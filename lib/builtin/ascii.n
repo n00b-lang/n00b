@@ -1,0 +1,23 @@
+func is_ascii_digit(c: char) -> bool {
+    let v: u32 = cast[u32] c
+    return v >= 0x30 and v <= 0x39
+}
+
+func is_ascii_letter(c: char) -> bool {
+    let v: u32 = cast[u32] c
+    return (v >= 0x61 and v <= 0x7a) or (v >= 0x41 and v <= 0x5a)
+}
+
+func hex_digit_value(c: char) -> u32? {
+    let v: u32 = cast[u32] c
+    if v >= 0x30 and v <= 0x39 {
+        return v - 0x30
+    }
+    if v >= 0x61 and v <= 0x66 {
+        return v - 0x61 + 10
+    }
+    if v >= 0x41 and v <= 0x46 {
+        return v - 0x41 + 10
+    }
+    return nil
+}

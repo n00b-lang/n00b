@@ -1,0 +1,196 @@
+import unicode
+import diag
+
+type Token_Id = u128
+
+const identifier_token_id: u128 = 0x110000
+
+enum Token_Policy { normal = 0, trivia, elastic }
+
+record Token_Class {
+    name:   string
+    id:     Token_Id
+    policy: Token_Policy
+    decl:   diag.Span
+}
+
+func __init(modify self: Token_Class, name: string, decl: diag.Span) {
+    self.name = name
+    self.id = token_id(0)
+    self.policy = Token_Policy.normal
+    self.decl = decl
+}
+
+enum Quant { one = 0, opt, star, plus }
+
+variant Atom {
+    rule:    uint
+    class:   uint
+    literal: uint
+    group:   List[Alt]
+}
+
+record Item {
+    atom:  Atom
+    quant: Quant
+    span:  diag.Span
+}
+
+record Alt {
+    items: List[Item]
+}
+
+record Rule {
+    name: string
+    alts: List[Alt]
+    defs: List[diag.Span]
+}
+
+func __init(modify self: Rule, name: string) {
+    self.name = name
+    self.alts = new[List[Alt]]()
+    self.defs = new[List[diag.Span]]()
+}
+
+record Literal {
+    text:       string
+    id:         Token_Id
+    hard:       bool
+    identifier: bool
+    first_use:  diag.Span
+}
+
+func __init(modify self: Literal, text: string, hard: bool,
+            first_use: diag.Span) {
+    self.text = text
+    self.id = literal_token_id(text)
+    self.hard = hard
+    self.identifier = is_identifier_shaped(text)
+    self.first_use = first_use
+}
+
+record Grammar {
+    source_name:   string
+    rules:         List[Rule]
+    rule_index:    Dict[string, uint]
+    classes:       List[Token_Class]
+    class_index:   Dict[string, uint]
+    literals:      List[Literal]
+    literal_index: Dict[string, uint]
+    start:         uint
+    identifier:    uint
+}
+
+func __init(modify self: Grammar, source_name: string) {
+    self.source_name = source_name
+    self.rules = new[List[Rule]]()
+    self.rule_index = new[Dict[string, uint]]()
+    self.classes = new[List[Token_Class]]()
+    self.class_index = new[Dict[string, uint]]()
+    self.literals = new[List[Literal]]()
+    self.literal_index = new[Dict[string, uint]]()
+    self.start = 0
+    self.identifier = 0
+}
+
+func token_id(raw: u128) -> Token_Id {
+    return cast[Token_Id] raw
+}
+
+func raw_token_id(id: Token_Id) -> u128 {
+    return cast[u128] id
+}
+
+func __equal(left: Token_Id, right: Token_Id) -> bool {
+    return raw_token_id(left) == raw_token_id(right)
+}
+
+func class_token_id(declared: uint) -> Token_Id {
+    return token_id(identifier_token_id + 1 + cast[u128] declared)
+}
+
+func literal_token_id(spelling: string) -> Token_Id {
+    let plain: string = text(spelling)
+    let n: uint = byte_len(plain)
+    if n > 0 and n <= 4 and len(plain) == 1 {
+        var at: u32 = 0
+        try {
+            return token_id(cast[u128] unicode.utf8_decode(plain, at)!)
+        } fail(err) {
+        }
+    }
+    return token_id(plain.hash())
+}
+
+func is_identifier_shaped(spelling: string) -> bool {
+    let n: uint = byte_len(spelling)
+    if n == 0 {
+        return false
+    }
+    var at: u32 = 0
+    var first: bool = true
+    while cast[uint](at) < n {
+        var cp: char = cast[char] 0
+        try {
+            cp = unicode.utf8_decode(spelling, at)!
+        } fail(err) {
+            return false
+        }
+        if first {
+            if cp != '_' and !unicode.is_xid_start(cp) {
+                return false
+            }
+            first = false
+        }
+        elif !unicode.is_xid_continue(cp) {
+            return false
+        }
+    }
+    return true
+}
+
+func is_soft(lit: Literal) -> bool {
+    return lit.identifier and !lit.hard
+}
+
+func find_rule(g: Grammar, name: string) -> Rule? {
+    let at: uint? = g.rule_index[name]
+    if at == nil {
+        return nil
+    }
+    return g.rules[at.get()]
+}
+
+func find_class(g: Grammar, name: string) -> Token_Class? {
+    let at: uint? = g.class_index[name]
+    if at == nil {
+        return nil
+    }
+    return g.classes[at.get()]
+}
+
+func find_literal(g: Grammar, spelling: string) -> Literal? {
+    let at: uint? = g.literal_index[spelling]
+    if at == nil {
+        return nil
+    }
+    return g.literals[at.get()]
+}
+
+func start_rule(g: Grammar) -> Rule {
+    return g.rules[g.start]
+}
+
+func identifier_class(g: Grammar) -> Token_Class {
+    return g.classes[g.identifier]
+}
+
+func is_hard_keyword(g: Grammar, spelling: string) -> bool {
+    let lit: Literal? = find_literal(g, spelling)
+    return lit != nil and lit.get().hard and lit.get().identifier
+}
+
+func is_soft_keyword(g: Grammar, spelling: string) -> bool {
+    let lit: Literal? = find_literal(g, spelling)
+    return lit != nil and is_soft(lit.get())
+}

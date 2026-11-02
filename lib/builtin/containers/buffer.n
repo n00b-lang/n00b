@@ -1,6 +1,7 @@
 import containers.array
 import string.core
 import panic
+import ascii
 
 object Buffer {
     private lock:      Atomic[u32]
@@ -110,23 +111,6 @@ private func pow2_ceil(n: uint) -> uint {
     return unsafe_shl(cast[uint] 1, 64 - __count_leading_zeros(n - 1))
 }
 
-private func hex_digit(byte: u8, out value: u8) -> bool {
-    if byte >= 0x30 and byte <= 0x39 {
-        value = byte - 0x30
-        return true
-    }
-    if byte >= 0x61 and byte <= 0x66 {
-        value = byte - 0x61 + 10
-        return true
-    }
-    if byte >= 0x41 and byte <= 0x46 {
-        value = byte - 0x41 + 10
-        return true
-    }
-    value = 0
-    return false
-}
-
 func __init(self: Buffer, length: int = -1, hex: string = "",
             ptr: Array[u8]? = nil, copy: bool = true) {
     __atomic_store(ref self.lock, 0)
@@ -172,8 +156,10 @@ func __init(self: Buffer, length: int = -1, hex: string = "",
         var valid_count: int = 0
         var i: uint = 0
         while i < hex_len {
-            var nibble: u8
-            if hex_digit(string.core.byte_at(hex, i), nibble) {
+            let digit: u32? = ascii.hex_digit_value(
+                cast[char] string.core.byte_at(hex, i))
+            if digit != nil {
+                let nibble: u8 = cast[u8] digit.get()
                 valid_count += 1
                 if valid_count % 2 == 1 {
                     cur = nibble << 4
