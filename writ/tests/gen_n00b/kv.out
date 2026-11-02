@@ -551,11 +551,11 @@ func __init(modify self: Db, path: string) {
 func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
     var key_value = key
     var val_value = val
-    if self.raw == 0 {
+    if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_put")
         fail failure
     }
-    let outcome = __kv_put(self.raw, ref key_value, ref val_value)
+    let outcome = __kv_put(self.__value.raw, ref key_value, ref val_value)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
         fail failure
@@ -569,11 +569,11 @@ func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
 func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
     var key_value = key
     var out_val: Ffi_Bytes = (data = 0, length = 0)
-    if self.raw == 0 {
+    if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_get")
         fail failure
     }
-    let outcome = __kv_get(self.raw, ref key_value, ref out_val)
+    let outcome = __kv_get(self.__value.raw, ref key_value, ref out_val)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
         fail failure
@@ -591,11 +591,11 @@ func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
 func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
     var prefix_value = prefix
     var result: uint = 0
-    if self.raw == 0 {
+    if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_new")
         fail failure
     }
-    let outcome = __kv_iter_new(self.raw, ref prefix_value, ref result)
+    let outcome = __kv_iter_new(self.__value.raw, ref prefix_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
@@ -609,11 +609,11 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
 
 func next(self: Iter) -> Entry? fail: Error {
     var result: Ffi_Bytes = (data = 0, length = 0)
-    if self.raw == 0 {
+    if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_next")
         fail failure
     }
-    let outcome = __kv_iter_next(self.raw, ref result)
+    let outcome = __kv_iter_next(self.__value.raw, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
         fail failure

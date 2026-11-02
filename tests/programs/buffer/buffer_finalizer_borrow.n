@@ -22,7 +22,7 @@ func churn(n: int) {
         keep = ref f
         i += 1
     }
-    require keep != nil and keep.get().v == n - 1
+    require keep != nil and keep.get().__value.v == n - 1
 }
 
 func borrowed() -> uint {

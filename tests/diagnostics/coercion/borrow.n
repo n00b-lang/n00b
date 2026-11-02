@@ -38,7 +38,7 @@ func drain() -> uint {
     if m == nil {
         return 0
     }
-    return sys.gc.finalize.run(m.get().heap, 0)
+    return sys.gc.finalize.run(m.get().__value.heap, 0)
 }
 func finalizer_run() -> uint {
     let view: string = g_3
@@ -145,8 +145,8 @@ ref_local()
 record Holder_11 { b: Buffer }
 func fill(first: Ref[Holder_11], second: Ref[Holder_11]) {
     let x: Buffer = buffer_from_string("kept")
-    first.b = x
-    second.b = x
+    first.__value.b = x
+    second.__value.b = x
 }
 func ref_params() -> uint {
     var p: Holder_11 = (b = empty_buffer())

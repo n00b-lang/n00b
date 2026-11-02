@@ -9,5 +9,5 @@ record Plain {
 }
 
 func first_mark(block: Ref[Block]) -> Ref[byte] {
-    return ref block.marks [0]
+    return ref block.__value.marks [0]
 }

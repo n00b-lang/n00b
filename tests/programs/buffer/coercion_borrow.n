@@ -125,9 +125,9 @@ record Tagged {
 }
 
 func field_writes(t: Ref[Tagged]) -> uint {
-    let view: string = t.b
-    t.n = 5
-    t.b = buffer_from_string("replaced")
+    let view: string = t.__value.b
+    t.__value.n = 5
+    t.__value.b = buffer_from_string("replaced")
     return byte_len(view)
 }
 

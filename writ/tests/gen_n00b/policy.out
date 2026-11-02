@@ -290,10 +290,10 @@ func __stmt_cell(raw: uint) -> Stmt {
 }
 
 func __finalize(consume self: Ref[Stmt_Cell]) {
-    if self.raw != 0 and debug_enabled() {
+    if self.__value.raw != 0 and debug_enabled() {
         __fd_write(2, "Stmt collected while open; releasing it\n")
-        __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
-        let released = __stmt_release(self.raw)
+        __ffi_event("policy:stmt_release", [cast[u64](self.__value.raw)]'array, __os_thread_id())
+        let released = __stmt_release(self.__value.raw)
     }
 }
 
@@ -305,30 +305,30 @@ func __ffi_kept_free(kept: u64) {
 func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
-    if stmt.raw == 0 {
+    if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
     var text_kept: uint = 0
-    let outcome = __bind_text_text_static(stmt.raw, ref text_value, ref result, ref text_kept)
+    let outcome = __bind_text_text_static(stmt.__value.raw, ref text_value, ref result, ref text_kept)
     if outcome < 0 {
         __ffi_kept_free(cast[u64](text_kept))
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
     }
     let text_kept_group = __ffi_hold_group()
-    __ffi_hold(text_kept_group, cast[u64](text_kept), ref __ffi_kept_free, "policy:stmt_release", [cast[u64](stmt.raw)]'array, 0)
+    __ffi_hold(text_kept_group, cast[u64](text_kept), ref __ffi_kept_free, "policy:stmt_release", [cast[u64](stmt.__value.raw)]'array, 0)
     return result
 }
 
 func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
-    if stmt.raw == 0 {
+    if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
-    let outcome = __bind_text_text_transient(stmt.raw, ref text_value, ref result)
+    let outcome = __bind_text_text_transient(stmt.__value.raw, ref text_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
@@ -339,11 +339,11 @@ func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
 func bind_text_owned(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
     var result: i32 = 0
-    if stmt.raw == 0 {
+    if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
-    let outcome = __bind_text_with_dtor(stmt.raw, ref text_value, ref result)
+    let outcome = __bind_text_with_dtor(stmt.__value.raw, ref text_value, ref result)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
@@ -368,13 +368,13 @@ func bind_text(stmt: Stmt, text: string, dtor: Bind_Text_Dtor) -> i32 fail: Erro
 }
 
 func close(modify self: Stmt) fail: Error {
-    let outcome = __stmt_release(self.raw)
+    let outcome = __stmt_release(self.__value.raw)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "stmt_release")
         fail failure
     }
-    __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
-    self.raw = 0
+    __ffi_event("policy:stmt_release", [cast[u64](self.__value.raw)]'array, __os_thread_id())
+    self.__value.raw = 0
 }
 7	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
 31	tests/gen_n00b/../policy/policy.writ:11:1	bind_text

@@ -2542,6 +2542,72 @@ func gc_finalize_ref() {
     require ref_finalized == 1
 }
 
+record Gcfin_Value {
+    v: int
+}
+
+record Gcfin_Holder {
+    tag: int
+    f: Gcfin_Value
+}
+
+object Gcfin_Box {
+    f: Gcfin_Value
+}
+
+var gcfin_count: int = 0
+var gcfin_seen: int = 0
+
+func __finalize(consume self: Ref[Gcfin_Value]) {
+    gcfin_count += 1
+    gcfin_seen = self.__value.v
+}
+
+func gcfin_storage(probe_type: typespec, row: Ref[sys.abi.Type_Record])
+    -> Tuple[i64, Ref[byte]] {
+    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(probe_type)
+    require option_row != nil
+    let reference_index: i64 = sys.abi.range_index(
+        option_row.get().__value.components, 0)
+    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] reference_index)
+    require reference_row != nil
+    let index: i64 = sys.abi.range_index(
+        reference_row.get().__value.components, 0)
+    let storage: Ref[byte]? = sys.gc.alloc.allocate_runtime(cast[u32] index,
+        cast[u64](sys.abi.size_bytes(row)),
+        cast[u32](sys.abi.alignment_bytes(row)), nil)
+    require storage != nil
+    return (index, storage.get())
+}
+
+func gc_generated_record_finalizer() {
+    gcfin_count = 0
+    let probe: Ref[Gcfin_Holder]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    require row != nil
+    require row.get().__value.finalizer_function_index != 0
+    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
+                                                       row.get())
+    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
+    require gcfin_count == 1
+}
+
+func gc_generated_object_finalizer() {
+    gcfin_count = 0
+    let probe: Ref[Gcfin_Box]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    require row != nil
+    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
+                                                       row.get())
+    let word: Ref[int] = unsafe_cast[Ref[int]] placed[1]
+    word.__value = 8
+    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
+    require gcfin_count == 1 and gcfin_seen == 8
+}
+
 func gc_known_finalizer() {
     let value: Ref[Finalized_Record] = construct_finalized()
     require value.__value.payload == 42
@@ -2654,5 +2720,7 @@ gc_finalize()
 gc_finalizer_cycle()
 gc_finalize_ref()
 gc_known_finalizer()
+gc_generated_record_finalizer()
+gc_generated_object_finalizer()
 gc_destroy_blocked_finalizer()
 __fd_write(2, "ok")

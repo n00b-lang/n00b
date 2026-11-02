@@ -36,8 +36,8 @@ func total(p: Pair) -> int {
 }
 
 func first(r: Ref[Pair]) -> int {
-    r.y = r.x
-    return r.y
+    r.__value.y = r.__value.x
+    return r.__value.y
 }
 
 var pointer_state: Atomic[Ref[byte]?]

@@ -4,11 +4,11 @@ let maybe_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(0)
 if maybe_row != nil {
     let row: Ref[sys.abi.Type_Record] = maybe_row.get()
     assert __abi_ref_address(row) != 0
-    let bits: Ref[u64] = ref row.size_bits
+    let bits: Ref[u64] = ref row.__value.size_bits
     assert __abi_ref_address(bits) != 0
     let zero: u64 = 0
-    assert row.size_bits == zero
-    assert sys.abi.range_index(row.components, 0) == sys.abi.range_index(row.components, 1)
+    assert row.__value.size_bits == zero
+    assert sys.abi.range_index(row.__value.components, 0) == sys.abi.range_index(row.__value.components, 1)
 } else {
     assert false
 }

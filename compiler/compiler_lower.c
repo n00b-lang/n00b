@@ -2389,6 +2389,9 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
     if (!consume || !ir_lower_set_temp_dest(context, consume,
             CORE_STRING_STATIC("__n00bb_moved_"), binding->type)
         || !ir_instr_operand_value(consume, binding)
+        || !ir_annot_set(lower->ir_context, &consume->annots, (ir_annot_t){
+                .key = CORE_STRING_STATIC("n00bb.move"),
+                .kind = IR_ANNOT_BOOL, .b = true})
         || !n00bb_set_owned(context, frame, false, span)) {
         lower_internal(context, span, "could not move a finalized local");
         return false;
@@ -3270,11 +3273,13 @@ n00bb_extract_step(ir_lower_context_t *context, ir_value_t *value,
     ir_instr_t *extract = value && type ? ir_lower_emit_instruction(context,
         step.positional ? IR_OP_EXTRACT_INDEX : IR_OP_EXTRACT, span)
         : nullptr;
+    n00bb_lower_context_t *lower = context->user;
     bool ok = extract && ir_lower_set_temp_dest(context, extract,
             CORE_STRING_STATIC("__n00bb_"), type)
         && ir_instr_operand_value(extract, value)
         && (step.positional ? ir_instr_operand_uint(extract, step.index)
-                            : ir_instr_operand_name(extract, step.name));
+                            : ir_instr_operand_name(extract, step.name))
+        && n00bb_set_reference_access(lower->ir_context, extract->dest, type);
     return ok ? extract->dest : nullptr;
 }
 
@@ -27357,12 +27362,7 @@ validate_consumed_binding_body(parse_sym_entry_t *symbol,
         if (!shown.u8_bytes) shown = n00bb_text_form(N00B_TEXT_THIS_VALUE);
         core_diagnostics_t *destination = ir_diags_destination(diagnostics);
         const core_translation_unit_t *unit = ir_diags_unit(diagnostics);
-        n00bb_report(destination, unit, N00B_DIAG_USE_AFTER_CONSUME,
-            span_location(bad->span),
-            bad_consume ? N00B_TEXT_CONSUMED_AGAIN
-                        : N00B_TEXT_USED_AFTER_CONSUME,
-            N00BB_ARGS(ARG_TEXT(shown)));
-        const ir_instr_t *earlier = nullptr;
+        ir_instr_t *earlier = nullptr;
         for (uint32_t e = 0; !earlier && e < function->n_blocks; e++)
             for (uint32_t i = 0; !earlier
                  && i < function->blocks[e]->n_instrs; i++) {
@@ -27371,12 +27371,23 @@ validate_consumed_binding_body(parse_sym_entry_t *symbol,
                     && n00bb_consume_identity(in) == binding)
                     earlier = in;
             }
+        bool moved = earlier && ir_annot_get(&earlier->annots,
+            CORE_STRING_STATIC("n00bb.move"));
+        n00bb_report(destination, unit, N00B_DIAG_USE_AFTER_CONSUME,
+            span_location(bad->span),
+            moved ? bad_consume ? N00B_TEXT_MOVED_AGAIN
+                                : N00B_TEXT_USED_AFTER_MOVE
+                  : bad_consume ? N00B_TEXT_CONSUMED_AGAIN
+                                : N00B_TEXT_USED_AFTER_CONSUME,
+            N00BB_ARGS(ARG_TEXT(shown)));
         if (earlier)
             n00bb_report_secondary(destination, nullptr,
-                span_location(earlier->span), N00B_TEXT_IS_CONSUMED_HERE,
+                span_location(earlier->span),
+                moved ? N00B_TEXT_IS_MOVED_HERE : N00B_TEXT_IS_CONSUMED_HERE,
                 N00BB_ARGS(ARG_TEXT(shown)));
-        n00bb_report_help(destination, N00B_TEXT_A_CONSUMED_VALUE_CANNOT_BE,
-            N00BB_NO_ARGS);
+        n00bb_report_help(destination, moved
+            ? N00B_TEXT_A_MOVED_VALUE_CANNOT_BE
+            : N00B_TEXT_A_CONSUMED_VALUE_CANNOT_BE, N00BB_NO_ARGS);
         ok = false;
     }
     free(incoming);
