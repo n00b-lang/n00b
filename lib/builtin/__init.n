@@ -194,7 +194,6 @@ package sort {
     export sort.sort_by
     export sort.order
     export sort.natural_compare
-    export sort.Comparator
 }
 
 package cursor {
