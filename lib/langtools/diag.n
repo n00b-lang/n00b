@@ -1,0 +1,265 @@
+import sort
+import text
+
+enum Severity { error = 0, warning, info, hint }
+
+record Span {
+    start_byte: uint
+    end_byte:   uint
+    start_line: u32
+    start_col:  u32
+    end_line:   u32
+    end_col:    u32
+}
+
+func __init(modify self: Span, start_byte: uint = 0, end_byte: uint = 0,
+            start_line: u32 = 1, start_col: u32 = 1, end_line: u32 = 1,
+            end_col: u32 = 1) {
+    self.start_byte = start_byte
+    self.end_byte = end_byte
+    self.start_line = start_line
+    self.start_col = start_col
+    self.end_line = end_line
+    self.end_col = end_col
+}
+
+record Related {
+    message: string
+    span:    Span
+}
+
+record Fix {
+    message:     string
+    span:        Span
+    replacement: string
+}
+
+record Diagnostic {
+    severity: Severity
+    code:     string
+    message:  string
+    span:     Span
+    help:     string?
+    fixes:    List[Fix]
+    related:  List[Related]
+}
+
+func __init(modify self: Diagnostic, code: string, message: string,
+            span: Span, severity: Severity = Severity.error) {
+    self.severity = severity
+    self.code = code
+    self.message = message
+    self.span = span
+    self.help = nil
+    self.fixes = new[List[Fix]]()
+    self.related = new[List[Related]]()
+}
+
+record Source {
+    name: string
+    text: string
+}
+
+func severity_name(severity: Severity) -> string {
+    switch severity {
+        case Severity.error { return "error" }
+        case Severity.warning { return "warning" }
+        case Severity.info { return "info" }
+        else { return "hint" }
+    }
+}
+
+private func edit_distance(a: string, b: string) -> uint {
+    let n: uint = byte_len(a)
+    let m: uint = byte_len(b)
+    var before: Array[uint] = new[Array[uint]](m + 1)
+    var previous: Array[uint] = new[Array[uint]](m + 1)
+    var current: Array[uint] = new[Array[uint]](m + 1)
+    for j: uint from 0 until m + 1 {
+        previous[j] = j
+    }
+    for i: uint from 1 until n + 1 {
+        current[0] = i
+        for j: uint from 1 until m + 1 {
+            let x: u8 = byte_at(a, i - 1)
+            let y: u8 = byte_at(b, j - 1)
+            var best: uint = previous[j - 1]
+            if x != y {
+                best += 1
+            }
+            if previous[j] + 1 < best {
+                best = previous[j] + 1
+            }
+            if current[j - 1] + 1 < best {
+                best = current[j - 1] + 1
+            }
+            if i > 1 and j > 1 and x == byte_at(b, j - 2) and
+                byte_at(a, i - 2) == y and before[j - 2] + 1 < best {
+                best = before[j - 2] + 1
+            }
+            current[j] = best
+        }
+        let spare: Array[uint] = before
+        before = previous
+        previous = current
+        current = spare
+    }
+    return previous[m]
+}
+
+func closest_match(name: string, candidates: List[string]) -> string? {
+    let length: uint = byte_len(name)
+    var limit: uint = length / 3
+    if limit == 0 {
+        limit = 1
+    }
+    var best: string? = nil
+    var best_distance: uint = limit + 1
+    for let candidate in candidates {
+        let other: uint = byte_len(candidate)
+        if (length > other and length - other > limit) or
+            (other > length and other - length > limit) or candidate == name {
+            continue
+        }
+        let distance: uint = edit_distance(name, candidate)
+        if distance < best_distance and distance < length {
+            best = candidate
+            best_distance = distance
+        }
+    }
+    return best
+}
+
+private func location(name: string, span: Span) -> string {
+    return name + ":" + decimal(span.start_line) + ":" +
+        decimal(span.start_col)
+}
+
+private func line_bounds(source: string, at: uint) -> Tuple[uint, uint] {
+    let n: uint = byte_len(source)
+    var first: uint = at
+    if first > n {
+        first = n
+    }
+    while first > 0 and byte_at(source, first - 1) != 0x0a {
+        first -= 1
+    }
+    var last: uint = first
+    while last < n and byte_at(source, last) != 0x0a and
+        byte_at(source, last) != 0x0d {
+        last += 1
+    }
+    return (first, last)
+}
+
+private func caret_row(line: string, span: Span) -> string {
+    var pieces: List[string] = new[List[string]]()
+    let n: uint = byte_len(line)
+    var col: u32 = 1
+    var width: u32 = 0
+    for i: uint from 0 until n {
+        let b: u8 = byte_at(line, i)
+        if (b & 0xc0) == 0x80 {
+            continue
+        }
+        if col >= span.start_col {
+            if span.end_line != span.start_line or col < span.end_col {
+                width += 1
+            }
+        }
+        elif b == 0x09 {
+            pieces.append("\t")
+        }
+        else {
+            pieces.append(" ")
+        }
+        col += 1
+    }
+    if width == 0 {
+        width = 1
+    }
+    pieces.append(text.repeat("^", width))
+    return join(pieces, "")
+}
+
+func render(d: Diagnostic, src: Source) -> string {
+    var out: List[string] = new[List[string]]()
+    out.append(location(src.name, d.span) + ": " + severity_name(d.severity) +
+               ": " + d.message + " [" + d.code + "]\n")
+    let bounds: Tuple[uint, uint] = line_bounds(src.text, d.span.start_byte)
+    let line: string = byte_slice(src.text, bounds[0], bounds[1])
+    let number: string = decimal(d.span.start_line)
+    out.append("\n    " + number + " | " + line + "\n")
+    out.append("    " + text.repeat(" ", byte_len(number)) + " | " +
+               caret_row(line, d.span) + "\n")
+    if d.help != nil {
+        out.append("\n  help: " + d.help.get() + "\n")
+    }
+    for let fix in d.fixes {
+        out.append("  fix: " + fix.message + "\n")
+    }
+    for let related in d.related {
+        out.append("  note: " + related.message + " (" +
+                   location(src.name, related.span) + ")\n")
+    }
+    return join(out, "")
+}
+
+func render_all(diags: List[Diagnostic], src: Source) -> string {
+    var out: List[string] = new[List[string]]()
+    for let d in diags {
+        out.append(render(d, src))
+    }
+    return join(out, "\n")
+}
+
+func stable_order(starts: List[uint]) -> Array[uint] {
+    var keys: Array[u128] = new[Array[u128]](starts.len())
+    var given: uint = 0
+    for let start in starts {
+        keys[given] = (cast[u128](start) << 64) | cast[u128](given)
+        given += 1
+    }
+    sort.sort(keys)
+    var order: Array[uint] = new[Array[uint]](starts.len())
+    for i: uint from 0 until starts.len() {
+        order[i] = cast[uint](keys[i] & 0xffffffffffffffff)
+    }
+    return order
+}
+
+func sorted_by_position(diags: List[Diagnostic]) -> List[Diagnostic] {
+    var starts: List[uint] = new[List[uint]]()
+    for let d in diags {
+        starts.append(d.span.start_byte)
+    }
+    var out: List[Diagnostic] = new[List[Diagnostic]]()
+    for at in stable_order(starts) {
+        out.append(diags[at])
+    }
+    return out
+}
+
+func apply_fixes(source: string, fixes: List[Fix]) -> string {
+    var starts: List[uint] = new[List[uint]]()
+    for let fix in fixes {
+        var key: uint = fix.span.start_byte * 2
+        if fix.span.end_byte > fix.span.start_byte {
+            key += 1
+        }
+        starts.append(key)
+    }
+    var out: List[string] = new[List[string]]()
+    var at: uint = 0
+    for given in stable_order(starts) {
+        let fix: Fix = fixes[given]
+        if fix.span.start_byte < at {
+            continue
+        }
+        out.append(byte_slice(source, at, fix.span.start_byte))
+        out.append(fix.replacement)
+        at = fix.span.end_byte
+    }
+    out.append(byte_slice(source, at, byte_len(source)))
+    return join(out, "")
+}

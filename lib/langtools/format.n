@@ -1,0 +1,178 @@
+import sort
+import text
+import diag
+import grammar
+
+private func quoted(spelling: string) -> string {
+    var pieces: List[string] = new[List[string]]()
+    pieces.append("\"")
+    var run: uint = 0
+    let n: uint = byte_len(spelling)
+    for i: uint from 0 until n {
+        let b: u8 = byte_at(spelling, i)
+        var escape: string? = nil
+        if b == 0x5c {
+            escape = "\\\\"
+        }
+        elif b == 0x22 {
+            escape = "\\\""
+        }
+        elif b == 0x0a {
+            escape = "\\n"
+        }
+        elif b == 0x0d {
+            escape = "\\r"
+        }
+        elif b == 0x09 {
+            escape = "\\t"
+        }
+        elif b == 0 {
+            escape = "\\0"
+        }
+        elif b < 0x20 or b == 0x7f {
+            let digits: string = hex(b)
+            escape = "\\u{" + byte_slice(digits, 2, byte_len(digits)) + "}"
+        }
+        if escape != nil {
+            pieces.append(byte_slice(spelling, run, i))
+            pieces.append(escape.get())
+            run = i + 1
+        }
+    }
+    pieces.append(byte_slice(spelling, run, n))
+    pieces.append("\"")
+    return join(pieces, "")
+}
+
+private func quant_suffix(quant: grammar.Quant) -> string {
+    switch quant {
+        case grammar.Quant.opt { return "?" }
+        case grammar.Quant.star { return "*" }
+        case grammar.Quant.plus { return "+" }
+        else { return "" }
+    }
+}
+
+private func atom_text(g: grammar.Grammar, atom: grammar.Atom) -> string {
+    switch atom {
+        case rule { return "<" + g.rules[atom.rule].name + ">" }
+        case class { return "%" + g.classes[atom.class].name }
+        case literal {
+            let lit: grammar.Literal = g.literals[atom.literal]
+            if lit.hard {
+                return "%" + quoted(lit.text)
+            }
+            return quoted(lit.text)
+        }
+        case group { return "(" + alts_text(g, atom.group, " | ") + ")" }
+    }
+    return ""
+}
+
+private func alt_text(g: grammar.Grammar, alt: grammar.Alt) -> string {
+    var items: List[string] = new[List[string]]()
+    for let item in alt.items {
+        items.append(atom_text(g, item.atom) + quant_suffix(item.quant))
+    }
+    return join(items, " ")
+}
+
+private func alts_text(g: grammar.Grammar, alts: List[grammar.Alt],
+                       separator: string) -> string {
+    var pieces: List[string] = new[List[string]]()
+    for let alt in alts {
+        pieces.append(alt_text(g, alt))
+    }
+    return join(pieces, separator)
+}
+
+private func policy_word(policy: grammar.Token_Policy) -> string {
+    switch policy {
+        case grammar.Token_Policy.trivia { return "trivia" }
+        case grammar.Token_Policy.elastic { return "elastic" }
+        else { return "tokens" }
+    }
+}
+
+private func declared_in_id_order(g: grammar.Grammar) -> List[grammar.Token_Class] {
+    var slots: Array[uint] = new[Array[uint]](g.classes.len() - 1)
+    var index: uint = 0
+    for let class in g.classes {
+        let raw: u128 = grammar.raw_token_id(class.id)
+        if raw > grammar.identifier_token_id {
+            slots[cast[uint](raw - grammar.identifier_token_id - 1)] = index
+        }
+        index += 1
+    }
+    var ordered: List[grammar.Token_Class] = new[List[grammar.Token_Class]]()
+    for i: uint from 0 until g.classes.len() - 1 {
+        ordered.append(g.classes[slots[i]])
+    }
+    return ordered
+}
+
+func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
+    var out: List[string] = new[List[string]]()
+    let ident: grammar.Token_Class = g.classes[g.identifier]
+    if ident.name != "IDENTIFIER" {
+        out.append("identifier: %" + ident.name + "\n")
+    }
+    let declared: List[grammar.Token_Class] = declared_in_id_order(g)
+    var run: List[string] = new[List[string]]()
+    var run_policy: grammar.Token_Policy = grammar.Token_Policy.normal
+    for let class in declared {
+        if run.len() > 0 and class.policy != run_policy {
+            out.append(policy_word(run_policy) + ": " + join(run, ", ") + "\n")
+            run = new[List[string]]()
+        }
+        run_policy = class.policy
+        run.append("%" + class.name)
+    }
+    if run.len() > 0 {
+        out.append(policy_word(run_policy) + ": " + join(run, ", ") + "\n")
+    }
+    out.append("start: <" + g.rules[g.start].name + ">\n")
+    if show_ids {
+        out.append("\n# %" + ident.name + " = " +
+                   hex(grammar.raw_token_id(ident.id)) + "\n")
+        for let class in declared {
+            out.append("# %" + class.name + " = " +
+                       hex(grammar.raw_token_id(class.id)) + "\n")
+        }
+        var spellings: Array[string] = new[Array[string]](g.literals.len())
+        var at: uint = 0
+        for let lit in g.literals {
+            spellings[at] = lit.text
+            at += 1
+        }
+        sort.sort(spellings)
+        for i: uint from 0 until g.literals.len() {
+            let found: grammar.Literal? = grammar.find_literal(g, spellings[i])
+            if found == nil {
+                continue
+            }
+            let lit: grammar.Literal = found.get()
+            var kind: string = ""
+            if grammar.is_soft(lit) {
+                kind = " (soft keyword)"
+            }
+            elif lit.hard and lit.identifier {
+                kind = " (hard keyword)"
+            }
+            out.append("# " + quoted(lit.text) + " = " +
+                       hex(grammar.raw_token_id(lit.id)) + kind + "\n")
+        }
+    }
+    var first_defs: List[uint] = new[List[uint]]()
+    for let rule in g.rules {
+        first_defs.append(rule.defs[0].start_byte)
+    }
+    for index in diag.stable_order(first_defs) {
+        let rule: grammar.Rule = g.rules[index]
+        let indent: string = text.repeat(" ", byte_len(rule.name) + 3)
+        out.append("\n<" + rule.name + "> ::= ")
+        out.append(alts_text(g, rule.alts, "\n" + indent + "| "))
+        out.append("\n")
+    }
+    return join(out, "")
+}
