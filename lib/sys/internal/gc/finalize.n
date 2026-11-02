@@ -18,33 +18,33 @@ thread var in_finalizers: bool = false
 thread var finalizer_thread: bool = false
 
 func notify(heap: Ref[internal.gc.core.Heap]) {
-    if !__atomic_load(ref heap.fin_notify) or
-        !__atomic_exchange(ref heap.fin_notify, false) {
+    if !__atomic_load(ref heap.__value.fin_notify) or
+        !__atomic_exchange(ref heap.__value.fin_notify, false) {
         return
     }
     wake(heap)
 }
 
 func wake(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.sync.event_wake(ref heap.fin_wake)
-    if __atomic_load(ref heap.fin_thread) != thread_idle or
-        __atomic_load(ref heap.shutdown) {
+    internal.gc.sync.event_wake(ref heap.__value.fin_wake)
+    if __atomic_load(ref heap.__value.fin_thread) != thread_idle or
+        __atomic_load(ref heap.__value.shutdown) {
         return
     }
-    __atomic_fetch_add(ref heap.fin_live, 1)
-    if !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_starting) {
-        __atomic_fetch_sub(ref heap.fin_live, 1)
+    __atomic_fetch_add(ref heap.__value.fin_live, 1)
+    if !__atomic_compare_exchange(ref heap.__value.fin_thread, thread_idle, thread_starting) {
+        __atomic_fetch_sub(ref heap.__value.fin_live, 1)
         return
     }
     if !internal.threads.thread_start(ref thread_main, unsafe_cast[Ref[byte]] heap) {
-        __atomic_store(ref heap.fin_thread, thread_idle)
-        __atomic_fetch_sub(ref heap.fin_live, 1)
+        __atomic_store(ref heap.__value.fin_thread, thread_idle)
+        __atomic_fetch_sub(ref heap.__value.fin_live, 1)
     }
 }
 
 func release_live(heap: Ref[internal.gc.core.Heap]) {
-    if __atomic_fetch_sub(ref heap.fin_live, 1) == 1 and
-        __atomic_load(ref heap.shutdown) {
+    if __atomic_fetch_sub(ref heap.__value.fin_live, 1) == 1 and
+        __atomic_load(ref heap.__value.shutdown) {
         internal.gc.heap.teardown(heap)
     }
 }
@@ -52,8 +52,8 @@ func release_live(heap: Ref[internal.gc.core.Heap]) {
 func thread_main(argument: Ref[byte]) -> Ref[byte] {
     let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] argument
     finalizer_thread = true
-    while !__atomic_load(ref heap.shutdown) {
-        while !__atomic_load(ref heap.shutdown) and
+    while !__atomic_load(ref heap.__value.shutdown) {
+        while !__atomic_load(ref heap.__value.shutdown) and
             run(heap, internal.gc.core.final_batch) != 0 {
         }
         park(heap)
@@ -66,42 +66,42 @@ func thread_main(argument: Ref[byte]) -> Ref[byte] {
 func park(heap: Ref[internal.gc.core.Heap]) {
     let attached: Ref[internal.gc.core.Mutator]? = internal.gc.alloc.attached_mutator()
     if attached != nil {
-        __os_thread_capture_self(ref attached.get().captured)
+        __os_thread_capture_self(ref attached.get().__value.captured)
         internal.gc.handshake.enter_blocking(attached.get())
     }
     while true {
-        let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_wake)
-        if __atomic_load(ref heap.shutdown) or pending(heap) != 0 {
-            internal.gc.sync.event_leave(ref heap.fin_wake)
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.__value.fin_wake)
+        if __atomic_load(ref heap.__value.shutdown) or pending(heap) != 0 {
+            internal.gc.sync.event_leave(ref heap.__value.fin_wake)
             break
         }
-        internal.gc.sync.event_wait(ref heap.fin_wake, seq, 0)
-        internal.gc.sync.event_leave(ref heap.fin_wake)
+        internal.gc.sync.event_wait(ref heap.__value.fin_wake, seq, 0)
+        internal.gc.sync.event_leave(ref heap.__value.fin_wake)
     }
     internal.gc.alloc.attached_leave_blocking()
 }
 
 func close_thread(heap: Ref[internal.gc.core.Heap]) {
-    __atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_closed)
-    internal.gc.sync.event_wake(ref heap.fin_wake)
+    __atomic_compare_exchange(ref heap.__value.fin_thread, thread_idle, thread_closed)
+    internal.gc.sync.event_wake(ref heap.__value.fin_wake)
 }
 
 func list_push(heap: Ref[internal.gc.core.Heap], block: Ref[internal.gc.core.Block_Metadata]) {
-    var head: Ref[internal.gc.core.Block_Metadata]? = __atomic_load(ref heap.final_blocks)
+    var head: Ref[internal.gc.core.Block_Metadata]? = __atomic_load(ref heap.__value.final_blocks)
     let item: Ref[internal.gc.core.Block_Metadata]? = block
     while true {
-        block.final_next = head
-        if __atomic_compare_exchange(ref heap.final_blocks, head, item) {
+        block.__value.final_next = head
+        if __atomic_compare_exchange(ref heap.__value.final_blocks, head, item) {
             return
         }
-        head = __atomic_load(ref heap.final_blocks)
+        head = __atomic_load(ref heap.__value.final_blocks)
     }
 }
 
 func note_block(heap: Ref[internal.gc.core.Heap],
                        block: Ref[internal.gc.core.Block_Metadata]) {
-    if !__atomic_load(ref block.in_final) and
-        __atomic_compare_exchange(ref block.in_final, false, true) {
+    if !__atomic_load(ref block.__value.in_final) and
+        __atomic_compare_exchange(ref block.__value.in_final, false, true) {
         list_push(heap, block)
     }
 }
@@ -121,23 +121,23 @@ func final_entry_at(base: Ref[byte], index: uint) -> Ref[internal.gc.core.Final_
 }
 
 func collector_fin_lock(heap: Ref[internal.gc.core.Heap]) -> bool {
-    if heap.fin_held {
+    if heap.__value.fin_held {
         return false
     }
-    internal.gc.sync.ticket_lock(ref heap.fin)
+    internal.gc.sync.ticket_lock(ref heap.__value.fin)
     return true
 }
 
 func enqueue(heap: Ref[internal.gc.core.Heap], payload: Ref[byte]) {
     let row:   Ref[internal.abi.Type_Record] = final_entry_record()
-    let grown: bool                         = internal.gc.heap.grow_array(ref heap.finq, ref heap.finq_cap,
+    let grown: bool                         = internal.gc.heap.grow_array(ref heap.__value.finq, ref heap.__value.finq_cap,
         internal.abi.size_bytes(row), internal.abi.alignment_bytes(row),
-        heap.finq_n, heap.finq_n + 1)
+        heap.__value.finq_n, heap.__value.finq_n + 1)
     require grown
-    let storage: Ref[byte]? = heap.finq
+    let storage: Ref[byte]? = heap.__value.finq
     if storage != nil {
-        final_entry_at(storage.get(), heap.finq_n).payload = payload
-        heap.finq_n += 1
+        final_entry_at(storage.get(), heap.__value.finq_n).__value.payload = payload
+        heap.__value.finq_n += 1
         return
     }
     require false
@@ -145,9 +145,9 @@ func enqueue(heap: Ref[internal.gc.core.Heap], payload: Ref[byte]) {
 
 func dead_in_block(marker: Ref[internal.gc.core.Marker],
                    block: Ref[internal.gc.core.Block_Metadata]) {
-    let heap:       Ref[internal.gc.core.Heap] = marker.heap
-    let epoch:      u32                  = heap.mark_epoch
-    let have_marks: bool                 = __atomic_load(ref block.mark_epoch) == epoch
+    let heap:       Ref[internal.gc.core.Heap] = marker.__value.heap
+    let epoch:      u32                  = heap.__value.mark_epoch
+    let have_marks: bool                 = __atomic_load(ref block.__value.mark_epoch) == epoch
     let first:      uint                 = (internal.gc.core.header_lines() * internal.gc.core.line_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
     let words:      uint                 = (internal.gc.core.block_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
     let base:       Ref[byte]            = internal.gc.core.block_base(block)
@@ -164,9 +164,9 @@ func dead_in_block(marker: Ref[internal.gc.core.Marker],
             dead = dead & (dead - 1)
             let offset: uint                          = (index * internal.gc.core.word_bits + bit) * internal.gc.core.granule_bytes
             let header: Ref[internal.gc.core.Object_Header] = internal.gc.core.block_object_header_at(base, offset)
-            if (header.meta & internal.gc.core.obj_final) != 0 {
-                header.meta = header.meta & ~internal.gc.core.obj_final
-                __atomic_fetch_sub(ref block.nfinal, 1)
+            if (header.__value.meta & internal.gc.core.obj_final) != 0 {
+                header.__value.meta = header.__value.meta & ~internal.gc.core.obj_final
+                __atomic_fetch_sub(ref block.__value.nfinal, 1)
                 enqueue(heap, internal.gc.core.payload_of(header))
             }
         }
@@ -175,77 +175,77 @@ func dead_in_block(marker: Ref[internal.gc.core.Marker],
 }
 
 func find_dead_locked(marker: Ref[internal.gc.core.Marker]) {
-    let heap:   Ref[internal.gc.core.Heap]            = marker.heap
+    let heap:   Ref[internal.gc.core.Heap]            = marker.__value.heap
     let locked: bool                            = collector_fin_lock(heap)
     let empty:  Ref[internal.gc.core.Block_Metadata]? = nil
-    var blocks: Ref[internal.gc.core.Block_Metadata]? = __atomic_exchange(ref heap.final_blocks, empty)
-    let first:  uint                            = heap.finq_n
+    var blocks: Ref[internal.gc.core.Block_Metadata]? = __atomic_exchange(ref heap.__value.final_blocks, empty)
+    let first:  uint                            = heap.__value.finq_n
     while blocks != nil {
         let block: Ref[internal.gc.core.Block_Metadata] = blocks.get()
-        blocks = block.final_next
+        blocks = block.__value.final_next
         dead_in_block(marker, block)
-        if __atomic_load(ref block.nfinal) != 0 {
+        if __atomic_load(ref block.__value.nfinal) != 0 {
             list_push(heap, block)
         } else {
-            __atomic_store(ref block.in_final, false)
-            if __atomic_load(ref block.nfinal) != 0 {
+            __atomic_store(ref block.__value.in_final, false)
+            if __atomic_load(ref block.__value.nfinal) != 0 {
                 note_block(heap, block)
             }
         }
     }
 
-    var link:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.final_los
+    var link:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.__value.final_los
     var candidate: Ref[internal.gc.core.Los_Obj]?      = link.__value
     while candidate != nil {
         let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
-        if (obj.hdr.meta & internal.gc.core.obj_final) == 0 {
-            link.__value = obj.final_next
-        } elif __atomic_load(ref obj.marked) != heap.mark_epoch {
-            obj.hdr.meta = obj.hdr.meta & ~internal.gc.core.obj_final
-            enqueue(heap, internal.gc.core.payload_of(ref obj.hdr))
-            link.__value = obj.final_next
+        if (obj.__value.hdr.meta & internal.gc.core.obj_final) == 0 {
+            link.__value = obj.__value.final_next
+        } elif __atomic_load(ref obj.__value.marked) != heap.__value.mark_epoch {
+            obj.__value.hdr.meta = obj.__value.hdr.meta & ~internal.gc.core.obj_final
+            enqueue(heap, internal.gc.core.payload_of(ref obj.__value.hdr))
+            link.__value = obj.__value.final_next
         } else {
-            link = ref obj.final_next
+            link = ref obj.__value.final_next
         }
         candidate = link.__value
     }
 
-    let storage: Ref[byte]? = heap.finq
+    let storage: Ref[byte]? = heap.__value.finq
     if storage != nil {
         var index: uint = first
-        while index < heap.finq_n {
+        while index < heap.__value.finq_n {
             internal.gc.mark.mark_object(marker,
-                final_entry_at(storage.get(), index).payload)
+                final_entry_at(storage.get(), index).__value.payload)
             index += 1
         }
     }
-    if heap.finq_n != first {
-        __atomic_store(ref heap.fin_notify, true)
+    if heap.__value.finq_n != first {
+        __atomic_store(ref heap.__value.fin_notify, true)
     }
     if locked {
-        internal.gc.sync.ticket_unlock(ref heap.fin)
+        internal.gc.sync.ticket_unlock(ref heap.__value.fin)
     }
 }
 
 func mark_locked(marker: Ref[internal.gc.core.Marker]) {
-    let heap:    Ref[internal.gc.core.Heap] = marker.heap
-    let before:  uint                 = marker.bytes
+    let heap:    Ref[internal.gc.core.Heap] = marker.__value.heap
+    let before:  uint                 = marker.__value.bytes
     let locked:  bool                 = collector_fin_lock(heap)
-    let storage: Ref[byte]?           = heap.finq
+    let storage: Ref[byte]?           = heap.__value.finq
     if storage != nil {
         var index: uint = 0
-        while index < heap.finq_n {
+        while index < heap.__value.finq_n {
             internal.gc.mark.mark_object(marker,
-                final_entry_at(storage.get(), index).payload)
+                final_entry_at(storage.get(), index).__value.payload)
             index += 1
         }
     }
-    var running: Ref[internal.gc.core.Final_Batch]? = heap.running
+    var running: Ref[internal.gc.core.Final_Batch]? = heap.__value.running
     while running != nil {
         let batch: Ref[internal.gc.core.Final_Batch] = running.get()
         var index: uint                        = 0
-        while index < batch.n {
-            let payload: Ref[byte]? = batch.objects[index]
+        while index < batch.__value.n {
+            let payload: Ref[byte]? = batch.__value.objects[index]
             if payload != nil {
                 internal.gc.mark.mark_object(marker, payload.get())
             } else {
@@ -253,12 +253,12 @@ func mark_locked(marker: Ref[internal.gc.core.Marker]) {
             }
             index += 1
         }
-        running = batch.next
+        running = batch.__value.next
     }
     if locked {
-        internal.gc.sync.ticket_unlock(ref heap.fin)
+        internal.gc.sync.ticket_unlock(ref heap.__value.fin)
     }
-    marker.bytes = before
+    marker.__value.bytes = before
 }
 
 func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
@@ -271,16 +271,16 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
         if maximum != 0 and maximum - done < count {
             count = maximum - done
         }
-        internal.gc.sync.ticket_lock(ref heap.fin)
-        if count > heap.finq_n {
-            count = heap.finq_n
+        internal.gc.sync.ticket_lock(ref heap.__value.fin)
+        if count > heap.__value.finq_n {
+            count = heap.__value.finq_n
         }
         var index: uint = 0
         while index < count {
-            let storage: Ref[byte]? = heap.finq
+            let storage: Ref[byte]? = heap.__value.finq
             if storage != nil {
-                heap.finq_n -= 1
-                let payload: Ref[byte]? = final_entry_at(storage.get(), heap.finq_n).payload
+                heap.__value.finq_n -= 1
+                let payload: Ref[byte]? = final_entry_at(storage.get(), heap.__value.finq_n).__value.payload
                 batch.objects[index] = payload
             } else {
                 require false
@@ -290,30 +290,30 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
         if count != 0 {
             batch.n = count
             batch.prev = nil
-            let previous: Ref[internal.gc.core.Final_Batch]? = heap.running
+            let previous: Ref[internal.gc.core.Final_Batch]? = heap.__value.running
             batch.next = previous
             if previous != nil {
-                previous.get().prev = ref batch
+                previous.get().__value.prev = ref batch
             }
-            heap.running = ref batch
-            heap.running_n += count
+            heap.__value.running = ref batch
+            heap.__value.running_n += count
             if finalizer_thread {
-                __atomic_compare_exchange(ref heap.fin_thread, thread_starting,
+                __atomic_compare_exchange(ref heap.__value.fin_thread, thread_starting,
                                           thread_running)
             }
         }
-        internal.gc.sync.ticket_unlock(ref heap.fin)
+        internal.gc.sync.ticket_unlock(ref heap.__value.fin)
         if count == 0 {
             break
         }
 
-        internal.gc.sync.event_wake(ref heap.fin_progress)
+        internal.gc.sync.event_wake(ref heap.__value.fin_progress)
         index = 0
         while index < count {
             let payload: Ref[byte]? = batch.objects[index]
             if payload != nil {
                 let address: Ref[byte] = payload.get()
-                __gc_invoke_finalizer(internal.gc.core.header_of(address).type_index,
+                __gc_invoke_finalizer(internal.gc.core.header_of(address).__value.type_index,
                                       address)
             } else {
                 require false
@@ -321,21 +321,21 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
             index += 1
         }
 
-        internal.gc.sync.ticket_lock(ref heap.fin)
+        internal.gc.sync.ticket_lock(ref heap.__value.fin)
         let previous:  Ref[internal.gc.core.Final_Batch]? = batch.prev
         let following: Ref[internal.gc.core.Final_Batch]? = batch.next
         if previous != nil {
-            previous.get().next = following
+            previous.get().__value.next = following
         } else {
-            heap.running = following
+            heap.__value.running = following
         }
         if following != nil {
-            following.get().prev = previous
+            following.get().__value.prev = previous
         }
-        heap.running_n -= count
-        heap.finalizers_run += cast[u64]count
-        internal.gc.sync.ticket_unlock(ref heap.fin)
-        internal.gc.sync.event_wake(ref heap.fin_progress)
+        heap.__value.running_n -= count
+        heap.__value.finalizers_run += cast[u64]count
+        internal.gc.sync.ticket_unlock(ref heap.__value.fin)
+        internal.gc.sync.event_wake(ref heap.__value.fin_progress)
         done += count
     }
     in_finalizers = nested
@@ -343,54 +343,54 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
 }
 
 func pending(heap: Ref[internal.gc.core.Heap]) -> uint {
-    internal.gc.sync.ticket_lock(ref heap.fin)
-    let count: uint = heap.finq_n
-    internal.gc.sync.ticket_unlock(ref heap.fin)
+    internal.gc.sync.ticket_lock(ref heap.__value.fin)
+    let count: uint = heap.__value.finq_n
+    internal.gc.sync.ticket_unlock(ref heap.__value.fin)
     return count
 }
 
 func completed(heap: Ref[internal.gc.core.Heap]) -> uint {
-    internal.gc.sync.ticket_lock(ref heap.fin)
-    let count: uint = heap.finalizers_run
-    internal.gc.sync.ticket_unlock(ref heap.fin)
+    internal.gc.sync.ticket_lock(ref heap.__value.fin)
+    let count: uint = heap.__value.finalizers_run
+    internal.gc.sync.ticket_unlock(ref heap.__value.fin)
     return count
 }
 
 func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
-    let heap:  Ref[internal.gc.core.Heap] = mutator.heap
-    let limit: uint                 = heap.cfg.finalizer_backlog_limit
+    let heap:  Ref[internal.gc.core.Heap] = mutator.__value.heap
+    let limit: uint                 = heap.__value.cfg.finalizer_backlog_limit
     if limit == 0 or in_finalizers or finalizer_thread or pending(heap) <= limit {
         return
     }
     wake(heap)
     let start: uint = completed(heap)
-    if __atomic_load(ref heap.fin_stalled) == start + 1 {
+    if __atomic_load(ref heap.__value.fin_stalled) == start + 1 {
         return
     }
 
     let begun: u64 = __unobserved(__os_now_ns())
     let startup_limit: u64 = begun + startup_wait_ns
     var deadline: u64 = begun + stall_wait_ns
-    __os_thread_capture_self(ref mutator.captured)
+    __os_thread_capture_self(ref mutator.__value.captured)
     internal.gc.handshake.enter_blocking(mutator)
     while true {
-        let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_progress)
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.__value.fin_progress)
         if pending(heap) <= limit or completed(heap) != start {
-            internal.gc.sync.event_leave(ref heap.fin_progress)
+            internal.gc.sync.event_leave(ref heap.__value.fin_progress)
             break
         }
         let now: u64 = __unobserved(__os_now_ns())
-        if __atomic_load(ref heap.fin_thread) == thread_starting
+        if __atomic_load(ref heap.__value.fin_thread) == thread_starting
             and now + stall_wait_ns <= startup_limit {
             deadline = now + stall_wait_ns
         }
         if now >= deadline {
-            __atomic_store(ref heap.fin_stalled, start + 1)
-            internal.gc.sync.event_leave(ref heap.fin_progress)
+            __atomic_store(ref heap.__value.fin_stalled, start + 1)
+            internal.gc.sync.event_leave(ref heap.__value.fin_progress)
             break
         }
-        internal.gc.sync.event_wait(ref heap.fin_progress, seq, deadline - now)
-        internal.gc.sync.event_leave(ref heap.fin_progress)
+        internal.gc.sync.event_wait(ref heap.__value.fin_progress, seq, deadline - now)
+        internal.gc.sync.event_leave(ref heap.__value.fin_progress)
     }
     internal.gc.handshake.leave_blocking(mutator)
 }

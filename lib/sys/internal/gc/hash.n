@@ -54,7 +54,7 @@ func hash_slot_at(slots: Ref[Hash_Slot], index: uint, stride: uint) -> Ref[Hash_
 }
 
 func tab_slots(tab: Ref[Hash_Tab]) -> Ref[Hash_Slot] {
-    let slots: Ref[Hash_Slot]? = tab.slots
+    let slots: Ref[Hash_Slot]? = tab.__value.slots
     if slots != nil {
         return slots.get()
     }
@@ -63,25 +63,25 @@ func tab_slots(tab: Ref[Hash_Tab]) -> Ref[Hash_Slot] {
 
 inline func tab_home(tab: Ref[Hash_Tab], key: uint) -> uint {
     let mixed: uint = unsafe_mul(key, 0x9e3779b97f4a7c15)
-    return mixed >> (64 - tab.bits)
+    return mixed >> (64 - tab.__value.bits)
 }
 
 inline func tab_lookup(tab: Ref[Hash_Tab], key: uint) -> Ref[byte]? {
-    let slots: Ref[Hash_Slot]? = tab.slots
+    let slots: Ref[Hash_Slot]? = tab.__value.slots
     if slots == nil {
         return nil
     }
     let allocated: Ref[Hash_Slot] = tab_slots(tab)
     let stride:    uint           = hash_slot_bytes()
-    let mask:      uint           = (1 << tab.bits) - 1
+    let mask:      uint           = (1 << tab.__value.bits) - 1
     var index:     uint           = tab_home(tab, key)
     while true {
         let slot: Ref[Hash_Slot] = hash_slot_at(allocated, index, stride)
-        if slot.val == nil {
+        if slot.__value.val == nil {
             return nil
         }
-        if slot.key == key {
-            return slot.val
+        if slot.__value.key == key {
+            return slot.__value.val
         }
         index = (index + 1) & mask
     }
@@ -90,14 +90,14 @@ inline func tab_lookup(tab: Ref[Hash_Tab], key: uint) -> Ref[byte]? {
 func tab_insert(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
     let slots:  Ref[Hash_Slot] = tab_slots(tab)
     let stride: uint           = hash_slot_bytes()
-    let mask:   uint           = (1 << tab.bits) - 1
+    let mask:   uint           = (1 << tab.__value.bits) - 1
     var index:  uint           = tab_home(tab, key)
     while true {
         let slot: Ref[Hash_Slot] = hash_slot_at(slots, index, stride)
-        if slot.val == nil {
-            slot.key = key
-            slot.val = val
-            tab.n += 1
+        if slot.__value.val == nil {
+            slot.__value.key = key
+            slot.__value.val = val
+            tab.__value.n += 1
             return
         }
         index = (index + 1) & mask
@@ -106,29 +106,29 @@ func tab_insert(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
 
 func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
     let stride: uint = hash_slot_bytes()
-    while tab.slots == nil or (tab.n + more) * 2 > (1 << tab.bits) {
-        let old:   Ref[Hash_Slot]? = tab.slots
+    while tab.__value.slots == nil or (tab.__value.n + more) * 2 > (1 << tab.__value.bits) {
+        let old:   Ref[Hash_Slot]? = tab.__value.slots
         var count: uint            = 0
         var bits:  uint            = 10
         if old != nil {
-            count = 1 << tab.bits
-            bits = tab.bits + 1
+            count = 1 << tab.__value.bits
+            bits = tab.__value.bits + 1
         }
         let new_count: uint       = 1 << bits
         let alignment: uint       = hash_slot_align()
         let mapped:    Ref[byte]? = internal.memory.map_zeroed(new_count * stride, alignment)
         if mapped != nil {
-            tab.slots = unsafe_cast[Ref[Hash_Slot]] mapped.get()
-            tab.bits = bits
-            tab.n = 0
+            tab.__value.slots = unsafe_cast[Ref[Hash_Slot]] mapped.get()
+            tab.__value.bits = bits
+            tab.__value.n = 0
             if old != nil {
                 let old_slots: Ref[Hash_Slot] = old.get()
                 var index:     uint           = 0
                 while index < count {
                     let slot:  Ref[Hash_Slot] = hash_slot_at(old_slots, index, stride)
-                    let value: Ref[byte]?     = slot.val
+                    let value: Ref[byte]?     = slot.__value.val
                     if value != nil {
-                        tab_insert(tab, slot.key, value.get())
+                        tab_insert(tab, slot.__value.key, value.get())
                     }
                     index += 1
                 }
@@ -144,13 +144,13 @@ func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
 func tab_find(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) -> Ref[Hash_Slot] {
     let slots:  Ref[Hash_Slot] = tab_slots(tab)
     let stride: uint           = hash_slot_bytes()
-    let mask:   uint           = (1 << tab.bits) - 1
+    let mask:   uint           = (1 << tab.__value.bits) - 1
     var index:  uint           = tab_home(tab, key)
     while true {
         let slot:   Ref[Hash_Slot] = hash_slot_at(slots, index, stride)
-        let stored: Ref[byte]?     = slot.val
+        let stored: Ref[byte]?     = slot.__value.val
         if stored != nil {
-            if slot.key == key and stored.get() == val {
+            if slot.__value.key == key and stored.get() == val {
                 return slot
             }
         } else {
@@ -167,14 +167,14 @@ func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
     let displacement: int            = __gc_byte_diff(first, slots)
     require displacement >= 0
     var hole:  uint = cast[uint](displacement) / stride
-    let mask:  uint = (1 << tab.bits) - 1
+    let mask:  uint = (1 << tab.__value.bits) - 1
     var index: uint = (hole + 1) & mask
     while true {
         let source: Ref[Hash_Slot] = hash_slot_at(slots, index, stride)
-        if source.val == nil {
+        if source.__value.val == nil {
             break
         }
-        let home:       uint = tab_home(tab, source.key)
+        let home:       uint = tab_home(tab, source.__value.key)
         var after_hole: bool
         if hole <= index {
             after_hole = hole < home and home <= index
@@ -183,27 +183,27 @@ func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
         }
         if !after_hole {
             let destination: Ref[Hash_Slot] = hash_slot_at(slots, hole, stride)
-            destination.key = source.key
-            destination.val = source.val
+            destination.__value.key = source.__value.key
+            destination.__value.val = source.__value.val
             hole = index
         }
         index = (index + 1) & mask
     }
     let last: Ref[Hash_Slot] = hash_slot_at(slots, hole, stride)
-    last.key = 0
-    last.val = nil
-    tab.n -= 1
+    last.__value.key = 0
+    last.__value.val = nil
+    tab.__value.n -= 1
     when debug_enabled() {
         var probe_index: uint = (hole + 1) & mask
         while true {
             let occupied: Ref[Hash_Slot] = hash_slot_at(slots, probe_index, stride)
-            if occupied.val == nil {
+            if occupied.__value.val == nil {
                 break
             }
-            var path: uint = tab_home(tab, occupied.key)
+            var path: uint = tab_home(tab, occupied.__value.key)
             while path != probe_index {
                 let prior: Ref[Hash_Slot] = hash_slot_at(slots, path, stride)
-                assert prior.val != nil
+                assert prior.__value.val != nil
                 path = (path + 1) & mask
             }
             probe_index = (probe_index + 1) & mask
@@ -212,14 +212,14 @@ func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
 }
 
 func tab_free(tab: Ref[Hash_Tab]) {
-    let slots: Ref[Hash_Slot]? = tab.slots
+    let slots: Ref[Hash_Slot]? = tab.__value.slots
     if slots != nil {
         let stride: uint = hash_slot_bytes()
-        internal.memory.unmap(slots.get(), (1 << tab.bits) * stride)
+        internal.memory.unmap(slots.get(), (1 << tab.__value.bits) * stride)
     }
-    tab.slots = nil
-    tab.bits = 0
-    tab.n = 0
+    tab.__value.slots = nil
+    tab.__value.bits = 0
+    tab.__value.n = 0
 }
 
 func index_slot_record() -> Ref[internal.abi.Type_Record] {
@@ -236,7 +236,7 @@ func index_slot_at(slots: Ref[Index_Slot], index: uint, stride: uint) -> Ref[Ind
 }
 
 func index_tab_slots(tab: Ref[Index_Tab]) -> Ref[Index_Slot] {
-    let slots: Ref[Index_Slot]? = tab.slots
+    let slots: Ref[Index_Slot]? = tab.__value.slots
     if slots != nil {
         return slots.get()
     }
@@ -245,25 +245,25 @@ func index_tab_slots(tab: Ref[Index_Tab]) -> Ref[Index_Slot] {
 
 func index_tab_home(tab: Ref[Index_Tab], key: uint) -> uint {
     let mixed: uint = unsafe_mul(key, 0x9e3779b97f4a7c15)
-    return mixed >> (64 - tab.bits)
+    return mixed >> (64 - tab.__value.bits)
 }
 
 func index_tab_lookup(tab: Ref[Index_Tab], key: uint) -> uint {
-    let slots: Ref[Index_Slot]? = tab.slots
+    let slots: Ref[Index_Slot]? = tab.__value.slots
     if slots == nil {
         return 0
     }
     let allocated: Ref[Index_Slot] = index_tab_slots(tab)
     let stride:    uint            = internal.abi.size_bytes(index_slot_record())
-    let mask:      uint            = (1 << tab.bits) - 1
+    let mask:      uint            = (1 << tab.__value.bits) - 1
     var index:     uint            = index_tab_home(tab, key)
     while true {
         let slot: Ref[Index_Slot] = index_slot_at(allocated, index, stride)
-        if slot.val == 0 {
+        if slot.__value.val == 0 {
             return 0
         }
-        if slot.key == key {
-            return slot.val
+        if slot.__value.key == key {
+            return slot.__value.val
         }
         index = (index + 1) & mask
     }
@@ -273,14 +273,14 @@ func index_tab_insert(tab: Ref[Index_Tab], key: uint, val: uint) {
     require val != 0
     let slots:  Ref[Index_Slot] = index_tab_slots(tab)
     let stride: uint            = internal.abi.size_bytes(index_slot_record())
-    let mask:   uint            = (1 << tab.bits) - 1
+    let mask:   uint            = (1 << tab.__value.bits) - 1
     var index:  uint            = index_tab_home(tab, key)
     while true {
         let slot: Ref[Index_Slot] = index_slot_at(slots, index, stride)
-        if slot.val == 0 {
-            slot.key = key
-            slot.val = val
-            tab.n += 1
+        if slot.__value.val == 0 {
+            slot.__value.key = key
+            slot.__value.val = val
+            tab.__value.n += 1
             return
         }
         index = (index + 1) & mask
@@ -289,28 +289,28 @@ func index_tab_insert(tab: Ref[Index_Tab], key: uint, val: uint) {
 
 func index_tab_reserve(tab: Ref[Index_Tab], more: uint) -> bool {
     let stride: uint = internal.abi.size_bytes(index_slot_record())
-    while tab.slots == nil or (tab.n + more) * 2 > (1 << tab.bits) {
-        let old:   Ref[Index_Slot]? = tab.slots
+    while tab.__value.slots == nil or (tab.__value.n + more) * 2 > (1 << tab.__value.bits) {
+        let old:   Ref[Index_Slot]? = tab.__value.slots
         var count: uint             = 0
         var bits:  uint             = 10
         if old != nil {
-            count = 1 << tab.bits
-            bits = tab.bits + 1
+            count = 1 << tab.__value.bits
+            bits = tab.__value.bits + 1
         }
         let new_count: uint       = 1 << bits
         let alignment: uint       = internal.abi.alignment_bytes(index_slot_record())
         let mapped:    Ref[byte]? = internal.memory.map_zeroed(new_count * stride, alignment)
         if mapped != nil {
-            tab.slots = unsafe_cast[Ref[Index_Slot]] mapped.get()
-            tab.bits = bits
-            tab.n = 0
+            tab.__value.slots = unsafe_cast[Ref[Index_Slot]] mapped.get()
+            tab.__value.bits = bits
+            tab.__value.n = 0
             if old != nil {
                 let old_slots: Ref[Index_Slot] = old.get()
                 var index:     uint            = 0
                 while index < count {
                     let slot: Ref[Index_Slot] = index_slot_at(old_slots, index, stride)
-                    if slot.val != 0 {
-                        index_tab_insert(tab, slot.key, slot.val)
+                    if slot.__value.val != 0 {
+                        index_tab_insert(tab, slot.__value.key, slot.__value.val)
                     }
                     index += 1
                 }
@@ -327,14 +327,14 @@ func index_tab_find(tab: Ref[Index_Tab], key: uint, val: uint) -> Ref[Index_Slot
     require val != 0
     let slots:  Ref[Index_Slot] = index_tab_slots(tab)
     let stride: uint            = internal.abi.size_bytes(index_slot_record())
-    let mask:   uint            = (1 << tab.bits) - 1
+    let mask:   uint            = (1 << tab.__value.bits) - 1
     var index:  uint            = index_tab_home(tab, key)
     while true {
         let slot: Ref[Index_Slot] = index_slot_at(slots, index, stride)
-        if slot.val == 0 {
+        if slot.__value.val == 0 {
             require false
         }
-        if slot.key == key and slot.val == val {
+        if slot.__value.key == key and slot.__value.val == val {
             return slot
         }
         index = (index + 1) & mask
@@ -348,14 +348,14 @@ func index_tab_delete(tab: Ref[Index_Tab], key: uint, val: uint) {
     let displacement: int             = __gc_byte_diff(first, slots)
     require displacement >= 0
     var hole:  uint = cast[uint](displacement) / stride
-    let mask:  uint = (1 << tab.bits) - 1
+    let mask:  uint = (1 << tab.__value.bits) - 1
     var index: uint = (hole + 1) & mask
     while true {
         let source: Ref[Index_Slot] = index_slot_at(slots, index, stride)
-        if source.val == 0 {
+        if source.__value.val == 0 {
             break
         }
-        let home:       uint = index_tab_home(tab, source.key)
+        let home:       uint = index_tab_home(tab, source.__value.key)
         var after_hole: bool
         if hole <= index {
             after_hole = hole < home and home <= index
@@ -364,27 +364,27 @@ func index_tab_delete(tab: Ref[Index_Tab], key: uint, val: uint) {
         }
         if !after_hole {
             let destination: Ref[Index_Slot] = index_slot_at(slots, hole, stride)
-            destination.key = source.key
-            destination.val = source.val
+            destination.__value.key = source.__value.key
+            destination.__value.val = source.__value.val
             hole = index
         }
         index = (index + 1) & mask
     }
     let last: Ref[Index_Slot] = index_slot_at(slots, hole, stride)
-    last.key = 0
-    last.val = 0
-    tab.n -= 1
+    last.__value.key = 0
+    last.__value.val = 0
+    tab.__value.n -= 1
     when debug_enabled() {
         var probe_index: uint = (hole + 1) & mask
         while true {
             let occupied: Ref[Index_Slot] = index_slot_at(slots, probe_index, stride)
-            if occupied.val == 0 {
+            if occupied.__value.val == 0 {
                 break
             }
-            var path: uint = index_tab_home(tab, occupied.key)
+            var path: uint = index_tab_home(tab, occupied.__value.key)
             while path != probe_index {
                 let prior: Ref[Index_Slot] = index_slot_at(slots, path, stride)
-                assert prior.val != 0
+                assert prior.__value.val != 0
                 path = (path + 1) & mask
             }
             probe_index = (probe_index + 1) & mask
@@ -393,12 +393,12 @@ func index_tab_delete(tab: Ref[Index_Tab], key: uint, val: uint) {
 }
 
 func index_tab_free(tab: Ref[Index_Tab]) {
-    let slots: Ref[Index_Slot]? = tab.slots
+    let slots: Ref[Index_Slot]? = tab.__value.slots
     if slots != nil {
         let stride: uint = internal.abi.size_bytes(index_slot_record())
-        internal.memory.unmap(slots.get(), (1 << tab.bits) * stride)
+        internal.memory.unmap(slots.get(), (1 << tab.__value.bits) * stride)
     }
-    tab.slots = nil
-    tab.bits = 0
-    tab.n = 0
+    tab.__value.slots = nil
+    tab.__value.bits = 0
+    tab.__value.n = 0
 }

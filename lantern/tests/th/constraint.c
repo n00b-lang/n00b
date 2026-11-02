@@ -232,7 +232,7 @@ static void test_has_field_auto_deref(th_ctx *ctx)
         .field = {.name = S("value"), .type = i}};
 
     check("auto-deref field accepts a value", binds(ctx, field, record));
-    check("auto-deref field accepts a reference", binds(ctx, field, ref));
+    check("auto-deref field rejects a reference", !binds(ctx, field, ref));
     check("strict field rejects a reference", !binds(ctx, strict, ref));
     check("auto-deref field rejects a missing field",
           !binds(ctx, field, th_ind(ctx, 0, i)));

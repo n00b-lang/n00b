@@ -40,7 +40,7 @@ func local_cases() {
     require a == 19
     var p: Point = (x = 1, y = 2)
     let rp: Ref[Point] = ref p
-    rp.x = 10
+    rp.__value.x = 10
     rp.__value.y = 30
     let whole: Point = rp.__value
     require whole.x == 10 and whole.y == 30
@@ -311,8 +311,8 @@ func report_cycle(info: sys.gc.core.Cycle_Info, user: Ref[byte]?) {
 func gc_collect_main() {
     let frame: Ref[sys.abi.Frame_Layout_Record]? = sys.abi.frame_layout_at(1)
     require frame != nil
-    require frame.get().function_index != 0
-    require frame.get().frame_byte_extent >= cast[u64](sys.abi.frame_root_offset)
+    require frame.get().__value.function_index != 0
+    require frame.get().__value.frame_byte_extent >= cast[u64](sys.abi.frame_root_offset)
     var frame_index: u32 = 1
     var found_typed_frame: bool = false
     var found_rootless_frame: bool = false
@@ -321,10 +321,10 @@ func gc_collect_main() {
     while candidate != nil {
         let layout: Ref[sys.abi.Frame_Layout_Record] =
             candidate.get()
-        if layout.shadow_frame_type_index != 0 {
+        if layout.__value.shadow_frame_type_index != 0 {
             found_typed_frame = true
         }
-        if layout.frame_byte_extent == cast[u64](sys.abi.frame_root_offset) {
+        if layout.__value.frame_byte_extent == cast[u64](sys.abi.frame_root_offset) {
             found_rootless_frame = true
         }
         frame_index += 1
@@ -352,9 +352,9 @@ func gc_collect_main() {
                 let mutator: Ref[sys.gc.core.Mutator] = attached.get()
                 var saw_tls_slot: bool = false
                 var tls_index: uint = 0
-                while tls_index < mutator.ntls_roots {
+                while tls_index < mutator.__value.ntls_roots {
                     let entry: Ref[sys.gc.roots.TLS_Root_Entry] = sys.gc.roots.tls_root_at(mutator, tls_index)
-                    if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_slot) {
+                    if __abi_ref_address(entry.__value.address) == __abi_ref_address(ref tls_slot) {
                         saw_tls_slot = true
                     }
                     tls_index += 1
@@ -363,18 +363,18 @@ func gc_collect_main() {
                 var owned: Ref[sys.gc.core.Block_Metadata]? = nil
                 sys.gc.core.own(heap, mutator, block, ref owned)
                 let assigned: Ref[sys.gc.core.Block_Metadata]? = block
-                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
-                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                sys.gc.core.bump_attach(mutator, ref mutator.__value.small, assigned)
+                require sys.gc.core.bump_next_hole(ref mutator.__value.small, 48)
                 let probe: byte = 0
                 let type_index: u32 = cast[u32](typeof(probe))
                 let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
+                    mutator, ref mutator.__value.small, type_index, 8,
                     sys.gc.core.granule_bytes, false)
                 let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
+                    mutator, ref mutator.__value.small, type_index, 8,
                     sys.gc.core.granule_bytes, false)
                 let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
-                    mutator, ref mutator.small, type_index, 8,
+                    mutator, ref mutator.__value.small, type_index, 8,
                     sys.gc.core.granule_bytes, false)
                 if first != nil and second != nil and third != nil {
                     var slot: Ref[byte]? = first
@@ -387,13 +387,13 @@ func gc_collect_main() {
                     let third_offset: uint = __abi_ref_address(
                         sys.gc.core.header_of(third.get())) - __abi_ref_address(base)
                     sys.gc.collect.collect(heap)
-                    assert heap.collections == 1
+                    assert heap.__value.collections == 1
                     let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(heap)
                     assert stats.collections == 1
                     assert stats.objects_allocated >= 2
-                    assert stats.blocks_total == heap.nblocks
-                    assert stats.pauses == heap.pauses
-                    assert stats.last_pause_ns == heap.last_pause_ns
+                    assert stats.blocks_total == heap.__value.nblocks
+                    assert stats.pauses == heap.__value.pauses
+                    assert stats.last_pause_ns == heap.__value.last_pause_ns
                     assert stats.max_pause_ns >= stats.last_pause_ns
                     assert stats.total_pause_ns >= stats.last_pause_ns
                     assert stats.finalizers_pending == 0
@@ -405,7 +405,7 @@ func gc_collect_main() {
                     sys.gc.collect.collect_start(heap)
                     while sys.gc.collect.collect_step(heap, 1) {}
                     sys.gc.collect.collect_finish(heap)
-                    assert heap.collections == 2
+                    assert heap.__value.collections == 2
                     assert pause_count >= 2
                     assert cycle_count == 2
                 } else { require false }

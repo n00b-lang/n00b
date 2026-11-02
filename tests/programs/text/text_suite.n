@@ -43,7 +43,7 @@ func rich_over(body: Ref[text.Rich_Body]) -> string {
 func body_of(s: string) -> Ref[text.Rich_Body] {
     var copy: string = s
     let words: Ref[String_Words] = unsafe_cast[Ref[String_Words]] ref copy
-    return unsafe_cast[Ref[text.Rich_Body]] words.data
+    return unsafe_cast[Ref[text.Rich_Body]] words.__value.data
 }
 
 func is_rich(s: string) -> bool {
@@ -539,15 +539,15 @@ func rich_body_text_offset() -> u64? {
     if body == nil {
         return nil
     }
-    let fields: sys.abi.Range = body.get().fields_or_arms
+    let fields: sys.abi.Range = body.get().__value.fields_or_arms
     var i: u32 = 0
     while i < fields.count {
         let index: i64 = sys.abi.range_index(fields, i)
         if index >= 0 {
             let field: Ref[sys.abi.Field_Record]? =
                 sys.abi.field_at(cast[u32] index)
-            if field != nil and field.get().declaration_ordinal == 0 {
-                return field.get().logical_bit_offset
+            if field != nil and field.get().__value.declaration_ordinal == 0 {
+                return field.get().__value.logical_bit_offset
             }
         }
         i += 1
@@ -1412,7 +1412,7 @@ func record_count(s: string) -> uint {
     if !is_rich(s) {
         return 0
     }
-    return body_of(s).style_info.len()
+    return body_of(s).__value.style_info.len()
 }
 
 func push_span(modify spans: List[text.Style_Span], start: u32, end: u32,
@@ -1456,7 +1456,7 @@ func rich_build_checks() {
     let two: string = text.rich_string("text", many)
     check(record_count(two) == 2, "rich_build_probe", "8")
     if record_count(two) == 2 {
-        let second: text.Style_Record = body_of(two).style_info[1]
+        let second: text.Style_Record = body_of(two).__value.style_info[1]
         check(opt_is(second.start_ix, 2) and opt_is(second.end_ix, 4), "rich_build_probe", "9")
         check(second.style_tag != nil, "rich_build_probe", "10")
     }
@@ -1466,7 +1466,7 @@ func rich_build_checks() {
     check(text.eq(tail, "beta"), "rich_build_probe", "11")
     check(record_count(tail) == 2, "rich_build_probe", "12")
     if record_count(tail) == 2 {
-        let recs: List[text.Style_Record] = body_of(tail).style_info
+        let recs: List[text.Style_Record] = body_of(tail).__value.style_info
         var clipped: bool = true
         for i from 0 until 2 {
             clipped = clipped and opt_is(recs[i].start_ix, 0) and
@@ -1481,7 +1481,7 @@ func rich_build_checks() {
     let carry: string = byte_slice_of("«b»head tail"'r, 5, 9)
     check(record_count(carry) == 1, "rich_build_probe", "15")
     if record_count(carry) == 1 {
-        let er: text.Style_Record = body_of(carry).style_info[0]
+        let er: text.Style_Record = body_of(carry).__value.style_info[0]
         check(opt_is(er.start_ix, 0) and
               opt_is(er.end_ix, text.index_extends), "rich_build_probe", "16")
     }
@@ -2205,7 +2205,7 @@ func tag_is_b(r: text.Style_Record) -> bool {
 func collect() {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    sys.gc.collect.collect(mutator.get().heap)
+    sys.gc.collect.collect(mutator.get().__value.heap)
 }
 
 func rich_literal_probe_main() {
@@ -2216,14 +2216,14 @@ func rich_literal_probe_main() {
 
     let cbody: Ref[text.Rich_Body] = body_of(closed)
     let ubody: Ref[text.Rich_Body] = body_of(unclosed)
-    check(cbody.style_info.len() == 1 and ubody.style_info.len() == 1, "rich_literal_probe", "3")
+    check(cbody.__value.style_info.len() == 1 and ubody.__value.style_info.len() == 1, "rich_literal_probe", "3")
 
-    let c: text.Style_Record = cbody.style_info[0]
+    let c: text.Style_Record = cbody.__value.style_info[0]
     check(opt_is(c.start_ix, 0), "rich_literal_probe", "4")
     check(opt_is(c.end_ix, 4), "rich_literal_probe", "5")
     check(tag_is_b(c), "rich_literal_probe", "6")
 
-    let u: text.Style_Record = ubody.style_info[0]
+    let u: text.Style_Record = ubody.__value.style_info[0]
     check(opt_is(u.end_ix, text.index_extends), "rich_literal_probe", "7")
     check(tag_is_b(u), "rich_literal_probe", "8")
 
@@ -2231,7 +2231,7 @@ func rich_literal_probe_main() {
 
     collect()
 
-    check(byte_len(closed) == 4 and cbody.style_info.len() == 1, "rich_literal_probe", "9")
+    check(byte_len(closed) == 4 and cbody.__value.style_info.len() == 1, "rich_literal_probe", "9")
     check(byte_at(closed, 0) == cast[u8] 't', "rich_literal_probe", "10")
     check(is_rich(wrapped) and is_rich(wrap_body.s), "rich_literal_probe", "11")
     check(byte_len(wrapped) == 4 and byte_at(wrapped, 0) == cast[u8] 't',
@@ -2611,7 +2611,7 @@ var override_theme: text.Theme = (
     styles = nil, roles = nil)
 
 func same_name(t: Ref[text.Theme], want: string) -> bool {
-    return t.name == want
+    return t.__value.name == want
 }
 
 func is_yes(v: bool?) -> bool {
@@ -2649,8 +2649,8 @@ func builtin_checks() {
     var i: uint = 0
     while i < text.theme_builtin_count() {
         let t: Ref[text.Theme] = text.theme_builtin(i)
-        check(byte_len(t.name) != 0 and byte_len(t.description) != 0, "theme_probe", "2")
-        check(text.theme_lookup(t.name) != nil, "theme_probe", "3")
+        check(byte_len(t.__value.name) != 0 and byte_len(t.__value.description) != 0, "theme_probe", "2")
+        check(text.theme_lookup(t.__value.name) != nil, "theme_probe", "3")
         var s: i8 = 0
         while s < slot(text.Palette_Ix.palette_size) {
             check(text.palette(t.__value, cast[text.Palette_Ix] s) != nil, "theme_probe", "4")
@@ -2751,7 +2751,7 @@ func theme_probe_main() {
 func objects_allocated() -> u64 {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    return mutator.get().objects_allocated
+    return mutator.get().__value.objects_allocated
 }
 
 func joined(a: string, b: string) -> string {

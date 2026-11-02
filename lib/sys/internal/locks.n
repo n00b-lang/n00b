@@ -52,18 +52,18 @@ func futex_park(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) {
 }
 
 func mutex_owned(mutex: Ref[Mutex]) -> bool {
-    return __atomic_load(ref mutex.owner) == self_tag()
+    return __atomic_load(ref mutex.__value.owner) == self_tag()
 }
 
 func mutex_fast(mutex: Ref[Mutex], me: u64) -> bool {
-    if __atomic_load(ref mutex.owner) == me {
-        mutex.nesting += 1
+    if __atomic_load(ref mutex.__value.owner) == me {
+        mutex.__value.nesting += 1
         return true
     }
     var spins: u32 = 0
     while spins < spin_limit {
-        if __atomic_fetch_or(ref mutex.state, mutex_locked) == mutex_unlocked {
-            __atomic_store(ref mutex.owner, me)
+        if __atomic_fetch_or(ref mutex.__value.state, mutex_locked) == mutex_unlocked {
+            __atomic_store(ref mutex.__value.owner, me)
             return true
         }
         internal.threads.cpu_relax()
@@ -77,12 +77,12 @@ func mutex_lock(mutex: Ref[Mutex]) {
     if mutex_fast(mutex, me) {
         return
     }
-    __atomic_fetch_add(ref mutex.should_wake, 1)
-    while __atomic_fetch_or(ref mutex.state, mutex_locked) != mutex_unlocked {
-        futex_park(ref mutex.state, mutex_locked, wait_slice_ns)
+    __atomic_fetch_add(ref mutex.__value.should_wake, 1)
+    while __atomic_fetch_or(ref mutex.__value.state, mutex_locked) != mutex_unlocked {
+        futex_park(ref mutex.__value.state, mutex_locked, wait_slice_ns)
     }
-    __atomic_fetch_sub(ref mutex.should_wake, 1)
-    __atomic_store(ref mutex.owner, me)
+    __atomic_fetch_sub(ref mutex.__value.should_wake, 1)
+    __atomic_store(ref mutex.__value.owner, me)
 }
 
 func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
@@ -94,7 +94,7 @@ func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
     var now: u64 = internal.clock.now_ns()
     let deadline: u64 = now + timeout_ns
     while now < deadline {
-        futex_park(ref mutex.state, mutex_locked, deadline - now)
+        futex_park(ref mutex.__value.state, mutex_locked, deadline - now)
         if mutex_fast(mutex, me) {
             return true
         }
@@ -105,32 +105,32 @@ func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
 
 func mutex_unlock(mutex: Ref[Mutex]) {
     require mutex_owned(mutex)
-    if mutex.nesting != 0 {
-        mutex.nesting -= 1
+    if mutex.__value.nesting != 0 {
+        mutex.__value.nesting -= 1
         return
     }
-    __atomic_store(ref mutex.owner, 0)
-    __atomic_store(ref mutex.state, mutex_unlocked)
-    if __atomic_load(ref mutex.should_wake) != 0 {
-        internal.threads.futex_wake_all(ref mutex.state)
+    __atomic_store(ref mutex.__value.owner, 0)
+    __atomic_store(ref mutex.__value.state, mutex_unlocked)
+    if __atomic_load(ref mutex.__value.should_wake) != 0 {
+        internal.threads.futex_wake_all(ref mutex.__value.state)
     }
 }
 
 func condition_lock(cv: Ref[Condition]) {
-    if mutex_owned(ref cv.mutex) {
+    if mutex_owned(ref cv.__value.mutex) {
         return
     }
-    mutex_lock(ref cv.mutex)
+    mutex_lock(ref cv.__value.mutex)
 }
 
 func condition_unlock(cv: Ref[Condition]) {
-    mutex_unlock(ref cv.mutex)
+    mutex_unlock(ref cv.__value.mutex)
 }
 
 func condition_leave(cv: Ref[Condition], unlock: bool) {
-    let waiters: u32 = __atomic_fetch_sub(ref cv.waiters, 1) - 1
-    if __atomic_load(ref cv.wake_slots) > waiters {
-        __atomic_store(ref cv.wake_slots, waiters)
+    let waiters: u32 = __atomic_fetch_sub(ref cv.__value.waiters, 1) - 1
+    if __atomic_load(ref cv.__value.wake_slots) > waiters {
+        __atomic_store(ref cv.__value.wake_slots, waiters)
     }
     if unlock {
         condition_unlock(cv)
@@ -144,8 +144,8 @@ func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
         deadline = internal.clock.now_ns() + timeout_ns
     }
     condition_lock(cv)
-    var seen: u32 = __atomic_load(ref cv.epoch)
-    __atomic_fetch_add(ref cv.waiters, 1)
+    var seen: u32 = __atomic_load(ref cv.__value.epoch)
+    __atomic_fetch_add(ref cv.__value.waiters, 1)
     condition_unlock(cv)
     while true {
         var remaining: u64 = 0
@@ -158,17 +158,17 @@ func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
             }
             remaining = deadline - now
         }
-        futex_park(ref cv.epoch, seen, remaining)
-        if __atomic_load(ref cv.epoch) == seen {
+        futex_park(ref cv.__value.epoch, seen, remaining)
+        if __atomic_load(ref cv.__value.epoch) == seen {
             continue
         }
         condition_lock(cv)
-        if __atomic_load(ref cv.wake_slots) != 0 {
-            __atomic_fetch_sub(ref cv.wake_slots, 1)
+        if __atomic_load(ref cv.__value.wake_slots) != 0 {
+            __atomic_fetch_sub(ref cv.__value.wake_slots, 1)
             condition_leave(cv, unlock)
             return true
         }
-        seen = __atomic_load(ref cv.epoch)
+        seen = __atomic_load(ref cv.__value.epoch)
         condition_unlock(cv)
     }
 }
@@ -176,9 +176,9 @@ func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
 func condition_notify(cv: Ref[Condition], all: bool = false,
                              max: u32 = 1, unlock: bool = false) {
     condition_lock(cv)
-    let waiters: u32 = __atomic_load(ref cv.waiters)
+    let waiters: u32 = __atomic_load(ref cv.__value.waiters)
     if waiters != 0 {
-        let slots: u32 = __atomic_load(ref cv.wake_slots)
+        let slots: u32 = __atomic_load(ref cv.__value.wake_slots)
         var want: u32 = max
         if all {
             want = waiters
@@ -186,9 +186,9 @@ func condition_notify(cv: Ref[Condition], all: bool = false,
         if want > waiters - slots {
             want = waiters - slots
         }
-        __atomic_store(ref cv.wake_slots, slots + want)
-        __atomic_fetch_add(ref cv.epoch, 1)
-        internal.threads.futex_wake_all(ref cv.epoch)
+        __atomic_store(ref cv.__value.wake_slots, slots + want)
+        __atomic_fetch_add(ref cv.__value.epoch, 1)
+        internal.threads.futex_wake_all(ref cv.__value.epoch)
     }
     if unlock {
         condition_unlock(cv)
@@ -196,10 +196,10 @@ func condition_notify(cv: Ref[Condition], all: bool = false,
 }
 
 func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true) {
-    __atomic_store(ref lock.state, 0)
-    __atomic_store(ref lock.owner, 0)
-    __atomic_store(ref lock.parked, 0)
-    lock.nonrecursive = !recursive
+    __atomic_store(ref lock.__value.state, 0)
+    __atomic_store(ref lock.__value.owner, 0)
+    __atomic_store(ref lock.__value.parked, 0)
+    lock.__value.nonrecursive = !recursive
 }
 
 func rw_backoff(lock: Ref[Rw_Lock], seen: u32, round: u32) {
@@ -207,14 +207,14 @@ func rw_backoff(lock: Ref[Rw_Lock], seen: u32, round: u32) {
         internal.threads.cpu_relax()
         return
     }
-    __atomic_fetch_add(ref lock.parked, 1)
-    futex_park(ref lock.state, seen, wait_slice_ns)
-    __atomic_fetch_sub(ref lock.parked, 1)
+    __atomic_fetch_add(ref lock.__value.parked, 1)
+    futex_park(ref lock.__value.state, seen, wait_slice_ns)
+    __atomic_fetch_sub(ref lock.__value.parked, 1)
 }
 
 func rw_wake(lock: Ref[Rw_Lock]) {
-    if __atomic_load(ref lock.parked) != 0 {
-        internal.threads.futex_wake_all(ref lock.state)
+    if __atomic_load(ref lock.__value.parked) != 0 {
+        internal.threads.futex_wake_all(ref lock.__value.state)
     }
 }
 
@@ -247,7 +247,7 @@ func rw_record(lock: Ref[Rw_Lock], write: bool) {
 
 func rw_readers_adjust(lock: Ref[Rw_Lock], up: bool) {
     while true {
-        let current: u32 = __atomic_load(ref lock.state)
+        let current: u32 = __atomic_load(ref lock.__value.state)
         let readers: u32 = current & rw_readers
         var wanted: u32 = current
         if up {
@@ -258,7 +258,7 @@ func rw_readers_adjust(lock: Ref[Rw_Lock], up: bool) {
             require readers != 0
             wanted = current - 1
         }
-        if __atomic_compare_exchange(ref lock.state, current, wanted) {
+        if __atomic_compare_exchange(ref lock.__value.state, current, wanted) {
             return
         }
     }
@@ -269,7 +269,7 @@ func rw_reenter(lock: Ref[Rw_Lock], write: bool) -> u32 {
     if slot == rw_records {
         return 0
     }
-    require !lock.nonrecursive
+    require !lock.__value.nonrecursive
     if write and held_write[slot] == 0 {
         return 1
     }
@@ -287,14 +287,14 @@ func rw_read_lock(lock: Ref[Rw_Lock]) {
     }
     var round: u32 = 0
     while true {
-        let current: u32 = __atomic_load(ref lock.state)
+        let current: u32 = __atomic_load(ref lock.__value.state)
         if current & rw_writer != 0 {
             rw_backoff(lock, current, round)
             round += 1
             continue
         }
         require current & rw_readers != rw_readers
-        if __atomic_compare_exchange(ref lock.state, current, current + 1) {
+        if __atomic_compare_exchange(ref lock.__value.state, current, current + 1) {
             rw_record(lock, false)
             return
         }
@@ -311,22 +311,22 @@ func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
         rw_readers_adjust(lock, false)
     }
     while true {
-        let current: u32 = __atomic_load(ref lock.state)
+        let current: u32 = __atomic_load(ref lock.__value.state)
         if current & rw_writer != 0 {
             if upgrading {
                 rw_readers_adjust(lock, true)
             }
             return false
         }
-        if __atomic_compare_exchange(ref lock.state, current,
+        if __atomic_compare_exchange(ref lock.__value.state, current,
                                      current | rw_writer) {
             break
         }
     }
-    __atomic_store(ref lock.owner, self_tag())
+    __atomic_store(ref lock.__value.owner, self_tag())
     var round: u32 = 0
     while true {
-        let current: u32 = __atomic_load(ref lock.state)
+        let current: u32 = __atomic_load(ref lock.__value.state)
         if current & rw_readers == 0 {
             break
         }
@@ -348,7 +348,7 @@ func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
 func rw_write_lock(lock: Ref[Rw_Lock]) {
     var round: u32 = 0
     while !rw_try_write_lock(lock) {
-        rw_backoff(lock, __atomic_load(ref lock.state), round)
+        rw_backoff(lock, __atomic_load(ref lock.__value.state), round)
         round += 1
     }
 }
@@ -370,9 +370,9 @@ func rw_unlock(lock: Ref[Rw_Lock], all: bool = false) {
         }
     }
     held_rw[slot] = 0
-    if __atomic_load(ref lock.owner) == self_tag() {
-        __atomic_store(ref lock.owner, 0)
-        __atomic_fetch_and(ref lock.state, ~rw_writer)
+    if __atomic_load(ref lock.__value.owner) == self_tag() {
+        __atomic_store(ref lock.__value.owner, 0)
+        __atomic_fetch_and(ref lock.__value.state, ~rw_writer)
     }
     if held_reader[slot] {
         rw_readers_adjust(lock, false)

@@ -66,8 +66,8 @@ func gc_array_backing_check() {
     let first: Ref[Backing_Item] = make_item(7)
     let second: Ref[Backing_Item] = make_item(9)
     let values = [first, second]'array
-    require values[0].value == 7
-    require values[1].value == 9
+    require values[0].__value.value == 7
+    require values[1].__value.value == 9
 }
 
 func literal_method_check() {
@@ -287,7 +287,7 @@ func abi_summaries_check() {
             break
         }
         total += 1
-        if found.get().summary_offset != 0 {
+        if found.get().__value.summary_offset != 0 {
             summarized += 1
         }
         index += 1
@@ -378,7 +378,7 @@ func atomic_global_check() {
     __atomic_store(ref atomic_head, ref node)
     let stored = __atomic_load(ref atomic_head)
     require stored != nil
-    require stored.get().value == 7
+    require stored.get().__value.value == 7
 }
 
 func box_integer(value: int) -> Any {
@@ -775,7 +775,7 @@ func thread_global_pair_check() {
     while index < sys.abi.storage_count() {
         let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
         if row != nil {
-            if row.get().segment_kind == 3 {
+            if row.get().__value.segment_kind == 3 {
                 let address: Ref[byte]? = sys.abi.storage_address(index)
                 if address != nil {
                     let actual: uint = __abi_ref_address(address.get())
@@ -823,15 +823,15 @@ func close_cell(self: Cell_Handle) {
 }
 
 func close_cell(self: Other) {
-    self.raw = 1
+    self.__value.raw = 1
 }
 
 func reset(modify self: Other) {
-    self.raw = 2
+    self.__value.raw = 2
 }
 
 func clear(modify self: Ref[Cell]) {
-    self.raw = 3
+    self.__value.raw = 3
 }
 
 func named_reference_check() {
@@ -842,10 +842,10 @@ func named_reference_check() {
     assert first.raw == 0
     let second = other(9)
     close_cell(second)
-    assert second.raw == 1
+    assert second.__value.raw == 1
     var modified = other(5)
     reset(modified)
-    assert modified.raw == 2
+    assert modified.__value.raw == 2
     var cell: Cell = (raw = 0)
     var direct: Ref[Cell] = ref cell
     clear(direct)
@@ -962,7 +962,7 @@ func option_field_narrowing_check() {
 func rounded_bytes(index: u32) -> uint {
     let found: Ref[sys.abi.Type_Record]? = sys.abi.type_at(index)
     if found != nil {
-        return cast[uint]((found.get().size_bits + 7) / 8)
+        return cast[uint]((found.get().__value.size_bits + 7) / 8)
     }
     return 0
 }
@@ -971,7 +971,7 @@ func combined_bytes(first_index: u32, second_index: u32) -> uint {
     let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
     let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
     if first != nil and second != nil {
-        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+        return cast[uint]((first.get().__value.size_bits + second.get().__value.size_bits) / 8)
     }
     return 0
 }
@@ -982,7 +982,7 @@ func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
     if first == nil or second == nil {
         return 0
     } else {
-        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+        return cast[uint]((first.get().__value.size_bits + second.get().__value.size_bits) / 8)
     }
 }
 
@@ -994,7 +994,7 @@ func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
     } elif second == nil {
         return 0
     } else {
-        return cast[uint](first.get().size_bits / 8)
+        return cast[uint](first.get().__value.size_bits / 8)
     }
 }
 
@@ -1559,8 +1559,8 @@ func native_frame_scan_check() {
     let mutator = sys.gc.alloc.mutator_for_native()
     assert mutator != nil
     if mutator != nil {
-        assert mutator.get().heap.last_stack_words > 0
-        assert mutator.get().heap.last_frame_slots > 0
+        assert mutator.get().__value.heap.__value.last_stack_words > 0
+        assert mutator.get().__value.heap.__value.last_frame_slots > 0
     }
 }
 
@@ -1604,9 +1604,9 @@ func gc_trace_record_check() {
     var expected: int = 127
     while cursor != nil {
         let node: Ref[Stress_Node] = cursor.get()
-        require node.value == expected
+        require node.__value.value == expected
         expected = expected - 1
-        cursor = node.next
+        cursor = node.__value.next
     }
     require expected == -1
 }

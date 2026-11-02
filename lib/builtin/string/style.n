@@ -357,8 +357,8 @@ private func rich_body(s: string) -> Ref[Rich_Body] {
 private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
     -> int {
     var result: int
-    let left_rich: bool = is_rich(left.s)
-    let right_rich: bool = is_rich(right.s)
+    let left_rich: bool = is_rich(left.__value.s)
+    let right_rich: bool = is_rich(right.__value.s)
     if left_rich != right_rich {
         if left_rich {
             return 1
@@ -366,35 +366,35 @@ private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
         return -1
     }
     if left_rich {
-        result = cmp_rich_bodies(rich_body(left.s), rich_body(right.s))
+        result = cmp_rich_bodies(rich_body(left.__value.s), rich_body(right.__value.s))
     }
     else {
-        result = cmp_text(left.s, right.s)
+        result = cmp_text(left.__value.s, right.__value.s)
     }
     if result != 0 {
         return result
     }
-    let count: int = cast[int] left.style_info.len()
-    result = cmp_words(left.style_info.len(), right.style_info.len())
+    let count: int = cast[int] left.__value.style_info.len()
+    result = cmp_words(left.__value.style_info.len(), right.__value.style_info.len())
     if result != 0 {
         return result
     }
     var i: int = 0
     while i < count {
-        result = cmp_style_record(left.style_info[i], right.style_info[i])
+        result = cmp_style_record(left.__value.style_info[i], right.__value.style_info[i])
         if result != 0 {
             return result
         }
         i += 1
     }
-    result = cmp_opt_style(left.base_style, right.base_style)
+    result = cmp_opt_style(left.__value.base_style, right.__value.base_style)
     if result != 0 {
         return result
     }
-    if left.opaque == right.opaque {
+    if left.__value.opaque == right.__value.opaque {
         return 0
     }
-    if left.opaque {
+    if left.__value.opaque {
         return 1
     }
     return -1
@@ -523,17 +523,17 @@ private func hash_opt_style(o: Text_Style?) -> u128 {
 
 private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
     var acc: u128
-    if is_rich(body.s) {
-        acc = hash_rich_body(rich_body(body.s))
+    if is_rich(body.__value.s) {
+        acc = hash_rich_body(rich_body(body.__value.s))
     }
     else {
-        acc = hash_text(body.s)
+        acc = hash_text(body.__value.s)
     }
-    let nrec: u64 = body.style_info.len()
+    let nrec: u64 = body.__value.style_info.len()
     acc = hash_chain(acc, nrec.hash())
     var i: int = 0
     while i < cast[int] nrec {
-        let r: Style_Record = body.style_info[i]
+        let r: Style_Record = body.__value.style_info[i]
         acc = hash_chain(acc, hash_opt_u32(r.start_ix))
         acc = hash_chain(acc, hash_opt_u32(r.end_ix))
         acc = hash_chain(acc, hash_opt_string(r.style_tag))
@@ -541,9 +541,9 @@ private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
         acc = hash_chain(acc, hash_sub_spec(r.substitution))
         i += 1
     }
-    acc = hash_chain(acc, hash_opt_style(body.base_style))
+    acc = hash_chain(acc, hash_opt_style(body.__value.base_style))
     var opaque: u64 = 0
-    if body.opaque {
+    if body.__value.opaque {
         opaque = 1
     }
     acc = hash_chain(acc, opaque.hash())
@@ -613,7 +613,7 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
 
 private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
     -> uint fail: int {
-    let nrec: int = cast[int] body.style_info.len()
+    let nrec: int = cast[int] body.__value.style_info.len()
     var out: uint = 0
     let i: u64 = pos
     var open_first: bool = true
@@ -623,7 +623,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
         var best: u64 = 0
         var j: int = 0
         while j < nrec {
-            let r: Style_Record = body.style_info[j]
+            let r: Style_Record = body.__value.style_info[j]
             j += 1
             if !opens_here(r, i) or r.end_ix == nil {
                 continue
@@ -642,7 +642,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
         }
         j = 0
         while j < nrec {
-            let r: Style_Record = body.style_info[j]
+            let r: Style_Record = body.__value.style_info[j]
             j += 1
             if !opens_here(r, i) or r.end_ix == nil or
                 cast[u64](r.end_ix.get_or_else(0)) != best {
@@ -655,7 +655,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
     }
     var k: int = 0
     while k < nrec {
-        let r: Style_Record = body.style_info[k]
+        let r: Style_Record = body.__value.style_info[k]
         k += 1
         if r.start_ix != nil and cast[u64](r.start_ix.get_or_else(0)) == i and
             sub_arm(r.substitution) != sub_arm_none {
@@ -667,7 +667,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
 
 private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
     -> uint fail: int {
-    let nrec: int = cast[int] body.style_info.len()
+    let nrec: int = cast[int] body.__value.style_info.len()
     var out: uint = 0
     let i: u64 = pos
     var close_first: bool = true
@@ -677,7 +677,7 @@ private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
         var best: u64 = 0
         var j: int = 0
         while j < nrec {
-            let r: Style_Record = body.style_info[j]
+            let r: Style_Record = body.__value.style_info[j]
             j += 1
             if !closes_here(r, i) {
                 continue
@@ -696,7 +696,7 @@ private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
         }
         j = 0
         while j < nrec {
-            let r: Style_Record = body.style_info[j]
+            let r: Style_Record = body.__value.style_info[j]
             j += 1
             if closes_here(r, i) and
                 cast[u64](r.start_ix.get_or_else(0)) == best {
@@ -718,7 +718,7 @@ private func opens_outward_in(fd: int, cur: string, pos: u64)
     }
     let body: Ref[Rich_Body] = rich_body(cur)
     out += level_opens(fd, body, pos)!
-    out += opens_outward_in(fd, body.s, pos)!
+    out += opens_outward_in(fd, body.__value.s, pos)!
     return out
 }
 
@@ -729,7 +729,7 @@ private func closes_inward_out(fd: int, cur: string, pos: u64)
         return out
     }
     let body: Ref[Rich_Body] = rich_body(cur)
-    out += closes_inward_out(fd, body.s, pos)!
+    out += closes_inward_out(fd, body.__value.s, pos)!
     out += level_closes(fd, body, pos)!
     return out
 }

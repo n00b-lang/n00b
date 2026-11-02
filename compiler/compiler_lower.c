@@ -2025,12 +2025,15 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
         parse_tree_t *member = member_access_node(grammar, source);
         parse_tree_t *index = n00bb_index_expression_node(grammar, source);
         core_string_t whole = source_text_of(lower->unit, source);
+        bool call = whole.u8_bytes
+            && whole.data[whole.u8_bytes - 1] == ')';
         bool place = lvalue
             || (member && core_string_eq(source_text_of(lower->unit, member),
                                          whole))
             || (index && core_string_eq(source_text_of(lower->unit, index),
                                         whole));
-        if (!place || !n00bb_type_finalized(lower->unit, type)) return true;
+        if (!place || call || !n00bb_type_finalized(lower->unit, type))
+            return true;
         core_string_t type_text = lower_type_text(context, type);
         lower_report(context, N00B_DIAG_FINALIZED_COPY, span,
             N00B_TEXT_FINALIZED_VALUE_COPIED,
@@ -17243,6 +17246,24 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_suppress_dereferences(ir_lower_context_t *context,
+                            parse_grammar_t *grammar, parse_tree_t *member)
+{
+    parse_tree_t *at = member && core_tree_num_children(member) >= 3
+        ? core_tree_child(member, 0) : nullptr;
+    for (parse_tree_t *inner = at ? member_access_node(grammar, at) : nullptr;
+         inner && core_tree_num_children(inner) >= 3;
+         inner = member_access_node(grammar, core_tree_child(inner, 0))) {
+        parse_tree_t *name = core_tree_child(inner,
+            core_tree_num_children(inner) - 1);
+        if (!core_string_eq(first_token_text(name),
+                            CORE_STRING_STATIC("__value"))) break;
+        if (!ir_lower_suppress_emit(context, inner)) return false;
+    }
+    return true;
+}
+
+static bool
 n00bb_lower_record_field_assignment(ir_lower_context_t *context,
                                     parse_visit_t *visit,
                                     parse_tree_t *target,
@@ -17279,6 +17300,7 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
         }
         return ir_lower_handle_assignment(context, visit->node)
             && ir_lower_suppress_emit(context, member)
+            && n00bb_suppress_dereferences(context, visit->grammar, member)
             && (!is_nil || ir_lower_skip_value(context, visit->node, source));
     }
 

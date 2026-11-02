@@ -358,7 +358,7 @@ func loads() -> bool {
     var copy: Atomic[u32] = width
     atomic_bump(copy)
     return flag and total == 15 and width == 5 and small == -3 and
-        ratio * 2.0 == 3.0 and h != nil and h.get().value == 7 and
+        ratio * 2.0 == 3.0 and h != nil and h.get().__value.value == 7 and
         copy == 6
 }
 

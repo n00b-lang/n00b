@@ -48,10 +48,10 @@ func sift(base: Ref[byte], count: uint, root: uint) {
             return
         }
         if child + 1 < count and
-            span_at(base, child + 1).start > span_at(base, child).start {
+            span_at(base, child + 1).__value.start > span_at(base, child).__value.start {
             child += 1
         }
-        if span_at(base, parent).start >= span_at(base, child).start {
+        if span_at(base, parent).__value.start >= span_at(base, child).__value.start {
             return
         }
         swap_spans(base, parent, child)
@@ -89,13 +89,13 @@ func build() -> bool {
     while cast[uint](index) < count {
         let row: Ref[internal.abi.Native_Frame_Record]? = internal.abi.native_frame(index)
         if row != nil {
-            let function: Ref[byte]? = row.get().function
+            let function: Ref[byte]? = row.get().__value.function
             if function != nil {
                 let start: uint            = __abi_ref_address(function.get())
                 let span:  Ref[Frame_Span] = span_at(base, used)
-                span.start = start
-                span.end = start + cast[uint](row.get().code_bytes)
-                span.row = row
+                span.__value.start = start
+                span.__value.end = start + cast[uint](row.get().__value.code_bytes)
+                span.__value.row = row
                 used += 1
             }
         }
@@ -143,7 +143,7 @@ func frame_for(return_address: uint) -> Ref[internal.abi.Native_Frame_Record]? {
     var high:   uint = span_count
     while low < high {
         let middle: uint = low + (high - low) / 2
-        if span_at(base, middle).start <= target {
+        if span_at(base, middle).__value.start <= target {
             low = middle + 1
         } else {
             high = middle
@@ -153,8 +153,8 @@ func frame_for(return_address: uint) -> Ref[internal.abi.Native_Frame_Record]? {
         return nil
     }
     let span: Ref[Frame_Span] = span_at(base, low - 1)
-    if target < span.end {
-        return span.row
+    if target < span.__value.end {
+        return span.__value.row
     }
     return nil
 }
