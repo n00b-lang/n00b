@@ -84,16 +84,6 @@ step_intern_locked(core_string_t step)
     return *canon;
 }
 
-static core_string_t
-step_intern(core_string_t step)
-{
-    if (!step.u8_bytes) return step;
-    pthread_mutex_lock(&step_lock);
-    core_string_t canon = step_intern_locked(step);
-    pthread_mutex_unlock(&step_lock);
-    return canon;
-}
-
 static const core_string_t *
 steps_join(const core_string_t *head, uint32_t head_depth,
            const core_string_t *tail, uint32_t tail_depth)
@@ -502,36 +492,36 @@ steps_prefix(uint32_t depth, const core_string_t *steps, uint32_t other_depth,
     return true;
 }
 
-static int32_t
-steps_within(uint32_t depth, const core_string_t *steps, uint32_t other_depth,
-             const core_string_t *other)
-{
-    return steps_prefix(depth, steps, other_depth, other) ? (int32_t)depth
-                                                          : -1;
-}
-
-static bool
-path_derefs(const core_string_t *steps, uint32_t depth)
+static uint32_t
+first_deref(const core_string_t *steps, uint32_t depth)
 {
     for (uint32_t s = 0; s < depth; s++)
-        if (step_eq(steps[s], value_step)) return true;
-    return false;
+        if (step_eq(steps[s], value_step)) return s;
+    return depth;
+}
+
+static uint32_t
+last_deref(const ir_spath_t *path)
+{
+    for (uint32_t s = path->depth; s > 0; s--)
+        if (step_eq(path->steps[s - 1], value_step)) return s - 1;
+    return UINT32_MAX;
 }
 
 static bool
 steps_cover(uint32_t depth, bool deep, const core_string_t *steps,
             uint32_t other_depth, bool other_deep, const core_string_t *other)
 {
-    if (deep) return steps_within(depth, steps, other_depth, other) >= 0;
-    return depth == other_depth && !other_deep
-        && steps_prefix(depth, steps, other_depth, other);
+    if (!deep && (depth != other_depth || other_deep)) return false;
+    return steps_prefix(depth, steps, other_depth, other);
 }
 
 static int32_t
 path_within(const ir_spath_t *outer, const ir_spath_t *inner)
 {
-    return steps_within(outer->depth, outer->steps, inner->depth,
-                        inner->steps);
+    return steps_prefix(outer->depth, outer->steps, inner->depth,
+                        inner->steps)
+        ? (int32_t)outer->depth : -1;
 }
 
 static bool
@@ -799,21 +789,20 @@ flow_add(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
 {
     ir_spath_t   key_to   = canonical_path(to);
     ir_spath_t   key_from = canonical_path(from);
-    uint32_t     base     = from->depth;
-    while (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT) && base
-           && !step_eq(from->steps[base - 1], value_step))
-        base--;
-    if (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT) && !base
-        && (from->flags & IR_SPATH_DEEP))
-        key_from.flags &= (uint8_t)~IR_SPATH_ROOT;
-    else if (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT) && base) {
+    uint32_t     base     = kind != IR_SFLOW_ALIAS
+                                    && (from->flags & IR_SPATH_ROOT)
+                              ? last_deref(from) : UINT32_MAX;
+    if (base != UINT32_MAX) {
         ir_spath_t pointer = key_from;
-        pointer.depth  = base - 1;
+        pointer.depth  = base;
         pointer.flags &= (uint8_t)~(IR_SPATH_ROOT | IR_SPATH_DEEP);
         flow_add(table, to, &pointer, kind);
         if (!(from->flags & IR_SPATH_DEEP)) return;
         key_from.flags &= (uint8_t)~IR_SPATH_ROOT;
     }
+    else if (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT)
+             && (from->flags & IR_SPATH_DEEP))
+        key_from.flags &= (uint8_t)~IR_SPATH_ROOT;
     uint32_t     source   = flow_source(table, &key_from);
     flow_dest_t *dest     = flow_dest(table, &key_to);
     bit_set(kind_bits(dest, kind), source);
@@ -857,7 +846,8 @@ place_covers(const ir_spath_t *a, const ir_spath_t *b)
         return steps_cover(a->depth, a->flags & IR_SPATH_DEEP, a->steps,
                            b->depth, b->flags & IR_SPATH_DEEP, b->steps);
     return steps_prefix(a->depth, a->steps, b->depth, b->steps)
-        && !path_derefs(b->steps + a->depth, b->depth - a->depth)
+        && first_deref(b->steps + a->depth, b->depth - a->depth)
+               == b->depth - a->depth
         && (!(b->flags & IR_SPATH_DEEP) || (b->flags & SPATH_INLINE));
 }
 
@@ -958,7 +948,7 @@ static bool
 dependence_address(const ir_spath_t *from)
 {
     return (from->flags & IR_SPATH_ROOT)
-        && (path_derefs(from->steps, from->depth)
+        && (first_deref(from->steps, from->depth) < from->depth
             || (from->flags & IR_SPATH_DEEP));
 }
 
@@ -968,24 +958,30 @@ typedef struct {
 } moved_flow_t;
 
 core_list_decl(moved_flow_t);
+typedef core_list_t(moved_flow_t) moved_list_t;
+
+static void
+take_source(flow_table_t *table, uint32_t s, bool alias, moved_list_t *moved)
+{
+    for (uint32_t d = 0; d < table->dests.len; d++) {
+        flow_dest_t *dest = &table->dests.data[d];
+        for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
+            if (kind == IR_SFLOW_ALIAS && !alias) continue;
+            flow_bits_t *bits = kind_bits(dest, kind);
+            if (!bit_has(bits, s)) continue;
+            bits->data[s / 64] &= ~(UINT64_C(1) << (s % 64));
+            core_list_push(*moved, ((moved_flow_t){d, s, kind}));
+        }
+    }
+}
 
 static void
 canonical_dependences(flow_table_t *table)
 {
-    core_list_t(moved_flow_t) moved = core_list_new(moved_flow_t);
-    for (uint32_t d = 0; d < table->dests.len; d++) {
-        flow_dest_t *dest = &table->dests.data[d];
-        for (uint32_t s = 0; s < table->sources.len; s++) {
-            if (!dependence_address(table->sources.data[s])) continue;
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
-                if (kind == IR_SFLOW_ALIAS) continue;
-                flow_bits_t *bits = kind_bits(dest, kind);
-                if (!bit_has(bits, s)) continue;
-                bits->data[s / 64] &= ~(UINT64_C(1) << (s % 64));
-                core_list_push(moved, ((moved_flow_t){d, s, kind}));
-            }
-        }
-    }
+    moved_list_t moved = core_list_new(moved_flow_t);
+    for (uint32_t s = 0; s < table->sources.len; s++)
+        if (dependence_address(table->sources.data[s]))
+            take_source(table, s, false, &moved);
     for (size_t m = 0; m < moved.len; m++)
         flow_add(table, table->dests.data[moved.data[m].dest].to,
                  table->sources.data[moved.data[m].source],
@@ -1009,10 +1005,10 @@ pointee_reach_of(const ir_spath_t *reach, const ir_spath_t *pointer)
             && step_eq(reach->steps[pointer->depth], value_step);
     }
     uint32_t base = pointer->depth;
-    if (pointer->flags & IR_SPATH_ROOT)
-        while (base && !step_eq(pointer->steps[base - 1], value_step)) base--;
-    if ((pointer->flags & IR_SPATH_ROOT) && base) base--;
-    else if (pointer->flags & IR_SPATH_ROOT) base = pointer->depth;
+    if (pointer->flags & IR_SPATH_ROOT) {
+        uint32_t deref = last_deref(pointer);
+        if (deref != UINT32_MAX) base = deref;
+    }
     else if (pointer->flags & IR_SPATH_DEEP) return false;
     return steps_prefix(reach->depth, reach->steps, base, pointer->steps);
 }
@@ -1344,13 +1340,16 @@ returns_pointers(const ir_summary_t *summary)
 }
 
 static th_type *pointee_type(ir_module_t *module, th_type *type);
+static bool     pointer_class(ir_module_t *module, th_type *type);
+static bool     generic_type(th_type *type);
 
 static uint8_t
 escape_from(const ir_spath_t *from, uint32_t param, bool address)
 {
     if (from->root != IR_SPLACE_PARAM || from->param != param) return 0;
     bool deep = from->flags & IR_SPATH_DEEP;
-    if (path_derefs(from->steps, from->depth)) return IR_SESCAPE_REFERENT;
+    if (first_deref(from->steps, from->depth) < from->depth)
+        return IR_SESCAPE_REFERENT;
     uint8_t escape = deep ? IR_SESCAPE_REFERENT : 0;
     if (address && !(from->flags & IR_SPATH_ROOT))
         escape |= IR_SESCAPE_ADDRESS;
@@ -1409,11 +1408,8 @@ ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
     th_type         *type     = function && param < function->n_params
             && function->params[param]
         ? function->params[param]->type : nullptr;
-    uint32_t kind = type ? th_kind_of(th_resolve(type)) : TH_VAR;
-    if ((escape & IR_SESCAPE_ADDRESS) && kind != TH_VAR && kind != TH_BOUND
-        && kind != TH_BINDER && kind != TH_TRAIT
-        && !pointee_type(function->owner, type)
-        && ir_machine_of(function->owner, type).class != IR_CLASS_PTR)
+    if ((escape & IR_SESCAPE_ADDRESS) && type && !generic_type(type)
+        && !pointer_class(function->owner, type))
         escape = (uint8_t)((escape & ~IR_SESCAPE_ADDRESS)
                            | IR_SESCAPE_REFERENT);
     return escape;
@@ -2057,7 +2053,6 @@ ir_summary_set_param_escape(ir_summary_t *summary, uint32_t param,
 {
     const ir_spath_t anywhere = {.root  = IR_SPLACE_UNKNOWN,
                                  .flags = IR_SPATH_DEEP};
-    core_string_t    pointee  = step_intern(value_step);
     if (flags & IR_SESCAPE_ADDRESS)
         flow_add(&summary->flows[IR_SFLOW_STORES], &anywhere,
                  &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = param},
@@ -2065,7 +2060,7 @@ ir_summary_set_param_escape(ir_summary_t *summary, uint32_t param,
     if (flags & IR_SESCAPE_REFERENT)
         flow_add(&summary->flows[IR_SFLOW_STORES], &anywhere,
                  &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = param,
-                               .steps = &pointee, .depth = 1,
+                               .steps = &value_step, .depth = 1,
                                .flags = IR_SPATH_DEEP},
                  IR_SFLOW_ALIAS);
     summary->results_known = true;
@@ -2141,6 +2136,27 @@ pointee_type(ir_module_t *module, th_type *type)
     if (th_kind_of(current) == TH_SEQUENCE && !th_seq_extent(current, &extent))
         return current;
     return nullptr;
+}
+
+static bool
+pointer_class(ir_module_t *module, th_type *type)
+{
+    return pointee_type(module, type)
+        || ir_machine_of(module, type).class == IR_CLASS_PTR;
+}
+
+static bool
+generic_type(th_type *type)
+{
+    switch (th_kind_of(th_resolve(type))) {
+    case TH_VAR:
+    case TH_BOUND:
+    case TH_BINDER:
+    case TH_TRAIT:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static th_type *
@@ -3054,8 +3070,6 @@ typedef struct {
     core_dict_t definitions;
     core_dict_t fields;
     core_dict_t slots;
-    core_dict_t pointers;
-    core_dict_t known;
 } type_memo_t;
 
 typedef struct {
@@ -3063,6 +3077,14 @@ typedef struct {
     const core_string_t *steps;
     uint32_t             depth;
 } slot_key_t;
+
+typedef struct {
+    slot_key_t key;
+    th_type   *raw;
+    th_type   *slot;
+    bool       maybe_pointer;
+    bool       pointer;
+} slot_info_t;
 
 static core_hash_value_t
 slot_key_hash(void *key)
@@ -3079,6 +3101,7 @@ slot_key_eq(const void *a, const void *b)
     const slot_key_t *x = a, *y = b;
     return x->root == y->root && x->steps == y->steps && x->depth == y->depth;
 }
+
 static type_memo_t *
 type_memo(ir_summaries_t *summaries, const ir_module_t *module)
 {
@@ -3092,8 +3115,6 @@ type_memo(ir_summaries_t *summaries, const ir_module_t *module)
     core_dict_init(&memo->definitions, nullptr, nullptr);
     core_dict_init(&memo->fields, nullptr, nullptr);
     core_dict_init(&memo->slots, slot_key_hash, slot_key_eq);
-    core_dict_init(&memo->pointers, slot_key_hash, slot_key_eq);
-    core_dict_init(&memo->known, slot_key_hash, slot_key_eq);
     core_dict_put(&summaries->type_memos, (void *)module, memo);
     return memo;
 }
@@ -3121,17 +3142,9 @@ type_memos_free(core_dict_t *memos)
         core_dict_free(&memo->definitions);
         core_dict_free(&memo->fields);
         core_dict_foreach(&memo->slots, entry) {
-            core_free(entry->key);
+            core_free(entry->value);
         }
         core_dict_free(&memo->slots);
-        core_dict_foreach(&memo->pointers, entry) {
-            core_free(entry->key);
-        }
-        core_dict_free(&memo->pointers);
-        core_dict_foreach(&memo->known, entry) {
-            core_free(entry->key);
-        }
-        core_dict_free(&memo->known);
         core_free(memo);
     }
     core_dict_free(memos);
@@ -3378,10 +3391,9 @@ static uint32_t
 address_base(const pt_item_t *item)
 {
     const ir_spath_t *path = &item->loc.path;
-    if (item->loc.site != PT_EXTERNAL) return path->depth;
-    for (uint32_t s = path->depth; s > 0; s--)
-        if (step_eq(path->steps[s - 1], value_step)) return s - 1;
-    return path->depth;
+    uint32_t          base = item->loc.site == PT_EXTERNAL ? last_deref(path)
+                                                           : UINT32_MAX;
+    return base == UINT32_MAX ? path->depth : base;
 }
 
 static bool
@@ -3573,13 +3585,6 @@ set_order(const pt_item_t *a, const pt_item_t *b)
 static void canonical_item(pt_item_t *item);
 static bool pointer_reach(const pt_item_t *item);
 
-static uint32_t
-last_deref(const ir_spath_t *path)
-{
-    for (uint32_t s = path->depth; s > 0; s--)
-        if (step_eq(path->steps[s - 1], value_step)) return s - 1;
-    return UINT32_MAX;
-}
 static void loc_push(pt_loc_t *loc, core_string_t step);
 
 static void
@@ -3682,7 +3687,6 @@ static void
 pt_add(pt_t *pt, pt_set_t *set, uintptr_t key, pt_item_t item)
 {
     if ((key & 3) == 1) typed_placement(pt, (uint32_t)(key >> 2), &item);
-    trim_repeats(&item);
     if (set_add(set, item)) pt_notify(pt, key);
 }
 
@@ -3748,7 +3752,8 @@ pt_leave(pt_t *outer)
     active_pt = outer;
 }
 
-static th_type *root_object_type(const ir_func_t *f, const ir_spath_t *path);
+static th_type *root_object_type(const ir_func_t *f, const ir_spath_t *path,
+                                 const pt_t *pt);
 
 static th_type *
 memo_defined(const pt_t *pt, th_type *type)
@@ -3780,51 +3785,60 @@ field_type(const pt_t *pt, th_type *record, core_string_t step)
 }
 
 static th_type *
-step_type(const pt_t *pt, th_type *type, core_string_t step)
+step_through(const pt_t *pt, ir_module_t *module, th_type *type,
+             core_string_t step)
 {
-    th_type *current = memo_defined(pt, type);
+    th_type *current = pt ? memo_defined(pt, type)
+                          : definition_in(module, type);
     if (!current) return nullptr;
-    if (step_eq(step, value_step))
-        return pointee_type(pt->f->owner, current);
+    if (step_eq(step, value_step)) return pointee_type(module, current);
     if (step_eq(step, element_step))
         return th_kind_of(current) == TH_SEQUENCE
             ? th_seq_elem(current) : nullptr;
-    return th_kind_of(current) == TH_RECORD
-        ? field_type(pt, current, step) : nullptr;
+    if (th_kind_of(current) != TH_RECORD) return nullptr;
+    return pt ? field_type(pt, current, step)
+              : th_record_lookup(current, step);
 }
 
-static th_type *
-loc_root_type(const pt_t *pt, const pt_loc_t *loc)
+static const slot_info_t *
+slot_info(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
 {
-    const ir_spath_t *path = &loc->path;
-    if (loc->site != PT_EXTERNAL) return pt->sites.data[loc->site].type;
-    if (named_root(path->root))
-        return path->global ? path->global->type : nullptr;
-    const ir_func_t *f = pt->f;
-    if (path->root != IR_SPLACE_PARAM || path->param >= f->n_params
-        || !f->params[path->param])
-        return nullptr;
-    th_type *type    = f->params[path->param]->type;
-    th_type *defined = memo_defined(pt, type);
-    return defined ? defined : type ? th_resolve(type) : nullptr;
+    th_type *root = loc->site == PT_EXTERNAL
+        ? root_object_type(pt->f, &loc->path, pt)
+        : pt->sites.data[loc->site].type;
+    slot_key_t   probe = {root, loc->path.steps, depth};
+    bool         found = false;
+    slot_info_t *info  = core_dict_get(&pt->types->slots, &probe, &found);
+    if (found) return info;
+    ir_module_t *module = pt->f->owner;
+    th_type     *raw    = root;
+    for (uint32_t s = 0; raw && s < depth; s++)
+        raw = step_through(pt, module, raw, loc->path.steps[s]);
+    th_type *slot = memo_defined(pt, raw);
+    info  = core_alloc(slot_info_t);
+    *info = (slot_info_t){
+        .key           = probe,
+        .raw           = raw,
+        .slot          = slot,
+        .maybe_pointer = !raw || pointer_class(module, raw)
+                      || generic_type(raw),
+        .pointer       = slot && pointer_class(module, slot),
+    };
+    core_dict_put(&pt->types->slots, &info->key, info);
+    return info;
 }
 
 static th_type *
 loc_type(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
 {
-    th_type *type = loc_root_type(pt, loc);
-    if (!type || !depth) return memo_defined(pt, type);
-    slot_key_t probe = {type, loc->path.steps, depth};
-    bool       found = false;
-    th_type   *slot  = core_dict_get(&pt->types->slots, &probe, &found);
-    if (found) return slot;
-    for (uint32_t s = 0; type && s < depth; s++)
-        type = step_type(pt, type, loc->path.steps[s]);
-    slot = memo_defined(pt, type);
-    slot_key_t *key = core_alloc(slot_key_t);
-    *key = probe;
-    core_dict_put(&pt->types->slots, key, slot);
-    return slot;
+    return slot_info(pt, loc, depth)->slot;
+}
+
+static bool
+same_object_type(th_type *a, th_type *b)
+{
+    return same_type(a, b)
+        || (a && b && ir_type_eq(active_pt->f->owner, a, b));
 }
 
 static th_type *
@@ -3871,7 +3885,7 @@ typed_placement(pt_t *pt, uint32_t site, pt_item_t *item)
                  && s + 1 == item->depth)
             return;
         else if (kind == TH_RECORD)
-            next = th_record_lookup(current, step);
+            next = field_type(pt, current, step);
         if (!next) break;
         type = next;
     }
@@ -3888,8 +3902,8 @@ recursive_step(const pt_loc_t *loc, uint32_t at)
     th_type *there = owner_type(active_pt, loc_type(active_pt, loc, at));
     th_type *here  = there
         ? owner_type(active_pt, loc_type(active_pt, loc, loc->path.depth))
-        : nullptr;    return !here || same_type(here, there)
-        || ir_type_eq(active_pt->f->owner, here, there);
+        : nullptr;
+    return !here || same_object_type(here, there);
 }
 
 static bool
@@ -3902,11 +3916,7 @@ recursive_object(pt_loc_t *loc, th_type *slot)
     if (!object) return false;
     for (uint32_t k = 1; k <= loc->path.depth; k++) {
         if (!step_eq(loc->path.steps[k - 1], value_step)) continue;
-        th_type *defined = loc_type(active_pt, loc, k);
-        if (!same_type(defined, object)
-            && !(defined
-                 && ir_type_eq(active_pt->f->owner, defined, object)))
-            continue;
+        if (!same_object_type(loc_type(active_pt, loc, k), object)) continue;
         loc->path.flags |= IR_SPATH_DEEP;
         return true;
     }
@@ -3922,18 +3932,16 @@ step_fits(th_type *type, core_string_t step)
         && kind != TH_BITINT)
         return true;
     if (step_eq(step, value_step))
-        return pointee_type(active_pt->f->owner, type)
-            || ir_machine_of(active_pt->f->owner, type).class == IR_CLASS_PTR;
+        return pointer_class(active_pt->f->owner, type);
     if (step_eq(step, element_step) || step_eq(step, length_step))
         return kind == TH_SEQUENCE;
-    return kind == TH_RECORD && th_record_lookup(type, step);
+    return kind == TH_RECORD && field_type(active_pt, type, step);
 }
 
 static void
 loc_push(pt_loc_t *loc, core_string_t step)
 {
     if (loc_deep(loc)) return;
-    step = step_intern(step);
     th_type *type = active_pt ? loc_type(active_pt, loc, loc->path.depth)
                               : nullptr;
     if (type && !step_fits(type, step)) {
@@ -4657,7 +4665,6 @@ is_address(const pt_item_t *item)
     return item->flow == PT_SAME && (!item->depth || item->deep);
 }
 
-static bool slot_pointer(pt_t *pt, const pt_item_t *item);
 static void
 address_step(pt_t *pt, const pt_set_t *from, core_string_t step,
              pt_set_t *into)
@@ -5262,7 +5269,6 @@ static bool
 member_inline(const ir_func_t *f, pt_t *pt, th_type *named, th_type *record,
               core_string_t name, bool *known)
 {
-    if (!pt) return layout_member_inline(f, named, record, name, known);
     bool           found   = false;
     member_list_t *members = core_dict_get(&pt->types->members, record,
                                            &found);
@@ -5282,7 +5288,7 @@ member_inline(const ir_func_t *f, pt_t *pt, th_type *named, th_type *record,
 }
 
 static uint32_t
-inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
+inline_depth(const ir_func_t *f, th_type *type, bool sequence_root,
              const ir_spath_t *at, bool *known)
 {
     uint32_t start = 0;
@@ -5342,8 +5348,8 @@ inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
                 *known = false;
                 return i;
             }
-            inline_elements = member_inline(f, pt, type, current, step,
-                                            &layout_known);
+            inline_elements = layout_member_inline(f, type, current, step,
+                                                   &layout_known);
             type            = member;
             break;
         }
@@ -5356,22 +5362,11 @@ inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
     return at->depth;
 }
 
-
 static th_type *
 end_type(ir_module_t *module, th_type *type, const ir_spath_t *path)
 {
-    for (uint32_t s = 0; type && s < path->depth; s++) {
-        th_type *current = definition_in(module, type);
-        if (!current) return nullptr;
-        if (core_string_eq(path->steps[s], value_step))
-            type = pointee_type(module, current);
-        else if (core_string_eq(path->steps[s], element_step))
-            type = th_kind_of(current) == TH_SEQUENCE
-                ? th_seq_elem(current) : nullptr;
-        else
-            type = th_kind_of(current) == TH_RECORD
-                ? th_record_lookup(current, path->steps[s]) : nullptr;
-    }
+    for (uint32_t s = 0; type && s < path->depth; s++)
+        type = step_through(nullptr, module, type, path->steps[s]);
     return type;
 }
 
@@ -5399,7 +5394,7 @@ refers_beyond(ir_module_t *module, th_type *type)
 }
 
 static th_type *
-root_object_type(const ir_func_t *f, const ir_spath_t *path)
+root_object_type(const ir_func_t *f, const ir_spath_t *path, const pt_t *pt)
 {
     if (named_root(path->root))
         return path->global ? path->global->type : nullptr;
@@ -5407,26 +5402,8 @@ root_object_type(const ir_func_t *f, const ir_spath_t *path)
         || !f->params[path->param])
         return nullptr;
     th_type *type    = f->params[path->param]->type;
-    th_type *defined = defined_type(f, type);
+    th_type *defined = pt ? memo_defined(pt, type) : defined_type(f, type);
     return defined ? defined : type ? th_resolve(type) : nullptr;
-}
-
-static bool
-slot_holds_pointer(ir_module_t *module, th_type *root, const ir_spath_t *path)
-{
-    th_type *slot = end_type(module, root, path);
-    if (!slot || pointee_type(module, slot)
-        || ir_machine_of(module, slot).class == IR_CLASS_PTR)
-        return true;
-    switch (th_kind_of(th_resolve(slot))) {
-    case TH_VAR:
-    case TH_BOUND:
-    case TH_BINDER:
-    case TH_TRAIT:
-        return true;
-    default:
-        return false;
-    }
 }
 
 static bool
@@ -5439,45 +5416,22 @@ slot_pointer(pt_t *pt, const pt_item_t *item)
         return true;
     if (path->depth && step_eq(path->steps[path->depth - 1], length_step))
         return false;
-    th_type   *root  = loc_root_type(pt, &item->loc);
-    slot_key_t probe = {root, path->steps, path->depth};
-    bool       found = false;
-    void      *known = core_dict_get(&pt->types->pointers, &probe, &found);
-    if (found) return known != nullptr;
-    bool pointer = slot_holds_pointer(pt->f->owner, root, path);
-    slot_key_t *key = core_alloc(slot_key_t);
-    *key = probe;
-    core_dict_put(&pt->types->pointers, key, pointer ? (void *)key : nullptr);
-    return pointer;
+    return slot_info(pt, &item->loc, path->depth)->maybe_pointer;
 }
-
 
 static bool
 known_pointer(pt_t *pt, const pt_loc_t *loc)
 {
-    slot_key_t probe = {loc_root_type(pt, loc), loc->path.steps,
-                        loc->path.depth};
-    bool       found = false;
-    void      *known = core_dict_get(&pt->types->known, &probe, &found);
-    if (found) return known != nullptr;
-    th_type *slot    = loc_type(pt, loc, loc->path.depth);
-    bool     pointer = slot && (pointee_type(pt->f->owner, slot)
-                                || ir_machine_of(pt->f->owner, slot).class
-                                       == IR_CLASS_PTR);
-    slot_key_t *key = core_alloc(slot_key_t);
-    *key = probe;
-    core_dict_put(&pt->types->known, key, pointer ? (void *)key : nullptr);
-    return pointer;
+    return slot_info(pt, loc, loc->path.depth)->pointer;
 }
 
 static bool
 flat_slot(pt_t *pt, const pt_loc_t *loc)
 {
-    th_type *slot = loc_type(pt, loc, loc->path.depth);
-    if (!slot) return false;
-    uint32_t kind = th_kind_of(slot);
-    return kind == TH_INDIRECTION || kind == TH_BITINT
-        || known_pointer(pt, loc);
+    const slot_info_t *info = slot_info(pt, loc, loc->path.depth);
+    if (!info->slot) return false;
+    uint32_t kind = th_kind_of(info->slot);
+    return kind == TH_INDIRECTION || kind == TH_BITINT || info->pointer;
 }
 
 static bool
@@ -5502,13 +5456,8 @@ canonical_item(pt_item_t *item)
     if (item->kind != PT_CONTENTS || loc_deep(&item->loc) || !active_pt
         || !slot_pointer(active_pt, item))
         return;
-    pt_loc_t pointee = location_of(item);
-    if (loc_deep(&pointee)) {
-        item->loc = pointee;
-        return;
-    }
-    item->loc  = pointee;
-    item->kind = PT_ADDRESS;
+    item->loc = location_of(item);
+    if (!loc_deep(&item->loc)) item->kind = PT_ADDRESS;
 }
 
 bool
@@ -5516,7 +5465,7 @@ ir_summary_path_inline(const ir_func_t *function, const ir_spath_t *path)
 {
     if (path->flags & IR_SPATH_DEEP) return false;
     if (!path->depth) return true;
-    th_type   *root    = root_object_type(function, path);
+    th_type   *root    = root_object_type(function, path, nullptr);
     th_type   *pointee = path->root == IR_SPLACE_PARAM && root && function
         ? pointee_type(function->owner, root) : nullptr;
     ir_spath_t object  = *path;
@@ -5532,7 +5481,7 @@ ir_summary_path_inline(const ir_func_t *function, const ir_spath_t *path)
                                         : nullptr;
     bool     known   = true;
     uint32_t inside  = function && root
-        ? inline_depth(function, nullptr, root,
+        ? inline_depth(function, root,
                        defined && th_kind_of(defined) == TH_SEQUENCE, path,
                        &known)
         : 0;
@@ -5545,7 +5494,7 @@ ir_summary_path_type(const ir_func_t *function, const ir_spath_t *path,
 {
     th_type *root = path->root == IR_SPLACE_UNKNOWN
         ? (path->flags & IR_SPATH_TYPED ? path->type : nullptr)
-        : root_object_type(function, path);
+        : root_object_type(function, path, nullptr);
     ir_module_t *module = function ? function->owner
         : path->global ? path->global->owner : nullptr;
     ir_spath_t prefix = *path;
@@ -5594,7 +5543,7 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
         break;
     }
     ir_spath_t referent = *path;
-    th_type   *root     = root_object_type(function, path);
+    th_type   *root     = root_object_type(function, path, nullptr);
     ir_module_t *owner   = function ? function->owner : nullptr;
     th_type     *pointee = path->root == IR_SPLACE_PARAM && root
         ? pointee_type(owner, root) : nullptr;
@@ -5613,7 +5562,7 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
     bool     known  = true;
     uint32_t inside = path->depth;
     if (path->depth && function && root)
-        inside = inline_depth(function, nullptr, root, false, path, &known);
+        inside = inline_depth(function, root, false, path, &known);
     else if (path->depth)
         known = false;
     bool     deep   = (path->flags & IR_SPATH_DEEP) || !known;
@@ -5632,17 +5581,8 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
     return count;
 }
 
-
 static void resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into,
                          pt_set_t *seen);
-
-static uint32_t
-first_deref(const ir_spath_t *path)
-{
-    for (uint32_t s = 0; s < path->depth; s++)
-        if (step_eq(path->steps[s], value_step)) return s;
-    return path->depth;
-}
 
 static void
 resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
@@ -5665,7 +5605,7 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     const ir_spath_t *path    = &loc.path;
     bool              deep    = loc_deep(&loc);
     bool              through = deep && !(path->flags & SPATH_INLINE);
-    uint32_t          slot    = first_deref(path);
+    uint32_t          slot    = first_deref(path->steps, path->depth);
     if (slot == path->depth) {
         set_add(into, item_at(loc));
         if (!through) return;
@@ -5916,7 +5856,7 @@ map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
             const core_string_t *rest  = path->steps + item->depth;
             uint32_t             count = path->depth - item->depth;
             bool                 deref = item->kind == PT_CONTENTS
-                ? path_derefs(rest, count)
+                ? first_deref(rest, count) < count
                 : count && step_eq(rest[0], value_step);
             if (!deref && !deep && !item->deep) continue;
             if (!deref || item->deep) {
@@ -6013,8 +5953,6 @@ write_reach(pt_t *pt, const pt_loc_t *at, const pt_set_t *reach)
     }
 }
 
-/* deleted */
-
 typedef enum : uint8_t {
     MAP_PLACE,
     MAP_VALUE,
@@ -6028,14 +5966,13 @@ enum {
 };
 
 static void
-places_value(pt_t *pt, pt_set_t *places, bool coarse, uint8_t mode,
-             pt_set_t *into)
+places_value(pt_t *pt, pt_set_t *places, uint8_t mode, pt_set_t *into)
 {
     bool deep = mode & VALUE_DEEP;
     if (mode & VALUE_ROOT) {
         for (size_t p = 0; p < places->len; p++) {
             pt_item_t place = places->data[p];
-            place.deep = deep || coarse;
+            place.deep = deep;
             set_add(into, place);
         }
         if (!deep) return;
@@ -6106,7 +6043,7 @@ resolved_value(pt_t *pt, pt_loc_t loc, uint8_t mode, pt_set_t *into)
         memo_begin(pt, &entry->memo, &frame);
         entry->items.len = 0;
         pt_resolve(pt, loc, &places);
-        places_value(pt, &places, false, mode, &entry->items);
+        places_value(pt, &places, mode, &entry->items);
         core_list_free(places);
         memo_end(pt, &entry->memo, &frame);
     }
@@ -7839,7 +7776,7 @@ static bool
 aggregate_slot(pt_t *pt, const ir_spath_t *path)
 {
     ir_module_t *module = pt->f->owner;
-    th_type     *slot   = end_type(module, root_object_type(pt->f, path),
+    th_type     *slot   = end_type(module, root_object_type(pt->f, path, pt),
                                    path);
     return slot && by_value(module, slot)
         && ir_machine_of(module, slot).class != IR_CLASS_PTR;
@@ -8579,7 +8516,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     th_type          *type     = nullptr;
     bool              elements = false;
     if (loc->site == PT_EXTERNAL)
-        type = root_object_type(pt->f, path);
+        type = root_object_type(pt->f, path, pt);
     else {
         type     = pt->sites.data[loc->site].type;
         elements = pt->sites.data[loc->site].elements;
@@ -8595,9 +8532,8 @@ crossings(pt_t *pt, const pt_loc_t *loc)
         type  = th_seq_elem(sequence);
         start = 1;
     }
-    bool     inline_elements = false;
-    bool     out_of_line     = false;
-    uint32_t i               = start;
+    bool     out_of_line = false;
+    uint32_t i           = start;
     for (; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
         th_type      *named   = type;
@@ -8607,9 +8543,8 @@ crossings(pt_t *pt, const pt_loc_t *loc)
         pt->crossed_known = i + 1;
         if (core_string_eq(step, value_step)) {
             bit_set(mask, i);
-            type            = pointee_type(pt->f->owner, current);
-            inline_elements = false;
-            out_of_line     = false;
+            type        = pointee_type(pt->f->owner, current);
+            out_of_line = false;
             if (!type) pt->crossed_known = path->depth;
             continue;
         }
@@ -8617,16 +8552,15 @@ crossings(pt_t *pt, const pt_loc_t *loc)
         case TH_SEQUENCE:
             if (!core_string_eq(step, element_step)) return mask;
             if (out_of_line) bit_set(mask, i);
-            type            = th_seq_elem(current);
-            inline_elements = false;
-            out_of_line     = false;
+            type        = th_seq_elem(current);
+            out_of_line = false;
             break;
         case TH_RECORD: {
             bool known = false;
-            type = th_record_lookup(current, step);
-            inline_elements = type
+            type = field_type(pt, current, step);
+            bool inside = type
                 && member_inline(pt->f, pt, named, current, step, &known);
-            out_of_line = type && known && !inline_elements;
+            out_of_line = type && known && !inside;
             break;
         }
         default:
@@ -9497,7 +9431,7 @@ join_rounds(ir_summary_t *next, const ir_summary_t *previous)
 static void
 split_pointer_sources(const ir_func_t *f, flow_table_t *table)
 {
-    core_list_t(moved_flow_t) moved = core_list_new(moved_flow_t);
+    moved_list_t moved = core_list_new(moved_flow_t);
     for (uint32_t s = 0; s < table->sources.len; s++) {
         const ir_spath_t *from = table->sources.data[s];
         if (!(from->flags & IR_SPATH_DEEP) || (from->flags & IR_SPATH_ROOT)
@@ -9506,15 +9440,7 @@ split_pointer_sources(const ir_func_t *f, flow_table_t *table)
             continue;
         th_type *slot = ir_summary_path_type(f, from, from->depth);
         if (!slot || !pointee_type(f ? f->owner : nullptr, slot)) continue;
-        for (uint32_t d = 0; d < table->dests.len; d++) {
-            flow_dest_t *dest = &table->dests.data[d];
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
-                flow_bits_t *bits = kind_bits(dest, kind);
-                if (!bit_has(bits, s)) continue;
-                bits->data[s / 64] &= ~(UINT64_C(1) << (s % 64));
-                core_list_push(moved, ((moved_flow_t){d, s, kind}));
-            }
-        }
+        take_source(table, s, true, &moved);
     }
     for (size_t m = 0; m < moved.len; m++) {
         const ir_spath_t *from = table->sources.data[moved.data[m].source];
