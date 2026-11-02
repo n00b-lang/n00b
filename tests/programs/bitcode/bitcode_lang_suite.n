@@ -120,6 +120,36 @@ func nominal_cast_check() {
     require text_round_trip("ok") == "ok"
 }
 
+type Wide_Id = u128
+type Flag = bool
+
+func __equal(left: Wide_Id, right: Wide_Id) -> bool {
+    return cast[u128](left) == cast[u128](right)
+}
+
+record Nominal_Fields {
+    name:   Text
+    id:     Wide_Id
+    hard:   bool
+    marked: Flag
+    word:   Word
+}
+
+func nominal_hard(fields: Nominal_Fields) -> bool {
+    return fields.hard and cast[bool] fields.marked
+}
+
+func nominal_field_check() {
+    let id: Wide_Id = cast[Wide_Id] cast[u128] 0x110000
+    let fields: Nominal_Fields = (name = cast[Text] "kw", id = id,
+                                  hard = true, marked = cast[Flag] true,
+                                  word = cast[Word] cast[u64] 9)
+    require nominal_hard(fields)
+    require fields.id == id
+    require cast[u64](fields.word) == 9
+    require cast[string](fields.name) == "kw"
+}
+
 func fill(out value: int, input: int) {
     value = input
 }
@@ -1898,6 +1928,7 @@ func start() -> nil {
     ffi_borrow_check()
     integer_complement_check()
     nominal_cast_check()
+    nominal_field_check()
     copyout_check()
     option_guard_flow_check()
     variant_array_literal_check()
