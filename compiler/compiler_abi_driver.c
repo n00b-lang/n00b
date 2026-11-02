@@ -409,8 +409,9 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                 ir_func_t *candidate = ir_func_at(runtime, f);
                 ir_func_t *body = n00bb_cached_body(candidate);
                 if (!body->n_blocks
-                    || !n00bb_names_function(view_text(function_name),
-                                             candidate->name)
+                    || !n00bb_names_function(
+                        n00bb_function_root(view_text(function_name)),
+                        candidate->name)
                     || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { valid = false; break; }

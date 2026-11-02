@@ -495,7 +495,8 @@ typedef struct {
     parse_tree_t *scope;
     parse_sym_entry_t *symbol;
     ir_local_t *owned;
-    const n00bb_finalize_plan_t *plan;
+    th_type *type;
+    bool fields;
     uint64_t order;
 } n00bb_final_frame_t;
 core_list_decl(n00bb_final_frame_t);
@@ -1818,6 +1819,9 @@ local_binding_mutability(const parse_sym_entry_t *symbol)
 
 static bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                             ir_span_t span);
+static bool n00bb_emit_branch(ir_lower_context_t *context,
+                              ir_value_t *condition, ir_block_t *on_true,
+                              ir_block_t *on_false, ir_span_t span);
 static th_type *n00bb_ir_builtin_type(ir_module_t *module,
                                       core_string_t name);
 
@@ -1874,6 +1878,26 @@ n00bb_final_address(ir_lower_context_t *context, parse_sym_entry_t *symbol,
     return bound ? take->dest : nullptr;
 }
 
+static ir_value_t *n00bb_reference_view(ir_lower_context_t *context,
+                                        ir_value_t *value, ir_span_t span);
+
+static ir_value_t *
+n00bb_fields_storage(ir_lower_context_t *context, ir_value_t *address,
+                     ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *referent = th_resolve(th_ind_referent(th_resolve(address->type)));
+    th_type *definition = referent && th_kind_of(referent) == TH_NAMED
+        ? th_type_definition(types, referent) : nullptr;
+    if (!definition || th_kind_of(th_resolve(definition)) != TH_INDIRECTION)
+        return address;
+    ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD, span);
+    return load && ir_lower_set_temp_dest(context, load,
+            CORE_STRING_STATIC("__n00bb_finalizing_"), referent)
+        && ir_instr_operand_value(load, address)
+        ? n00bb_reference_view(context, load->dest, span) : nullptr;
+}
+
 static ir_value_t *
 n00bb_final_field(ir_lower_context_t *context, ir_value_t *address,
                   core_string_t name, ir_span_t span)
@@ -1898,20 +1922,178 @@ n00bb_final_field(ir_lower_context_t *context, ir_value_t *address,
         && ir_instr_operand_name(at, name) ? at->dest : nullptr;
 }
 
+enum { N00BB_FINALIZE_DEPTH = 16 };
+
+static ir_func_t *n00bb_record_field_method(ir_lower_context_t *context,
+                                            const th_env_method_t *selected,
+                                            ir_module_t **owner_module);
+static ir_value_t *n00bb_emit_consume_value(ir_lower_context_t *context,
+                                            ir_value_t *value,
+                                            ir_value_t *binding,
+                                            ir_span_t span);
+static bool n00bb_emit_finalize_value(ir_lower_context_t *context,
+                                      ir_value_t *address, th_type *type,
+                                      ir_span_t span, size_t depth);
+
+static ir_local_t *
+n00bb_finalize_temporary(ir_lower_context_t *context, th_type *type)
+{
+    char buffer[48];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_finalizing_%llu",
+        (unsigned long long)context->next_value_id++);
+    return ir_local_add(context->function, name, type);
+}
+
+static ir_value_t *
+n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op, th_type *type,
+                ir_value_t *operand, ir_span_t span)
+{
+    ir_instr_t *in = ir_lower_emit_instruction(context, op, span);
+    return in && ir_lower_set_temp_dest(context, in,
+            CORE_STRING_STATIC("__n00bb_finalizing_"), type)
+        && ir_instr_operand_value(in, operand) ? in->dest : nullptr;
+}
+
+static bool
+n00bb_finalize_copy(ir_lower_context_t *context, ir_value_t *value,
+                    th_type *type, ir_span_t span, size_t depth)
+{
+    ir_local_t *local = n00bb_finalize_temporary(context, type);
+    ir_instr_t *copy = local
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
+                                   type);
+    ir_instr_t *take = copy && ir_instr_set_dest_local(copy, local)
+        && ir_instr_operand_value(copy, value)
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+        : nullptr;
+    return take && ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_finalizing_"), pointer_type)
+        && ir_instr_operand_local(take, local)
+        && n00bb_emit_finalize_value(context, take->dest, type, span,
+                                     depth + 1);
+}
+
+static bool
+n00bb_emit_finalizer_call(ir_lower_context_t *context,
+                          const th_env_method_t *method,
+                          ir_value_t *address, ir_span_t span)
+{
+    ir_module_t *owner = nullptr;
+    ir_func_t *function = n00bb_record_field_method(context, method, &owner);
+    ir_value_t *callee = owner && function
+        ? ir_func_address(owner, function) : nullptr;
+    th_type *signature = callee && method->signature
+        ? th_unify(ir_module_types(context->module), function->type,
+                   method->signature) : nullptr;
+    th_type *nil_type = th_name(ir_module_types(context->module),
+                                CORE_STRING_STATIC("nil"));
+    ir_value_t *consumed = signature
+        ? n00bb_emit_consume_value(context, address, nullptr, span)
+        : nullptr;
+    ir_instr_t *call = consumed
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    return call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_finalized_"), nil_type)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, consumed)
+        && ir_instr_set_call_signature(call, signature);
+}
+
+static bool
+n00bb_emit_finalize_fields(ir_lower_context_t *context, ir_value_t *address,
+                           ir_span_t span, size_t depth)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    address = n00bb_fields_storage(context, address, span);
+    if (!address) return false;
+    th_type *resolved = th_resolve(th_ind_referent(th_resolve(address->type)));
+    th_type *shape = resolved && th_kind_of(resolved) == TH_NAMED
+        ? th_type_definition(types, resolved) : resolved;
+    shape = shape ? th_resolve(shape) : nullptr;
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (!member || !member->type
+            || !n00bb_type_finalized(lower->unit, member->type)) continue;
+        ir_value_t *field = n00bb_final_field(context, address, member->name,
+                                              span);
+        if (!field || !n00bb_emit_finalize_value(context, field, member->type,
+                                                 span, depth + 1))
+            return false;
+    }
+    return true;
+}
+
+static bool
+n00bb_emit_finalize_value(ir_lower_context_t *context, ir_value_t *address,
+                          th_type *type, ir_span_t span, size_t depth)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || depth >= N00BB_FINALIZE_DEPTH
+        || !n00bb_type_finalized(lower->unit, resolved)) return true;
+    th_type *item = th_option_item(resolved);
+    size_t count = 0;
+    if (item || static_tuple_element_type(resolved, 0, &count)) {
+        ir_value_t *value = n00bb_emit_temp(context, IR_OP_LOAD, resolved,
+                                            address, span);
+        if (!value) return false;
+        if (!item) {
+            for (size_t i = 0; i < count; i++) {
+                th_type *element = static_tuple_element_type(resolved, i,
+                                                             nullptr);
+                if (!n00bb_type_finalized(lower->unit, element)) continue;
+                ir_instr_t *extract = ir_lower_emit_instruction(context,
+                    IR_OP_EXTRACT_INDEX, span);
+                if (!extract || !ir_lower_set_temp_dest(context, extract,
+                        CORE_STRING_STATIC("__n00bb_finalizing_"), element)
+                    || !ir_instr_operand_value(extract, value)
+                    || !ir_instr_operand_uint(extract, i)
+                    || !n00bb_finalize_copy(context, extract->dest, element,
+                                            span, depth)) return false;
+            }
+            return true;
+        }
+        th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                                   CORE_STRING_STATIC("bool"));
+        ir_value_t *absent = bool_type
+            ? n00bb_emit_temp(context, IR_OP_OPTION_IS_NIL, bool_type, value,
+                              span) : nullptr;
+        ir_block_t *present = n00bb_branch_block(context, lower, "present");
+        ir_block_t *join = n00bb_branch_block(context, lower, "absent");
+        if (!absent || !present || !join
+            || !n00bb_emit_branch(context, absent, join, present, span))
+            return false;
+        context->block = present;
+        ir_value_t *payload = n00bb_emit_temp(context, IR_OP_OPTION_GET, item,
+                                              value, span);
+        if (!payload || !n00bb_finalize_copy(context, payload, item, span,
+                                             depth)
+            || !n00bb_emit_jump(context, join, span)) return false;
+        context->block = join;
+        return true;
+    }
+    th_env_method_t method = {0};
+    if (n00bb_type_finalizer(lower->unit, resolved, &method))
+        return n00bb_emit_finalizer_call(context, &method, address, span);
+    return n00bb_emit_finalize_fields(context, address, span, depth);
+}
+
 static bool
 n00bb_emit_scope_finalize(ir_lower_context_t *context,
                           n00bb_final_frame_t *frame, parse_tree_t *source)
 {
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, source);
-    th_type *nil_type = th_name(ir_module_types(context->module),
-                                CORE_STRING_STATIC("nil"));
     ir_value_t *owned = ir_local_value(context->function, frame->owned);
     ir_block_t *finalize = n00bb_branch_block(context, lower, "finalize");
     ir_block_t *join = n00bb_branch_block(context, lower, "finalized");
     ir_instr_t *branch = finalize && join && owned
         ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
-    if (!nil_type || !branch || !ir_instr_operand_value(branch, owned)
+    if (!branch || !ir_instr_operand_value(branch, owned)
         || !ir_instr_operand_block(branch, finalize)
         || !ir_instr_operand_block(branch, join)) {
         lower_internal(context, span, "could not test a finalized local");
@@ -1919,17 +2101,18 @@ n00bb_emit_scope_finalize(ir_lower_context_t *context,
     }
     branch->span = span;
     context->block = finalize;
-    ir_value_t *base = n00bb_set_owned(context, frame, false, span)
-        ? n00bb_final_address(context, frame->symbol, span) : nullptr;
-    bool ok = base != nullptr;
-    for (size_t s = 0; ok && s < frame->plan->count; s++) {
-        const n00bb_finalize_step_t *step = &frame->plan->steps[s];
-        ir_value_t *address = base;
-        for (size_t d = 0; address && d < step->depth; d++)
-            address = n00bb_final_field(context, address, step->path[d],
-                                        span);
-        ok = address && n00bb_emit_site_trait_call(context, step->site,
-            address, TH_CONSUME, nil_type, nullptr, source);
+    bool ok = n00bb_set_owned(context, frame, false, span);
+    if (ok && frame->fields) {
+        ir_local_t *local = ir_lower_bound_local(context, frame->symbol);
+        ir_value_t *self = local ? ir_local_value(context->function, local)
+            : ir_lower_bound_value(context, frame->symbol);
+        ok = self && n00bb_emit_finalize_fields(context, self, span, 0);
+    }
+    else if (ok) {
+        ir_value_t *address = n00bb_final_address(context, frame->symbol,
+                                                  span);
+        ok = address && n00bb_emit_finalize_value(context, address,
+                                                  frame->type, span, 0);
     }
     if (!ok || !n00bb_emit_jump(context, join, span)) {
         lower_internal(context, span, "could not finalize a local");
@@ -1956,13 +2139,43 @@ n00bb_begin_final_frame(ir_lower_context_t *context,
                         parse_sym_entry_t *symbol, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    const n00bb_finalize_plan_t *plan = n00bb_scope_finalize_plan(symbol);
-    if (!lower || !context->reachable || !plan
-        || symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
+    if (!lower || !context->reachable
         || (symbol->selected_storage_class.data
             && symbol->selected_storage_class.u8_bytes)
         || n00bb_local_escapes(symbol)) return true;
     bool parameter = symbol->kind == PARSE_SYM_PARAM;
+    bool consumed = parameter && core_string_eq(symbol->direction,
+                                                CORE_STRING_STATIC("consume"));
+    bool finalizer_self = consumed && lower->function_symbol
+        && core_string_eq(lower->function_symbol->name,
+                          CORE_STRING_STATIC("__finalize"))
+        && th_kind_of(th_resolve(symbol->type)) == TH_INDIRECTION;
+    th_type *type = finalizer_self
+        ? th_ind_referent(th_resolve(symbol->type)) : symbol->type;
+    if ((parameter && !consumed) || !type
+        || symbol->kind == PARSE_SYM_FUNCTION) return true;
+    if (finalizer_self) {
+        th_ctx *types = ir_module_types(context->module);
+        th_type *resolved = th_resolve(type);
+        th_type *shape = th_kind_of(resolved) == TH_NAMED
+            ? th_type_definition(types, resolved) : resolved;
+        shape = shape ? th_resolve(shape) : nullptr;
+        if (shape && th_kind_of(shape) == TH_INDIRECTION) {
+            th_type *fields = th_resolve(th_ind_referent(shape));
+            shape = fields && th_kind_of(fields) == TH_NAMED
+                ? th_type_definition(types, fields) : fields;
+            shape = shape ? th_resolve(shape) : nullptr;
+        }
+        bool any = false;
+        for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+             && i < th_record_len(shape); i++) {
+            const th_member *member = th_record_member(shape, i);
+            any |= member && member->type
+                && n00bb_type_finalized(lower->unit, member->type);
+        }
+        if (!any) return true;
+    }
+    else if (!n00bb_type_finalized(lower->unit, type)) return true;
     parse_tree_t *scope = symbol->scope ? symbol->scope->node : nullptr;
     if (!scope || (!parameter
         && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("body"))
@@ -1979,10 +2192,22 @@ n00bb_begin_final_frame(ir_lower_context_t *context,
         .scope = scope,
         .symbol = symbol,
         .owned = owned,
-        .plan = plan,
+        .type = type,
+        .fields = finalizer_self,
         .order = ++lower->next_control_order,
     };
-    if (!owned || !core_list_try_push(lower->finals, frame)
+    ir_value_t *binding = ir_lower_bound_address(context, symbol);
+    ir_local_t *local = binding ? nullptr
+        : ir_lower_bound_local(context, symbol);
+    if (!binding) binding = local ? ir_local_value(context->function, local)
+                                  : ir_lower_bound_value(context, symbol);
+    ir_annots_t *annots = binding ? ir_value_annots(binding) : nullptr;
+    if (!owned || !annots || !core_list_try_push(lower->finals, frame)
+        || !ir_annot_set(lower->ir_context, annots, (ir_annot_t){
+                .key = CORE_STRING_STATIC("n00bb.finalize_owned"),
+                .kind = IR_ANNOT_VALUE,
+                .v = ir_local_value(context->function, owned),
+            })
         || !n00bb_set_owned(context,
             &lower->finals.data[lower->finals.len - 1], parameter, span)) {
         lower_internal(context, span, "could not track a finalized local");
@@ -8022,6 +8247,9 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_push(parts->expressions, rest->expressions.data[i]);
         core_list_push(parts->values, rest->values.data[i]);
     }
+    for (size_t i = 0; i < parts->expressions.len; i++)
+        if (!n00bb_move_source(context, visit->grammar,
+                               parts->expressions.data[i])) return false;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                        IR_OP_AGGREGATE, span);
@@ -12180,6 +12408,28 @@ n00bb_object_hash_function(ir_lower_context_t *context, th_type *receiver)
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
+static ir_func_t *
+n00bb_record_finalize_function(ir_lower_context_t *context,
+                               th_type *receiver)
+{
+    ir_func_t *function = context->function;
+    if (!function || function->n_blocks || !receiver) return nullptr;
+    th_ctx *types = ir_module_types(context->module);
+    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"),
+                                    th_ind(types, 0, receiver));
+    ir_block_t *block = self
+        ? ir_block_add(function, CORE_STRING_STATIC("entry")) : nullptr;
+    if (!block) return nullptr;
+    context->block = block;
+    context->reachable = true;
+    ir_span_t span = ir_module_span(context->module);
+    span.implied = true;
+    if (!n00bb_emit_finalize_fields(context, self, span, 0))
+        return nullptr;
+    ir_instr_t *ret = ir_instr_add(context->block, IR_OP_RETURN);
+    return ret ? function : nullptr;
+}
+
 static bool
 n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
 {
@@ -12206,6 +12456,9 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                 bool object_equal = symbol->name.data
                     && core_string_starts_with(symbol->name,
                         CORE_STRING_STATIC("__n00bb_object_equal_"));
+                bool finalize = symbol->name.data
+                    && core_string_starts_with(symbol->name,
+                        CORE_STRING_STATIC("__finalize#n00bb_"));
                 ir_func_t *function = link_ir_function_for_symbol(analysis, symbol);
                 ir_module_t *module = unit_module(state);
                 n00bb_lower_context_t lower = {
@@ -12218,7 +12471,9 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                     .user = &lower,
                 };
                 bool generated = function && module
-                    && (object_hash
+                    && (finalize
+                        ? n00bb_record_finalize_function(&context, receiver)
+                        : object_hash
                         ? n00bb_object_hash_function(&context, receiver)
                         : object_equal
                         ? n00bb_object_equal_function(&context, receiver)

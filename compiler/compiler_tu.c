@@ -1772,21 +1772,10 @@ cache_iteration_plan(parse_grammar_t *grammar,
     return true;
 }
 
-#define N00BB_FINALIZE_PLAN_KEY CORE_STRING_STATIC("n00bb.finalize-plan")
-
 enum { N00BB_FINALIZE_DEPTH = 16 };
 
-core_list_decl(n00bb_finalize_step_t);
-
-typedef struct {
-    n00bb_tu_state_t *state;
-    n00bb_link_use_site_t site;
-    core_string_t path[N00BB_FINALIZE_DEPTH];
-    core_list_t(n00bb_finalize_step_t) steps;
-} scope_plan_builder_t;
-
 static th_type *
-scope_record_shape(n00bb_tu_state_t *state, th_type *type)
+finalize_record_shape(n00bb_tu_state_t *state, th_type *type)
 {
     th_type *resolved = type ? th_resolve(type) : nullptr;
     if (!resolved || th_is_poison(resolved)
@@ -1798,54 +1787,45 @@ scope_record_shape(n00bb_tu_state_t *state, th_type *type)
     return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
 }
 
-static bool
-scope_plan_add(scope_plan_builder_t *builder, th_type *type, size_t depth)
+bool
+n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
+                     th_env_method_t *method)
 {
-    n00bb_tu_state_t *state = builder->state;
-    th_type *shape = scope_record_shape(state, type);
-    if (!shape || depth >= N00BB_FINALIZE_DEPTH) return true;
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    if (!state || !type) return false;
     th_type *reference = th_ind(state->types, 0, th_resolve(type));
-    th_env_method_t method = {0};
-    if (reference && th_env_method_resolve(state->types, reference,
-            CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
-            &method) == TH_ENV_METHOD_FOUND) {
-        n00bb_link_use_site_t site = builder->site;
-        site.dispatch_receiver_type = reference;
-        core_string_t *path = depth
-            ? core_arena_alloc(&state->semantic_values, depth * sizeof(*path))
-            : nullptr;
-        if (depth && !path) return false;
-        for (size_t i = 0; i < depth; i++) path[i] = builder->path[i];
-        n00bb_finalize_step_t step = {
-            .path = path, .depth = depth,
-            .site = state->link_use_sites.len,
-        };
-        if (!append_link_use_site(state, site)
-            || !core_list_try_push(builder->steps, step)) return false;
-    }
-    for (size_t i = 0; i < th_record_len(shape); i++) {
-        const th_member *member = th_record_member(shape, i);
-        if (!member || !member->type) continue;
-        builder->path[depth] = member->name;
-        if (!scope_plan_add(builder, member->type, depth + 1)) return false;
-    }
-    return true;
+    th_env_method_t found = {0};
+    bool resolved = reference && th_env_method_resolve(state->types,
+        reference, CORE_STRING_STATIC("Finalize"),
+        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND;
+    if (resolved && method) *method = found;
+    return resolved;
 }
 
 static bool
-type_finalized_within(n00bb_tu_state_t *state, th_type *type, size_t depth)
+type_finalized_within(core_translation_unit_t *unit, th_type *type,
+                      size_t depth)
 {
-    th_type *shape = scope_record_shape(state, type);
-    if (!shape || depth >= N00BB_FINALIZE_DEPTH) return false;
-    th_type *reference = th_ind(state->types, 0, th_resolve(type));
-    th_env_method_t method = {0};
-    if (reference && th_env_method_resolve(state->types, reference,
-            CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
-            &method) == TH_ENV_METHOD_FOUND) return true;
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || depth >= N00BB_FINALIZE_DEPTH) return false;
+    th_type *item = th_option_item(resolved);
+    if (item) return type_finalized_within(unit, item, depth + 1);
+    size_t count = 0;
+    if (static_tuple_element_type(resolved, 0, &count)) {
+        for (size_t i = 0; i < count; i++)
+            if (type_finalized_within(unit,
+                    static_tuple_element_type(resolved, i, nullptr),
+                    depth + 1)) return true;
+        return false;
+    }
+    th_type *shape = finalize_record_shape(state, resolved);
+    if (!shape) return false;
+    if (n00bb_type_finalizer(unit, resolved, nullptr)) return true;
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *member = th_record_member(shape, i);
         if (member && member->type
-            && type_finalized_within(state, member->type, depth + 1))
+            && type_finalized_within(unit, member->type, depth + 1))
             return true;
     }
     return false;
@@ -1854,87 +1834,7 @@ type_finalized_within(n00bb_tu_state_t *state, th_type *type, size_t depth)
 bool
 n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
 {
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    return state && type_finalized_within(state, type, 0);
-}
-
-const n00bb_finalize_plan_t *
-n00bb_scope_finalize_plan(const parse_sym_entry_t *symbol)
-{
-    return symbol ? parse_sym_binding(symbol, N00BB_FINALIZE_PLAN_KEY)
-                  : nullptr;
-}
-
-static parse_tree_t *
-scope_finalizer_site_node(parse_grammar_t *grammar, parse_tree_t *declaration,
-                          bool parameter)
-{
-    core_string_t wrapper = parameter ? CORE_STRING_STATIC("param-decl")
-                                      : CORE_STRING_STATIC("body-stmt");
-    for (parse_tree_t *at = declaration; at; at = parse_tree_parent(at))
-        if (nt_is(grammar, at, wrapper)) return at;
-    return nullptr;
-}
-
-bool
-register_scope_finalizers(parse_grammar_t *grammar,
-                          core_translation_unit_t *unit)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    parse_symtab_t *symtab = state && state->annotations
-        ? state->annotations->symtab : nullptr;
-    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-         scope; scope = scope->all_next) {
-        if (!scope_is_within_function(scope)) continue;
-        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-             symbol = symbol->next_in_scope) {
-            bool local = symbol->kind == PARSE_SYM_VARIABLE
-                && symbol->storage_duration != PARSE_SYM_STORAGE_MODULE;
-            bool owned = symbol->kind == PARSE_SYM_PARAM
-                && core_string_eq(symbol->direction,
-                                  CORE_STRING_STATIC("consume"));
-            parse_tree_t *node = (local || owned) && symbol->decl_node
-                ? scope_finalizer_site_node(grammar, symbol->decl_node, owned)
-                : nullptr;
-            if (!node || n00bb_scope_finalize_plan(symbol)
-                || !scope_record_shape(state, symbol->type)) continue;
-            scope_plan_builder_t builder = {
-                .state = state,
-                .site = {
-                    .node = node,
-                    .scope = scope,
-                    .function_owner = enclosing_function_symbol(grammar,
-                        symbol->decl_node),
-                    .dispatch_trait = CORE_STRING_STATIC("Finalize"),
-                    .dispatch_method = CORE_STRING_STATIC("__finalize"),
-                    .secondary_dispatch = true,
-                    .semantic_dispatch = true,
-                },
-                .steps = core_list_new(n00bb_finalize_step_t),
-            };
-            bool built = scope_plan_add(&builder, symbol->type, 0);
-            n00bb_finalize_plan_t *plan = built && builder.steps.len
-                ? core_arena_alloc(&state->semantic_values, sizeof(*plan))
-                : nullptr;
-            n00bb_finalize_step_t *steps = plan
-                ? core_arena_alloc(&state->semantic_values,
-                                   builder.steps.len * sizeof(*steps))
-                : nullptr;
-            if (steps) {
-                for (size_t i = 0; i < builder.steps.len; i++)
-                    steps[i] = builder.steps.data[i];
-                *plan = (n00bb_finalize_plan_t){
-                    .steps = steps, .count = builder.steps.len,
-                };
-            }
-            size_t count = builder.steps.len;
-            core_list_free(builder.steps);
-            if (!built || (count && (!steps || !parse_sym_set_binding(
-                    symbol, N00BB_FINALIZE_PLAN_KEY, plan))))
-                return false;
-        }
-    }
-    return true;
+    return unit && tu_state(unit) && type_finalized_within(unit, type, 0);
 }
 
 bool

@@ -95,22 +95,9 @@ void resolve_declaration_patterns(parse_grammar_t *grammar,
 bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                bool closed_only);
-typedef struct {
-    core_string_t *path;
-    size_t depth;
-    size_t site;
-} n00bb_finalize_step_t;
-
-typedef struct {
-    n00bb_finalize_step_t *steps;
-    size_t count;
-} n00bb_finalize_plan_t;
-
-bool register_scope_finalizers(parse_grammar_t *grammar,
-                               core_translation_unit_t *unit);
-const n00bb_finalize_plan_t *n00bb_scope_finalize_plan(
-    const parse_sym_entry_t *symbol);
 bool n00bb_type_finalized(core_translation_unit_t *unit, th_type *type);
+bool n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
+                          th_env_method_t *method);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                            core_list_t(n00bb_tree_ptr_t) *arguments);
 core_string_t call_keyword_name(parse_tree_t *argument);

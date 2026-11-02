@@ -13295,6 +13295,19 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
                     body);
         LLVMPositionBuilderAtEnd(builder, body);
         LLVMValueRef payload = LLVMGetParam(bridge, 1);
+        th_ctx *types = ir_module_types(function->owner);
+        th_type *self = function->n_params && function->params[0]
+            ? th_resolve(function->params[0]->type) : nullptr;
+        th_type *referent = self && th_kind_of(self) == TH_INDIRECTION
+            ? th_resolve(th_ind_referent(self)) : nullptr;
+        th_type *definition = referent && th_kind_of(referent) == TH_NAMED
+            ? th_type_definition(types, referent) : nullptr;
+        if (definition
+            && th_kind_of(th_resolve(definition)) == TH_INDIRECTION) {
+            LLVMValueRef slot = LLVMBuildAlloca(builder, pointer, "handle");
+            LLVMBuildStore(builder, payload, slot);
+            payload = slot;
+        }
         LLVMBuildCall2(builder, target_signature, target, &payload, 1, "");
         LLVMBuildRetVoid(builder);
     }
