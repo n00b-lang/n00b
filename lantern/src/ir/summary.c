@@ -3052,7 +3052,32 @@ typedef struct {
     core_dict_t pointer_types;
     core_dict_t members;
     core_dict_t definitions;
+    core_dict_t fields;
+    core_dict_t slots;
+    core_dict_t pointers;
 } type_memo_t;
+
+typedef struct {
+    th_type             *root;
+    const core_string_t *steps;
+    uint32_t             depth;
+} slot_key_t;
+
+static core_hash_value_t
+slot_key_hash(void *key)
+{
+    const slot_key_t *k = key;
+    return core_hash_word((void *)k->root)
+         ^ (core_hash_word((void *)k->steps) * 31u)
+         ^ (core_hash_value_t)k->depth;
+}
+
+static bool
+slot_key_eq(const void *a, const void *b)
+{
+    const slot_key_t *x = a, *y = b;
+    return x->root == y->root && x->steps == y->steps && x->depth == y->depth;
+}
 static type_memo_t *
 type_memo(ir_summaries_t *summaries, const ir_module_t *module)
 {
@@ -3064,6 +3089,9 @@ type_memo(ir_summaries_t *summaries, const ir_module_t *module)
     core_dict_init(&memo->pointer_types, nullptr, nullptr);
     core_dict_init(&memo->members, nullptr, nullptr);
     core_dict_init(&memo->definitions, nullptr, nullptr);
+    core_dict_init(&memo->fields, nullptr, nullptr);
+    core_dict_init(&memo->slots, slot_key_hash, slot_key_eq);
+    core_dict_init(&memo->pointers, slot_key_hash, slot_key_eq);
     core_dict_put(&summaries->type_memos, (void *)module, memo);
     return memo;
 }
@@ -3078,9 +3106,26 @@ type_memos_free(core_dict_t *memos)
             core_list_free(*members);
             core_free(members);
         }
+        core_dict_foreach(&memo->fields, entry) {
+            core_dict_t *fields = entry->value;
+            core_dict_foreach(fields, field) {
+                core_dict_string_key_free(field->key);
+            }
+            core_dict_free(fields);
+            core_free(fields);
+        }
         core_dict_free(&memo->members);
         core_dict_free(&memo->pointer_types);
         core_dict_free(&memo->definitions);
+        core_dict_free(&memo->fields);
+        core_dict_foreach(&memo->slots, entry) {
+            core_free(entry->key);
+        }
+        core_dict_free(&memo->slots);
+        core_dict_foreach(&memo->pointers, entry) {
+            core_free(entry->key);
+        }
+        core_dict_free(&memo->pointers);
         core_free(memo);
     }
     core_dict_free(memos);
@@ -3712,25 +3757,54 @@ memo_defined(const pt_t *pt, th_type *type)
 }
 
 static th_type *
+field_type(const pt_t *pt, th_type *record, core_string_t step)
+{
+    bool         found  = false;
+    core_dict_t *fields = core_dict_get(&pt->types->fields, record, &found);
+    if (!found) {
+        fields = core_alloc(core_dict_t);
+        core_dict_init_string(fields);
+        core_dict_put(&pt->types->fields, record, fields);
+    }
+    th_type *type = core_dict_get(fields, &step, &found);
+    if (found) return type;
+    type = th_record_lookup(record, step);
+    core_dict_put(fields, core_dict_string_key_copy(step), type);
+    return type;
+}
+
+static th_type *
+step_type(const pt_t *pt, th_type *type, core_string_t step)
+{
+    th_type *current = memo_defined(pt, type);
+    if (!current) return nullptr;
+    if (step_eq(step, value_step))
+        return pointee_type(pt->f->owner, current);
+    if (step_eq(step, element_step))
+        return th_kind_of(current) == TH_SEQUENCE
+            ? th_seq_elem(current) : nullptr;
+    return th_kind_of(current) == TH_RECORD
+        ? field_type(pt, current, step) : nullptr;
+}
+
+static th_type *
 loc_type(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
 {
     th_type *type = loc->site == PT_EXTERNAL
         ? root_object_type(pt->f, &loc->path)
         : pt->sites.data[loc->site].type;
-    for (uint32_t s = 0; type && s < depth; s++) {
-        th_type      *current = memo_defined(pt, type);
-        core_string_t step    = loc->path.steps[s];
-        if (!current) return nullptr;
-        if (step_eq(step, value_step))
-            type = pointee_type(pt->f->owner, current);
-        else if (step_eq(step, element_step))
-            type = th_kind_of(current) == TH_SEQUENCE
-                ? th_seq_elem(current) : nullptr;
-        else
-            type = th_kind_of(current) == TH_RECORD
-                ? th_record_lookup(current, step) : nullptr;
-    }
-    return memo_defined(pt, type);
+    if (!type || !depth) return memo_defined(pt, type);
+    slot_key_t probe = {type, loc->path.steps, depth};
+    bool       found = false;
+    th_type   *slot  = core_dict_get(&pt->types->slots, &probe, &found);
+    if (found) return slot;
+    for (uint32_t s = 0; type && s < depth; s++)
+        type = step_type(pt, type, loc->path.steps[s]);
+    slot = memo_defined(pt, type);
+    slot_key_t *key = core_alloc(slot_key_t);
+    *key = probe;
+    core_dict_put(&pt->types->slots, key, slot);
+    return slot;
 }
 
 static th_type *
@@ -3799,20 +3873,21 @@ recursive_step(const pt_loc_t *loc, uint32_t at)
 }
 
 static bool
-recursive_object(pt_loc_t *loc)
+recursive_object(pt_loc_t *loc, th_type *slot)
 {
-    th_type *slot   = loc_type(active_pt, loc, loc->path.depth);
     th_type *object = slot ? memo_defined(active_pt,
                                           pointee_type(active_pt->f->owner,
                                                        slot))
                            : nullptr;
     if (!object) return false;
-    for (uint32_t k = 1; k <= loc->path.depth; k++) {
+    th_type *earlier = loc_type(active_pt, loc, 0);
+    for (uint32_t k = 1; earlier && k <= loc->path.depth; k++) {
+        earlier = step_type(active_pt, earlier, loc->path.steps[k - 1]);
         if (!step_eq(loc->path.steps[k - 1], value_step)) continue;
-        th_type *earlier = loc_type(active_pt, loc, k);
-        if (!same_type(earlier, object)
-            && !(earlier
-                 && ir_type_eq(active_pt->f->owner, earlier, object)))
+        th_type *defined = memo_defined(active_pt, earlier);
+        if (!same_type(defined, object)
+            && !(defined
+                 && ir_type_eq(active_pt->f->owner, defined, object)))
             continue;
         loc->path.flags |= IR_SPATH_DEEP;
         return true;
@@ -3847,7 +3922,8 @@ loc_push(pt_loc_t *loc, core_string_t step)
         loc->path.flags |= IR_SPATH_DEEP;
         return;
     }
-    if (active_pt && step_eq(step, value_step) && recursive_object(loc))
+    if (active_pt && step_eq(step, value_step)
+        && recursive_object(loc, type))
         return;
     bool repeated = false;
     for (uint32_t s = 0; !repeated && s < loc->path.depth; s++)
@@ -5318,20 +5394,9 @@ root_object_type(const ir_func_t *f, const ir_spath_t *path)
 }
 
 static bool
-slot_pointer(pt_t *pt, const pt_item_t *item)
+slot_holds_pointer(ir_module_t *module, th_type *root, const ir_spath_t *path)
 {
-    uint32_t          site = item->loc.site;
-    const ir_spath_t *path = &item->loc.path;
-    if (item->kind != PT_CONTENTS
-        || (site != PT_EXTERNAL && site >= pt->sites.len))
-        return true;
-    if (path->depth && step_eq(path->steps[path->depth - 1], length_step))
-        return false;
-    ir_module_t *module = pt->f->owner;
-    th_type     *root   = site == PT_EXTERNAL
-        ? root_object_type(pt->f, path)
-        : pt->sites.data[site].type;
-    th_type     *slot   = end_type(module, root, path);
+    th_type *slot = end_type(module, root, path);
     if (!slot || pointee_type(module, slot)
         || ir_machine_of(module, slot).class == IR_CLASS_PTR)
         return true;
@@ -5344,6 +5409,30 @@ slot_pointer(pt_t *pt, const pt_item_t *item)
     default:
         return false;
     }
+}
+
+static bool
+slot_pointer(pt_t *pt, const pt_item_t *item)
+{
+    uint32_t          site = item->loc.site;
+    const ir_spath_t *path = &item->loc.path;
+    if (item->kind != PT_CONTENTS
+        || (site != PT_EXTERNAL && site >= pt->sites.len))
+        return true;
+    if (path->depth && step_eq(path->steps[path->depth - 1], length_step))
+        return false;
+    th_type   *root  = site == PT_EXTERNAL
+        ? root_object_type(pt->f, path)
+        : pt->sites.data[site].type;
+    slot_key_t probe = {root, path->steps, path->depth};
+    bool       found = false;
+    void      *known = core_dict_get(&pt->types->pointers, &probe, &found);
+    if (found) return known != nullptr;
+    bool pointer = slot_holds_pointer(pt->f->owner, root, path);
+    slot_key_t *key = core_alloc(slot_key_t);
+    *key = probe;
+    core_dict_put(&pt->types->pointers, key, pointer ? (void *)key : nullptr);
+    return pointer;
 }
 
 
