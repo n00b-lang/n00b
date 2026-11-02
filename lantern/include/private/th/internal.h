@@ -199,6 +199,7 @@ struct th_type {
       uint64_t origin;
       bool has_index;
       bool cons_borrowed;
+      bool open_slot;
       th_type *ref;
       core_string_t name;
       core_list_t(th_constraint) cons;

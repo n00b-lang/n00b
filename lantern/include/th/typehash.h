@@ -526,6 +526,8 @@ void   th_register_integer_method(th_ctx *ctx, th_integer_method_fn fn,
 bool   th_var_is_integer(const th_type *var, uint8_t *flags);
 bool   th_var_owned_integer(const th_ctx *ctx, const th_type *var);
 bool   th_ground_integer(th_ctx *ctx, th_type *var, th_type *type);
+void   th_var_mark_open(th_type *type);
+bool   th_var_is_open(const th_type *type);
 bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                    void *context);
 bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);

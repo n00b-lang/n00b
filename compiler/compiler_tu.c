@@ -1202,9 +1202,11 @@ bind_for_item_type(parse_grammar_t *grammar,
         && !th_unify_probe(types, declared, resolved)
         && loop_item_converts(types, resolved, declared);
     if (converts) return true;
-    th_type *unified = symbol
-        ? th_unify_in_place(types, symbol->type, item_type)
-        : nullptr;
+    th_type *unified = !symbol ? nullptr
+        : !th_var_is_open(symbol->type)
+            ? th_unify_in_place(types, symbol->type, item_type)
+        : th_ground_integer(types, symbol->type, item_type)
+            ? th_resolve(symbol->type) : nullptr;
     if (!unified && symbol && declared)
         report_loop_item_misfit(unit, single, symbol, declared, resolved);
     if (!unified) return false;
@@ -7009,6 +7011,16 @@ expected_expression_child_type(parse_grammar_t *grammar,
     return nullptr;
 }
 
+static th_type *
+inferred_symbol_type(th_ctx *types, parse_sym_entry_t *symbol,
+                     parse_tree_t *use, th_type *declared, void *context)
+{
+    if (symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.loop-binding")))
+        th_var_mark_open(declared);
+    return n00bb_narrowed_symbol_type(types, symbol, use, declared, context);
+}
+
 bool
 prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
 {
@@ -7034,7 +7046,7 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
                                           n00bb_report_inference_failure,
                                           unit);
     parse_annot_result_set_symbol_type_hook(state->annotations,
-                                            n00bb_narrowed_symbol_type, unit);
+                                            inferred_symbol_type, unit);
     parse_annot_result_set_tuple_element_hook(state->annotations,
                                               n00bb_tuple_element, unit);
     parse_annot_result_set_node_callback(state->annotations,
@@ -12350,8 +12362,11 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         if (for_binding) {
             parse_sym_set_storage_duration(symbol,
                                            PARSE_SYM_STORAGE_AUTOMATIC);
-            if (!CHILD_NT(visit->grammar, visit->node, "type-spec"))
+            if (!CHILD_NT(visit->grammar, visit->node, "type-spec")) {
                 parse_sym_mark_type_inferred(symbol);
+                parse_sym_set_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.loop-binding"), symbol);
+            }
             if (core_string_eq(first_token_text(visit->node),
                                CORE_STRING_STATIC("let")))
                 parse_sym_set_binding(symbol,

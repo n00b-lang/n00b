@@ -425,6 +425,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     if (c.kind == TH_CON_HAS_FIELD) {
         if (!ctx || !c.field.name.u8_bytes) return false;
         c.field.name = th_strdup(ctx, c.field.name);
+        th_var_mark_open(c.field.type);
     }
 
     if (ctx && c.kind == TH_CON_IMPLEMENTS && !c.has_scope &&
@@ -1089,6 +1090,18 @@ bool th_ground_integer(th_ctx *ctx, th_type *var, th_type *type)
     return bound;
 }
 
+void th_var_mark_open(th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (type && type->kind == TH_VAR) type->var.open_slot = true;
+}
+
+bool th_var_is_open(const th_type *type)
+{
+    type = type ? th_resolve((th_type *)type) : nullptr;
+    return type && type->kind == TH_VAR && type->var.open_slot;
+}
+
 bool th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                  void *context)
 {
@@ -1236,6 +1249,18 @@ static bool integer_pair_converts(th_ctx *ctx, th_type *left, th_type *right)
             || th_resolve(right)->kind != TH_VAR);
 }
 
+static bool open_integer_argument(th_ctx *ctx, th_type *actual,
+                                  th_type *formal)
+{
+    actual = th_resolve(actual);
+    formal = th_resolve(formal);
+    return actual && formal && actual->kind == TH_VAR
+        && actual->var.open_slot && !actual->var.cons.len
+        && formal->kind != TH_VAR && integer_shaped(ctx, formal)
+        && th_var_constrain(ctx, actual,
+               (th_constraint){.kind = TH_CON_INTEGER});
+}
+
 static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
                                     th_type *formal, th_mode mode,
                                     core_dict_t *seen)
@@ -1243,7 +1268,8 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
     if (!actual || !formal) return false;
     th_type *referent = dereferenced_argument(ctx, actual, formal, mode);
     if (referent) return uni(ctx, referent, formal, seen);
-    if (th_mode_is_in(mode) && integer_pair_converts(ctx, actual, formal))
+    if (th_mode_is_in(mode) && (integer_pair_converts(ctx, actual, formal)
+            || open_integer_argument(ctx, actual, formal)))
         return true;
     if (!(ctx->method_argument_coercions
           & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
@@ -1540,7 +1566,12 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             }
 
             size_t field_errors = ctx->errors.len;
-            if (c->field.type && !uni(ctx, m, c->field.type, seen)) {
+            bool grounding = ctx->grounding_integers;
+            ctx->grounding_integers = grounding
+                || th_var_is_open(c->field.type);
+            bool fits = !c->field.type || uni(ctx, m, c->field.type, seen);
+            ctx->grounding_integers = grounding;
+            if (!fits) {
                 if (ctx->errors.len > field_errors) return false;
                 th_err(ctx, TH_ERR_CONSTRAINT,
                        CORE_STRING_STATIC("has_field"), c->field.type, m,
@@ -2887,6 +2918,8 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
             }
             a->var.ref = b;
             a->revision++;
+            if (b->kind == TH_VAR && a->var.open_slot)
+                b->var.open_slot = true;
 
             continue;
         }
