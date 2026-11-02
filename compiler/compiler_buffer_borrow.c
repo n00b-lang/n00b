@@ -644,9 +644,10 @@ static void
 add_source(uint64_t *from, const ir_func_t *function, const ir_spath_t *path)
 {
     if (path->root != IR_SPLACE_PARAM) return;
-    uint64_t bit = path_parameter_bit(function, path);
-    if (!path->depth) from[N00BB_FLOW_SELF] |= bit;
-    if (path->depth || (path->flags & IR_SPATH_DEEP))
+    uint64_t bit    = path_parameter_bit(function, path);
+    bool     derefs = ir_spath_derefs(path);
+    if (!derefs) from[N00BB_FLOW_SELF] |= bit;
+    if (derefs || (path->flags & IR_SPATH_DEEP))
         from[N00BB_FLOW_CONTENTS] |= bit;
 }
 

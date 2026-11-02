@@ -2943,6 +2943,7 @@ typedef struct {
     ir_spath_t path;
     uint32_t   site;
 } pt_loc_t;
+core_list_decl(pt_loc_t);
 
 typedef enum : uint8_t {
     PT_SAME,
@@ -3211,6 +3212,8 @@ struct pt_t {
     flow_bits_t            crossed;
     uint32_t               crossed_known;
     pt_set_t               seen;
+    core_list_t(pt_loc_t)  reading;
+    uint32_t               cuts;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
     uint64_t               generation;
@@ -4779,6 +4782,7 @@ typedef struct {
     pt_loc_t loc;
     uint64_t generation;
     pt_set_t items;
+    bool     partial;
 } stored_t;
 
 static core_hash_value_t resolved_hash(void *key);
@@ -4799,11 +4803,13 @@ stored_at(pt_t *pt, const pt_loc_t *loc)
     bool      known   = false;
     uintptr_t changed = (uintptr_t)core_dict_get(
         &pt->changed, (void *)contents_key(loc->site), &known);
-    if (!found || changed > entry->generation) {
+    if (!found || entry->partial || changed > entry->generation) {
+        uint32_t cuts     = pt->cuts;
         entry->items.len  = 0;
         contents_into(pt, loc, &pt->sites.data[loc->site].contents,
                       &entry->items);
         entry->generation = pt->generation;
+        entry->partial    = pt->cuts != cuts;
     }
     return &entry->items;
 }
@@ -4828,15 +4834,15 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     }
 }
 
-static _Thread_local core_list_t(uint64_t) reading;
-
 static bool
-begin_reading(uint32_t site, uint32_t depth)
+begin_reading(pt_t *pt, const pt_loc_t *loc)
 {
-    uint64_t key = (uint64_t)site << 32 | depth;
-    for (size_t r = 0; r < reading.len; r++)
-        if (reading.data[r] == key) return false;
-    core_list_push(reading, key);
+    for (size_t r = 0; r < pt->reading.len; r++)
+        if (resolved_eq(&pt->reading.data[r], loc)) {
+            pt->cuts++;
+            return false;
+        }
+    core_list_push(pt->reading, *loc);
     return true;
 }
 
@@ -4886,9 +4892,9 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
             set_add(into, contents_item(target));
             continue;
         }
-        if (!begin_reading(target.site, target.path.depth)) continue;
+        if (!begin_reading(pt, &target)) continue;
         content_at(pt, &target, into);
-        reading.len--;
+        pt->reading.len--;
     }
 }
 
@@ -5467,6 +5473,12 @@ param_object(const ir_func_t *function, const ir_spath_t *path,
         return true;
     }
     return !path->depth && (path->flags & IR_SPATH_DEEP);
+}
+
+bool
+ir_spath_derefs(const ir_spath_t *path)
+{
+    return first_deref(path->steps, path->depth) < path->depth;
 }
 
 bool
@@ -8428,6 +8440,7 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_groups);
     core_list_free(pt->described);
     core_list_free(pt->seen);
+    core_list_free(pt->reading);
     core_list_free(pt->crossed);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
     flow_free(&pt->flow);

@@ -298,6 +298,7 @@ th_type          *ir_summary_path_type(const ir_func_t *function,
                                        const ir_spath_t *path, uint32_t depth);
 bool              ir_summary_path_inline(const ir_func_t *function,
                                          const ir_spath_t *path);
+bool              ir_spath_derefs(const ir_spath_t *path);
 void              ir_summary_merged_paths(const ir_summary_t *summary,
                                           ir_spath_list_t *into);
 void              ir_spath_list_release(ir_spath_list_t *paths);
