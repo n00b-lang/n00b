@@ -104,6 +104,9 @@
              "keep concrete generic calls on the boxed path"), \
     DEV_FLAG("--closed-world", NO_ALIAS, BOOL, false, \
              "omit the polymorphic implementations kept for dynamic linking"), \
+    FLAG("--no-closed-world", NO_ALIAS, BOOL, false, \
+         "keep the polymorphic implementations needed for dynamic linking " \
+         "in an LTO build"), \
     FLAG("--function-summaries", NO_ALIAS, BOOL, false, \
          "keep function summaries in the executable for dynamic linking, " \
          "reflection and debugging"), \
