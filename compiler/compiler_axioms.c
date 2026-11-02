@@ -325,32 +325,61 @@ n00bb_axiom_function_has(const ir_func_t *function, uint8_t role)
     return axiom && (axiom->roles & role);
 }
 
-static pthread_rwlock_t pure_lock = PTHREAD_RWLOCK_INITIALIZER;
-static core_dict_t      pure_natives;
-static bool             pure_ready;
+enum { NATIVE_PURE = 1, NATIVE_FOREIGN = 2 };
+
+static pthread_rwlock_t generated_lock = PTHREAD_RWLOCK_INITIALIZER;
+static core_dict_t      generated_natives;
+static bool             generated_ready;
+
+static void
+note_generated_native(core_string_t symbol, uintptr_t kind)
+{
+    if (!symbol.data) return;
+    pthread_rwlock_wrlock(&generated_lock);
+    if (!generated_ready) {
+        core_dict_init_string(&generated_natives);
+        generated_ready = true;
+    }
+    if (!core_dict_contains(&generated_natives, &symbol))
+        core_dict_put(&generated_natives, core_dict_string_key_copy(symbol),
+                      (void *)kind);
+    pthread_rwlock_unlock(&generated_lock);
+}
+
+static uintptr_t
+generated_native(const ir_func_t *function)
+{
+    if (!function || function->n_blocks) return 0;
+    pthread_rwlock_rdlock(&generated_lock);
+    bool      found = false;
+    uintptr_t kind  = generated_ready
+        ? (uintptr_t)core_dict_get(&generated_natives,
+                                   (void *)&function->name, &found)
+        : 0;
+    pthread_rwlock_unlock(&generated_lock);
+    return found ? kind : 0;
+}
 
 void
 n00bb_axiom_note_pure_native(core_string_t symbol)
 {
-    if (!symbol.data) return;
-    pthread_rwlock_wrlock(&pure_lock);
-    if (!pure_ready) {
-        core_dict_init_string(&pure_natives);
-        pure_ready = true;
-    }
-    if (!core_dict_contains(&pure_natives, &symbol))
-        core_dict_put(&pure_natives, core_dict_string_key_copy(symbol),
-                      (void *)1);
-    pthread_rwlock_unlock(&pure_lock);
+    note_generated_native(symbol, NATIVE_PURE);
+}
+
+void
+n00bb_axiom_note_foreign_native(core_string_t symbol)
+{
+    note_generated_native(symbol, NATIVE_FOREIGN);
 }
 
 bool
 n00bb_axiom_pure_native(const ir_func_t *function)
 {
-    if (!function || function->n_blocks) return false;
-    pthread_rwlock_rdlock(&pure_lock);
-    bool pure = pure_ready
-        && core_dict_contains(&pure_natives, (void *)&function->name);
-    pthread_rwlock_unlock(&pure_lock);
-    return pure;
+    return generated_native(function) == NATIVE_PURE;
+}
+
+bool
+n00bb_axiom_foreign_native(const ir_func_t *function)
+{
+    return generated_native(function) == NATIVE_FOREIGN;
 }

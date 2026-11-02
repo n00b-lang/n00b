@@ -42,8 +42,25 @@ site_object(const pt_t *pt, uint32_t site)
     };
 }
 
+static bool
+foreign_beyond(const ir_func_t *f, const ir_spath_t *path)
+{
+    for (uint32_t d = 0; d < path->depth; d++) {
+        if (!step_eq(path->steps[d], value_step)) continue;
+        th_type *type = ir_summary_path_type(f, path, d);
+        type = type ? th_resolve(type) : nullptr;
+        th_type *item = type ? th_option_item(type) : nullptr;
+        if (item) type = th_resolve(item);
+        uint8_t attrs = 0;
+        if (type && th_kind_of(type) == TH_INDIRECTION
+            && th_ind_attrs(type, &attrs) && (attrs & TH_FOREIGN))
+            return true;
+    }
+    return false;
+}
+
 static ir_pto_t
-external_object(const ir_spath_t *path, bool contents)
+external_object(const ir_func_t *f, const ir_spath_t *path, bool contents)
 {
     switch (path->root) {
     case IR_SPLACE_PARAM:
@@ -51,6 +68,7 @@ external_object(const ir_spath_t *path, bool contents)
                           .param = path->param};
     case IR_SPLACE_GLOBAL:
     case IR_SPLACE_THREAD:
+        if (foreign_beyond(f, path)) return (ir_pto_t){.kind = IR_PTO_UNKNOWN};
         return (ir_pto_t){.kind = IR_PTO_GLOBAL, .global = path->global};
     default:
         return (ir_pto_t){.kind = IR_PTO_UNKNOWN};
@@ -68,9 +86,9 @@ item_objects(const pt_t *pt, const pt_item_t *item, ir_pto_list_t *into)
     }
     bool beyond = loc->path.depth || item->kind == PT_CONTENTS;
     bool self   = !loc->path.depth && item->kind != PT_CONTENTS;
-    if (self) ir_pto_add(into, external_object(&loc->path, false));
+    if (self) ir_pto_add(into, external_object(pt->f, &loc->path, false));
     if (beyond || (self && loc_deep(loc)))
-        ir_pto_add(into, external_object(&loc->path, true));
+        ir_pto_add(into, external_object(pt->f, &loc->path, true));
 }
 
 static void

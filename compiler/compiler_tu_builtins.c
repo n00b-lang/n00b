@@ -93,13 +93,30 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                      native->writes);
         return summary;
     }
-    if (!n00bb_axiom_pure_native(function)) return nullptr;
+    bool foreign = n00bb_axiom_foreign_native(function);
+    if (!foreign && !n00bb_axiom_pure_native(function)) return nullptr;
     ir_summary_t *summary = ir_summary_new(summaries, function);
-    for (uint32_t p = 0; p < th_func_nparams(function->type); p++)
+    if (foreign) {
+        ir_summary_set_flags(summary, IR_SUMMARY_MAY_FAIL
+            | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
+            | IR_SUMMARY_MAY_BLOCK
+            | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
+            | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES);
+        ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
+    }
+    for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
         ir_summary_add_path(summary, &(ir_spath_t){
             .root = IR_SPLACE_PARAM, .param = p,
             .flags = IR_SPATH_READ | IR_SPATH_READS_ENTRY | IR_SPATH_DEEP
                 | IR_SPATH_ROOT});
+        const th_param *formal = th_func_param(function->type, p);
+        th_type *type = formal && formal->type ? th_resolve(formal->type)
+                                               : nullptr;
+        if (foreign && type && th_kind_of(type) == TH_INDIRECTION)
+            ir_summary_add_path(summary, &(ir_spath_t){
+                .root = IR_SPLACE_PARAM, .param = p,
+                .flags = IR_SPATH_WRITE | IR_SPATH_ROOT});
+    }
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
     native_flows(summary, function, 0, UINT32_MAX, 0);
@@ -311,6 +328,7 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
             return false;
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
+        else n00bb_axiom_note_foreign_native(natives.items[i].symbol);
     }
     return true;
 }
