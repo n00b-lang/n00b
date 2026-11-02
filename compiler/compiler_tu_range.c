@@ -52,6 +52,43 @@ n00bb_set_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
     return true;
 }
 
+n00bb_range_assumed_t
+n00bb_integer_range_assumed(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts ? facts->integer_range_assumed : (n00bb_range_assumed_t){0};
+}
+
+void
+n00bb_set_integer_range_assumed(n00bb_tu_state_t *state, parse_tree_t *node,
+                                n00bb_range_assumed_t assumed)
+{
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+    if (facts) facts->integer_range_assumed = assumed;
+}
+
+n00bb_range_assumed_t
+n00bb_range_assumed_apply(ir_op_t op, n00bb_range_assumed_t left,
+                          n00bb_range_assumed_t right)
+{
+    switch (op) {
+    case IR_OP_COPY:
+        return left;
+    case IR_OP_NEG:
+        return (n00bb_range_assumed_t){left.hi, left.lo};
+    case IR_OP_ADD:
+        return (n00bb_range_assumed_t){left.lo || right.lo,
+                                       left.hi || right.hi};
+    case IR_OP_SUB:
+        return (n00bb_range_assumed_t){left.lo || right.hi,
+                                       left.hi || right.lo};
+    default: {
+        bool any = left.lo || left.hi || right.lo || right.hi;
+        return (n00bb_range_assumed_t){any, any};
+    }
+    }
+}
+
 enum {
     RANGE_SIMPLE_LIT = 1u << 0,
     RANGE_UNARY = 1u << 1,
@@ -556,7 +593,7 @@ n00bb_integer_reference_symbol(parse_tree_t *node)
 
 void
 n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
-                          ir_interval_t range)
+                          ir_interval_t range, n00bb_range_assumed_t assumed)
 {
     parse_sym_entry_t *symbol = node ? n00bb_integer_reference_symbol(node)
                                      : nullptr;
@@ -565,11 +602,14 @@ n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
         &state->integer_solved_symbols, symbol, nullptr);
     if (!settled) {
         settled = core_alloc(n00bb_symbol_range_t);
-        *settled = (n00bb_symbol_range_t){.symbol = symbol, .range = range};
+        *settled = (n00bb_symbol_range_t){.symbol = symbol, .range = range,
+                                          .assumed = assumed};
         core_dict_put(&state->integer_solved_symbols, symbol, settled);
         return;
     }
     settled->range = ir_interval_join(settled->range, range);
+    settled->assumed.lo = settled->assumed.lo || assumed.lo;
+    settled->assumed.hi = settled->assumed.hi || assumed.hi;
 }
 
 static bool
@@ -773,7 +813,7 @@ n00bb_range_binary_op(uint32_t roles, parse_tree_t *node)
 
 static bool
 n00bb_range_primary(n00bb_tu_state_t *state, parse_tree_t *node,
-                    ir_interval_t *range)
+                    ir_interval_t *range, n00bb_range_assumed_t *assumed)
 {
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
     if (!token || parse_token_tid(token) != PARSE_TOK_IDENTIFIER)
@@ -799,11 +839,18 @@ n00bb_range_primary(n00bb_tu_state_t *state, parse_tree_t *node,
         return true;
     }
     bool typed = n00bb_type_interval(parse_tree_type(node), range);
+    *assumed = (n00bb_range_assumed_t){typed, typed};
     const n00bb_symbol_range_t *settled = core_dict_get(
         &state->integer_solved_symbols, symbol, nullptr);
     if (!settled) return typed;
+    ir_interval_t type_range = *range;
     if (!typed || !ir_interval_meet(*range, settled->range, range))
         *range = settled->range;
+    *assumed = (n00bb_range_assumed_t){
+        settled->assumed.lo || (typed && range->lo == type_range.lo
+                                && range->lo != settled->range.lo),
+        settled->assumed.hi || (typed && range->hi == type_range.hi
+                                && range->hi != settled->range.hi)};
     return true;
 }
 
@@ -819,6 +866,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         || th_kind_of(th_resolve(node_type)) == TH_VAR;
     if (!open && !is_integer_type(node_type)) return;
     ir_interval_t range = {0};
+    n00bb_range_assumed_t assumed = {0};
     bool known = false;
     int64_t constant = 0;
     uint32_t roles = range_roles(grammar, state, node);
@@ -840,7 +888,12 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         ir_interval_t left = {0}, right = {0};
         known = child_range(node, 0, &left)
             && child_range(node, 2, &right);
-        if (known) range = ir_interval_apply(binary, left, right);
+        if (known) {
+            range = ir_interval_apply(binary, left, right);
+            assumed = n00bb_range_assumed_apply(binary,
+                n00bb_integer_range_assumed(core_tree_child(node, 0)),
+                n00bb_integer_range_assumed(core_tree_child(node, 2)));
+        }
     }
     else if ((roles & RANGE_UNARY) && child_count == 2) {
         core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
@@ -851,13 +904,16 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
             parse_tree_set_integer_literal_origin(node,
                 parse_tree_integer_literal_origin(operand));
         known = sign && child_range(node, 1, &range);
-        if (known && core_string_eq(op, CORE_STRING_STATIC("-")))
+        assumed = n00bb_integer_range_assumed(operand);
+        if (known && core_string_eq(op, CORE_STRING_STATIC("-"))) {
             range = ir_interval_apply(IR_OP_NEG, range, range);
+            assumed = n00bb_range_assumed_apply(IR_OP_NEG, assumed, assumed);
+        }
     }
     else if ((roles & RANGE_PRIMARY) && child_count == 1
              && !n00bb_current_integer_range(core_tree_child(node, 0),
                                              nullptr))
-        known = n00bb_range_primary(state, node, &range);
+        known = n00bb_range_primary(state, node, &range, &assumed);
     else if (roles & RANGE_WRAPPER) {
         size_t ranged = 0;
         parse_tree_t *literal_child = nullptr;
@@ -880,6 +936,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
             ir_interval_t child = {0};
             if (!n00bb_current_integer_range(member, &child)) continue;
             range = child;
+            assumed = n00bb_integer_range_assumed(member);
             ranged++;
         }
         known = ranged == 1;
@@ -890,7 +947,9 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     ir_interval_t bounds = {0};
     if (known && !open && n00bb_type_interval(node_type, &bounds)
         && !ir_interval_meet(range, bounds, &range)) return;
-    if (known) (void)n00bb_set_integer_range(state, node, range);
+    if (!known) return;
+    (void)n00bb_set_integer_range(state, node, range);
+    n00bb_set_integer_range_assumed(state, node, assumed);
 }
 
 void
