@@ -1,0 +1,5 @@
+import cyclic
+
+require cyclic.shown == 1
+require cyclic.hidden == 2
+require cyclic.nowhere == 3

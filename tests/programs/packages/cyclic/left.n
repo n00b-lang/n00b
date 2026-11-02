@@ -1,0 +1,7 @@
+import right
+
+const shown: int = 1
+
+func through_right() -> int {
+    return right.hidden
+}

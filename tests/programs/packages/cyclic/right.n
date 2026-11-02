@@ -1,0 +1,7 @@
+import left
+
+const hidden: int = 2
+
+func through_left() -> int {
+    return left.shown
+}
