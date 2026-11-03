@@ -359,6 +359,17 @@ N00B_DIAG(TRAIT_CHECK, "N00B-S0078", ERROR,
     "A trait can check what its methods do, with `forbids_effect` or\n"
     "`has_effect`. Calls through the trait rely on it, so every\n"
     "implementation must meet it.")
+N00B_DIAG(EFFECT_DECLARATION, "N00B-S0079", ERROR,
+    "an effect declaration names something it can't use",
+    "`effect Name { from f; handled by g }` declares an effect: calling `f`\n"
+    "causes it, and `g` takes care of it so its callers don't get it. Both\n"
+    "must name functions. The built-in effects can't be declared, and\n"
+    "adding clauses to another module's effect needs its qualified name.")
+N00B_DIAG(HANDLED_ELSEWHERE, "N00B-S0080", WARNING,
+    "`handled by` is written outside the package that declares the effect",
+    "`handled by` removes an effect from callers, so it belongs in the\n"
+    "package that declares the effect. Then everything that stops the effect\n"
+    "is listed in one place.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

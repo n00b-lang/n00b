@@ -1,0 +1,21 @@
+server.handle: (int) -> int
+  panics          here (14:12)
+  named           audit_log.Audited
+  param n         untouched
+server.stamp: () -> nil
+  no effects      
+  named           audit_log.Audited, a source
+server.maybe: (int) -> int
+  no effects      
+  named           audit_log.Audited
+  param n         untouched
+server.batched: (int) -> int
+  no effects      
+  param n         untouched
+audit_log.note: (string) -> nil
+  no effects      
+  named           audit_log.Audited, a source
+  param _entry    untouched
+audit_log.flush: () -> nil
+  no effects      
+  named           audit_log.Audited, handled here

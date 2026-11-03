@@ -33,7 +33,7 @@
                    "litmod", "modify", "consume", "where", "count", "by",
                    "union", "from", "all", "struct", "object", "view",
                    "fn", "function", "not", "null", "None",
-                   "elseif")
+                   "elseif", "effect", "handled")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

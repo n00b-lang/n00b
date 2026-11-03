@@ -84,7 +84,6 @@ static const n00bb_axiom_t axioms[] = {
                            0),
     COLLECTION_FREE_NATIVE("__function_writes", "n00bb_function_writes", 0,
                            0, 0),
-    COLLECTION_FREE_NATIVE("__effect", "n00bb_effect", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__unobserved", "n00bb_unobserved", 0, 0, 0),
     NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
            0, 0, 0),

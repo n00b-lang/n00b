@@ -107,8 +107,10 @@ typedef struct {
     bool (*global_reachable)(void *context, const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
                             const ir_summary_t *summary);
-    bool (*inherits_effect)(void *context, const ir_func_t *callee,
-                            core_string_t effect);
+    bool (*inherits_effect)(void *context, const ir_func_t *caller,
+                            const ir_func_t *callee, core_string_t effect);
+    void (*callee_effects)(void *context, const ir_func_t *callee,
+                           ir_summary_t *caller);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 

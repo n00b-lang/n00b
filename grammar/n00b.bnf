@@ -45,6 +45,7 @@
                    | <object-decl>
                    | <variant-decl>
                    | <trait-decl>
+                   | <effect-decl>
                    | <callback-decl>
                    | <package-decl>
 
@@ -665,7 +666,7 @@
 <effect-query> @infer("bool") @emit("effect_query") @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
 <effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"
                       | %"may_read" | %"may_write" | %"may_lend"
-<effect-query-name> ::= %IDENTIFIER
+<effect-query-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <new-expr> @infer("`t") @emit("array_new") @nospace ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
 
@@ -885,6 +886,12 @@
 <trait-spec> ::= <trait-check>
 <trait-check> ::= <trait-check-term> (<and-op> <trait-check-term>)*
 <trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
+
+<effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
+<effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
+<effect-clause> ::= <effect-source> | <effect-handler>
+<effect-source> ::= %"from" <expression>
+<effect-handler> ::= %"handled" %"by" <expression>
 
 <trait-func-prelude> ::= <function-keyword>
 <trait-func-prelude> ::= <member-visibility> <function-keyword>

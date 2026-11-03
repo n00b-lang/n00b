@@ -3,6 +3,7 @@
 
 #include "ir/summary.h"
 #include "lib/buffer.h"
+#include "specialize.h"
 
 typedef struct {
     core_string_t name;
@@ -38,17 +39,34 @@ typedef struct {
     core_string_t effect;
 } n00bb_bound_t;
 
+typedef struct {
+    ir_func_t                      *function;
+    struct core_translation_unit_t *unit;
+} n00bb_effect_clause_t;
+core_list_decl(n00bb_effect_clause_t);
+
+typedef struct {
+    core_string_t                      qualified;
+    core_list_t(n00bb_effect_clause_t) sources;
+    core_list_t(n00bb_effect_clause_t) handlers;
+} n00bb_user_effect_t;
+
 n00bb_query_t n00bb_query_named(core_string_t word);
 core_string_t n00bb_query_word(n00bb_query_t query);
 bool n00bb_query_about_effect(n00bb_query_t query);
 bool n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
-                       uint64_t bits);
+                       uint64_t bits, const n00bb_user_effect_t *user);
 bool n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
-                        n00bb_query_t query, core_string_t name);
+                        n00bb_query_t query, core_string_t name,
+                        const n00bb_user_effect_t *user);
+bool n00bb_function_listed(
+    const core_list_t(n00bb_effect_clause_t) *clauses, ir_func_t *function);
 bool n00bb_bound_parse(core_string_t tag, n00bb_bound_t *out);
 void n00bb_bound_tag(core_buffer_t *out, n00bb_query_t query, uint32_t param,
                      core_string_t effect);
 uint64_t n00bb_bound_bits(const ir_func_t *function, n00bb_query_t query);
+bool n00bb_bound_names(const ir_func_t *function, n00bb_query_t query,
+                       core_string_t effect);
 
 static const core_string_t n00bb_callback_bound_key =
     CORE_STRING_STATIC("n00bb.callback_bound");

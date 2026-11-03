@@ -147,10 +147,11 @@ parameter_named(const ir_func_t *function, core_string_t name)
 }
 
 typedef struct {
-    ir_summaries_t *summaries;
-    uint64_t        bits;
-    core_dict_t     known;
-    bool            callees_must;
+    ir_summaries_t            *summaries;
+    uint64_t                   bits;
+    const n00bb_user_effect_t *user;
+    core_dict_t                known;
+    bool                       callees_must;
 } must_t;
 
 static bool must_body(must_t *must, ir_func_t *function);
@@ -161,10 +162,19 @@ must_callee(void *context, const ir_func_t *target,
 {
     must_t *must = context;
     ir_func_t *body = n00bb_cached_body((ir_func_t *)target);
-    bool does = body && body->n_blocks ? must_body(must, body)
+    const n00bb_user_effect_t *user = must->user;
+    if (user && n00bb_function_listed(&user->handlers, body)) {
+        must->callees_must = false;
+        return;
+    }
+    bool does = user && n00bb_function_listed(&user->sources, body) ? true
+        : body && body->n_blocks ? must_body(must, body)
         : n00bb_is_callback_bound(target)
-        ? (n00bb_bound_bits(target, N00BB_QUERY_HAS_EFFECT) & must->bits) != 0
-        : summary && (ir_summary_effect_bits(summary) & must->bits);
+        ? (user ? n00bb_bound_names(target, N00BB_QUERY_HAS_EFFECT,
+                                    user->qualified)
+                : (n00bb_bound_bits(target, N00BB_QUERY_HAS_EFFECT)
+                   & must->bits) != 0)
+        : !user && summary && (ir_summary_effect_bits(summary) & must->bits);
     must->callees_must = must->callees_must && does;
 }
 
@@ -209,9 +219,10 @@ must_body(must_t *must, ir_func_t *function)
 
 bool
 n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
-                  uint64_t bits)
+                  uint64_t bits, const n00bb_user_effect_t *user)
 {
-    must_t must = {.summaries = summaries, .bits = bits};
+    if (user && n00bb_function_listed(&user->sources, function)) return true;
+    must_t must = {.summaries = summaries, .bits = bits, .user = user};
     core_dict_init(&must.known, nullptr, nullptr);
     bool does = must_body(&must, function);
     core_dict_free(&must.known);
@@ -219,8 +230,19 @@ n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
 }
 
 bool
+n00bb_function_listed(const core_list_t(n00bb_effect_clause_t) *clauses,
+                      ir_func_t *function)
+{
+    ir_func_t *body = n00bb_cached_body(function);
+    for (size_t i = 0; body && i < clauses->len; i++)
+        if (clauses->data[i].function == body) return true;
+    return false;
+}
+
+bool
 n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
-                   n00bb_query_t query, core_string_t name)
+                   n00bb_query_t query, core_string_t name,
+                   const n00bb_user_effect_t *user)
 {
     ir_summary_t *summary = subject ? ir_summary_for(summaries, subject)
                                     : nullptr;
@@ -232,7 +254,9 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
     bool may = effect
         ? (flags & IR_SUMMARY_CALLS_UNKNOWN)
             || (ir_summary_effect_bits(summary) & effect->bits)
-        : ir_summary_has_effect(summary, name);
+        : (flags & IR_SUMMARY_CALLS_UNKNOWN)
+            || ir_summary_has_effect(summary, name)
+            || (user && n00bb_function_listed(&user->sources, subject));
     int64_t param = parameter_named(subject, name);
     uint8_t role = param >= 0
         ? n00bb_parameter_role(subject, summary, (uint32_t)param) : 0;
@@ -242,10 +266,11 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
     case N00BB_QUERY_FORBIDS_EFFECT:
         return !may;
     case N00BB_QUERY_HAS_EFFECT:
-        if (!effect) return false;
+        if (!effect)
+            return user && n00bb_must_effect(summaries, subject, 0, user);
         if (effect->bits == IR_SUMMARY_MAY_DIVERGE)
             return (flags & IR_SUMMARY_DIVERGES) != 0;
-        return n00bb_must_effect(summaries, subject, effect->bits);
+        return n00bb_must_effect(summaries, subject, effect->bits, nullptr);
     case N00BB_QUERY_MAY_READ:
         return (role & N00BB_ROLE_READS) != 0;
     case N00BB_QUERY_MAY_WRITE:
@@ -292,6 +317,19 @@ n00bb_bound_tag(core_buffer_t *out, n00bb_query_t query, uint32_t param,
     core_buffer_append_string(out, n00bb_query_word(query));
     core_buffer_printf(out, ":%u:", param);
     core_buffer_append_string(out, effect);
+}
+
+bool
+n00bb_bound_names(const ir_func_t *function, n00bb_query_t query,
+                  core_string_t effect)
+{
+    for (uint32_t e = 0;; e++) {
+        core_string_t tag = ir_func_effect_at(function, e);
+        if (!tag.u8_bytes) return false;
+        n00bb_bound_t bound;
+        if (n00bb_bound_parse(tag, &bound) && bound.query == query
+            && core_string_eq(bound.effect, effect)) return true;
+    }
 }
 
 uint64_t

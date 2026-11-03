@@ -594,9 +594,16 @@ const dict_size_reads_live: bool = __function_reads(ref dict_size,
 const dict_size_reads_entries: bool = __function_reads(ref dict_size,
                                                        "table.__value.entries")
 
+func audit_mark(n: int) -> int {
+    return n
+}
+
+effect Audit {
+    from audit_mark
+}
+
 func audited_step(n: int) -> int {
-    __effect("audit")
-    return n + 1
+    return audit_mark(n) + 1
 }
 
 func audited_caller(n: int) -> int {
@@ -607,11 +614,11 @@ func unaudited(n: int) -> int {
     return n * 2
 }
 
+has_effect(audited_step, Audit) and has_effect(audited_caller, Audit)
+forbids_effect(unaudited, Audit)
+
 func effect_paths_check() {
     require audited_caller(1) == 4
-    require __function_has_effect(ref audited_step, "audit")
-    require __function_has_effect(ref audited_caller, "audit")
-    require !__function_has_effect(ref unaudited, "audit")
     require dict_size_reads_live
     require !dict_size_reads_entries
     require __function_reads(ref dict_size, "table.__value.index")

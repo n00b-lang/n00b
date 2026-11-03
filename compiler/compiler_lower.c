@@ -14330,17 +14330,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not retain builtin trait method requirement");
     }
     if (native_builtin
-        && core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))) {
-        core_string_t effect = {0};
-        if (!n00bb_call_literal_argument(visit->grammar, caller_state,
-                                         call_node, 0, 1, &effect))
-            return lower_internal(context, span,
-                "__effect reached lowering without a literal name");
-        return ir_func_add_effect(context->function, effect)
-            ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
-            : lower_internal(context, span, "could not record an effect");
-    }
-    if (native_builtin
         && core_string_eq(symbol->name, CORE_STRING_STATIC("__unobserved"))) {
         parse_tree_t *argument = n00bb_call_positional_argument(
             visit->grammar, call_node, 0, 1);
@@ -23078,6 +23067,9 @@ summary_has_effect(const ir_summary_t *summary, core_string_t name)
         : ir_summary_has_effect(summary, name);
 }
 
+static bool answer_query(n00bb_link_analysis_t *analysis, ir_func_t *subject,
+                         n00bb_query_t query, core_string_t effect);
+
 static uint64_t
 effects_answer(n00bb_link_analysis_t *analysis, ir_instr_t *in,
                effects_query_t query)
@@ -23096,8 +23088,8 @@ effects_answer(n00bb_link_analysis_t *analysis, ir_instr_t *in,
         ir_annot_t *word = ir_annot_get(&in->annots,
             CORE_STRING_STATIC("n00bb.effects.query"));
         return word && word->kind == IR_ANNOT_STR
-            && n00bb_query_answer(analysis->summaries, subject,
-                                  n00bb_query_named(word->s), text);
+            && answer_query(analysis, subject, n00bb_query_named(word->s),
+                            text);
     }
     case EFFECTS_QUERY_NONE:
         break;
@@ -23132,6 +23124,7 @@ typedef struct {
     core_string_t  name;
     parse_tree_t  *function;
     int64_t        callback;
+    core_string_t  effect;
 } effect_query_parts_t;
 
 static const core_string_t effects_query_key =
@@ -23156,6 +23149,284 @@ effect_query_parts(parse_grammar_t *grammar,
         .callback = -1,
     };
     return out->query != N00BB_QUERY_NONE && out->name.u8_bytes;
+}
+
+static core_string_t
+effect_declaration_name(parse_grammar_t *grammar,
+                        const core_translation_unit_t *unit,
+                        parse_tree_t *declaration)
+{
+    parse_tree_t *name = child_nt(grammar, declaration,
+                                  CORE_STRING_STATIC("effect-query-name"));
+    return name ? source_text_of(unit, name) : (core_string_t){0};
+}
+
+static bool
+declares_effect(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                core_string_t name)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; state && i < state->module_top_level_statements.len;
+         i++) {
+        parse_tree_t *statement = state->module_top_level_statements.data[i];
+        if (nt_is(grammar, statement, CORE_STRING_STATIC("effect-decl"))
+            && core_string_eq(effect_declaration_name(grammar, unit,
+                                                      statement), name))
+            return true;
+    }
+    return false;
+}
+
+static const core_string_t effect_declaration_key =
+    CORE_STRING_STATIC("n00bb.effect.declaration");
+
+static ir_func_t *
+metadata_stub(ir_module_t *module, core_string_t name)
+{
+    ir_func_t *stub = ir_func_find(module, name);
+    if (stub) return stub;
+    th_type *nil = th_name(ir_module_types(module), CORE_STRING_STATIC("nil"));
+    th_type *signature = th_func_with_error(ir_module_types(module), nil, nil,
+                                            nullptr, 0, nullptr, nullptr, 0);
+    return signature ? ir_func_add(module, name, signature, IR_LINK_EXTERN)
+                     : nullptr;
+}
+
+static ir_module_t *
+cached_ir_module(n00bb_link_analysis_t *analysis,
+                 core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state) return nullptr;
+    ir_module_t *cached = state->interface_module && analysis
+            && analysis->cache
+        ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+        : nullptr;
+    return cached ? cached : state->ir_module;
+}
+
+static void
+append_qualified(core_buffer_t *out, const core_translation_unit_t *unit,
+                 core_string_t leaf)
+{
+    core_buffer_append_string(out, unit->module.identifier);
+    core_buffer_putc(out, '.');
+    core_buffer_append_string(out, leaf);
+}
+
+static bool
+records_effect(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
+               core_string_t leaf)
+{
+    ir_module_t *module = cached_ir_module(analysis, unit);
+    if (!module) return false;
+    core_buffer_t name = {0};
+    core_buffer_puts(&name, "__n00bb_effect#");
+    append_qualified(&name, unit, leaf);
+    bool found = ir_func_find(module, core_buffer_string(&name)) != nullptr;
+    core_buffer_release(&name);
+    return found;
+}
+
+static bool
+module_matches(core_string_t module, core_string_t prefix)
+{
+    if (!prefix.u8_bytes || core_string_eq(module, prefix)) return true;
+    return module.u8_bytes > prefix.u8_bytes
+        && core_string_ends_with(module, prefix)
+        && module.data[module.u8_bytes - prefix.u8_bytes - 1] == '.';
+}
+
+static core_translation_unit_t *
+effect_owner(parse_grammar_t *grammar, core_translation_unit_t *root,
+             core_string_t name, core_string_t *leaf)
+{
+    *leaf = n00bb_name_leaf(name);
+    core_string_t prefix = leaf->u8_bytes < name.u8_bytes
+        ? core_string_slice(name, 0, name.u8_bytes - leaf->u8_bytes - 1)
+        : (core_string_t){0};
+    core_list_t(core_translation_unit_ptr_t) pending =
+        core_list_new(core_translation_unit_ptr_t);
+    core_dict_t visited;
+    core_dict_init(&visited, nullptr, nullptr);
+    core_list_push(pending, root);
+    core_translation_unit_t *found = nullptr;
+    n00bb_link_analysis_t *analysis = tu_state(root)
+        ? tu_state(root)->link_analysis : nullptr;
+    for (size_t at = 0; !found && at < pending.len; at++) {
+        core_translation_unit_t *unit = pending.data[at];
+        if (!core_dict_add(&visited, unit, unit)) continue;
+        if (module_matches(unit->module.identifier, prefix)
+            && (declares_effect(grammar, unit, *leaf)
+                || records_effect(analysis, unit, *leaf)))
+            found = unit;
+        for (size_t i = 0; !found && i < unit->imports.len; i++)
+            core_list_push(pending, unit->imports.data[i]);
+    }
+    core_dict_free(&visited);
+    core_list_free(pending);
+    return found;
+}
+
+static bool
+resolve_effect(parse_grammar_t *grammar, core_translation_unit_t *unit,
+               core_string_t name, core_buffer_t *out)
+{
+    if (n00bb_effect_named(name)) {
+        core_buffer_append_string(out, name);
+        return true;
+    }
+    core_string_t leaf = {0};
+    core_translation_unit_t *owner = unit
+        ? effect_owner(grammar, unit, name, &leaf) : nullptr;
+    if (!owner) return false;
+    append_qualified(out, owner, leaf);
+    return true;
+}
+
+static parse_sym_entry_t *
+named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
+               parse_tree_t *expression)
+{
+    parse_sym_entry_t *symbol = expression
+        ? attached_symbol(grammar, unit, expression) : nullptr;
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        ? canonical_symbol(symbol) : nullptr;
+}
+
+static core_list_t(parse_tree_ptr_t)
+effect_clauses(parse_grammar_t *grammar, parse_tree_t *declaration)
+{
+    core_list_t(parse_tree_ptr_t) clauses = core_list_new(parse_tree_ptr_t);
+    core_list_t(parse_tree_ptr_t) stack = core_list_new(parse_tree_ptr_t);
+    core_list_push(stack, declaration);
+    while (stack.len) {
+        parse_tree_t *node = stack.data[--stack.len];
+        if (!node || core_tree_is_leaf(node)) continue;
+        if (nt_is(grammar, node, CORE_STRING_STATIC("effect-source"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler"))) {
+            core_list_push(clauses, node);
+            continue;
+        }
+        for (size_t i = core_tree_num_children(node); i > 0; i--)
+            core_list_push(stack, core_tree_child(node, i - 1));
+    }
+    core_list_free(stack);
+    return clauses;
+}
+
+
+static ir_func_t *
+module_function(n00bb_link_analysis_t *analysis, core_string_t module,
+                core_string_t name)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        ir_module_t *owner = cached_ir_module(analysis, analysis->units.data[u]);
+        if (owner && core_string_eq(ir_module_name(owner), module))
+            return n00bb_cached_body(ir_func_find(owner, name));
+    }
+    return nullptr;
+}
+
+static bool
+tab_fields(core_string_t text, core_string_t *fields, size_t count)
+{
+    for (size_t f = 0; f < count; f++) {
+        int64_t tab = f + 1 < count ? core_string_find_byte(text, '\t')
+                                    : (int64_t)text.u8_bytes;
+        if (tab <= 0) return false;
+        fields[f] = core_string_slice(text, 0, (size_t)tab);
+        text = f + 1 < count
+            ? core_string_slice(text, (size_t)tab + 1,
+                                text.u8_bytes - (size_t)tab - 1)
+            : text;
+    }
+    return true;
+}
+
+static n00bb_user_effect_t *
+user_effect(n00bb_link_analysis_t *analysis, core_string_t qualified)
+{
+    for (size_t e = 0; e < analysis->user_effects.len; e++)
+        if (core_string_eq(analysis->user_effects.data[e].qualified,
+                           qualified))
+            return &analysis->user_effects.data[e];
+    return nullptr;
+}
+
+static void
+collect_effect_entries(n00bb_link_analysis_t *analysis,
+                       core_translation_unit_t *unit, ir_func_t *stub,
+                       n00bb_user_effect_t *effect)
+{
+    for (uint32_t e = 0;; e++) {
+        core_string_t entry = ir_func_effect_at(stub, e);
+        core_string_t fields[3];
+        if (!entry.u8_bytes) break;
+        if (!tab_fields(entry, fields, 3)) continue;
+        ir_func_t *function = module_function(analysis, fields[1], fields[2]);
+        if (!function) continue;
+        n00bb_effect_clause_t clause = {.function = function, .unit = unit};
+        if (core_string_eq(fields[0], CORE_STRING_STATIC("handled")))
+            core_list_push(effect->handlers, clause);
+        else core_list_push(effect->sources, clause);
+        core_dict_put(&analysis->effect_functions, function, function);
+    }
+}
+
+static void
+release_user_effects(n00bb_link_analysis_t *analysis)
+{
+    for (size_t e = 0; e < analysis->user_effects.len; e++) {
+        core_free(analysis->user_effects.data[e].qualified.data);
+        core_list_free(analysis->user_effects.data[e].sources);
+        core_list_free(analysis->user_effects.data[e].handlers);
+    }
+    analysis->user_effects.len = 0;
+    if (analysis->effect_functions_ready)
+        core_dict_free(&analysis->effect_functions);
+    analysis->effect_functions_ready = false;
+}
+
+static void
+collect_user_effects(n00bb_link_analysis_t *analysis)
+{
+    release_user_effects(analysis);
+    core_dict_init(&analysis->effect_functions, nullptr, nullptr);
+    analysis->effect_functions_ready = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        ir_module_t *module = cached_ir_module(analysis, unit);
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *stub = ir_func_at(module, f);
+            ir_annot_t *declared = core_string_starts_with(stub->name,
+                    CORE_STRING_STATIC("__n00bb_effect#"))
+                ? ir_annot_get(&stub->annots, effect_declaration_key)
+                : nullptr;
+            if (!declared || declared->kind != IR_ANNOT_STR) continue;
+            n00bb_user_effect_t *effect = user_effect(analysis, declared->s);
+            if (!effect) {
+                core_list_push(analysis->user_effects,
+                    ((n00bb_user_effect_t){
+                        .qualified = core_string_dup(declared->s),
+                        .sources = core_list_new(n00bb_effect_clause_t),
+                        .handlers = core_list_new(n00bb_effect_clause_t),
+                    }));
+                effect = &analysis->user_effects.data[
+                    analysis->user_effects.len - 1];
+            }
+            collect_effect_entries(analysis, unit, stub, effect);
+        }
+    }
+}
+
+static bool
+answer_query(n00bb_link_analysis_t *analysis, ir_func_t *subject,
+             n00bb_query_t query, core_string_t effect)
+{
+    return n00bb_query_answer(analysis->summaries, subject, query, effect,
+        n00bb_query_about_effect(query) ? user_effect(analysis, effect)
+                                        : nullptr);
 }
 
 static parse_sym_entry_t *
@@ -23252,12 +23523,20 @@ check_effect_query(ir_lower_context_t *context, parse_grammar_t *grammar,
     }
     if (n00bb_query_about_effect(parts->query)) {
         const n00bb_effect_name_t *effect = n00bb_effect_named(parts->name);
-        if (!effect) {
+        core_buffer_t qualified = {0};
+        bool known = resolve_effect(grammar, lower->unit, parts->name,
+                                    &qualified);
+        parts->effect = known ? ir_strdup(lower->ir_context,
+                                          core_buffer_string(&qualified))
+                              : (core_string_t){0};
+        core_buffer_release(&qualified);
+        if (!known) {
             lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
                 N00B_TEXT_NOT_AN_EFFECT, N00BB_ARGS(ARG_TEXT(parts->name)));
             return false;
         }
-        if (parts->query == N00BB_QUERY_HAS_EFFECT && effect->group) {
+        if (parts->query == N00BB_QUERY_HAS_EFFECT && effect
+            && effect->group) {
             lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
                 N00B_TEXT_HAS_EFFECT_TAKES_ONE,
                 N00BB_ARGS(ARG_TEXT(parts->name)));
@@ -23314,6 +23593,8 @@ n00bb_lower_effect_query(ir_lower_context_t *context, parse_visit_t *visit,
                .key = CORE_STRING_STATIC("n00bb.abi.native"),
                .kind = IR_ANNOT_STR, .s = native})
         ? ir_func_address(context->module, function) : nullptr;
+    core_string_t name = n00bb_query_about_effect(parts.query) ? parts.effect
+                                                               : parts.name;
     ir_instr_t *call = callee
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
     bool emitted = call
@@ -23323,7 +23604,7 @@ n00bb_lower_effect_query(ir_lower_context_t *context, parse_visit_t *visit,
         && ir_instr_operand_value(call, callee)
         && ir_instr_set_call_signature(call, signature)
         && annotate_effects_query(lower->ir_context, call,
-               ir_func_address(subject->owner, subject), parts.name)
+               ir_func_address(subject->owner, subject), name)
         && ir_annot_set(lower->ir_context, &call->annots, (ir_annot_t){
                .key = effects_query_key, .kind = IR_ANNOT_STR,
                .s = n00bb_query_word(parts.query)});
@@ -23434,11 +23715,111 @@ valid_check_query(void *context, parse_tree_t *query,
     }
     core_buffer_t tag = {0};
     n00bb_bound_tag(&tag, parts->query, (uint32_t)parts->callback,
-                    parts->name);
+                    parts->effect);
     bool added = ir_func_add_effect(lowering->function,
                                     core_buffer_string(&tag));
     core_buffer_release(&tag);
     return added;
+}
+
+static bool
+record_effect_clause(ir_lower_context_t *context, ir_func_t *stub,
+                     parse_sym_entry_t *symbol, bool handled)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    ir_func_t *function = state && state->link_analysis
+        ? link_ir_function_for_symbol(state->link_analysis, symbol) : nullptr;
+    if (!function) return true;
+    core_buffer_t entry = {0};
+    if (handled) core_buffer_puts(&entry, "handled\t");
+    else core_buffer_puts(&entry, "from\t");
+    core_buffer_append_string(&entry, ir_module_name(function->owner));
+    core_buffer_putc(&entry, '\t');
+    core_buffer_append_string(&entry, function->name);
+    bool added = ir_func_add_effect(stub, core_buffer_string(&entry));
+    core_buffer_release(&entry);
+    return added;
+}
+
+static ir_func_t *
+effect_stub(ir_lower_context_t *context, core_string_t qualified)
+{
+    n00bb_lower_context_t *lower = context->user;
+    core_buffer_t name = {0};
+    core_buffer_puts(&name, "__n00bb_effect#");
+    core_buffer_append_string(&name, qualified);
+    ir_func_t *stub = metadata_stub(context->module,
+                                    core_buffer_string(&name));
+    core_buffer_release(&name);
+    return stub && ir_annot_set(lower->ir_context, &stub->annots, (ir_annot_t){
+               .key = effect_declaration_key, .kind = IR_ANNOT_STR,
+               .s = ir_strdup(lower->ir_context, qualified)})
+        ? stub : nullptr;
+}
+
+static bool
+n00bb_lower_effect_declaration(ir_lower_context_t *context,
+                               parse_visit_t *visit, bool entering,
+                               void *opaque)
+{
+    (void)opaque;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    if (!entering || !lower) return true;
+    parse_grammar_t *grammar = visit->grammar;
+    core_string_t name = effect_declaration_name(grammar, lower->unit,
+                                                 visit->node);
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    if (n00bb_effect_named(name)) {
+        lower_report(context, N00B_DIAG_EFFECT_DECLARATION, span,
+            N00B_TEXT_EFFECT_IS_BUILT_IN, N00BB_ARGS(ARG_TEXT(name)));
+        return ir_lower_prune_node(context, visit->node);
+    }
+    core_string_t leaf = {0};
+    core_translation_unit_t *owner = effect_owner(grammar, lower->unit, name,
+                                                  &leaf);
+    if (!owner)
+        lower_report(context, N00B_DIAG_EFFECT_DECLARATION, span,
+            N00B_TEXT_NOT_AN_EFFECT, N00BB_ARGS(ARG_TEXT(name)));
+    core_buffer_t qualified = {0};
+    if (owner) append_qualified(&qualified, owner, leaf);
+    ir_func_t *stub = owner
+        ? effect_stub(context, core_buffer_string(&qualified)) : nullptr;
+    core_buffer_release(&qualified);
+    core_string_t declaring = owner ? n00bb_package_id(owner)
+                                    : (core_string_t){0};
+    core_string_t writing = n00bb_package_id(lower->unit);
+    core_list_t(parse_tree_ptr_t) clauses = effect_clauses(grammar,
+                                                           visit->node);
+    for (size_t c = 0; c < clauses.len; c++) {
+        parse_tree_t *clause = clauses.data[c];
+        parse_tree_t *expression = child_nt(grammar, clause,
+                                            CORE_STRING_STATIC("expression"));
+        parse_tree_t *site = expression ? expression : clause;
+        bool handled = nt_is(grammar, clause,
+                             CORE_STRING_STATIC("effect-handler"));
+        parse_sym_entry_t *symbol = named_function(grammar, lower->unit,
+                                                   expression);
+        if (symbol && stub
+            && !record_effect_clause(context, stub, symbol, handled)) {
+            core_list_free(clauses);
+            return false;
+        }
+        if (!symbol)
+            lower_report(context, N00B_DIAG_EFFECT_DECLARATION,
+                lower_span_for_tree(context, site),
+                N00B_TEXT_EFFECT_NEEDS_FUNCTION,
+                N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, site))));
+        else if (handled && owner && owner != lower->unit
+                 && !core_string_eq(declaring, writing))
+            lower_report(context, N00B_DIAG_HANDLED_ELSEWHERE,
+                lower_span_for_tree(context, clause),
+                N00B_TEXT_HANDLED_OUTSIDE_PACKAGE,
+                N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(declaring),
+                           ARG_TEXT(writing)));
+    }
+    core_list_free(clauses);
+    return ir_lower_prune_node(context, visit->node);
 }
 
 static bool
@@ -23707,19 +24088,6 @@ collect_operator_bounds(n00bb_link_analysis_t *analysis)
     }
 }
 
-static ir_module_t *
-cached_ir_module(n00bb_link_analysis_t *analysis,
-                 core_translation_unit_t *unit)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    if (!state) return nullptr;
-    ir_module_t *cached = state->interface_module && analysis
-            && analysis->cache
-        ? n00bb_cache_module(analysis->cache, unit->module.identifier)
-        : nullptr;
-    return cached ? cached : state->ir_module;
-}
-
 static parse_tree_t *
 trait_declaration(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
 {
@@ -23750,11 +24118,7 @@ record_trait_check(ir_module_t *module, ir_ctx_t *context,
     core_buffer_puts(&name, "__n00bb_trait_check#");
     core_buffer_append_string(&name, trait);
     core_buffer_printf(&name, "#%zu", index);
-    th_type *nil = th_name(ir_module_types(module), CORE_STRING_STATIC("nil"));
-    th_type *signature = th_func_with_error(ir_module_types(module), nil, nil,
-                                            nullptr, 0, nullptr, nullptr, 0);
-    ir_func_t *stub = signature ? ir_func_add(module,
-        core_buffer_string(&name), signature, IR_LINK_EXTERN) : nullptr;
+    ir_func_t *stub = metadata_stub(module, core_buffer_string(&name));
     core_buffer_release(&name);
     if (!stub) return false;
     stub->span = tree_span(file_id, term);
@@ -23807,20 +24171,16 @@ record_trait_checks(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return ok;
 }
 
-static bool
-tab_fields(core_string_t text, core_string_t *fields, size_t count)
+static core_string_t
+trait_effect_name(n00bb_link_analysis_t *analysis,
+                  core_translation_unit_t *unit, core_string_t name)
 {
-    for (size_t f = 0; f < count; f++) {
-        int64_t tab = f + 1 < count ? core_string_find_byte(text, '\t')
-                                    : (int64_t)text.u8_bytes;
-        if (tab <= 0) return false;
-        fields[f] = core_string_slice(text, 0, (size_t)tab);
-        text = f + 1 < count
-            ? core_string_slice(text, (size_t)tab + 1,
-                                text.u8_bytes - (size_t)tab - 1)
-            : text;
-    }
-    return true;
+    core_buffer_t qualified = {0};
+    core_string_t resolved = !n00bb_effect_named(name)
+            && resolve_effect(analysis->grammar, unit, name, &qualified)
+        ? core_string_dup(core_buffer_string(&qualified)) : name;
+    core_buffer_release(&qualified);
+    return resolved;
 }
 
 static void
@@ -23832,14 +24192,13 @@ collect_trait_stub(n00bb_link_analysis_t *analysis,
     if (!trait || trait->kind != IR_ANNOT_STR
         || !tab_fields(ir_func_effect_at(stub, 0), fields, 3)) return;
     core_buffer_t qualified = {0};
-    core_buffer_append_string(&qualified, unit->module.identifier);
-    core_buffer_putc(&qualified, '.');
-    core_buffer_append_string(&qualified, trait->s);
+    append_qualified(&qualified, unit, trait->s);
     core_list_push(analysis->trait_bounds, ((n00bb_trait_bound_t){
         .unit = unit, .span = stub->span, .trait = trait->s,
         .qualified = core_string_dup(core_buffer_string(&qualified)),
         .method = fields[1],
-        .rule = {.query = n00bb_query_named(fields[0]), .effect = fields[2]},
+        .rule = {.query = n00bb_query_named(fields[0]),
+                 .effect = trait_effect_name(analysis, unit, fields[2])},
     }));
     core_buffer_release(&qualified);
 }
@@ -23940,9 +24299,17 @@ static ir_summary_t *
 n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
                     const ir_func_t *function)
 {
-    if (n00bb_is_callback_bound(function))
-        return ir_summary_bounded(summaries, function,
+    if (n00bb_is_callback_bound(function)) {
+        n00bb_link_analysis_t *analysis = context;
+        ir_summary_t *summary = ir_summary_bounded(summaries, function,
             n00bb_bound_bits(function, N00BB_QUERY_FORBIDS_EFFECT));
+        for (size_t e = 0; summary && e < analysis->user_effects.len; e++) {
+            core_string_t name = analysis->user_effects.data[e].qualified;
+            if (!n00bb_bound_names(function, N00BB_QUERY_FORBIDS_EFFECT, name))
+                (void)ir_summary_add_effect(summary, name);
+        }
+        return summary;
+    }
     ir_summary_t *summary = n00bb_native_axiom(summaries, function);
     return summary ? summary
                    : n00bb_interface_summary(context, summaries, function);
@@ -24931,9 +25298,25 @@ explain_function(n00bb_link_analysis_t *analysis, ir_func_t *function)
             core_buffer_append_string(&detail, bound.effect);
             core_buffer_putc(&detail, ')');
         }
-        else core_buffer_append_string(&detail, effect);
+        else {
+            core_buffer_append_string(&detail, effect);
+            n00bb_user_effect_t *user = user_effect(analysis, effect);
+            if (user && n00bb_function_listed(&user->sources, function))
+                core_buffer_puts(&detail, ", a source");
+            if (user && n00bb_function_listed(&user->handlers, function))
+                core_buffer_puts(&detail, ", handled here");
+        }
         explain_line(&out, bounded ? CORE_STRING_STATIC("checks")
                                    : CORE_STRING_STATIC("named"), &detail);
+    }
+    for (size_t e = 0; e < analysis->user_effects.len; e++) {
+        n00bb_user_effect_t *user = &analysis->user_effects.data[e];
+        if (!n00bb_function_listed(&user->sources, function)
+            || ir_summary_has_effect(summary, user->qualified)) continue;
+        core_buffer_t detail = {0};
+        core_buffer_append_string(&detail, user->qualified);
+        core_buffer_puts(&detail, ", a source");
+        explain_line(&out, CORE_STRING_STATIC("named"), &detail);
     }
     for (uint32_t p = 0; p < function->n_params; p++) {
         uint8_t role = n00bb_parameter_role(function, summary, p);
@@ -25008,8 +25391,13 @@ check_query_value(check_eval_t *eval, parse_tree_t *node, ir_func_t **subject,
         return true;
     *subject = effect_query_subject(eval->analysis, grammar,
                                     eval->check->unit, node, parts);
-    return n00bb_query_answer(eval->analysis->summaries, *subject,
-                              parts->query, parts->name);
+    core_buffer_t effect = {0};
+    core_string_t name = n00bb_query_about_effect(parts->query)
+            && resolve_effect(grammar, eval->check->unit, parts->name, &effect)
+        ? core_buffer_string(&effect) : parts->name;
+    bool answer = answer_query(eval->analysis, *subject, parts->query, name);
+    core_buffer_release(&effect);
+    return answer;
 }
 
 static bool
@@ -25269,8 +25657,7 @@ static bool
 bound_holds(n00bb_link_analysis_t *analysis, ir_func_t *function,
             const n00bb_bound_t *bound)
 {
-    return n00bb_query_answer(analysis->summaries, function, bound->query,
-                              bound->effect)
+    return answer_query(analysis, function, bound->query, bound->effect)
         || (bound->query == N00BB_QUERY_FORBIDS_EFFECT
             && unresolved_only(analysis, function, bound->effect));
 }
@@ -26566,13 +26953,57 @@ report_bookkeeping_writes(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-n00bb_summary_inherits_effect(void *context, const ir_func_t *callee,
-                              core_string_t effect)
+effect_function(n00bb_link_analysis_t *analysis, const ir_func_t *callee)
 {
-    (void)context;
-    (void)callee;
+    bool found = false;
+    if (analysis->effect_functions_ready)
+        (void)core_dict_get(&analysis->effect_functions,
+                            n00bb_cached_body((ir_func_t *)callee), &found);
+    return found;
+}
+
+static bool
+clause_applies(n00bb_link_analysis_t *analysis,
+               const core_list_t(n00bb_effect_clause_t) *clauses,
+               const ir_func_t *caller, const ir_func_t *callee)
+{
+    ir_func_t *body = n00bb_cached_body((ir_func_t *)callee);
+    core_translation_unit_t *unit = caller
+        ? unit_for_module(analysis, caller->owner) : nullptr;
+    for (size_t c = 0; c < clauses->len; c++) {
+        const n00bb_effect_clause_t *clause = &clauses->data[c];
+        if (clause->function == body
+            && (!unit || clause->unit == unit
+                || n00bb_unit_reaches_import(unit, clause->unit)))
+            return true;
+    }
+    return false;
+}
+
+static bool
+n00bb_summary_inherits_effect(void *context, const ir_func_t *caller,
+                              const ir_func_t *callee, core_string_t effect)
+{
     n00bb_bound_t bound;
-    return !n00bb_bound_parse(effect, &bound);
+    if (n00bb_bound_parse(effect, &bound)) return false;
+    if (!effect_function(context, callee)) return true;
+    n00bb_user_effect_t *user = user_effect(context, effect);
+    return !user || !clause_applies(context, &user->handlers, caller, callee);
+}
+
+static void
+n00bb_summary_callee_effects(void *context, const ir_func_t *callee,
+                             ir_summary_t *caller)
+{
+    n00bb_link_analysis_t *analysis = context;
+    if (!effect_function(analysis, callee)) return;
+    const ir_func_t *function = ir_summary_function(caller);
+    for (size_t e = 0; e < analysis->user_effects.len; e++) {
+        n00bb_user_effect_t *user = &analysis->user_effects.data[e];
+        if (clause_applies(analysis, &user->sources, function, callee)
+            && !clause_applies(analysis, &user->handlers, function, callee))
+            (void)ir_summary_add_effect(caller, user->qualified);
+    }
 }
 
 static void
@@ -26589,6 +27020,9 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .inherits_effect = n00bb_summary_inherits_effect,
         .defer_trap_proofs = defer_trap_proofs,
     };
+    collect_user_effects(analysis);
+    if (analysis->user_effects.len)
+        analysis->summary_hooks.callee_effects = n00bb_summary_callee_effects;
     if (analysis->bounded_targets_ready)
         core_dict_free(&analysis->bounded_targets);
     core_dict_init(&analysis->bounded_targets, nullptr, nullptr);
@@ -29782,6 +30216,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                      n00bb_lower_try_scope, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("expression-stmt"), n00bb_lower_effect_check,
+        nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+        CORE_STRING_STATIC("effect-decl"), n00bb_lower_effect_declaration,
         nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("simple-lit"), n00bb_lower_static_litmod, nullptr)
