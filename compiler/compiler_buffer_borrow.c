@@ -1674,10 +1674,10 @@ escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views,
         for (uint32_t i = first; !found && i < instruction->n_operands; i++) {
             uint32_t index = i - first;
             if (index < 64 && trusted >> index & 1) continue;
-            bool kept = opaque
-                || effect_bit(effects->escapes, index, N00BB_FLOW_SELF)
-                || effect_bit(effects->leaks, index, N00BB_FLOW_SELF);
-            bool escapes = kept
+            bool kept = !opaque
+                && (effect_bit(effects->escapes, index, N00BB_FLOW_SELF)
+                    || effect_bit(effects->leaks, index, N00BB_FLOW_SELF));
+            bool escapes = opaque || kept
                 || effect_bit(effects->escapes, index, N00BB_FLOW_CONTENTS)
                 || effect_bit(effects->leaks, index, N00BB_FLOW_CONTENTS);
             if (escapes)
