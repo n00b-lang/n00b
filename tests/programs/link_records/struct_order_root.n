@@ -1,0 +1,6 @@
+import struct_order.shapes
+import struct_order.user
+
+func fill(modify tokens: List[struct_order.shapes.Token]) {
+    struct_order.user.set(tokens, 2, 5, 7, 11)
+}
