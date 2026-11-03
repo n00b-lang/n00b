@@ -1,0 +1,1 @@
+tests/diagnostics/lower/trait_arguments.n:1:39: error N00B-T0588: `Reference` needs one type argument per type parameter (it has 1), but this constraint gives 2

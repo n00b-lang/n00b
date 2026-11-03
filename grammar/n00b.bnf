@@ -607,7 +607,7 @@
 <unary-expr> @emit("complement", $1) @infer("$1") @nospace ::= %"~" <unary-expr>
 <unary-expr> @emit("negate", $1) @infer("method_return($1, __negate)") @nospace ::= %"-" <unary-expr>
 <unary-expr> @emit("identity", $1) @infer("$1") @nospace ::= %"+" <unary-expr>
-<unary-expr> @operator("ref") @infer("ref[$1]") ::= %"ref" <unary-expr>
+<unary-expr> @operator("ref") @infer("reference_to($1)") ::= %"ref" <unary-expr>
 <unary-expr> @emit("cast", $4) @infer("$2") @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("unsafe_cast", $4) @infer("$2") @nospace($1) @nospace($2) @nospace($3) ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("identity", $0) ::= <postfix-expr>
@@ -814,6 +814,7 @@
 
 <one-constraint> ::= %"!=" <one-tspec>
                    | <trait-name>
+                   | <trait-name> %"[" <tspec-list> %"]"
 
 <trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 

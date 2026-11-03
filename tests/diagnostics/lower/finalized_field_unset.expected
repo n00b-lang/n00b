@@ -1,0 +1,2 @@
+tests/diagnostics/lower/finalized_field_unset.n:13:1: error N00B-S0069: `__init` never sets `guard`, whose type `Guard` has a finalizer
+  help: set every field that holds a value with a finalizer in `__init`

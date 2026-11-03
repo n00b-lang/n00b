@@ -306,6 +306,17 @@ N00B_DIAG(FINALIZED_COPY, "N00B-S0068", ERROR,
     "once, so it can only be moved, never copied. Only a whole local\n"
     "variable or parameter can be moved. Move the whole variable, or build\n"
     "a new value.")
+N00B_DIAG(FINALIZED_FIELD_UNSET, "N00B-S0069", ERROR,
+    "`__init` leaves a field with a finalizer unset",
+    "A field whose type has a finalizer, or holds one, starts out zero, and\n"
+    "the object's finalizer finalizes it later. Set every such field in\n"
+    "`__init`, so a zero value is never finalized.")
+N00B_DIAG(REFERENCE_ADDRESS_ESCAPES, "N00B-S0070", ERROR,
+    "an address from a reference type outlives the access",
+    "`ref` of a place reached through a reference type's `.__value` gives\n"
+    "the address that type's `__ref_address` or `__ref_address_mut` handed\n"
+    "out. That address is only valid while the access lasts, so it can be\n"
+    "passed directly to a call, but not stored or returned.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

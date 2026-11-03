@@ -1211,6 +1211,38 @@ rewrite_open_finalize(box_calls_t *calls, ir_func_t *caller,
 }
 
 static bool
+rewrite_open_reference(box_calls_t *calls, ir_func_t *caller,
+                       ir_instr_t *instruction)
+{
+    ir_value_t *callee = instruction->n_operands == 2
+        && instruction->operands[0].kind == IR_OPD_VALUE
+        && instruction->operands[1].kind == IR_OPD_VALUE
+        ? instruction->operands[0].value : nullptr;
+    bool mutable = callee && callee->kind == IR_VAL_FUNC && callee->owner
+        && n00bb_names_function(
+            CORE_STRING_STATIC("__n00bb_ref_address_mut_open"),
+            callee->owner->name);
+    if (!mutable && (!callee || callee->kind != IR_VAL_FUNC || !callee->owner
+            || !n00bb_names_function(
+                CORE_STRING_STATIC("__n00bb_ref_address_open"),
+                callee->owner->name))) return true;
+    ir_value_t *source = instruction->operands[1].value;
+    th_type *address = instruction->dest
+        ? th_resolve(instruction->dest->type) : nullptr;
+    th_type *actuals[] = {
+        source ? source->type : nullptr,
+        address && th_kind_of(address) == TH_INDIRECTION
+            ? th_ind_referent(address) : nullptr,
+    };
+    ir_func_t *target = runtime_function(calls, mutable
+        ? CORE_STRING_STATIC("ref_address_mut_open")
+        : CORE_STRING_STATIC("ref_address_open"));
+    return !target || !actuals[0] || !actuals[1]
+        || retarget(calls, caller, instruction, target, actuals, 2, &source,
+                    1);
+}
+
+static bool
 rewrite_native_call(box_calls_t *calls, ir_func_t *caller,
                     ir_instr_t *instruction)
 {
@@ -1698,6 +1730,8 @@ rewrite_emitted(box_calls_t *calls)
                 case IR_OP_CALL:
                     rewritten = rewrite_open_finalize(calls, function,
                                                       instruction)
+                        && rewrite_open_reference(calls, function,
+                                                  instruction)
                         && rewrite_native_call(calls,function, instruction);
                     break;
                 case IR_OP_AGGREGATE:

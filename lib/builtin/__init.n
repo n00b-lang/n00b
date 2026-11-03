@@ -10,6 +10,7 @@ import cursor
 import hashing
 import integer
 import containers.traits
+import reference
 import io.debug
 import io.raw
 import io.format
@@ -180,6 +181,9 @@ package builtin {
     export containers.traits.Associative
     export containers.traits.SetLike
     export containers.traits.TreeLike
+    export reference.Referenceable
+    export reference.Reference
+    export reference.Mutable_Reference
     export io.debug.raw_debug
     export io.raw.Raw_Repr
     export integer.decimal

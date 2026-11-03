@@ -276,8 +276,26 @@ referent_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (symbol && symbol->type) type = symbol->type;
     }
     type = type ? th_resolve(type) : nullptr;
-    return type && th_kind_of(type) == TH_INDIRECTION
-        ? th_ind_referent(type) : nullptr;
+    if (type && th_kind_of(type) == TH_INDIRECTION)
+        return th_ind_referent(type);
+    for (size_t i = 0; type && th_kind_of(type) == TH_VAR
+         && i < th_var_constraint_count(type); i++) {
+        th_constraint constraint = {0};
+        th_type *address = th_var_constraint_at(type, i, &constraint)
+            && constraint.kind == TH_CON_METHOD
+            && (core_string_eq(constraint.method.name,
+                               CORE_STRING_STATIC("__ref_address"))
+                || core_string_eq(constraint.method.name,
+                                  CORE_STRING_STATIC("__ref_address_mut")))
+            ? th_resolve(constraint.method.result) : nullptr;
+        if (address && th_kind_of(address) == TH_INDIRECTION)
+            return th_ind_referent(address);
+    }
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *referent = nullptr;
+    return state && n00bb_reference_method(state->types, type, false, nullptr,
+                                           &referent)
+        ? referent : nullptr;
 }
 
 static th_type *
@@ -4240,6 +4258,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         CORE_STRING_STATIC("__gc_memset"), CORE_STRING_STATIC("__gc_memcpy"),
         CORE_STRING_STATIC("__gc_invoke_finalizer"),
         CORE_STRING_STATIC("__finalize_boxed"),
+        CORE_STRING_STATIC("__ref_address_boxed"),
+        CORE_STRING_STATIC("__ref_address_mut_boxed"),
         CORE_STRING_STATIC("__volatile_load"),
         CORE_STRING_STATIC("__gc_signal_fence"),
         CORE_STRING_STATIC("__gc_prefetch"),
@@ -5302,7 +5322,9 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
-    core_list_free(analysis->boxed_finalizers);
+    core_list_free(analysis->boxed_hooks.finalizers);
+    core_list_free(analysis->boxed_hooks.addresses);
+    core_list_free(analysis->boxed_hooks.mutable_addresses);
     core_list_free(analysis->record_requests);
     for (size_t p = 0; analysis->record_requests_indexed
          && p <= N00BB_RECORD_C; p++)

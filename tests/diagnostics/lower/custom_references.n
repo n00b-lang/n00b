@@ -1,0 +1,36 @@
+record Slot {
+    value: int
+}
+
+object Viewer {
+    target: Ref[Slot]
+}
+
+object Handle {
+    target: Ref[Slot]
+}
+
+func __ref_address(self: Viewer) -> Ref[Slot] {
+    return self.target
+}
+
+func __ref_address(self: Handle) -> Ref[Slot] {
+    return self.target
+}
+
+func __ref_address_mut(self: Handle) -> Ref[Slot] {
+    return self.target
+}
+
+func write_viewer(v: Viewer) {
+    v.__value.value = 3
+}
+
+func leak(h: Handle) -> Ref[Slot] {
+    return ref h.__value
+}
+
+func keep(h: Handle) -> int {
+    let r: Ref[int] = ref h.__value.value
+    return r.__value
+}

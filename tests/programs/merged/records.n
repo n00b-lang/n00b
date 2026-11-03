@@ -603,6 +603,134 @@ func fin_generic_wrapped() -> int {
     return fin_generic_sink(w)
 }
 
+object Fin_Init_Box {
+    f: Fin_Value
+}
+
+func __init(self: Fin_Init_Box, consume f: Fin_Value, twice: bool) {
+    self.f = f
+    if twice {
+        self.f = (v = 7)
+    }
+}
+
+func fin_field_overwrite() -> int {
+    var h: Fin_Holder = (tag = 1, f = (v = 1))
+    h.f = fin_make(2)
+    return fin_count
+}
+
+func fin_store_through(r: Ref[Fin_Value]) {
+    r.__value = fin_make(4)
+}
+
+func fin_reference_overwrite() -> int {
+    var f: Fin_Value = (v = 3)
+    fin_store_through(ref f)
+    return f.v
+}
+
+func fin_initialized_once() -> int {
+    let b: Fin_Init_Box = new[Fin_Init_Box](fin_make(5), false)
+    require fin_count == 0
+    let c: Fin_Init_Box = new[Fin_Init_Box](fin_make(6), true)
+    require fin_count == 1 and fin_order == 6
+    return b.f.v + c.f.v
+}
+
+record Ref_Slot {
+    value: int
+}
+
+object Ref_Handle {
+    target: Ref[Ref_Slot]
+}
+
+object Ref_Store {
+    slot:   Ref_Slot
+    handed: int
+}
+
+object Ref_Lent {
+    owner: Ref_Store
+}
+
+func __init(self: Ref_Handle, target: Ref[Ref_Slot]) {
+    self.target = target
+}
+
+func __init(self: Ref_Store, value: int) {
+    self.slot = (value = value)
+    self.handed = 0
+}
+
+func __init(self: Ref_Lent, owner: Ref_Store) {
+    self.owner = owner
+}
+
+func __ref_address(self: Ref_Handle) -> Ref[Ref_Slot] {
+    return self.target
+}
+
+func __ref_address_mut(self: Ref_Handle) -> Ref[Ref_Slot] {
+    return self.target
+}
+
+func __ref_create(self: Ref_Store) -> Ref_Lent {
+    self.handed += 1
+    return new[Ref_Lent](self)
+}
+
+func __ref_address(self: Ref_Lent) -> Ref[Ref_Slot] {
+    return ref self.owner.slot
+}
+
+func ref_bump(r: Ref[Ref_Slot]) {
+    r.__value.value += 100
+}
+
+func ref_double(modify s: Ref_Slot) {
+    s.value *= 2
+}
+
+func ref_through_handle() -> int {
+    var slot: Ref_Slot = (value = 1)
+    let h: Ref_Handle = new[Ref_Handle](ref slot)
+    h.__value = (value = 2)
+    h.__value.value += 3
+    ref_bump(ref h.__value)
+    ref_double(h.__value)
+    let copy: Ref_Slot = h.__value
+    return copy.value + slot.value
+}
+
+func ref_generic_read(r: 'R) -> 'T where 'R : Reference['T] {
+    return r.__value
+}
+
+func ref_generic_write(r: 'R, value: 'T)
+    where 'R : Mutable_Reference['T] {
+    r.__value = value
+}
+
+func ref_generic() -> int {
+    var slot: Ref_Slot = (value = 1)
+    let h: Ref_Handle = new[Ref_Handle](ref slot)
+    let plain: Ref[Ref_Slot] = ref slot
+    let replacement: Ref_Slot = (value = 30)
+    ref_generic_write(h, replacement)
+    let through_handle: Ref_Slot = ref_generic_read(h)
+    let through_ref: Ref_Slot = ref_generic_read(plain)
+    return through_handle.value + through_ref.value
+}
+
+func ref_created() -> int {
+    let store: Ref_Store = new[Ref_Store](4)
+    let lent: Ref_Lent = ref store
+    let again: Ref_Lent = ref store
+    return lent.__value.value * 10 + again.__value.value + store.handed
+}
+
 require fin_scoped() == 0
 require fin_count == 1 and fin_order == 1
 fin_reset()
@@ -679,6 +807,17 @@ require fin_generic_wrapped() == 1
 require fin_count == 1 and fin_order == 83
 fin_reset()
 require fin_generic_sink(3) == 1
+require fin_field_overwrite() == 1
+require fin_count == 2 and fin_order == 12
+fin_reset()
+require fin_reference_overwrite() == 4
+require fin_count == 2 and fin_order == 34
+fin_reset()
+require fin_initialized_once() == 12
+fin_reset()
+require ref_through_handle() == 420
+require ref_created() == 46
+require ref_generic() == 60
 let fin_kept: Fin_Value = fin_returned_temporary()
 require fin_kept.v == 5 and fin_count == 0
 fin_reset()

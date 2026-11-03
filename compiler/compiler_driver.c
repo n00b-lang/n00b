@@ -5094,7 +5094,7 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
                 seeds, seed_count, &analysis->specializations,
                 &analysis->specialization_requests,
-                &analysis->boxed_finalizers, failure)
+                &analysis->boxed_hooks, failure)
             && build_reachable_functions(analysis, &analysis->units,
                                          diagnostics);
         seed_count = 0;
@@ -5126,7 +5126,7 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
 }
 
 static bool
-specialize_calls(n00bb_link_analysis_t *analysis,
+specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                  core_diagnostics_t *diagnostics)
 {
     n00bb_specialization_failure_t failure = {0};
@@ -5136,10 +5136,12 @@ specialize_calls(n00bb_link_analysis_t *analysis,
                       n00bb_source_unit_module, analysis, &seeds);
     bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
                                  diagnostics)
-        && n00bb_rewrite_box_operations(analysis)
-        && specialize_emitted(analysis, nullptr, 0, &failure, diagnostics);
+        && (check_only || n00bb_rewrite_box_operations(analysis))
+        && (check_only
+            || specialize_emitted(analysis, nullptr, 0, &failure,
+                                  diagnostics));
     core_list_free(seeds);
-    if (ok) ok = publish_declared_aggregate_layouts(analysis)
+    if (ok && !check_only) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
     core_translation_unit_t *site = nullptr;
     for (size_t i = 0; !ok && failure.located && !site
@@ -5723,8 +5725,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && check_command && cache
         && n00bb_cache_snapshot(cache, link))
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
-    if (emit_program && specialize)
-        located = specialize_calls(link_analysis, cli_diagnostics);
+    if ((emit_program || (located && check_command)) && specialize)
+        located = specialize_calls(link_analysis, !emit_program,
+                                   cli_diagnostics);
     if (located && emit_program && specialize
         && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--report-specialization-gaps")))

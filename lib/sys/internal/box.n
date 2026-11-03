@@ -713,6 +713,41 @@ func ref_differ(left: Ref['T], right: Ref['T]) -> bool {
     return !reference_equal(__box_of(left), __box_of(right))
 }
 
+func dispatch_address(source: Ref[Any], writable: bool, slot: Ref[Any]) {
+    let type_index: u32 = box_view(source).__value.type_field & 0x7fffffff
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    if type_row(type_index).__value.kind
+        == cast[u32](internal.abi.Type_Kind.reference_type) {
+        reference_locate(source, ref location)
+    } else {
+        let payload: Ref[byte]? = slot_address(source)
+        require payload != nil
+        let child: u32 = component_of(box_view(slot).__value.type_field,
+                                      internal.abi.Type_Kind.reference_type)
+        if writable {
+            location.address = __ref_address_mut_boxed(type_index,
+                                                        payload.get())
+        } else {
+            location.address = __ref_address_boxed(type_index, payload.get())
+        }
+        require location.address != nil
+        location.type_index = child
+        location.width = type_row(child).__value.size_bits
+    }
+    reference_at(ref location, slot)
+}
+
+func ref_address_open(source: 'R) -> Ref['T] {
+    dispatch_address(__box_of(source), false, __result_box())
+    return __box_as(__result_box())
+}
+
+func ref_address_mut_open(source: 'R) -> Ref['T] {
+    dispatch_address(__box_of(source), true, __result_box())
+    return __box_as(__result_box())
+}
+
 func finalize_ref(target: Ref['T]) {
     var location: Location = (address = nil, type_index = 0, reserved = 0,
                               bit_offset = 0, width = 0)

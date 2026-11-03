@@ -34,6 +34,12 @@ typedef struct {
 core_list_decl(n00bb_boxed_finalizer_t);
 
 typedef struct {
+    core_list_t(n00bb_boxed_finalizer_t) finalizers;
+    core_list_t(n00bb_boxed_finalizer_t) addresses;
+    core_list_t(n00bb_boxed_finalizer_t) mutable_addresses;
+} n00bb_boxed_hooks_t;
+
+typedef struct {
     core_buffer_t message;
     core_string_t module;
     core_string_t function;
@@ -55,7 +61,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
-    core_list_t(n00bb_boxed_finalizer_t) *boxed_finalizers,
+    n00bb_boxed_hooks_t *boxed_hooks,
     n00bb_specialization_failure_t *failure);
 
 #endif

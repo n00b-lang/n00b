@@ -788,12 +788,63 @@ field_projection(ictx *c, th_type *receiver, core_string_t name,
 }
 
 static th_type *
+custom_referent(ictx *c, th_type *receiver)
+{
+    th_type *signature = th_method_lookup(c->tc, receiver,
+        CORE_STRING_STATIC("__ref_address"));
+    th_env_method_t method = {0};
+    core_string_t trait = {0};
+    if (!signature
+        && th_env_method_resolve_by_name(c->tc, receiver,
+            CORE_STRING_STATIC("__ref_address"), &method, &trait)
+            == TH_ENV_METHOD_FOUND)
+        signature = method.signature;
+    if (!signature || th_kind_of(th_resolve(signature)) != TH_FUNCTION) {
+        th_type *referent = fresh(c);
+        th_type *address = th_ind(c->tc, 0, referent);
+        th_type *shape = address ? th_func_with_error(c->tc, address,
+            fresh(c), nullptr, 0, nullptr, nullptr, 0) : nullptr;
+        if (!shape || !th_require_method_at(c->tc, receiver,
+                CORE_STRING_STATIC("__ref_address"), (core_string_t){},
+                address, shape, c->v->node))
+            return nullptr;
+        return referent;
+    }
+    th_type *instance = th_instantiate(c->tc,
+                                       th_generalize(c->tc, signature));
+    const th_param *self = instance && th_kind_of(instance) == TH_FUNCTION
+        ? th_func_param(instance, 0) : nullptr;
+    if (!self || !th_unify_in_place(c->tc, self->type, receiver))
+        return nullptr;
+    th_type *address = th_resolve(th_func_ret(instance));
+    return address && th_kind_of(address) == TH_INDIRECTION
+        ? th_ind_referent(address) : nullptr;
+}
+
+static th_type *
 referent_projection(ictx *c, th_type *receiver)
 {
     th_type *resolved = th_resolve(receiver);
     if (resolved && th_kind_of(resolved) == TH_INDIRECTION)
         return th_ind_referent(resolved);
     if (th_is_poison(resolved)) return resolved;
+    th_type *custom = resolved && th_kind_of(resolved) == TH_NAMED
+        ? custom_referent(c, resolved) : nullptr;
+    if (custom) return custom;
+    for (size_t i = 0; resolved && th_kind_of(resolved) == TH_VAR
+         && i < th_var_constraint_count(resolved); i++) {
+        th_constraint constraint = {0};
+        if (!th_var_constraint_at(resolved, i, &constraint)
+            || constraint.kind != TH_CON_METHOD
+            || (!core_string_eq(constraint.method.name,
+                                CORE_STRING_STATIC("__ref_address"))
+                && !core_string_eq(constraint.method.name,
+                                   CORE_STRING_STATIC("__ref_address_mut"))))
+            continue;
+        th_type *address = th_resolve(constraint.method.result);
+        if (address && th_kind_of(address) == TH_INDIRECTION)
+            return th_ind_referent(address);
+    }
     th_type *result = fresh(c);
     if (resolved && th_kind_of(resolved) == TH_VAR
         && th_unify_in_place(c->tc, resolved, th_ind(c->tc, 0, result)))
@@ -1074,6 +1125,23 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
         th_type *ret = signature ? th_func_ret(signature) : nullptr;
 
         return ret ? ret : fresh(c);
+    }
+
+    case PARSE_INFER_REFERENCE_TO: {
+        th_type *resolved = th_resolve(t);
+        th_type *signature = resolved && th_kind_of(resolved) == TH_NAMED
+            ? th_method_lookup(c->tc, resolved,
+                               CORE_STRING_STATIC("__ref_create"))
+            : nullptr;
+        th_type *instance = signature
+            ? th_instantiate(c->tc, th_generalize(c->tc, signature))
+            : nullptr;
+        const th_param *self = instance
+            && th_kind_of(instance) == TH_FUNCTION
+            ? th_func_param(instance, 0) : nullptr;
+        if (self && th_unify_in_place(c->tc, self->type, resolved))
+            return th_func_ret(instance);
+        return th_ind(c->tc, 0, t);
     }
 
     case PARSE_INFER_REFERENT_MEMBER: {

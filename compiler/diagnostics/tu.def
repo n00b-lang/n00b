@@ -462,3 +462,8 @@ N00B_DIAG(REF_ZERO_SIZE, "N00B-T0587", ERROR,
     "no storage, so there is nothing for a reference to point at. Use the\n"
     "value itself:\n"
     "    var marker: nil")
+N00B_DIAG(TRAIT_ARGUMENT_COUNT, "N00B-T0588", ERROR,
+    "a trait constraint gives the wrong number of type arguments",
+    "A trait's type parameters are the type variables its methods use,\n"
+    "other than the receiver, in the order they first appear. A constraint\n"
+    "such as `'R : Reference['T]` gives one type for each of them.")

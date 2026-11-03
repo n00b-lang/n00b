@@ -141,6 +141,23 @@ func run(selected: string) {
         let reader: Ref[() -> int] = ref read_value
         reader.call()
         value = 7
+    } elif selected == "panic_live" {
+        panic_with_live_value()
+    }
+}
+
+record Noisy {
+    id: int
+}
+
+func __finalize(consume self: Ref[Noisy]) {
+    __fd_write(2, "finalized\n")
+}
+
+func panic_with_live_value() {
+    let noisy: Noisy = (id = 1)
+    if noisy.id == 1 {
+        panic("live value")
     }
 }
 

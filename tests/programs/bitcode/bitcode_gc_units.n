@@ -2676,6 +2676,39 @@ func gc_boxed_finalizer_dispatch() {
     require gcfin_count == 3
 }
 
+object Gcref_Handle {
+    target: Ref[Gcfin_Value]
+}
+
+func __init(self: Gcref_Handle, target: Ref[Gcfin_Value]) {
+    self.target = target
+}
+
+func __ref_address(self: Gcref_Handle) -> Ref[Gcfin_Value] {
+    return self.target
+}
+
+func __ref_address_mut(self: Gcref_Handle) -> Ref[Gcfin_Value] {
+    return self.target
+}
+
+func gc_boxed_reference_dispatch() {
+    var value: Gcfin_Value = (v = 1)
+    var handle: Gcref_Handle = new[Gcref_Handle](ref value)
+    let index: u32 = sys.box.type_field_of(handle) & 0x7fffffff
+    let raw: Ref[byte]? = __ref_address_mut_boxed(index,
+        unsafe_cast[Ref[byte]] (ref handle))
+    require raw != nil
+    let address: Ref[Gcfin_Value] = unsafe_cast[Ref[Gcfin_Value]] raw.get()
+    address.__value.v = 5
+    require value.v == 5
+    var plain: int = 3
+    let none: Ref[byte]? = __ref_address_boxed(
+        sys.box.type_field_of(plain) & 0x7fffffff,
+        unsafe_cast[Ref[byte]] (ref plain))
+    require none == nil
+}
+
 func gc_known_finalizer() {
     let value: Ref[Finalized_Record] = construct_finalized()
     require value.__value.payload == 42
@@ -2793,5 +2826,6 @@ gc_generated_object_finalizer()
 gc_generic_object_finalizer()
 gc_user_generic_object_finalizer()
 gc_boxed_finalizer_dispatch()
+gc_boxed_reference_dispatch()
 gc_destroy_blocked_finalizer()
 __fd_write(2, "ok")
