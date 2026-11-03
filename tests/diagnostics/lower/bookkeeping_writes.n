@@ -1,0 +1,44 @@
+record Slot {
+    value: int
+}
+
+object Store {
+    slot:           Slot
+    handed: int
+}
+
+object Lent {
+    private owner: Store
+}
+
+func __init(self: Store, value: int) {
+    self.slot = (value = value)
+    self.handed = 0
+}
+
+func __init(self: Lent, owner: Store) {
+    self.owner = owner
+}
+
+func __ref_create(self: Store) -> Lent {
+    self.handed += 1
+    return new[Lent](self)
+}
+
+func __finalize(consume self: Ref[Lent]) {
+    self.__value.owner.handed -= 1
+}
+
+func __ref_address(self: Lent) -> Ref[Slot] {
+    return ref self.owner.slot
+}
+
+func peek(view lent: Lent) -> int {
+    return lent.__value.value
+}
+
+func check(view store: Store) -> int {
+    let lent: Lent = ref store
+    return peek(lent)
+}
+

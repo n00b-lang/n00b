@@ -317,6 +317,12 @@ N00B_DIAG(REFERENCE_ADDRESS_ESCAPES, "N00B-S0070", ERROR,
     "the address that type's `__ref_address` or `__ref_address_mut` handed\n"
     "out. That address is only valid while the access lasts, so it can be\n"
     "passed directly to a call, but not stored or returned.")
+N00B_DIAG(BOOKKEEPING_WRITE, "N00B-S0071", ERROR,
+    "`__ref_create` or `__finalize` writes visible state",
+    "Taking a reference and finalizing a value don't count as writes to the\n"
+    "value, so `__ref_create` and `__finalize` may only update private\n"
+    "bookkeeping fields of their own type. Make the field private, or move\n"
+    "the change out of the hook.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

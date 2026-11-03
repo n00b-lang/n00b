@@ -266,6 +266,10 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             else summarize_function(summaries, next, members[i],
                                     cyclic ? &settled[i] : nullptr);
             summarize_paths(summaries, next, members[i]);
+            const ir_summary_hooks_t *hooks = summaries->hooks;
+            if (hooks && hooks->bookkeeping)
+                ir_summary_paths_as_reads(next, hooks->bookkeeping(
+                    hooks->context, members[i], next));
             ir_analysis_scope_end(scope);
             if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
