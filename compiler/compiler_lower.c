@@ -20,6 +20,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_link.h"
 #include "compiler_axioms.h"
 #include "compiler_buffer_borrow.h"
+#include "compiler_effects.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "config.h"
@@ -23923,33 +23924,47 @@ witness_chain(n00bb_link_analysis_t *analysis, const ir_summary_t *summary,
 }
 
 static void
+explain_chain(core_buffer_t *out, n00bb_link_analysis_t *analysis,
+              const ir_summary_t *summary, uint32_t flag)
+{
+    const ir_switness_t *chain[WITNESS_DEPTH];
+    uint32_t depth = witness_chain(analysis, summary, flag, chain);
+    for (uint32_t d = 0; d < depth; d++) {
+        core_buffer_t callee = {0};
+        ir_switness_callee_text(chain[d], &callee);
+        if (d) core_buffer_puts(out, " -> ");
+        if (callee.byte_len) core_buffer_append(out, callee.data,
+                                                callee.byte_len);
+        else core_buffer_puts(out, "here");
+        core_buffer_printf(out, " (%u:%u)", chain[d]->line, chain[d]->column);
+        core_buffer_release(&callee);
+    }
+}
+
+static void
 dump_witness_chains(n00bb_link_analysis_t *analysis, ir_func_t *function)
 {
     ir_summary_t *summary = ir_summary_of(analysis->summaries, function);
     for (uint32_t b = 0; b <= IR_SEFFECT_FLAG_BITS; b++) {
         bool     unknown = b == IR_SEFFECT_FLAG_BITS;
-        uint32_t flag    = unknown ? IR_SWITNESS_UNKNOWN : 1u << b;
-        const ir_switness_t *chain[WITNESS_DEPTH];
-        uint32_t depth = witness_chain(analysis, summary, flag, chain);
-        if (!depth) continue;
+        core_buffer_t chain = {0};
+        explain_chain(&chain, analysis, summary,
+                      unknown ? IR_SWITNESS_UNKNOWN : 1u << b);
         core_string_t name = unknown ? CORE_STRING_STATIC("unknown")
                                      : ir_summary_flag_name(b);
-        fprintf(stdout, "  why %.*s:", (int)name.u8_bytes, name.data);
-        for (uint32_t d = 0; d < depth; d++) {
-            const ir_switness_t *witness = chain[d];
-            core_buffer_t callee = {0};
-            ir_switness_callee_text(witness, &callee);
-            if (!callee.byte_len)
-                fprintf(stdout, "%s here (%u:%u)", d ? " ->" : "",
-                        witness->line, witness->column);
-            else
-                fprintf(stdout, "%s %.*s (%u:%u)", d ? " ->" : "",
-                        (int)callee.byte_len, callee.data,
-                        witness->line, witness->column);
-            core_buffer_release(&callee);
-        }
-        fputc('\n', stdout);
+        if (chain.byte_len)
+            fprintf(stdout, "  why %.*s: %.*s\n", (int)name.u8_bytes,
+                    name.data, (int)chain.byte_len, chain.data);
+        core_buffer_release(&chain);
     }
+}
+
+static void
+function_name_text(core_buffer_t *out, const ir_func_t *function)
+{
+    core_buffer_append_string(out, ir_module_name(function->owner));
+    core_buffer_putc(out, '.');
+    core_buffer_append_string(out, n00bb_function_root(function->name));
 }
 
 static void
@@ -24011,9 +24026,7 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
 {
     ir_summary_t *summary = ir_summary_of(analysis->summaries, function);
     core_buffer_t name = {0};
-    core_buffer_append_string(&name, ir_module_name(function->owner));
-    core_buffer_putc(&name, '.');
-    core_buffer_append_string(&name, n00bb_function_root(function->name));
+    function_name_text(&name, function);
     core_buffer_puts(out, "{\"function\":");
     core_buffer_append_quoted(out, core_buffer_string(&name));
     core_buffer_release(&name);
@@ -24092,6 +24105,124 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
     core_buffer_putc(out, '}');
 }
 
+static void
+explain_line(core_buffer_t *out, core_string_t label, core_buffer_t *detail)
+{
+    core_buffer_printf(out, "  %-16.*s", (int)label.u8_bytes, label.data);
+    if (detail->byte_len) core_buffer_append(out, detail->data,
+                                             detail->byte_len);
+    core_buffer_putc(out, '\n');
+    core_buffer_release(detail);
+}
+
+static void
+explain_globals(core_buffer_t *detail, const ir_func_t *function,
+                const ir_summary_t *summary, uint8_t access)
+{
+    bool first = true;
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if ((path->root != IR_SPLACE_GLOBAL && path->root != IR_SPLACE_THREAD)
+            || !(path->flags & access)) continue;
+        if (!first) core_buffer_puts(detail, ", ");
+        first = false;
+        spath_text(detail, function, summary, path);
+    }
+}
+
+static uint32_t
+effect_witness_flag(uint64_t bits)
+{
+    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++)
+        if (bits == (1u << b)) return 1u << b;
+    return 0;
+}
+
+static void
+explain_function(n00bb_link_analysis_t *analysis, ir_func_t *function)
+{
+    ir_summary_t *summary = ir_summary_of(analysis->summaries, function);
+    if (!summary) return;
+    core_buffer_t out = {0};
+    function_name_text(&out, function);
+    core_buffer_puts(&out, ": ");
+    core_buffer_append_string(&out, n00bb_print_type_brief(
+        ir_module_types(function->owner), function->type));
+    core_buffer_putc(&out, '\n');
+    uint64_t bits = ir_summary_effect_bits(summary);
+    uint32_t flags = ir_summary_flags(summary);
+    bool any = false;
+    for (size_t i = 0; i < n00bb_effect_name_count(); i++) {
+        const n00bb_effect_name_t *effect = n00bb_effect_name_at(i);
+        if (effect->group || !(bits & effect->bits)) continue;
+        any = true;
+        core_buffer_t detail = {0};
+        uint32_t flag = effect_witness_flag(effect->bits);
+        if (flag == IR_SUMMARY_MAY_DIVERGE
+            && (flags & IR_SUMMARY_DIVERGES)) {
+            core_buffer_puts(&detail, "always");
+        }
+        bool reads = effect->bits == IR_SEFFECT_READS_NONLOCAL;
+        if (reads || effect->bits == IR_SEFFECT_WRITES_NONLOCAL) {
+            explain_globals(&detail, function, summary,
+                            reads ? IR_SPATH_READ : IR_SPATH_WRITE);
+            if (!detail.byte_len)
+                explain_chain(&detail, analysis, summary,
+                              IR_SWITNESS_UNKNOWN);
+        }
+        else if (flag) {
+            core_buffer_t chain = {0};
+            explain_chain(&chain, analysis, summary, flag);
+            if (chain.byte_len && detail.byte_len)
+                core_buffer_puts(&detail, ": ");
+            core_buffer_append(&detail, chain.data, chain.byte_len);
+            core_buffer_release(&chain);
+        }
+        explain_line(&out, effect->name, &detail);
+    }
+    if (flags & IR_SUMMARY_CALLS_UNKNOWN) {
+        any = true;
+        core_buffer_t detail = {0};
+        explain_chain(&detail, analysis, summary, IR_SWITNESS_UNKNOWN);
+        explain_line(&out, CORE_STRING_STATIC("may do anything"), &detail);
+    }
+    if (!any) {
+        core_buffer_t none = {0};
+        explain_line(&out, CORE_STRING_STATIC("no effects"), &none);
+    }
+    for (uint32_t e = 0; e < ir_summary_effect_count(summary); e++) {
+        core_buffer_t detail = {0};
+        core_buffer_append_string(&detail, ir_summary_effect_at(summary, e));
+        explain_line(&out, CORE_STRING_STATIC("named"), &detail);
+    }
+    for (uint32_t p = 0; p < function->n_params; p++) {
+        uint8_t role = n00bb_parameter_role(function, summary, p);
+        core_buffer_t detail = {0};
+        core_buffer_printf(&detail, "%s", role & N00BB_ROLE_WRITES ? "writer"
+                                        : role & N00BB_ROLE_READS ? "reader"
+                                        : "untouched");
+        if (role & N00BB_ROLE_LENDS) core_buffer_puts(&detail, ", lends");
+        core_buffer_t label = {0};
+        core_buffer_puts(&label, "param ");
+        param_text(&label, function, p);
+        explain_line(&out, core_buffer_string(&label), &detail);
+        core_buffer_release(&label);
+    }
+    core_buffer_t hidden = {0};
+    uint64_t named = n00bb_named_effect_bits() | IR_SUMMARY_DIVERGES
+        | IR_SUMMARY_NO_RETURN | IR_SUMMARY_MAY_FAIL
+        | IR_SUMMARY_CALLS_UNKNOWN;
+    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
+        if (!(flags & (1u << b)) || (named & (1u << b))) continue;
+        if (hidden.byte_len) core_buffer_putc(&hidden, ' ');
+        core_buffer_append_string(&hidden, ir_summary_flag_name(b));
+    }
+    if (hidden.byte_len)
+        explain_line(&out, CORE_STRING_STATIC("detail"), &hidden);
+    else core_buffer_release(&hidden);
+    dump_text(&out);
+}
+
 static bool
 dump_effects_of(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
 {
@@ -24113,6 +24244,10 @@ dump_effects_of(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
             if (analysis->effects_json) {
                 core_buffer_printf(&json, "%s", listed++ ? ",\n " : "[");
                 json_function(&json, analysis, functions.data[i]);
+                continue;
+            }
+            if (analysis->effects_explain) {
+                explain_function(analysis, functions.data[i]);
                 continue;
             }
             dump_function_summary(analysis->summaries, functions.data[i],

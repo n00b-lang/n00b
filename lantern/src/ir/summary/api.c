@@ -209,7 +209,8 @@ ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
     summary->flags = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP
         | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
         | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
-        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES;
+        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_MAY_DIVERGE
+        | IR_SUMMARY_OBSERVES;
     add_path(summary, &(ir_spath_t){
         .root  = IR_SPLACE_UNKNOWN,
         .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
@@ -424,17 +425,36 @@ ir_switness_callee_text(const ir_switness_t *witness, core_buffer_t *out)
                                      : witness->name.u8_bytes);
 }
 
+static int
+compare_targets(const void *left, const void *right)
+{
+    const ir_func_t *a = *(const ir_func_t *const *)left;
+    const ir_func_t *b = *(const ir_func_t *const *)right;
+    int order = core_string_cmp(ir_module_name(a->owner),
+                                ir_module_name(b->owner));
+    return order ? order : core_string_cmp(a->name, b->name);
+}
+
+static bool
+better_witness(const ir_switness_t *witness, const ir_switness_t *candidate)
+{
+    if (!candidate->callee || !witness->callee) return false;
+    if (candidate->line != witness->line)
+        return candidate->line < witness->line;
+    if (candidate->column != witness->column)
+        return candidate->column < witness->column;
+    return compare_targets(&candidate->callee, &witness->callee) < 0;
+}
+
 static void
 add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
           ir_func_t *callee, core_string_t name)
 {
-    uint32_t added = flags & ~summary->flags;
     summary->flags |= flags;
-    for (uint32_t b = 0; added && b < IR_SEFFECT_FLAG_BITS; b++) {
+    for (uint32_t b = 0; flags && b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
-        if (!(added & flag) || ir_summary_witness_for(summary, flag))
-            continue;
-        core_list_push(summary->witnesses, ((ir_switness_t){
+        if (!(flags & flag)) continue;
+        ir_switness_t candidate = {
             .flag   = flag,
             .callee = callee,
             .module = callee ? ir_module_name(callee->owner)
@@ -442,7 +462,13 @@ add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
             .name   = callee ? callee->name : name,
             .line   = in ? in->span.start_line : 0,
             .column = in ? in->span.start_col : 0,
-        }));
+        };
+        ir_switness_t *witness = nullptr;
+        for (size_t i = 0; !witness && i < summary->witnesses.len; i++)
+            if (summary->witnesses.data[i].flag == flag)
+                witness = &summary->witnesses.data[i];
+        if (!witness) core_list_push(summary->witnesses, candidate);
+        else if (better_witness(witness, &candidate)) *witness = candidate;
     }
 }
 

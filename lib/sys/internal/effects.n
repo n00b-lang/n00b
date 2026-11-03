@@ -18,12 +18,13 @@ const may_output:          u64 = 0x10000
 const reads_env:           u64 = 0x20000
 const reads_clock:         u64 = 0x40000
 const reads_random:        u64 = 0x80000
-const traps_explicit:      u64 = 0x100000
-const traps_bounds:        u64 = 0x200000
-const traps_unwrap:        u64 = 0x400000
-const traps_arithmetic:    u64 = 0x800000
-const reads_nonlocal:      u64 = 0x1000000
-const writes_nonlocal:     u64 = 0x2000000
+const may_diverge:         u64 = 0x100000
+const traps_explicit:      u64 = 0x200000
+const traps_bounds:        u64 = 0x400000
+const traps_unwrap:        u64 = 0x800000
+const traps_arithmetic:    u64 = 0x1000000
+const reads_nonlocal:      u64 = 0x2000000
+const writes_nonlocal:     u64 = 0x4000000
 
 func reads_parameter(index: u64) -> u64 {
     return cast[u64](1) << (32 + index)

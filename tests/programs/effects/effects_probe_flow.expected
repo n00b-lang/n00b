@@ -35,7 +35,7 @@ builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   reads self.__value.index.live
   output result data[self.__value.index.live] control[]
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets
+  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads self.__value.entries
   reads self.__value.index.ctrl
   reads self.__value.entries.__value.storage
@@ -50,7 +50,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   returns self.__value.entries.__value.storage.__value[].value
   output result data[self.__value.entries.__value.storage.__value[].value] control[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.hashes.__value[] self.__value.index.slots.__value[]]
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets
+  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads self.__value.entries
   reads+writes self.__value.index.ctrl
   reads+writes self.__value.index.dead
@@ -130,7 +130,7 @@ builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
   output (new in builtin.containers.lease.__ref_create:35:28).leases data[self.__value.items.__value.leases] control[]
   output (new in builtin.containers.lease.__ref_create:35:28).storage data[self.__value.items.__value.storage] control[]
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
-  effects may_trap may_allocate may_collect allocates_direct reinterprets
+  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads spans.__value.count
   reads spans.__value.items
   reads spans.__value.items.__value.storage

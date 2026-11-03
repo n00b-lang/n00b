@@ -61,7 +61,9 @@
              "reads and writes, and where its result comes from; " \
              "separate several names with commas"), \
     DEV_FLAG("--effects-json", NO_ALIAS, BOOL, false, \
-             "print the --effects-of report as JSON")
+             "print the --effects-of report as JSON"), \
+    DEV_FLAG("--effects-explain", NO_ALIAS, BOOL, false, \
+             "print the --effects-of report as `n00b explain effects` does")
 #define NO_COMPTIME_FLAG \
     FLAG("--no-comptime", NO_ALIAS, BOOL, false, \
          "skip the comptime phase; a program that needs build-time values fails")
@@ -252,6 +254,12 @@ static const parse_cmdr_flag_t CACHE_FLAGS[] = {
     END_FLAGS,
 };
 
+static const parse_cmdr_flag_t EXPLAIN_FLAGS[] = {
+    FLAG("--json", NO_ALIAS, BOOL, false,
+         "with `effects`, print the report as JSON"),
+    END_FLAGS,
+};
+
 static const parse_cmdr_flag_t VERSION_FLAGS[] = {
     DEV_FLAG("--marker", NO_ALIAS, BOOL, false,
              "print the toolchain marker written at install"),
@@ -292,8 +300,10 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
     COMMAND("completions",
             "print tab completion for a shell: bash, zsh, fish, powershell",
             nullptr, "shell", 1, 1, false),
-    COMMAND("explain", "explain a diagnostic code such as N00B-T0042",
-            nullptr, "code", 1, 1, false),
+    COMMAND("explain",
+            "explain a diagnostic code such as N00B-T0042, or a function's "
+            "effects: explain effects MODULE.FUNCTION [module|file]",
+            EXPLAIN_FLAGS, "code", 1, 3, false),
     COMMAND("compile", "emit ABI metadata for one translation unit",
             LOWERING_FLAGS, "input", 1, 1, true),
     COMMAND("preprocess", "emit preprocessor output for one input",

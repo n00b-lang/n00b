@@ -537,6 +537,7 @@ typedef struct n00bb_link_analysis_t {
     bool dump_ranges;
     core_string_t effects_of;
     bool effects_json;
+    bool effects_explain;
     th_env *environment;
     th_env *export_environment;
     th_env *interface_environment;
