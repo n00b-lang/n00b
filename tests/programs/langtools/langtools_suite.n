@@ -401,6 +401,53 @@ func corpus_check(path: string, expected: Dict[string, Tuple[uint, uint]]) {
           path + ": round trip")
 }
 
+func lex_spec_check(path: string) {
+    let text: string? = read_text(path)
+    if text == nil {
+        check(false, path + ": cannot read")
+        return
+    }
+    try {
+        let spec: langtools.Lex_Spec =
+            langtools.load_lex(text.get(), source_name = path)!
+        check(spec.rules.len() > 0, path + ": has rules")
+    } fail(diags) {
+        for let d in diags {
+            check(false, path + ": " + d.code + " " + d.message)
+        }
+    }
+}
+
+func lex_codes(text: string) -> string {
+    try {
+        let spec: langtools.Lex_Spec = langtools.load_lex(text)!
+        return ""
+    } fail(diags) {
+        var codes: List[string] = new[List[string]]()
+        for let d in diags {
+            codes.append(d.code)
+        }
+        return join(codes, " ")
+    }
+}
+
+func lex_load_checks() {
+    check(lex_codes("comment \"//\"\nstring '\"' .. '\"' -> %STRING\n") == "",
+          "lex spec loads")
+    check(lex_codes("comentt \"//\"\n") == "lex/unknown-rule", "unknown rule")
+    check(lex_codes("string '\"' .. '\"' raww\n") == "lex/unknown-option",
+          "unknown option")
+    check(lex_codes("comment\n") == "lex/missing-value", "missing head")
+    check(lex_codes("string escapes nope -> %S\n") == "lex/undefined-set",
+          "undefined escape set")
+    check(lex_codes("suffixes a: \"u\"\nsuffixes a: \"l\"\n") ==
+          "lex/duplicate-set", "duplicate named set")
+    check(lex_codes("string '\"' .. '\"' -> STRING\n") ==
+          "lex/expected-class", "output without percent")
+    check(lex_codes("comment \"#\"\n  -> %NOTE\n") == "",
+          "indented continuation")
+}
+
 diag_checks()
 id_checks()
 feature_checks()
@@ -408,11 +455,19 @@ literal_checks()
 bad_input_checks()
 fix_checks()
 lex_checks()
+lex_load_checks()
 let expected: Dict[string, Tuple[uint, uint]] = lantern_counts()
 let args: List[string] = sys.env.args()
 check(args.len() > 1, "corpus grammars given")
 for i: uint from 1 until args.len() {
-    corpus_check(args[i], expected)
+    let path: string = args[i]
+    if byte_len(path) > 4
+        and byte_slice(path, byte_len(path) - 4, byte_len(path)) == ".lex" {
+        lex_spec_check(path)
+    }
+    else {
+        corpus_check(path, expected)
+    }
 }
 if failures == 0 {
     __fd_write(2, "ok")

@@ -5,6 +5,8 @@ import ebnf_parse
 import format
 import lex
 import bnf_litmod
+import lex_spec
+import lex_load
 
 package langtools {
     export diag
@@ -13,4 +15,6 @@ package langtools {
     export format.format_grammar
     export lex
     export bnf_litmod
+    export lex_spec
+    export lex_load.load_lex
 }

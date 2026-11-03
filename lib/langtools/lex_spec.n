@@ -1,0 +1,167 @@
+import diag
+
+enum Value_Kind { text = 0, word, class, pair }
+
+record Lex_Value {
+    kind:  Value_Kind
+    text:  string
+    close: string
+    span:  diag.Span
+}
+
+record Lex_Option {
+    name:   string
+    values: List[Lex_Value]
+    span:   diag.Span
+}
+
+record Lex_Rule {
+    kind:    string
+    name:    string
+    head:    List[Lex_Value]
+    options: List[Lex_Option]
+    flags:   List[string]
+    outputs: List[Lex_Value]
+    span:    diag.Span
+}
+
+func __init(modify self: Lex_Rule, kind: string, span: diag.Span) {
+    self.kind = kind
+    self.name = ""
+    self.head = new[List[Lex_Value]]()
+    self.options = new[List[Lex_Option]]()
+    self.flags = new[List[string]]()
+    self.outputs = new[List[Lex_Value]]()
+    self.span = span
+}
+
+record Lex_Spec {
+    source_name: string
+    rules:       List[Lex_Rule]
+    sets:        Dict[string, uint]
+}
+
+func __init(modify self: Lex_Spec, source_name: string) {
+    self.source_name = source_name
+    self.rules = new[List[Lex_Rule]]()
+    self.sets = new[Dict[string, uint]]()
+}
+
+record Rule_Schema {
+    kind:    string
+    named:   bool
+    head:    uint
+    options: Array[string]
+    flags:   Array[string]
+    outputs: uint
+}
+
+func schema_table() -> Dict[string, Rule_Schema] {
+    var table: Dict[string, Rule_Schema] = new[Dict[string, Rule_Schema]]()
+    for let schema in schema_list() {
+        table[schema.kind] = schema
+    }
+    return table
+}
+
+private func schema_list() -> List[Rule_Schema] {
+    var all: List[Rule_Schema] = new[List[Rule_Schema]]()
+    all.append((kind = "comment", named = false, head = 1,
+        options = ["fill"], flags = ["nested"], outputs = 1))
+    all.append((kind = "region", named = false, head = 1,
+        options = ["line"], flags = [], outputs = 0))
+    all.append((kind = "escapes", named = true, head = 0,
+        options = ["chars", "literal", "digits"],
+        flags = [], outputs = 0))
+    all.append((kind = "string", named = false, head = 1,
+        options = ["prefix", "quotes", "pairs", "escape", "escapes",
+                   "interp"],
+        flags = ["raw", "multiline", "scalar", "nested", "holes", "plain"],
+        outputs = 3))
+    all.append((kind = "suffixes", named = true, head = 64,
+        options = [], flags = ["integer"], outputs = 1))
+    all.append((kind = "number", named = false, head = 0,
+        options = ["prefix", "digits", "sep", "point", "exp", "suffixes",
+                   "suffix", "int", "float"],
+        flags = [], outputs = 0))
+    all.append((kind = "profile", named = true, head = 0,
+        options = ["normalize", "mixed-scripts", "confusables", "emoji"],
+        flags = [], outputs = 0))
+    all.append((kind = "identifier", named = false, head = 0,
+        options = ["start", "extra", "upper", "profile"],
+        flags = [], outputs = 1))
+    all.append((kind = "sigil", named = false, head = 1,
+        options = ["attach-after"],
+        flags = ["digits", "before-string", "unless-closed"], outputs = 1))
+    all.append((kind = "regex", named = false, head = 1,
+        options = ["flags", "not-after"], flags = [],
+        outputs = 1))
+    all.append((kind = "header", named = true, head = 0,
+        options = ["quotes"], flags = [], outputs = 0))
+    all.append((kind = "heredoc", named = false, head = 1,
+        options = ["header", "terminator-indent", "body-indent"],
+        flags = ["queue"], outputs = 1))
+    all.append((kind = "fence", named = false, head = 1,
+        options = ["fill", "body", "min", "pad", "bidi"], flags = ["label"],
+        outputs = 1))
+    all.append((kind = "embed", named = false, head = 1,
+        options = ["open", "close"], flags = [],
+        outputs = 1))
+    all.append((kind = "directive", named = false, head = 1,
+        options = ["eol"], flags = [], outputs = 1))
+    all.append((kind = "layout", named = false, head = 0,
+        options = ["brackets", "continue", "indent", "newline", "eof",
+                   "tabs", "mixed-indent", "bracket-newlines",
+                   "dedent-newline", "terminator", "terminator-after"],
+        flags = [], outputs = 0))
+    all.append((kind = "whitespace", named = false, head = 1,
+        options = [], flags = [],
+        outputs = 0))
+    all.append((kind = "fallback", named = false, head = 1,
+        options = [], flags = ["recover"], outputs = 0))
+    all.append((kind = "bidi", named = false, head = 1,
+        options = [], flags = [],
+        outputs = 0))
+    all.append((kind = "recover", named = false, head = 1,
+        options = ["sync"], flags = ["consume"], outputs = 1))
+    return all
+}
+
+func set_key(kind: string, name: string) -> string {
+    return kind + ":" + name
+}
+
+func find_set(spec: Lex_Spec, kind: string, name: string) -> Lex_Rule? {
+    let at: uint? = spec.sets[set_key(kind, name)]
+    if at == nil {
+        return nil
+    }
+    return spec.rules[at.get()]
+}
+
+func find_option(rule: Lex_Rule, name: string) -> Lex_Option? {
+    for let option in rule.options {
+        if option.name == name {
+            return option
+        }
+    }
+    return nil
+}
+
+func has_flag(rule: Lex_Rule, flag: string) -> bool {
+    for f in rule.flags {
+        if f == flag {
+            return true
+        }
+    }
+    return false
+}
+
+func listed(names: Array[string], name: string) -> bool {
+    for n in names {
+        if n == name {
+            return true
+        }
+    }
+    return false
+}

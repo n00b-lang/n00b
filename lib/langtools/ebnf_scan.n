@@ -86,18 +86,18 @@ func end_point(span: diag.Span) -> diag.Span {
         end_line = span.end_line, end_col = span.end_col)
 }
 
-private func peek(sc: Ebnf_Scanner, ahead: uint = 0) -> char {
+func peek(sc: Ebnf_Scanner, ahead: uint = 0) -> char {
     if sc.pos + ahead >= sc.n {
         return cast[char] 0
     }
     return cast[char] byte_at(sc.src, sc.pos + ahead)
 }
 
-private func at_end(sc: Ebnf_Scanner) -> bool {
+func at_end(sc: Ebnf_Scanner) -> bool {
     return sc.pos >= sc.n
 }
 
-private func step(sc: Ebnf_Scanner) {
+func step(sc: Ebnf_Scanner) {
     let b: u8 = byte_at(sc.src, sc.pos)
     sc.pos += 1
     if b == 0x0a {
@@ -109,38 +109,38 @@ private func step(sc: Ebnf_Scanner) {
     }
 }
 
-private func step_char(sc: Ebnf_Scanner) {
+func step_char(sc: Ebnf_Scanner) {
     step(sc)
     while !at_end(sc) and (byte_at(sc.src, sc.pos) & 0xc0) == 0x80 {
         step(sc)
     }
 }
 
-private func is_word_start(c: char) -> bool {
+func is_word_start(c: char) -> bool {
     return is_ascii_letter(c) or c == '_'
 }
 
-private func is_word_char(c: char) -> bool {
+func is_word_char(c: char) -> bool {
     return is_word_start(c) or is_ascii_digit(c)
 }
 
-private func is_blank(c: char) -> bool {
+func is_blank(c: char) -> bool {
     return c == ' ' or c == '\t' or c == '\r'
 }
 
-private func skip_blanks(sc: Ebnf_Scanner) {
+func skip_blanks(sc: Ebnf_Scanner) {
     while !at_end(sc) and is_blank(peek(sc)) {
         step(sc)
     }
 }
 
-private func skip_comment(sc: Ebnf_Scanner) {
+func skip_comment(sc: Ebnf_Scanner) {
     while !at_end(sc) and peek(sc) != '\n' {
         step(sc)
     }
 }
 
-private func slice(sc: Ebnf_Scanner, from: uint) -> string {
+func slice(sc: Ebnf_Scanner, from: uint) -> string {
     return byte_slice(sc.src, from, sc.pos)
 }
 
@@ -188,7 +188,7 @@ private func unicode_escape(sc: Ebnf_Scanner, from: Mark) -> string? {
     return from_char(cast[char] value)
 }
 
-private func literal(sc: Ebnf_Scanner, start: Mark) -> string {
+func literal(sc: Ebnf_Scanner, start: Mark) -> string {
     let quote: char = peek(sc)
     let errors_before: uint = sc.diags.len()
     step(sc)
