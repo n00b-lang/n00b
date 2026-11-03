@@ -203,6 +203,7 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->contents_memo, entry) {
         content_memo_t *content = entry->value;
         core_list_free(content->items);
+        core_list_free(content->widened);
         core_list_free(content->log);
         memo_free(&content->memo);
         core_free(content);

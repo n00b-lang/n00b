@@ -422,13 +422,9 @@ log_new_items(pt_t *pt, core_list_t(pt_logged_t) *log, const pt_set_t *old,
                                                 pt->generation}));
 }
 
-static void
-content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+static content_memo_t *
+content_entry(pt_t *pt, const pt_loc_t *loc)
 {
-    if (pt->reading.len) {
-        content_compute(pt, loc, into);
-        return;
-    }
     content_key_t   probe = {*loc, pt->at};
     bool            found = false;
     content_memo_t *entry = core_dict_get(&pt->contents_memo, &probe,
@@ -449,8 +445,22 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
         if (pt->cuts != cuts) entry->memo.computed = false;
         log_new_items(pt, &entry->log, &old, &entry->items);
         core_list_free(old);
+        entry->widened.len = 0;
+        for (size_t i = 0; i < entry->items.len; i++)
+            set_add(pt, &entry->widened, anywhere_below(entry->items.data[i]));
     }
     memo_use(pt, &entry->memo);
+    return entry;
+}
+
+static void
+content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+{
+    if (pt->reading.len) {
+        content_compute(pt, loc, into);
+        return;
+    }
+    content_memo_t *entry = content_entry(pt, loc);
     if (!pt->delta_since) {
         set_merge(pt, into, &entry->items);
         return;
@@ -460,6 +470,18 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
         if (logged->generation <= pt->delta_since) break;
         set_add(pt, into, logged->item);
     }
+}
+
+static void
+content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+{
+    if (pt->reading.len || pt->delta_since) {
+        pt_set_t reached = (pt_set_t){0};
+        content_at(pt, loc, &reached);
+        merge_widened(pt, into, &reached, true);
+        return;
+    }
+    set_merge(pt, into, &content_entry(pt, loc)->widened);
 }
 
 static bool
@@ -653,10 +675,8 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
                                          at->depth - (uint32_t)under, loose,
                                          target));
                 if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
-                    pt_set_t reached = (pt_set_t){0};
                     target.loc.path.flags |= IR_SPATH_DEEP;
-                    content_at(pt, &target.loc, &reached);
-                    merge_widened(pt, into, &reached, true);
+                    content_below(pt, &target.loc, into);
                 }
                 continue;
             }
