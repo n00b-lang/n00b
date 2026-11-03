@@ -32,3 +32,7 @@ trait TreeLike {
     func child_count(self: 'T) -> uint
     func child(self: 'T, index: int) -> 'T?
 }
+
+trait Copy {
+    func __copy(self: 'T) -> 'T
+}

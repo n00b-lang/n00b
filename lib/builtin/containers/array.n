@@ -2,6 +2,17 @@ func len(self: Array['T]) -> uint {
     return __array_length(self)
 }
 
+func __copy(self: Array['T]) -> Array['T] {
+    let count: uint = __array_length(self)
+    var copy: Array['T] = new[Array['T]](cast[int]count)
+    var at: uint = 0
+    while at < count {
+        copy[at] = self[at]
+        at += 1
+    }
+    return copy
+}
+
 func copy_items(modify dst: Array['T], dst_at: uint, src: Array['T],
                 src_at: uint, n: uint) {
     if n == 0 {

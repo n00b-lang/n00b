@@ -10,6 +10,7 @@ import cursor
 import hashing
 import integer
 import containers.traits
+import containers.lease
 import reference
 import io.debug
 import io.raw
@@ -120,6 +121,9 @@ package builtin {
     export containers.array.len
     export containers.dict.len
     export containers.list.len
+    export containers.lease.len
+    export containers.lease.leased
+    export containers.lease.release
     export containers.set.len
     export containers.view.len
     export string.core.widen_encoding
@@ -181,6 +185,10 @@ package builtin {
     export containers.traits.Associative
     export containers.traits.SetLike
     export containers.traits.TreeLike
+    export containers.traits.Copy
+    export containers.lease.Leasable
+    export containers.lease.Lease
+    export containers.lease.Lease_Count
     export reference.Referenceable
     export reference.Reference
     export reference.Mutable_Reference

@@ -1804,7 +1804,10 @@ n00bb_reference_hook(th_ctx *types, th_type *receiver, core_string_t name,
     th_type *returned = self && th_unify_in_place(types, self->type, resolved)
         ? th_resolve(th_func_ret(instance)) : nullptr;
     if (!returned) return false;
-    if (method) *method = found;
+    if (method) {
+        *method = found;
+        method->signature = th_resolve(instance);
+    }
     if (result) *result = returned;
     return true;
 }
