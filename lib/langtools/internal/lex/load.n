@@ -11,14 +11,14 @@ record Item {
 }
 
 object Loader {
-    sc:      internal.scan.Ebnf_Scanner
+    sc:      internal.scan.Scanner
     spec:    internal.lex.spec.Spec
     schemas: Dict[string, internal.lex.spec.Rule_Schema]
     ahead:   Item?
 }
 
 func __init(self: Loader, text: string, source_name: string) {
-    self.sc = new[internal.scan.Ebnf_Scanner](text)
+    self.sc = new[internal.scan.Scanner](text, "lex")
     self.spec = new[internal.lex.spec.Spec](source_name)
     self.schemas = internal.lex.spec.schema_table()
     self.ahead = nil
@@ -26,8 +26,7 @@ func __init(self: Loader, text: string, source_name: string) {
 
 private func diagnostic(l: Loader, code: string, message: string,
                         span: internal.diag.Span) -> internal.diag.Diagnostic {
-    let d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("lex/" + code, message, span)
-    return d
+    return internal.scan.diagnostic(l.sc, code, message, span)
 }
 
 private func item(l: Loader, kind: Item_Kind, text: string,
@@ -35,12 +34,8 @@ private func item(l: Loader, kind: Item_Kind, text: string,
     return (kind = kind, text = text, span = internal.scan.span_from(l.sc, from))
 }
 
-private func is_word_char(c: char) -> bool {
-    return internal.scan.is_word_char(c) or c == '-'
-}
-
 private func skip_to_content(l: Loader) -> bool {
-    let sc: internal.scan.Ebnf_Scanner = l.sc
+    let sc: internal.scan.Scanner = l.sc
     while !internal.scan.at_end(sc) {
         let start: uint = sc.pos
         internal.scan.skip_blanks(sc)
@@ -60,7 +55,7 @@ private func skip_to_content(l: Loader) -> bool {
 }
 
 private func scan(l: Loader) -> Item {
-    let sc: internal.scan.Ebnf_Scanner = l.sc
+    let sc: internal.scan.Scanner = l.sc
     while true {
         internal.scan.skip_blanks(sc)
         let from: internal.scan.Mark = internal.scan.mark(sc)
@@ -86,7 +81,7 @@ private func scan(l: Loader) -> Item {
         if c == '%' {
             internal.scan.step(sc)
             let name_start: uint = sc.pos
-            while !internal.scan.at_end(sc) and is_word_char(internal.scan.peek(sc)) {
+            while !internal.scan.at_end(sc) and internal.scan.is_name_char(internal.scan.peek(sc)) {
                 internal.scan.step(sc)
             }
             return item(l, Item_Kind.class, internal.scan.slice(sc, name_start),
@@ -103,7 +98,7 @@ private func scan(l: Loader) -> Item {
             return item(l, Item_Kind.arrow, "->", from)
         }
         if internal.scan.is_word_char(c) {
-            while !internal.scan.at_end(sc) and is_word_char(internal.scan.peek(sc)) {
+            while !internal.scan.at_end(sc) and internal.scan.is_name_char(internal.scan.peek(sc)) {
                 internal.scan.step(sc)
             }
             let text: string = internal.scan.slice(sc, from.byte)
@@ -308,6 +303,8 @@ private func parse_rule(l: Loader, head: Item) {
 
 private const optional_heads: Array[string] = ["string", "suffixes"]
 
+private const bare_options: Array[string] = ["point"]
+
 private func check_rule(l: Loader, schema: internal.lex.spec.Rule_Schema,
                         rule: internal.lex.spec.Rule) {
     if schema.head > 0 and !internal.lex.spec.listed(optional_heads, rule.kind)
@@ -321,7 +318,8 @@ private func check_rule(l: Loader, schema: internal.lex.spec.Rule_Schema,
             decimal(schema.outputs) + " token class(es)", rule.span))
     }
     for let option in rule.options {
-        if option.values.len() == 0 {
+        if option.values.len() == 0 and
+            !internal.lex.spec.listed(bare_options, option.name) {
             internal.scan.report(l.sc, diagnostic(l,"missing-value",
                 "`" + option.name + "` needs a value", option.span))
         }
@@ -388,17 +386,7 @@ func load(text: string, source_name: string = "<string>")
         check_references(l)
     }
     if l.sc.diags.len() > 0 {
-        var renamed: List[internal.diag.Diagnostic] = new[List[internal.diag.Diagnostic]]()
-        for let d in l.sc.diags {
-            var moved: internal.diag.Diagnostic = d
-            if byte_len(moved.code) > 5
-                and byte_slice(moved.code, 0, 5) == "ebnf/" {
-                moved.code = "lex/" + byte_slice(moved.code, 5,
-                                                 byte_len(moved.code))
-            }
-            renamed.append(moved)
-        }
-        fail internal.diag.sorted_by_position(renamed)
+        fail internal.diag.sorted_by_position(l.sc.diags)
     }
     return l.spec
 }

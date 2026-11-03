@@ -30,6 +30,7 @@ package builtin {
     export ascii.is_ascii_digit
     export ascii.is_ascii_letter
     export ascii.hex_digit_value
+    export ascii.decimal_value
     export bitptr.Bitptr
     export bitptr.bitptr
     export abi.string_backing_at

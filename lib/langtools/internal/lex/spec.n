@@ -81,11 +81,12 @@ private func schema_list() -> List[Rule_Schema] {
     all.append((kind = "suffixes", named = true, head = 64,
         options = [], flags = ["integer"], outputs = 1))
     all.append((kind = "number", named = false, head = 0,
-        options = ["prefix", "digits", "sep", "point", "exp", "suffixes",
-                   "suffix", "int", "float"],
+        options = ["prefix", "sign", "digits", "sep", "point", "exp",
+                   "suffixes", "suffix", "int", "float"],
         flags = [], outputs = 0))
     all.append((kind = "profile", named = true, head = 0,
-        options = ["normalize", "mixed-scripts", "confusables", "emoji"],
+        options = ["normalize", "mixed-scripts", "confusables", "emoji",
+                   "scripts"],
         flags = [], outputs = 0))
     all.append((kind = "identifier", named = false, head = 0,
         options = ["start", "extra", "upper", "profile"],
@@ -97,10 +98,13 @@ private func schema_list() -> List[Rule_Schema] {
         options = ["flags", "not-after"], flags = [],
         outputs = 1))
     all.append((kind = "header", named = true, head = 0,
-        options = ["quotes"], flags = [], outputs = 0))
+        options = ["quotes", "tag-start", "tag-continue"],
+        flags = ["quoted-only", "leading-space", "strict-trailing"],
+        outputs = 0))
     all.append((kind = "heredoc", named = false, head = 1,
-        options = ["header", "terminator-indent", "body-indent"],
-        flags = ["queue"], outputs = 1))
+        options = ["header", "terminator-indent", "body-indent",
+                   "interpolate"],
+        flags = ["queue", "terminator-tail"], outputs = 2))
     all.append((kind = "fence", named = false, head = 1,
         options = ["fill", "body", "min", "pad", "bidi"], flags = ["label"],
         outputs = 1))
@@ -112,7 +116,9 @@ private func schema_list() -> List[Rule_Schema] {
     all.append((kind = "layout", named = false, head = 0,
         options = ["brackets", "continue", "indent", "newline", "eof",
                    "tabs", "mixed-indent", "bracket-newlines",
-                   "dedent-newline", "terminator", "terminator-after"],
+                   "dedent-newline", "terminator", "terminator-after",
+                   "tab-width", "alignment", "unmatched-dedent",
+                   "blank-lines", "comment-lines"],
         flags = [], outputs = 0))
     all.append((kind = "whitespace", named = false, head = 1,
         options = [], flags = [],

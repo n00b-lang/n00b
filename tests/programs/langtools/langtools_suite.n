@@ -1,6 +1,7 @@
 import langtools
 import langtools.grammar
 import langtools.lex
+import text
 import sys.fs
 import sys.env
 
@@ -280,6 +281,16 @@ func fix_checks() {
     check(load(repaired) != nil, "fixes repair the grammar")
 }
 
+func class_of(g: langtools.grammar.Grammar, name: string)
+    -> langtools.grammar.Token_Id? {
+    let found: langtools.grammar.Token_Class? =
+        langtools.grammar.find_class(g, name)
+    if found == nil {
+        return nil
+    }
+    return found.get().id
+}
+
 func lex_checks() {
     let loaded: langtools.grammar.Grammar? = load(feature_grammar)
     if loaded == nil {
@@ -288,8 +299,8 @@ func lex_checks() {
     let g: langtools.grammar.Grammar = loaded.get()
     let source: string = "let match + é\t ;; x"
     let ctx: langtools.lex.Context = new[langtools.lex.Context](g, source)
-    let name: langtools.grammar.Token_Id? = ctx.classes["NAME"]
-    let comment: langtools.grammar.Token_Id? = ctx.classes["COMMENT"]
+    let name: langtools.grammar.Token_Id? = class_of(g, "NAME")
+    let comment: langtools.grammar.Token_Id? = class_of(g, "COMMENT")
     check(name != nil and comment != nil, "context class ids")
     if name == nil or comment == nil {
         return
@@ -309,7 +320,7 @@ func lex_checks() {
                                                  class = comment.get())
     check(trivia.flags.trivia and !trivia.flags.elastic
           and !trivia.flags.trailing, "trivia flag")
-    let note: langtools.grammar.Token_Id? = ctx.classes["NOTE"]
+    let note: langtools.grammar.Token_Id? = class_of(g, "NOTE")
     check(note != nil, "trailing class id")
     if note != nil {
         let trailing: langtools.lex.Token = langtools.lex.emit(ctx, 16, 18,
@@ -412,6 +423,212 @@ func corpus_check(path: string, expected: Dict[string, Tuple[uint, uint]]) {
           path + ": round trip")
 }
 
+func dir_name(path: string) -> string {
+    let name: uint = byte_len(base_name(path))
+    return byte_slice(path, 0, cast[int](byte_len(path) - name))
+}
+
+func render_tokens(g: langtools.grammar.Grammar, source: string,
+                   tokens: List[langtools.lex.Token]) -> string {
+    var names: Dict[u128, string] = new[Dict[u128, string]]()
+    for let c in g.classes {
+        names[langtools.grammar.raw_token_id(c.id)] = c.name
+    }
+    for let lit in g.literals {
+        names[langtools.grammar.raw_token_id(lit.id)] = lit.text
+    }
+    var out: List[string] = new[List[string]]()
+    var line: uint = 1
+    var col: uint = 1
+    var at: uint = 0
+    for i: uint from 0 until tokens.len() {
+        let t: langtools.lex.Token = tokens[i]
+        while at < t.start {
+            let b: u8 = byte_at(source, at)
+            if b == 0x0a {
+                line += 1
+                col = 1
+            }
+            elif (b & 0xc0) != 0x80 {
+                col += 1
+            }
+            at += 1
+        }
+        let spelling: string = byte_slice(source, t.start, t.end)
+        let named: string? = names[langtools.grammar.raw_token_id(t.id)]
+        var name: string = named.get_or_else(spelling)
+        if len(name) < 22 {
+            name = name + text.repeat(" ", cast[u64](22 - len(name)))
+        }
+        var row: string = name + " " + decimal(line) + ":" + decimal(col)
+        if byte_len(spelling) > 0 {
+            row = row + "  " + spelling
+        }
+        out.append(row)
+    }
+    return join(out, "\n") + "\n"
+}
+
+func token_check(path: string) {
+    let golden: string? = read_text(path)
+    if golden == nil {
+        check(false, path + ": cannot read")
+        return
+    }
+    let all: string = golden.get()
+    let found: int? = find_bytes(all, "\n")
+    if found == nil {
+        check(false, path + ": no header line")
+        return
+    }
+    let newline: int = found.get()
+    let header: List[string] = text.split(byte_slice(all, 2, newline), " ")
+    let dir: string = dir_name(path)
+    let grammar_text: string? = read_text(dir + header[0])
+    let spec_text: string? = read_text(dir + header[1])
+    let source: string? = read_text(dir + header[2])
+    if grammar_text == nil or spec_text == nil or source == nil {
+        check(false, path + ": cannot read its inputs")
+        return
+    }
+    let g: langtools.grammar.Grammar? = convert(header[0], grammar_text.get())
+    if g == nil {
+        return
+    }
+    try {
+        let spec: langtools.lex.Spec = langtools.lex.load(spec_text.get())!
+        let lx: langtools.lex.Lexer = langtools.lex.compile(spec, g.get())!
+        let tokens: List[langtools.lex.Token] =
+            langtools.lex.tokenize(lx, source.get())!
+        let want: string = byte_slice(all, newline + 1,
+                                      cast[int](byte_len(all)))
+        check(render_tokens(g.get(), source.get(), tokens) == want,
+              path + ": tokens match")
+    } fail(diags) {
+        check(false, path + ": " + langtools.render_all(diags,
+            (name = path, text = source.get())))
+    }
+}
+
+func lex_lexer(spec: string) -> langtools.lex.Lexer
+    fail: List[langtools.Diagnostic] {
+    let g: langtools.grammar.Grammar = langtools.grammar.load(
+        "identifier: %IDENTIFIER\ntokens: %STRING, %NUMBER, %CHAR\n" +
+        "elastic: %INDENT, %DEDENT, %NEWLINE\nstart: <s>\n" +
+        "<s> ::= (%STRING | %NUMBER | %CHAR | %IDENTIFIER | \"+\")*\n")!
+    let s: langtools.lex.Spec = langtools.lex.load(spec)!
+    return langtools.lex.compile(s, g)!
+}
+
+func recovery_checks() {
+    try {
+        let lx: langtools.lex.Lexer = lex_lexer(
+            "escapes e: chars \"n\"\n" +
+            "string '\"' .. '\"' escape \"\\\\\" escapes e -> %STRING\n" +
+            "number digits \"0123456789\" int %NUMBER\n" +
+            "recover %STRING sync '\"' \"\\n\" consume -> %STRING\n" +
+            "recover %NUMBER -> %NUMBER\n")!
+        let result: langtools.lex.Scan =
+            langtools.lex.scan(lx, "\"a\\q\" 12x \"open\n7")
+        check(result.tokens.len() == 5, "recovery keeps scanning (got " +
+              decimal(result.tokens.len()) + " tokens)")
+        check(result.diagnostics.len() == 3, "recovery reports each error")
+    } fail(diags) {
+        check(false, "recovery spec loads")
+    }
+}
+
+func lex_codes(spec: string, source: string) -> string {
+    try {
+        let lx: langtools.lex.Lexer = lex_lexer(spec)!
+        let tokens: List[langtools.lex.Token] =
+            langtools.lex.tokenize(lx, source)!
+        return "ok"
+    } fail(diags) {
+        var codes: List[string] = new[List[string]]()
+        for let d in diags {
+            codes.append(d.code)
+        }
+        return join(codes, " ")
+    }
+}
+
+func codes_are(spec: string, source: string, want: string, probe: string) {
+    let got: string = lex_codes(spec, source)
+    check(got == want, probe + " (got `" + got + "`)")
+}
+
+func tokenize_checks() {
+    let strings: string = [-
+escapes e: chars "nt\\\""
+string '"' .. '"' escape "\\" escapes e -> %STRING
+string "'" .. "'" escape "\\" scalar -> %CHAR
+number digits "0123456789" point exp "eE" int %NUMBER float %NUMBER
+comment "/*" .. "*/" nested
+fallback reject
+-]
+    codes_are(strings, "\"a\\n\" + 'b' + 1.5e3 /* x /* y */ */", "ok",
+              "tokenize ok")
+    codes_are(strings, "\"abc", "lex/unterminated-string",
+              "unterminated-string")
+    codes_are(strings, "\"a\nb\"", "lex/string-newline", "string-newline")
+    codes_are(strings, "\"a\\q\"", "lex/bad-escape", "bad-escape")
+    codes_are(strings, "'ab'", "lex/character-length", "character-length")
+    codes_are(strings, "1e", "lex/bad-number", "bad-number")
+    codes_are(strings, "12abc", "lex/bad-number", "bad-number identifier tail")
+    codes_are(strings, "/* a /* b */", "lex/unterminated-comment",
+              "unterminated nested comment")
+    codes_are(strings, "1 $ 2", "lex/unexpected-character", "fallback reject")
+    codes_are("string '\"' .. '\"' -> %STRNG\n", "", "lex/unknown-class",
+              "unknown-class")
+    let acute: string = from_char(cast[char] 0x0301)
+    let cyrillic_u: string = from_char(cast[char] 0x0443)
+    let grin: string = from_char(cast[char] 0x1f600)
+    let rlo: string = from_char(cast[char] 0x202e)
+    codes_are("profile p: normalize nfc\nidentifier profile p -> " +
+              "%IDENTIFIER\n", "cafe" + acute, "lex/identifier-not-normalized",
+              "identifier-not-normalized")
+    codes_are("profile p: mixed-scripts diagnose\nidentifier profile p -> " +
+              "%IDENTIFIER\n", "pa" + cyrillic_u + "pal",
+              "lex/identifier-mixed-scripts", "identifier-mixed-scripts")
+    codes_are("profile p: emoji diagnose\nidentifier profile p -> " +
+              "%IDENTIFIER\n", "x" + grin, "lex/identifier-emoji",
+              "identifier-emoji")
+    codes_are("profile p: normalize nfc mixed-scripts diagnose\n" +
+              "identifier profile p -> %IDENTIFIER\n", "caf" +
+              from_char(cast[char] 0xe9), "ok", "profile accepts NFC")
+    codes_are("bidi reject\nstring '\"' .. '\"' -> %STRING\n",
+              "\"a" + rlo + "b\"", "lex/bidi-control", "bidi-control")
+    codes_are("bidi allow\nstring '\"' .. '\"' -> %STRING\n",
+              "\"a" + rlo + "b\"", "ok", "bidi allow")
+    codes_are("profile p: normalize maybe\nidentifier profile p -> " +
+              "%IDENTIFIER\n", "", "lex/bad-value", "profile bad-value")
+    recovery_checks()
+    codes_are("heredoc \"<<\" -> %STRING\n", "x = <<EOT\nbody\n",
+              "lex/unterminated-heredoc", "unterminated-heredoc")
+    codes_are("fence \"r#\" .. \"#\" fill \"#\" body '\"' .. '\"' min 0 " +
+              "-> %STRING\n", "r#\"abc", "lex/unterminated-fence",
+              "unterminated-fence")
+    codes_are("regex \"/\" .. \"/\" -> %STRING\n", "/ab\nc/",
+              "lex/regex-newline", "regex-newline")
+    codes_are("region \"#[\" .. \"#]\" line \"#\"\n" +
+              "number digits \"0123456789\" int %NUMBER\n", "1 #[x#\n",
+              "lex/region-not-alone", "region-not-alone")
+    let indents: string = [-
+number digits "0123456789" int %NUMBER float %NUMBER
+layout indent %INDENT %DEDENT newline %NEWLINE tabs reject
+       mixed-indent reject unmatched-dedent reject
+-]
+    codes_are(indents, "1\n    2\n    3\n4\n", "ok", "indentation ok")
+    codes_are(indents, "1\n\t2\n", "lex/tab-indentation", "tab-indentation")
+    codes_are(indents, "1\n    2\n  3\n", "lex/dedent-mismatch",
+              "dedent-mismatch")
+    codes_are("number digits \"0123456789\" int %NUMBER\n" +
+              "layout indent %INDENT %DEDENT mixed-indent reject\n",
+              "1\n \t2\n", "lex/mixed-indentation", "mixed-indentation")
+    codes_are("layout tabs maybe\n", "", "lex/bad-value", "layout bad-value")
+}
+
 func lex_spec_check(path: string) {
     let text: string? = read_text(path)
     if text == nil {
@@ -467,6 +684,7 @@ bad_input_checks()
 fix_checks()
 lex_checks()
 lex_load_checks()
+tokenize_checks()
 let expected: Dict[string, Tuple[uint, uint]] = lantern_counts()
 let args: List[string] = sys.env.args()
 check(args.len() > 1, "corpus grammars given")
@@ -475,6 +693,10 @@ for i: uint from 1 until args.len() {
     if byte_len(path) > 4
         and byte_slice(path, byte_len(path) - 4, byte_len(path)) == ".lex" {
         lex_spec_check(path)
+    }
+    elif byte_len(path) > 7 and byte_slice(path, byte_len(path) - 7,
+                                           byte_len(path)) == ".tokens" {
+        token_check(path)
     }
     else {
         corpus_check(path, expected)

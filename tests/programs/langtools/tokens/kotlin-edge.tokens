@@ -1,0 +1,33 @@
+# ../../../../lantern/grammars/kotlin.bnf ../lex/kotlin.lex ../samples/edge.kt
+fun                    1:1  fun
+IDENTIFIER             1:5  main
+(                      1:9  (
+IDENTIFIER             1:10  args
+:                      1:14  :
+IDENTIFIER             1:16  Array
+<                      1:21  <
+IDENTIFIER             1:22  String
+>                      1:28  >
+)                      1:29  )
+{                      1:31  {
+NL                     2:1
+val                    2:5  val
+IDENTIFIER             2:9  x
+=                      2:11  =
+IDENTIFIER             2:13  listOf
+(                      2:19  (
+INTEGER                2:20  1
+,                      2:21  ,
+INTEGER                3:9  2
+)                      3:10  )
+NL                     4:1
+IDENTIFIER             5:5  println
+(                      5:12  (
+IDENTIFIER             5:13  x
+)                      5:14  )
+NL                     6:1
+return                 7:5  return
+NL                     8:1
+}                      8:1  }
+NL                     8:2
+EOF                    8:2

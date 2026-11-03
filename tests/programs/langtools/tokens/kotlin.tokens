@@ -1,0 +1,31 @@
+# ../../../../lantern/grammars/kotlin.bnf ../lex/kotlin.lex ../../../../lantern/tests/samples/s.kt
+package                2:1  package
+IDENTIFIER             2:9  x
+NL                     3:1
+fun                    3:1  fun
+IDENTIFIER             3:5  greet
+(                      3:10  (
+IDENTIFIER             3:11  name
+:                      3:15  :
+IDENTIFIER             3:17  String
+)                      3:23  )
+:                      3:24  :
+IDENTIFIER             3:26  String
+{                      3:33  {
+NL                     4:1
+val                    4:5  val
+IDENTIFIER             4:9  n
+=                      4:11  =
+INTEGER                4:13  0xffL
+NL                     5:1
+val                    5:5  val
+IDENTIFIER             5:9  m
+=                      5:11  =
+MULTILINE_STRING       5:13  """multi"""
+NL                     6:1
+return                 6:5  return
+STRING                 6:12  "hi $name $n $m"
+NL                     7:1
+}                      7:1  }
+NL                     8:1
+EOF                    8:1

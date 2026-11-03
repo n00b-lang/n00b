@@ -1,0 +1,52 @@
+# ../../../../lantern/grammars/python.bnf ../lex/python.lex ../../../../lantern/tests/samples/s.py
+import                 2:1  import
+IDENTIFIER             2:8  os
+NEWLINE                3:1
+def                    4:1  def
+IDENTIFIER             4:5  greet
+(                      4:10  (
+IDENTIFIER             4:11  name
+:                      4:15  :
+IDENTIFIER             4:17  str
+=                      4:21  =
+STRING                 4:23  "world"
+)                      4:30  )
+->                     4:32  ->
+IDENTIFIER             4:35  str
+:                      4:38  :
+NEWLINE                5:1
+INDENT                 5:1
+STRING                 5:5  """Doc."""
+NEWLINE                6:1
+IDENTIFIER             6:5  n
+=                      6:7  =
+INTEGER                6:9  0x1f
++                      6:14  +
+INTEGER                6:16  1_000
++                      6:22  +
+FLOAT                  6:24  2.5e3
+NEWLINE                7:1
+if                     7:5  if
+IDENTIFIER             7:8  name
+:                      7:12  :
+NEWLINE                8:1
+INDENT                 8:1
+return                 8:9  return
+FSTRING_START          8:16  f"hello 
+{                      8:24  {
+IDENTIFIER             8:25  name
+!                      8:29  !
+IDENTIFIER             8:30  r
+}                      8:31  }
+FSTRING_MIDDLE         8:32   and 
+{                      8:37  {
+IDENTIFIER             8:38  n
+}                      8:39  }
+FSTRING_END            8:40  "
+NEWLINE                9:1
+DEDENT                 9:1
+return                 9:5  return
+STRING                 9:12  'bye'
+NEWLINE                10:1
+DEDENT                 10:1
+ENDMARKER              10:1

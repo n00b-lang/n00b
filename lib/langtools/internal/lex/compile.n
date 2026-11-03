@@ -1,0 +1,1211 @@
+import unicode
+import unicode.query
+import sort
+import internal.diag
+import internal.scan
+import internal.grammar.model
+import internal.lex.spec
+
+record Char_Set {
+    low:   u64
+    high:  u64
+    other: Array[u32]
+}
+
+func char_set(text: string) -> Char_Set {
+    var low: u64 = 0
+    var high: u64 = 0
+    var others: List[u32] = new[List[u32]]()
+    var at: uint = 0
+    while at < byte_len(text) {
+        let code: u32 = cast[u32] internal.scan.decode_at(text, at)
+        at += internal.scan.char_width(text, at)
+        if code < 64 {
+            low |= cast[u64](1) << cast[u64](code)
+        }
+        elif code < 128 {
+            high |= cast[u64](1) << cast[u64](code - 64)
+        }
+        else {
+            others.append(code)
+        }
+    }
+    var other: Array[u32] = new[Array[u32]](others.len())
+    for i: uint from 0 until others.len() {
+        other[i] = others[i]
+    }
+    sort.sort(other)
+    return (low = low, high = high, other = other)
+}
+
+func has(set: Char_Set, c: char) -> bool {
+    let code: u32 = cast[u32] c
+    if code < 64 {
+        return (set.low >> cast[u64](code)) & 1 == 1
+    }
+    if code < 128 {
+        return (set.high >> cast[u64](code - 64)) & 1 == 1
+    }
+    var lo: uint = 0
+    var hi: uint = __array_length(set.other)
+    while lo < hi {
+        let mid: uint = lo + (hi - lo) / 2
+        if set.other[mid] < code {
+            lo = mid + 1
+        }
+        else {
+            hi = mid
+        }
+    }
+    return lo < __array_length(set.other) and set.other[lo] == code
+}
+
+record Comment {
+    open:   string
+    close:  string
+    fill:   string
+    nested: bool
+    class:  internal.grammar.model.Token_Id?
+}
+
+record Escape_Prefix {
+    prefix: string
+    width:  uint
+    digits: Char_Set
+}
+
+record Escapes {
+    constrained: bool
+    chars:       Char_Set
+    prefixes:    List[Escape_Prefix]
+}
+
+record Quoted {
+    open:      string
+    close:     string
+    nest_open: string
+    escape:    string
+    escapes:   Escapes
+    raw:       bool
+    multiline: bool
+    scalar:    bool
+    nested:    bool
+    class:     internal.grammar.model.Token_Id?
+    hole_open:  string
+    hole_close: string
+    holes:      bool
+    mid_class:  internal.grammar.model.Token_Id?
+    end_class:  internal.grammar.model.Token_Id?
+}
+
+record Suffix {
+    text:    string
+    class:   internal.grammar.model.Token_Id?
+    integer: bool
+}
+
+record Number_Form {
+    prefix:         string
+    sign:           Char_Set
+    digits:         Char_Set
+    sep:            Char_Set
+    after_prefix:   bool
+    sep_repeat:     bool
+    sep_trailing:   bool
+    point:          bool
+    leading:        bool
+    trailing:       bool
+    needs_exponent: bool
+    exp:            Char_Set
+    suffixes:       List[Suffix]
+    int_class:      internal.grammar.model.Token_Id?
+    float_class:    internal.grammar.model.Token_Id?
+}
+
+record Profile {
+    normalize:   string
+    mixed:       bool
+    confusables: bool
+    emoji:       string
+    scripts:     Dict[u16, bool]
+    common:      u16
+    inherited:   u16
+}
+
+record Identifier_Rule {
+    start:   Char_Set
+    extra:   Char_Set
+    upper:   internal.grammar.model.Token_Id?
+    class:   internal.grammar.model.Token_Id?
+    profile: Profile?
+}
+
+record Recovery {
+    sync:    List[string]
+    consume: bool
+    class:   internal.grammar.model.Token_Id?
+}
+
+record Layout {
+    brackets:         string
+    line_continue:    string
+    indent:           internal.grammar.model.Token_Id?
+    dedent:           internal.grammar.model.Token_Id?
+    newline:          internal.grammar.model.Token_Id?
+    newline_each:     bool
+    eof:              internal.grammar.model.Token_Id?
+    terminator:       internal.grammar.model.Token_Id?
+    terminator_class: bool
+    terminator_after: Dict[string, bool]
+    after_ids:        Dict[u128, bool]
+    tab_width:        uint
+    reject_tabs:      bool
+    reject_mixed:     bool
+    reject_alignment: bool
+    reject_unmatched: bool
+    blank_lines:      bool
+    comment_lines:    bool
+    bracket_newlines: bool
+    dedent_newline:   bool
+    values:           Dict[u128, bool]
+}
+
+func uses_lines(layout: Layout) -> bool {
+    return layout.newline != nil or layout.indent != nil or
+        layout.terminator != nil
+}
+
+record Regex {
+    open:      string
+    close:     string
+    flags:     Char_Set
+    not_after: Dict[u128, bool]
+    class:     internal.grammar.model.Token_Id?
+}
+
+record Sigil {
+    prefix:        string
+    digits:        bool
+    before_string: bool
+    unless_closed: bool
+    attach_after:  Dict[u128, bool]
+    class:         internal.grammar.model.Token_Id?
+}
+
+enum Pad { none = 0, optional, required }
+
+record Fence {
+    open:       string
+    close:      string
+    fill:       string
+    body_open:  string
+    body_close: string
+    minimum:    uint
+    pad:        Pad
+    pad_chars:  Char_Set
+    pad_any:    bool
+    label:      bool
+    class:      internal.grammar.model.Token_Id?
+}
+
+record Directive {
+    open:  string
+    eol:   internal.grammar.model.Token_Id?
+    class: internal.grammar.model.Token_Id?
+}
+
+record Region {
+    open:  string
+    close: string
+    line:  string
+}
+
+record Heredoc {
+    open:               string
+    unquoted:           bool
+    single:             bool
+    double:             bool
+    leading_space:      bool
+    trailing_text:      bool
+    tag_start:          Char_Set
+    tag_continue:       Char_Set
+    terminator_indent:  bool
+    terminator_tail:    bool
+    strip:              bool
+    queue:              bool
+    interpolate:        List[string]
+    class:              internal.grammar.model.Token_Id?
+    interpolated_class: internal.grammar.model.Token_Id?
+}
+
+record Embed {
+    open:        string
+    close:       string
+    open_class:  internal.grammar.model.Token_Id?
+    close_class: internal.grammar.model.Token_Id?
+    class:       internal.grammar.model.Token_Id?
+}
+
+object Lexer {
+    g:                    internal.grammar.model.Grammar
+    layout:               Layout
+    fences:               List[Fence]
+    directives:           List[Directive]
+    regions:              List[Region]
+    heredocs:             List[Heredoc]
+    embeds:               List[Embed]
+    recoveries:           Dict[u128, Recovery]
+    bidi:                 string
+    bidi_classes:         Dict[u128, string]
+    starters:             Array[u32]
+    bracket_delta:        Array[i8]
+    line_comments:        List[string]
+    comments:             List[Comment]
+    strings:              List[Quoted]
+    numbers:              List[Number_Form]
+    regexes:              List[Regex]
+    sigils:               List[Sigil]
+    identifier:           Identifier_Rule?
+    plain:                Number_Form?
+    whitespace_codepoint: bool
+    reject:               bool
+    recover:              bool
+    comment_starts:       List[List[uint]]
+    string_starts:        List[List[uint]]
+    terminals:            List[List[uint]]
+    boundary:             List[bool]
+    decimal:              Char_Set
+}
+
+func __init(self: Lexer, g: internal.grammar.model.Grammar) {
+    self.g = g
+    self.layout = (brackets = "", line_continue = "", indent = nil,
+        dedent = nil, newline = nil, newline_each = false, eof = nil,
+        terminator = nil, terminator_class = false,
+        terminator_after = new[Dict[string, bool]](),
+        after_ids = new[Dict[u128, bool]](), tab_width = 8, reject_tabs = false, reject_mixed = false,
+        reject_alignment = false, reject_unmatched = false,
+        blank_lines = false, comment_lines = false, bracket_newlines = false,
+        dedent_newline = false, values = new[Dict[u128, bool]]())
+    self.comments = new[List[Comment]]()
+    self.strings = new[List[Quoted]]()
+    self.numbers = new[List[Number_Form]]()
+    self.regexes = new[List[Regex]]()
+    self.sigils = new[List[Sigil]]()
+    self.fences = new[List[Fence]]()
+    self.directives = new[List[Directive]]()
+    self.regions = new[List[Region]]()
+    self.heredocs = new[List[Heredoc]]()
+    self.embeds = new[List[Embed]]()
+    self.recoveries = new[Dict[u128, Recovery]]()
+    self.bidi = "allow"
+    self.bidi_classes = new[Dict[u128, string]]()
+    self.starters = new[Array[u32]](256)
+    self.bracket_delta = new[Array[i8]](256)
+    self.line_comments = new[List[string]]()
+    self.identifier = nil
+    self.plain = nil
+    self.whitespace_codepoint = false
+    self.reject = false
+    self.recover = false
+    self.comment_starts = new[List[List[uint]]]()
+    self.string_starts = new[List[List[uint]]]()
+    self.terminals = new[List[List[uint]]]()
+    self.boundary = new[List[bool]]()
+    self.decimal = char_set("0123456789")
+}
+
+private func emoji_allowed(rule: Identifier_Rule, c: char) -> bool {
+    let p: Profile? = rule.profile
+    return p != nil and p.get().emoji != "reject" and cast[u32](c) >= 0x80 and
+        unicode.has_property(c, unicode.Property.extended_pictographic)
+}
+
+func starts_identifier(rule: Identifier_Rule, c: char) -> bool {
+    return internal.grammar.model.is_identifier_start(c) or
+        has(rule.start, c) or emoji_allowed(rule, c)
+}
+
+func continues_identifier(lx: Lexer, c: char) -> bool {
+    if internal.grammar.model.is_identifier_continue(c) {
+        return true
+    }
+    let rule: Identifier_Rule? = lx.identifier
+    return rule != nil and (has(rule.get().extra, c) or
+                            emoji_allowed(rule.get(), c))
+}
+
+private func last_char(text: string) -> char {
+    var at: uint = byte_len(text)
+    while at > 0 {
+        at -= 1
+        if (byte_at(text, at) & 0xc0) != 0x80 {
+            break
+        }
+    }
+    return internal.scan.decode_at(text, at)
+}
+
+func longest_first(texts: List[string]) -> Array[uint] {
+    var shortness: List[uint] = new[List[uint]]()
+    for t in texts {
+        shortness.append(0xffffffff - byte_len(t))
+    }
+    return internal.diag.stable_order(shortness)
+}
+
+private func buckets(texts: List[string], keep: List[bool])
+    -> List[List[uint]] {
+    var out: List[List[uint]] = new[List[List[uint]]]()
+    for b: uint from 0 until 256 {
+        out.append(new[List[uint]]())
+    }
+    for index in longest_first(texts) {
+        if keep[index] and byte_len(texts[index]) > 0 {
+            out[cast[uint](byte_at(texts[index], 0))].append(index)
+        }
+    }
+    return out
+}
+
+private func all(n: uint) -> List[bool] {
+    var out: List[bool] = new[List[bool]]()
+    for i: uint from 0 until n {
+        out.append(true)
+    }
+    return out
+}
+
+object Compiler {
+    lexer: Lexer
+    spec:  internal.lex.spec.Spec
+    diags: List[internal.diag.Diagnostic]
+}
+
+func __init(self: Compiler, spec: internal.lex.spec.Spec,
+            g: internal.grammar.model.Grammar) {
+    self.lexer = new[Lexer](g)
+    self.spec = spec
+    self.diags = new[List[internal.diag.Diagnostic]]()
+}
+
+private func report(c: Compiler, code: string, message: string,
+                    span: internal.diag.Span) {
+    c.diags.append(new[internal.diag.Diagnostic]("lex/" + code, message,
+                                                 span))
+}
+
+private func class_id(c: Compiler, value: internal.lex.spec.Value)
+    -> internal.grammar.model.Token_Id? {
+    let found: internal.grammar.model.Token_Class? =
+        internal.grammar.model.find_class(c.lexer.g, value.text)
+    if found != nil {
+        return found.get().id
+    }
+    var names: List[string] = new[List[string]]()
+    for let class in c.lexer.g.classes {
+        names.append(class.name)
+    }
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic](
+        "lex/unknown-class", "`%" + value.text +
+        "` is not a token class of the grammar", value.span)
+    let guess: string? = internal.diag.closest_match(value.text, names)
+    if guess != nil {
+        d.fixes.append((message = "did you mean `%" + guess.get() + "`?",
+                        span = value.span, replacement = "%" + guess.get()))
+    }
+    c.diags.append(d)
+    return nil
+}
+
+private func output(c: Compiler, rule: internal.lex.spec.Rule)
+    -> internal.grammar.model.Token_Id? {
+    if rule.outputs.len() == 0 {
+        return nil
+    }
+    return class_id(c, rule.outputs[0])
+}
+
+private func option_text(rule: internal.lex.spec.Rule, name: string) -> string {
+    let found: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if found == nil or found.get().values.len() == 0 {
+        return ""
+    }
+    return found.get().values[0].text
+}
+
+private func option_class(c: Compiler, rule: internal.lex.spec.Rule,
+                          name: string) -> internal.grammar.model.Token_Id? {
+    let found: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if found == nil or found.get().values.len() == 0 {
+        return nil
+    }
+    return class_id(c, found.get().values[0])
+}
+
+private func option_has_word(rule: internal.lex.spec.Rule, name: string,
+                             word: string) -> bool {
+    let found: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if found == nil {
+        return false
+    }
+    for let v in found.get().values {
+        if v.kind == internal.lex.spec.Value_Kind.word and v.text == word {
+            return true
+        }
+    }
+    return false
+}
+
+private func comment(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    c.lexer.comments.append((open = head.text, close = head.close,
+        fill = option_text(rule, "fill"),
+        nested = internal.lex.spec.has_flag(rule, "nested"),
+        class = output(c, rule)))
+}
+
+private func escapes(c: Compiler, name: string, span: internal.diag.Span)
+    -> Escapes {
+    var result: Escapes = (constrained = false, chars = char_set(""),
+                           prefixes = new[List[Escape_Prefix]]())
+    if name == "" {
+        return result
+    }
+    let set: internal.lex.spec.Rule? =
+        internal.lex.spec.find_set(c.spec, "escapes", name)
+    if set == nil {
+        return result
+    }
+    result.constrained = true
+    var chars: List[string] = new[List[string]]()
+    for let option in set.get().options {
+        if option.name == "chars" {
+            for let v in option.values {
+                chars.append(v.text)
+            }
+        }
+        elif option.name == "literal" {
+            for let v in option.values {
+                result.prefixes.append((prefix = v.text, width = 0,
+                                        digits = char_set("")))
+            }
+        }
+        elif option.name == "digits" and option.values.len() == 3 {
+            let width: u64? = decimal_value(option.values[1].text)
+            result.prefixes.append((prefix = option.values[0].text,
+                width = cast[uint](width.get_or_else(0)),
+                digits = char_set(option.values[2].text)))
+        }
+    }
+    result.chars = char_set(join(chars, ""))
+    var texts: List[string] = new[List[string]]()
+    for let p in result.prefixes {
+        texts.append(p.prefix)
+    }
+    var sorted: List[Escape_Prefix] = new[List[Escape_Prefix]]()
+    for index in longest_first(texts) {
+        sorted.append(result.prefixes[index])
+    }
+    result.prefixes = sorted
+    return result
+}
+
+private func quoted(c: Compiler, rule: internal.lex.spec.Rule, open: string,
+                    close: string, nest_open: string, esc: Escapes,
+                    class: internal.grammar.model.Token_Id?, h: Holes) {
+    c.lexer.strings.append((open = open, close = close, nest_open = nest_open,
+        escape = option_text(rule, "escape"), escapes = esc,
+        raw = internal.lex.spec.has_flag(rule, "raw"),
+        multiline = internal.lex.spec.has_flag(rule, "multiline"),
+        scalar = internal.lex.spec.has_flag(rule, "scalar"),
+        nested = internal.lex.spec.has_flag(rule, "nested"),
+        class = class, hole_open = h.open, hole_close = h.close,
+        holes = internal.lex.spec.has_flag(rule, "holes"),
+        mid_class = h.mid, end_class = h.end))
+}
+
+record Holes {
+    open:  string
+    close: string
+    mid:   internal.grammar.model.Token_Id?
+    end:   internal.grammar.model.Token_Id?
+}
+
+private func holes_of(c: Compiler, rule: internal.lex.spec.Rule) -> Holes {
+    var h: Holes = (open = "", close = "", mid = nil, end = nil)
+    let interp: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "interp")
+    if interp != nil and interp.get().values.len() > 0 {
+        h.open = interp.get().values[0].text
+        h.close = interp.get().values[0].close
+    }
+    if rule.outputs.len() > 1 {
+        h.mid = class_id(c, rule.outputs[1])
+    }
+    if rule.outputs.len() > 2 {
+        h.end = class_id(c, rule.outputs[2])
+    }
+    return h
+}
+
+private func string_rule(c: Compiler, rule: internal.lex.spec.Rule) {
+    let h: Holes = holes_of(c, rule)
+    let class: internal.grammar.model.Token_Id? = output(c, rule)
+    let esc: Escapes = escapes(c, option_text(rule, "escapes"), rule.span)
+    if rule.head.len() > 0 {
+        let head: internal.lex.spec.Value = rule.head[0]
+        quoted(c, rule, head.text, head.close, head.text, esc, class, h)
+        return
+    }
+    var prefixes: List[string] = new[List[string]]()
+    let prefix: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "prefix")
+    if prefix != nil {
+        for let v in prefix.get().values {
+            prefixes.append(v.text)
+        }
+    }
+    var quotes: List[string] = new[List[string]]()
+    let quote: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "quotes")
+    if quote != nil {
+        for let v in quote.get().values {
+            quotes.append(v.text)
+        }
+    }
+    var pairs: List[internal.lex.spec.Value] =
+        new[List[internal.lex.spec.Value]]()
+    let pair: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "pairs")
+    if pair != nil {
+        for let v in pair.get().values {
+            pairs.append(v)
+        }
+    }
+    for p in prefixes {
+        for q in quotes {
+            quoted(c, rule, p + q, q, q, esc, class, h)
+        }
+        for let v in pairs {
+            quoted(c, rule, p + v.text, v.close, v.text, esc, class, h)
+        }
+    }
+    if prefixes.len() == 0 or internal.lex.spec.has_flag(rule, "plain") {
+        for q in quotes {
+            quoted(c, rule, q, q, q, esc, class, h)
+        }
+    }
+}
+
+private func suffix_list(c: Compiler, rule: internal.lex.spec.Rule)
+    -> List[Suffix] {
+    var out: List[Suffix] = new[List[Suffix]]()
+    for let option in rule.options {
+        if option.name == "suffix" and option.values.len() > 0 {
+            var class: internal.grammar.model.Token_Id? = nil
+            var integer: bool = false
+            for i : uint from 1 until option.values.len() {
+                let v: internal.lex.spec.Value = option.values[i]
+                if v.kind == internal.lex.spec.Value_Kind.class {
+                    class = class_id(c, v)
+                }
+                elif v.text == "integer" {
+                    integer = true
+                }
+            }
+            out.append((text = option.values[0].text, class = class,
+                        integer = integer))
+        }
+        elif option.name == "suffixes" {
+            for let v in option.values {
+                let set: internal.lex.spec.Rule? =
+                    internal.lex.spec.find_set(c.spec, "suffixes", v.text)
+                if set == nil {
+                    continue
+                }
+                let class: internal.grammar.model.Token_Id? =
+                    output(c, set.get())
+                let integer: bool =
+                    internal.lex.spec.has_flag(set.get(), "integer")
+                for let s in set.get().head {
+                    out.append((text = s.text, class = class,
+                                integer = integer))
+                }
+            }
+        }
+    }
+    var texts: List[string] = new[List[string]]()
+    for let s in out {
+        texts.append(s.text)
+    }
+    var sorted: List[Suffix] = new[List[Suffix]]()
+    for index in longest_first(texts) {
+        sorted.append(out[index])
+    }
+    return sorted
+}
+
+private func number(c: Compiler, rule: internal.lex.spec.Rule) {
+    let point: bool = internal.lex.spec.find_option(rule, "point") != nil
+    c.lexer.numbers.append((prefix = option_text(rule, "prefix"),
+        sign = char_set(option_text(rule, "sign")),
+        digits = char_set(option_text(rule, "digits")),
+        sep = char_set(option_text(rule, "sep")),
+        after_prefix = option_has_word(rule, "sep", "after-prefix"),
+        sep_repeat = option_has_word(rule, "sep", "repeat"),
+        sep_trailing = option_has_word(rule, "sep", "trailing"),
+        point = point,
+        leading = option_has_word(rule, "point", "leading"),
+        trailing = option_has_word(rule, "point", "trailing"),
+        needs_exponent = option_has_word(rule, "point", "exponent-required"),
+        exp = char_set(option_text(rule, "exp")),
+        suffixes = suffix_list(c, rule),
+        int_class = option_class(c, rule, "int"),
+        float_class = option_class(c, rule, "float")))
+}
+
+private func choice(c: Compiler, rule: internal.lex.spec.Rule, name: string,
+                    allowed: Array[string], fallback: string) -> string {
+    let found: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if found == nil or found.get().values.len() == 0 {
+        return fallback
+    }
+    let word: string = found.get().values[0].text
+    if !internal.lex.spec.listed(allowed, word) {
+        report(c, "bad-value", "`" + name + "` takes one of " +
+               join(allowed_list(allowed), ", "), found.get().values[0].span)
+        return fallback
+    }
+    return word
+}
+
+private func allowed_list(words: Array[string]) -> List[string] {
+    var out: List[string] = new[List[string]]()
+    for w in words {
+        out.append("`" + w + "`")
+    }
+    return out
+}
+
+private func profile(c: Compiler, name: string, span: internal.diag.Span)
+    -> Profile? {
+    let set: internal.lex.spec.Rule? =
+        internal.lex.spec.find_set(c.spec, "profile", name)
+    if set == nil {
+        return nil
+    }
+    let rule: internal.lex.spec.Rule = set.get()
+    var scripts: Dict[u16, bool] = new[Dict[u16, bool]]()
+    for word in option_words(rule, "scripts") {
+        let id: u16? = unicode.query.script_by_name(word)
+        if id == nil {
+            report(c, "unknown-script", "`" + word +
+                   "` is not a Unicode script name", rule.span)
+        }
+        else {
+            scripts[id.get()] = true
+        }
+    }
+    return (normalize = choice(c, rule, "normalize", ["nfc", "nfkc", "none"],
+                               "none"),
+        mixed = choice(c, rule, "mixed-scripts", ["diagnose", "allow"],
+                       "allow") == "diagnose",
+        confusables = choice(c, rule, "confusables", ["diagnose", "allow"],
+                             "allow") == "diagnose",
+        emoji = choice(c, rule, "emoji", ["reject", "allow", "diagnose"],
+                       "reject"),
+        scripts = scripts,
+        common = unicode.query.script_by_name("Common").get_or_else(0),
+        inherited = unicode.query.script_by_name("Inherited").get_or_else(0))
+}
+
+private func identifier(c: Compiler, rule: internal.lex.spec.Rule) {
+    c.lexer.identifier = (start = char_set(option_text(rule, "start")),
+        extra = char_set(option_text(rule, "extra")),
+        upper = option_class(c, rule, "upper"),
+        class = output(c, rule),
+        profile = profile(c, option_text(rule, "profile"), rule.span))
+}
+
+private func recovery(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    let id: internal.grammar.model.Token_Id? = class_id(c, head)
+    if id == nil {
+        return
+    }
+    var class: internal.grammar.model.Token_Id? = output(c, rule)
+    if class == nil {
+        class = id
+    }
+    let recovery: Recovery = (sync = option_words(rule, "sync"),
+        consume = internal.lex.spec.has_flag(rule, "consume"), class = class)
+    c.lexer.recoveries[internal.grammar.model.raw_token_id(id.get())] =
+        recovery
+}
+
+private func policy(c: Compiler, option: internal.lex.spec.Option,
+                    yes: string, no: string) -> bool {
+    let word: string = option.values[0].text
+    if word != yes and word != no {
+        report(c, "bad-value", "`" + option.name + "` takes `" + yes +
+               "` or `" + no + "`", option.values[0].span)
+    }
+    return word == yes
+}
+
+private func layout(c: Compiler, rule: internal.lex.spec.Rule) {
+    var l: Layout = c.lexer.layout
+    for let option in rule.options {
+        let name: string = option.name
+        let values: List[internal.lex.spec.Value] = option.values
+        if values.len() == 0 {
+            continue
+        }
+        if name == "brackets" {
+            l.brackets = values[0].text
+        }
+        elif name == "continue" {
+            l.line_continue = values[0].text
+        }
+        elif name == "indent" {
+            l.indent = class_id(c, values[0])
+            if values.len() > 1 {
+                l.dedent = class_id(c, values[1])
+            }
+        }
+        elif name == "newline" {
+            l.newline = class_id(c, values[0])
+            l.newline_each = values.len() > 1 and values[1].text == "each"
+        }
+        elif name == "eof" {
+            l.eof = class_id(c, values[0])
+        }
+        elif name == "terminator" {
+            if values[0].kind == internal.lex.spec.Value_Kind.class {
+                l.terminator = class_id(c, values[0])
+                l.terminator_class = true
+            }
+            else {
+                l.terminator =
+                    internal.grammar.model.literal_token_id(values[0].text)
+            }
+        }
+        elif name == "terminator-after" {
+            for let v in values {
+                l.terminator_after[v.text] = true
+            }
+        }
+        elif name == "tab-width" {
+            l.tab_width = cast[uint](decimal_value(values[0].text)
+                                     .get_or_else(8))
+        }
+        elif name == "tabs" {
+            l.reject_tabs = policy(c, option, "reject", "allow")
+        }
+        elif name == "mixed-indent" {
+            l.reject_mixed = policy(c, option, "reject", "allow")
+        }
+        elif name == "alignment" {
+            l.reject_alignment = policy(c, option, "reject", "allow")
+        }
+        elif name == "unmatched-dedent" {
+            l.reject_unmatched = policy(c, option, "reject", "allow")
+        }
+        elif name == "blank-lines" {
+            l.blank_lines = policy(c, option, "apply", "ignore")
+        }
+        elif name == "comment-lines" {
+            l.comment_lines = policy(c, option, "apply", "ignore")
+        }
+        elif name == "bracket-newlines" {
+            l.bracket_newlines = policy(c, option, "keep", "drop")
+        }
+        elif name == "dedent-newline" {
+            l.dedent_newline = policy(c, option, "emit", "none")
+        }
+    }
+    c.lexer.layout = l
+}
+
+private func value_class(lexer: Lexer, id: internal.grammar.model.Token_Id?) {
+    if id != nil {
+        lexer.layout.values[internal.grammar.model.raw_token_id(id.get())] =
+            true
+    }
+}
+
+private func value_classes(lexer: Lexer) {
+    let rule: Identifier_Rule? = lexer.identifier
+    if rule != nil {
+        value_class(lexer, rule.get().class)
+        value_class(lexer, rule.get().upper)
+    }
+    for let q in lexer.strings {
+        value_class(lexer, q.class)
+        value_class(lexer, q.end_class)
+    }
+    for let x in lexer.regexes {
+        value_class(lexer, x.class)
+    }
+    for let s in lexer.sigils {
+        value_class(lexer, s.class)
+    }
+    for let f in lexer.fences {
+        value_class(lexer, f.class)
+    }
+    for let h in lexer.heredocs {
+        value_class(lexer, h.class)
+        value_class(lexer, h.interpolated_class)
+    }
+    for let form in lexer.numbers {
+        value_class(lexer, form.int_class)
+        value_class(lexer, form.float_class)
+        for let s in form.suffixes {
+            value_class(lexer, s.class)
+        }
+    }
+}
+
+private func token_set(c: Compiler, rule: internal.lex.spec.Rule,
+                       name: string) -> Dict[u128, bool] {
+    var set: Dict[u128, bool] = new[Dict[u128, bool]]()
+    let option: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if option == nil {
+        return set
+    }
+    for let v in option.get().values {
+        if v.kind == internal.lex.spec.Value_Kind.class {
+            let id: internal.grammar.model.Token_Id? = class_id(c, v)
+            if id != nil {
+                set[internal.grammar.model.raw_token_id(id.get())] = true
+            }
+        }
+        else {
+            set[internal.grammar.model.raw_token_id(
+                internal.grammar.model.literal_token_id(v.text))] = true
+        }
+    }
+    return set
+}
+
+private func regex(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    c.lexer.regexes.append((open = head.text, close = head.close,
+        flags = char_set(option_text(rule, "flags")),
+        not_after = token_set(c, rule, "not-after"), class = output(c, rule)))
+}
+
+private func sigil(c: Compiler, rule: internal.lex.spec.Rule) {
+    c.lexer.sigils.append((prefix = rule.head[0].text,
+        digits = internal.lex.spec.has_flag(rule, "digits"),
+        before_string = internal.lex.spec.has_flag(rule, "before-string"),
+        unless_closed = internal.lex.spec.has_flag(rule, "unless-closed"),
+        attach_after = token_set(c, rule, "attach-after"),
+        class = output(c, rule)))
+}
+
+private func fence(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    var body_open: string = ""
+    var body_close: string = ""
+    let body: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "body")
+    if body != nil and body.get().values.len() > 0 {
+        body_open = body.get().values[0].text
+        body_close = body.get().values[0].close
+    }
+    var minimum: uint = 1
+    let min_text: string = option_text(rule, "min")
+    if byte_len(min_text) > 0 {
+        minimum = cast[uint](decimal_value(min_text).get_or_else(1))
+    }
+    var pad: Pad = Pad.none
+    var chars: string = ""
+    let pad_option: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, "pad")
+    if pad_option != nil and pad_option.get().values.len() > 0 {
+        let policy: string = pad_option.get().values[0].text
+        if policy == "required" {
+            pad = Pad.required
+        }
+        elif policy == "optional" {
+            pad = Pad.optional
+        }
+        else {
+            report(c, "bad-value", "`pad` takes `required` or `optional`",
+                   pad_option.get().values[0].span)
+        }
+        if pad_option.get().values.len() > 1 {
+            chars = pad_option.get().values[1].text
+        }
+    }
+    c.lexer.fences.append((open = head.text, close = head.close,
+        fill = option_text(rule, "fill"), body_open = body_open,
+        body_close = body_close, minimum = minimum, pad = pad,
+        pad_chars = char_set(chars), pad_any = byte_len(chars) == 0,
+        label = internal.lex.spec.has_flag(rule, "label"),
+        class = output(c, rule)))
+    let bidi: string = choice(c, rule, "bidi", ["allow", "warn", "reject"],
+                              "")
+    let class: internal.grammar.model.Token_Id? = output(c, rule)
+    if byte_len(bidi) > 0 and class != nil {
+        c.lexer.bidi_classes[internal.grammar.model.raw_token_id(class.get())] =
+            bidi
+    }
+}
+
+private func directive(c: Compiler, rule: internal.lex.spec.Rule) {
+    c.lexer.directives.append((open = rule.head[0].text,
+        eol = option_class(c, rule, "eol"), class = output(c, rule)))
+}
+
+private func option_words(rule: internal.lex.spec.Rule, name: string)
+    -> List[string] {
+    var words: List[string] = new[List[string]]()
+    let found: internal.lex.spec.Option? =
+        internal.lex.spec.find_option(rule, name)
+    if found != nil {
+        for let v in found.get().values {
+            words.append(v.text)
+        }
+    }
+    return words
+}
+
+private func heredoc(c: Compiler, rule: internal.lex.spec.Rule) {
+    let header: internal.lex.spec.Rule? = internal.lex.spec.find_set(c.spec,
+        "header", option_text(rule, "header"))
+    var single: bool = false
+    var double: bool = false
+    var unquoted: bool = true
+    var leading: bool = false
+    var trailing: bool = true
+    var start: string = ""
+    var cont: string = ""
+    if header != nil {
+        let h: internal.lex.spec.Rule = header.get()
+        for q in option_words(h, "quotes") {
+            single = single or q == "single"
+            double = double or q == "double"
+        }
+        unquoted = !internal.lex.spec.has_flag(h, "quoted-only")
+        leading = internal.lex.spec.has_flag(h, "leading-space")
+        trailing = !internal.lex.spec.has_flag(h, "strict-trailing")
+        start = option_text(h, "tag-start")
+        cont = option_text(h, "tag-continue")
+    }
+    var interpolated: internal.grammar.model.Token_Id? = nil
+    if rule.outputs.len() > 1 {
+        interpolated = class_id(c, rule.outputs[1])
+    }
+    c.lexer.heredocs.append((open = rule.head[0].text, unquoted = unquoted,
+        single = single, double = double, leading_space = leading,
+        trailing_text = trailing, tag_start = char_set(start),
+        tag_continue = char_set(cont),
+        terminator_indent = option_text(rule, "terminator-indent") == "allow",
+        terminator_tail = internal.lex.spec.has_flag(rule, "terminator-tail"),
+        strip = option_text(rule, "body-indent") == "strip",
+        queue = internal.lex.spec.has_flag(rule, "queue"),
+        interpolate = option_words(rule, "interpolate"),
+        class = output(c, rule), interpolated_class = interpolated))
+}
+
+private func embed(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    c.lexer.embeds.append((open = head.text, close = head.close,
+        open_class = option_class(c, rule, "open"),
+        close_class = option_class(c, rule, "close"),
+        class = output(c, rule)))
+}
+
+private func region(c: Compiler, rule: internal.lex.spec.Rule) {
+    let head: internal.lex.spec.Value = rule.head[0]
+    c.lexer.regions.append((open = head.text, close = head.close,
+                            line = option_text(rule, "line")))
+}
+
+private func mode(c: Compiler, rule: internal.lex.spec.Rule) -> string {
+    if rule.head.len() == 0 {
+        return ""
+    }
+    return rule.head[0].text
+}
+
+private func tables(lexer: Lexer) {
+    var texts: List[string] = new[List[string]]()
+    var keep: List[bool] = new[List[bool]]()
+    for let lit in lexer.g.literals {
+        texts.append(lit.text)
+        keep.append(!lit.identifier or lexer.identifier == nil)
+        lexer.boundary.append(byte_len(lit.text) > 0 and
+                              continues_identifier(lexer,
+                                                   last_char(lit.text)))
+    }
+    lexer.terminals = buckets(texts, keep)
+    var opens: List[string] = new[List[string]]()
+    for let k in lexer.comments {
+        opens.append(k.open)
+    }
+    lexer.comment_starts = buckets(opens, all(opens.len()))
+    var quotes: List[string] = new[List[string]]()
+    for let q in lexer.strings {
+        quotes.append(q.open)
+    }
+    lexer.string_starts = buckets(quotes, all(quotes.len()))
+    var prefixes: List[string] = new[List[string]]()
+    for let form in lexer.numbers {
+        prefixes.append(form.prefix)
+    }
+    var forms: List[Number_Form] = new[List[Number_Form]]()
+    for index in longest_first(prefixes) {
+        forms.append(lexer.numbers[index])
+        if byte_len(prefixes[index]) == 0 and lexer.plain == nil {
+            lexer.plain = lexer.numbers[index]
+        }
+    }
+    lexer.numbers = forms
+    var sigil_prefixes: List[string] = new[List[string]]()
+    for let s in lexer.sigils {
+        sigil_prefixes.append(s.prefix)
+    }
+    var sigils: List[Sigil] = new[List[Sigil]]()
+    for index in longest_first(sigil_prefixes) {
+        sigils.append(lexer.sigils[index])
+    }
+    lexer.sigils = sigils
+    for let k in lexer.comments {
+        if byte_len(k.close) == 0 and k.class == nil {
+            lexer.line_comments.append(k.open)
+        }
+    }
+    for let x in lexer.regexes {
+        mark_start(lexer, x.open, starts_regex)
+    }
+    for let s in lexer.sigils {
+        mark_start(lexer, s.prefix, starts_sigil)
+    }
+    for let f in lexer.fences {
+        mark_start(lexer, f.open, starts_fence)
+    }
+    for let h in lexer.heredocs {
+        mark_start(lexer, h.open, starts_heredoc)
+    }
+    for let d in lexer.directives {
+        mark_start(lexer, d.open, starts_directive)
+    }
+    for let r in lexer.regions {
+        mark_start(lexer, r.open, starts_region)
+        mark_start(lexer, r.close, starts_region)
+    }
+    for let e in lexer.embeds {
+        mark_start(lexer, e.close, starts_embed_close)
+    }
+    let brackets: string = lexer.layout.brackets
+    var i: uint = 0
+    while i + 1 < byte_len(brackets) {
+        lexer.bracket_delta[cast[uint](byte_at(brackets, i))] = 1
+        lexer.bracket_delta[cast[uint](byte_at(brackets, i + 1))] = -1
+        i += 2
+    }
+    for text in [")", "]", "}"] {
+        lexer.layout.after_ids[internal.grammar.model.raw_token_id(
+            internal.grammar.model.literal_token_id(text))] = true
+    }
+    for let entry in lexer.layout.terminator_after {
+        lexer.layout.after_ids[internal.grammar.model.raw_token_id(
+            internal.grammar.model.literal_token_id(entry.key))] = true
+    }
+}
+
+const starts_regex: u32 = 1
+const starts_sigil: u32 = 2
+const starts_fence: u32 = 4
+const starts_heredoc: u32 = 8
+const starts_directive: u32 = 16
+const starts_region: u32 = 32
+const starts_embed_close: u32 = 64
+
+private func mark_start(lexer: Lexer, text: string, bit: u32) {
+    if byte_len(text) > 0 {
+        let at: uint = cast[uint](byte_at(text, 0))
+        lexer.starters[at] = lexer.starters[at] | bit
+    }
+}
+
+func can_start(lexer: Lexer, b: u8, bit: u32) -> bool {
+    return (lexer.starters[cast[uint](b)] & bit) != 0
+}
+
+func compile(spec: internal.lex.spec.Spec, g: internal.grammar.model.Grammar)
+    -> Lexer fail: List[internal.diag.Diagnostic] {
+    var c: Compiler = new[Compiler](spec, g)
+    for let rule in spec.rules {
+        let kind: string = rule.kind
+        if kind == "comment" {
+            comment(c, rule)
+        }
+        elif kind == "string" {
+            string_rule(c, rule)
+        }
+        elif kind == "number" {
+            number(c, rule)
+        }
+        elif kind == "regex" {
+            regex(c, rule)
+        }
+        elif kind == "sigil" {
+            sigil(c, rule)
+        }
+        elif kind == "fence" {
+            fence(c, rule)
+        }
+        elif kind == "directive" {
+            directive(c, rule)
+        }
+        elif kind == "region" {
+            region(c, rule)
+        }
+        elif kind == "heredoc" {
+            heredoc(c, rule)
+        }
+        elif kind == "embed" {
+            embed(c, rule)
+        }
+        elif kind == "recover" {
+            recovery(c, rule)
+        }
+        elif kind == "bidi" {
+            let policy: string = mode(c, rule)
+            if policy != "allow" and policy != "warn" and policy != "reject" {
+                report(c, "bad-value", "`bidi` takes `allow`, `warn` or " +
+                       "`reject`", rule.span)
+            }
+            c.lexer.bidi = policy
+        }
+        elif kind == "identifier" {
+            identifier(c, rule)
+        }
+        elif kind == "layout" {
+            layout(c, rule)
+        }
+        elif kind == "whitespace" {
+            c.lexer.whitespace_codepoint = mode(c, rule) == "codepoint"
+        }
+        elif kind == "fallback" {
+            c.lexer.reject = mode(c, rule) == "reject"
+            c.lexer.recover = internal.lex.spec.has_flag(rule, "recover")
+        }
+    }
+    if c.diags.len() > 0 {
+        fail internal.diag.sorted_by_position(c.diags)
+    }
+    tables(c.lexer)
+    value_classes(c.lexer)
+    return c.lexer
+}

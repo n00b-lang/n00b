@@ -8,28 +8,34 @@ flagset Token_Flags {
 record Token {
     id:     internal.grammar.model.Token_Id
     alt_id: internal.grammar.model.Token_Id?
-    start:  uint
-    end:    uint
-    flags:  Token_Flags
+    start:    uint
+    end:      uint
+    flags:    Token_Flags
+    modifier: uint?
+    content:  Content?
+}
+
+record Content {
+    start:       uint
+    end:         uint
+    label_start: uint
+    label_end:   uint
 }
 
 object Context {
     g:        internal.grammar.model.Grammar
     source:   string
-    classes:  Dict[string, internal.grammar.model.Token_Id]
     policies: List[internal.grammar.model.Token_Policy]
 }
 
 func __init(self: Context, g: internal.grammar.model.Grammar, source: string) {
     self.g = g
     self.source = source
-    self.classes = new[Dict[string, internal.grammar.model.Token_Id]]()
     self.policies = new[List[internal.grammar.model.Token_Policy]]()
     for i : uint from 0 until g.classes.len() {
         self.policies.append(internal.grammar.model.Token_Policy.normal)
     }
     for let class in g.classes {
-        self.classes[class.name] = class.id
         let slot: u128 = internal.grammar.model.raw_token_id(class.id) -
             internal.grammar.model.identifier_token_id
         self.policies[cast[uint](slot)] = class.policy
@@ -37,11 +43,11 @@ func __init(self: Context, g: internal.grammar.model.Grammar, source: string) {
 }
 
 private func flags_of(ctx: Context, raw: u128) -> Token_Flags {
-    if raw < internal.grammar.model.identifier_token_id or
-        raw - internal.grammar.model.identifier_token_id >= cast[u128](ctx.policies.len()) {
+    let base: u128 = internal.grammar.model.identifier_token_id
+    if raw < base or raw - base >= cast[u128](ctx.policies.len()) {
         return Token_Flags.none
     }
-    switch ctx.policies[cast[uint](raw - internal.grammar.model.identifier_token_id)] {
+    switch ctx.policies[cast[uint](raw - base)] {
         case internal.grammar.model.Token_Policy.trivia {
             return Token_Flags.trivia
         }
@@ -57,18 +63,25 @@ private func flags_of(ctx: Context, raw: u128) -> Token_Flags {
     }
 }
 
-func emit(ctx  : Context, start: uint, end: uint,
+func literal_token(id: internal.grammar.model.Token_Id, start: uint,
+                   end: uint) -> Token {
+    return (id = id, alt_id = nil, start = start, end = end,
+            flags = Token_Flags.none, modifier = nil, content = nil)
+}
+
+func emit(ctx: Context, start: uint, end: uint,
           class: internal.grammar.model.Token_Id? = nil) -> Token {
-    let spelling: string = byte_slice(ctx.source, start, end)
     if class == nil {
-        return (id = internal.grammar.model.literal_token_id(spelling), alt_id = nil,
-                start = start, end = end, flags = Token_Flags.none)
+        return literal_token(internal.grammar.model.literal_token_id(
+            byte_slice(ctx.source, start, end)), start, end)
     }
     var id:     internal.grammar.model.Token_Id  = class.get()
     var alt_id: internal.grammar.model.Token_Id? = nil
-    let raw:    u128              = internal.grammar.model.raw_token_id(id)
+    let raw:    u128 = internal.grammar.model.raw_token_id(id)
     if raw == internal.grammar.model.identifier_token_id {
-        let lit: internal.grammar.model.Literal? = internal.grammar.model.find_literal(ctx.g, spelling)
+        let lit: internal.grammar.model.Literal? =
+            internal.grammar.model.find_literal(ctx.g,
+                byte_slice(ctx.source, start, end))
         if lit != nil and lit.get().identifier {
             if lit.get().hard {
                 id = lit.get().id
@@ -79,5 +92,5 @@ func emit(ctx  : Context, start: uint, end: uint,
         }
     }
     return (id = id, alt_id = alt_id, start = start, end = end,
-            flags = flags_of(ctx, raw))
+            flags = flags_of(ctx, raw), modifier = nil, content = nil)
 }

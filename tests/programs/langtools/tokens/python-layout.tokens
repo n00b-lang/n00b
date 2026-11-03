@@ -1,0 +1,77 @@
+# ../../../../lantern/grammars/python.bnf ../samples/python-layout.lex ../samples/layout.py
+import                 1:1  import
+IDENTIFIER             1:8  os
+NEWLINE                2:1
+def                    3:1  def
+IDENTIFIER             3:5  f
+(                      3:6  (
+IDENTIFIER             3:7  a
+,                      3:8  ,
+IDENTIFIER             3:10  b
+=                      3:11  =
+(                      3:12  (
+INTEGER                3:13  1
+,                      3:14  ,
+INTEGER                4:13  2
+)                      4:14  )
+)                      4:15  )
+:                      4:16  :
+NEWLINE                5:1
+INDENT                 6:1
+if                     6:5  if
+IDENTIFIER             6:8  a
+:                      6:9  :
+NEWLINE                7:1
+INDENT                 8:1
+return                 8:9  return
+[                      8:16  [
+IDENTIFIER             8:17  x
+for                    9:17  for
+IDENTIFIER             9:21  x
+in                     9:23  in
+IDENTIFIER             9:26  b
+]                      9:27  ]
+NEWLINE                10:1
+DEDENT                 10:1
+elif                   10:5  elif
+IDENTIFIER             10:10  b
+:                      10:11  :
+NEWLINE                11:1
+INDENT                 11:1
+IDENTIFIER             11:9  x
+=                      11:11  =
+INTEGER                11:13  1
++                      11:15  +
+INTEGER                12:13  2
+NEWLINE                13:1
+while                  13:9  while
+IDENTIFIER             13:15  x
+:                      13:16  :
+NEWLINE                14:1
+INDENT                 14:1
+IDENTIFIER             14:13  x
+-=                     14:15  -=
+INTEGER                14:18  1
+NEWLINE                15:1
+DEDENT                 15:1
+DEDENT                 15:1
+return                 15:5  return
+STRING                 15:12  'done'
+NEWLINE                16:1
+DEDENT                 17:1
+class                  17:1  class
+IDENTIFIER             17:7  C
+:                      17:8  :
+NEWLINE                18:1
+INDENT                 18:1
+pass                   18:5  pass
+NEWLINE                19:1
+DEDENT                 19:1
+IDENTIFIER             19:1  y
+=                      19:3  =
+IDENTIFIER             19:5  f
+(                      19:6  (
+INTEGER                19:7  1
+)                      19:8  )
+NEWLINE                20:1
+ENDMARKER              20:1

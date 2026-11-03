@@ -1,5 +1,6 @@
 import unicode
 import internal.diag
+import internal.scan
 
 type Token_Id = u128
 
@@ -117,40 +118,33 @@ func literal_token_id(spelling: string) -> Token_Id {
     let plain: string = text(spelling)
     let n: uint = byte_len(plain)
     if n > 0 and n <= 4 and len(plain) == 1 {
-        var at: u32 = 0
-        try {
-            return token_id(cast[u128] unicode.utf8_decode(plain, at)!)
-        } fail(err) {
-        }
+        return token_id(cast[u128] internal.scan.decode_at(plain, 0))
     }
     return token_id(plain.hash())
 }
 
+func is_identifier_start(c: char) -> bool {
+    return c == '_' or unicode.is_xid_start(c)
+}
+
+func is_identifier_continue(c: char) -> bool {
+    return unicode.is_xid_continue(c)
+}
+
 func is_identifier_shaped(spelling: string) -> bool {
     let n: uint = byte_len(spelling)
-    if n == 0 {
-        return false
-    }
-    var at: u32 = 0
-    var first: bool = true
-    while cast[uint](at) < n {
-        var cp: char = cast[char] 0
-        try {
-            cp = unicode.utf8_decode(spelling, at)!
-        } fail(err) {
+    var at: uint = 0
+    while at < n {
+        let c: char = internal.scan.decode_at(spelling, at)
+        if at == 0 and !is_identifier_start(c) {
             return false
         }
-        if first {
-            if cp != '_' and !unicode.is_xid_start(cp) {
-                return false
-            }
-            first = false
-        }
-        elif !unicode.is_xid_continue(cp) {
+        if at > 0 and !is_identifier_continue(c) {
             return false
         }
+        at += internal.scan.char_width(spelling, at)
     }
-    return true
+    return n > 0
 }
 
 func is_soft(lit: Literal) -> bool {

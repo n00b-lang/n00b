@@ -3,8 +3,8 @@ header ruby-label: quotes single double
 heredoc "<<~" header ruby-label queue terminator-indent allow body-indent strip -> %HEREDOC
 heredoc "<<-" header ruby-label queue terminator-indent allow body-indent keep -> %HEREDOC
 string quotes '"' "'" escape "\\" plain -> %STRING
-string prefix "%q" "%w" pairs "(" .. ")" "[" .. "]" "{" .. "}" "<" .. ">" escape "\\" nested multiline -> %Q
-regex "/" .. "/" flags "imxounse" not-after %IDENTIFIER %CONSTANT %INTEGER %FLOAT %STRING %Q %REGEX %IVAR %CVAR %GVAR %HEREDOC ")" "]" "}" "true" "false" "nil" "self" -> %REGEX
+string prefix "%q" "%w" pairs "(" .. ")" "[" .. "]" "{" .. "}" "<" .. ">" escape "\\" nested multiline -> %STRING
+regex "/" .. "/" flags "imxounse" not-after %IDENTIFIER %CONSTANT %INTEGER %FLOAT %STRING %REGEX %IVAR %CVAR %GVAR %HEREDOC ")" "]" "}" "true" "false" "nil" "self" -> %REGEX
 sigil "@@" -> %CVAR
 sigil "@" -> %IVAR
 sigil "$" -> %GVAR

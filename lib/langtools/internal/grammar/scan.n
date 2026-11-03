@@ -1,0 +1,283 @@
+import internal.diag
+import internal.scan
+
+enum Kind {
+    eof = 0, newline, rule_name, assign, pipe, lparen, rparen, question, star,
+    plus, comma, class_ref, hard_lit, lit, directive
+}
+
+record Token {
+    kind: Kind
+    text: string
+    span: internal.diag.Span
+}
+
+object Tokenizer {
+    sc:   internal.scan.Scanner
+    last: Kind
+}
+
+func __init(self: Tokenizer, text: string) {
+    self.sc = new[internal.scan.Scanner](text, "ebnf")
+    self.last = Kind.newline
+}
+
+private func token(t: Tokenizer, kind: Kind, text: string,
+                   span: internal.diag.Span) -> Token {
+    t.last = kind
+    return (kind = kind, text = text, span = span)
+}
+
+private func literal(t: Tokenizer, start: internal.scan.Mark) -> string {
+    let errors_before: uint = t.sc.diags.len()
+    let value: string = internal.scan.literal(t.sc, start)
+    if byte_len(value) == 0 and t.sc.diags.len() == errors_before {
+        var d: internal.diag.Diagnostic = internal.scan.diagnostic(t.sc,
+            "empty-literal", "an empty literal matches nothing",
+            internal.scan.span_from(t.sc, start))
+        d.help = "to make something optional, write it as `( ... )?`"
+        internal.scan.report(t.sc, d)
+    }
+    return value
+}
+
+private func annotation(t: Tokenizer) {
+    let sc: internal.scan.Scanner = t.sc
+    let start: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.step(sc)
+    while !internal.scan.at_end(sc) and
+        internal.scan.is_name_char(internal.scan.peek(sc)) {
+        internal.scan.step(sc)
+    }
+    if internal.scan.peek(sc) == '(' {
+        var depth: uint = 0
+        while !internal.scan.at_end(sc) {
+            let c: char = internal.scan.peek(sc)
+            if c == '"' or c == '\'' {
+                internal.scan.step(sc)
+                while !internal.scan.at_end(sc) and
+                    internal.scan.peek(sc) != c and
+                    internal.scan.peek(sc) != '\n' {
+                    if internal.scan.peek(sc) == '\\' {
+                        internal.scan.step(sc)
+                    }
+                    if !internal.scan.at_end(sc) {
+                        internal.scan.step(sc)
+                    }
+                }
+                if !internal.scan.at_end(sc) and internal.scan.peek(sc) == c {
+                    internal.scan.step(sc)
+                }
+                continue
+            }
+            internal.scan.step(sc)
+            if c == '(' {
+                depth += 1
+            }
+            elif c == ')' {
+                depth -= 1
+                if depth == 0 {
+                    break
+                }
+            }
+        }
+    }
+    let span: internal.diag.Span = internal.scan.span_from(sc, start)
+    internal.scan.skip_blanks(sc)
+    var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc,
+        "annotation-not-supported", "annotations are not supported", span)
+    d.fixes.append(internal.scan.fix("delete the annotation",
+                                     internal.scan.span_from(sc, start), ""))
+    internal.scan.report(sc, d)
+}
+
+private func continues(t: Tokenizer) -> bool {
+    let sc: internal.scan.Scanner = t.sc
+    while !internal.scan.at_end(sc) {
+        let c: char = internal.scan.peek(sc)
+        if internal.scan.is_blank(c) or c == '\n' {
+            internal.scan.step(sc)
+        }
+        elif c == '#' {
+            internal.scan.skip_comment(sc)
+        }
+        else {
+            return c == '|' or t.last == Kind.assign
+        }
+    }
+    return false
+}
+
+private func word(t: Tokenizer) -> Token? {
+    let sc: internal.scan.Scanner = t.sc
+    let start: internal.scan.Mark = internal.scan.mark(sc)
+    while !internal.scan.at_end(sc) and
+        internal.scan.is_word_char(internal.scan.peek(sc)) {
+        internal.scan.step(sc)
+    }
+    let text: string = internal.scan.slice(sc, start.byte)
+    let span: internal.diag.Span = internal.scan.span_from(sc, start)
+    if byte_len(text) > 2 and internal.scan.matches_at(text, 0, "__") {
+        var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc,
+            "char-class-not-supported", "character classes are not supported",
+            span)
+        d.help = "match characters in the lexer, and refer to the token " +
+            "class it produces with `%NAME`"
+        internal.scan.report(sc, d)
+        return nil
+    }
+    let after: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.skip_blanks(sc)
+    if internal.scan.peek(sc) == ':' and
+        internal.scan.peek(sc, ahead = 1) != ':' {
+        internal.scan.step(sc)
+        return token(t, Kind.directive, text, span)
+    }
+    internal.scan.reset(sc, after)
+    var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc, "bare-name",
+        "rule references are written in angle brackets", span)
+    d.fixes.append(internal.scan.fix("write `<" + text + ">`", span,
+                                     "<" + text + ">"))
+    internal.scan.report(sc, d)
+    return token(t, Kind.rule_name, text, span)
+}
+
+private func rule_name(t: Tokenizer) -> Token? {
+    let sc: internal.scan.Scanner = t.sc
+    let start: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.step(sc)
+    let name_start: uint = sc.pos
+    if !internal.scan.is_word_start(internal.scan.peek(sc)) {
+        internal.scan.report(sc, internal.scan.diagnostic(sc,
+            "expected-rule-name", "expected a rule name after `<`",
+            internal.scan.span_from(sc, start)))
+        return nil
+    }
+    while !internal.scan.at_end(sc) and
+        internal.scan.is_name_char(internal.scan.peek(sc)) {
+        internal.scan.step(sc)
+    }
+    let name: string = internal.scan.slice(sc, name_start)
+    if internal.scan.peek(sc) == '>' {
+        internal.scan.step(sc)
+    }
+    else {
+        var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc,
+            "unclosed-angle", "`<" + name + "` is missing its closing `>`",
+            internal.scan.span_from(sc, start))
+        d.fixes.append(internal.scan.fix("add `>`", internal.scan.point(sc),
+                                         ">"))
+        internal.scan.report(sc, d)
+    }
+    return token(t, Kind.rule_name, name, internal.scan.span_from(sc, start))
+}
+
+private func percent(t: Tokenizer) -> Token? {
+    let sc: internal.scan.Scanner = t.sc
+    let start: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.step(sc)
+    let c: char = internal.scan.peek(sc)
+    if c == '"' or c == '\'' {
+        let text: string = literal(t, start)
+        return token(t, Kind.hard_lit, text, internal.scan.span_from(sc, start))
+    }
+    if internal.scan.is_word_start(c) {
+        let name_start: uint = sc.pos
+        while !internal.scan.at_end(sc) and
+            internal.scan.is_word_char(internal.scan.peek(sc)) {
+            internal.scan.step(sc)
+        }
+        return token(t, Kind.class_ref, internal.scan.slice(sc, name_start),
+                     internal.scan.span_from(sc, start))
+    }
+    var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc, "bad-percent",
+        "`%` must be followed by a token class name or a quoted literal",
+        internal.scan.span_from(sc, start))
+    d.help = "write `%NAME` for a token class, or `%\"text\"` for a hard token"
+    internal.scan.report(sc, d)
+    return nil
+}
+
+private func punct(t: Tokenizer, kind: Kind, width: uint) -> Token {
+    let start: internal.scan.Mark = internal.scan.mark(t.sc)
+    internal.scan.advance(t.sc, width)
+    return token(t, kind, internal.scan.slice(t.sc, start.byte),
+                 internal.scan.span_from(t.sc, start))
+}
+
+private func unexpected(t: Tokenizer) {
+    let sc: internal.scan.Scanner = t.sc
+    let start: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.step_char(sc)
+    let span: internal.diag.Span = internal.scan.span_from(sc, start)
+    var d: internal.diag.Diagnostic = internal.scan.diagnostic(sc,
+        "unexpected-character",
+        "unexpected `" + internal.scan.slice(sc, start.byte) + "`", span)
+    if byte_at(sc.src, start.byte) == 0x3a {
+        d.help = "`::=` separates a rule's name from its definition"
+    }
+    d.fixes.append(internal.scan.fix("delete it", span, ""))
+    internal.scan.report(sc, d)
+}
+
+func next(t: Tokenizer) -> Token {
+    let sc: internal.scan.Scanner = t.sc
+    while !sc.halted {
+        internal.scan.skip_blanks(sc)
+        if internal.scan.at_end(sc) {
+            break
+        }
+        let c: char = internal.scan.peek(sc)
+        var found: Token? = nil
+        switch c {
+            case '#' { internal.scan.skip_comment(sc) }
+            case '\n' {
+                let start: internal.scan.Mark = internal.scan.mark(sc)
+                internal.scan.step(sc)
+                let span: internal.diag.Span =
+                    internal.scan.span_from(sc, start)
+                let blank: bool = t.last == Kind.newline
+                if !continues(t) and !blank {
+                    found = token(t, Kind.newline, "", span)
+                }
+            }
+            case '<' { found = rule_name(t) }
+            case '%' { found = percent(t) }
+            case '"', '\'' {
+                let start: internal.scan.Mark = internal.scan.mark(sc)
+                let text: string = literal(t, start)
+                found = token(t, Kind.lit, text,
+                              internal.scan.span_from(sc, start))
+            }
+            case '@' { annotation(t) }
+            case '|' { found = punct(t, Kind.pipe, 1) }
+            case '(' { found = punct(t, Kind.lparen, 1) }
+            case ')' { found = punct(t, Kind.rparen, 1) }
+            case '?' { found = punct(t, Kind.question, 1) }
+            case '*' { found = punct(t, Kind.star, 1) }
+            case '+' { found = punct(t, Kind.plus, 1) }
+            case ',' { found = punct(t, Kind.comma, 1) }
+            case ':' {
+                if internal.scan.peek(sc, ahead = 1) == ':' and
+                    internal.scan.peek(sc, ahead = 2) == '=' {
+                    found = punct(t, Kind.assign, 3)
+                }
+                else {
+                    unexpected(t)
+                }
+            }
+            else {
+                if internal.scan.is_word_start(c) {
+                    found = word(t)
+                }
+                else {
+                    unexpected(t)
+                }
+            }
+        }
+        if found != nil {
+            return found.get()
+        }
+    }
+    return token(t, Kind.eof, "", internal.scan.point(sc))
+}

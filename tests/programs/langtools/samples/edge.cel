@@ -1,0 +1,4 @@
+a + 1 + 2u + 0xFFu + 1.5 + .5e3 + 3. - "str\n" + 'sq' + b"bytes" + r"raw\n" + R'raw2'
+x.y[0] in [1, 2] && !z || w != 1u ? """triple "q" """ : '''tri'''
+// comment
+size(m) >= 2 && m["k"] == true

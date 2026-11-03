@@ -3,7 +3,7 @@ comment "//"
 comment "#"
 comment "/*" .. "*/"
 header php-label: quotes single double
-heredoc "<<<" header php-label terminator-indent allow body-indent strip -> %HEREDOC
+heredoc "<<<" header php-label terminator-indent allow terminator-tail body-indent strip -> %HEREDOC
 string '"' .. '"' escape "\\" -> %ENCAPSED_STRING
 string "'" .. "'" escape "\\" -> %STRING
 sigil "$" -> %VARIABLE
