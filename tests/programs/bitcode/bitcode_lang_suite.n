@@ -1163,7 +1163,7 @@ func unspecialized_pair(first: 'T, second: 'T) -> List['T] {
 
 func unspecialized_chars(source: Array['C]) -> List['C] {
     let cb = callback[Transform](ref plus_one)
-    return new[List['C]](items = source)
+    return new[List['C]](items = source.__copy())
 }
 
 func unspecialized_copy(source: Array['C]) -> Array['C] {
@@ -1664,7 +1664,7 @@ var anchors: List[Array[u8]] = new[List[Array[u8]]]()
 var item_anchors: List[Array[Item]] = new[List[Array[Item]]]()
 var code_anchors: List[Array[i32]] = new[List[Array[i32]]]()
 
-func c_text(bytes: Array[u8]) -> Foreign[i8]? {
+func c_text(consume bytes: Array[u8]) -> Foreign[i8]? {
     anchors.append(bytes)
     return unsafe_cast[Foreign[i8]?] __abi_ref_address(ref bytes[0])
 }
@@ -2083,7 +2083,7 @@ func index_write_check() {
     require items[0] == 8 and items[1] == 5
 }
 
-func list_from_items(items: Array[int], n: uint) -> List[int] {
+func list_from_items(consume items: Array[int], n: uint) -> List[int] {
     let list: List[int] = new[List[int]](items = items)
     list.count = n
     return list

@@ -1516,6 +1516,25 @@ view_inputs(th_type *signature)
 }
 
 static uint64_t
+lent_array_inputs(th_type *signature)
+{
+    uint64_t arrays = 0;
+    uint32_t inputs = 0;
+    for (size_t i = 0; signature && i < th_func_nparams(signature); i++) {
+        const th_param *formal = th_func_param(signature, i);
+        if (!formal || !th_mode_accepts_input(formal->mode)) continue;
+        th_type *type = formal->type ? th_resolve(formal->type) : nullptr;
+        uint64_t extent = 0;
+        if (formal->mode == TH_IN && inputs < 64 && type
+            && th_kind_of(type) == TH_SEQUENCE
+            && !th_seq_extent(type, &extent))
+            arrays |= UINT64_C(1) << inputs;
+        inputs++;
+    }
+    return arrays;
+}
+
+static uint64_t
 mutable_view_inputs(th_ctx *types, th_type *signature)
 {
     uint64_t views = view_inputs(signature);
@@ -1603,14 +1622,21 @@ report_guarded_write(ir_diags_t *diagnostics, ir_func_t *function,
 
 static const ir_value_t *
 view_reference(analysis_t *analysis, const ir_instr_t *at, ir_value_t *value,
-               bool contents, uint64_t views)
+               bool contents, uint64_t views, uint64_t arrays)
 {
     ir_pto_list_t reached = core_list_new(ir_pto_t);
     if (contents)
         ir_points_to_loaded(analysis->points_to, at, value, &reached);
     else value_objects(analysis, at, value, &reached);
-    reach(analysis, &reached, false);
     const ir_value_t *found = nullptr;
+    for (size_t r = 0; arrays && !found && r < reached.len; r++) {
+        const ir_value_t *parameter = object_parameter(analysis,
+                                                       &reached.data[r]);
+        if (parameter && parameter->index < 64
+            && arrays >> parameter->index & 1)
+            found = parameter;
+    }
+    reach(analysis, &reached, false);
     for (size_t r = 0; !found && r < reached.len; r++) {
         const ir_value_t *parameter = object_parameter(analysis,
                                                        &reached.data[r]);
@@ -1636,7 +1662,8 @@ outlives_call(analysis_t *analysis, const ir_instr_t *at,
 }
 
 static const ir_value_t *
-escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views)
+escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views,
+             uint64_t arrays)
 {
     if (is_call(instruction)) {
         const n00bb_flow_t *effects = call_effects(analysis, instruction);
@@ -1647,15 +1674,16 @@ escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views)
         for (uint32_t i = first; !found && i < instruction->n_operands; i++) {
             uint32_t index = i - first;
             if (index < 64 && trusted >> index & 1) continue;
-            bool escapes = opaque
+            bool kept = opaque
                 || effect_bit(effects->escapes, index, N00BB_FLOW_SELF)
+                || effect_bit(effects->leaks, index, N00BB_FLOW_SELF);
+            bool escapes = kept
                 || effect_bit(effects->escapes, index, N00BB_FLOW_CONTENTS)
-                || effect_bit(effects->leaks, index, N00BB_FLOW_SELF)
                 || effect_bit(effects->leaks, index, N00BB_FLOW_CONTENTS);
             if (escapes)
                 found = view_reference(analysis, instruction,
                                        operand_at(instruction, i), false,
-                                       views);
+                                       views, kept ? arrays : 0);
         }
         return found;
     }
@@ -1671,19 +1699,23 @@ escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views)
         return nullptr;
     return view_reference(analysis, instruction,
                           operand_at(instruction, value_at), source >= 0,
-                          views);
+                          views, source >= 0 ? 0 : arrays);
 }
 
 static void
 report_view_escape(ir_diags_t *diagnostics, const ir_instr_t *offender,
-                   const ir_value_t *parameter)
+                   const ir_value_t *parameter, bool array)
 {
     core_diagnostics_t *destination = ir_diags_destination(diagnostics);
     if (!destination) return;
-    n00bb_report(destination, ir_diags_unit(diagnostics), N00B_DIAG_VIEW_ESCAPE,
-        borrow_location(offender->span),
-        is_call(offender) ? N00B_TEXT_CALL_MAY_KEEP_VIEW
-                          : N00B_TEXT_STORES_VIEW,
+    n00bb_text_t message = array
+        ? is_call(offender) ? N00B_TEXT_CALL_MAY_KEEP_ARRAY
+                            : N00B_TEXT_STORES_ARRAY
+        : is_call(offender) ? N00B_TEXT_CALL_MAY_KEEP_VIEW
+                            : N00B_TEXT_STORES_VIEW;
+    n00bb_report(destination, ir_diags_unit(diagnostics),
+        array ? N00B_DIAG_ARRAY_KEPT : N00B_DIAG_VIEW_ESCAPE,
+        borrow_location(offender->span), message,
         N00BB_ARGS(ARG_TEXT(parameter->name)));
     const ir_value_t *target = offender->n_operands
         && offender->operands[0].kind == IR_OPD_VALUE
@@ -1701,12 +1733,17 @@ report_view_escape(ir_diags_t *diagnostics, const ir_instr_t *offender,
             borrow_location(target->def->span),
             N00B_TEXT_THIS_PLACE_OUTLIVES_THE_CALL,
             N00BB_NO_ARGS);
-    n00bb_report_help(destination, N00B_TEXT_STORE_A_COPY_OR_RETURN,
-        N00BB_NO_ARGS);
+    if (array)
+        n00bb_report_help(destination, N00B_TEXT_CONSUME_OR_COPY_ARRAY,
+            N00BB_ARGS(ARG_TEXT(parameter->name)));
+    else
+        n00bb_report_help(destination, N00B_TEXT_STORE_A_COPY_OR_RETURN,
+            N00BB_NO_ARGS);
 }
 
 static bool
-guard_function(ir_diags_t *diagnostics, analysis_t *analysis, uint64_t views)
+guard_function(ir_diags_t *diagnostics, analysis_t *analysis, uint64_t views,
+               uint64_t arrays)
 {
     ir_func_t *function = analysis->function;
     if (!analysis_solve(analysis)) {
@@ -1739,10 +1776,12 @@ guard_function(ir_diags_t *diagnostics, analysis_t *analysis, uint64_t views)
                 accepted = false;
                 continue;
             }
-            const ir_value_t *escaped = views
-                ? escaped_view(analysis, instruction, views) : nullptr;
+            const ir_value_t *escaped = views | arrays
+                ? escaped_view(analysis, instruction, views, arrays)
+                : nullptr;
             if (escaped) {
-                report_view_escape(diagnostics, instruction, escaped);
+                report_view_escape(diagnostics, instruction, escaped,
+                    escaped->index < 64 && arrays >> escaped->index & 1);
                 accepted = false;
             }
         }
@@ -1777,10 +1816,11 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_summaries_t *summaries,
         analysis.points_to = nullptr;
         uint64_t views = mutable_view_inputs(types,
                                              function_signature(function));
+        uint64_t arrays = lent_array_inputs(function_signature(function));
         analysis.constants = shared_constants
             && references_constant(types, function);
-        if ((views || analysis.constants)
-            && !guard_function(diagnostics, &analysis, views))
+        if ((views || arrays || analysis.constants)
+            && !guard_function(diagnostics, &analysis, views, arrays))
             ok = false;
         ir_points_to_free(analysis.points_to);
     }

@@ -196,7 +196,8 @@ func empty_buffer() -> Buffer {
     return new[Buffer](length = 0)
 }
 
-func buffer_from_bytes(bytes: Array[u8], len: int, copy: bool = true)
+func buffer_from_bytes(consume bytes: Array[u8], len: int,
+                       copy: bool = true)
     -> Buffer {
     return new[Buffer](length = len, ptr = bytes, copy = copy)
 }

@@ -1,4 +1,5 @@
 import containers.array
+import reference
 
 object Lease_Count {
     private count: Atomic[uint]
@@ -24,15 +25,16 @@ func __init(self: Leasable['T], consume storage: Array['T]) {
     self.leases = new[Lease_Count]()
 }
 
-func __init(self: Lease['T], storage: Array['T], leases: Lease_Count) {
-    self.storage = storage
+func __init(self: Lease['T], leases: Lease_Count) {
     self.leases = leases
     __atomic_store(ref self.released, false)
 }
 
 func __ref_create(self: Leasable['T]) -> Lease['T] {
     __atomic_fetch_add(ref self.leases.count, 1)
-    return new[Lease['T]](self.storage, self.leases)
+    let lease: Lease['T] = new[Lease['T]](self.leases)
+    lease.storage = self.storage
+    return lease
 }
 
 func __ref_address(self: Lease['T]) -> Ref[Array['T]] {
