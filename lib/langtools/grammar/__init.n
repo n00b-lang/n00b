@@ -1,0 +1,11 @@
+import internal.grammar.model
+import internal.grammar.parse
+import internal.grammar.format
+import internal.grammar.litmod
+
+package langtools.grammar {
+    export internal.grammar.model
+    export internal.grammar.parse.load
+    export internal.grammar.format.format
+    export internal.grammar.litmod
+}

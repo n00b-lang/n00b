@@ -1,0 +1,18 @@
+import internal.lex.spec
+import internal.lex.load
+import internal.lex.tokens
+import internal.lex.compile
+import internal.lex.tokenize
+import internal.lex.litmod
+
+package langtools.lex {
+    export internal.lex.spec
+    export internal.lex.load.load
+    export internal.lex.tokens
+    export internal.lex.compile.Lexer
+    export internal.lex.compile.compile
+    export internal.lex.tokenize.tokenize
+    export internal.lex.tokenize.scan
+    export internal.lex.tokenize.Scan
+    export internal.lex.litmod
+}

@@ -1,0 +1,51 @@
+// The built-in `typical` language that specs extend: C-like comments,
+// strings, characters, numbers and identifiers. Blocks for token classes a
+// grammar doesn't declare are dropped when a spec is compiled.
+func text() -> string {
+    return [-
+source {
+    space:   " " \t \f \v
+    newline: \n \r
+    reject:  Whitespace - space - newline + Invisible
+    unknown: reject
+}
+
+comments {
+    line:  //
+    block: /* */
+}
+
+IDENTIFIER {
+    like: identifier
+    set:  XID
+    add:  _
+}
+
+INTEGER {
+    like:   integer
+    digits: decimal
+    variant hex { prefix: 0x, any case   digits: hex }
+}
+
+FLOAT {
+    like:     float
+    digits:   decimal
+    fraction: .
+    allow:    .5 5.
+    exponent: e E
+}
+
+STRING {
+    like:   string
+    quotes: '"'
+    escape: \
+}
+
+CHAR {
+    like:   string
+    quotes: "'"
+    escape: \
+    length: 1
+}
+-]
+}

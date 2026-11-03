@@ -1,0 +1,23 @@
+# ../../../../lantern/grammars/cel.bnf ../lex/cel.lex ../../../../lantern/tests/samples/s.cel
+IDENTIFIER             1:1  request
+.                      1:8  .
+IDENTIFIER             1:9  auth
+.                      1:13  .
+IDENTIFIER             1:14  claims
+[                      1:20  [
+STRING                 1:21  "email"
+]                      1:28  ]
+.                      1:29  .
+IDENTIFIER             1:30  endsWith
+(                      1:38  (
+STRING                 1:39  "@example.com"
+)                      1:53  )
+&&                     1:55  &&
+IDENTIFIER             1:58  size
+(                      1:62  (
+IDENTIFIER             1:63  request
+.                      1:70  .
+IDENTIFIER             1:71  headers
+)                      1:78  )
+>                      1:80  >
+UINT                   1:82  0u

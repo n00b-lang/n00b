@@ -1,0 +1,330 @@
+import unicode
+import unicode.query
+import sort
+import containers.list
+import internal.scan
+
+// A fixed set of characters: ASCII as a bitmap, the rest sorted.
+record Char_Set {
+    low:   u64
+    high:  u64
+    other: Array[u32]
+}
+
+func char_set(text: string) -> Char_Set {
+    var low: u64 = 0
+    var high: u64 = 0
+    var others: List[u32] = []
+    var at: uint = 0
+    while at < byte_len(text) {
+        let code: u32 = cast[u32] internal.scan.decode_at(text, at)
+        at += internal.scan.char_width(text, at)
+        if code < 64 {
+            low |= cast[u64](1) << cast[u64](code)
+        }
+        elif code < 128 {
+            high |= cast[u64](1) << cast[u64](code - 64)
+        }
+        else {
+            others.append(code)
+        }
+    }
+    var other: Array[u32] = containers.list.to_array(others)
+    sort.sort(other)
+    return (low = low, high = high, other = other)
+}
+
+func has(set: Char_Set, c: char) -> bool {
+    let code: u32 = cast[u32] c
+    if code < 64 {
+        return (set.low >> cast[u64](code)) & 1 == 1
+    }
+    if code < 128 {
+        return (set.high >> cast[u64](code - 64)) & 1 == 1
+    }
+    let at: uint = sort.search(set.other, code)
+    return at < __array_length(set.other) and set.other[at] == code
+}
+
+// A character set built from named sets, ranges and characters with `+`
+// and `-`. Its steps apply in order: the last step that matches a character
+// decides whether the character is in the set. A step can name another set.
+enum Term_Kind { chars = 0, range, category, property, script, xid_start,
+                 xid_continue, set }
+
+record Step {
+    add:   bool
+    kind:  Term_Kind
+    lo:    u32
+    hi:    u32
+    cats:  u32
+    prop:  unicode.Property
+    id:    u16
+    chars: Char_Set
+    set:   Char_Pred?
+}
+
+// The ASCII answers are worked out once, when the set is made.
+object Char_Pred {
+    steps: List[Step]
+    low:   u64
+    high:  u64
+}
+
+func __init(self: Char_Pred, steps: List[Step]) {
+    self.steps = steps
+    self.low = 0
+    self.high = 0
+    for code: u32 from 0 until 128 {
+        if evaluate(self, cast[char] code) {
+            if code < 64 {
+                self.low |= cast[u64](1) << cast[u64](code)
+            }
+            else {
+                self.high |= cast[u64](1) << cast[u64](code - 64)
+            }
+        }
+    }
+}
+
+private func matches(s: Step, c: char) -> bool {
+    let code: u32 = cast[u32] c
+    switch s.kind {
+        case Term_Kind.chars { return has(s.chars, c) }
+        case Term_Kind.range { return code >= s.lo and code <= s.hi }
+        case Term_Kind.category {
+            let gc: u32 = cast[u32](unicode.general_category(c))
+            return (s.cats >> gc) & 1 == 1
+        }
+        case Term_Kind.property { return unicode.has_property(c, s.prop) }
+        case Term_Kind.script { return unicode.query.script(c) == s.id }
+        case Term_Kind.xid_start { return unicode.is_xid_start(c) }
+        case Term_Kind.xid_continue { return unicode.is_xid_continue(c) }
+        else {
+            let named: Char_Pred? = s.set
+            return named != nil and contains(named, c)
+        }
+    }
+}
+
+private func evaluate(p: Char_Pred, c: char) -> bool {
+    var inside: bool = false
+    for s in p.steps {
+        if matches(s, c) {
+            inside = s.add
+        }
+    }
+    return inside
+}
+
+func contains(p: Char_Pred, c: char) -> bool {
+    let code: u32 = cast[u32] c
+    if code < 64 {
+        return (p.low >> cast[u64](code)) & 1 == 1
+    }
+    if code < 128 {
+        return (p.high >> cast[u64](code - 64)) & 1 == 1
+    }
+    return evaluate(p, c)
+}
+
+// A set of exactly the characters in `text`.
+func fixed(text: string) -> Char_Pred {
+    var steps: List[Step] = []
+    if byte_len(text) > 0 {
+        steps.append(chars_term(text))
+    }
+    return new[Char_Pred](steps)
+}
+
+// The ASCII members as a Char_Set, for digit and flag sets.
+func ascii_members(p: Char_Pred) -> Char_Set {
+    return (low = p.low, high = p.high, other = new[Array[u32]](0))
+}
+
+private func term(kind: Term_Kind) -> Step {
+    return (add = true, kind = kind, lo = 0, hi = 0, cats = 0,
+            prop = unicode.Property.white_space, id = 0,
+            chars = char_set(""), set = nil)
+}
+
+func chars_term(text: string) -> Step {
+    var t: Step = term(Term_Kind.chars)
+    t.chars = char_set(text)
+    return t
+}
+
+func range_term(lo: u32, hi: u32) -> Step {
+    var t: Step = term(Term_Kind.range)
+    t.lo = lo
+    t.hi = hi
+    return t
+}
+
+func set_term(named: Char_Pred) -> Step {
+    var t: Step = term(Term_Kind.set)
+    t.set = named
+    return t
+}
+
+// A built-in set by name. `start` picks XID_Start for `XID`; otherwise it
+// means XID_Continue.
+func named_term(name: string, start: bool) -> Step? {
+    if name == "XID" {
+        if start {
+            return term(Term_Kind.xid_start)
+        }
+        return term(Term_Kind.xid_continue)
+    }
+    if name == "XID_Start" {
+        return term(Term_Kind.xid_start)
+    }
+    if name == "XID_Continue" {
+        return term(Term_Kind.xid_continue)
+    }
+    if name == "Emoji" or name == "Whitespace" {
+        var t: Step = term(Term_Kind.property)
+        t.prop = unicode.Property.white_space
+        if name == "Emoji" {
+            t.prop = unicode.Property.extended_pictographic
+        }
+        return t
+    }
+    if name == "upper" {
+        return range_term(0x41, 0x5a)
+    }
+    if name == "lower" {
+        return range_term(0x61, 0x7a)
+    }
+    let listed: string? = named_chars()[name]
+    if listed != nil {
+        return chars_term(listed)
+    }
+    let cats: u32? = categories()[name]
+    if cats != nil {
+        var t: Step = term(Term_Kind.category)
+        t.cats = cats
+        return t
+    }
+    let script: u16? = unicode.query.script_by_name(name)
+    if script != nil {
+        var t: Step = term(Term_Kind.script)
+        t.id = script
+        return t
+    }
+    return nil
+}
+
+private const ascii_letters: string =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+private func named_chars() -> Dict[string, string] {
+    var out: Dict[string, string] = new[Dict[string, string]]()
+    out["decimal"] = "0123456789"
+    out["hex"] = "0123456789abcdefABCDEF"
+    out["octal"] = "01234567"
+    out["binary"] = "01"
+    out["alpha"] = ascii_letters
+    out["alnum"] = ascii_letters + "0123456789"
+    out["Newline"] = "\n\r" + from_char(cast[char] 0x85) +
+        from_char(cast[char] 0x2028) + from_char(cast[char] 0x2029)
+    out["Invisible"] = from_char(cast[char] 0x200b) +
+        from_char(cast[char] 0x200c) + from_char(cast[char] 0x200d) +
+        from_char(cast[char] 0x2060) + from_char(cast[char] 0xfeff)
+    return out
+}
+
+private func bits(cats: Array[unicode.Gc]) -> u32 {
+    var mask: u32 = 0
+    for g in cats {
+        mask |= cast[u32](1) << cast[u32](g)
+    }
+    return mask
+}
+
+// Unicode general categories as bit masks, by their short names, plus the
+// one-letter groups and their long names.
+private func categories() -> Dict[string, u32] {
+    var out: Dict[string, u32] = new[Dict[string, u32]]()
+    let letters: u32 = bits([unicode.Gc.lu, unicode.Gc.ll, unicode.Gc.lt,
+                             unicode.Gc.lm, unicode.Gc.lo])
+    let marks: u32 = bits([unicode.Gc.mn, unicode.Gc.mc, unicode.Gc.me])
+    let numbers: u32 = bits([unicode.Gc.nd, unicode.Gc.nl, unicode.Gc.no])
+    let punctuation: u32 = bits([unicode.Gc.pc, unicode.Gc.pd, unicode.Gc.ps,
+        unicode.Gc.pe, unicode.Gc.pi, unicode.Gc.pf, unicode.Gc.po])
+    let symbols: u32 = bits([unicode.Gc.sm, unicode.Gc.sc, unicode.Gc.sk,
+                             unicode.Gc.so])
+    let separators: u32 = bits([unicode.Gc.zs, unicode.Gc.zl, unicode.Gc.zp])
+    out["L"] = letters
+    out["Letter"] = letters
+    out["M"] = marks
+    out["Mark"] = marks
+    out["N"] = numbers
+    out["Number"] = numbers
+    out["P"] = punctuation
+    out["Punctuation"] = punctuation
+    out["S"] = symbols
+    out["Symbol"] = symbols
+    out["Z"] = separators
+    out["Separator"] = separators
+    out["Lu"] = bits([unicode.Gc.lu])
+    out["Ll"] = bits([unicode.Gc.ll])
+    out["Lt"] = bits([unicode.Gc.lt])
+    out["Lm"] = bits([unicode.Gc.lm])
+    out["Lo"] = bits([unicode.Gc.lo])
+    out["Mn"] = bits([unicode.Gc.mn])
+    out["Mc"] = bits([unicode.Gc.mc])
+    out["Nd"] = bits([unicode.Gc.nd])
+    out["Nl"] = bits([unicode.Gc.nl])
+    out["Pc"] = bits([unicode.Gc.pc])
+    out["Zs"] = bits([unicode.Gc.zs])
+    out["Cc"] = bits([unicode.Gc.cc])
+    out["Cf"] = bits([unicode.Gc.cf])
+    return out
+}
+
+// The character a spec word stands for: itself, an escape such as `\t`, or
+// `U+2028`. Returns nil when the word is not a single character.
+func char_of(word: string) -> char? {
+    let n: uint = byte_len(word)
+    if n == 0 {
+        return nil
+    }
+    if internal.scan.char_width(word, 0) == n {
+        return internal.scan.decode_at(word, 0)
+    }
+    if n == 2 and byte_at(word, 0) == 0x5c {
+        switch cast[char] byte_at(word, 1) {
+            case 'n' { return '\n' }
+            case 'r' { return '\r' }
+            case 't' { return '\t' }
+            case 'f' { return cast[char] 0x0c }
+            case 'v' { return cast[char] 0x0b }
+            case '0' { return cast[char] 0 }
+            case '\\' { return '\\' }
+            else { return nil }
+        }
+    }
+    if n > 2 and byte_at(word, 0) == 0x55 and byte_at(word, 1) == 0x2b {
+        var value: u32 = 0
+        for i: uint from 2 until n {
+            let digit: u32? = hex_digit_value(cast[char] byte_at(word, i))
+            if digit == nil {
+                return nil
+            }
+            value = (value << 4) | digit
+        }
+        return cast[char] value
+    }
+    return nil
+}
+
+// The text a spec word stands for when it names characters: escapes and
+// `U+XXXX` decoded, anything else as written.
+func decoded(word: string) -> string {
+    let c: char? = char_of(word)
+    if c != nil {
+        return from_char(c)
+    }
+    return word
+}

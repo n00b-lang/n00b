@@ -1,0 +1,42 @@
+# ../../../../lantern/grammars/go.bnf ../lex/go.lex ../../../../lantern/tests/samples/s.go
+package                1:1  package
+IDENTIFIER             1:9  main
+;                      2:1
+import                 3:1  import
+STRING                 3:8  "fmt"
+;                      4:1
+func                   6:1  func
+IDENTIFIER             6:6  Greet
+(                      6:11  (
+IDENTIFIER             6:12  name
+IDENTIFIER             6:17  string
+)                      6:23  )
+IDENTIFIER             6:25  string
+{                      6:32  {
+IDENTIFIER             7:2  n
+:=                     7:4  :=
+INTEGER                7:7  0x1f
++                      7:12  +
+INTEGER                7:14  1_000
+;                      8:1
+IDENTIFIER             8:2  s
+:=                     8:4  :=
+STRING                 8:7  `raw
+string`
+;                      10:1
+return                 10:2  return
+IDENTIFIER             10:9  fmt
+.                      10:12  .
+IDENTIFIER             10:13  Sprintf
+(                      10:20  (
+STRING                 10:21  "hi %s %d %v"
+,                      10:34  ,
+IDENTIFIER             10:36  name
+,                      10:40  ,
+IDENTIFIER             10:42  n
+,                      10:43  ,
+IDENTIFIER             10:45  s
+)                      10:46  )
+;                      11:1
+}                      11:1  }
+;                      12:1

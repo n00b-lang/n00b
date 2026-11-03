@@ -1,0 +1,36 @@
+# ../../../../lantern/grammars/rust.bnf ../lex/rust.lex ../samples/edge.rs
+fn                     1:1  fn
+IDENTIFIER             1:4  main
+(                      1:8  (
+)                      1:9  )
+{                      1:11  {
+let                    2:5  let
+IDENTIFIER             2:9  a
+=                      2:11  =
+RAW_STRING             2:13  r"raw\n"
+;                      2:21  ;
+let                    3:5  let
+IDENTIFIER             3:9  b
+=                      3:11  =
+RAW_STRING             3:13  r#"has "quotes""#
+;                      3:30  ;
+let                    4:5  let
+IDENTIFIER             4:9  c
+=                      4:11  =
+RAW_STRING             4:13  r##"has "# inside"##
+;                      4:33  ;
+let                    5:5  let
+IDENTIFIER             5:9  d
+=                      5:11  =
+RAW_BYTE_STRING        5:13  br#"bytes"#
+;                      5:24  ;
+let                    6:5  let
+IDENTIFIER             6:9  r#type
+=                      6:16  =
+INTEGER                6:18  0xff_u32
++                      6:27  +
+INTEGER                6:29  1__0
++                      6:34  +
+INTEGER                6:36  2_
+;                      6:38  ;
+}                      7:1  }
