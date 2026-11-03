@@ -1,4 +1,4 @@
-import diag
+import internal.diag
 
 const max_errors: uint = 100
 
@@ -10,7 +10,7 @@ enum Tok_Kind {
 record Ebnf_Token {
     kind: Tok_Kind
     text: string
-    span: diag.Span
+    span: internal.diag.Span
 }
 
 record Mark {
@@ -26,7 +26,7 @@ object Ebnf_Scanner {
     line:   u32
     col:    u32
     last:   Tok_Kind
-    diags:  List[diag.Diagnostic]
+    diags:  List[internal.diag.Diagnostic]
     halted: bool
 }
 
@@ -37,16 +37,16 @@ func __init(self: Ebnf_Scanner, text: string) {
     self.line = 1
     self.col = 1
     self.last = Tok_Kind.newline
-    self.diags = new[List[diag.Diagnostic]]()
+    self.diags = new[List[internal.diag.Diagnostic]]()
     self.halted = false
 }
 
-func report(sc: Ebnf_Scanner, d: diag.Diagnostic) {
+func report(sc: Ebnf_Scanner, d: internal.diag.Diagnostic) {
     if sc.halted {
         return
     }
     if sc.diags.len() == max_errors {
-        sc.diags.append(new[diag.Diagnostic](code = "ebnf/too-many-errors",
+        sc.diags.append(new[internal.diag.Diagnostic](code = "ebnf/too-many-errors",
             message = "too many errors; stopping after " +
                 decimal(max_errors), span = d.span))
         sc.halted = true
@@ -55,7 +55,7 @@ func report(sc: Ebnf_Scanner, d: diag.Diagnostic) {
     sc.diags.append(d)
 }
 
-func fix(message: string, span: diag.Span, replacement: string) -> diag.Fix {
+func fix(message: string, span: internal.diag.Span, replacement: string) -> internal.diag.Fix {
     return (message = message, span = span, replacement = replacement)
 }
 
@@ -63,25 +63,25 @@ func mark(sc: Ebnf_Scanner) -> Mark {
     return (byte = sc.pos, line = sc.line, col = sc.col)
 }
 
-func span_from(sc: Ebnf_Scanner, from: Mark) -> diag.Span {
-    return new[diag.Span](start_byte = from.byte, end_byte = sc.pos,
+func span_from(sc: Ebnf_Scanner, from: Mark) -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = from.byte, end_byte = sc.pos,
         start_line = from.line, start_col = from.col, end_line = sc.line,
         end_col = sc.col)
 }
 
-func point(sc: Ebnf_Scanner) -> diag.Span {
+func point(sc: Ebnf_Scanner) -> internal.diag.Span {
     return span_from(sc, mark(sc))
 }
 
-func join_spans(first: diag.Span, last: diag.Span) -> diag.Span {
-    return new[diag.Span](start_byte = first.start_byte,
+func join_spans(first: internal.diag.Span, last: internal.diag.Span) -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = first.start_byte,
         end_byte = last.end_byte, start_line = first.start_line,
         start_col = first.start_col, end_line = last.end_line,
         end_col = last.end_col)
 }
 
-func end_point(span: diag.Span) -> diag.Span {
-    return new[diag.Span](start_byte = span.end_byte, end_byte = span.end_byte,
+func end_point(span: internal.diag.Span) -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = span.end_byte, end_byte = span.end_byte,
         start_line = span.end_line, start_col = span.end_col,
         end_line = span.end_line, end_col = span.end_col)
 }
@@ -145,14 +145,14 @@ func slice(sc: Ebnf_Scanner, from: uint) -> string {
 }
 
 private func token(sc: Ebnf_Scanner, kind: Tok_Kind, text: string,
-                   span: diag.Span) -> Ebnf_Token {
+                   span: internal.diag.Span) -> Ebnf_Token {
     sc.last = kind
     return (kind = kind, text = text, span = span)
 }
 
 
 private func bad_escape(sc: Ebnf_Scanner, from: Mark) {
-    var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/bad-escape",
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/bad-escape",
         "unknown escape sequence", span_from(sc, from))
     d.help = "valid escapes are \\\\ \\\" \\' \\n \\r \\t \\0 and \\u{hex}"
     report(sc, d)
@@ -181,7 +181,7 @@ private func unicode_escape(sc: Ebnf_Scanner, from: Mark) -> string? {
     }
     step(sc)
     if value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff) {
-        report(sc, new[diag.Diagnostic]("ebnf/bad-escape",
+        report(sc, new[internal.diag.Diagnostic]("ebnf/bad-escape",
             "\\u{...} must name a Unicode scalar value", span_from(sc, from)))
         return nil
     }
@@ -197,7 +197,7 @@ func literal(sc: Ebnf_Scanner, start: Mark) -> string {
     while true {
         if at_end(sc) or peek(sc) == '\n' {
             pieces.append(slice(sc, run))
-            var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/unterminated-literal",
+            var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/unterminated-literal",
                 "this literal has no closing quote", span_from(sc, start))
             d.fixes.append(fix("close the literal", point(sc),
                                from_char(quote)))
@@ -245,7 +245,7 @@ func literal(sc: Ebnf_Scanner, start: Mark) -> string {
     }
     let value: string = join(pieces, "")
     if byte_len(value) == 0 and sc.diags.len() == errors_before {
-        var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/empty-literal",
+        var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/empty-literal",
             "an empty literal matches nothing", span_from(sc, start))
         d.help = "to make something optional, write it as `( ... )?`"
         report(sc, d)
@@ -290,9 +290,9 @@ private func annotation(sc: Ebnf_Scanner) {
             }
         }
     }
-    let span: diag.Span = span_from(sc, start)
+    let span: internal.diag.Span = span_from(sc, start)
     skip_blanks(sc)
-    var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/annotation-not-supported",
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/annotation-not-supported",
         "annotations are not supported", span)
     d.fixes.append(fix("delete the annotation", span_from(sc, start), ""))
     report(sc, d)
@@ -320,10 +320,10 @@ private func word(sc: Ebnf_Scanner) -> Ebnf_Token? {
         step(sc)
     }
     let text: string = slice(sc, start.byte)
-    let span: diag.Span = span_from(sc, start)
+    let span: internal.diag.Span = span_from(sc, start)
     if byte_len(text) > 2 and byte_at(text, 0) == 0x5f and
         byte_at(text, 1) == 0x5f {
-        var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/char-class-not-supported",
+        var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/char-class-not-supported",
             "character classes are not supported", span)
         d.help = "match characters in the lexer, and refer to the token " +
             "class it produces with `%NAME`"
@@ -339,7 +339,7 @@ private func word(sc: Ebnf_Scanner) -> Ebnf_Token? {
     sc.pos = after.byte
     sc.line = after.line
     sc.col = after.col
-    var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/bare-name",
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/bare-name",
         "rule references are written in angle brackets", span)
     d.fixes.append(fix("write `<" + text + ">`", span, "<" + text + ">"))
     report(sc, d)
@@ -351,7 +351,7 @@ private func rule_name(sc: Ebnf_Scanner) -> Ebnf_Token? {
     step(sc)
     let name_start: uint = sc.pos
     if !is_word_start(peek(sc)) {
-        report(sc, new[diag.Diagnostic]("ebnf/expected-rule-name",
+        report(sc, new[internal.diag.Diagnostic]("ebnf/expected-rule-name",
             "expected a rule name after `<`", span_from(sc, start)))
         return nil
     }
@@ -363,7 +363,7 @@ private func rule_name(sc: Ebnf_Scanner) -> Ebnf_Token? {
         step(sc)
     }
     else {
-        var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/unclosed-angle",
+        var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/unclosed-angle",
             "`<" + name + "` is missing its closing `>`", span_from(sc, start))
         d.fixes.append(fix("add `>`", point(sc), ">"))
         report(sc, d)
@@ -387,7 +387,7 @@ private func percent(sc: Ebnf_Scanner) -> Ebnf_Token? {
         return token(sc, Tok_Kind.class_ref, slice(sc, name_start),
                      span_from(sc, start))
     }
-    var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/bad-percent",
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/bad-percent",
         "`%` must be followed by a token class name or a quoted literal",
         span_from(sc, start))
     d.help = "write `%NAME` for a token class, or `%\"text\"` for a hard token"
@@ -407,8 +407,8 @@ private func punct(sc: Ebnf_Scanner, kind: Tok_Kind, width: uint)
 private func unexpected(sc: Ebnf_Scanner) {
     let start: Mark = mark(sc)
     step_char(sc)
-    let span: diag.Span = span_from(sc, start)
-    var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/unexpected-character",
+    let span: internal.diag.Span = span_from(sc, start)
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("ebnf/unexpected-character",
         "unexpected `" + slice(sc, start.byte) + "`", span)
     if byte_at(sc.src, start.byte) == 0x3a {
         d.help = "`::=` separates a rule's name from its definition"
@@ -430,7 +430,7 @@ func next_token(sc: Ebnf_Scanner) -> Ebnf_Token {
             case '\n' {
                 let start: Mark = mark(sc)
                 step(sc)
-                let span: diag.Span = span_from(sc, start)
+                let span: internal.diag.Span = span_from(sc, start)
                 let blank: bool = sc.last == Tok_Kind.newline
                 if !continues(sc) and !blank {
                     found = token(sc, Tok_Kind.newline, "", span)

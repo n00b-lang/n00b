@@ -1,129 +1,129 @@
-import diag
-import ebnf_scan
-import lex_spec
+import internal.diag
+import internal.scan
+import internal.lex.spec
 
 enum Item_Kind { word = 0, text, class, dots, arrow, set_name, end_rule, eof }
 
 record Item {
     kind: Item_Kind
     text: string
-    span: diag.Span
+    span: internal.diag.Span
 }
 
-object Lex_Loader {
-    sc:      ebnf_scan.Ebnf_Scanner
-    spec:    lex_spec.Lex_Spec
-    schemas: Dict[string, lex_spec.Rule_Schema]
+object Loader {
+    sc:      internal.scan.Ebnf_Scanner
+    spec:    internal.lex.spec.Spec
+    schemas: Dict[string, internal.lex.spec.Rule_Schema]
     ahead:   Item?
 }
 
-func __init(self: Lex_Loader, text: string, source_name: string) {
-    self.sc = new[ebnf_scan.Ebnf_Scanner](text)
-    self.spec = new[lex_spec.Lex_Spec](source_name)
-    self.schemas = lex_spec.schema_table()
+func __init(self: Loader, text: string, source_name: string) {
+    self.sc = new[internal.scan.Ebnf_Scanner](text)
+    self.spec = new[internal.lex.spec.Spec](source_name)
+    self.schemas = internal.lex.spec.schema_table()
     self.ahead = nil
 }
 
-private func diagnostic(l: Lex_Loader, code: string, message: string,
-                        span: diag.Span) -> diag.Diagnostic {
-    let d: diag.Diagnostic = new[diag.Diagnostic]("lex/" + code, message, span)
+private func diagnostic(l: Loader, code: string, message: string,
+                        span: internal.diag.Span) -> internal.diag.Diagnostic {
+    let d: internal.diag.Diagnostic = new[internal.diag.Diagnostic]("lex/" + code, message, span)
     return d
 }
 
-private func item(l: Lex_Loader, kind: Item_Kind, text: string,
-                  from: ebnf_scan.Mark) -> Item {
-    return (kind = kind, text = text, span = ebnf_scan.span_from(l.sc, from))
+private func item(l: Loader, kind: Item_Kind, text: string,
+                  from: internal.scan.Mark) -> Item {
+    return (kind = kind, text = text, span = internal.scan.span_from(l.sc, from))
 }
 
 private func is_word_char(c: char) -> bool {
-    return ebnf_scan.is_word_char(c) or c == '-'
+    return internal.scan.is_word_char(c) or c == '-'
 }
 
-private func skip_to_content(l: Lex_Loader) -> bool {
-    let sc: ebnf_scan.Ebnf_Scanner = l.sc
-    while !ebnf_scan.at_end(sc) {
+private func skip_to_content(l: Loader) -> bool {
+    let sc: internal.scan.Ebnf_Scanner = l.sc
+    while !internal.scan.at_end(sc) {
         let start: uint = sc.pos
-        ebnf_scan.skip_blanks(sc)
-        let c: char = ebnf_scan.peek(sc)
+        internal.scan.skip_blanks(sc)
+        let c: char = internal.scan.peek(sc)
         if c == '#' {
-            ebnf_scan.skip_comment(sc)
+            internal.scan.skip_comment(sc)
         }
-        if ebnf_scan.at_end(sc) {
+        if internal.scan.at_end(sc) {
             return false
         }
-        if ebnf_scan.peek(sc) != '\n' {
+        if internal.scan.peek(sc) != '\n' {
             return sc.pos > start
         }
-        ebnf_scan.step(sc)
+        internal.scan.step(sc)
     }
     return false
 }
 
-private func scan(l: Lex_Loader) -> Item {
-    let sc: ebnf_scan.Ebnf_Scanner = l.sc
+private func scan(l: Loader) -> Item {
+    let sc: internal.scan.Ebnf_Scanner = l.sc
     while true {
-        ebnf_scan.skip_blanks(sc)
-        let from: ebnf_scan.Mark = ebnf_scan.mark(sc)
-        if ebnf_scan.at_end(sc) {
+        internal.scan.skip_blanks(sc)
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        if internal.scan.at_end(sc) {
             return item(l, Item_Kind.eof, "", from)
         }
-        let c: char = ebnf_scan.peek(sc)
+        let c: char = internal.scan.peek(sc)
         if c == '#' {
-            ebnf_scan.skip_comment(sc)
+            internal.scan.skip_comment(sc)
             continue
         }
         if c == '\n' {
-            ebnf_scan.step(sc)
+            internal.scan.step(sc)
             if skip_to_content(l) {
                 continue
             }
             return item(l, Item_Kind.end_rule, "", from)
         }
         if c == '"' or c == '\'' {
-            let text: string = ebnf_scan.literal(sc, from)
+            let text: string = internal.scan.literal(sc, from)
             return item(l, Item_Kind.text, text, from)
         }
         if c == '%' {
-            ebnf_scan.step(sc)
+            internal.scan.step(sc)
             let name_start: uint = sc.pos
-            while !ebnf_scan.at_end(sc) and is_word_char(ebnf_scan.peek(sc)) {
-                ebnf_scan.step(sc)
+            while !internal.scan.at_end(sc) and is_word_char(internal.scan.peek(sc)) {
+                internal.scan.step(sc)
             }
-            return item(l, Item_Kind.class, ebnf_scan.slice(sc, name_start),
+            return item(l, Item_Kind.class, internal.scan.slice(sc, name_start),
                         from)
         }
-        if c == '.' and ebnf_scan.peek(sc, ahead = 1) == '.' {
-            ebnf_scan.step(sc)
-            ebnf_scan.step(sc)
+        if c == '.' and internal.scan.peek(sc, ahead = 1) == '.' {
+            internal.scan.step(sc)
+            internal.scan.step(sc)
             return item(l, Item_Kind.dots, "..", from)
         }
-        if c == '-' and ebnf_scan.peek(sc, ahead = 1) == '>' {
-            ebnf_scan.step(sc)
-            ebnf_scan.step(sc)
+        if c == '-' and internal.scan.peek(sc, ahead = 1) == '>' {
+            internal.scan.step(sc)
+            internal.scan.step(sc)
             return item(l, Item_Kind.arrow, "->", from)
         }
-        if ebnf_scan.is_word_char(c) {
-            while !ebnf_scan.at_end(sc) and is_word_char(ebnf_scan.peek(sc)) {
-                ebnf_scan.step(sc)
+        if internal.scan.is_word_char(c) {
+            while !internal.scan.at_end(sc) and is_word_char(internal.scan.peek(sc)) {
+                internal.scan.step(sc)
             }
-            let text: string = ebnf_scan.slice(sc, from.byte)
-            if ebnf_scan.peek(sc) == ':' {
-                ebnf_scan.step(sc)
+            let text: string = internal.scan.slice(sc, from.byte)
+            if internal.scan.peek(sc) == ':' {
+                internal.scan.step(sc)
                 return item(l, Item_Kind.set_name, text, from)
             }
             return item(l, Item_Kind.word, text, from)
         }
-        ebnf_scan.step_char(sc)
-        var d: diag.Diagnostic = diagnostic(l,"unexpected-character",
-            "unexpected `" + ebnf_scan.slice(sc, from.byte) + "`",
-            ebnf_scan.span_from(sc, from))
-        d.fixes.append(ebnf_scan.fix("delete it", d.span, ""))
-        ebnf_scan.report(sc, d)
+        internal.scan.step_char(sc)
+        var d: internal.diag.Diagnostic = diagnostic(l,"unexpected-character",
+            "unexpected `" + internal.scan.slice(sc, from.byte) + "`",
+            internal.scan.span_from(sc, from))
+        d.fixes.append(internal.scan.fix("delete it", d.span, ""))
+        internal.scan.report(sc, d)
     }
-    return item(l, Item_Kind.eof, "", ebnf_scan.mark(sc))
+    return item(l, Item_Kind.eof, "", internal.scan.mark(sc))
 }
 
-private func next(l: Lex_Loader) -> Item {
+private func next(l: Loader) -> Item {
     let held: Item? = l.ahead
     if held != nil {
         l.ahead = nil
@@ -132,7 +132,7 @@ private func next(l: Lex_Loader) -> Item {
     return scan(l)
 }
 
-private func peek(l: Lex_Loader) -> Item {
+private func peek(l: Loader) -> Item {
     let held: Item? = l.ahead
     if held != nil {
         return held.get()
@@ -142,7 +142,7 @@ private func peek(l: Lex_Loader) -> Item {
     return fresh
 }
 
-private func skip_rule(l: Lex_Loader) {
+private func skip_rule(l: Loader) {
     while true {
         let it: Item = next(l)
         if it.kind == Item_Kind.end_rule or it.kind == Item_Kind.eof {
@@ -151,7 +151,7 @@ private func skip_rule(l: Lex_Loader) {
     }
 }
 
-private func names_of(schema: lex_spec.Rule_Schema) -> List[string] {
+private func names_of(schema: internal.lex.spec.Rule_Schema) -> List[string] {
     var names: List[string] = new[List[string]]()
     for n in schema.options {
         names.append(n)
@@ -162,45 +162,45 @@ private func names_of(schema: lex_spec.Rule_Schema) -> List[string] {
     return names
 }
 
-private func unknown_word(l: Lex_Loader, it: Item, what: string,
+private func unknown_word(l: Loader, it: Item, what: string,
                           candidates: List[string]) {
-    var d: diag.Diagnostic = diagnostic(l,"unknown-" + what,
+    var d: internal.diag.Diagnostic = diagnostic(l,"unknown-" + what,
         "unknown " + what + " `" + it.text + "`", it.span)
-    let guess: string? = diag.closest_match(it.text, candidates)
+    let guess: string? = internal.diag.closest_match(it.text, candidates)
     if guess != nil {
-        d.fixes.append(ebnf_scan.fix("did you mean `" + guess.get() + "`?",
+        d.fixes.append(internal.scan.fix("did you mean `" + guess.get() + "`?",
                                      it.span, guess.get()))
     }
-    ebnf_scan.report(l.sc, d)
+    internal.scan.report(l.sc, d)
 }
 
-private func value_of(l: Lex_Loader, it: Item) -> lex_spec.Lex_Value {
-    var kind: lex_spec.Value_Kind = lex_spec.Value_Kind.word
+private func value_of(l: Loader, it: Item) -> internal.lex.spec.Value {
+    var kind: internal.lex.spec.Value_Kind = internal.lex.spec.Value_Kind.word
     if it.kind == Item_Kind.text {
-        kind = lex_spec.Value_Kind.text
+        kind = internal.lex.spec.Value_Kind.text
     }
     elif it.kind == Item_Kind.class {
-        kind = lex_spec.Value_Kind.class
+        kind = internal.lex.spec.Value_Kind.class
     }
     if it.kind == Item_Kind.text and peek(l).kind == Item_Kind.dots {
         let dots: Item = next(l)
         let close: Item = next(l)
         if close.kind != Item_Kind.text {
-            ebnf_scan.report(l.sc, diagnostic(l,"expected-close",
+            internal.scan.report(l.sc, diagnostic(l,"expected-close",
                 "`..` must be followed by a quoted closing delimiter",
                 close.span))
             l.ahead = close
             return (kind = kind, text = it.text, close = "", span = it.span)
         }
-        return (kind = lex_spec.Value_Kind.pair, text = it.text,
+        return (kind = internal.lex.spec.Value_Kind.pair, text = it.text,
                 close = close.text,
-                span = ebnf_scan.join_spans(it.span, close.span))
+                span = internal.scan.join_spans(it.span, close.span))
     }
     return (kind = kind, text = it.text, close = "", span = it.span)
 }
 
-private func parse_rule(l: Lex_Loader, head: Item) {
-    let schema_found: lex_spec.Rule_Schema? = l.schemas[head.text]
+private func parse_rule(l: Loader, head: Item) {
+    let schema_found: internal.lex.spec.Rule_Schema? = l.schemas[head.text]
     if schema_found == nil {
         var kinds: List[string] = new[List[string]]()
         for let entry in l.schemas {
@@ -210,12 +210,12 @@ private func parse_rule(l: Lex_Loader, head: Item) {
         skip_rule(l)
         return
     }
-    let schema: lex_spec.Rule_Schema = schema_found.get()
-    var rule: lex_spec.Lex_Rule = new[lex_spec.Lex_Rule](head.text, head.span)
+    let schema: internal.lex.spec.Rule_Schema = schema_found.get()
+    var rule: internal.lex.spec.Rule = new[internal.lex.spec.Rule](head.text, head.span)
     if schema.named {
         let name: Item = next(l)
         if name.kind != Item_Kind.set_name {
-            ebnf_scan.report(l.sc, diagnostic(l,"expected-set-name",
+            internal.scan.report(l.sc, diagnostic(l,"expected-set-name",
                 "`" + head.text + "` defines a named set: write `" +
                 head.text + " name: ...`", name.span))
             l.ahead = name
@@ -238,30 +238,30 @@ private func parse_rule(l: Lex_Loader, head: Item) {
             continue
         }
         if it.kind == Item_Kind.dots or it.kind == Item_Kind.set_name {
-            ebnf_scan.report(l.sc, diagnostic(l,"unexpected-token",
+            internal.scan.report(l.sc, diagnostic(l,"unexpected-token",
                 "unexpected `" + it.text + "`", it.span))
             continue
         }
-        if it.kind == Item_Kind.word and lex_spec.listed(schema.flags,
+        if it.kind == Item_Kind.word and internal.lex.spec.listed(schema.flags,
                                                          it.text) {
             rule.flags.append(it.text)
             current = nil
             outputs = false
             continue
         }
-        if it.kind == Item_Kind.word and lex_spec.listed(schema.options,
+        if it.kind == Item_Kind.word and internal.lex.spec.listed(schema.options,
                                                          it.text) {
             rule.options.append((name = it.text,
-                                 values = new[List[lex_spec.Lex_Value]](),
+                                 values = new[List[internal.lex.spec.Value]](),
                                  span = it.span))
             current = rule.options.len() - 1
             outputs = false
             continue
         }
-        let value: lex_spec.Lex_Value = value_of(l, it)
+        let value: internal.lex.spec.Value = value_of(l, it)
         if outputs {
-            if value.kind != lex_spec.Value_Kind.class {
-                ebnf_scan.report(l.sc, diagnostic(l,"expected-class",
+            if value.kind != internal.lex.spec.Value_Kind.class {
+                internal.scan.report(l.sc, diagnostic(l,"expected-class",
                     "outputs after `->` are token classes like `%NAME`",
                     value.span))
                 continue
@@ -282,7 +282,7 @@ private func parse_rule(l: Lex_Loader, head: Item) {
             unknown_word(l, it, "option", names)
         }
         else {
-            ebnf_scan.report(l.sc, diagnostic(l,"unexpected-value",
+            internal.scan.report(l.sc, diagnostic(l,"unexpected-value",
                 "`" + head.text + "` takes no value here", value.span))
         }
     }
@@ -292,15 +292,15 @@ private func parse_rule(l: Lex_Loader, head: Item) {
     if !schema.named or rule.name == "" {
         return
     }
-    let key: string = lex_spec.set_key(rule.kind, rule.name)
+    let key: string = internal.lex.spec.set_key(rule.kind, rule.name)
     let first: uint? = l.spec.sets[key]
     if first != nil {
-        var d: diag.Diagnostic = diagnostic(l,"duplicate-set",
+        var d: internal.diag.Diagnostic = diagnostic(l,"duplicate-set",
             "`" + rule.kind + " " + rule.name + ":` is already defined",
             rule.span)
         d.related.append((message = "first defined here",
                           span = l.spec.rules[first.get()].span))
-        ebnf_scan.report(l.sc, d)
+        internal.scan.report(l.sc, d)
         return
     }
     l.spec.sets[key] = at
@@ -308,21 +308,21 @@ private func parse_rule(l: Lex_Loader, head: Item) {
 
 private const optional_heads: Array[string] = ["string", "suffixes"]
 
-private func check_rule(l: Lex_Loader, schema: lex_spec.Rule_Schema,
-                        rule: lex_spec.Lex_Rule) {
-    if schema.head > 0 and !lex_spec.listed(optional_heads, rule.kind)
+private func check_rule(l: Loader, schema: internal.lex.spec.Rule_Schema,
+                        rule: internal.lex.spec.Rule) {
+    if schema.head > 0 and !internal.lex.spec.listed(optional_heads, rule.kind)
         and rule.head.len() == 0 {
-        ebnf_scan.report(l.sc, diagnostic(l,"missing-value",
+        internal.scan.report(l.sc, diagnostic(l,"missing-value",
             "`" + rule.kind + "` needs a delimiter or value first", rule.span))
     }
     if rule.outputs.len() > schema.outputs {
-        ebnf_scan.report(l.sc, diagnostic(l,"too-many-outputs",
+        internal.scan.report(l.sc, diagnostic(l,"too-many-outputs",
             "`" + rule.kind + "` produces at most " +
             decimal(schema.outputs) + " token class(es)", rule.span))
     }
     for let option in rule.options {
         if option.values.len() == 0 {
-            ebnf_scan.report(l.sc, diagnostic(l,"missing-value",
+            internal.scan.report(l.sc, diagnostic(l,"missing-value",
                 "`" + option.name + "` needs a value", option.span))
         }
     }
@@ -331,15 +331,15 @@ private func check_rule(l: Lex_Loader, schema: lex_spec.Rule_Schema,
 private const set_references: Array[string] = ["escapes", "suffixes",
     "profile", "header"]
 
-private func check_references(l: Lex_Loader) {
+private func check_references(l: Loader) {
     for let rule in l.spec.rules {
         for let option in rule.options {
-            if !lex_spec.listed(set_references, option.name) {
+            if !internal.lex.spec.listed(set_references, option.name) {
                 continue
             }
             let kind: string = option.name
             for let value in option.values {
-                if lex_spec.find_set(l.spec, kind, value.text) != nil {
+                if internal.lex.spec.find_set(l.spec, kind, value.text) != nil {
                     continue
                 }
                 var known: List[string] = new[List[string]]()
@@ -348,24 +348,24 @@ private func check_references(l: Lex_Loader) {
                         known.append(other.name)
                     }
                 }
-                var d: diag.Diagnostic = diagnostic(l, "undefined-set",
+                var d: internal.diag.Diagnostic = diagnostic(l, "undefined-set",
                     "no `" + kind + "` set is named `" + value.text + "`",
                     value.span)
-                let guess: string? = diag.closest_match(value.text, known)
+                let guess: string? = internal.diag.closest_match(value.text, known)
                 if guess != nil {
-                    d.fixes.append(ebnf_scan.fix(
+                    d.fixes.append(internal.scan.fix(
                         "did you mean `" + guess.get() + "`?", value.span,
                         guess.get()))
                 }
-                ebnf_scan.report(l.sc, d)
+                internal.scan.report(l.sc, d)
             }
         }
     }
 }
 
-func load_lex(text: string, source_name: string = "<string>")
-    -> lex_spec.Lex_Spec fail: List[diag.Diagnostic] {
-    var l: Lex_Loader = new[Lex_Loader](text, source_name)
+func load(text: string, source_name: string = "<string>")
+    -> internal.lex.spec.Spec fail: List[internal.diag.Diagnostic] {
+    var l: Loader = new[Loader](text, source_name)
     skip_to_content(l)
     while !l.sc.halted {
         let head: Item = next(l)
@@ -376,7 +376,7 @@ func load_lex(text: string, source_name: string = "<string>")
             continue
         }
         if head.kind != Item_Kind.word {
-            ebnf_scan.report(l.sc, diagnostic(l,"expected-rule",
+            internal.scan.report(l.sc, diagnostic(l,"expected-rule",
                 "expected a rule name such as `comment` or `string`",
                 head.span))
             skip_rule(l)
@@ -388,9 +388,9 @@ func load_lex(text: string, source_name: string = "<string>")
         check_references(l)
     }
     if l.sc.diags.len() > 0 {
-        var renamed: List[diag.Diagnostic] = new[List[diag.Diagnostic]]()
+        var renamed: List[internal.diag.Diagnostic] = new[List[internal.diag.Diagnostic]]()
         for let d in l.sc.diags {
-            var moved: diag.Diagnostic = d
+            var moved: internal.diag.Diagnostic = d
             if byte_len(moved.code) > 5
                 and byte_slice(moved.code, 0, 5) == "ebnf/" {
                 moved.code = "lex/" + byte_slice(moved.code, 5,
@@ -398,7 +398,7 @@ func load_lex(text: string, source_name: string = "<string>")
             }
             renamed.append(moved)
         }
-        fail diag.sorted_by_position(renamed)
+        fail internal.diag.sorted_by_position(renamed)
     }
     return l.spec
 }

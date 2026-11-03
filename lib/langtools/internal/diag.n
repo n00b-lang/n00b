@@ -213,6 +213,19 @@ func render_all(diags: List[Diagnostic], src: Source) -> string {
     return join(out, "\n")
 }
 
+func render_embedded(diags: List[Diagnostic], text: string, path: string,
+                     line: uint) -> string {
+    let offset: u32 = cast[u32](line)
+    var shifted: List[Diagnostic] = new[List[Diagnostic]]()
+    for let d in diags {
+        var moved: Diagnostic = d
+        moved.span.start_line += offset
+        moved.span.end_line += offset
+        shifted.append(moved)
+    }
+    return render_all(shifted, (name = path, text = text))
+}
+
 func stable_order(starts: List[uint]) -> Array[uint] {
     var keys: Array[u128] = new[Array[u128]](starts.len())
     var given: uint = 0

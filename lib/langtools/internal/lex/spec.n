@@ -1,49 +1,49 @@
-import diag
+import internal.diag
 
 enum Value_Kind { text = 0, word, class, pair }
 
-record Lex_Value {
+record Value {
     kind:  Value_Kind
     text:  string
     close: string
-    span:  diag.Span
+    span:  internal.diag.Span
 }
 
-record Lex_Option {
+record Option {
     name:   string
-    values: List[Lex_Value]
-    span:   diag.Span
+    values: List[Value]
+    span:   internal.diag.Span
 }
 
-record Lex_Rule {
+record Rule {
     kind:    string
     name:    string
-    head:    List[Lex_Value]
-    options: List[Lex_Option]
+    head:    List[Value]
+    options: List[Option]
     flags:   List[string]
-    outputs: List[Lex_Value]
-    span:    diag.Span
+    outputs: List[Value]
+    span:    internal.diag.Span
 }
 
-func __init(modify self: Lex_Rule, kind: string, span: diag.Span) {
+func __init(modify self: Rule, kind: string, span: internal.diag.Span) {
     self.kind = kind
     self.name = ""
-    self.head = new[List[Lex_Value]]()
-    self.options = new[List[Lex_Option]]()
+    self.head = new[List[Value]]()
+    self.options = new[List[Option]]()
     self.flags = new[List[string]]()
-    self.outputs = new[List[Lex_Value]]()
+    self.outputs = new[List[Value]]()
     self.span = span
 }
 
-record Lex_Spec {
+record Spec {
     source_name: string
-    rules:       List[Lex_Rule]
+    rules:       List[Rule]
     sets:        Dict[string, uint]
 }
 
-func __init(modify self: Lex_Spec, source_name: string) {
+func __init(modify self: Spec, source_name: string) {
     self.source_name = source_name
-    self.rules = new[List[Lex_Rule]]()
+    self.rules = new[List[Rule]]()
     self.sets = new[Dict[string, uint]]()
 }
 
@@ -131,7 +131,7 @@ func set_key(kind: string, name: string) -> string {
     return kind + ":" + name
 }
 
-func find_set(spec: Lex_Spec, kind: string, name: string) -> Lex_Rule? {
+func find_set(spec: Spec, kind: string, name: string) -> Rule? {
     let at: uint? = spec.sets[set_key(kind, name)]
     if at == nil {
         return nil
@@ -139,7 +139,7 @@ func find_set(spec: Lex_Spec, kind: string, name: string) -> Lex_Rule? {
     return spec.rules[at.get()]
 }
 
-func find_option(rule: Lex_Rule, name: string) -> Lex_Option? {
+func find_option(rule: Rule, name: string) -> Option? {
     for let option in rule.options {
         if option.name == name {
             return option
@@ -148,7 +148,7 @@ func find_option(rule: Lex_Rule, name: string) -> Lex_Option? {
     return nil
 }
 
-func has_flag(rule: Lex_Rule, flag: string) -> bool {
+func has_flag(rule: Rule, flag: string) -> bool {
     for f in rule.flags {
         if f == flag {
             return true

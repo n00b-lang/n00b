@@ -1,7 +1,7 @@
 import sort
 import text
-import diag
-import grammar
+import internal.diag
+import internal.grammar.model
 
 private func quoted(spelling: string) -> string {
     var pieces: List[string] = new[List[string]]()
@@ -44,21 +44,21 @@ private func quoted(spelling: string) -> string {
     return join(pieces, "")
 }
 
-private func quant_suffix(quant: grammar.Quant) -> string {
+private func quant_suffix(quant: internal.grammar.model.Quant) -> string {
     switch quant {
-        case grammar.Quant.opt { return "?" }
-        case grammar.Quant.star { return "*" }
-        case grammar.Quant.plus { return "+" }
+        case internal.grammar.model.Quant.opt { return "?" }
+        case internal.grammar.model.Quant.star { return "*" }
+        case internal.grammar.model.Quant.plus { return "+" }
         else { return "" }
     }
 }
 
-private func atom_text(g: grammar.Grammar, atom: grammar.Atom) -> string {
+private func atom_text(g: internal.grammar.model.Grammar, atom: internal.grammar.model.Atom) -> string {
     switch atom {
         case rule { return "<" + g.rules[atom.rule].name + ">" }
         case class { return "%" + g.classes[atom.class].name }
         case literal {
-            let lit: grammar.Literal = g.literals[atom.literal]
+            let lit: internal.grammar.model.Literal = g.literals[atom.literal]
             if lit.hard {
                 return "%" + quoted(lit.text)
             }
@@ -69,7 +69,7 @@ private func atom_text(g: grammar.Grammar, atom: grammar.Atom) -> string {
     return ""
 }
 
-private func alt_text(g: grammar.Grammar, alt: grammar.Alt) -> string {
+private func alt_text(g: internal.grammar.model.Grammar, alt: internal.grammar.model.Alt) -> string {
     var items: List[string] = new[List[string]]()
     for let item in alt.items {
         items.append(atom_text(g, item.atom) + quant_suffix(item.quant))
@@ -77,7 +77,7 @@ private func alt_text(g: grammar.Grammar, alt: grammar.Alt) -> string {
     return join(items, " ")
 }
 
-private func alts_text(g: grammar.Grammar, alts: List[grammar.Alt],
+private func alts_text(g: internal.grammar.model.Grammar, alts: List[internal.grammar.model.Alt],
                        separator: string) -> string {
     var pieces: List[string] = new[List[string]]()
     for let alt in alts {
@@ -86,41 +86,41 @@ private func alts_text(g: grammar.Grammar, alts: List[grammar.Alt],
     return join(pieces, separator)
 }
 
-private func policy_word(policy: grammar.Token_Policy) -> string {
+private func policy_word(policy: internal.grammar.model.Token_Policy) -> string {
     switch policy {
-        case grammar.Token_Policy.trivia { return "trivia" }
-        case grammar.Token_Policy.trailing { return "trailing" }
-        case grammar.Token_Policy.elastic { return "elastic" }
+        case internal.grammar.model.Token_Policy.trivia { return "trivia" }
+        case internal.grammar.model.Token_Policy.trailing { return "trailing" }
+        case internal.grammar.model.Token_Policy.elastic { return "elastic" }
         else { return "tokens" }
     }
 }
 
-private func declared_in_id_order(g: grammar.Grammar) -> List[grammar.Token_Class] {
+private func declared_in_id_order(g: internal.grammar.model.Grammar) -> List[internal.grammar.model.Token_Class] {
     var slots: Array[uint] = new[Array[uint]](g.classes.len() - 1)
     var index: uint = 0
     for let class in g.classes {
-        let raw: u128 = grammar.raw_token_id(class.id)
-        if raw > grammar.identifier_token_id {
-            slots[cast[uint](raw - grammar.identifier_token_id - 1)] = index
+        let raw: u128 = internal.grammar.model.raw_token_id(class.id)
+        if raw > internal.grammar.model.identifier_token_id {
+            slots[cast[uint](raw - internal.grammar.model.identifier_token_id - 1)] = index
         }
         index += 1
     }
-    var ordered: List[grammar.Token_Class] = new[List[grammar.Token_Class]]()
+    var ordered: List[internal.grammar.model.Token_Class] = new[List[internal.grammar.model.Token_Class]]()
     for i: uint from 0 until g.classes.len() - 1 {
         ordered.append(g.classes[slots[i]])
     }
     return ordered
 }
 
-func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
+func format(g: internal.grammar.model.Grammar, show_ids: bool = false) -> string {
     var out: List[string] = new[List[string]]()
-    let ident: grammar.Token_Class = g.classes[g.identifier]
+    let ident: internal.grammar.model.Token_Class = g.classes[g.identifier]
     if ident.name != "IDENTIFIER" {
         out.append("identifier: %" + ident.name + "\n")
     }
-    let declared: List[grammar.Token_Class] = declared_in_id_order(g)
+    let declared: List[internal.grammar.model.Token_Class] = declared_in_id_order(g)
     var run: List[string] = new[List[string]]()
-    var run_policy: grammar.Token_Policy = grammar.Token_Policy.normal
+    var run_policy: internal.grammar.model.Token_Policy = internal.grammar.model.Token_Policy.normal
     for let class in declared {
         if run.len() > 0 and class.policy != run_policy {
             out.append(policy_word(run_policy) + ": " + join(run, ", ") + "\n")
@@ -135,10 +135,10 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
     out.append("start: <" + g.rules[g.start].name + ">\n")
     if show_ids {
         out.append("\n# %" + ident.name + " = " +
-                   hex(grammar.raw_token_id(ident.id)) + "\n")
+                   hex(internal.grammar.model.raw_token_id(ident.id)) + "\n")
         for let class in declared {
             out.append("# %" + class.name + " = " +
-                       hex(grammar.raw_token_id(class.id)) + "\n")
+                       hex(internal.grammar.model.raw_token_id(class.id)) + "\n")
         }
         var spellings: Array[string] = new[Array[string]](g.literals.len())
         var at: uint = 0
@@ -148,28 +148,28 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
         }
         sort.sort(spellings)
         for i: uint from 0 until g.literals.len() {
-            let found: grammar.Literal? = grammar.find_literal(g, spellings[i])
+            let found: internal.grammar.model.Literal? = internal.grammar.model.find_literal(g, spellings[i])
             if found == nil {
                 continue
             }
-            let lit: grammar.Literal = found.get()
+            let lit: internal.grammar.model.Literal = found.get()
             var kind: string = ""
-            if grammar.is_soft(lit) {
+            if internal.grammar.model.is_soft(lit) {
                 kind = " (soft keyword)"
             }
             elif lit.hard and lit.identifier {
                 kind = " (hard keyword)"
             }
             out.append("# " + quoted(lit.text) + " = " +
-                       hex(grammar.raw_token_id(lit.id)) + kind + "\n")
+                       hex(internal.grammar.model.raw_token_id(lit.id)) + kind + "\n")
         }
     }
     var first_defs: List[uint] = new[List[uint]]()
     for let rule in g.rules {
         first_defs.append(rule.defs[0].start_byte)
     }
-    for index in diag.stable_order(first_defs) {
-        let rule: grammar.Rule = g.rules[index]
+    for index in internal.diag.stable_order(first_defs) {
+        let rule: internal.grammar.model.Rule = g.rules[index]
         let indent: string = text.repeat(" ", byte_len(rule.name) + 3)
         out.append("\n<" + rule.name + "> ::= ")
         out.append(alts_text(g, rule.alts, "\n" + indent + "| "))

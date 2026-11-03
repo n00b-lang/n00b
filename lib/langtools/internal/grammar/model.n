@@ -1,5 +1,5 @@
 import unicode
-import diag
+import internal.diag
 
 type Token_Id = u128
 
@@ -15,10 +15,10 @@ record Token_Class {
     name:   string
     id:     Token_Id
     policy: Token_Policy
-    decl:   diag.Span
+    decl:   internal.diag.Span
 }
 
-func __init(modify self: Token_Class, name: string, decl: diag.Span) {
+func __init(modify self: Token_Class, name: string, decl: internal.diag.Span) {
     self.name = name
     self.id = token_id(0)
     self.policy = Token_Policy.normal
@@ -37,7 +37,7 @@ variant Atom {
 record Item {
     atom:  Atom
     quant: Quant
-    span:  diag.Span
+    span:  internal.diag.Span
 }
 
 record Alt {
@@ -47,13 +47,13 @@ record Alt {
 record Rule {
     name: string
     alts: List[Alt]
-    defs: List[diag.Span]
+    defs: List[internal.diag.Span]
 }
 
 func __init(modify self: Rule, name: string) {
     self.name = name
     self.alts = new[List[Alt]]()
-    self.defs = new[List[diag.Span]]()
+    self.defs = new[List[internal.diag.Span]]()
 }
 
 record Literal {
@@ -61,11 +61,11 @@ record Literal {
     id:         Token_Id
     hard:       bool
     identifier: bool
-    first_use:  diag.Span
+    first_use:  internal.diag.Span
 }
 
 func __init(modify self: Literal, text: string, hard: bool,
-            first_use: diag.Span) {
+            first_use: internal.diag.Span) {
     self.text = text
     self.id = literal_token_id(text)
     self.hard = hard
