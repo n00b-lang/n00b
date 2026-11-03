@@ -1,0 +1,890 @@
+import internal.diag
+import internal.scan
+import internal.lex.spec
+import internal.lex.typical
+
+// Lex spec syntax: one setting per line, grouped into blocks.
+//
+//     extends: typical
+//     STRING {
+//         quotes: '"' "'"
+//         variant raw { prefix: r   raw: yes }
+//     }
+//
+// A block is `NAME { ... }`, or `NAME:` with an indented body. A block may
+// also sit on one line, as `NAME { key: v   key: v }`.
+
+record Item {
+    text:   string
+    quoted: bool
+    key:    bool
+    comma:  bool
+    span:   internal.diag.Span
+}
+
+record Line {
+    items:  List[Item]
+    indent: uint
+}
+
+object Loader {
+    sc:    internal.scan.Scanner
+    lines: List[Line]
+}
+
+func __init(self: Loader, text: string) {
+    self.sc = new[internal.scan.Scanner](text, "lex")
+    self.lines = []
+}
+
+private func report(l: Loader, code: string, message: string,
+                    span: internal.diag.Span) {
+    internal.scan.report(l.sc, internal.scan.diagnostic(l.sc, code, message,
+                                                        span))
+}
+
+private func suggest(l: Loader, code: string, message: string, it: Item,
+                     candidates: List[string]) {
+    var d: internal.diag.Diagnostic = internal.scan.diagnostic(l.sc, code,
+        message, it.span)
+    let guess: string? = internal.diag.closest_match(it.text, candidates)
+    if guess != nil {
+        d.fixes.append(internal.scan.fix("did you mean `" + guess + "`?",
+                                         it.span, guess))
+    }
+    internal.scan.report(l.sc, d)
+}
+
+// ---- Reading lines --------------------------------------------------------
+
+private func is_key_text(text: string) -> bool {
+    let n: uint = byte_len(text)
+    if n < 2 or byte_at(text, n - 1) != 0x3a {
+        return false
+    }
+    if !internal.scan.is_word_start(cast[char] byte_at(text, 0)) {
+        return false
+    }
+    for i: uint from 1 until n - 1 {
+        if !internal.scan.is_name_char(cast[char] byte_at(text, i)) {
+            return false
+        }
+    }
+    return true
+}
+
+private func word(l: Loader) -> Item {
+    let sc: internal.scan.Scanner = l.sc
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    while !internal.scan.at_end(sc) {
+        let c: char = internal.scan.peek(sc)
+        if c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == ',' {
+            break
+        }
+        internal.scan.step_char(sc)
+    }
+    let text: string = internal.scan.slice(sc, from.byte)
+    let span: internal.diag.Span = internal.scan.span_from(sc, from)
+    if is_key_text(text) {
+        return (text = byte_slice(text, 0, cast[int](byte_len(text) - 1)),
+                quoted = false, key = true, comma = false, span = span)
+    }
+    return (text = text, quoted = false, key = false, comma = false,
+            span = span)
+}
+
+private func read_lines(l: Loader) {
+    let sc: internal.scan.Scanner = l.sc
+    var items: List[Item] = []
+    var indent: uint = 0
+    var line_start: uint = 0
+    while !internal.scan.at_end(sc) {
+        let c: char = internal.scan.peek(sc)
+        if c == '\n' {
+            if items.len() > 0 {
+                l.lines.append((items = items, indent = indent))
+                items = []
+            }
+            internal.scan.step(sc)
+            line_start = sc.pos
+            continue
+        }
+        if internal.scan.is_blank(c) {
+            internal.scan.step(sc)
+            continue
+        }
+        if items.len() == 0 {
+            indent = sc.pos - line_start
+        }
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        if c == '#' {
+            internal.scan.skip_comment(sc)
+            continue
+        }
+        if c == ',' {
+            internal.scan.step(sc)
+            items.append((text = ",", quoted = false, key = false, comma = true,
+                          span = internal.scan.span_from(sc, from)))
+            continue
+        }
+        if c == '"' or c == '\'' {
+            let text: string = internal.scan.literal(sc, from)
+            items.append((text = text, quoted = true, key = false,
+                          comma = false,
+                          span = internal.scan.span_from(sc, from)))
+            continue
+        }
+        items.append(word(l))
+    }
+    if items.len() > 0 {
+        l.lines.append((items = items, indent = indent))
+    }
+}
+
+// ---- Settings ---------------------------------------------------------------
+
+private func value_of(it: Item) -> internal.lex.spec.Value {
+    return (text = it.text, quoted = it.quoted, span = it.span)
+}
+
+private func is_word(it: Item, text: string) -> bool {
+    return !it.quoted and !it.key and !it.comma and it.text == text
+}
+
+// Where a setting starts at `at`: its key, its operation and the index of
+// its first value. A key needs its colon except as the first word of a line.
+private func setting_at(items: List[Item], at: uint, line_start: bool)
+    -> Tuple[string, internal.lex.spec.Op, uint]? {
+    if at >= items.len() {
+        return nil
+    }
+    let it: Item = items[at]
+    if it.key {
+        return (it.text, internal.lex.spec.Op.set, at + 1)
+    }
+    var op: internal.lex.spec.Op = internal.lex.spec.Op.set
+    if is_word(it, "add") {
+        op = internal.lex.spec.Op.add
+    }
+    elif is_word(it, "remove") {
+        op = internal.lex.spec.Op.remove
+    }
+    if op != internal.lex.spec.Op.set and at + 1 < items.len() {
+        let next: Item = items[at + 1]
+        if next.key or (line_start and !next.quoted and
+                        (internal.lex.spec.known_key(next.text) or
+                         next.text == "variant")) {
+            return (next.text, op, at + 2)
+        }
+    }
+    if line_start and !it.quoted and !it.comma and items.len() > at + 1 and
+        internal.lex.spec.known_key(it.text) {
+        return (it.text, internal.lex.spec.Op.set, at + 1)
+    }
+    return nil
+}
+
+// Appends items[from until end] to a setting's groups, splitting at commas.
+private func fill(s: internal.lex.spec.Setting, items: List[Item], from: uint,
+                  end: uint) {
+    for i: uint from from until end {
+        let it: Item = items[i]
+        if it.comma {
+            s.groups.append([])
+            continue
+        }
+        s.groups[s.groups.len() - 1].append(value_of(it))
+    }
+}
+
+private func new_setting(key: string, op: internal.lex.spec.Op,
+                         span: internal.diag.Span) -> internal.lex.spec.Setting {
+    var groups: List[List[internal.lex.spec.Value]] = []
+    groups.append([])
+    return (key = key, op = op, groups = groups, own = true, span = span)
+}
+
+// Reads the settings on one line into `block`. A line that starts with no
+// key continues the block's last setting.
+private func settings_line(l: Loader, block: internal.lex.spec.Block,
+                           items: List[Item], from: uint, end: uint) {
+    var at: uint = from
+    if setting_at(items, at, true) == nil {
+        if block.settings.len() == 0 {
+            report(l, "expected-key", "expected a setting such as `quotes:`",
+                   items[at].span)
+            return
+        }
+        var last: internal.lex.spec.Setting =
+            block.settings[block.settings.len() - 1]
+        let stop: uint = next_key(items, at, end)
+        fill(last, items, at, stop)
+        at = stop
+    }
+    while at < end {
+        let found: Tuple[string, internal.lex.spec.Op, uint]? =
+            setting_at(items, at, at == from)
+        if found == nil {
+            report(l, "expected-key", "expected a setting such as `quotes:`",
+                   items[at].span)
+            return
+        }
+        let start: uint = found[2]
+        let stop: uint = next_key(items, start, end)
+        var s: internal.lex.spec.Setting = new_setting(found[0],
+            found[1], items[at].span)
+        fill(s, items, start, stop)
+        block.settings.append(s)
+        at = stop
+    }
+}
+
+private func next_key(items: List[Item], from: uint, end: uint) -> uint {
+    var at: uint = from
+    while at < end {
+        if items[at].key {
+            if at > from and (is_word(items[at - 1], "add") or
+                              is_word(items[at - 1], "remove")) {
+                return at - 1
+            }
+            return at
+        }
+        at += 1
+    }
+    return end
+}
+
+// ---- Blocks -----------------------------------------------------------------
+
+// The shape of a block header line: where its name is, and whether it opens
+// with a brace or a colon.
+record Header {
+    name:  Item
+    brace: bool
+    body:  uint
+}
+
+private func header_of(line: Line, at: uint) -> Header? {
+    let items: List[Item] = line.items
+    if at >= items.len() {
+        return nil
+    }
+    let name: Item = items[at]
+    if name.quoted or name.comma {
+        return nil
+    }
+    if name.key and items.len() == at + 1 {
+        return (name = name, brace = false, body = at + 1)
+    }
+    if !name.key and at + 1 < items.len() and is_word(items[at + 1], "{") {
+        return (name = name, brace = true, body = at + 2)
+    }
+    return nil
+}
+
+// Parses a block whose header is on line `index`; returns the line after it.
+private func block(l: Loader, index: uint, at: uint,
+                   out: internal.lex.spec.Block) -> uint {
+    let line: Line = l.lines[index]
+    let h: Header? = header_of(line, at)
+    if h == nil {
+        return index + 1
+    }
+    let items: List[Item] = line.items
+    if h.brace {
+        let last: uint = items.len() - 1
+        if last > h.body and is_word(items[last], "}") {
+            settings_line(l, out, items, h.body, last)
+            return index + 1
+        }
+        if h.body < items.len() {
+            settings_line(l, out, items, h.body, items.len())
+        }
+        var i: uint = index + 1
+        while i < l.lines.len() {
+            let body: Line = l.lines[i]
+            if body.items.len() == 1 and is_word(body.items[0], "}") {
+                return i + 1
+            }
+            i = body_line(l, out, i)
+        }
+        report(l, "unclosed-block", "`" + h.name.text + " {` is never closed",
+               h.name.span)
+        return i
+    }
+    var i: uint = index + 1
+    while i < l.lines.len() and l.lines[i].indent > line.indent {
+        i = body_line(l, out, i)
+    }
+    return i
+}
+
+private func body_line(l: Loader, out: internal.lex.spec.Block, i: uint)
+    -> uint {
+    let line: Line = l.lines[i]
+    if is_word(line.items[0], "variant") {
+        let h: Header? = header_of(line, 1)
+        if h == nil {
+            report(l, "expected-block", "write `variant NAME { ... }`",
+                   line.items[0].span)
+            return i + 1
+        }
+        var v: internal.lex.spec.Block = new[internal.lex.spec.Block](
+            h.name.text, h.name.span)
+        let next: uint = block(l, i, 1, v)
+        if v.variants.len() > 0 {
+            report(l, "nested-variant", "a variant cannot hold variants",
+                   v.variants[0].span)
+        }
+        out.variants.append(v)
+        return next
+    }
+    settings_line(l, out, line.items, 0, line.items.len())
+    return i + 1
+}
+
+// ---- The file -------------------------------------------------------------
+
+record Raw {
+    base:    string
+    removes: List[internal.lex.spec.Value]
+    blocks:  List[internal.lex.spec.Block]
+    escapes: Dict[string, internal.lex.spec.Setting]
+    sets:    Dict[string, internal.lex.spec.Setting]
+}
+
+private func definition(l: Loader, i: uint, line: Line,
+                        into: Dict[string, internal.lex.spec.Setting]) -> uint {
+    let name: Item = line.items[1]
+    var s: internal.lex.spec.Setting = new_setting(name.text,
+        internal.lex.spec.Op.set, name.span)
+    fill(s, line.items, 2, line.items.len())
+    var next: uint = i + 1
+    while next < l.lines.len() and l.lines[next].indent > line.indent {
+        let more: Line = l.lines[next]
+        fill(s, more.items, 0, more.items.len())
+        next += 1
+    }
+    into[name.text] = s
+    return next
+}
+
+private func parse(l: Loader) -> Raw {
+    var raw: Raw = (base = "", removes = [],
+        blocks = [],
+        escapes = new[Dict[string, internal.lex.spec.Setting]](),
+        sets = new[Dict[string, internal.lex.spec.Setting]]())
+    var i: uint = 0
+    while i < l.lines.len() {
+        let line: Line = l.lines[i]
+        let first: Item = line.items[0]
+        if (first.key or is_word(first, "extends") or is_word(first, "remove"))
+            and (first.text == "extends" or first.text == "remove") and
+            line.items.len() > 1 {
+            for k: uint from 1 until line.items.len() {
+                if first.text == "extends" {
+                    raw.base = line.items[k].text
+                }
+                elif !line.items[k].comma {
+                    raw.removes.append(value_of(line.items[k]))
+                }
+            }
+            i += 1
+            continue
+        }
+        if (is_word(first, "escapes") or is_word(first, "set")) and
+            line.items.len() > 1 and line.items[1].key {
+            if first.text == "escapes" {
+                i = definition(l, i, line, raw.escapes)
+            }
+            else {
+                i = definition(l, i, line, raw.sets)
+            }
+            continue
+        }
+        let h: Header? = header_of(line, 0)
+        if h == nil {
+            report(l, "expected-block",
+                   "expected a block such as `STRING { ... }`", first.span)
+            i += 1
+            continue
+        }
+        var b: internal.lex.spec.Block = new[internal.lex.spec.Block](
+            h.name.text, h.name.span)
+        i = block(l, i, 0, b)
+        raw.blocks.append(b)
+    }
+    return raw
+}
+
+// ---- Merging ----------------------------------------------------------------
+
+private func copy_setting(s: internal.lex.spec.Setting, own: bool)
+    -> internal.lex.spec.Setting {
+    var groups: List[List[internal.lex.spec.Value]] = []
+    for let g in s.groups {
+        var copy: List[internal.lex.spec.Value] = []
+        for let v in g {
+            copy.append(v)
+        }
+        groups.append(copy)
+    }
+    return (key = s.key, op = s.op, groups = groups, own = own, span = s.span)
+}
+
+private func copy_settings(settings: List[internal.lex.spec.Setting],
+                           own: bool) -> List[internal.lex.spec.Setting] {
+    var out: List[internal.lex.spec.Setting] = []
+    for let s in settings {
+        out.append(copy_setting(s, own and s.own))
+    }
+    return out
+}
+
+private func copy_block(b: internal.lex.spec.Block, own: bool)
+    -> internal.lex.spec.Block {
+    var out: internal.lex.spec.Block = new[internal.lex.spec.Block](b.name,
+                                                                    b.span)
+    out.kind = b.kind
+    out.own = own
+    out.settings = copy_settings(b.settings, own)
+    for let v in b.variants {
+        out.variants.append(copy_block(v, own and v.own))
+    }
+    return out
+}
+
+private func remove_values(group: List[internal.lex.spec.Value],
+                           drop: List[internal.lex.spec.Value])
+    -> List[internal.lex.spec.Value] {
+    var out: List[internal.lex.spec.Value] = []
+    for let v in group {
+        var keep: bool = true
+        for let d in drop {
+            if d.text == v.text {
+                keep = false
+            }
+        }
+        if keep {
+            out.append(v)
+        }
+    }
+    return out
+}
+
+private func drop_keys(modify target: internal.lex.spec.Block,
+                       keys: Array[string]) {
+    var kept: List[internal.lex.spec.Setting] = []
+    for let s in target.settings {
+        if !internal.lex.spec.listed(keys, s.key) {
+            kept.append(s)
+        }
+    }
+    target.settings = kept
+}
+
+// Applies one written setting to a block. `replaced` holds the keys this
+// block has already replaced, so a key written twice accumulates.
+private func apply(modify target: internal.lex.spec.Block,
+                   s: internal.lex.spec.Setting, replaced: Dict[string, bool]) {
+    let key: string = s.key
+    if key == "variant" {
+        if s.op == internal.lex.spec.Op.remove {
+            var kept: List[internal.lex.spec.Block] = []
+            for let v in target.variants {
+                var keep: bool = true
+                for let g in s.groups {
+                    for let name in g {
+                        keep = keep and name.text != v.name
+                    }
+                }
+                if keep {
+                    kept.append(v)
+                }
+            }
+            target.variants = kept
+        }
+        return
+    }
+    if internal.lex.spec.listed(internal.lex.spec.set_ops, key) {
+        if key == "set" {
+            drop_keys(target, internal.lex.spec.set_ops)
+        }
+        elif key == "start" {
+            drop_keys(target, ["start", "add_start", "remove_start"])
+        }
+        target.settings.append(copy_setting(s, s.own))
+        return
+    }
+    if key == "suffix" and s.op == internal.lex.spec.Op.add {
+        var line: internal.lex.spec.Setting = copy_setting(s, s.own)
+        line.op = internal.lex.spec.Op.set
+        target.settings.append(line)
+        return
+    }
+    if s.op == internal.lex.spec.Op.set {
+        if replaced[key] == nil {
+            drop_keys_named(target, key)
+            replaced[key] = true
+        }
+        target.settings.append(copy_setting(s, s.own))
+        return
+    }
+    let at: uint? = last_setting(target.settings, key)
+    if at == nil {
+        if s.op == internal.lex.spec.Op.add {
+            var fresh: internal.lex.spec.Setting = copy_setting(s, s.own)
+            fresh.op = internal.lex.spec.Op.set
+            target.settings.append(fresh)
+        }
+        return
+    }
+    var base: internal.lex.spec.Setting = target.settings[at]
+    base.own = base.own or s.own
+    let first: List[internal.lex.spec.Value] = s.groups[0]
+    if internal.lex.spec.listed(internal.lex.spec.set_keys, key) {
+        var op: string = "+"
+        if s.op == internal.lex.spec.Op.remove {
+            op = "-"
+        }
+        base.groups[0].append((text = op, quoted = false, span = s.span))
+        for let v in first {
+            base.groups[0].append(v)
+        }
+    }
+    elif s.op == internal.lex.spec.Op.add {
+        for let v in first {
+            base.groups[0].append(v)
+        }
+    }
+    else {
+        base.groups[0] = remove_values(base.groups[0], first)
+    }
+    target.settings[at] = base
+}
+
+private func last_setting(settings: List[internal.lex.spec.Setting],
+                          key: string) -> uint? {
+    var at: uint? = nil
+    for i: uint from 0 until settings.len() {
+        if settings[i].key == key {
+            at = i
+        }
+    }
+    return at
+}
+
+private func drop_keys_named(modify target: internal.lex.spec.Block,
+                             key: string) {
+    var kept: List[internal.lex.spec.Setting] = []
+    for let s in target.settings {
+        if s.key != key {
+            kept.append(s)
+        }
+    }
+    target.settings = kept
+}
+
+private func merge_settings(modify target: internal.lex.spec.Block,
+                            written: List[internal.lex.spec.Setting],
+                            own: bool) {
+    target.own = target.own or own
+    var replaced: Dict[string, bool] = new[Dict[string, bool]]()
+    for let s in written {
+        if s.key != "like" {
+            apply(target, s, replaced)
+        }
+    }
+}
+
+// Merges a written block into an existing one, variants by name.
+private func merge(modify target: internal.lex.spec.Block,
+                   written: internal.lex.spec.Block) {
+    merge_settings(target, written.settings, written.own)
+    for let v in written.variants {
+        var found: bool = false
+        for i: uint from 0 until target.variants.len() {
+            if target.variants[i].name == v.name {
+                var existing: internal.lex.spec.Block = target.variants[i]
+                merge(existing, v)
+                target.variants[i] = existing
+                found = true
+            }
+        }
+        if !found {
+            target.variants.append(copy_block(v, v.own))
+        }
+    }
+}
+
+// ---- Resolving `like` -------------------------------------------------------
+
+object Resolver {
+    l:       Loader
+    spec:    internal.lex.spec.Spec
+    written: Dict[string, internal.lex.spec.Block]
+    // Absent: not started; false: resolving now; true: done.
+    done:    Dict[string, bool]
+}
+
+// Replaces the block of the same name.
+private func put_block(spec: internal.lex.spec.Spec,
+                       b: internal.lex.spec.Block) {
+    for i: uint from 0 until spec.blocks.len() {
+        if spec.blocks[i].name == b.name {
+            spec.blocks[i] = b
+            return
+        }
+    }
+}
+
+// Gives a block its kind, filling in a `like:` block from its prototype,
+// which is resolved first.
+private func resolve(r: Resolver, name: string) {
+    let state: bool? = r.done[name]
+    if state != nil {
+        return
+    }
+    let found: internal.lex.spec.Block? = internal.lex.spec.find_block(r.spec,
+                                                                       name)
+    if found == nil {
+        return
+    }
+    var b: internal.lex.spec.Block = found
+    let w: internal.lex.spec.Block? = r.written[name]
+    if w == nil or b.kind != "" {
+        r.done[name] = true
+        return
+    }
+    r.done[name] = false
+    let like: List[internal.lex.spec.Value] =
+        internal.lex.spec.values(w, "like")
+    if like.len() == 0 {
+        if internal.lex.spec.listed(internal.lex.spec.special_blocks, name) {
+            b.kind = name
+        }
+        else {
+            report(r.l, "missing-like", "`" + name +
+                   "` needs `like:` naming a kind such as `string` or another " +
+                   "block", b.span)
+        }
+    }
+    elif internal.lex.spec.listed(internal.lex.spec.token_kinds(),
+                                  like[0].text) {
+        merge(b, w)
+        b.kind = like[0].text
+    }
+    else {
+        b = from_prototype(r, b, w, like[0])
+    }
+    put_block(r.spec, b)
+    r.done[name] = true
+}
+
+// A `like:` block: a copy of the block it names, with its own settings
+// merged in.
+private func from_prototype(r: Resolver, b: internal.lex.spec.Block,
+                            w: internal.lex.spec.Block,
+                            like: internal.lex.spec.Value)
+    -> internal.lex.spec.Block {
+    let proto: string = like.text
+    let state: bool? = r.done[proto]
+    if state != nil and !state {
+        report(r.l, "like-cycle", "`like:` loops back to `" + proto + "`",
+               like.span)
+        return b
+    }
+    resolve(r, proto)
+    let found: internal.lex.spec.Block? = internal.lex.spec.find_block(r.spec,
+                                                                       proto)
+    if found == nil {
+        var names: List[string] = []
+        for let other in r.spec.blocks {
+            names.append(other.name)
+        }
+        for k in internal.lex.spec.token_kinds() {
+            names.append(k)
+        }
+        var d: internal.diag.Diagnostic = internal.scan.diagnostic(r.l.sc,
+            "unknown-like", "`" + proto + "` is not a block or a kind",
+            like.span)
+        let guess: string? = internal.diag.closest_match(proto, names)
+        if guess != nil {
+            d.fixes.append(internal.scan.fix("did you mean `" + guess +
+                                             "`?", like.span, guess))
+        }
+        internal.scan.report(r.l.sc, d)
+        return b
+    }
+    var built: internal.lex.spec.Block = copy_block(found, true)
+    built.name = b.name
+    built.span = b.span
+    merge(built, w)
+    return built
+}
+
+private func check_keys(l: Loader, b: internal.lex.spec.Block, kind: string) {
+    let token: bool = internal.lex.spec.is_token_block(b.name)
+    check_settings(l, b.settings, kind, token)
+    for let v in b.variants {
+        check_settings(l, v.settings, kind, token)
+    }
+}
+
+private func check_settings(l: Loader,
+                            settings: List[internal.lex.spec.Setting],
+                            kind: string, token: bool) {
+    let allowed: Array[string] = internal.lex.spec.kind_keys(kind)
+    for let s in settings {
+        if !s.own or s.key == "variant" or
+            internal.lex.spec.listed(allowed, s.key) or
+            (token and
+             internal.lex.spec.listed(internal.lex.spec.token_keys, s.key)) {
+            continue
+        }
+        var names: List[string] = []
+        for k in allowed {
+            names.append(k)
+        }
+        let it: Item = (text = s.key, quoted = false, key = true,
+                        comma = false, span = s.span)
+        suggest(l, "unknown-key", "`" + kind + "` blocks have no `" + s.key +
+                "` setting", it, names)
+    }
+}
+
+// ---- Loading ----------------------------------------------------------------
+
+// The spec a file extends. The built-in `typical` extends nothing, so it is
+// built here directly; any other base was loaded by the caller.
+private func base_spec(l: Loader, raw: Raw, bases: Dict[string,
+                       internal.lex.spec.Spec]) -> internal.lex.spec.Spec {
+    if raw.base == "" {
+        return new[internal.lex.spec.Spec]("")
+    }
+    if raw.base == "typical" {
+        var t: Loader = new[Loader](internal.lex.typical.text())
+        read_lines(t)
+        return build(t, parse(t), new[internal.lex.spec.Spec](""), "typical")
+    }
+    let found: internal.lex.spec.Spec? = bases[raw.base]
+    if found == nil {
+        report(l, "unknown-base", "no spec named `" + raw.base +
+               "` was given to extend", l.lines[0].items[0].span)
+        return new[internal.lex.spec.Spec]("")
+    }
+    return found
+}
+
+// A parsed file applied to the spec it extends.
+private func build(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
+                   source_name: string) -> internal.lex.spec.Spec {
+    var spec: internal.lex.spec.Spec = inherit(l, raw, base, source_name)
+    var r: Resolver = new[Resolver](l, spec)
+    apply_written(r, raw)
+    for let b in raw.blocks {
+        resolve(r, b.name)
+    }
+    for let b in spec.blocks {
+        if b.kind != "" {
+            check_keys(l, b, b.kind)
+        }
+    }
+    return spec
+}
+
+// A copy of the base spec, less the blocks this file removes, with this
+// file's named escapes and sets added.
+private func inherit(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
+                     source_name: string) -> internal.lex.spec.Spec {
+    var spec: internal.lex.spec.Spec = new[internal.lex.spec.Spec](source_name)
+    for let b in base.blocks {
+        var removed: bool = false
+        for let r in raw.removes {
+            removed = removed or r.text == b.name
+        }
+        if !removed {
+            spec.blocks.append(copy_block(b, false))
+        }
+    }
+    for let r in raw.removes {
+        if internal.lex.spec.find_block(base, r.text) == nil {
+            report(l, "unknown-block", "`" + r.text +
+                   "` is not a block of the spec this one extends", r.span)
+        }
+    }
+    for let entry in base.escapes {
+        spec.escapes[entry.key] = copy_setting(entry.value, false)
+    }
+    for let entry in base.sets {
+        spec.sets[entry.key] = copy_setting(entry.value, false)
+    }
+    for let entry in raw.escapes {
+        spec.escapes[entry.key] = entry.value
+    }
+    for let entry in raw.sets {
+        spec.sets[entry.key] = entry.value
+    }
+    return spec
+}
+
+// Merges each written block into the base block of the same name, or adds
+// it. A new block with `like:` is filled in later, by `resolve`.
+private func apply_written(r: Resolver, raw: Raw) {
+    for let w in raw.blocks {
+        r.written[w.name] = w
+        let found: internal.lex.spec.Block? =
+            internal.lex.spec.find_block(r.spec, w.name)
+        if found != nil {
+            if internal.lex.spec.has(w, "like") {
+                report(r.l, "like-on-existing", "`" + w.name +
+                       "` already exists; `like:` only starts a new block",
+                       w.span)
+            }
+            var existing: internal.lex.spec.Block = found
+            merge(existing, w)
+            put_block(r.spec, existing)
+            continue
+        }
+        var fresh: internal.lex.spec.Block =
+            new[internal.lex.spec.Block](w.name, w.span)
+        if !internal.lex.spec.has(w, "like") {
+            merge(fresh, w)
+        }
+        r.spec.blocks.append(fresh)
+    }
+}
+
+private func load_text(text: string, source_name: string,
+                       bases: Dict[string, internal.lex.spec.Spec])
+    -> internal.lex.spec.Spec fail: List[internal.diag.Diagnostic] {
+    var l: Loader = new[Loader](text)
+    read_lines(l)
+    let raw: Raw = parse(l)
+    let spec: internal.lex.spec.Spec = build(l, raw, base_spec(l, raw, bases),
+                                             source_name)
+    if l.sc.diags.len() > 0 {
+        fail internal.diag.sorted_by_position(l.sc.diags)
+    }
+    return spec
+}
+
+func __init(self: Resolver, l: Loader, spec: internal.lex.spec.Spec) {
+    self.l = l
+    self.spec = spec
+    self.written = new[Dict[string, internal.lex.spec.Block]]()
+    self.done = new[Dict[string, bool]]()
+}
+
+// Loads a lex spec. `extends: typical` starts from the built-in typical
+// language; any other base must be passed in `bases`, by name.
+func load(text: string, source_name: string = "<string>",
+          bases: Dict[string, internal.lex.spec.Spec]? = nil)
+    -> internal.lex.spec.Spec fail: List[internal.diag.Diagnostic] {
+    var given: Dict[string, internal.lex.spec.Spec] =
+        new[Dict[string, internal.lex.spec.Spec]]()
+    if bases != nil {
+        given = bases
+    }
+    return load_text(text, source_name, given)!
+}

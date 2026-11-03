@@ -1,0 +1,57 @@
+# ../../../../lantern/grammars/lua.bnf ../lex/lua.lex ../samples/edge.lua
+local                  1:1  local
+IDENTIFIER             1:7  a
+=                      1:9  =
+INTEGER                1:11  0x1F
++                      1:16  +
+FLOAT                  1:18  0xA.8p1
++                      1:26  +
+FLOAT                  1:28  1.5e3
++                      1:34  +
+FLOAT                  1:36  .5
++                      1:39  +
+FLOAT                  1:41  3.
++                      1:44  +
+FLOAT                  1:46  0x.1
+local                  2:1  local
+IDENTIFIER             2:7  s
+=                      2:9  =
+STRING                 2:11  "dq \"esc\""
+..                     2:24  ..
+STRING                 2:27  'sq \'esc\''
+local                  3:1  local
+IDENTIFIER             3:7  raw
+=                      3:11  =
+STRING                 3:13  [[
+multi line
+raw]]
+local                  7:12  local
+IDENTIFIER             7:18  b
+=                      7:20  =
+IDENTIFIER             7:22  a
+//                     7:24  //
+INTEGER                7:27  2
+~=                     7:29  ~=
+INTEGER                7:32  3
+and                    7:34  and
+IDENTIFIER             7:38  a
+>=                     7:40  >=
+IDENTIFIER             7:43  b
+local                  9:1  local
+IDENTIFIER             9:7  t
+=                      9:9  =
+{                      9:11  {
+INTEGER                9:12  1
+,                      9:13  ,
+INTEGER                9:15  2
+,                      9:16  ,
+INTEGER                9:18  3
+}                      9:19  }
+;                      9:20  ;
+IDENTIFIER             9:22  t
+[                      9:23  [
+#                      9:24  #
+IDENTIFIER             9:25  t
+]                      9:26  ]
+=                      9:28  =
+...                    9:30  ...

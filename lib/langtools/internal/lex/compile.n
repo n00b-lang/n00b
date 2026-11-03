@@ -1,0 +1,1532 @@
+import unicode
+import unicode.query
+import internal.diag
+import internal.scan
+import internal.grammar.model
+import internal.lex.spec
+import internal.lex.load
+import internal.lex.chars
+
+// The compiled lexer: the spec's blocks turned into the tables the
+// tokenizer runs on.
+
+record Comment {
+    open:   string
+    close:  string
+    fill:   string
+    nested: bool
+    class:  internal.grammar.model.Token_Id?
+}
+
+record Escape_Prefix {
+    prefix: string
+    width:  uint
+    digits: internal.lex.chars.Char_Set
+}
+
+record Escapes {
+    constrained: bool
+    chars:       internal.lex.chars.Char_Set
+    prefixes:    List[Escape_Prefix]
+}
+
+record Quoted {
+    open:       string
+    close:      string
+    nest_open:  string
+    escape:     string
+    escapes:    Escapes
+    raw:        bool
+    multiline:  bool
+    scalar:     bool
+    nested:     bool
+    class:      internal.grammar.model.Token_Id?
+    hole_open:  string
+    hole_close: string
+    holes:      bool
+    mid_class:  internal.grammar.model.Token_Id?
+    end_class:  internal.grammar.model.Token_Id?
+}
+
+record Suffix {
+    text:       string
+    class:      internal.grammar.model.Token_Id?
+    integer:    bool
+    float_only: bool
+}
+
+record Number_Form {
+    prefix:         string
+    sign:           internal.lex.chars.Char_Set
+    digits:         internal.lex.chars.Char_Set
+    sep:            internal.lex.chars.Char_Set
+    after_prefix:   bool
+    sep_repeat:     bool
+    sep_trailing:   bool
+    point:          bool
+    leading:        bool
+    trailing:       bool
+    needs_exponent: bool
+    exp:            internal.lex.chars.Char_Set
+    suffixes:       List[Suffix]
+    int_class:      internal.grammar.model.Token_Id?
+    float_class:    internal.grammar.model.Token_Id?
+}
+
+enum Policy { allow = 0, warn, reject }
+
+record Profile {
+    normalize:   string
+    mixed:       Policy
+    confusables: Policy
+    emoji:       Policy
+    scripts:     Dict[u16, bool]
+    common:      u16
+    inherited:   u16
+}
+
+record Identifier_Rule {
+    start:   internal.lex.chars.Char_Pred
+    cont:    internal.lex.chars.Char_Pred
+    class:   internal.grammar.model.Token_Id?
+    profile: Profile
+}
+
+record Recovery {
+    sync:    List[string]
+    consume: bool
+    stop:    bool
+    class:   internal.grammar.model.Token_Id?
+}
+
+record Layout {
+    brackets:         string
+    line_continue:    string
+    indent:           internal.grammar.model.Token_Id?
+    dedent:           internal.grammar.model.Token_Id?
+    newline:          internal.grammar.model.Token_Id?
+    newline_each:     bool
+    eof:              internal.grammar.model.Token_Id?
+    terminator:       internal.grammar.model.Token_Id?
+    terminator_class: bool
+    after_ids:        Dict[u128, bool]
+    tab_width:        uint
+    reject_tabs:      bool
+    reject_spaces:    bool
+    reject_mixed:     bool
+    reject_unmatched: bool
+    bracket_newlines: bool
+    dedent_newline:   bool
+    values:           Dict[u128, bool]
+}
+
+func uses_lines(layout: Layout) -> bool {
+    return layout.newline != nil or layout.indent != nil or
+        layout.terminator != nil
+}
+
+record Regex {
+    open:      string
+    close:     string
+    flags:     internal.lex.chars.Char_Set
+    not_after: Dict[u128, bool]
+    class:     internal.grammar.model.Token_Id?
+}
+
+record Sigil {
+    prefix:        string
+    digits:        bool
+    before_string: bool
+    unless_closed: bool
+    attach_after:  Dict[u128, bool]
+    class:         internal.grammar.model.Token_Id?
+}
+
+enum Pad { none = 0, optional, required }
+
+record Fence {
+    open:       string
+    close:      string
+    fill:       string
+    body_open:  string
+    body_close: string
+    minimum:    uint
+    pad:        Pad
+    label:      bool
+    class:      internal.grammar.model.Token_Id?
+}
+
+record Directive {
+    open:  string
+    eol:   internal.grammar.model.Token_Id?
+    class: internal.grammar.model.Token_Id?
+}
+
+record Region {
+    open:  string
+    close: string
+    line:  string
+}
+
+record Heredoc {
+    open:              string
+    unquoted:          bool
+    single:            bool
+    double:            bool
+    terminator_indent: bool
+    terminator_tail:   bool
+    strip:             bool
+    queue:             bool
+    class:             internal.grammar.model.Token_Id?
+}
+
+record Embed {
+    open:        string
+    close:       string
+    open_class:  internal.grammar.model.Token_Id?
+    close_class: internal.grammar.model.Token_Id?
+    class:       internal.grammar.model.Token_Id?
+}
+
+object Lexer {
+    g:              internal.grammar.model.Grammar
+    layout:         Layout
+    space:          internal.lex.chars.Char_Pred
+    newline:        internal.lex.chars.Char_Pred
+    rejected:       internal.lex.chars.Char_Pred
+    reject:         bool
+    recover:        bool
+    bidi:           Policy
+    bidi_classes:   Dict[u128, Policy]
+    comments:       List[Comment]
+    line_comments:  List[string]
+    regions:        List[Region]
+    directives:     List[Directive]
+    strings:        List[Quoted]
+    fences:         List[Fence]
+    numbers:        List[Number_Form]
+    plain:          Number_Form?
+    identifiers:    List[Identifier_Rule]
+    sigils:         List[Sigil]
+    regexes:        List[Regex]
+    heredocs:       List[Heredoc]
+    embeds:         List[Embed]
+    recoveries:     Dict[u128, Recovery]
+    starters:       Array[u32]
+    bracket_delta:  Array[i8]
+    comment_starts: List[List[uint]]
+    string_starts:  List[List[uint]]
+    terminals:      List[List[uint]]
+    boundary:       List[bool]
+    decimal:        internal.lex.chars.Char_Set
+}
+
+func __init(self: Lexer, g: internal.grammar.model.Grammar) {
+    self.g = g
+    self.layout = (brackets = "", line_continue = "", indent = nil,
+        dedent = nil, newline = nil, newline_each = false, eof = nil,
+        terminator = nil, terminator_class = false,
+        after_ids = new[Dict[u128, bool]](), tab_width = 8,
+        reject_tabs = false, reject_spaces = false, reject_mixed = false,
+        reject_unmatched = false, bracket_newlines = false,
+        dedent_newline = false, values = new[Dict[u128, bool]]())
+    self.space = internal.lex.chars.fixed(" \t" +
+        from_char(cast[char] 0x0c) + from_char(cast[char] 0x0b))
+    self.newline = internal.lex.chars.fixed("\n\r")
+    self.rejected = internal.lex.chars.fixed("")
+    self.reject = false
+    self.recover = true
+    self.bidi = Policy.allow
+    self.bidi_classes = new[Dict[u128, Policy]]()
+    self.comments = []
+    self.line_comments = []
+    self.regions = []
+    self.directives = []
+    self.strings = []
+    self.fences = []
+    self.numbers = []
+    self.plain = nil
+    self.identifiers = []
+    self.sigils = []
+    self.regexes = []
+    self.heredocs = []
+    self.embeds = []
+    self.recoveries = new[Dict[u128, Recovery]]()
+    self.starters = new[Array[u32]](256)
+    self.bracket_delta = new[Array[i8]](256)
+    self.comment_starts = []
+    self.string_starts = []
+    self.terminals = []
+    self.boundary = []
+    self.decimal = internal.lex.chars.char_set("0123456789")
+}
+
+func is_space(lx: Lexer, c: char) -> bool {
+    return internal.lex.chars.contains(lx.space, c)
+}
+
+func is_line_end(lx: Lexer, c: char) -> bool {
+    return internal.lex.chars.contains(lx.newline, c)
+}
+
+// Whether `c` can continue a word. A spec without identifiers still has
+// words, such as the `abc` in `12abc`: they are Unicode identifiers.
+func continues_identifier(lx: Lexer, c: char) -> bool {
+    if lx.identifiers.len() == 0 {
+        return internal.grammar.model.is_identifier_continue(c)
+    }
+    for let rule in lx.identifiers {
+        if internal.lex.chars.contains(rule.cont, c) {
+            return true
+        }
+    }
+    return false
+}
+
+// ---- Compiling --------------------------------------------------------------
+
+object Compiler {
+    lexer:  Lexer
+    spec:   internal.lex.spec.Spec
+    diags:  List[internal.diag.Diagnostic]
+    forms:  Dict[string, uint]
+    sides:  List[Number_Side]
+    sets:   Dict[string, internal.lex.chars.Char_Pred]
+}
+
+func __init(self: Compiler, spec: internal.lex.spec.Spec,
+            g: internal.grammar.model.Grammar) {
+    self.lexer = new[Lexer](g)
+    self.spec = spec
+    self.diags = []
+    self.forms = new[Dict[string, uint]]()
+    self.sides = []
+    self.sets = new[Dict[string, internal.lex.chars.Char_Pred]]()
+}
+
+private func report(c: Compiler, code: string, message: string,
+                    span: internal.diag.Span) {
+    c.diags.append(new[internal.diag.Diagnostic]("lex/" + code, message,
+                                                 span))
+}
+
+private func looks_like_class(text: string) -> bool {
+    return internal.lex.spec.is_token_block(text)
+}
+
+// A grammar class by name. An unknown name is an error when the spec
+// itself wrote it; from a base spec it is dropped.
+private func class_named(c: Compiler, text: string, span: internal.diag.Span,
+                         own: bool) -> internal.grammar.model.Token_Id? {
+    let found: internal.grammar.model.Token_Class? =
+        internal.grammar.model.find_class(c.lexer.g, text)
+    if found != nil {
+        return found.id
+    }
+    if !own {
+        return nil
+    }
+    var names: List[string] = []
+    for let class in c.lexer.g.classes {
+        names.append(class.name)
+    }
+    var d: internal.diag.Diagnostic = new[internal.diag.Diagnostic](
+        "lex/unknown-class", "`" + text +
+        "` is not a token class of the grammar", span)
+    let guess: string? = internal.diag.closest_match(text, names)
+    if guess != nil {
+        d.fixes.append((message = "did you mean `" + guess + "`?",
+                        span = span, replacement = guess))
+    }
+    c.diags.append(d)
+    return nil
+}
+
+private func setting_class(c: Compiler, b: internal.lex.spec.Block,
+                           key: string) -> internal.grammar.model.Token_Id? {
+    let s: internal.lex.spec.Setting? = internal.lex.spec.setting(b, key)
+    if s == nil or s.groups[0].len() == 0 {
+        return nil
+    }
+    let v: internal.lex.spec.Value = s.groups[0][0]
+    return class_named(c, v.text, v.span, s.own)
+}
+
+// Token ids for a list of classes and literals, as in `not-after`.
+private func token_set(c: Compiler, b: internal.lex.spec.Block, key: string)
+    -> Dict[u128, bool] {
+    var out: Dict[u128, bool] = new[Dict[u128, bool]]()
+    for let s in internal.lex.spec.settings(b, key) {
+        for let v in s.groups[0] {
+            if !v.quoted and looks_like_class(v.text) {
+                let id: internal.grammar.model.Token_Id? =
+                    class_named(c, v.text, v.span, s.own)
+                if id != nil {
+                    out[internal.grammar.model.raw_token_id(id)] = true
+                }
+                continue
+            }
+            out[internal.grammar.model.raw_token_id(
+                internal.grammar.model.literal_token_id(v.text))] = true
+        }
+    }
+    return out
+}
+
+private func choice(c: Compiler, b: internal.lex.spec.Block, key: string,
+                    allowed: Array[string], fallback: string) -> string {
+    let all: List[internal.lex.spec.Value] = internal.lex.spec.head(b, key)
+    if all.len() == 0 {
+        return fallback
+    }
+    var spelled: List[string] = []
+    for let v in all {
+        spelled.append(v.text)
+    }
+    let word: string = join(spelled, " ")
+    if !internal.lex.spec.listed(allowed, word) {
+        var quoted: List[string] = []
+        for w in allowed {
+            quoted.append("`" + w + "`")
+        }
+        report(c, "bad-value", "`" + key + "` takes " + join(quoted, ", "),
+               all[0].span)
+        return fallback
+    }
+    return word
+}
+
+private func policy(c: Compiler, b: internal.lex.spec.Block, key: string,
+                    fallback: Policy) -> Policy {
+    let word: string = choice(c, b, key, ["allow", "warn", "reject"], "")
+    if word == "allow" {
+        return Policy.allow
+    }
+    if word == "warn" {
+        return Policy.warn
+    }
+    if word == "reject" {
+        return Policy.reject
+    }
+    return fallback
+}
+
+// Texts from a setting's first group, each written case expanded when the
+// setting says `any case`.
+private func texts(b: internal.lex.spec.Block, key: string) -> List[string] {
+    var out: List[string] = []
+    let any_case: bool = internal.lex.spec.has_modifier(b, key, "any case")
+    for let v in internal.lex.spec.head(b, key) {
+        if v.text == "none" and !v.quoted {
+            continue
+        }
+        let text: string = internal.lex.chars.decoded(v.text)
+        if any_case {
+            for spelling in cases(text) {
+                add_unique(out, spelling)
+            }
+        }
+        else {
+            add_unique(out, text)
+        }
+    }
+    return out
+}
+
+private func add_unique(out: List[string], text: string) {
+    for t in out {
+        if t == text {
+            return
+        }
+    }
+    out.append(text)
+}
+
+// Every upper/lower spelling of an ASCII word.
+private func cases(text: string) -> List[string] {
+    var out: List[string] = []
+    out.append("")
+    for i: uint from 0 until byte_len(text) {
+        let b: u8 = byte_at(text, i)
+        var next: List[string] = []
+        for prefix in out {
+            next.append(prefix + from_char(cast[char] b))
+            if b >= 0x61 and b <= 0x7a {
+                next.append(prefix + from_char(cast[char](b - 0x20)))
+            }
+            elif b >= 0x41 and b <= 0x5a {
+                next.append(prefix + from_char(cast[char](b + 0x20)))
+            }
+        }
+        out = next
+    }
+    return out
+}
+
+private func joined(b: internal.lex.spec.Block, key: string) -> string {
+    return join(texts(b, key), "")
+}
+
+// ---- Character sets -------------------------------------------------------
+
+// Adds the terms of a set expression: names, ranges and characters joined
+// by `+` and `-`. A term with no operator before it gets `add`.
+private func build(c: Compiler, into: List[internal.lex.chars.Step],
+                   values: List[internal.lex.spec.Value], add: bool,
+                   start: bool) {
+    var sign: bool = add
+    for let v in values {
+        if !v.quoted and v.text == "+" {
+            sign = true
+            continue
+        }
+        if !v.quoted and v.text == "-" {
+            sign = false
+            continue
+        }
+        let t: internal.lex.chars.Step? = term(c, v, start)
+        if t != nil {
+            var step: internal.lex.chars.Step = t
+            step.add = sign
+            into.append(step)
+        }
+        sign = add
+    }
+}
+
+private func term(c: Compiler, v: internal.lex.spec.Value, start: bool)
+    -> internal.lex.chars.Step? {
+    if v.quoted {
+        return internal.lex.chars.chars_term(v.text)
+    }
+    let ch: char? = internal.lex.chars.char_of(v.text)
+    if ch != nil {
+        return internal.lex.chars.chars_term(from_char(ch))
+    }
+    let dots: int? = find_bytes(v.text, "..")
+    if dots != nil {
+        let lo: char? = internal.lex.chars.char_of(byte_slice(v.text, 0,
+                                                              dots))
+        let hi: char? = internal.lex.chars.char_of(byte_slice(v.text,
+            dots + 2, cast[int](byte_len(v.text))))
+        if lo != nil and hi != nil {
+            return internal.lex.chars.range_term(cast[u32] lo,
+                                                 cast[u32] hi)
+        }
+    }
+    let named: internal.lex.chars.Step? =
+        internal.lex.chars.named_term(v.text, start)
+    if named != nil {
+        return named
+    }
+    let known: internal.lex.chars.Char_Pred? = c.sets[v.text]
+    if known != nil {
+        return internal.lex.chars.set_term(known)
+    }
+    let defined: internal.lex.spec.Setting? = c.spec.sets[v.text]
+    if defined != nil {
+        var steps: List[internal.lex.chars.Step] = []
+        build(c, steps, defined.groups[0], true, start)
+        let named: internal.lex.chars.Char_Pred =
+            new[internal.lex.chars.Char_Pred](steps)
+        c.sets[v.text] = named
+        return internal.lex.chars.set_term(named)
+    }
+    report(c, "unknown-set", "`" + v.text +
+           "` is not a character, a range or a named set", v.span)
+    return nil
+}
+
+private func pred_of(c: Compiler, b: internal.lex.spec.Block, key: string)
+    -> internal.lex.chars.Char_Pred {
+    var steps: List[internal.lex.chars.Step] = []
+    build(c, steps, internal.lex.spec.head(b, key), true, false)
+    return new[internal.lex.chars.Char_Pred](steps)
+}
+
+private func ascii_set(c: Compiler, b: internal.lex.spec.Block, key: string)
+    -> internal.lex.chars.Char_Set {
+    return internal.lex.chars.ascii_members(pred_of(c, b, key))
+}
+
+// ---- Recovery -------------------------------------------------------------
+
+// `on-error`: `keep going` (the default), `skip to CHARS`, or `stop`.
+private func on_error(c: Compiler, b: internal.lex.spec.Block,
+                      class: internal.grammar.model.Token_Id?, quoted: bool) {
+    if class == nil {
+        return
+    }
+    var r: Recovery = (sync = [], consume = false,
+                       stop = false, class = class)
+    let words: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
+                                                                      "on-error")
+    if words.len() == 0 or (words.len() == 2 and words[0].text == "keep" and
+                            words[1].text == "going") {
+        if quoted {
+            r.sync.append("\n")
+        }
+    }
+    elif words[0].text == "stop" {
+        r.stop = true
+    }
+    elif words.len() > 2 and words[0].text == "skip" and
+        words[1].text == "to" {
+        r.consume = true
+        for i: uint from 2 until words.len() {
+            r.sync.append(internal.lex.chars.decoded(words[i].text))
+        }
+    }
+    else {
+        report(c, "bad-value", "`on-error` takes `keep going`, " +
+               "`skip to CHARS` or `stop`", words[0].span)
+        return
+    }
+    c.lexer.recoveries[internal.grammar.model.raw_token_id(class)] = r
+}
+
+// ---- Comments, regions, directives ------------------------------------------
+
+private func strip_fill(text: string, fill: string, front: bool) -> string {
+    let n: uint = byte_len(text)
+    let f: uint = byte_len(fill)
+    if front and n > f and byte_slice(text, 0, cast[int](f)) == fill {
+        return byte_slice(text, cast[int](f), cast[int](n))
+    }
+    if !front and n > f and byte_slice(text, cast[int](n - f),
+                                       cast[int](n)) == fill {
+        return byte_slice(text, 0, cast[int](n - f))
+    }
+    return text
+}
+
+private func comments(c: Compiler, b: internal.lex.spec.Block,
+                      class: internal.grammar.model.Token_Id?) {
+    for open in texts(b, "line") {
+        c.lexer.comments.append((open = open, close = "", fill = "",
+                                 nested = false, class = class))
+    }
+    let nested: bool = internal.lex.spec.is_yes(b, "nested")
+    let pair: List[string] = texts(b, "block")
+    var stretch: string = ""
+    let s: internal.lex.spec.Setting? = internal.lex.spec.setting(b, "block")
+    if s != nil and s.groups.len() > 1 {
+        let mods: List[internal.lex.spec.Value] = s.groups[1]
+        if mods.len() == 2 and mods[0].text == "stretch" {
+            stretch = internal.lex.chars.decoded(mods[1].text)
+        }
+    }
+    var i: uint = 0
+    while i + 1 < pair.len() {
+        var open: string = pair[i]
+        var close: string = pair[i + 1]
+        if byte_len(stretch) > 0 {
+            open = strip_fill(open, stretch, false)
+            close = strip_fill(close, stretch, true)
+        }
+        c.lexer.comments.append((open = open, close = close, fill = stretch,
+                                 nested = nested, class = class))
+        i += 2
+    }
+    let region: List[string] = texts(b, "region")
+    if region.len() == 2 {
+        var line: string = ""
+        let r: internal.lex.spec.Setting? = internal.lex.spec.setting(b,
+                                                                      "region")
+        if r != nil {
+            let groups: List[List[internal.lex.spec.Value]] = r.groups
+            if groups.len() > 1 and groups[1].len() == 2 and
+                groups[1][0].text == "ends-with" {
+                line = groups[1][1].text
+            }
+        }
+        c.lexer.regions.append((open = region[0], close = region[1],
+                                line = line))
+    }
+}
+
+private func directives(c: Compiler, b: internal.lex.spec.Block,
+                        class: internal.grammar.model.Token_Id?) {
+    let eol: internal.grammar.model.Token_Id? =
+        setting_class(c, b, "end-token")
+    for open in texts(b, "line-starts-with") {
+        c.lexer.directives.append((open = open, eol = eol, class = class))
+    }
+}
+
+// ---- Strings ----------------------------------------------------------------
+
+private func escapes(c: Compiler, b: internal.lex.spec.Block) -> Escapes {
+    var result: Escapes = (constrained = false,
+        chars = internal.lex.chars.char_set(""),
+        prefixes = [])
+    var examples: List[internal.lex.spec.Value] = []
+    for let v in internal.lex.spec.head(b, "escapes") {
+        if !v.quoted and byte_len(v.text) > 0 and byte_at(v.text, 0) == 0x5c {
+            examples.append(v)
+            continue
+        }
+        let set: internal.lex.spec.Setting? = c.spec.escapes[v.text]
+        if set == nil {
+            report(c, "unknown-escapes", "no escape set is named `" + v.text +
+                   "`", v.span)
+            continue
+        }
+        for let e in set.groups[0] {
+            examples.append(e)
+        }
+    }
+    if examples.len() == 0 {
+        return result
+    }
+    result.constrained = true
+    var chars: List[string] = []
+    for let e in examples {
+        let body: string = byte_slice(e.text, 1, cast[int](byte_len(e.text)))
+        var n: uint = byte_len(body)
+        var width: uint = 0
+        var last: u8 = 0
+        if n > 0 {
+            last = byte_at(body, n - 1)
+        }
+        if n > 1 and (last == 0x48 or last == 0x4f) {
+            while n > 1 and byte_at(body, n - 1) == last {
+                n -= 1
+                width += 1
+            }
+        }
+        if width > 0 {
+            var digits: string = "01234567"
+            if last == 0x48 {
+                digits = "0123456789abcdefABCDEF"
+            }
+            result.prefixes.append((prefix = byte_slice(body, 0, cast[int](n)),
+                width = width, digits = internal.lex.chars.char_set(digits)))
+        }
+        elif internal.scan.char_width(body, 0) == byte_len(body) {
+            chars.append(body)
+        }
+        else {
+            result.prefixes.append((prefix = body, width = 0,
+                digits = internal.lex.chars.char_set("")))
+        }
+    }
+    result.chars = internal.lex.chars.char_set(join(chars, ""))
+    var texts_by: List[string] = []
+    for let p in result.prefixes {
+        texts_by.append(p.prefix)
+    }
+    var sorted: List[Escape_Prefix] = []
+    for index in longest_first(texts_by) {
+        sorted.append(result.prefixes[index])
+    }
+    result.prefixes = sorted
+    return result
+}
+
+private func string_form(c: Compiler, b: internal.lex.spec.Block,
+                         class: internal.grammar.model.Token_Id?) {
+    var prefixes: List[string] = texts(b, "prefix")
+    if prefixes.len() == 0 or
+        internal.lex.spec.has_modifier(b, "prefix", "optional") {
+        prefixes.append("")
+    }
+    let quotes: List[string] = texts(b, "quotes")
+    let pairs: List[string] = texts(b, "pairs")
+    let multi: List[string] = texts(b, "multiline")
+    var escape: string = joined(b, "escape")
+    let esc: Escapes = escapes(c, b)
+    let interp: List[string] = texts(b, "interpolate")
+    var hole_open: string = ""
+    var hole_close: string = ""
+    if interp.len() == 2 {
+        hole_open = interp[0]
+        hole_close = interp[1]
+    }
+    var start: internal.grammar.model.Token_Id? = class
+    var mid: internal.grammar.model.Token_Id? = nil
+    var end: internal.grammar.model.Token_Id? = nil
+    if internal.lex.spec.has(b, "start") {
+        start = setting_class(c, b, "start")
+        mid = setting_class(c, b, "middle")
+        end = setting_class(c, b, "end")
+    }
+    let base: Quoted = (open = "", close = "", nest_open = "", escape = escape,
+        escapes = esc, raw = internal.lex.spec.is_yes(b, "raw"),
+        multiline = false,
+        scalar = internal.lex.spec.first(b, "length") == "1",
+        nested = internal.lex.spec.is_yes(b, "nested"), class = start,
+        hole_open = hole_open, hole_close = hole_close,
+        holes = internal.lex.spec.is_yes(b, "braces-are-tokens"),
+        mid_class = mid, end_class = end)
+    let pad: string = joined(b, "pad")
+    let pad_required: bool = internal.lex.spec.has_modifier(b, "pad",
+                                                            "at least one")
+    for p in prefixes {
+        for q in quotes {
+            var form: Quoted = base
+            form.open = p + q
+            form.close = q
+            form.nest_open = q
+            form.multiline = multiline(multi, q)
+            if byte_len(pad) == 0 or !pad_required {
+                c.lexer.strings.append(form)
+            }
+            if byte_len(pad) > 0 {
+                c.lexer.fences.append((open = p + pad, close = pad, fill = pad,
+                    body_open = q, body_close = q, minimum = 0, pad = Pad.none,
+                    label = false, class = start))
+            }
+        }
+        var i: uint = 0
+        while i + 1 < pairs.len() {
+            var form: Quoted = base
+            form.open = p + pairs[i]
+            form.close = pairs[i + 1]
+            form.nest_open = pairs[i]
+            form.multiline = multiline(multi, pairs[i])
+            c.lexer.strings.append(form)
+            i += 2
+        }
+    }
+}
+
+private func multiline(multi: List[string], quote: string) -> bool {
+    for m in multi {
+        if m == "yes" or m == quote {
+            return true
+        }
+    }
+    return false
+}
+
+// ---- Numbers ----------------------------------------------------------------
+
+// One side of a number form: what an integer or a float block says about
+// numbers with a given prefix. Integer and float sides with the same prefix
+// become one Number_Form.
+record Number_Side {
+    prefix:   string
+    is_float: bool
+    class:    internal.grammar.model.Token_Id?
+    both:     bool
+    sign:     string
+    digits:   internal.lex.chars.Char_Set
+    sep:      string
+    allow:    List[string]
+    fraction: bool
+    exp:      string
+    needs:    bool
+    suffixes: List[Suffix]
+}
+
+private func suffixes_of(c: Compiler, b: internal.lex.spec.Block,
+                         own_class: internal.grammar.model.Token_Id?,
+                         is_float: bool) -> List[Suffix] {
+    var out: List[Suffix] = []
+    for let s in internal.lex.spec.settings(b, "suffix") {
+        var target: internal.grammar.model.Token_Id? = own_class
+        var words: List[string] = []
+        var arrow: bool = false
+        var dropped: bool = false
+        for let v in s.groups[0] {
+            if !v.quoted and v.text == "->" {
+                arrow = true
+                continue
+            }
+            if arrow {
+                target = class_named(c, v.text, v.span, s.own)
+                dropped = target == nil
+                continue
+            }
+            words.append(v.text)
+        }
+        if dropped {
+            continue
+        }
+        var any_case: bool = false
+        for i: uint from 1 until s.groups.len() {
+            if s.groups[i].len() == 2 and s.groups[i][0].text == "any" {
+                any_case = true
+            }
+        }
+        for w in words {
+            var spellings: List[string] = []
+            if any_case {
+                spellings = cases(w)
+            }
+            else {
+                spellings.append(w)
+            }
+            for t in spellings {
+                out.append((text = t, class = target, integer = !is_float,
+                            float_only = is_float))
+            }
+        }
+    }
+    return out
+}
+
+private func number_side(c: Compiler, b: internal.lex.spec.Block,
+                         class: internal.grammar.model.Token_Id?,
+                         is_float: bool) {
+    var prefixes: List[string] = texts(b, "prefix")
+    if prefixes.len() == 0 {
+        prefixes.append("")
+    }
+    let fraction: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
+                                                                     "fraction")
+    let has_fraction: bool = is_float and fraction.len() > 0 and
+        fraction[0].text != "none"
+    var allow: List[string] = []
+    for let v in internal.lex.spec.head(b, "allow") {
+        allow.append(v.text)
+    }
+    var exp: string = ""
+    if is_float {
+        exp = joined(b, "exponent")
+    }
+    for p in prefixes {
+        c.sides.append((prefix = p, is_float = is_float, class = class,
+            both = is_float and internal.lex.spec.has_modifier(b, "fraction",
+                                                               "optional"),
+            sign = joined(b, "sign"), digits = ascii_set(c, b, "digits"),
+            sep = joined(b, "separator"), allow = allow,
+            fraction = has_fraction, exp = exp,
+            needs = internal.lex.spec.has_modifier(b, "exponent", "required"),
+            suffixes = suffixes_of(c, b, class, is_float)))
+    }
+}
+
+private func allows(side: Number_Side?, shape: string) -> bool {
+    if side == nil {
+        return false
+    }
+    for a in side.allow {
+        if a == shape {
+            return true
+        }
+    }
+    return false
+}
+
+// Joins the integer and float sides that share a prefix into Number_Forms.
+private func number_forms(c: Compiler) {
+    var order: List[string] = []
+    var ints: Dict[string, Number_Side] = new[Dict[string, Number_Side]]()
+    var floats: Dict[string, Number_Side] = new[Dict[string, Number_Side]]()
+    for let side in c.sides {
+        if ints[side.prefix] == nil and floats[side.prefix] == nil {
+            order.append(side.prefix)
+        }
+        if side.is_float {
+            floats[side.prefix] = side
+        }
+        else {
+            ints[side.prefix] = side
+        }
+    }
+    for prefix in order {
+        let i: Number_Side? = ints[prefix]
+        let f: Number_Side? = floats[prefix]
+        var int_class: internal.grammar.model.Token_Id? = nil
+        var float_class: internal.grammar.model.Token_Id? = nil
+        var digits: internal.lex.chars.Char_Set =
+            internal.lex.chars.char_set("")
+        var sign: string = ""
+        var sep: string = ""
+        var exp: string = ""
+        if f != nil {
+            float_class = f.class
+            if f.both {
+                int_class = f.class
+            }
+            digits = f.digits
+            sign = f.sign
+            sep = f.sep
+            exp = f.exp
+        }
+        if i != nil {
+            int_class = i.class
+            digits = i.digits
+            sign = sign + i.sign
+            sep = sep + i.sep
+        }
+        let point: bool = f != nil and f.fraction
+        c.lexer.numbers.append((prefix = prefix,
+            sign = internal.lex.chars.char_set(sign), digits = digits,
+            sep = internal.lex.chars.char_set(sep),
+            after_prefix = allows(i, "0x_1") or allows(f, "0x_1"),
+            sep_repeat = allows(i, "1__0") or allows(f, "1__0"),
+            sep_trailing = allows(i, "1_") or allows(f, "1_"),
+            point = point, leading = point and allows(f, ".5"),
+            trailing = point and allows(f, "5."),
+            needs_exponent = f != nil and f.needs,
+            exp = internal.lex.chars.char_set(exp),
+            suffixes = merged_suffixes(i, f),
+            int_class = int_class, float_class = float_class))
+    }
+}
+
+// A suffix written on both sides with the same result applies to both;
+// otherwise each applies only to its own side.
+private func merged_suffixes(i: Number_Side?, f: Number_Side?) -> List[Suffix] {
+    var all: List[Suffix] = []
+    if i != nil {
+        for let s in i.suffixes {
+            all.append(s)
+        }
+    }
+    if f != nil {
+        for let s in f.suffixes {
+            var shared: bool = false
+            for k: uint from 0 until all.len() {
+                if all[k].text == s.text and all[k].integer and
+                    same_class(all[k].class, s.class) {
+                    var both: Suffix = all[k]
+                    both.integer = false
+                    all[k] = both
+                    shared = true
+                }
+            }
+            if !shared {
+                all.append(s)
+            }
+        }
+    }
+    var spelled: List[string] = []
+    for let s in all {
+        spelled.append(s.text)
+    }
+    var sorted: List[Suffix] = []
+    for index in longest_first(spelled) {
+        sorted.append(all[index])
+    }
+    return sorted
+}
+
+private func same_class(a: internal.grammar.model.Token_Id?,
+                        b: internal.grammar.model.Token_Id?) -> bool {
+    if a == nil or b == nil {
+        return a == nil and b == nil
+    }
+    return internal.grammar.model.raw_token_id(a) ==
+        internal.grammar.model.raw_token_id(b)
+}
+
+// ---- Identifiers and sigils -------------------------------------------------
+
+private func identifier(c: Compiler, b: internal.lex.spec.Block,
+                        class: internal.grammar.model.Token_Id?) {
+    var start: List[internal.lex.chars.Step] = []
+    var cont: List[internal.lex.chars.Step] = []
+    for let s in b.settings {
+        let values: List[internal.lex.spec.Value] = s.groups[0]
+        let key: string = s.key
+        if key == "set" or key == "start" {
+            start = []
+        }
+        if key == "set" {
+            cont = []
+        }
+        let add: bool = key != "remove" and key != "remove_start"
+        if key == "set" or key == "start" or key == "add" or key == "remove" or
+            key == "add_start" or key == "remove_start" {
+            build(c, start, values, add, true)
+        }
+        if key == "set" or key == "add" or key == "remove" or
+            key == "add_continue" {
+            build(c, cont, values, add, false)
+        }
+    }
+    let emoji: Policy = policy(c, b, "emoji", Policy.reject)
+    let pictographs: internal.lex.chars.Step? =
+        internal.lex.chars.named_term("Emoji", false)
+    if internal.lex.spec.has(b, "emoji") and pictographs != nil {
+        start.append(pictographs)
+        cont.append(pictographs)
+    }
+    var scripts: Dict[u16, bool] = new[Dict[u16, bool]]()
+    for let v in internal.lex.spec.values(b, "scripts") {
+        let id: u16? = unicode.query.script_by_name(v.text)
+        if id == nil {
+            report(c, "unknown-script", "`" + v.text +
+                   "` is not a Unicode script name", v.span)
+        }
+        else {
+            scripts[id] = true
+        }
+    }
+    let normalize: string = choice(c, b, "normalize",
+                                   ["NFC", "NFKC", "none"], "none")
+    let profile: Profile = (normalize = normalize,
+        mixed = policy(c, b, "mixed-scripts", Policy.allow),
+        confusables = policy(c, b, "confusables", Policy.allow),
+        emoji = emoji, scripts = scripts,
+        common = unicode.query.script_by_name("Common").get_or_else(0),
+        inherited = unicode.query.script_by_name("Inherited").get_or_else(0))
+    c.lexer.identifiers.append((
+        start = new[internal.lex.chars.Char_Pred](start),
+        cont = new[internal.lex.chars.Char_Pred](cont),
+        class = class, profile = profile))
+}
+
+private func sigil(c: Compiler, b: internal.lex.spec.Block,
+                   class: internal.grammar.model.Token_Id?) {
+    let closed: bool = internal.lex.spec.is_yes(b, "not-if-closed")
+    for prefix in texts(b, "sigil") {
+        c.lexer.sigils.append((prefix = prefix,
+            digits = internal.lex.spec.first(b, "then") == "digits",
+            before_string = closed, unless_closed = closed,
+            attach_after = token_set(c, b, "modifier-after"), class = class))
+    }
+}
+
+// ---- Other token kinds ------------------------------------------------------
+
+private func regex(c: Compiler, b: internal.lex.spec.Block,
+                   class: internal.grammar.model.Token_Id?) {
+    // Not `texts`: an opener and closer can be the same, as in `/ /`.
+    var delims: List[string] = []
+    for let v in internal.lex.spec.head(b, "delimiters") {
+        delims.append(internal.lex.chars.decoded(v.text))
+    }
+    if delims.len() != 2 {
+        report(c, "bad-value", "`delimiters` takes an opener and a closer",
+               b.span)
+        return
+    }
+    c.lexer.regexes.append((open = delims[0], close = delims[1],
+        flags = internal.lex.chars.char_set(joined(b, "flags")),
+        not_after = token_set(c, b, "not-after"), class = class))
+}
+
+private func heredoc(c: Compiler, b: internal.lex.spec.Block,
+                     class: internal.grammar.model.Token_Id?) {
+    let label: List[string] = texts(b, "label")
+    var unquoted: bool = false
+    var single: bool = false
+    var double: bool = false
+    for w in label {
+        unquoted = unquoted or w == "word"
+        single = single or w == "single-quoted"
+        double = double or w == "double-quoted"
+    }
+    for open in texts(b, "opener") {
+        c.lexer.heredocs.append((open = open, unquoted = unquoted,
+            single = single, double = double,
+            terminator_indent = internal.lex.spec.is_yes(b, "end-may-indent"),
+            terminator_tail = internal.lex.spec.is_yes(b, "end-may-continue"),
+            strip = internal.lex.spec.first(b, "body-indent") == "strip",
+            queue = internal.lex.spec.first(b, "rest-of-line") == "code",
+            class = class))
+    }
+}
+
+private func fence(c: Compiler, b: internal.lex.spec.Block,
+                   class: internal.grammar.model.Token_Id?) {
+    let body: List[string] = texts(b, "body")
+    var body_open: string = ""
+    var body_close: string = ""
+    if body.len() == 2 {
+        body_open = body[0]
+        body_close = body[1]
+    }
+    var minimum: uint = 1
+    if internal.lex.spec.has_modifier(b, "stretch", "zero or more") {
+        minimum = 0
+    }
+    var pad: Pad = Pad.none
+    let padding: string = choice(c, b, "padding", ["required", "optional"], "")
+    if padding == "required" {
+        pad = Pad.required
+    }
+    elif padding == "optional" {
+        pad = Pad.optional
+    }
+    c.lexer.fences.append((open = joined(b, "open"), close = joined(b, "close"),
+        fill = joined(b, "stretch"), body_open = body_open,
+        body_close = body_close, minimum = minimum, pad = pad,
+        label = internal.lex.spec.first(b, "label") == "allowed",
+        class = class))
+    if internal.lex.spec.has(b, "bidi") and class != nil {
+        c.lexer.bidi_classes[internal.grammar.model.raw_token_id(class)] =
+            policy(c, b, "bidi", Policy.allow)
+    }
+}
+
+private func embed(c: Compiler, b: internal.lex.spec.Block,
+                   class: internal.grammar.model.Token_Id?) {
+    let code: List[string] = texts(b, "code")
+    if code.len() != 2 {
+        report(c, "bad-value", "`code` takes an opener and a closer", b.span)
+        return
+    }
+    c.lexer.embeds.append((open = code[0], close = code[1],
+        open_class = setting_class(c, b, "open-tag"),
+        close_class = setting_class(c, b, "close-tag"), class = class))
+}
+
+// ---- layout and source --------------------------------------------------------
+
+private func layout(c: Compiler, b: internal.lex.spec.Block) {
+    var l: Layout = c.lexer.layout
+    l.brackets = joined(b, "brackets")
+    l.line_continue = joined(b, "continue")
+    let indent: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
+                                                                       "indent")
+    let s: internal.lex.spec.Setting? = internal.lex.spec.setting(b, "indent")
+    if s != nil and indent.len() == 2 {
+        l.indent = class_named(c, indent[0].text, indent[0].span, s.own)
+        l.dedent = class_named(c, indent[1].text, indent[1].span, s.own)
+    }
+    l.newline = setting_class(c, b, "newline")
+    l.newline_each = internal.lex.spec.has_modifier(b, "newline", "every line")
+    l.eof = setting_class(c, b, "end-of-file")
+    let end: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
+                                                               "statement-end")
+    if end.len() > 0 {
+        let first: internal.lex.spec.Value = end[0]
+        let found: internal.grammar.model.Token_Class? =
+            internal.grammar.model.find_class(c.lexer.g, first.text)
+        if found != nil {
+            l.terminator = found.id
+            l.terminator_class = true
+        }
+        else {
+            l.terminator = internal.grammar.model.literal_token_id(first.text)
+        }
+        var after: bool = false
+        for let v in end {
+            if after {
+                l.after_ids[internal.grammar.model.raw_token_id(
+                    internal.grammar.model.literal_token_id(v.text))] = true
+            }
+            after = after or v.text == "after"
+        }
+    }
+    l.bracket_newlines = choice(c, b, "newlines-in-brackets",
+                                ["keep", "drop"], "drop") == "keep"
+    l.dedent_newline = choice(c, b, "newline-after-dedent", ["yes", "no"],
+                              "no") == "yes"
+    l.reject_unmatched = choice(c, b, "dedent-must-match", ["yes", "no"],
+                                "no") == "yes"
+    c.lexer.layout = l
+}
+
+private func source(c: Compiler, b: internal.lex.spec.Block) {
+    if internal.lex.spec.has(b, "space") {
+        c.lexer.space = pred_of(c, b, "space")
+    }
+    if internal.lex.spec.has(b, "newline") {
+        c.lexer.newline = pred_of(c, b, "newline")
+    }
+    // `reject:` can name these, as in `Whitespace - space - newline`.
+    c.sets["space"] = c.lexer.space
+    c.sets["newline"] = c.lexer.newline
+    if internal.lex.spec.has(b, "reject") {
+        c.lexer.rejected = pred_of(c, b, "reject")
+    }
+    c.lexer.reject = choice(c, b, "unknown", ["reject", "allow"],
+                            "allow") == "reject"
+    c.lexer.recover = !internal.lex.spec.has_modifier(b, "unknown", "stop")
+    c.lexer.bidi = policy(c, b, "bidi", Policy.allow)
+    var l: Layout = c.lexer.layout
+    let indent: string = choice(c, b, "indent-with",
+                                ["spaces", "tabs", "either"], "")
+    l.reject_tabs = indent == "spaces"
+    l.reject_spaces = indent == "tabs"
+    l.reject_mixed = choice(c, b, "mixed-indent", ["reject", "allow"],
+                            "allow") == "reject"
+    let width: string = internal.lex.spec.first(b, "tab-width")
+    if byte_len(width) > 0 {
+        l.tab_width = cast[uint](decimal_value(width).get_or_else(8))
+    }
+    c.lexer.layout = l
+}
+
+// ---- Tables -----------------------------------------------------------------
+
+func longest_first(texts: List[string]) -> Array[uint] {
+    var shortness: List[uint] = []
+    for t in texts {
+        shortness.append(0xffffffff - byte_len(t))
+    }
+    return internal.diag.stable_order(shortness)
+}
+
+private func buckets(texts: List[string], keep: List[bool])
+    -> List[List[uint]] {
+    var out: List[List[uint]] = []
+    for b: uint from 0 until 256 {
+        out.append([])
+    }
+    for index in longest_first(texts) {
+        if keep[index] and byte_len(texts[index]) > 0 {
+            out[cast[uint](byte_at(texts[index], 0))].append(index)
+        }
+    }
+    return out
+}
+
+private func last_char(text: string) -> char {
+    var at: uint = byte_len(text)
+    while at > 0 {
+        at -= 1
+        if (byte_at(text, at) & 0xc0) != 0x80 {
+            break
+        }
+    }
+    return internal.scan.decode_at(text, at)
+}
+
+const starts_regex: u32 = 1
+const starts_sigil: u32 = 2
+const starts_fence: u32 = 4
+const starts_heredoc: u32 = 8
+const starts_directive: u32 = 16
+const starts_region: u32 = 32
+const starts_embed_close: u32 = 64
+
+private func mark_start(lexer: Lexer, text: string, bit: u32) {
+    if byte_len(text) > 0 {
+        let at: uint = cast[uint](byte_at(text, 0))
+        lexer.starters[at] = lexer.starters[at] | bit
+    }
+}
+
+func can_start(lexer: Lexer, b: u8, bit: u32) -> bool {
+    return (lexer.starters[cast[uint](b)] & bit) != 0
+}
+
+private func tables(lexer: Lexer) {
+    var texts_all: List[string] = []
+    var keep: List[bool] = []
+    for let lit in lexer.g.literals {
+        texts_all.append(lit.text)
+        keep.append(!lit.identifier or lexer.identifiers.len() == 0)
+        lexer.boundary.append(byte_len(lit.text) > 0 and
+            continues_identifier(lexer, last_char(lit.text)))
+    }
+    lexer.terminals = buckets(texts_all, keep)
+    var opens: List[string] = []
+    var every: List[bool] = []
+    for let k in lexer.comments {
+        opens.append(k.open)
+        every.append(true)
+        if byte_len(k.close) == 0 and k.class == nil {
+            lexer.line_comments.append(k.open)
+        }
+    }
+    lexer.comment_starts = buckets(opens, every)
+    var quotes: List[string] = []
+    var all_quotes: List[bool] = []
+    for let q in lexer.strings {
+        quotes.append(q.open)
+        all_quotes.append(true)
+    }
+    lexer.string_starts = buckets(quotes, all_quotes)
+    var prefixes: List[string] = []
+    for let form in lexer.numbers {
+        prefixes.append(form.prefix)
+    }
+    var forms: List[Number_Form] = []
+    for index in longest_first(prefixes) {
+        forms.append(lexer.numbers[index])
+        if byte_len(prefixes[index]) == 0 and lexer.plain == nil {
+            lexer.plain = lexer.numbers[index]
+        }
+    }
+    lexer.numbers = forms
+    var sigil_prefixes: List[string] = []
+    for let s in lexer.sigils {
+        sigil_prefixes.append(s.prefix)
+    }
+    var sigils: List[Sigil] = []
+    for index in longest_first(sigil_prefixes) {
+        sigils.append(lexer.sigils[index])
+    }
+    lexer.sigils = sigils
+    for let x in lexer.regexes {
+        mark_start(lexer, x.open, starts_regex)
+    }
+    for let s in lexer.sigils {
+        mark_start(lexer, s.prefix, starts_sigil)
+    }
+    for let f in lexer.fences {
+        mark_start(lexer, f.open, starts_fence)
+    }
+    for let h in lexer.heredocs {
+        mark_start(lexer, h.open, starts_heredoc)
+    }
+    for let d in lexer.directives {
+        mark_start(lexer, d.open, starts_directive)
+    }
+    for let r in lexer.regions {
+        mark_start(lexer, r.open, starts_region)
+        mark_start(lexer, r.close, starts_region)
+    }
+    for let e in lexer.embeds {
+        mark_start(lexer, e.close, starts_embed_close)
+    }
+    let brackets: string = lexer.layout.brackets
+    var i: uint = 0
+    while i + 1 < byte_len(brackets) {
+        lexer.bracket_delta[cast[uint](byte_at(brackets, i))] = 1
+        lexer.bracket_delta[cast[uint](byte_at(brackets, i + 1))] = -1
+        i += 2
+    }
+    for text in [")", "]", "}"] {
+        lexer.layout.after_ids[internal.grammar.model.raw_token_id(
+            internal.grammar.model.literal_token_id(text))] = true
+    }
+}
+
+private func value_class(lexer: Lexer, id: internal.grammar.model.Token_Id?) {
+    if id != nil {
+        lexer.layout.values[internal.grammar.model.raw_token_id(id)] =
+            true
+    }
+}
+
+// Classes after which a line end can end a statement.
+private func value_classes(lexer: Lexer) {
+    for let rule in lexer.identifiers {
+        value_class(lexer, rule.class)
+    }
+    for let q in lexer.strings {
+        value_class(lexer, q.class)
+        value_class(lexer, q.end_class)
+    }
+    for let x in lexer.regexes {
+        value_class(lexer, x.class)
+    }
+    for let s in lexer.sigils {
+        value_class(lexer, s.class)
+    }
+    for let f in lexer.fences {
+        value_class(lexer, f.class)
+    }
+    for let h in lexer.heredocs {
+        value_class(lexer, h.class)
+    }
+    for let form in lexer.numbers {
+        value_class(lexer, form.int_class)
+        value_class(lexer, form.float_class)
+        for let s in form.suffixes {
+            value_class(lexer, s.class)
+        }
+    }
+}
+
+// ---- Entry point --------------------------------------------------------------
+
+// An interpolated string block names its pieces' classes itself.
+private func has_pieces(b: internal.lex.spec.Block) -> bool {
+    return b.kind == "string" and internal.lex.spec.has(b, "start")
+}
+
+// The class a token block produces. A block from a base spec whose class
+// the grammar doesn't declare is dropped quietly; the spec's own block is
+// an error.
+private func block_class(c: Compiler, b: internal.lex.spec.Block)
+    -> internal.grammar.model.Token_Id? {
+    let emits: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
+                                                                      "emits")
+    var name: string = b.name
+    var span: internal.diag.Span = b.span
+    if emits.len() > 0 {
+        name = emits[0].text
+        span = emits[0].span
+    }
+    if has_pieces(b) and emits.len() == 0 {
+        return nil
+    }
+    return class_named(c, name, span, b.own)
+}
+
+private func token_block(c: Compiler, b: internal.lex.spec.Block) {
+    let class: internal.grammar.model.Token_Id? = block_class(c, b)
+    if class == nil and !has_pieces(b) {
+        return
+    }
+    let kind: string = b.kind
+    for let settings in internal.lex.spec.forms(b) {
+        var form: internal.lex.spec.Block = b
+        form.settings = settings
+        if kind == "identifier" and texts(form, "prefix").len() > 0 {
+            // Rust's r#match: a prefixed identifier is a sigil.
+            for p in texts(form, "prefix") {
+                c.lexer.sigils.append((prefix = p, digits = false,
+                    before_string = false, unless_closed = false,
+                    attach_after = new[Dict[u128, bool]](), class = class))
+            }
+        }
+        elif kind == "identifier" {
+            identifier(c, form, class)
+        }
+        elif kind == "integer" or kind == "float" {
+            number_side(c, form, class, kind == "float")
+        }
+        elif kind == "string" {
+            string_form(c, form, class)
+        }
+        elif kind == "comment" {
+            comments(c, form, class)
+        }
+        elif kind == "regex" {
+            regex(c, form, class)
+        }
+        elif kind == "sigil" {
+            sigil(c, form, class)
+        }
+        elif kind == "heredoc" {
+            heredoc(c, form, class)
+        }
+        elif kind == "fence" {
+            fence(c, form, class)
+        }
+        elif kind == "embed" {
+            embed(c, form, class)
+        }
+        elif kind == "directive" {
+            directives(c, form, class)
+        }
+    }
+    on_error(c, b, class, b.kind == "string")
+    // An interpolated string's pieces; an identifier's `start` is a set.
+    if b.kind == "string" and internal.lex.spec.has(b, "start") {
+        on_error(c, b, setting_class(c, b, "start"), true)
+        on_error(c, b, setting_class(c, b, "middle"), true)
+        on_error(c, b, setting_class(c, b, "end"), true)
+    }
+}
+
+func compile(spec: internal.lex.spec.Spec, g: internal.grammar.model.Grammar)
+    -> Lexer fail: List[internal.diag.Diagnostic] {
+    var c: Compiler = new[Compiler](spec, g)
+    for let b in spec.blocks {
+        if b.kind == "source" {
+            source(c, b)
+        }
+        elif b.kind == "layout" {
+            layout(c, b)
+        }
+        elif b.kind == "comments" {
+            comments(c, b, nil)
+        }
+        elif b.kind == "directives" {
+            directives(c, b, nil)
+        }
+        else {
+            token_block(c, b)
+        }
+    }
+    number_forms(c)
+    if c.diags.len() > 0 {
+        fail internal.diag.sorted_by_position(c.diags)
+    }
+    tables(c.lexer)
+    value_classes(c.lexer)
+    return c.lexer
+}

@@ -51,8 +51,8 @@ func __init(modify self: Diagnostic, code: string, message: string,
     self.message = message
     self.span = span
     self.help = nil
-    self.fixes = new[List[Fix]]()
-    self.related = new[List[Related]]()
+    self.fixes = []
+    self.related = []
 }
 
 record Source {
@@ -153,7 +153,7 @@ private func line_bounds(source: string, at: uint) -> Tuple[uint, uint] {
 }
 
 private func caret_row(line: string, span: Span) -> string {
-    var pieces: List[string] = new[List[string]]()
+    var pieces: List[string] = []
     let n: uint = byte_len(line)
     var col: u32 = 1
     var width: u32 = 0
@@ -183,7 +183,7 @@ private func caret_row(line: string, span: Span) -> string {
 }
 
 func render(d: Diagnostic, src: Source) -> string {
-    var out: List[string] = new[List[string]]()
+    var out: List[string] = []
     out.append(location(src.name, d.span) + ": " + severity_name(d.severity) +
                ": " + d.message + " [" + d.code + "]\n")
     let bounds: Tuple[uint, uint] = line_bounds(src.text, d.span.start_byte)
@@ -206,11 +206,24 @@ func render(d: Diagnostic, src: Source) -> string {
 }
 
 func render_all(diags: List[Diagnostic], src: Source) -> string {
-    var out: List[string] = new[List[string]]()
+    var out: List[string] = []
     for let d in diags {
         out.append(render(d, src))
     }
     return join(out, "\n")
+}
+
+func render_embedded(diags: List[Diagnostic], text: string, path: string,
+                     line: uint) -> string {
+    let offset: u32 = cast[u32](line)
+    var shifted: List[Diagnostic] = []
+    for let d in diags {
+        var moved: Diagnostic = d
+        moved.span.start_line += offset
+        moved.span.end_line += offset
+        shifted.append(moved)
+    }
+    return render_all(shifted, (name = path, text = text))
 }
 
 func stable_order(starts: List[uint]) -> Array[uint] {
@@ -229,11 +242,11 @@ func stable_order(starts: List[uint]) -> Array[uint] {
 }
 
 func sorted_by_position(diags: List[Diagnostic]) -> List[Diagnostic] {
-    var starts: List[uint] = new[List[uint]]()
+    var starts: List[uint] = []
     for let d in diags {
         starts.append(d.span.start_byte)
     }
-    var out: List[Diagnostic] = new[List[Diagnostic]]()
+    var out: List[Diagnostic] = []
     for at in stable_order(starts) {
         out.append(diags[at])
     }
@@ -241,7 +254,7 @@ func sorted_by_position(diags: List[Diagnostic]) -> List[Diagnostic] {
 }
 
 func apply_fixes(source: string, fixes: List[Fix]) -> string {
-    var starts: List[uint] = new[List[uint]]()
+    var starts: List[uint] = []
     for let fix in fixes {
         var key: uint = fix.span.start_byte * 2
         if fix.span.end_byte > fix.span.start_byte {
@@ -249,7 +262,7 @@ func apply_fixes(source: string, fixes: List[Fix]) -> string {
         }
         starts.append(key)
     }
-    var out: List[string] = new[List[string]]()
+    var out: List[string] = []
     var at: uint = 0
     for given in stable_order(starts) {
         let fix: Fix = fixes[given]

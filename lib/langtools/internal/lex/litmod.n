@@ -1,0 +1,13 @@
+import internal.diag
+import internal.lex.spec
+import internal.lex.load
+
+fence litmod lex(contents: string, site: Literal_Site)
+    -> internal.lex.spec.Spec fail: string {
+    try {
+        return internal.lex.load.load(contents, source_name = site.path)!
+    } fail(diags) {
+        fail internal.diag.render_embedded(diags, contents, site.path,
+                                           site.line)
+    }
+}

@@ -1,0 +1,13 @@
+import internal.diag
+import internal.grammar.model
+import internal.grammar.parse
+
+fence litmod bnf(contents: string, site: Literal_Site)
+    -> internal.grammar.model.Grammar fail: string {
+    try {
+        return internal.grammar.parse.load(contents, source_name = site.path)!
+    } fail(diags) {
+        fail internal.diag.render_embedded(diags, contents, site.path,
+                                           site.line)
+    }
+}

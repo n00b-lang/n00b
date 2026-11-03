@@ -1,0 +1,32 @@
+# ../../../../lantern/grammars/swift.bnf ../lex/swift.lex ../../../../lantern/tests/samples/s.swift
+import                 2:1  import
+IDENTIFIER             2:8  Foundation
+NEWLINE                3:1
+func                   3:1  func
+IDENTIFIER             3:6  greet
+(                      3:11  (
+_                      3:12  _
+IDENTIFIER             3:14  name
+:                      3:18  :
+IDENTIFIER             3:20  String
+)                      3:26  )
+->                     3:28  ->
+IDENTIFIER             3:31  String
+{                      3:38  {
+let                    4:5  let
+IDENTIFIER             4:9  n
+=                      4:11  =
+INTEGER                4:13  0xff
+NEWLINE                5:1
+let                    5:5  let
+IDENTIFIER             5:9  m
+=                      5:11  =
+MULTILINE_STRING       5:13  """
+        multi
+        """
+NEWLINE                8:1
+return                 8:5  return
+STRING                 8:12  "hi \(name) \(n) \(m)"
+NEWLINE                9:1
+}                      9:1  }
+NEWLINE                10:1
