@@ -323,6 +323,11 @@ N00B_DIAG(BOOKKEEPING_WRITE, "N00B-S0071", ERROR,
     "value, so `__ref_create` and `__finalize` may only update private\n"
     "bookkeeping fields of their own type. Make the field private, or move\n"
     "the change out of the hook.")
+N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
+    "an array parameter is kept beyond the call",
+    "An array passed as an ordinary parameter is only lent for the call.\n"
+    "A function that keeps it somewhere that outlives the call takes it as\n"
+    "`consume`, so the caller hands it over, or keeps a copy.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

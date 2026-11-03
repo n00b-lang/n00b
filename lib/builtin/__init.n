@@ -10,6 +10,7 @@ import cursor
 import hashing
 import integer
 import containers.traits
+import containers.lease
 import reference
 import io.debug
 import io.raw
@@ -121,6 +122,9 @@ package builtin {
     export containers.array.len
     export containers.dict.len
     export containers.list.len
+    export containers.lease.len
+    export containers.lease.leased
+    export containers.lease.release
     export containers.set.len
     export containers.view.len
     export string.core.widen_encoding
@@ -165,6 +169,7 @@ package builtin {
     export containers.list.list
     export containers.list.l
     export containers.dict.Dict
+    export containers.dict.Dict_Cursor
     export containers.dict.dict
     export containers.dict.d
     export containers.set.Set
@@ -174,6 +179,7 @@ package builtin {
     export containers.view.View
     export containers.errors.Container_Err
     export cursor.Cursor
+    export cursor.Lease_Cursor
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup
@@ -182,6 +188,10 @@ package builtin {
     export containers.traits.Associative
     export containers.traits.SetLike
     export containers.traits.TreeLike
+    export containers.traits.Copy
+    export containers.lease.Leasable
+    export containers.lease.Lease
+    export containers.lease.Lease_Count
     export reference.Referenceable
     export reference.Reference
     export reference.Mutable_Reference
@@ -205,6 +215,7 @@ package sort {
 
 package cursor {
     export cursor.Cursor
+    export cursor.Lease_Cursor
     export cursor.iter
     export cursor.next
     export cursor.cleanup

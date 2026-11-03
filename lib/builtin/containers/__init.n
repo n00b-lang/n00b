@@ -4,6 +4,7 @@ import containers.set
 import containers.tree
 import containers.view
 import containers.traits
+import containers.lease
 
 package containers {
 }
@@ -76,6 +77,17 @@ package containers.view {
     export containers.view.len
 }
 
+package containers.lease {
+    export containers.lease.Leasable
+    export containers.lease.Lease
+    export containers.lease.Lease_Count
+    export containers.lease.len
+    export containers.lease.leased
+    export containers.lease.release
+    export containers.lease.writable
+    export containers.lease.replace_storage
+}
+
 package containers.traits {
     export containers.traits.Has_Length
     export containers.traits.Appendable
@@ -83,4 +95,5 @@ package containers.traits {
     export containers.traits.Associative
     export containers.traits.SetLike
     export containers.traits.TreeLike
+    export containers.traits.Copy
 }

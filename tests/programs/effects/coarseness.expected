@@ -2,15 +2,16 @@ coarseness.lookup: (Dict[int, int], int) -> int?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads table.__value.entries
   reads table.__value.index.ctrl
-  reads table.__value.entries.__value[]
+  reads table.__value.entries.__value.storage
   reads table.__value.index.ctrl.__value[]
   reads table.__value.index.hashes.__value[]
   reads table.__value.index.slots.__value[]
+  reads table.__value.entries.__value.storage.__value[]
   reads builtin.hashing.secret.__value[]...
   escapes table referent
   traps explicit bounds unwrap arithmetic
-  returns table.__value.entries.__value[].value
-  output result data[table.__value.entries.__value[].value] control[key key.__value... table.__value.index.ctrl.__value.__len table.__value.index.ctrl.__value[] table.__value.index.hashes.__value[] table.__value.index.slots.__value[]]
+  returns table.__value.entries.__value.storage.__value[].value
+  output result data[table.__value.entries.__value.storage.__value[].value] control[key key.__value... table.__value.index.ctrl.__value.__len table.__value.index.ctrl.__value[] table.__value.index.hashes.__value[] table.__value.index.slots.__value[]]
 coarseness.hash_str: (string) -> u128
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads s...

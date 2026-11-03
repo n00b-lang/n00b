@@ -1,39 +1,25 @@
+import containers.array
 import containers.traits
+import containers.lease
 import containers.view
 import cursor
 import panic
 
 object List {
-    items:  Array['T]
-    count:  uint
-    shared: bool
+    items: containers.lease.Leasable['T]
+    count: uint
 }
 
-func __init(self: List['T], items : Array['T] = []) {
-    self.items = items
+func __init(self: List['T], consume items : Array['T] = []) {
     self.count = __array_length(items)
-    self.shared = false
-}
-
-private func detach(self: List['T]) {
-    if !self.shared {
-        return
-    }
-    var copy: Array['T] = new[Array['T]](cast[int]__array_length(self.items))
-    var at:   uint      = 0
-    while at < self.count {
-        copy[at] = self.items[at]
-        at += 1
-    }
-    self.items = copy
-    self.shared = false
+    self.items = new[containers.lease.Leasable['T]](items)
 }
 
 func len(self: List['T]) -> uint {
     return self.count
 }
 
-func list_with_length(items: Array['T], n: uint) -> List['T] {
+func list_with_length(consume items: Array['T], n: uint) -> List['T] {
     let list: List['T] = new[List['T]](items = items)
     list.count = n
     return list
@@ -62,7 +48,6 @@ func __read(self: List['T], index: int) -> 'T {
 
 func __write(self: List['T], index: int, value: 'T) {
     let at: int = checked_index(self, index)
-    detach(self)
     self.items[at] = value
 }
 
@@ -111,7 +96,6 @@ func __write_slice(self: List['T], start_ix: int?,
     let removed: uint = cast[uint](end - start)
     let length:  uint = self.count - removed + incoming
     ensure_capacity(self, length)
-    detach(self)
     if incoming > removed {
         let growth: uint = incoming - removed
         var tail:   uint = self.count
@@ -135,7 +119,7 @@ func __write_slice(self: List['T], start_ix: int?,
     if length < self.count {
         var stale: uint = length
         while stale < self.count {
-            __array_clear(ref self.items, stale)
+            __array_clear(containers.lease.writable(self.items), stale)
             stale += 1
         }
     }
@@ -143,7 +127,7 @@ func __write_slice(self: List['T], start_ix: int?,
 }
 
 func ensure_capacity(self: List['T], needed: uint) {
-    let capacity: uint = __array_length(self.items)
+    let capacity: uint = containers.lease.len(self.items)
     if needed <= capacity {
         return
     }
@@ -158,15 +142,13 @@ func ensure_capacity(self: List['T], needed: uint) {
         next[index] = value
         index += 1
     }
-    self.items = next
-    self.shared = false
+    containers.lease.replace_storage(self.items, next)
 }
 
 func append(self: List['T], value: 'T,
                    front : bool = false) {
     ensure_capacity(self, self.count + 1)
     if front {
-        detach(self)
         var index: uint = self.count
         while index > 0 {
             self.items[index] = self.items[index - 1]
@@ -185,7 +167,6 @@ func insert(self: List['T], index: int, value: 'T) {
                                  "an insertion into a list")
     }
     ensure_capacity(self, self.count + 1)
-    detach(self)
     var at: uint = self.count
     while at > cast[uint]index {
         self.items[at] = self.items[at - 1]
@@ -199,7 +180,6 @@ func pop(self: List['T], front : bool = false) -> 'T? {
     if self.count == 0 {
         return nil
     }
-    detach(self)
     var index: uint = self.count - 1
     if front {
         index = 0
@@ -212,7 +192,7 @@ func pop(self: List['T], front : bool = false) -> 'T? {
         }
     }
     self.count -= 1
-    __array_clear(ref self.items, self.count)
+    __array_clear(containers.lease.writable(self.items), self.count)
     return value
 }
 
@@ -229,7 +209,6 @@ func find(self: List['T], value: 'T) -> int? where 'T : Equal {
 
 func remove(self: List['T], value: 'T,
                    all : bool = true) -> uint where 'T : Equal {
-    detach(self)
     var read:    uint = 0
     var write:   uint = 0
     var removed: uint = 0
@@ -247,7 +226,7 @@ func remove(self: List['T], value: 'T,
     }
     var stale: uint = write
     while stale < self.count {
-        __array_clear(ref self.items, stale)
+        __array_clear(containers.lease.writable(self.items), stale)
         stale += 1
     }
     self.count = write
@@ -255,14 +234,13 @@ func remove(self: List['T], value: 'T,
 }
 
 func clear(self: List['T]) {
-    self.items = []
+    containers.lease.replace_storage(self.items, [])
     self.count = 0
-    self.shared = false
 }
 
 func to_array(consume self: List['T]) -> Array['T] {
-    detach(self)
-    return __array_prefix(self.items, self.count)
+    let items: Ref[Array['T]] = containers.lease.writable(self.items)
+    return __array_prefix(items.__value, self.count)
 }
 
 func __add(self: List['T], other: List['T]) -> List['T] {
@@ -282,14 +260,11 @@ func __add(self: List['T], other: List['T]) -> List['T] {
     return new[List['T]](items = items)
 }
 
-func iter(self: List['T]) -> cursor.Cursor['T] {
-    self.shared = true
-    let view: containers.view.View['T] =
-        containers.view.__slice(self.items, 0, cast[int]self.count)
-    return new[cursor.Cursor['T]](view)
+func iter(self: List['T]) -> cursor.Lease_Cursor['T] {
+    return new[cursor.Lease_Cursor['T]](ref self.items, self.count)
 }
 
 alias litmod l = list
 sequence litmod list(items: Array['T]) -> List['T] fail: string {
-    return new[List['T]](items = items)
+    return new[List['T]](items = containers.array.__copy(items))
 }

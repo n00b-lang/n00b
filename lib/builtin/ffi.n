@@ -162,7 +162,7 @@ func __ffi_hold_group() -> u64 {
 }
 
 func __ffi_hold(group: u64, token: u64, release: Ref[(u64) -> nil], event: string,
-                keys: Array[u64], thread_id: uint) {
+                consume keys: Array[u64], thread_id: uint) {
     let hold: Ffi_Hold = (group = group, token = token, release = release, event = event,
                           keys = keys, thread_id = thread_id)
     ffi_holds.append(hold)

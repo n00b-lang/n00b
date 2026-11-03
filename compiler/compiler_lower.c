@@ -17326,8 +17326,8 @@ n00bb_emit_hook_call(ir_lower_context_t *context,
     ir_value_t *callee = owner && function
         ? ir_func_address(owner, function) : nullptr;
     th_type *signature = callee && method->signature
-        ? th_unify(ir_module_types(context->module), function->type,
-                   method->signature) : nullptr;
+        ? th_apply_subst(ir_module_types(context->module), method->signature)
+        : nullptr;
     th_type *result = signature ? th_func_ret(signature) : nullptr;
     ir_instr_t *call = result
         ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;

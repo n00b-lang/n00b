@@ -12,16 +12,6 @@ sys.internal.env.args: () -> List[string]
   traps explicit bounds unwrap arithmetic
   returns fresh
   output result data[(new in sys.internal.env.args:33:29)] control[]
-  output (new in builtin.containers.list.detach:22:27)[]... data[(reads_env)] control[]
-  output (new in builtin.containers.list.detach:22:27)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
-  output (new in builtin.containers.list.detach:22:27)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[]... data[(reads_env)] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
-  output (new in builtin.string.core.long_bytes:189:12)[]... data[(reads_env)] control[]
-  output (new in sys.internal.env.args:33:29).items data[(new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
-  output (new in sys.internal.env.c_string:14:28)[] data[(reads_env)] control[]
-  output (new in sys.internal.env.c_string:14:9) data[(new in sys.internal.env.c_string:14:28)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
   output result data[(reads_clock)] control[]
@@ -48,20 +38,20 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads self.__value.entries
   reads self.__value.index.ctrl
-  reads self.__value.entries.__value[]
+  reads self.__value.entries.__value.storage
   reads self.__value.index.ctrl.__value[]
   reads self.__value.index.hashes.__value[]
   reads self.__value.index.slots.__value[]
+  reads self.__value.entries.__value.storage.__value[]
   reads key...
   reads builtin.hashing.secret.__value[]...
   escapes self referent
   traps explicit bounds unwrap arithmetic
-  returns self.__value.entries.__value[].value
-  output result data[self.__value.entries.__value[].value] control[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.hashes.__value[] self.__value.index.slots.__value[]]
+  returns self.__value.entries.__value.storage.__value[].value
+  output result data[self.__value.entries.__value.storage.__value[].value] control[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.hashes.__value[] self.__value.index.slots.__value[]]
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  writes self.__value.entries...
-  reads+writes self.__value.entries
+  reads self.__value.entries
   reads+writes self.__value.index.ctrl
   reads+writes self.__value.index.dead
   reads+writes self.__value.index.growth_left
@@ -69,31 +59,40 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.__value.index.live
   writes self.__value.index.slots
   reads+writes self.__value.index.used
-  reads+writes self.__value.entries.__value[]
+  reads+writes self.__value.entries.__value.leases
+  writes self.__value.entries.__value.storage...
+  reads+writes self.__value.entries.__value.storage
   reads+writes self.__value.index.ctrl.__value[]
   reads self.__value.index.dead.__value[]
   reads+writes self.__value.index.hashes.__value[]
   reads+writes self.__value.index.slots.__value[]
+  reads self.__value.entries.__value.leases.__value.count
+  reads+writes self.__value.entries.__value.storage.__value[]
   reads key...
   reads builtin.hashing.secret.__value[]...
   escapes self referent
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns self.__value.entries.__value[].value value
-  output result data[self self.__value.entries.__value[].value value] control[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.dead.__value.__len self.__value.index.dead.__value[] self.__value.index.growth_left self.__value.index.hashes.__value.__len self.__value.index.hashes.__value[] self.__value.index.live self.__value.index.slots.__value[] self.__value.index.used]
-  output (new in builtin.containers.dict.ensure_entries:42:9).__len data[self self.__value.entries.__value.__len] control[]
-  output (new in builtin.containers.dict.ensure_entries:42:9)[] data[self.__value.entries.__value[]] control[]
-  output (new in builtin.containers.dict.ensure_entries:42:9)[]... data[self] control[]
-  output (new in builtin.containers.dict.ensure_entries:42:9)[].key data[key] control[]
-  output (new in builtin.containers.dict.ensure_entries:42:9)[].value data[value] control[]
+  returns self.__value.entries.__value.storage.__value[].value value
+  output result data[self.__value.entries self.__value.entries.__value.storage.__value[].value value] control[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.dead.__value.__len self.__value.index.dead.__value[] self.__value.index.growth_left self.__value.index.hashes.__value.__len self.__value.index.hashes.__value[] self.__value.index.live self.__value.index.slots.__value[] self.__value.index.used]
+  output (new in builtin.containers.array.__copy:7:27).__len data[self.__value.entries self.__value.entries.__value.storage.__value.__len] control[]
+  output (new in builtin.containers.array.__copy:7:27)[] data[self.__value.entries.__value.storage.__value[]] control[]
+  output (new in builtin.containers.array.__copy:7:27)[]... data[self.__value.entries] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].key data[key self.__value.entries.__value.storage.__value[].key] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].value data[value] control[]
+  output (new in builtin.containers.dict.ensure_entries:50:9).__len data[self.__value.entries self.__value.entries.__value.storage.__value.__len] control[]
+  output (new in builtin.containers.dict.ensure_entries:50:9)[] data[self.__value.entries.__value.storage.__value[]] control[]
+  output (new in builtin.containers.dict.ensure_entries:50:9)[]... data[self.__value.entries] control[]
   output (new in builtin.containers.hash_index.reserve:181:35)[] data[key key.__value... self.__value.index.hashes.__value[]] control[]
   output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.__value.index.dead.__value[]] control[]
-  output self.__value.entries data[(new in builtin.containers.dict.ensure_entries:42:9)] control[]
-  output self.__value.entries... data[self] control[]
-  output self.__value.entries.__value[] data[self.__value.entries.__value[]] control[]
-  output self.__value.entries.__value[].key data[key self.__value.entries.__value[].key] control[]
-  output self.__value.entries.__value[].value data[value] control[]
+  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
+  output self.__value.entries.__value.storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.dict.ensure_entries:50:9) self.__value.entries.__value.storage] control[]
+  output self.__value.entries.__value.storage... data[self.__value.entries] control[]
+  output self.__value.entries.__value.storage.__value.__len data[self.__value.entries.__value.storage.__value.__len] control[]
+  output self.__value.entries.__value.storage.__value[] data[self.__value.entries.__value.storage.__value[]] control[]
+  output self.__value.entries.__value.storage.__value[].key data[key self.__value.entries.__value.storage.__value[].key] control[]
+  output self.__value.entries.__value.storage.__value[].value data[value] control[]
   output self.__value.index.ctrl data[(new in builtin.containers.hash_index.rebuild:155:25)] control[]
   output self.__value.index.ctrl.__value[] data[key key.__value... self.__value.index.ctrl.__value.__len self.__value.index.ctrl.__value[] self.__value.index.hashes.__value[]] control[]
   output self.__value.index.dead data[(new in builtin.containers.hash_index.compact:214:25) (new in builtin.containers.hash_index.reserve:189:36)] control[]
@@ -104,51 +103,54 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output self.__value.index.slots data[(new in builtin.containers.hash_index.rebuild:156:26)] control[]
   output self.__value.index.slots.__value[] data[self.__value.index.used] control[self.__value.index.dead.__value.__len self.__value.index.dead.__value[]]
   output self.__value.index.used data[self.__value.index.used] control[self.__value.index.dead.__value.__len self.__value.index.dead.__value[]]
-builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
-  effects may_trap may_allocate
+builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
+  effects may_allocate may_collect allocates_direct
   reads self.__value.entries
-  reads self.__value.index.dead
-  reads self.__value.index.live
   reads self.__value.index.used
-  reads self.__value.entries.__value[]
-  reads self.__value.index.dead.__value[]
+  reads self.__value.entries.__value.leases
+  reads self.__value.entries.__value.storage
+  reads self.__value.entries.__value.leases.__value.count
   escapes self referent
-  traps bounds arithmetic
-  output result data[(new in builtin.containers.dict.iter:177:9) self.__value.index.live...] control[]
-  output (new in builtin.containers.dict.iter:177:9).__len data[self.__value.index.live] control[]
-  output (new in builtin.containers.dict.iter:177:9)[].key data[self.__value.entries.__value[].key] control[]
-  output (new in builtin.containers.dict.iter:177:9)[].value data[self.__value.entries.__value[].value] control[]
+  output result data[(new in builtin.containers.lease.__ref_create:35:28) self.__value.index.used] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).leases data[self.__value.entries.__value.leases] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).storage data[self.__value.entries.__value.storage] control[]
 builtin.containers.list.len: (List['T]) -> uint
   effects none
   reads self.__value.count
   output result data[self.__value.count] control[]
-builtin.containers.list.iter: (List['T]) -> Cursor['T]
-  effects may_trap
+builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
+  effects may_allocate may_collect allocates_direct
   reads self.__value.count
   reads self.__value.items
-  writes self.__value.shared
+  reads self.__value.items.__value.leases
+  reads self.__value.items.__value.storage
+  reads self.__value.items.__value.leases.__value.count
   escapes self referent
-  traps arithmetic
-  output result data[self.__value.count self.__value.items] control[]
+  output result data[(new in builtin.containers.lease.__ref_create:35:28) self.__value.count] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).leases data[self.__value.items.__value.leases] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).storage data[self.__value.items.__value.storage] control[]
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads spans.__value.count
   reads spans.__value.items
-  reads spans.__value.items.__value[]
+  reads spans.__value.items.__value.storage
+  reads spans.__value.items.__value.storage.__value[]
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
   output result data[(new in text.internal.rich.rich_string:9:9)] control[]
-  output (new in builtin.containers.list.__init:12:49)[].end_ix data[spans.__value.items.__value[].end] control[]
-  output (new in builtin.containers.list.__init:12:49)[].start_ix data[spans.__value.items.__value[].start] control[]
-  output (new in builtin.containers.list.__init:12:49)[].style_tag data[spans.__value.items.__value[].tag] control[]
-  output (new in builtin.containers.list.detach:22:27)[].end_ix data[spans.__value.items.__value[].end] control[]
-  output (new in builtin.containers.list.detach:22:27)[].start_ix data[spans.__value.items.__value[].start] control[]
-  output (new in builtin.containers.list.detach:22:27)[].style_tag data[spans.__value.items.__value[].tag] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].end_ix data[spans.__value.items.__value[].end] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].start_ix data[spans.__value.items.__value[].start] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].style_tag data[spans.__value.items.__value[].tag] control[]
-  output (new in text.internal.rich.rich_string:9:51).items data[(new in builtin.containers.list.__init:12:49) (new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].style_tag data[spans.__value.items.__value.storage.__value[].tag] control[]
+  output (new in builtin.containers.list.__init:13:57)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
+  output (new in builtin.containers.list.__init:13:57)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
+  output (new in builtin.containers.list.__init:13:57)[].style_tag data[spans.__value.items.__value.storage.__value[].tag] control[]
+  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23)] control[]
+  output (new in builtin.containers.list.__init:15:18).storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.list.__init:13:57) (new in builtin.containers.list.ensure_capacity:138:28)] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[].style_tag data[spans.__value.items.__value.storage.__value[].tag] control[]
+  output (new in text.internal.rich.rich_string:9:51).items data[(new in builtin.containers.list.__init:15:18)] control[]
   output (new in text.internal.rich.rich_string:9:9).s data[text] control[]
   output (new in text.internal.rich.rich_string:9:9).style_info data[(new in text.internal.rich.rich_string:9:51)] control[]
 unicode.internal.properties.general_category: (char) -> Gc
