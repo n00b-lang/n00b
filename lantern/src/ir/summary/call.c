@@ -157,14 +157,34 @@ memo_stale(pt_t *pt, const pt_memo_t *memo)
         || depends_changed(pt, &memo->depends, memo->generation);
 }
 
+static bool
+growth_only_stale(pt_t *pt, const pt_memo_t *memo)
+{
+    if (!memo->computed || (memo->positional && memo->at != pt->at))
+        return false;
+    for (size_t d = 0; d < memo->depends.len; d++) {
+        uintptr_t key     = (uintptr_t)memo->depends.data[d];
+        uintptr_t changed = (uintptr_t)core_dict_get(
+            &pt->changed, (void *)key, nullptr);
+        if (changed > memo->generation
+            && !(key >> (sizeof(uintptr_t) * 8 - 1)) && (key & 3) == 1
+            && ((key >> 2) >= pt->sites.len
+                || pt->sites.data[key >> 2].local))
+            return false;
+    }
+    return true;
+}
+
 static void
 memo_begin(pt_t *pt, pt_memo_t *memo, pt_memo_frame_t *frame)
 {
-    *frame = (pt_memo_frame_t){.resolving  = pt->resolving,
-                               .positional = pt->positional};
+    *frame = (pt_memo_frame_t){.resolving   = pt->resolving,
+                               .positional  = pt->positional,
+                               .delta_since = pt->delta_since};
     memo->depends.len = 0;
     pt->resolving     = &memo->depends;
     pt->positional    = false;
+    pt->delta_since   = 0;
 }
 
 static int
@@ -193,6 +213,7 @@ memo_end(pt_t *pt, pt_memo_t *memo, const pt_memo_frame_t *frame)
     memo->reader     = pt->reader;
     pt->resolving    = frame->resolving;
     pt->positional   = frame->positional;
+    pt->delta_since  = frame->delta_since;
 }
 
 static void
@@ -698,8 +719,11 @@ source_items(pt_t *pt, mapped_sources_t *mapped, uint32_t source,
     pt->at = mapped->call;
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
+        uint64_t        since = growth_only_stale(pt, &entry->memo)
+            ? entry->memo.generation : 0;
         memo_begin(pt, &entry->memo, &frame);
-        entry->items.len = 0;
+        if (since) pt->delta_since = since;
+        else entry->items.len = 0;
         map_location(pt, mapped->call, mapped->callee,
                      mapped->flows->sources.data[source], mode,
                      &entry->items);
