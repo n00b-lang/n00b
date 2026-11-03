@@ -86,7 +86,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output (new in builtin.containers.dict.ensure_entries:50:9)[]... data[self.__value.entries] control[]
   output (new in builtin.containers.hash_index.reserve:181:35)[] data[key key.__value... self.__value.index.hashes.__value[]] control[]
   output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.__value.index.dead.__value[]] control[]
-  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:67:23) (new in builtin.containers.lease.writable:60:23) self.__value.entries.__value.leases] control[]
+  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
   output self.__value.entries.__value.storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.dict.ensure_entries:50:9) self.__value.entries.__value.storage] control[]
   output self.__value.entries.__value.storage... data[self.__value.entries] control[]
   output self.__value.entries.__value.storage.__value.__len data[self.__value.entries.__value.storage.__value.__len] control[]
@@ -111,9 +111,9 @@ builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   reads self.__value.entries.__value.storage
   reads self.__value.entries.__value.leases.__value.count
   escapes self referent
-  output result data[(new in builtin.containers.lease.__ref_create:34:28) self.__value.index.used] control[]
-  output (new in builtin.containers.lease.__ref_create:34:28).leases data[self.__value.entries.__value.leases] control[]
-  output (new in builtin.containers.lease.__ref_create:34:28).storage data[self.__value.entries.__value.storage] control[]
+  output result data[(new in builtin.containers.lease.__ref_create:35:28) self.__value.index.used] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).leases data[self.__value.entries.__value.leases] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).storage data[self.__value.entries.__value.storage] control[]
 builtin.containers.list.len: (List['T]) -> uint
   effects none
   reads self.__value.count
@@ -126,9 +126,9 @@ builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
   reads self.__value.items.__value.storage
   reads self.__value.items.__value.leases.__value.count
   escapes self referent
-  output result data[(new in builtin.containers.lease.__ref_create:34:28) self.__value.count] control[]
-  output (new in builtin.containers.lease.__ref_create:34:28).leases data[self.__value.items.__value.leases] control[]
-  output (new in builtin.containers.lease.__ref_create:34:28).storage data[self.__value.items.__value.storage] control[]
+  output result data[(new in builtin.containers.lease.__ref_create:35:28) self.__value.count] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).leases data[self.__value.items.__value.leases] control[]
+  output (new in builtin.containers.lease.__ref_create:35:28).storage data[self.__value.items.__value.storage] control[]
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads spans.__value.count
@@ -145,7 +145,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   output (new in builtin.containers.list.__init:13:57)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
   output (new in builtin.containers.list.__init:13:57)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
   output (new in builtin.containers.list.__init:13:57)[].style_tag data[spans.__value.items.__value.storage.__value[].tag] control[]
-  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:24:19) (new in builtin.containers.lease.replace_storage:67:23) (new in builtin.containers.lease.writable:60:23)] control[]
+  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23)] control[]
   output (new in builtin.containers.list.__init:15:18).storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.list.__init:13:57) (new in builtin.containers.list.ensure_capacity:138:28)] control[]
   output (new in builtin.containers.list.ensure_capacity:138:28)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
   output (new in builtin.containers.list.ensure_capacity:138:28)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
