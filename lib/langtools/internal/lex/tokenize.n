@@ -667,15 +667,14 @@ private func sigil(r: Run, before_string: bool) -> bool {
     let name: uint = sc.pos
     internal.scan.advance(sc, sigil_body(r, g.digits, sc.pos) - sc.pos)
     if attach {
-        var last: internal.lex.tokens.Token = r.tokens[r.tokens.len() - 1]
-        if last.modifier != nil {
+        let last: uint = r.tokens.len() - 1
+        if r.tokens[last].modifier != nil {
             error(r, "postfix-invalid",
                   "a token can carry only one postfix modifier", from)
             return true
         }
-        last.end = sc.pos
-        last.modifier = name
-        r.tokens[r.tokens.len() - 1] = last
+        r.tokens[last].end = sc.pos
+        r.tokens[last].modifier = name
         return true
     }
     var class: internal.grammar.model.Token_Id? = g.class
@@ -1013,10 +1012,8 @@ private func heredoc(r: Run) -> bool {
 
 private func set_content(r: Run, start: uint, end: uint, label_start: uint,
                          label_end: uint) {
-    var last: internal.lex.tokens.Token = r.tokens[r.tokens.len() - 1]
-    last.content = (start = start, end = end, label_start = label_start,
-                    label_end = label_end)
-    r.tokens[r.tokens.len() - 1] = last
+    r.tokens[r.tokens.len() - 1].content = (start = start, end = end,
+        label_start = label_start, label_end = label_end)
 }
 
 private func queued_bodies(r: Run) {

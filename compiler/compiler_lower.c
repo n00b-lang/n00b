@@ -7490,6 +7490,42 @@ n00bb_lower_structural_cast(ir_lower_context_t *context, ir_value_t *value,
     return true;
 }
 
+static bool
+n00bb_record_literal_as(ir_lower_context_t *context, th_type *target,
+                        parse_tree_t *source, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_value_t *value = source ? ir_lower_node_value(context, source) : nullptr;
+    th_type *element = target;
+    th_type *option_element = nullptr;
+    if (n00bb_option_type_element(target, &option_element))
+        element = option_element;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *definition = element ? th_type_definition(types, element)
+                                  : nullptr;
+    th_type *from = value ? th_resolve(value->type) : nullptr;
+    th_type *to = definition ? th_resolve(definition) : nullptr;
+    if (!lower || !value || !value->def || value->def->op != IR_OP_AGGREGATE
+        || !from || th_kind_of(from) != TH_RECORD
+        || !to || th_kind_of(to) != TH_RECORD
+        || th_kind_of(th_resolve(element)) == TH_RECORD
+        || th_record_len(from) != th_record_len(to)
+        || ir_type_eq(context->module, definition, value->type)
+        || n00bb_type_has_constructor(lower->unit, element))
+        return true;
+    for (size_t i = 0; i < th_record_len(to); i++) {
+        const th_member *member = th_record_member(to, i);
+        th_type *field = record_lookup_text(nullptr, from, member->name);
+        if (!field || !structural_field_fits(context, field, member->type))
+            return true;
+    }
+    ir_lower_result_t cast = {0};
+    if (!n00bb_lower_structural_cast(context, value, element, false, span,
+                                     &cast)) return true;
+    return cast.status == IR_LOWER_VALUE && cast.value
+        && ir_lower_set_node_value(context, source, cast.value);
+}
+
 static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
@@ -16865,6 +16901,11 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         if (i > 0 && parameter && th_mode_is_input_only(mode)) {
             bool literal_source = !slice && i == argument_count - 1
                 && source && !source_value;
+            if (literal_source) {
+                if (!n00bb_nominal_value_as(context, parameter->type, source))
+                    return false;
+                arguments[i] = ir_lower_node_value(context, source);
+            }
             arguments[i] = n00bb_materialize(context,
                 literal_source ? source : nullptr, arguments[i],
                 parameter->type, lower_span_for_tree(context, site_node));
@@ -17171,6 +17212,22 @@ n00bb_nominal_value_as(ir_lower_context_t *context, th_type *target_type,
         return false;
     }
 
+    th_type *from = parse_tree_type(source);
+    from = from ? th_resolve(from) : nullptr;
+    th_type *to = th_resolve(definition);
+    ir_instr_t *aggregate = value->def;
+    size_t count = th_record_len(to);
+    if (from && th_kind_of(from) == TH_RECORD
+        && count == aggregate->n_operands && count == th_record_len(from)) {
+        ir_operand_t *ordered = core_alloc_array(ir_operand_t, count);
+        for (size_t i = 0; i < count; i++)
+            for (size_t j = 0; j < count; j++)
+                if (core_string_eq(th_record_member(to, i)->name,
+                                   th_record_member(from, j)->name))
+                    ordered[i] = aggregate->operands[j];
+        memcpy(aggregate->operands, ordered, count * sizeof(*ordered));
+        core_free(ordered);
+    }
     value->type = target_type;
     return ir_lower_set_node_value(context, source, value);
 }
@@ -18113,6 +18170,11 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
             lower->unit, target, &writeback, span);
     th_type *resolved_field_type = address
         ? th_ind_referent(address->type) : field->type;
+    if (!is_nil && source
+        && (!n00bb_nominal_value_as(context, resolved_field_type, source)
+            || !n00bb_record_literal_as(context, resolved_field_type,
+                                        source, span)))
+        return false;
     ir_value_t *value = source
         ? n00bb_materialize_source(context, visit, source,
                                    resolved_field_type)

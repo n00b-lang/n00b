@@ -1,0 +1,10 @@
+import shapes
+
+func set(modify tokens: List[shapes.Token], start: uint, end: uint,
+         label_start: uint, label_end: uint) {
+    let parts = (start = start, end = end, label_start = label_start,
+                 label_end = label_end)
+    var token: shapes.Token = tokens[0]
+    token.content = cast[shapes.Content](parts)
+    tokens[0] = token
+}

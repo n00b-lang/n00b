@@ -1,6 +1,7 @@
 import unicode
 import unicode.query
 import sort
+import containers.list
 import internal.diag
 import internal.scan
 import internal.grammar.model
@@ -30,10 +31,7 @@ func char_set(text: string) -> Char_Set {
             others.append(code)
         }
     }
-    var other: Array[u32] = new[Array[u32]](others.len())
-    for i: uint from 0 until others.len() {
-        other[i] = others[i]
-    }
+    var other: Array[u32] = containers.list.to_array(others)
     sort.sort(other)
     return (low = low, high = high, other = other)
 }
@@ -46,18 +44,8 @@ func has(set: Char_Set, c: char) -> bool {
     if code < 128 {
         return (set.high >> cast[u64](code - 64)) & 1 == 1
     }
-    var lo: uint = 0
-    var hi: uint = __array_length(set.other)
-    while lo < hi {
-        let mid: uint = lo + (hi - lo) / 2
-        if set.other[mid] < code {
-            lo = mid + 1
-        }
-        else {
-            hi = mid
-        }
-    }
-    return lo < __array_length(set.other) and set.other[lo] == code
+    let at: uint = sort.search(set.other, code)
+    return at < __array_length(set.other) and set.other[at] == code
 }
 
 record Comment {
@@ -742,10 +730,9 @@ private func recovery(c: Compiler, rule: internal.lex.spec.Rule) {
     if class == nil {
         class = id
     }
-    let recovery: Recovery = (sync = option_words(rule, "sync"),
-        consume = internal.lex.spec.has_flag(rule, "consume"), class = class)
     c.lexer.recoveries[internal.grammar.model.raw_token_id(id.get())] =
-        recovery
+        (sync = option_words(rule, "sync"),
+         consume = internal.lex.spec.has_flag(rule, "consume"), class = class)
 }
 
 private func policy(c: Compiler, option: internal.lex.spec.Option,

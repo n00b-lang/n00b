@@ -60,6 +60,9 @@ N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
     && N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
         --output "$tmp/shared_link_nested_root.n00bm" shared_link_first)
 [ -s "$tmp/shared_link_nested_root.n00bm" ]
+N00B_PATH="$script_dir/programs/link_records" "$compiler" library \
+    --output "$tmp/struct_order.n00bm" struct_order_root
+[ -s "$tmp/struct_order.n00bm" ]
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
     --output "$tmp/abi_value_root.n00bm" abi_value_root
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
