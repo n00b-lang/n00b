@@ -458,6 +458,12 @@ typedef struct {
 core_list_decl(n00bb_value_block_frame_t);
 
 typedef struct {
+    core_string_t name;
+    ir_local_t *flag;
+} n00bb_init_field_t;
+core_list_decl(n00bb_init_field_t);
+
+typedef struct {
     parse_tree_t *node;
     parse_tree_t *body;
     parse_tree_t *error_clause;
@@ -601,6 +607,7 @@ typedef struct {
     core_list_t(n00bb_typecase_frame_t) typecases;
     size_t skipped_failures;
     core_list_t(n00bb_value_block_frame_t) value_blocks;
+    core_list_t(n00bb_init_field_t) init_fields;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
@@ -1847,8 +1854,8 @@ n00bb_final_frame(n00bb_lower_context_t *lower,
 }
 
 static bool
-n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
-                bool owned, ir_span_t span)
+n00bb_set_flag(ir_lower_context_t *context, ir_local_t *flag, bool value,
+               ir_span_t span)
 {
     th_type *bool_type = n00bb_ir_builtin_type(context->module,
                                                CORE_STRING_STATIC("bool"));
@@ -1856,10 +1863,17 @@ n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
         ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
     if (!constant || !ir_lower_set_temp_dest(context, constant,
             CORE_STRING_STATIC("__n00bb_"), bool_type)
-        || !ir_instr_operand_int(constant, owned ? 1 : 0)) return false;
+        || !ir_instr_operand_int(constant, value ? 1 : 0)) return false;
     ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY, span);
-    return copy && ir_instr_set_dest_local(copy, frame->owned)
+    return copy && ir_instr_set_dest_local(copy, flag)
         && ir_instr_operand_value(copy, constant->dest);
+}
+
+static bool
+n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
+                bool owned, ir_span_t span)
+{
+    return n00bb_set_flag(context, frame->owned, owned, span);
 }
 
 static ir_value_t *n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op,
@@ -6010,6 +6024,15 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (!n00bb_move_source(context, visit->grammar, expression))
             return false;
+        ir_value_t *result = expression
+            ? ir_lower_node_value(context, expression) : nullptr;
+        if (result && result->kind == IR_VAL_GLOBAL) {
+            ir_value_t *read = n00bb_emit_temp(context, IR_OP_COPY,
+                result->type, result,
+                lower_span_for_tree(context, expression));
+            if (!read || !ir_lower_set_node_value(context, expression, read))
+                return false;
+        }
         return n00bb_emit_with_success(context, visit->node);
     }
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
@@ -6025,20 +6048,21 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ir_value_t *value = expression
                 ? n00bb_result_value(context, expression, frame->result)
                 : nullptr;
-            if (value && (!n00bb_move_source(context, visit->grammar,
-                                             expression)
-                || !n00bb_emit_scoped_cleanups(context, visit->node,
-                                               frame->order, nullptr, true,
-                                               UINT64_MAX)))
+            if (value && !n00bb_move_source(context, visit->grammar,
+                                            expression))
                 return false;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
-            ir_instr_t *jump = store
+            bool stored = store && ir_instr_set_dest_local(store,
+                                                           frame->result)
+                && ir_instr_operand_value(store, value)
+                && n00bb_emit_scoped_cleanups(context, visit->node,
+                                              frame->order, nullptr, true,
+                                              UINT64_MAX);
+            ir_instr_t *jump = stored
                 ? ir_instr_add(context->block, IR_OP_JUMP) : nullptr;
-            if (!store || !ir_instr_set_dest_local(store, frame->result)
-                || !ir_instr_operand_value(store, value) || !jump
-                || !ir_instr_operand_block(jump, frame->continuation)) {
+            if (!jump || !ir_instr_operand_block(jump, frame->continuation)) {
                 lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not store a block value and continue");
@@ -17752,6 +17776,81 @@ n00bb_lower_field_receiver(ir_lower_context_t *context, parse_visit_t *visit,
     return n00bb_suppress_dereferences(context, visit->grammar, visit->node);
 }
 
+static parse_sym_entry_t *
+n00bb_initialized_self(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *target)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!lower || !lower->function_symbol
+        || !core_string_eq(lower->function_symbol->name,
+                           CORE_STRING_STATIC("__init"))) return nullptr;
+    parse_tree_t *member = member_access_node(grammar, target);
+    parse_tree_t *lvalue = member && core_tree_num_children(member)
+        ? n00bb_simple_lvalue(core_tree_child(member, 0)) : nullptr;
+    parse_sym_entry_t *symbol = lvalue
+        ? attached_symbol(grammar, lower->unit, lvalue) : nullptr;
+    return symbol && symbol->kind == PARSE_SYM_PARAM
+        && core_string_eq(symbol->name, CORE_STRING_STATIC("self"))
+        ? symbol : nullptr;
+}
+
+static ir_local_t *
+n00bb_init_field_flag(ir_lower_context_t *context, core_string_t name,
+                      ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    for (size_t i = 0; i < lower->init_fields.len; i++)
+        if (core_string_eq(lower->init_fields.data[i].name, name))
+            return lower->init_fields.data[i].flag;
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    char buffer[48];
+    core_string_t local_name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_initialized_%llu",
+        (unsigned long long)context->next_value_id++);
+    ir_local_t *flag = bool_type
+        ? ir_local_add(context->function, local_name, bool_type) : nullptr;
+    ir_block_t *entry = ir_block_entry(context->function);
+    ir_instr_t *constant = flag && entry
+        ? ir_instr_insert(entry, IR_OP_CONST, 0) : nullptr;
+    ir_instr_t *clear = constant
+        && ir_instr_set_fresh_dest(constant, "__n00bb_", bool_type)
+        && ir_instr_operand_int(constant, 0)
+        ? ir_instr_insert(entry, IR_OP_COPY, 1) : nullptr;
+    if (!clear || !ir_instr_set_dest_local(clear, flag)
+        || !ir_instr_operand_value(clear, constant->dest)) return nullptr;
+    constant->span = clear->span = span;
+    core_list_push(lower->init_fields, ((n00bb_init_field_t){name, flag}));
+    return flag;
+}
+
+static bool
+n00bb_finalize_replaced(ir_lower_context_t *context, ir_value_t *address,
+                        ir_local_t *initialized, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *type = th_ind_referent(th_resolve(address->type));
+    if (!type || !n00bb_type_may_finalize(lower->unit, type)) return true;
+    ir_block_t *join = nullptr;
+    if (initialized) {
+        ir_block_t *replace = n00bb_branch_block(context, lower, "replace");
+        join = n00bb_branch_block(context, lower, "replaced");
+        ir_value_t *flag = ir_local_value(context->function, initialized);
+        if (!replace || !join || !flag
+            || !n00bb_emit_branch(context, flag, replace, join, span))
+            return false;
+        context->block = replace;
+    }
+    ir_value_t *old = n00bb_emit_temp(context, IR_OP_COPY, address->type,
+                                      address, span);
+    if (!old || !n00bb_emit_finalize_value(context, old, type, span, 0))
+        return false;
+    if (!join) return true;
+    if (!n00bb_emit_jump(context, join, span)) return false;
+    context->block = join;
+    return true;
+}
+
 static bool
 n00bb_lower_record_field_assignment(ir_lower_context_t *context,
                                     parse_visit_t *visit,
@@ -17834,7 +17933,16 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
             "record field assignment does not match its array shape");
         return false;
     }
-    if (!n00bb_emit_indirect_write(context, address, value, span)) {
+    parse_sym_entry_t *self = n00bb_initialized_self(context, visit->grammar,
+                                                    target);
+    ir_local_t *initialized = self && n00bb_type_may_finalize(lower->unit,
+            th_ind_referent(th_resolve(address->type)))
+        ? n00bb_init_field_flag(context, field->name, span) : nullptr;
+    if ((self && n00bb_type_may_finalize(lower->unit,
+                th_ind_referent(th_resolve(address->type))) && !initialized)
+        || !n00bb_finalize_replaced(context, address, initialized, span)
+        || !n00bb_emit_indirect_write(context, address, value, span)
+        || (initialized && !n00bb_set_flag(context, initialized, true, span))) {
         lower_internal(context, span,
             "could not emit the record field store");
         return false;
@@ -17884,7 +17992,8 @@ n00bb_lower_referent_assignment(ir_lower_context_t *context,
         }
         return false;
     }
-    if (!n00bb_emit_indirect_write(context, address, value, span)) {
+    if (!n00bb_finalize_replaced(context, address, nullptr, span)
+        || !n00bb_emit_indirect_write(context, address, value, span)) {
         lower_internal(context, span,
                     "could not emit the store through a reference");
         return false;
@@ -20692,6 +20801,53 @@ bind_missing_external(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_check_initialized_fields(ir_lower_context_t *context,
+                               parse_sym_entry_t *function,
+                               core_list_t(parse_sym_entry_ptr_t) *parameters)
+{
+    n00bb_lower_context_t *lower = context->user;
+    parse_sym_entry_t *self = parameters && parameters->len
+        ? parameters->data[0] : nullptr;
+    if (!function || !self || !core_string_eq(function->name,
+            CORE_STRING_STATIC("__init"))
+        || !core_string_eq(self->name, CORE_STRING_STATIC("self"))
+        || !self->type) return true;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *shape = th_resolve(self->type);
+    shape = th_kind_of(shape) == TH_NAMED
+        ? th_type_definition(types, shape) : shape;
+    shape = shape ? th_resolve(shape) : nullptr;
+    if (shape && th_kind_of(shape) == TH_INDIRECTION) {
+        th_type *fields = th_resolve(th_ind_referent(shape));
+        shape = fields && th_kind_of(fields) == TH_NAMED
+            ? th_type_definition(types, fields) : fields;
+        shape = shape ? th_resolve(shape) : nullptr;
+    }
+    bool ok = true;
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (!member || !member->type
+            || !n00bb_type_may_finalize(lower->unit, member->type)) continue;
+        bool set = false;
+        for (size_t j = 0; !set && j < lower->init_fields.len; j++)
+            set = core_string_eq(lower->init_fields.data[j].name,
+                                 member->name);
+        if (set) continue;
+        core_string_t type_text = lower_type_text(context, member->type);
+        lower_report(context, N00B_DIAG_FINALIZED_FIELD_UNSET,
+            lower_span_for_tree(context, function->decl_node),
+            N00B_TEXT_FINALIZED_FIELD_UNSET,
+            N00BB_ARGS(ARG_TEXT(member->name), ARG_TEXT(type_text)));
+        lower_help(context, N00B_TEXT_SET_EVERY_FINALIZED_FIELD,
+                   N00BB_NO_ARGS);
+        core_free(type_text.data);
+        ok = false;
+    }
+    return ok;
+}
+
+static bool
 lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
               core_translation_unit_t *unit, parse_sym_entry_t *symbol,
               parse_tree_t *body, ir_func_t *function,
@@ -20743,6 +20899,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .loops = core_list_new(n00bb_loop_frame_t),
         .requires = core_list_new(n00bb_require_frame_t),
         .value_blocks = core_list_new(n00bb_value_block_frame_t),
+        .init_fields = core_list_new(n00bb_init_field_t),
         .tries = core_list_new(n00bb_try_frame_t),
         .withs = core_list_new(n00bb_with_frame_t),
         .finals = core_list_new(n00bb_final_frame_t),
@@ -21089,6 +21246,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     else lowered = ir_lower_tree(lowerer, &context, grammar, body);
+    if (lowered.status != IR_LOWER_FAILED
+        && !n00bb_check_initialized_fields(&context, symbol, parameters))
+        lowered.status = IR_LOWER_FAILED;
     bool failed = lower_failures(&context)
         > failures + lower_data.skipped_failures;
     if (lowered.status == IR_LOWER_FAILED || failed) goto cleanup;
@@ -21182,6 +21342,7 @@ cleanup:
         core_list_free(lower_data.typecases.data[i].arms);
     core_list_free(lower_data.typecases);
     core_list_free(lower_data.value_blocks);
+    core_list_free(lower_data.init_fields);
     core_list_free(lower_data.tries);
     for (size_t w = 0; w < lower_data.withs.len; w++) {
         for (size_t i = 0; i < lower_data.withs.data[w].items.len; i++)

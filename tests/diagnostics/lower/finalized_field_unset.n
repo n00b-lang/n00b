@@ -1,0 +1,15 @@
+record Guard {
+    id: int
+}
+
+object Holder {
+    guard: Guard
+    count: int
+}
+
+func __finalize(consume self: Ref[Guard]) {
+}
+
+func __init(self: Holder, count: int) {
+    self.count = count
+}
