@@ -122,7 +122,7 @@ func c_length(bytes: Array[u8]) -> uint {
 }
 
 func cstring_of(s: string) -> Array[u8] {
-    let empty: Array[u8] = new[Array[u8]](0)
+    let empty: Array[u8] = []
     let result = try {
         -> to_cstring(s)!
     } fail(e) {
@@ -161,7 +161,7 @@ func run_cstring_checks() {
     let copied = try {
         -> to_cstring(shortish, copy = true, buf = buf)!
     } fail(e) {
-        -> new[Array[u8]](0)
+        -> []
     }
     require c_length(copied) == byte_len(shortish)
     var j: uint = 0

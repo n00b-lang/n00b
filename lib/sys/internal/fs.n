@@ -94,7 +94,7 @@ func read_file(path: string) -> Array[u8] fail: int {
 }
 
 func data_file(path: string) -> Array[u8] {
-    var data: Array[u8] = new[Array[u8]](0)
+    var data: Array[u8] = []
     try {
         data = read_file(path)!
     } fail(failure) {

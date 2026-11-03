@@ -114,7 +114,7 @@ private func pow2_ceil(n: uint) -> uint {
 func __init(self: Buffer, length: int = -1, hex: string = "",
             ptr: Array[u8]? = nil, copy: bool = true) {
     __atomic_store(ref self.lock, 0)
-    self.store = new[Array[u8]](0)
+    self.store = []
     self.byte_len = 0
     self.alloc_len = 0
     self.borrowed = false
@@ -433,7 +433,7 @@ private func set_slice_raw(buffer: Buffer, start: int, end: int,
 func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
     fail: Buffer_Error {
     var ok: bool
-    var bytes: Array[u8] = new[Array[u8]](0)
+    var bytes: Array[u8] = []
     var add_len: int = 0
     if val != nil {
         bytes = string.core.__text_byte_array(val.get())
@@ -472,7 +472,7 @@ func to_string(consume self: Buffer,
         result = string.core.from_raw(ref self.store,
                                       cast[int] self.byte_len,
                                       copy = false, encoding = encoding)
-        self.store = new[Array[u8]](0)
+        self.store = []
         self.byte_len = 0
         self.alloc_len = 0
     }
@@ -481,7 +481,7 @@ func to_string(consume self: Buffer,
 
 func free(self: Buffer) {
     with Buffer_Write(self) {
-        self.store = new[Array[u8]](0)
+        self.store = []
         self.byte_len = 0
         self.alloc_len = 0
         self.borrowed = false

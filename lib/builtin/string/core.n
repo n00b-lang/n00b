@@ -623,7 +623,7 @@ func to_cstring(self: string, copy: bool = false, buf: Array[u8]? = nil)
         direct[len] = 0
         return direct
     }
-    var out: Array[u8] = buf.get_or_else(new[Array[u8]](0))
+    var out: Array[u8] = buf.get_or_else([])
     require __array_length(out) > len
     var k: uint = 0
     while k < len {
