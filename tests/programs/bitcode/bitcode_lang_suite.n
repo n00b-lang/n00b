@@ -1917,6 +1917,11 @@ func ascii_check() {
     let eleven: u32? = hex_digit_value('b')
     require eleven != nil and eleven.get() == 11
     require hex_digit_value('g') == nil
+    let forty_two: u64? = decimal_value("042")
+    require forty_two != nil and forty_two.get() == 42
+    require decimal_value("") == nil and decimal_value("4a") == nil
+    require decimal_value("18446744073709551615") != nil
+    require decimal_value("18446744073709551616") == nil
     require buffer_holds(new[Buffer](hex = "41 4a:4B"), "AJK")
 }
 
