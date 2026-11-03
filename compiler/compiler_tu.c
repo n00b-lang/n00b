@@ -1788,6 +1788,41 @@ finalize_record_shape(n00bb_tu_state_t *state, th_type *type, bool open)
 }
 
 bool
+n00bb_reference_hook(th_ctx *types, th_type *receiver, core_string_t name,
+                     th_env_method_t *method, th_type **result)
+{
+    th_type *resolved = receiver ? th_resolve(receiver) : nullptr;
+    if (!types || !resolved || th_kind_of(resolved) != TH_NAMED) return false;
+    th_env_method_t found = {0};
+    core_string_t trait = {0};
+    if (th_env_method_resolve_by_name(types, resolved, name, &found, &trait)
+            != TH_ENV_METHOD_FOUND || !found.signature) return false;
+    th_type *instance = th_instantiate(types,
+                                       th_generalize(types, found.signature));
+    const th_param *self = instance && th_kind_of(instance) == TH_FUNCTION
+        ? th_func_param(instance, 0) : nullptr;
+    th_type *returned = self && th_unify_in_place(types, self->type, resolved)
+        ? th_resolve(th_func_ret(instance)) : nullptr;
+    if (!returned) return false;
+    if (method) *method = found;
+    if (result) *result = returned;
+    return true;
+}
+
+bool
+n00bb_reference_method(th_ctx *types, th_type *receiver, bool writable,
+                       th_env_method_t *method, th_type **referent)
+{
+    th_type *address = nullptr;
+    if (!n00bb_reference_hook(types, receiver, writable
+                ? CORE_STRING_STATIC("__ref_address_mut")
+                : CORE_STRING_STATIC("__ref_address"), method, &address)
+        || th_kind_of(address) != TH_INDIRECTION) return false;
+    if (referent) *referent = th_ind_referent(address);
+    return true;
+}
+
+bool
 n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
                      th_env_method_t *method)
 {
@@ -7112,6 +7147,11 @@ inferred_symbol_type(th_ctx *types, parse_sym_entry_t *symbol,
     return n00bb_narrowed_symbol_type(types, symbol, use, declared, context);
 }
 
+static th_type *n00bb_reference_hook_signature(th_ctx *types,
+                                               th_type *receiver,
+                                               core_string_t name,
+                                               void *context);
+
 bool
 prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
 {
@@ -7124,7 +7164,9 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
     if (!th_register_method_resolver(types, n00bb_callback_method_signature,
-                                     state)) return false;
+                                     state)
+        || !th_register_method_resolver(types,
+               n00bb_reference_hook_signature, state)) return false;
     parse_annot_result_set_type_node_resolver(state->annotations,
         n00bb_resolve_type_node, unit);
     if (!register_builtin_symbols(state->annotations, state, types)
@@ -11894,6 +11936,34 @@ n00bb_specialize_callback_role(th_ctx *types,
         : nullptr;
     core_free(replacements);
     return specialized;
+}
+
+static th_type *
+n00bb_reference_hook_signature(th_ctx *types, th_type *receiver,
+                               core_string_t name, void *context)
+{
+    if (!types || !receiver
+        || (!core_string_eq(name, CORE_STRING_STATIC("__ref_address"))
+            && !core_string_eq(name, CORE_STRING_STATIC("__ref_address_mut"))
+            && !core_string_eq(name, CORE_STRING_STATIC("__ref_create"))))
+        return nullptr;
+    n00bb_tu_state_t *state = context;
+    parse_scope_t *scope = state ? module_scope(state) : nullptr;
+    th_type *resolved = th_resolve(receiver);
+    for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope : nullptr;
+         symbol; symbol = symbol->next_in_scope) {
+        if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
+            || !core_string_eq(symbol->name, name)) continue;
+        th_type *signature = th_resolve(symbol->type);
+        th_type *instance = th_kind_of(signature) == TH_BINDER
+            ? th_instantiate(types, signature) : signature;
+        const th_param *self = instance
+            && th_kind_of(instance) == TH_FUNCTION
+            ? th_func_param(instance, 0) : nullptr;
+        if (self && th_unify_probe(types, self->type, resolved))
+            return signature;
+    }
+    return nullptr;
 }
 
 th_type *

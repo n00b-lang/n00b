@@ -1,0 +1,5 @@
+tests/diagnostics/lower/custom_references.n:26:5: error N00B-S0019: `Viewer` is a read-only reference: it has no `__ref_address_mut`
+tests/diagnostics/lower/custom_references.n:30:12: error N00B-S0070: `ref h.__value` would keep an address that a reference type only lends for this access
+  help: pass `ref` of it directly as a call argument, or copy the value out
+tests/diagnostics/lower/custom_references.n:34:23: error N00B-S0070: `ref h.__value.value` would keep an address that a reference type only lends for this access
+  help: pass `ref` of it directly as a call argument, or copy the value out

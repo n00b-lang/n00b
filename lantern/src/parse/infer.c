@@ -25,6 +25,7 @@ static int64_t tid_method_return;
 static int64_t tid_field_return;
 static int64_t tid_field_return_auto_deref;
 static int64_t tid_referent_member;
+static int64_t tid_reference_to;
 
 static void
 learn_tids(parse_grammar_t *g)
@@ -46,6 +47,7 @@ learn_tids(parse_grammar_t *g)
     tid_field_return  = TID("field_return");
     tid_field_return_auto_deref = TID("field_return_auto_deref");
     tid_referent_member = TID("referent_member");
+    tid_reference_to = TID("reference_to");
 
 #undef TID
 }
@@ -457,6 +459,9 @@ r_project(parse_reduce_t *r)
     else if (tid == tid_referent_member) {
         e->proj = PARSE_INFER_REFERENT_MEMBER;
     }
+    else if (tid == tid_reference_to) {
+        e->proj = PARSE_INFER_REFERENCE_TO;
+    }
     else {
         fail(r);
     }
@@ -740,6 +745,8 @@ parse_infer_proj_name(parse_infer_proj_t p)
         return CORE_STRING_STATIC("field_return_auto_deref");
     case PARSE_INFER_REFERENT_MEMBER:
         return CORE_STRING_STATIC("referent_member");
+    case PARSE_INFER_REFERENCE_TO:
+        return CORE_STRING_STATIC("reference_to");
     }
 
     return CORE_STRING_STATIC("?");

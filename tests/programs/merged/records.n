@@ -638,6 +638,79 @@ func fin_initialized_once() -> int {
     return b.f.v + c.f.v
 }
 
+record Ref_Slot {
+    value: int
+}
+
+object Ref_Handle {
+    target: Ref[Ref_Slot]
+}
+
+object Ref_Store {
+    slot:   Ref_Slot
+    handed: int
+}
+
+object Ref_Lent {
+    owner: Ref_Store
+}
+
+func __init(self: Ref_Handle, target: Ref[Ref_Slot]) {
+    self.target = target
+}
+
+func __init(self: Ref_Store, value: int) {
+    self.slot = (value = value)
+    self.handed = 0
+}
+
+func __init(self: Ref_Lent, owner: Ref_Store) {
+    self.owner = owner
+}
+
+func __ref_address(self: Ref_Handle) -> Ref[Ref_Slot] {
+    return self.target
+}
+
+func __ref_address_mut(self: Ref_Handle) -> Ref[Ref_Slot] {
+    return self.target
+}
+
+func __ref_create(self: Ref_Store) -> Ref_Lent {
+    self.handed += 1
+    return new[Ref_Lent](self)
+}
+
+func __ref_address(self: Ref_Lent) -> Ref[Ref_Slot] {
+    return ref self.owner.slot
+}
+
+func ref_bump(r: Ref[Ref_Slot]) {
+    r.__value.value += 100
+}
+
+func ref_double(modify s: Ref_Slot) {
+    s.value *= 2
+}
+
+func ref_through_handle() -> int {
+    var slot: Ref_Slot = (value = 1)
+    let h: Ref_Handle = new[Ref_Handle](ref slot)
+    h.__value = (value = 2)
+    h.__value.value += 3
+    ref_bump(ref h.__value)
+    ref_double(h.__value)
+    let copy: Ref_Slot = h.__value
+    return copy.value + slot.value
+}
+
+func ref_created() -> int {
+    let store: Ref_Store = new[Ref_Store](4)
+    let lent: Ref_Lent = ref store
+    let again: Ref_Lent = ref store
+    return lent.__value.value * 10 + again.__value.value + store.handed
+}
+
 require fin_scoped() == 0
 require fin_count == 1 and fin_order == 1
 fin_reset()
@@ -722,6 +795,8 @@ require fin_count == 2 and fin_order == 34
 fin_reset()
 require fin_initialized_once() == 12
 fin_reset()
+require ref_through_handle() == 420
+require ref_created() == 46
 let fin_kept: Fin_Value = fin_returned_temporary()
 require fin_kept.v == 5 and fin_count == 0
 fin_reset()

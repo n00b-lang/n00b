@@ -608,6 +608,7 @@ typedef struct {
     size_t skipped_failures;
     core_list_t(n00bb_value_block_frame_t) value_blocks;
     core_list_t(n00bb_init_field_t) init_fields;
+    bool reference_write;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
@@ -1879,6 +1880,11 @@ n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
 static ir_value_t *n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op,
                                    th_type *type, ir_value_t *operand,
                                    ir_span_t span);
+static ir_value_t *n00bb_emit_hook_call(ir_lower_context_t *context,
+                                        const th_env_method_t *method,
+                                        ir_value_t *argument, ir_span_t span);
+static bool n00bb_from_reference_address(ir_value_t *value);
+static bool n00bb_call_argument(parse_grammar_t *grammar, parse_tree_t *node);
 
 static ir_value_t *
 n00bb_final_address(ir_lower_context_t *context, parse_sym_entry_t *symbol,
@@ -13943,10 +13949,13 @@ n00bb_out_argument_location(ir_lower_context_t *context,
     location.global = (location.lvalue || module_target) && !location.local
             && !location.address
         ? ir_lower_bound_value(context, location.symbol) : nullptr;
-    if (member_target)
+    if (member_target) {
+        lower->reference_write = true;
         location.address = n00bb_addressable_expression_address(context,
             grammar, lower->unit, argument,
             lower_span_for_tree(context, argument));
+        lower->reference_write = false;
+    }
     if (location.symbol)
         n00bb_note_narrowed_write(context, grammar, argument, location.symbol);
     location.type = location.index_target
@@ -16098,6 +16107,30 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
         bool function_reference = target
             && target->kind == PARSE_SYM_FUNCTION
             && names_symbol_directly(operand);
+        n00bb_tu_state_t *operand_state = lower ? tu_state(lower->unit)
+                                                : nullptr;
+        th_env_method_t create = {0};
+        if (!function_reference && operand && operand_state
+            && n00bb_reference_hook(operand_state->types,
+                   parse_tree_type(operand),
+                   CORE_STRING_STATIC("__ref_create"), &create, nullptr)) {
+            ir_value_t *place = n00bb_addressable_expression_address(context,
+                visit->grammar, lower->unit, operand, span);
+            th_type *stored = place
+                ? th_resolve(th_ind_referent(th_resolve(place->type)))
+                : nullptr;
+            ir_value_t *value = stored
+                ? n00bb_emit_indirect_read(context, place, stored, span)
+                : nullptr;
+            ir_value_t *created = value
+                ? n00bb_emit_hook_call(context, &create, value, span)
+                : nullptr;
+            if (!created
+                || !ir_lower_set_node_value(context, visit->node, created))
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not create a reference with __ref_create");
+            return true;
+        }
         ir_value_t *storage = nullptr;
         if (function_reference) {
             parse_sym_entry_t *function_target = canonical_symbol(target);
@@ -16118,6 +16151,15 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
         else if (operand && lower)
             storage = n00bb_addressable_expression_address(context,
                 visit->grammar, lower->unit, operand, span);
+        if (storage && n00bb_from_reference_address(storage)
+            && !n00bb_call_argument(visit->grammar, visit->node)) {
+            lower_report(context, N00B_DIAG_REFERENCE_ADDRESS_ESCAPES, span,
+                N00B_TEXT_REFERENCE_ADDRESS_ESCAPES,
+                N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, operand))));
+            lower_help(context, N00B_TEXT_PASS_THE_REFERENCE_DIRECTLY,
+                       N00BB_NO_ARGS);
+            return false;
+        }
         if (storage && storage->def && storage->def->op == IR_OP_INDEX
             && storage->def->n_operands
             && storage->def->operands[0].kind == IR_OPD_VALUE) {
@@ -17218,6 +17260,110 @@ n00bb_reference_view(ir_lower_context_t *context, ir_value_t *value,
 }
 
 static ir_value_t *
+n00bb_emit_hook_call(ir_lower_context_t *context,
+                     const th_env_method_t *method, ir_value_t *argument,
+                     ir_span_t span)
+{
+    ir_module_t *owner = nullptr;
+    ir_func_t *function = n00bb_record_field_method(context, method, &owner);
+    ir_value_t *callee = owner && function
+        ? ir_func_address(owner, function) : nullptr;
+    th_type *signature = callee && method->signature
+        ? th_unify(ir_module_types(context->module), function->type,
+                   method->signature) : nullptr;
+    th_type *result = signature ? th_func_ret(signature) : nullptr;
+    ir_instr_t *call = result
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    return call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_hook_"), result)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, argument)
+        && ir_instr_set_call_signature(call, signature) ? call->dest : nullptr;
+}
+
+static bool
+n00bb_referent_written(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (n00bb_reference_target(grammar, node)) return true;
+    parse_tree_t *at = node;
+    for (parse_tree_t *parent = parse_tree_parent(at); parent;
+         at = parent, parent = parse_tree_parent(at)) {
+        if (nt_is(grammar, parent, CORE_STRING_STATIC("assign-stmt"))
+            || nt_is(grammar, parent, CORE_STRING_STATIC("binop-assign-stmt")))
+            return core_tree_child(parent, 0) == at;
+        bool receiver = n00bb_postfix_node(grammar, parent)
+            && core_tree_child(parent, 0) == at;
+        if (!receiver && core_tree_num_children(parent) != 1) return false;
+    }
+    return false;
+}
+
+static ir_value_t *
+n00bb_custom_reference_address(ir_lower_context_t *context,
+                               parse_grammar_t *grammar,
+                               parse_tree_t *referent, ir_value_t *reference,
+                               ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    th_type *type = reference ? th_resolve(reference->type) : nullptr;
+    if (!state || !type || th_kind_of(type) != TH_NAMED) return nullptr;
+    bool writable = lower->reference_write
+        || n00bb_referent_written(grammar, referent);
+    th_env_method_t method = {0};
+    if (!n00bb_reference_method(state->types, type, writable, &method,
+                                nullptr)) {
+        if (writable && n00bb_reference_method(state->types, type, false,
+                                               nullptr, nullptr)) {
+            core_string_t text = lower_type_text(context, type);
+            lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+                N00B_TEXT_READ_ONLY_REFERENCE, N00BB_ARGS(ARG_TEXT(text)));
+            core_free(text.data);
+        }
+        return nullptr;
+    }
+    ir_value_t *address = n00bb_emit_hook_call(context, &method, reference,
+                                               span);
+    return address && ir_value_set_indirect_access(lower->ir_context, address,
+            writable ? IR_INDIRECT_ACCESS_READ_WRITE
+                     : IR_INDIRECT_ACCESS_READ)
+        && ir_annot_set(lower->ir_context, ir_value_annots(address),
+            (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.reference_address"),
+                         .kind = IR_ANNOT_BOOL, .b = true})
+        ? address : nullptr;
+}
+
+static bool
+n00bb_from_reference_address(ir_value_t *value)
+{
+    for (size_t depth = 0; value && depth < 64; depth++) {
+        if (ir_annot_get(ir_value_annots(value),
+                CORE_STRING_STATIC("n00bb.reference_address"))) return true;
+        ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+        bool step = def && def->n_operands
+            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
+                || def->op == IR_OP_COPY || def->op == IR_OP_CAST
+                || def->op == IR_OP_NOMINAL_CAST || def->op == IR_OP_OFFSET);
+        value = step ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return false;
+}
+
+static bool
+n00bb_call_argument(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *parent = parse_tree_parent(at);
+        if (!parent) return false;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("expression")))
+            return nt_is(grammar, parent, CORE_STRING_STATIC("positional-args"))
+                || nt_is(grammar, parent, CORE_STRING_STATIC("keyword-arg"));
+        if (core_tree_num_children(parent) != 1) return false;
+    }
+    return false;
+}
+
+static ir_value_t *
 n00bb_record_field_address(ir_lower_context_t *context,
                            parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -17240,6 +17386,9 @@ n00bb_record_field_address(ir_lower_context_t *context,
             else
                 break;
         }
+        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_NAMED)
+            return n00bb_custom_reference_address(context, grammar,
+                                                  referent, pointer, span);
         parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
         if ((!pointer || th_kind_of(th_resolve(pointer->type))
                 != TH_INDIRECTION) && symbol)
@@ -17247,10 +17396,19 @@ n00bb_record_field_address(ir_lower_context_t *context,
         if (pointer && pointer->kind == IR_VAL_GLOBAL) pointer = nullptr;
         if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_INDIRECTION)
             return pointer;
+        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_NAMED)
+            return n00bb_custom_reference_address(context, grammar,
+                                                  referent, pointer, span);
         ir_value_t *storage = n00bb_addressable_expression_address(context,
             grammar, unit, receiver, span);
         th_type *stored = storage
             ? th_resolve(th_ind_referent(th_resolve(storage->type))) : nullptr;
+        if (stored && th_kind_of(stored) == TH_NAMED) {
+            ir_value_t *reference = n00bb_emit_indirect_read(context, storage,
+                                                             stored, span);
+            return reference ? n00bb_custom_reference_address(context,
+                grammar, referent, reference, span) : nullptr;
+        }
         return stored && th_kind_of(stored) == TH_INDIRECTION
             ? n00bb_emit_indirect_read(context, storage, stored, span)
             : nullptr;
@@ -17893,8 +18051,10 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
     }
 
     ir_span_t span = lower_span_for_tree(context, visit->node);
+    size_t failures = lower_failures(context);
     ir_value_t *address = n00bb_record_field_address(context, visit->grammar,
         lower->unit, target, span);
+    if (!address && lower_failures(context) > failures) return false;
     n00bb_index_writeback_t writeback = {0};
     if (!address)
         address = n00bb_index_writeback_place(context, visit->grammar,
@@ -17963,8 +18123,10 @@ n00bb_lower_referent_assignment(ir_lower_context_t *context,
         return ir_lower_handle_assignment(context, visit->node)
             && ir_lower_suppress_emit(context, member);
     ir_span_t span = lower_span_for_tree(context, visit->node);
+    size_t failures = lower_failures(context);
     ir_value_t *address = n00bb_record_field_address(context, visit->grammar,
         lower->unit, target, span);
+    if (!address && lower_failures(context) > failures) return false;
     ir_value_t *value = address && source
         ? n00bb_materialize_source(context, visit, source,
                                    th_ind_referent(address->type))

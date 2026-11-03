@@ -276,8 +276,13 @@ referent_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (symbol && symbol->type) type = symbol->type;
     }
     type = type ? th_resolve(type) : nullptr;
-    return type && th_kind_of(type) == TH_INDIRECTION
-        ? th_ind_referent(type) : nullptr;
+    if (type && th_kind_of(type) == TH_INDIRECTION)
+        return th_ind_referent(type);
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *referent = nullptr;
+    return state && n00bb_reference_method(state->types, type, false, nullptr,
+                                           &referent)
+        ? referent : nullptr;
 }
 
 static th_type *

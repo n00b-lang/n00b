@@ -1,0 +1,11 @@
+trait Referenceable {
+    func __ref_create(self: 'S) -> 'R
+}
+
+trait Reference {
+    func __ref_address(self: 'R) -> Ref['T]
+}
+
+trait Mutable_Reference {
+    func __ref_address_mut(self: 'R) -> Ref['T]
+}

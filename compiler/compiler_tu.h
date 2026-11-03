@@ -97,6 +97,11 @@ bool resolve_for_binding_types(parse_grammar_t *grammar,
                                bool closed_only);
 bool n00bb_type_finalized(core_translation_unit_t *unit, th_type *type);
 bool n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type);
+bool n00bb_reference_hook(th_ctx *types, th_type *receiver,
+                          core_string_t name, th_env_method_t *method,
+                          th_type **result);
+bool n00bb_reference_method(th_ctx *types, th_type *receiver, bool writable,
+                            th_env_method_t *method, th_type **referent);
 bool n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
                           th_env_method_t *method);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
