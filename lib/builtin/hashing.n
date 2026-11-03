@@ -4,6 +4,7 @@ import string.style
 
 trait Hash {
     func hash(self: 'T) -> u128
+    forbids_effect(hash, impure)
 }
 
 private const prime32_1: u64 = 0x9E3779B1

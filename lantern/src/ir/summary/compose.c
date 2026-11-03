@@ -312,7 +312,13 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
         if (flags)
             add_flags(summary, flags, call, targets.targets.data[t],
                       (core_string_t){0});
-        (void)merge_effects(summary, callee);
+        const ir_summary_hooks_t *hooks = summaries->hooks;
+        for (size_t e = 0; e < callee->effects.len; e++)
+            if (!hooks || !hooks->inherits_effect
+                || hooks->inherits_effect(hooks->context,
+                                          targets.targets.data[t],
+                                          callee->effects.data[e]))
+                (void)ir_summary_add_effect(summary, callee->effects.data[e]);
     }
     core_list_free(targets.targets);
 }

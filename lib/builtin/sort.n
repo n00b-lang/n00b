@@ -17,6 +17,7 @@ func natural_compare(left: 'T, right: 'T) -> Comparison where 'T : Comparable {
 }
 
 inline func order(by: Comparator['T], left: 'T, right: 'T) -> Comparison {
+    forbids_effect(by, impure)
     let result: Comparison = by.call(left, right)
     if result == Comparison.unordered {
         panic.panic("cannot sort values that compare as unordered, " +
@@ -32,6 +33,7 @@ inline func swap(left: Ref['T], right: Ref['T]) {
 }
 
 func sort_by(modify items: Array['T], by: Comparator['T]) {
+    forbids_effect(by, impure)
     let count:     uint = __array_length(items)
     var height:    uint = count
     var max_depth: uint = 0

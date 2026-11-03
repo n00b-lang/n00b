@@ -162,6 +162,8 @@ must_callee(void *context, const ir_func_t *target,
     must_t *must = context;
     ir_func_t *body = n00bb_cached_body((ir_func_t *)target);
     bool does = body && body->n_blocks ? must_body(must, body)
+        : n00bb_is_callback_bound(target)
+        ? (n00bb_bound_bits(target, N00BB_QUERY_HAS_EFFECT) & must->bits) != 0
         : summary && (ir_summary_effect_bits(summary) & must->bits);
     must->callees_must = must->callees_must && does;
 }
@@ -254,4 +256,56 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
         break;
     }
     return false;
+}
+
+bool
+n00bb_bound_parse(core_string_t tag, n00bb_bound_t *out)
+{
+    int64_t first = core_string_find_byte(tag, ':');
+    if (first <= 0) return false;
+    core_string_t rest = core_string_slice(tag, (size_t)first + 1,
+                                           tag.u8_bytes - (size_t)first - 1);
+    int64_t second = core_string_find_byte(rest, ':');
+    if (second <= 0) return false;
+    uint64_t param = 0;
+    size_t consumed = 0;
+    if (!core_string_parse_u64(core_string_slice(rest, 0, (size_t)second), 10,
+                               &param, &consumed)
+        || consumed != (size_t)second || param > UINT32_MAX)
+        return false;
+    *out = (n00bb_bound_t){
+        .query  = n00bb_query_named(core_string_slice(tag, 0,
+                                                      (size_t)first)),
+        .param  = (uint32_t)param,
+        .effect = core_string_slice(rest, (size_t)second + 1,
+                                    rest.u8_bytes - (size_t)second - 1),
+    };
+    return (out->query == N00BB_QUERY_FORBIDS_EFFECT
+            || out->query == N00BB_QUERY_HAS_EFFECT)
+        && out->effect.u8_bytes;
+}
+
+void
+n00bb_bound_tag(core_buffer_t *out, n00bb_query_t query, uint32_t param,
+                core_string_t effect)
+{
+    core_buffer_append_string(out, n00bb_query_word(query));
+    core_buffer_printf(out, ":%u:", param);
+    core_buffer_append_string(out, effect);
+}
+
+uint64_t
+n00bb_bound_bits(const ir_func_t *function, n00bb_query_t query)
+{
+    uint64_t bits = 0;
+    for (uint32_t e = 0;; e++) {
+        core_string_t tag = ir_func_effect_at(function, e);
+        if (!tag.u8_bytes) break;
+        n00bb_bound_t bound;
+        const n00bb_effect_name_t *effect = n00bb_bound_parse(tag, &bound)
+            && bound.query == query ? n00bb_effect_named(bound.effect)
+                                    : nullptr;
+        if (effect) bits |= effect->bits;
+    }
+    return bits;
 }

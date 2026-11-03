@@ -1,0 +1,74 @@
+callback Pick {
+    call (a: 'X, b: 'X) -> 'X
+    handler (a: 'X, b: 'X) -> 'X
+}
+
+func pick_both(by: Pick[int], a: int, b: int) -> int {
+    forbids_effect(by, impure)
+    return by.call(a, b)
+}
+
+func forward(by: Pick[int], a: int) -> int {
+    forbids_effect(by, impure)
+    return pick_both(by, a, a)
+}
+
+func careless(by: Pick[int], a: int) -> int {
+    return pick_both(by, a, a)
+}
+
+func bad_form(by: Pick[int], a: int) -> int {
+    may_effect(by, output)
+    return a
+}
+
+func larger(a: int, b: int) -> int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func noisy(a: int, b: int) -> int {
+    raw_debug("picked")
+    return a
+}
+
+forbids_effect(pick_both, impure)
+forbids_effect(forward, impure)
+
+func good() -> int {
+    let by: Pick[int] = callback[Pick](ref larger)
+    return forward(by, 3)
+}
+
+func bad() -> int {
+    let by: Pick[int] = callback[Pick](ref noisy)
+    return pick_both(by, 1, 2)
+}
+
+record Key {
+    id: int
+}
+
+func hash(self: Key) -> u128 {
+    raw_debug("hashing")
+    return cast[u128]self.id
+}
+
+record Money {
+    cents: int
+}
+
+func __add(self: Money, other: Money) -> Money {
+    raw_debug("adding")
+    return (cents = self.cents + other.cents)
+}
+
+func lookup(table: Dict[Key, int], k: Key) -> int? {
+    return table.get(k)
+}
+
+func total(a: Money, b: Money) -> Money {
+    return a + b
+}

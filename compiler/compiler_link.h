@@ -1,5 +1,6 @@
 #pragma once
 
+#include "compiler_effects.h"
 #include "compiler_tu.h"
 #include "driver.h"
 #include "abi_record_layout.h"
@@ -467,6 +468,16 @@ typedef struct {
 core_list_decl(n00bb_effect_check_t);
 
 typedef struct {
+    core_translation_unit_t *unit;
+    ir_span_t span;
+    core_string_t trait;
+    core_string_t qualified;
+    core_string_t method;
+    n00bb_bound_t rule;
+} n00bb_trait_bound_t;
+core_list_decl(n00bb_trait_bound_t);
+
+typedef struct {
     ir_func_t *function;
     ir_span_t span;
     core_translation_unit_t *unit;
@@ -508,6 +519,9 @@ typedef struct n00bb_link_analysis_t {
     ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_effect_check_t) effect_checks;
+    core_list_t(n00bb_trait_bound_t) trait_bounds;
+    core_dict_t bounded_targets;
+    bool bounded_targets_ready;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     n00bb_boxed_hooks_t boxed_hooks;
     core_list_t(n00bb_bookkeeping_write_t) bookkeeping_writes;

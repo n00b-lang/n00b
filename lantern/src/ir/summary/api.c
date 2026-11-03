@@ -202,19 +202,44 @@ merge_effects(ir_summary_t *into, const ir_summary_t *from)
 }
 
 
+static const uint32_t worst_case_flags = IR_SUMMARY_MAY_FAIL
+    | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
+    | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_MAY_DIVERGE
+    | IR_SUMMARY_OBSERVES;
+
 ir_summary_t *
 ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
 {
     ir_summary_t *summary = ir_summary_new(summaries, function);
-    summary->flags = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP
-        | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
-        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
-        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_MAY_DIVERGE
-        | IR_SUMMARY_OBSERVES;
+    summary->flags = worst_case_flags | IR_SUMMARY_CALLS_UNKNOWN;
     add_path(summary, &(ir_spath_t){
         .root  = IR_SPLACE_UNKNOWN,
         .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
     summary->traps = IR_STRAP_ALL;
+    return summary;
+}
+
+ir_summary_t *
+ir_summary_bounded(ir_summaries_t *summaries, const ir_func_t *function,
+                   uint64_t forbidden)
+{
+    ir_summary_t *summary = ir_summary_new(summaries, function);
+    summary->flags = (worst_case_flags | IR_SUMMARY_STARTS_THREADS)
+        & ~(uint32_t)forbidden;
+    if (!(summary->flags & IR_SUMMARY_OBSERVES))
+        summary->flags &= ~(uint32_t)IR_SUMMARY_MAY_IO;
+    uint8_t globals = (forbidden & IR_SEFFECT_READS_NONLOCAL
+                       ? 0 : IR_SPATH_READ | IR_SPATH_READS_ENTRY)
+        | (forbidden & IR_SEFFECT_WRITES_NONLOCAL ? 0 : IR_SPATH_WRITE);
+    if (globals)
+        add_path(summary, &(ir_spath_t){
+            .root = IR_SPLACE_UNKNOWN, .flags = globals | IR_SPATH_DEEP});
+    for (uint32_t p = 0; p < function->n_params; p++) {
+        ir_spath_t path = ir_spath_of_place(&(ir_splace_t){
+            .kind = IR_SPLACE_PARAM, .param = p}, IR_SPATH_ACCESS);
+        add_path(summary, &path);
+    }
+    if (summary->flags & IR_SUMMARY_MAY_TRAP) summary->traps = IR_STRAP_ALL;
     return summary;
 }
 
@@ -435,9 +460,21 @@ compare_targets(const void *left, const void *right)
     return order ? order : core_string_cmp(a->name, b->name);
 }
 
-static bool
-better_witness(const ir_switness_t *witness, const ir_switness_t *candidate)
+static uint8_t
+witness_tier(const ir_switness_t *witness, const ir_func_t *self)
 {
+    if (self && witness->callee == self) return 2;
+    return !witness->callee
+        && core_string_eq(witness->name, CORE_STRING_STATIC("?"));
+}
+
+static bool
+better_witness(const ir_switness_t *witness, const ir_switness_t *candidate,
+               const ir_func_t *self)
+{
+    uint8_t tier = witness_tier(witness, self);
+    uint8_t candidate_tier = witness_tier(candidate, self);
+    if (tier != candidate_tier) return candidate_tier < tier;
     if (!candidate->callee || !witness->callee) return false;
     if (candidate->line != witness->line)
         return candidate->line < witness->line;
@@ -468,7 +505,8 @@ add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
             if (summary->witnesses.data[i].flag == flag)
                 witness = &summary->witnesses.data[i];
         if (!witness) core_list_push(summary->witnesses, candidate);
-        else if (better_witness(witness, &candidate)) *witness = candidate;
+        else if (better_witness(witness, &candidate, summary->function))
+            *witness = candidate;
     }
 }
 

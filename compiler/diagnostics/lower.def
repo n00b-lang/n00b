@@ -348,6 +348,17 @@ N00B_DIAG(EFFECT_QUESTION_IN_WHEN, "N00B-S0076", ERROR,
     "`when` is decided before the compiler knows what functions do, so its\n"
     "condition can't ask about effects. Use `if`, which folds the question\n"
     "away once it is known.")
+N00B_DIAG(CALLBACK_BOUND, "N00B-S0077", ERROR,
+    "a callback doesn't meet the check on the parameter it's passed to",
+    "A function can check what a callback parameter does, with\n"
+    "`forbids_effect` or `has_effect`. Every call must then pass a function\n"
+    "that meets the check, or forward one of its own parameters that has\n"
+    "the same check.")
+N00B_DIAG(TRAIT_CHECK, "N00B-S0078", ERROR,
+    "an implementation doesn't meet its trait's check",
+    "A trait can check what its methods do, with `forbids_effect` or\n"
+    "`has_effect`. Calls through the trait rely on it, so every\n"
+    "implementation must meet it.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

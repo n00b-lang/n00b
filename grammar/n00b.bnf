@@ -882,6 +882,10 @@
 <trait-spec> @declares($1, $2, "function") @scope("trait") @nospace($2) ::=
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
 
+<trait-spec> ::= <trait-check>
+<trait-check> ::= <trait-check-term> (<and-op> <trait-check-term>)*
+<trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
+
 <trait-func-prelude> ::= <function-keyword>
 <trait-func-prelude> ::= <member-visibility> <function-keyword>
 
