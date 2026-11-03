@@ -1,0 +1,75 @@
+import containers.array
+
+object Lease_Count {
+    private count: Atomic[uint]
+}
+
+object Leasable {
+    private storage: Array['T]
+    private leases:  Lease_Count
+}
+
+object Lease {
+    private storage:  Array['T]
+    private leases:   Lease_Count
+    private released: Atomic[bool]
+}
+
+func __init(self: Lease_Count) {
+    __atomic_store(ref self.count, 0)
+}
+
+func __init(self: Leasable['T], consume storage: Array['T]) {
+    self.storage = storage
+    self.leases = new[Lease_Count]()
+}
+
+func __init(self: Lease['T], storage: Array['T], leases: Lease_Count) {
+    self.storage = storage
+    self.leases = leases
+    __atomic_store(ref self.released, false)
+}
+
+func __ref_create(self: Leasable['T]) -> Lease['T] {
+    __atomic_fetch_add(ref self.leases.count, 1)
+    return new[Lease['T]](self.storage, self.leases)
+}
+
+func __ref_address(self: Lease['T]) -> Ref[Array['T]] {
+    return ref self.storage
+}
+
+func release(self: Lease['T]) {
+    if !__atomic_exchange(ref self.released, true) {
+        __atomic_fetch_sub(ref self.leases.count, 1)
+    }
+}
+
+func __finalize(consume self: Ref[Lease['T]]) {
+    release(self.__value)
+}
+
+func leased(self: Leasable['T]) -> bool {
+    return __atomic_load(ref self.leases.count) != 0
+}
+
+func writable(self: Leasable['T]) -> Ref[Array['T]] {
+    if leased(self) {
+        self.storage = containers.array.__copy(self.storage)
+        self.leases = new[Lease_Count]()
+    }
+    return ref self.storage
+}
+
+func len(self: Leasable['T]) -> uint {
+    return __array_length(self.storage)
+}
+
+func __read(self: Leasable['T], index: int) -> 'T {
+    return self.storage[index]
+}
+
+func __write(self: Leasable['T], index: int, value: 'T) {
+    let items: Ref[Array['T]] = writable(self)
+    items.__value[index] = value
+}

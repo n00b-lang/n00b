@@ -36,6 +36,9 @@ static address_storage_t address_storage_within(ir_func_t *caller,
 static bool boxed_address(ir_func_t *caller, ir_value_t *address);
 static bool heap_allocation(ir_func_t *caller, ir_instr_t *allocation);
 static bool open_reference(ir_func_t *caller, ir_value_t *address);
+static ir_instr_t *fresh_instruction(ir_block_t *block, uint32_t at,
+                                     ir_span_t span, ir_op_t op,
+                                     th_type *type);
 static bool two_variable_call(box_calls_t *calls, ir_func_t *caller,
     ir_instr_t *instruction, ir_func_t *target, th_type *owner_type,
     th_type *other_type, ir_value_t *const *arguments,
@@ -95,6 +98,28 @@ open_option_payload(ir_module_t *module, th_type *type)
 }
 
 static bool
+raw_referent_load(box_calls_t *calls, ir_func_t *caller,
+                  ir_instr_t *instruction, ir_value_t *address)
+{
+    th_ctx *types = ir_module_types(caller->owner);
+    th_type *any = th_name(types, CORE_STRING_STATIC("Any"));
+    ir_func_t *target = runtime_function(calls,
+        CORE_STRING_STATIC("reference_address"));
+    if (!any || !target) return true;
+    ir_instr_t *slot = fresh_instruction(instruction->block,
+        instruction->index, instruction->span, IR_OP_BITCAST,
+        th_ind(types, 0, any));
+    if (!slot || !ir_instr_operand_value(slot, address)) return false;
+    ir_instr_t *call = fresh_instruction(instruction->block,
+        instruction->index, instruction->span, IR_OP_CALL,
+        th_func_ret(target->type));
+    if (!call || !retarget(calls, caller, call, target, nullptr, 0,
+                           &slot->dest, 1)) return false;
+    instruction->operands[0].value = call->dest;
+    return true;
+}
+
+static bool
 rewrite_load(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
@@ -115,7 +140,8 @@ rewrite_load(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction)
         return !target || retarget(calls, caller, instruction, target,
                                    &payload, 1, &address, 1);
     }
-    if (!n00bb_boxed_signature_position(module, referent)) return true;
+    if (!n00bb_boxed_signature_position(module, referent))
+        return raw_referent_load(calls, caller, instruction, address);
     ir_func_t *target = runtime_function(calls,
                                          CORE_STRING_STATIC("ref_get"));
     return !target || retarget(calls, caller, instruction, target, &referent,
@@ -1354,7 +1380,8 @@ address_storage_within(ir_func_t *caller, ir_value_t *address, unsigned depth,
             < th_func_nparams(caller->type)
             ? th_func_param(caller->type, address->index) : nullptr;
         return !parameter ? ADDRESS_UNKNOWN
-            : th_mode_is_in(parameter->mode) ? ADDRESS_BOXED : ADDRESS_RAW;
+            : th_mode_is_input_only(parameter->mode) ? ADDRESS_BOXED
+                                                : ADDRESS_RAW;
     }
     if (address->kind != IR_VAL_INSTR) return ADDRESS_BOXED;
     ir_instr_t *definition = address->def;
