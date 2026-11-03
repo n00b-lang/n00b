@@ -647,6 +647,7 @@
             | <new-expr>
             | <callback-expr>
             | <typeof-expr>
+            | <effect-query>
             | <tuple-or-paren>
 
 <primary> ::= <literal-expr> %":" <type-spec>
@@ -660,6 +661,11 @@
 <primary> @varref($0) @emit("reference") @infer("lookup($0)") @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
 <typeof-expr> @infer("typespec") @emit("typeof", $2) @nospace ::= %"typeof" %"(" <expression> %")"
+
+<effect-query> @infer("bool") @emit("effect_query") @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
+<effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"
+                      | %"may_read" | %"may_write" | %"may_lend"
+<effect-query-name> ::= %IDENTIFIER
 
 <new-expr> @infer("`t") @emit("array_new") @nospace ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
 

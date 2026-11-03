@@ -5271,6 +5271,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
         .emitted_functions = core_list_new(n00bb_ir_func_ptr_t),
         .specializations = core_list_new(n00bb_specialization_t),
+        .effect_checks = core_list_new(n00bb_effect_check_t),
         .specialization_requests =
             core_list_new(n00bb_specialization_request_t),
         .baked_roots = core_list_new(n00bb_baked_root_t),

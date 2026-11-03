@@ -84,7 +84,7 @@ $(BUILD)/compile_commands.json: $(N00B)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall regen-unicode regen-effects
+.PHONY: install uninstall regen-unicode
 install: $(N00B) $(RUNTIME_BITCODE) $(CROSS_RUNTIMES)
 	@tools/install.sh --build $(BUILD) $(if $(PREFIX),--prefix $(PREFIX)) $(INSTALL_FLAGS)
 
@@ -98,8 +98,5 @@ regen-unicode:
 	    --conformance-program tests/programs/unicode/gen_conformance.n \
 	    --test-data-dir $(BUILD)/unicode-test-data --allow-downloads --no-strict
 	python3 tools/gen_lantern_unicode.py --allow-downloads
-
-regen-effects:
-	python3 tools/gen_effects.py
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

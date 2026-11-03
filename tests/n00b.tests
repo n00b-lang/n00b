@@ -86,7 +86,6 @@ inline-n00b	pr	10	sh "$SRC/tests/inline_n00b.sh" "$BUILD/n00b" "$SRC/tests/progr
 abi-link-fixtures	pr	18	sh "$SRC/tests/abi_link_fixtures.sh" "$BUILD/n00b" "$BUILD/abi-record-object-test" "$BUILD/abi-link-input-test" "$BUILD/abi-register-object-test"
 formatter	pr	5	sh "$SRC/tests/formatter.sh" "$BUILD/n00b"
 unicode-tables-match	dev	2	python3 "$SRC/tools/check_unicode_tables.py" --root "$SRC"
-effects-generated	dev	2	python3 "$SRC/tools/gen_effects.py" --root "$SRC" --check
 install	pr,serial	23	sh "$SRC/tests/install.sh" "$SRC" "$BUILD"
 fast-suite-n00b	pr	20	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/fast_suite.n"
 gc-units-n00b	pr	30	N00B_PATH="$SRC/tests/programs/bitcode" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_gc_units.n"

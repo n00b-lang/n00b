@@ -386,10 +386,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *failure_args[] = {
         u32, u64, u64, u64, th_name(types, CORE_STRING_STATIC("string")),
     };
-    th_type *effects_subject = th_var(types);
-    th_type *effects_args[] = {
-        effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
-    };
     th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
     th_type *text = th_name(types, CORE_STRING_STATIC("string"));
     th_type *effect_subject = th_var(types);
@@ -463,8 +459,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_start"), i32,
             thread_start_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__function_effects"), u64, effects_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_has_effect"), boolean,
             has_effect_args, 2)

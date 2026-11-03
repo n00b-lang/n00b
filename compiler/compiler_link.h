@@ -460,6 +460,13 @@ core_list_decl(n00bb_record_request_site_t);
 typedef struct n00bb_interface_summaries_t n00bb_interface_summaries_t;
 
 typedef struct {
+    core_translation_unit_t *unit;
+    parse_tree_t *statement;
+    parse_tree_t *expression;
+} n00bb_effect_check_t;
+core_list_decl(n00bb_effect_check_t);
+
+typedef struct {
     ir_func_t *function;
     ir_span_t span;
     core_translation_unit_t *unit;
@@ -500,6 +507,7 @@ typedef struct n00bb_link_analysis_t {
     core_dict_t escaped_globals;
     ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;
+    core_list_t(n00bb_effect_check_t) effect_checks;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     n00bb_boxed_hooks_t boxed_hooks;
     core_list_t(n00bb_bookkeeping_write_t) bookkeeping_writes;

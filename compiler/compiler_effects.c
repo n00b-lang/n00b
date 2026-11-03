@@ -1,4 +1,8 @@
 #include "compiler_effects.h"
+#include "cached_body.h"
+
+#include "ir/sites.h"
+#include "lib/dict.h"
 
 static const n00bb_effect_name_t effect_names[] = {
 #define IR_EFFECT_NAME(name, bits) \
@@ -98,4 +102,156 @@ n00bb_parameter_role(const ir_func_t *function, const ir_summary_t *summary,
         || lends_through(function, summary, IR_SFLOW_STORES, param))
         role |= N00BB_ROLE_LENDS;
     return role;
+}
+
+static const core_string_t query_words[] = {
+    [N00BB_QUERY_NONE]           = CORE_STRING_STATIC(""),
+    [N00BB_QUERY_MAY_EFFECT]     = CORE_STRING_STATIC("may_effect"),
+    [N00BB_QUERY_FORBIDS_EFFECT] = CORE_STRING_STATIC("forbids_effect"),
+    [N00BB_QUERY_HAS_EFFECT]     = CORE_STRING_STATIC("has_effect"),
+    [N00BB_QUERY_MAY_READ]       = CORE_STRING_STATIC("may_read"),
+    [N00BB_QUERY_MAY_WRITE]      = CORE_STRING_STATIC("may_write"),
+    [N00BB_QUERY_MAY_LEND]       = CORE_STRING_STATIC("may_lend"),
+};
+
+n00bb_query_t
+n00bb_query_named(core_string_t word)
+{
+    for (size_t q = 1; q < sizeof(query_words) / sizeof(query_words[0]); q++)
+        if (core_string_eq(query_words[q], word)) return (n00bb_query_t)q;
+    return N00BB_QUERY_NONE;
+}
+
+core_string_t
+n00bb_query_word(n00bb_query_t query)
+{
+    return query_words[query];
+}
+
+bool
+n00bb_query_about_effect(n00bb_query_t query)
+{
+    return query == N00BB_QUERY_MAY_EFFECT
+        || query == N00BB_QUERY_FORBIDS_EFFECT
+        || query == N00BB_QUERY_HAS_EFFECT;
+}
+
+static int64_t
+parameter_named(const ir_func_t *function, core_string_t name)
+{
+    for (uint32_t p = 0; function && p < function->n_params; p++)
+        if (function->params[p]
+            && core_string_eq(function->params[p]->name, name))
+            return p;
+    return -1;
+}
+
+typedef struct {
+    ir_summaries_t *summaries;
+    uint64_t        bits;
+    core_dict_t     known;
+    bool            callees_must;
+} must_t;
+
+static bool must_body(must_t *must, ir_func_t *function);
+
+static void
+must_callee(void *context, const ir_func_t *target,
+            const ir_summary_t *summary)
+{
+    must_t *must = context;
+    ir_func_t *body = n00bb_cached_body((ir_func_t *)target);
+    bool does = body && body->n_blocks ? must_body(must, body)
+        : summary && (ir_summary_effect_bits(summary) & must->bits);
+    must->callees_must = must->callees_must && does;
+}
+
+static uint8_t
+must_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
+{
+    (void)outcome;
+    must_t *must = context;
+    bool call = in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE;
+    if (!call) {
+        bool allocates = in->op == IR_OP_ALLOC || in->op == IR_OP_ARRAY_NEW;
+        return allocates && (must->bits & IR_SUMMARY_MAY_ALLOCATE)
+            ? IR_PATH_PASSED : IR_PATH_UNPASSED;
+    }
+    bool outer = must->callees_must;
+    must->callees_must = true;
+    bool known = ir_summary_call_callees(must->summaries, in, must_callee,
+                                         must);
+    bool passed = known && must->callees_must;
+    must->callees_must = outer;
+    return passed ? IR_PATH_PASSED : IR_PATH_UNPASSED;
+}
+
+static bool
+must_body(must_t *must, ir_func_t *function)
+{
+    enum { MUST_NOT = 1, MUST_DOES = 2 };
+    bool found = false;
+    uintptr_t known = (uintptr_t)core_dict_get(&must->known, function,
+                                               &found);
+    if (found) return known == MUST_DOES;
+    core_dict_put(&must->known, function, (void *)(uintptr_t)MUST_NOT);
+    ir_path_exits_t exits;
+    bool does = ir_paths_flow(function, IR_PATH_UNPASSED, must_step, must,
+                              &exits)
+        && !(exits.returned & IR_PATH_UNPASSED)
+        && !(exits.failed & IR_PATH_UNPASSED);
+    core_dict_put(&must->known, function,
+                  (void *)(uintptr_t)(does ? MUST_DOES : MUST_NOT));
+    return does;
+}
+
+bool
+n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
+                  uint64_t bits)
+{
+    must_t must = {.summaries = summaries, .bits = bits};
+    core_dict_init(&must.known, nullptr, nullptr);
+    bool does = must_body(&must, function);
+    core_dict_free(&must.known);
+    return does;
+}
+
+bool
+n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
+                   n00bb_query_t query, core_string_t name)
+{
+    ir_summary_t *summary = subject ? ir_summary_for(summaries, subject)
+                                    : nullptr;
+    if (!summary) return query != N00BB_QUERY_NONE
+        && query != N00BB_QUERY_FORBIDS_EFFECT
+        && query != N00BB_QUERY_HAS_EFFECT;
+    const n00bb_effect_name_t *effect = n00bb_effect_named(name);
+    uint32_t flags = ir_summary_flags(summary);
+    bool may = effect
+        ? (flags & IR_SUMMARY_CALLS_UNKNOWN)
+            || (ir_summary_effect_bits(summary) & effect->bits)
+        : ir_summary_has_effect(summary, name);
+    int64_t param = parameter_named(subject, name);
+    uint8_t role = param >= 0
+        ? n00bb_parameter_role(subject, summary, (uint32_t)param) : 0;
+    switch (query) {
+    case N00BB_QUERY_MAY_EFFECT:
+        return may;
+    case N00BB_QUERY_FORBIDS_EFFECT:
+        return !may;
+    case N00BB_QUERY_HAS_EFFECT:
+        if (!effect) return false;
+        if (effect->bits == IR_SUMMARY_MAY_DIVERGE)
+            return (flags & IR_SUMMARY_DIVERGES) != 0;
+        return n00bb_must_effect(summaries, subject, effect->bits);
+    case N00BB_QUERY_MAY_READ:
+        return (role & N00BB_ROLE_READS) != 0;
+    case N00BB_QUERY_MAY_WRITE:
+        return (role & N00BB_ROLE_WRITES) != 0;
+    case N00BB_QUERY_MAY_LEND:
+        return (role & N00BB_ROLE_LENDS) != 0;
+    case N00BB_QUERY_NONE:
+        break;
+    }
+    return false;
 }

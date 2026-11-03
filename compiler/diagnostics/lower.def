@@ -328,6 +328,26 @@ N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
     "An array passed as an ordinary parameter is only lent for the call.\n"
     "A function that keeps it somewhere that outlives the call takes it as\n"
     "`consume`, so the caller hands it over, or keeps a copy.")
+N00B_DIAG(EFFECT_CHECK_FALSE, "N00B-S0073", ERROR,
+    "a check about effects is false",
+    "A statement made only of effect questions is a check: the compiler\n"
+    "requires it to be true. The notes show why it isn't. Change the code\n"
+    "so the check holds, or change the check.")
+N00B_DIAG(EFFECT_CHECK_MIXED, "N00B-S0074", ERROR,
+    "a check mixes effect questions with run-time values",
+    "A check is answered while compiling, so it can only combine effect\n"
+    "questions and constants with `not`, `and` and `or`. Put the run-time\n"
+    "part in a statement of its own.")
+N00B_DIAG(EFFECT_QUESTION, "N00B-S0075", ERROR,
+    "an effect question names something it can't ask about",
+    "Effect questions name a function, then an effect or one of that\n"
+    "function's parameters. Inside a function body the function can be left\n"
+    "out, and the question is about the enclosing function.")
+N00B_DIAG(EFFECT_QUESTION_IN_WHEN, "N00B-S0076", ERROR,
+    "an effect question decides a `when`",
+    "`when` is decided before the compiler knows what functions do, so its\n"
+    "condition can't ask about effects. Use `if`, which folds the question\n"
+    "away once it is known.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"
