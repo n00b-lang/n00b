@@ -42,12 +42,14 @@ typedef struct {
 
 typedef struct {
     ir_func_t                      *function;
+    core_string_t                   native;
     struct core_translation_unit_t *unit;
 } n00bb_effect_clause_t;
 core_list_decl(n00bb_effect_clause_t);
 
 typedef struct {
     core_string_t                      qualified;
+    uint64_t                           bits;
     core_list_t(n00bb_effect_clause_t) sources;
     core_list_t(n00bb_effect_clause_t) handlers;
 } n00bb_user_effect_t;
@@ -58,9 +60,14 @@ bool n00bb_query_about_effect(n00bb_query_t query);
 int64_t n00bb_parameter_named(const ir_func_t *function, core_string_t name);
 bool n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
                        uint64_t bits, const n00bb_user_effect_t *user);
+const ir_instr_t *n00bb_must_skip(ir_summaries_t *summaries,
+                                  ir_func_t *function, uint64_t bits,
+                                  const n00bb_user_effect_t *user);
 bool n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
                         n00bb_query_t query, core_string_t name,
                         const n00bb_user_effect_t *user);
+bool n00bb_clause_matches(const n00bb_effect_clause_t *clause,
+                          ir_func_t *body);
 bool n00bb_function_listed(
     const core_list_t(n00bb_effect_clause_t) *clauses, ir_func_t *function);
 bool n00bb_bound_parse(core_string_t tag, n00bb_bound_t *out);

@@ -171,11 +171,11 @@ must_callee(void *context, const ir_func_t *target,
     bool does = user && n00bb_function_listed(&user->sources, body) ? true
         : body && body->n_blocks ? must_body(must, body)
         : n00bb_is_callback_bound(target)
-        ? (user ? n00bb_bound_names(target, N00BB_QUERY_HAS_EFFECT,
-                                    user->qualified)
-                : (n00bb_bound_bits(target, N00BB_QUERY_HAS_EFFECT)
-                   & must->bits) != 0)
-        : !user && summary && (ir_summary_effect_bits(summary) & must->bits);
+        ? (user && n00bb_bound_names(target, N00BB_QUERY_HAS_EFFECT,
+                                     user->qualified))
+            || (n00bb_bound_bits(target, N00BB_QUERY_HAS_EFFECT)
+                & must->bits) != 0
+        : summary && (ir_summary_effect_bits(summary) & must->bits);
     must->callees_must = must->callees_must && does;
 }
 
@@ -230,13 +230,43 @@ n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
     return does;
 }
 
+const ir_instr_t *
+n00bb_must_skip(ir_summaries_t *summaries, ir_func_t *function, uint64_t bits,
+                const n00bb_user_effect_t *user)
+{
+    if (!function || !function->n_blocks
+        || (user && n00bb_function_listed(&user->sources, function)))
+        return nullptr;
+    must_t must = {.summaries = summaries, .bits = bits, .user = user};
+    core_dict_init(&must.known, nullptr, nullptr);
+    const ir_instr_t *exit = nullptr;
+    for (uint32_t b = 0; !exit && b < function->n_blocks; b++) {
+        ir_instr_t *terminator = ir_block_terminator(function->blocks[b]);
+        if (terminator
+            && (terminator->op == IR_OP_RETURN || terminator->op == IR_OP_FAIL)
+            && (ir_paths_state(function, IR_PATH_UNPASSED, must_step, &must,
+                               terminator) & IR_PATH_UNPASSED))
+            exit = terminator;
+    }
+    core_dict_free(&must.known);
+    return exit;
+}
+
+bool
+n00bb_clause_matches(const n00bb_effect_clause_t *clause, ir_func_t *body)
+{
+    return body && (clause->function == body
+        || (clause->native.u8_bytes && !body->n_blocks
+            && core_string_eq(clause->native, n00bb_native_symbol(body))));
+}
+
 bool
 n00bb_function_listed(const core_list_t(n00bb_effect_clause_t) *clauses,
                       ir_func_t *function)
 {
     ir_func_t *body = n00bb_cached_body(function);
     for (size_t i = 0; body && i < clauses->len; i++)
-        if (clauses->data[i].function == body) return true;
+        if (n00bb_clause_matches(&clauses->data[i], body)) return true;
     return false;
 }
 
@@ -270,8 +300,10 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
         if (!effect)
             return user && n00bb_must_effect(summaries, subject, 0, user);
         if (effect->bits == IR_SUMMARY_MAY_DIVERGE)
-            return (flags & IR_SUMMARY_DIVERGES) != 0;
-        return n00bb_must_effect(summaries, subject, effect->bits, nullptr);
+            return (flags & IR_SUMMARY_DIVERGES)
+                || (user && n00bb_must_effect(summaries, subject,
+                                              effect->bits, user));
+        return n00bb_must_effect(summaries, subject, effect->bits, user);
     case N00BB_QUERY_MAY_READ:
         return (role & N00BB_ROLE_READS) != 0;
     case N00BB_QUERY_MAY_WRITE:

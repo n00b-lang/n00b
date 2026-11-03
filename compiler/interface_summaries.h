@@ -6,6 +6,20 @@
 
 typedef struct n00bb_interface_summaries_t n00bb_interface_summaries_t;
 
+typedef bool (*n00bb_module_encode_fn)(void *context, ir_module_t *module,
+                                       core_buffer_t *out);
+typedef bool (*n00bb_module_metadata_fn)(void *context, core_string_t module,
+                                         const uint8_t *data, size_t size);
+
+bool n00bb_publish_module_metadata(n00bb_link_analysis_t *analysis,
+                                   core_string_t owner_prefix,
+                                   core_string_t key, uint32_t version,
+                                   n00bb_module_encode_fn encode,
+                                   void *context);
+bool n00bb_each_module_metadata(const th_env *environment,
+                                core_string_t owner_prefix, core_string_t key,
+                                uint32_t version,
+                                n00bb_module_metadata_fn visit, void *context);
 bool n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis);
 ir_summary_t *n00bb_interface_summary(n00bb_link_analysis_t *analysis,
                                       ir_summaries_t *summaries,

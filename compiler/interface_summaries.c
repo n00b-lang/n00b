@@ -82,12 +82,14 @@ module_summaries(ir_summaries_t *summaries, ir_module_t *module,
 }
 
 bool
-n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis)
+n00bb_publish_module_metadata(n00bb_link_analysis_t *analysis,
+                              core_string_t owner_prefix, core_string_t key,
+                              uint32_t version, n00bb_module_encode_fn encode,
+                              void *context)
 {
     th_env *environment = analysis ? analysis->interface_environment
                                    : nullptr;
-    if (!environment || th_env_is_frozen(environment)
-        || !analysis->summaries) return true;
+    if (!environment || th_env_is_frozen(environment)) return true;
     core_buffer_t owner = {0};
     core_buffer_t data = {0};
     bool ok = true;
@@ -96,22 +98,59 @@ n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis)
         if (!state || !state->ir_module || state->interface_module) continue;
         owner.byte_len = 0;
         data.byte_len = 0;
-        core_buffer_puts(&owner, SUMMARY_OWNER);
+        ok = encode(context, state->ir_module, &data);
+        if (!ok || !data.byte_len) continue;
+        core_buffer_append_string(&owner, owner_prefix);
         core_buffer_append_string(&owner, ir_module_name(state->ir_module));
         core_string_t name = core_buffer_string(&owner);
-        ok = module_summaries(analysis->summaries, state->ir_module, &data)
-            && (th_env_replace_metadata(environment,
-                    TH_ENV_METADATA_ENVIRONMENT, name,
-                    CORE_STRING_STATIC(SUMMARY_KEY),
-                    SUMMARY_METADATA_VERSION, data.data, data.byte_len)
-                || th_env_register_metadata(environment,
-                    TH_ENV_METADATA_ENVIRONMENT, name,
-                    CORE_STRING_STATIC(SUMMARY_KEY),
-                    SUMMARY_METADATA_VERSION, data.data, data.byte_len));
+        ok = th_env_replace_metadata(environment, TH_ENV_METADATA_ENVIRONMENT,
+                 name, key, version, data.data, data.byte_len)
+            || th_env_register_metadata(environment,
+                 TH_ENV_METADATA_ENVIRONMENT, name, key, version, data.data,
+                 data.byte_len);
     }
     core_buffer_release(&owner);
     core_buffer_release(&data);
     return ok;
+}
+
+bool
+n00bb_each_module_metadata(const th_env *environment,
+                           core_string_t owner_prefix, core_string_t key,
+                           uint32_t version, n00bb_module_metadata_fn visit,
+                           void *context)
+{
+    bool ok = true;
+    for (size_t i = 0; ok && environment
+         && i < th_env_metadata_count(environment); i++) {
+        th_env_metadata_view_t view = {0};
+        if (!th_env_metadata_at(environment, i, &view)
+            || view.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+            || view.version != version || !core_string_eq(view.key, key)
+            || !core_string_starts_with(view.owner_name, owner_prefix))
+            continue;
+        ok = visit(context, core_string_slice(view.owner_name,
+                       owner_prefix.u8_bytes,
+                       view.owner_name.u8_bytes - owner_prefix.u8_bytes),
+                   view.data, view.size);
+    }
+    return ok;
+}
+
+static bool
+encode_summaries(void *context, ir_module_t *module, core_buffer_t *out)
+{
+    n00bb_link_analysis_t *analysis = context;
+    return module_summaries(analysis->summaries, module, out);
+}
+
+bool
+n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis)
+{
+    if (!analysis || !analysis->summaries) return true;
+    return n00bb_publish_module_metadata(analysis,
+        CORE_STRING_STATIC(SUMMARY_OWNER), CORE_STRING_STATIC(SUMMARY_KEY),
+        SUMMARY_METADATA_VERSION, encode_summaries, analysis);
 }
 
 static bool
@@ -153,23 +192,21 @@ index_module(n00bb_interface_summaries_t *index, core_string_t module,
     }
 }
 
+static bool
+index_metadata(void *context, core_string_t module, const uint8_t *data,
+               size_t size)
+{
+    index_module(context, module, data, size);
+    return true;
+}
+
 static void
 index_environment(n00bb_interface_summaries_t *index,
                   const th_env *environment)
 {
-    core_string_t prefix = CORE_STRING_STATIC(SUMMARY_OWNER);
-    for (size_t i = 0; environment
-         && i < th_env_metadata_count(environment); i++) {
-        th_env_metadata_view_t view = {0};
-        if (!th_env_metadata_at(environment, i, &view)
-            || view.owner_kind != TH_ENV_METADATA_ENVIRONMENT
-            || view.version != SUMMARY_METADATA_VERSION
-            || !core_string_eq(view.key, CORE_STRING_STATIC(SUMMARY_KEY))
-            || !core_string_starts_with(view.owner_name, prefix)) continue;
-        index_module(index, core_string_slice(view.owner_name,
-                         prefix.u8_bytes, view.owner_name.u8_bytes),
-                     view.data, view.size);
-    }
+    (void)n00bb_each_module_metadata(environment,
+        CORE_STRING_STATIC(SUMMARY_OWNER), CORE_STRING_STATIC(SUMMARY_KEY),
+        SUMMARY_METADATA_VERSION, index_metadata, index);
 }
 
 static n00bb_interface_summaries_t *

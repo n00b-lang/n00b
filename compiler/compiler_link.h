@@ -475,6 +475,7 @@ typedef struct {
     core_string_t qualified;
     core_string_t method;
     n00bb_bound_t rule;
+    core_string_t expression;
 } n00bb_trait_bound_t;
 core_list_decl(n00bb_trait_bound_t);
 core_list_decl(n00bb_user_effect_t);
@@ -528,6 +529,7 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_mark_question_t) mark_questions;
     core_dict_t effect_functions;
     bool effect_functions_ready;
+    core_list_t(core_string_t) effect_natives;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     n00bb_boxed_hooks_t boxed_hooks;
     core_list_t(n00bb_bookkeeping_write_t) bookkeeping_writes;

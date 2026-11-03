@@ -888,7 +888,11 @@
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
 
 <trait-spec> ::= <trait-check>
-<trait-check> ::= <trait-check-term> (<and-op> <trait-check-term>)*
+<trait-check> ::= <trait-check-and> (<or-op> <trait-check-and>)*
+<trait-check-and> ::= <trait-check-unary> (<and-op> <trait-check-unary>)*
+<trait-check-unary> ::= <trait-check-term>
+<trait-check-unary> ::= <not-op> <trait-check-unary>
+<trait-check-unary> ::= %"(" <trait-check> %")"
 <trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
 
 <effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
