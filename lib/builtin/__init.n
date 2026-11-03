@@ -196,6 +196,7 @@ package builtin {
 package sort {
     export sort.sort
     export sort.sort_by
+    export sort.search
     export sort.order
     export sort.natural_compare
     export sort.Comparator

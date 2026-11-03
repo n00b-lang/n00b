@@ -713,6 +713,16 @@ func comparator_check() {
     require items[0] == 3 and items[1] == 2 and items[2] == 1
 }
 
+func search_check() {
+    let items: Array[u32] = [2, 4, 4, 9]
+    require sort.search(items, 1) == 0
+    require sort.search(items, 4) == 1
+    require sort.search(items, 5) == 3
+    require sort.search(items, 10) == 4
+    let none: Array[u32] = []
+    require sort.search(none, 3) == 0
+}
+
 func loop_items_widen_check() {
     var total: int = 0
     for n in [1, 2, 255, 256] {
@@ -2125,6 +2135,7 @@ func start() -> nil {
     effect_paths_check()
     immutable_string_check()
     comparator_check()
+    search_check()
     loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()
