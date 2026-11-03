@@ -394,6 +394,34 @@ content_compute(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     }
 }
 
+static bool
+set_holds(const pt_set_t *set, const pt_item_t *item)
+{
+    size_t low = 0, high = set->len;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int    order  = set_order(&set->data[middle], item);
+        if (order < 0) low = middle + 1;
+        else if (order > 0) high = middle;
+        else return true;
+    }
+    return false;
+}
+
+static void
+log_new_items(pt_t *pt, core_list_t(pt_logged_t) *log, const pt_set_t *old,
+              const pt_set_t *now)
+{
+    bool removed = false;
+    for (size_t i = 0; !removed && i < old->len; i++)
+        removed = !set_holds(now, &old->data[i]);
+    if (removed) log->len = 0;
+    for (size_t i = 0; i < now->len; i++)
+        if (removed || !set_holds(old, &now->data[i]))
+            core_list_push(*log, ((pt_logged_t){now->data[i],
+                                                pt->generation}));
+}
+
 static void
 content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
 {
@@ -413,14 +441,25 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
         uint64_t        cuts = pt->cuts;
+        pt_set_t        old  = entry->items;
+        entry->items = (pt_set_t){0};
         memo_begin(pt, &entry->memo, &frame);
-        entry->items.len = 0;
         content_compute(pt, loc, &entry->items);
         memo_end(pt, &entry->memo, &frame);
         if (pt->cuts != cuts) entry->memo.computed = false;
+        log_new_items(pt, &entry->log, &old, &entry->items);
+        core_list_free(old);
     }
     memo_use(pt, &entry->memo);
-    set_merge(pt, into, &entry->items);
+    if (!pt->delta_since) {
+        set_merge(pt, into, &entry->items);
+        return;
+    }
+    for (size_t l = entry->log.len; l > 0; l--) {
+        const pt_logged_t *logged = &entry->log.data[l - 1];
+        if (logged->generation <= pt->delta_since) break;
+        set_add(pt, into, logged->item);
+    }
 }
 
 static bool
