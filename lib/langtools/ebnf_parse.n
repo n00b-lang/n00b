@@ -309,7 +309,7 @@ private func rule(p: Ebnf_Parser) {
 }
 
 private const directive_names: Array[string] = ["start", "identifier",
-    "tokens", "trivia", "elastic"]
+    "tokens", "trivia", "trailing", "elastic"]
 
 private func expect_class(p: Ebnf_Parser) -> Use? {
     if !at(p, ebnf_scan.Tok_Kind.class_ref) {
@@ -385,10 +385,14 @@ private func directive(p: Ebnf_Parser) {
             p.identifier_use = use
         }
     }
-    elif word == "tokens" or word == "trivia" or word == "elastic" {
+    elif word == "tokens" or word == "trivia" or word == "trailing"
+        or word == "elastic" {
         var policy: grammar.Token_Policy = grammar.Token_Policy.normal
         if word == "trivia" {
             policy = grammar.Token_Policy.trivia
+        }
+        elif word == "trailing" {
+            policy = grammar.Token_Policy.trailing
         }
         elif word == "elastic" {
             policy = grammar.Token_Policy.elastic
@@ -429,7 +433,7 @@ private func directive(p: Ebnf_Parser) {
         }
         else {
             d.help = "directives are `start:`, `identifier:`, `tokens:`, " +
-                "`trivia:` and `elastic:`"
+                "`trivia:`, `trailing:` and `elastic:`"
         }
         report(p, d)
         skip_line(p)
@@ -568,8 +572,7 @@ private func resolve_classes(p: Ebnf_Parser) {
         let class: grammar.Token_Class = p.g.classes[i]
         let declared: bool = p.declared[i] or i == identifier
         unknown.append(!declared)
-        trivia.append(declared and
-                      class.policy == grammar.Token_Policy.trivia)
+        trivia.append(declared and grammar.is_trivia(class.policy))
         if declared {
             known.append(class.name)
         }

@@ -89,6 +89,7 @@ private func alts_text(g: grammar.Grammar, alts: List[grammar.Alt],
 private func policy_word(policy: grammar.Token_Policy) -> string {
     switch policy {
         case grammar.Token_Policy.trivia { return "trivia" }
+        case grammar.Token_Policy.trailing { return "trailing" }
         case grammar.Token_Policy.elastic { return "elastic" }
         else { return "tokens" }
     }

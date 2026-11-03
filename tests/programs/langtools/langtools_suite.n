@@ -108,6 +108,7 @@ identifier: %NAME
 tokens: %NUMBER
 trivia: %COMMENT
 elastic: %NEWLINE
+trailing: %NOTE
 start: <stmt>
 
 <expr> ::= <term> (("+" | %"-") <term>)*
@@ -145,6 +146,11 @@ func feature_checks() {
     check(newline != nil and
           newline.get().policy == langtools.Token_Policy.elastic,
           "elastic class")
+    let note: langtools.Token_Class? = langtools.find_class(g, "NOTE")
+    check(note != nil and
+          note.get().policy == langtools.Token_Policy.trailing and
+          langtools.raw_token_id(note.get().id) == 0x110004,
+          "trailing class")
     check(langtools.is_hard_keyword(g, "let"), "hard keyword")
     check(langtools.is_soft_keyword(g, "match"), "soft keyword")
     check(!langtools.is_soft_keyword(g, "+") and !langtools.is_hard_keyword(g, "+"),
@@ -290,7 +296,16 @@ func lex_checks() {
     check(fixed.id == langtools.literal_token_id("é\t"), "unclassed hash")
     let trivia: langtools.Token = langtools.emit(ctx, 16, 18,
                                                  class = comment.get())
-    check(trivia.flags.trivia and !trivia.flags.elastic, "trivia flag")
+    check(trivia.flags.trivia and !trivia.flags.elastic
+          and !trivia.flags.trailing, "trivia flag")
+    let note: langtools.Token_Id? = ctx.classes["NOTE"]
+    check(note != nil, "trailing class id")
+    if note != nil {
+        let trailing: langtools.Token = langtools.emit(ctx, 16, 18,
+                                                       class = note.get())
+        check(trailing.flags.trivia and trailing.flags.trailing,
+              "trailing flag")
+    }
     let plain: langtools.Token = langtools.emit(ctx, 19, 20, class = name.get())
     check(plain.id == name.get() and plain.alt_id == nil, "plain identifier")
 }

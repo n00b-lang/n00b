@@ -1,7 +1,7 @@
 import grammar
 
 flagset Token_Flags {
-    trivia, elastic,
+    trivia, elastic, trailing,
     none = nil
 }
 
@@ -44,6 +44,9 @@ private func flags_of(ctx: Lex_Context, raw: u128) -> Token_Flags {
     switch ctx.policies[cast[uint](raw - grammar.identifier_token_id)] {
         case grammar.Token_Policy.trivia {
             return Token_Flags.trivia
+        }
+        case grammar.Token_Policy.trailing {
+            return Token_Flags.trivia | Token_Flags.trailing
         }
         case grammar.Token_Policy.elastic {
             return Token_Flags.elastic

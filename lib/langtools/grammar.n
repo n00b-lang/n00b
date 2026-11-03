@@ -5,7 +5,11 @@ type Token_Id = u128
 
 const identifier_token_id: u128 = 0x110000
 
-enum Token_Policy { normal = 0, trivia, elastic }
+enum Token_Policy { normal = 0, trivia, elastic, trailing }
+
+func is_trivia(policy: Token_Policy) -> bool {
+    return policy == Token_Policy.trivia or policy == Token_Policy.trailing
+}
 
 record Token_Class {
     name:   string
