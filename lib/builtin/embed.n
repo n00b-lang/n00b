@@ -127,7 +127,7 @@ private func read_all(fd: int, at: Ref[byte], length: uint, path: string)
 fence litmod embed(contents: string, site: litmod_site.Literal_Site)
     -> Array['E] fail: string {
     let path: string = resolved_path(contents, site)
-    var items: Array['E] = new[Array['E]](0)
+    var items: Array['E] = []
     let found: Ref[abi.Type_Record]? = element_row(items)
     if found == nil {
         fail "'embed needs a concrete element type"

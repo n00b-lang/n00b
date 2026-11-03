@@ -17,10 +17,10 @@ record Hash_Index {
 }
 
 func __init(modify self: Hash_Index) {
-    self.ctrl = new[Array[u64]](0)
-    self.slots = new[Array[u32]](0)
-    self.hashes = new[Array[u128]](0)
-    self.dead = new[Array[u64]](0)
+    self.ctrl = []
+    self.slots = []
+    self.hashes = []
+    self.dead = []
     self.used = 0
     self.live = 0
     self.growth_left = 0
@@ -211,7 +211,7 @@ func compact(self: Ref[Hash_Index]) {
         read += 1
     }
     self.__value.used = write
-    self.__value.dead = new[Array[u64]](0)
+    self.__value.dead = []
     rebuild(self, self.__value.live + 1 + self.__value.live / 2)
 }
 

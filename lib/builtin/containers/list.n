@@ -255,7 +255,7 @@ func remove(self: List['T], value: 'T,
 }
 
 func clear(self: List['T]) {
-    self.items = new[Array['T]](0)
+    self.items = []
     self.count = 0
     self.shared = false
 }
