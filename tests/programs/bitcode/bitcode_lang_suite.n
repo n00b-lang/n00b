@@ -2100,6 +2100,35 @@ func index_tuple_write_check() {
     require items[0].count == 6 and items[0].name == "z"
 }
 
+record Literal_Inner {
+    count: uint
+    name:  string
+}
+
+record Literal_Item {
+    maybe: Literal_Inner?
+    plain: Literal_Inner
+}
+
+func index_field_tuple_write_check() {
+    var items: List[Literal_Item] = new[List[Literal_Item]]()
+    let empty: Literal_Inner = (count = 0, name = "")
+    let item: Literal_Item = (maybe = nil, plain = empty)
+    items.append(item)
+    items[0].plain = (name = "p", count = 300)
+    items[0].maybe = (count = 7, name = "q")
+    require items[0].plain.count == 300 and items[0].plain.name == "p"
+    let maybe = items[0].maybe
+    require maybe != nil and maybe.get().count == 7
+    require maybe.get().name == "q"
+    let count: uint = 9
+    let name: string = "r"
+    items[0].maybe = (name = name, count = count)
+    let exact = items[0].maybe
+    require exact != nil and exact.get().count == 9
+    require exact.get().name == "r"
+}
+
 func index_write_check() {
     var items = [1, 2]
     items[0] = 7
@@ -2176,6 +2205,7 @@ func start() -> nil {
     index_write_check()
     index_field_write_check()
     index_tuple_write_check()
+    index_field_tuple_write_check()
     primitive_operator_method_check()
     char_switch_check()
     hash_container_order_check()
