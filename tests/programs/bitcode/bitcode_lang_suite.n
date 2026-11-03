@@ -2080,6 +2080,26 @@ func index_field_write_check() {
     require items[0].inner.k == 7 and items[1].inner.k == 0
 }
 
+record Stored_Pair {
+    count: uint
+    name:  string
+}
+
+func index_tuple_write_check() {
+    var by_name: Dict[string, Stored_Pair] = new[Dict[string, Stored_Pair]]()
+    by_name["k"] = (count = 5, name = "y")
+    by_name["j"] = (name = "x", count = 4)
+    var items: List[Stored_Pair] = new[List[Stored_Pair]]()
+    items.append((count = 1, name = "q"))
+    items[0] = (count = 6, name = "z")
+    let k = by_name["k"]
+    let j = by_name["j"]
+    require k != nil and j != nil
+    require k.get().count == 5 and k.get().name == "y"
+    require j.get().count == 4 and j.get().name == "x"
+    require items[0].count == 6 and items[0].name == "z"
+}
+
 func index_write_check() {
     var items = [1, 2]
     items[0] = 7
@@ -2155,6 +2175,7 @@ func start() -> nil {
     tuples_check()
     index_write_check()
     index_field_write_check()
+    index_tuple_write_check()
     primitive_operator_method_check()
     char_switch_check()
     hash_container_order_check()

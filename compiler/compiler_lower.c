@@ -16865,6 +16865,11 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         if (i > 0 && parameter && th_mode_is_input_only(mode)) {
             bool literal_source = !slice && i == argument_count - 1
                 && source && !source_value;
+            if (literal_source) {
+                if (!n00bb_nominal_value_as(context, parameter->type, source))
+                    return false;
+                arguments[i] = ir_lower_node_value(context, source);
+            }
             arguments[i] = n00bb_materialize(context,
                 literal_source ? source : nullptr, arguments[i],
                 parameter->type, lower_span_for_tree(context, site_node));
@@ -17171,6 +17176,22 @@ n00bb_nominal_value_as(ir_lower_context_t *context, th_type *target_type,
         return false;
     }
 
+    th_type *from = parse_tree_type(source);
+    from = from ? th_resolve(from) : nullptr;
+    th_type *to = th_resolve(definition);
+    ir_instr_t *aggregate = value->def;
+    size_t count = th_record_len(to);
+    if (from && th_kind_of(from) == TH_RECORD
+        && count == aggregate->n_operands && count == th_record_len(from)) {
+        ir_operand_t *ordered = core_alloc_array(ir_operand_t, count);
+        for (size_t i = 0; i < count; i++)
+            for (size_t j = 0; j < count; j++)
+                if (core_string_eq(th_record_member(to, i)->name,
+                                   th_record_member(from, j)->name))
+                    ordered[i] = aggregate->operands[j];
+        memcpy(aggregate->operands, ordered, count * sizeof(*ordered));
+        core_free(ordered);
+    }
     value->type = target_type;
     return ir_lower_set_node_value(context, source, value);
 }
