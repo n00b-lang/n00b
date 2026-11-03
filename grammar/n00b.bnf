@@ -45,6 +45,8 @@
                    | <object-decl>
                    | <variant-decl>
                    | <trait-decl>
+                   | <effect-decl>
+                   | <mark-decl>
                    | <callback-decl>
                    | <package-decl>
 
@@ -376,27 +378,27 @@
 <pos-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
     %IDENTIFIER
 <pos-param> @declares($0, $2, "param") @direction($0, "in") @pass_by("in") @nospace($1) ::=
-    %IDENTIFIER %":" <type-spec>
+    %IDENTIFIER %":" <type-spec> <mark-annotation>*
 <pos-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
     %"in" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "in") @pass_by("in") @nospace($2) ::=
-    %"in" %IDENTIFIER %":" <type-spec>
+    %"in" %IDENTIFIER %":" <type-spec> <mark-annotation>*
 <pos-param> @declares($1, "param") @direction($1, "view") @pass_by("view") ::=
     %"view" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "view") @pass_by("view") @nospace($2) ::=
-    %"view" %IDENTIFIER %":" <type-spec>
+    %"view" %IDENTIFIER %":" <type-spec> <mark-annotation>*
 <pos-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
     %"out" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "out") @pass_by("out") @nospace($2) ::=
-    %"out" %IDENTIFIER %":" <type-spec>
+    %"out" %IDENTIFIER %":" <type-spec> <mark-annotation>*
 <pos-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
     %"modify" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "modify") @pass_by("inout") @nospace($2) ::=
-    %"modify" %IDENTIFIER %":" <type-spec>
+    %"modify" %IDENTIFIER %":" <type-spec> <mark-annotation>*
 <pos-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
     %"consume" %IDENTIFIER
 <pos-param> @declares($1, $3, "param") @direction($1, "consume") @pass_by("consume") @nospace($2) ::=
-    %"consume" %IDENTIFIER %":" <type-spec>
+    %"consume" %IDENTIFIER %":" <type-spec> <mark-annotation>*
 
 <default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") @infer("$0 unify $2") ::=
                 %IDENTIFIER <assign-op> <expression>
@@ -647,6 +649,7 @@
             | <new-expr>
             | <callback-expr>
             | <typeof-expr>
+            | <effect-query>
             | <tuple-or-paren>
 
 <primary> ::= <literal-expr> %":" <type-spec>
@@ -660,6 +663,12 @@
 <primary> @varref($0) @emit("reference") @infer("lookup($0)") @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
 <typeof-expr> @infer("typespec") @emit("typeof", $2) @nospace ::= %"typeof" %"(" <expression> %")"
+
+<effect-query> @infer("bool") @emit("effect_query") @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
+<effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"
+                      | %"may_read" | %"may_write" | %"may_lend"
+                      | %"may_carry"
+<effect-query-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <new-expr> @infer("`t") @emit("array_new") @nospace ::= %"new" (%"[" <type-spec> %"]")? %"(" <call-args>? %")"
 
@@ -822,7 +831,7 @@
        <member-visibility>? %"type" %IDENTIFIER <type-layout-modifier>* <type-body>
 
 <record-decl> @namespace("type") @scope("record", $2) @type($2) @exposes ::=
-       <member-visibility>? <record-keyword> %IDENTIFIER <type-layout-modifier>* <type-body>
+       <member-visibility>? <record-keyword> %IDENTIFIER <type-layout-modifier>* <mark-annotation>* <type-body>
 
 <object-decl> @namespace("type") @scope("object", $2) @type($2) @exposes ::=
        <member-visibility>? %"object" %IDENTIFIER <type-body>
@@ -841,6 +850,8 @@
 
 <type-decl-one> @field($1, $3) @nospace($2) ::=
        <member-visibility>? %IDENTIFIER %":" <type-spec>
+<type-decl-one> @field($1, $3) @nospace($2) ::=
+       <member-visibility>? %IDENTIFIER %":" <type-spec> <mark-annotation>+
 <type-decl-one> @field($1, $3) @nospace($2) ::=
        <member-visibility>? %IDENTIFIER %":" <type-spec> <field-extent>
 <type-decl-one> @nospace($2) ::=
@@ -875,6 +886,29 @@
 
 <trait-spec> @declares($1, $2, "function") @scope("trait") @nospace($2) ::=
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
+
+<trait-spec> ::= <trait-check>
+<trait-check> ::= <trait-check-and> (<or-op> <trait-check-and>)*
+<trait-check-and> ::= <trait-check-unary> (<and-op> <trait-check-unary>)*
+<trait-check-unary> ::= <trait-check-term>
+<trait-check-unary> ::= <not-op> <trait-check-unary>
+<trait-check-unary> ::= %"(" <trait-check> %")"
+<trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
+
+<effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
+<effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
+<effect-clause> ::= <effect-source> | <effect-handler>
+<effect-source> ::= %"from" <expression>
+<effect-handler> ::= %"handled" %"by" <expression>
+
+<mark-decl> ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
+<mark-clause-list> @hardline ::= <mark-clause> (<eos>+ <mark-clause>)*
+<mark-clause> ::= <effect-source> | <mark-clearer> | <mark-rejecter>
+<mark-clearer> ::= %"cleared" %"by" <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-rejecter> ::= %"rejected" %"by" <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-annotation> ::= <mark-carries> | <mark-rejects>
+<mark-carries> ::= %"carries" <effect-query-name>
+<mark-rejects> ::= %"rejects" <effect-query-name>
 
 <trait-func-prelude> ::= <function-keyword>
 <trait-func-prelude> ::= <member-visibility> <function-keyword>

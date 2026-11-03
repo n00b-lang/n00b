@@ -1,0 +1,5 @@
+import calm
+
+package beta {
+    export calm
+}

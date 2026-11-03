@@ -1,0 +1,35 @@
+func read_env(key: string) -> string {
+    return key
+}
+
+func trim(text: string) -> string {
+    return text
+}
+
+func check(path: string) -> string fail: int {
+    if path == "" {
+        fail 1
+    }
+    return path
+}
+
+func open(path: string) -> int {
+    if path == "" {
+        return 0
+    }
+    return 1
+}
+
+mark Untrusted {
+    from read_env
+    cleared by check(path)
+    rejected by open(path)
+}
+
+func questions() -> int {
+    let name: string = read_env("HOME")
+    may_carry(name, Missing)
+    return 1
+}
+
+may_carry(read_env, Untrusted)

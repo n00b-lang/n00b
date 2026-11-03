@@ -328,6 +328,59 @@ N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
     "An array passed as an ordinary parameter is only lent for the call.\n"
     "A function that keeps it somewhere that outlives the call takes it as\n"
     "`consume`, so the caller hands it over, or keeps a copy.")
+N00B_DIAG(EFFECT_CHECK_FALSE, "N00B-S0073", ERROR,
+    "a check about effects is false",
+    "A statement made only of effect questions is a check: the compiler\n"
+    "requires it to be true. The notes show why it isn't. Change the code\n"
+    "so the check holds, or change the check.")
+N00B_DIAG(EFFECT_CHECK_MIXED, "N00B-S0074", ERROR,
+    "a check mixes effect questions with run-time values",
+    "A check is answered while compiling, so it can only combine effect\n"
+    "questions and constants with `not`, `and` and `or`. Put the run-time\n"
+    "part in a statement of its own.")
+N00B_DIAG(EFFECT_QUESTION, "N00B-S0075", ERROR,
+    "an effect question names something it can't ask about",
+    "Effect questions name a function, then an effect or one of that\n"
+    "function's parameters. Inside a function body the function can be left\n"
+    "out, and the question is about the enclosing function.")
+N00B_DIAG(EFFECT_QUESTION_IN_WHEN, "N00B-S0076", ERROR,
+    "an effect question decides a `when`",
+    "`when` is decided before the compiler knows what functions do, so its\n"
+    "condition can't ask about effects. Use `if`, which folds the question\n"
+    "away once it is known.")
+N00B_DIAG(CALLBACK_BOUND, "N00B-S0077", ERROR,
+    "a callback doesn't meet the check on the parameter it's passed to",
+    "A function can check what a callback parameter does, with\n"
+    "`forbids_effect` or `has_effect`. Every call must then pass a function\n"
+    "that meets the check, or forward one of its own parameters that has\n"
+    "the same check.")
+N00B_DIAG(TRAIT_CHECK, "N00B-S0078", ERROR,
+    "an implementation doesn't meet its trait's check",
+    "A trait can check what its methods do, with `forbids_effect` or\n"
+    "`has_effect`. Calls through the trait rely on it, so every\n"
+    "implementation must meet it.")
+N00B_DIAG(EFFECT_DECLARATION, "N00B-S0079", ERROR,
+    "an effect declaration names something it can't use",
+    "`effect Name { from f; handled by g }` declares an effect: calling `f`\n"
+    "causes it, and `g` takes care of it so its callers don't get it. Both\n"
+    "must name functions. The built-in effects can't be declared, and\n"
+    "adding clauses to another module's effect needs its qualified name.")
+N00B_DIAG(HANDLED_ELSEWHERE, "N00B-S0080", WARNING,
+    "`handled by` is written outside the package that declares the effect",
+    "`handled by` removes an effect from callers, so it belongs in the\n"
+    "package that declares the effect. Then everything that stops the effect\n"
+    "is listed in one place.")
+N00B_DIAG(MARK_REJECTED, "N00B-S0081", ERROR,
+    "a value that may carry a mark is passed to a parameter that rejects it",
+    "A mark follows data from the functions that produce it, through every\n"
+    "value computed from it. A parameter that rejects the mark can't be\n"
+    "given such a value. Check it with one of the mark's validators first.")
+N00B_DIAG(MARK_DECLARATION, "N00B-S0082", ERROR,
+    "a mark declaration names something it can't use",
+    "`mark Name { from f; cleared by g(p); rejected by h(p) }` declares a\n"
+    "mark. `f`, `g` and `h` must be functions, `p` one of their parameters,\n"
+    "and a validator (`cleared by`) must be able to fail. A mark is declared\n"
+    "in the module that owns it.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

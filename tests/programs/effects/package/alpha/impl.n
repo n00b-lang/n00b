@@ -1,0 +1,11 @@
+func note(_entry: string) {
+}
+
+func flush() {
+    note("batch")
+}
+
+effect Audited {
+    from note
+    handled by flush
+}

@@ -330,7 +330,7 @@ func lantern_counts() -> Dict[string, Tuple[uint, uint]] {
     counts["rust.bnf"] = (216, 547)
     counts["swift.bnf"] = (308, 636)
     counts["typescript.bnf"] = (241, 562)
-    counts["n00b.bnf"] = (300, 627)
+    counts["n00b.bnf"] = (320, 664)
     counts["lex.bnf"] = (5, 7)
     counts["infer.bnf"] = (22, 49)
     return counts

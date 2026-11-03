@@ -688,6 +688,7 @@ typedef struct {
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
+    core_list_t(parse_tree_ptr_t) mark_annotations;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(n00bb_literal_constant_t) literal_constants;

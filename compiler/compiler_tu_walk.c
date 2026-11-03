@@ -210,22 +210,9 @@ check_builtin_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_sym_entry_t *symbol = attached_symbol(grammar, unit,
                                                 core_tree_child(node, 0));
     if (!n00bb_builtin_native_function(symbol)) return;
-    if (core_string_eq(symbol->name, CORE_STRING_STATIC("__unobserved"))) {
+    if (core_string_eq(symbol->name, CORE_STRING_STATIC("__unobserved")))
         mark_unobserved_calls(grammar, tu_state(unit),
                               call_arguments_node(grammar, node));
-        return;
-    }
-    core_string_t name = {0};
-    if (!core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))
-        || (n00bb_call_literal_argument(grammar, tu_state(unit), node, 0, 1,
-                                        &name)
-            && name.u8_bytes))
-        return;
-    n00bb_report(core_translation_unit_diagnostics(unit), unit,
-        N00B_DIAG_BUILTIN_ARGUMENTS, link_source_location(node),
-        N00B_TEXT_BUILTIN_EXPECTS,
-        N00BB_ARGS(ARG_TEXT(symbol->name),
-                   ARG_PHRASE_ID(N00B_TEXT_PHRASE_TAKES_ONE_STRING_LITERAL)));
 }
 
 static void
@@ -1187,6 +1174,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             core_list_push(state->module_top_level_statements, statement);
         }
+        if (NT_IS(grammar, node, "mark-annotation"))
+            core_list_push(state->mark_annotations, node);
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);

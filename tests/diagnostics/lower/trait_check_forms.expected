@@ -1,0 +1,2 @@
+tests/diagnostics/lower/trait_check_forms.n:24:1: error N00B-S0078: `render` implements `Render.render`, but the trait's check is false for it
+  tests/diagnostics/lower/trait_check_forms.n:4:5: note: `Render` checks this here

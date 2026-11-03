@@ -5610,6 +5610,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             : parse_cmdr_flag_str(args, CORE_STRING_STATIC("--effects-of"));
         link_analysis->effects_json = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--effects-json"));
+        link_analysis->effects_explain = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--effects-explain"));
     }
     if (located && (lower_command || build_command || compile_command
                     || library_command))

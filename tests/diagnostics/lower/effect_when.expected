@@ -1,0 +1,2 @@
+tests/diagnostics/lower/effect_when.n:5:6: error N00B-S0076: a `when` can't ask about effects
+  help: use `if`, which folds the question away once it is known

@@ -1,0 +1,21 @@
+tests/diagnostics/lower/effect_checks.n:9:5: error N00B-S0073: this check is false: `render` may do `clock`
+  tests/diagnostics/lower/effect_checks.n:10:8: note: `render` calls `effect_checks.stamp`
+  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`
+  lib/sys/internal/clock.n:2:12: note: `now_ns` calls `sys.internal.clock.n00b_os_now_ns`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_checks.n:31:5: error N00B-S0073: this check is false: `maybe_leave` can come back to its caller
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_checks.n:48:5: error N00B-S0073: this check is false: `writes` may write `items`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_checks.n:53:5: error N00B-S0074: this check mixes effect questions with values known only when the program runs
+  help: put the run-time part in a statement of its own
+tests/diagnostics/lower/effect_checks.n:58:5: error N00B-S0075: `teleport` is not an effect
+tests/diagnostics/lower/effect_checks.n:59:5: error N00B-S0075: `has_effect` takes a single effect, but `impure` is a group
+tests/diagnostics/lower/effect_checks.n:60:5: error N00B-S0075: `unknowns` has no parameter `z`
+tests/diagnostics/lower/effect_checks.n:67:1: error N00B-S0073: this check is false: `render` may do `clock`
+  tests/diagnostics/lower/effect_checks.n:10:8: note: `render` calls `effect_checks.stamp`
+  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`
+  lib/sys/internal/clock.n:2:12: note: `now_ns` calls `sys.internal.clock.n00b_os_now_ns`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_checks.n:68:1: error N00B-S0075: `may_effect(output)` asks about the enclosing function, but there is none here
+  help: name the function first: `may_effect(f, output)`

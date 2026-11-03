@@ -1,0 +1,2 @@
+tests/diagnostics/lower/mark_questions.n:31:5: error N00B-S0075: `Missing` is not a mark
+tests/diagnostics/lower/mark_questions.n:35:1: error N00B-S0075: `may_carry` asks about a local variable or parameter of the enclosing function

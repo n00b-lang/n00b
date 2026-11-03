@@ -289,7 +289,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                       | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-                      | observes,
+                      | IR_SUMMARY_MAY_DIVERGE | observes,
                   call, nullptr, CORE_STRING_STATIC("?"));
         summary->traps |= IR_STRAP_ALL;
         core_list_free(targets.targets);
@@ -305,11 +305,23 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
                | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
                | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
                | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
-               | IR_SUMMARY_CALLS_CALLBACKS | observes);
-        if (flags & ~summary->flags)
+               | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
+               | observes);
+        if (callee->flags & IR_SUMMARY_DIVERGES)
+            flags |= IR_SUMMARY_MAY_DIVERGE;
+        if (flags)
             add_flags(summary, flags, call, targets.targets.data[t],
                       (core_string_t){0});
-        (void)merge_effects(summary, callee);
+        const ir_summary_hooks_t *hooks = summaries->hooks;
+        for (size_t e = 0; e < callee->effects.len; e++)
+            if (!hooks || !hooks->inherits_effect
+                || hooks->inherits_effect(hooks->context, summary->function,
+                                          targets.targets.data[t],
+                                          callee->effects.data[e]))
+                (void)ir_summary_add_effect(summary, callee->effects.data[e]);
+        if (hooks && hooks->callee_effects)
+            hooks->callee_effects(hooks->context, targets.targets.data[t],
+                                  summary);
     }
     core_list_free(targets.targets);
 }
@@ -400,6 +412,62 @@ exit_site(ir_summaries_t *summaries, const ir_func_t *f, uint32_t flag,
     return nullptr;
 }
 
+static bool
+reaches_exit(ir_block_t *block, const bool *exits)
+{
+    ir_instr_t *term = ir_block_terminator(block);
+    if (!term) return false;
+    if (term->op == IR_OP_RETURN || term->op == IR_OP_FAIL
+        || term->op == IR_OP_TRAP || term->op == IR_OP_UNREACHABLE)
+        return true;
+    for (uint32_t s = 0; s < ir_succ_count(term); s++) {
+        ir_block_t *to = ir_succ_at(term, s);
+        if (to && exits[to->index]) return true;
+    }
+    return false;
+}
+
+static const ir_instr_t *
+endless_loop(ir_func_t *f)
+{
+    uint32_t count = f->n_blocks;
+    bool *exits = core_alloc_array(bool, count ? count : 1);
+    bool *seen = core_alloc_array(bool, count ? count : 1);
+    uint32_t *stack = core_alloc_array(uint32_t, count ? count : 1);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = count; b-- > 0;)
+            if (!exits[b] && reaches_exit(f->blocks[b], exits))
+                changed = exits[b] = true;
+    }
+    const ir_instr_t *found = nullptr;
+    ir_block_t *entry = ir_block_entry(f);
+    uint32_t depth = 0;
+    if (entry && entry->index < count) {
+        seen[entry->index] = true;
+        stack[depth++] = entry->index;
+    }
+    while (depth && !found) {
+        ir_block_t *block = f->blocks[stack[--depth]];
+        ir_instr_t *term = ir_block_terminator(block);
+        for (uint32_t i = 0; !exits[block->index] && !found
+             && i < block->n_instrs; i++)
+            if (ir_span_known(block->instrs[i]->span))
+                found = block->instrs[i];
+        if (!exits[block->index] && !found) found = term;
+        for (uint32_t s = 0; term && s < ir_succ_count(term); s++) {
+            ir_block_t *to = ir_succ_at(term, s);
+            if (!to || to->index >= count || seen[to->index]) continue;
+            seen[to->index] = true;
+            stack[depth++] = to->index;
+        }
+    }
+    core_free(stack);
+    core_free(seen);
+    core_free(exits);
+    return found;
+}
+
 static void
 summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                    ir_func_t *f, const uint32_t *settled)
@@ -463,6 +531,18 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
             site = exit_site(summaries, f, IR_SUMMARY_MAY_FAIL, &callee);
         if (site) add_flags(summary, flag, site, callee, (core_string_t){0});
         else summary->flags |= flag;
+    }
+    if (!(summary->flags & IR_SUMMARY_MAY_DIVERGE)) {
+        ir_func_t        *callee = nullptr;
+        const ir_instr_t *site   = summary->flags & IR_SUMMARY_DIVERGES
+            ? exit_site(summaries, f, IR_SUMMARY_DIVERGES, &callee)
+            : nullptr;
+        if (!site) site = endless_loop(f);
+        if (site)
+            add_flags(summary, IR_SUMMARY_MAY_DIVERGE, site, callee,
+                      (core_string_t){0});
+        else if (summary->flags & IR_SUMMARY_DIVERGES)
+            summary->flags |= IR_SUMMARY_MAY_DIVERGE;
     }
     adjust_flags(summaries, summary);
 }
