@@ -30,6 +30,7 @@ package builtin {
     export ascii.is_ascii_digit
     export ascii.is_ascii_letter
     export ascii.hex_digit_value
+    export ascii.decimal_value
     export bitptr.Bitptr
     export bitptr.bitptr
     export abi.string_backing_at
@@ -196,6 +197,7 @@ package builtin {
 package sort {
     export sort.sort
     export sort.sort_by
+    export sort.search
     export sort.order
     export sort.natural_compare
     export sort.Comparator

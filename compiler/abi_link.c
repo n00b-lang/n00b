@@ -1270,11 +1270,24 @@ compatible_type_members(const abi_link_key_t *first,
         : a->kind == N00B_ABI_TYPE_TRAIT
             ? N00B_ABI_TABLE_TRAIT_METHOD : 0;
     if (!member_kind) return !a_range.count;
+    bool by_name = member_kind == N00B_ABI_TABLE_FIELD
+        && a->kind == N00B_ABI_TYPE_RECORD
+        && !a->owner_module_index && !b->owner_module_index;
     for (uint32_t i = 0; i < a_range.count; i++) {
         const void *a_row = indexed_range_row(first->view, a_range, i,
                                                member_kind);
         const void *b_row = indexed_range_row(candidate->view, b_range, i,
                                                member_kind);
+        for (uint32_t j = 0; by_name && a_row && j < b_range.count; j++) {
+            const n00b_abi_field_v1 *named = indexed_range_row(
+                candidate->view, b_range, j, member_kind);
+            if (named && compatible_string_values(first->view,
+                    &((const n00b_abi_field_v1 *)a_row)->name,
+                    candidate->view, &named->name)) {
+                b_row = named;
+                break;
+            }
+        }
         if (!a_row || !b_row) return false;
         if (member_kind == N00B_ABI_TABLE_TRAIT_METHOD) {
             const n00b_abi_trait_method_v1 *a_method = a_row;

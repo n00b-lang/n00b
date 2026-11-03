@@ -208,7 +208,8 @@ n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
     bool *placed = core_alloc_array(bool, count);
     size_t aligned_count = 0, unaligned_count = 0;
     for (size_t i = 0; i < count; i++) {
-        if (fields[i].alignment_bits == 1 && policy == N00BB_RECORD_DEFAULT)
+        if ((fields[i].alignment_bits == 1 || !fields[i].extent_bits)
+            && policy == N00BB_RECORD_DEFAULT)
             unaligned[unaligned_count++] = i;
         else aligned[aligned_count++] = i;
     }

@@ -713,6 +713,16 @@ func comparator_check() {
     require items[0] == 3 and items[1] == 2 and items[2] == 1
 }
 
+func search_check() {
+    let items: Array[u32] = [2, 4, 4, 9]
+    require sort.search(items, 1) == 0
+    require sort.search(items, 4) == 1
+    require sort.search(items, 5) == 3
+    require sort.search(items, 10) == 4
+    let none: Array[u32] = []
+    require sort.search(none, 3) == 0
+}
+
 func loop_items_widen_check() {
     var total: int = 0
     for n in [1, 2, 255, 256] {
@@ -1917,6 +1927,11 @@ func ascii_check() {
     let eleven: u32? = hex_digit_value('b')
     require eleven != nil and eleven.get() == 11
     require hex_digit_value('g') == nil
+    let forty_two: u64? = decimal_value("042")
+    require forty_two != nil and forty_two.get() == 42
+    require decimal_value("") == nil and decimal_value("4a") == nil
+    require decimal_value("18446744073709551615") != nil
+    require decimal_value("18446744073709551616") == nil
     require buffer_holds(new[Buffer](hex = "41 4a:4B"), "AJK")
 }
 
@@ -2075,6 +2090,55 @@ func index_field_write_check() {
     require items[0].inner.k == 7 and items[1].inner.k == 0
 }
 
+record Stored_Pair {
+    count: uint
+    name:  string
+}
+
+func index_tuple_write_check() {
+    var by_name: Dict[string, Stored_Pair] = new[Dict[string, Stored_Pair]]()
+    by_name["k"] = (count = 5, name = "y")
+    by_name["j"] = (name = "x", count = 4)
+    var items: List[Stored_Pair] = new[List[Stored_Pair]]()
+    items.append((count = 1, name = "q"))
+    items[0] = (count = 6, name = "z")
+    let k = by_name["k"]
+    let j = by_name["j"]
+    require k != nil and j != nil
+    require k.get().count == 5 and k.get().name == "y"
+    require j.get().count == 4 and j.get().name == "x"
+    require items[0].count == 6 and items[0].name == "z"
+}
+
+record Literal_Inner {
+    count: uint
+    name:  string
+}
+
+record Literal_Item {
+    maybe: Literal_Inner?
+    plain: Literal_Inner
+}
+
+func index_field_tuple_write_check() {
+    var items: List[Literal_Item] = new[List[Literal_Item]]()
+    let empty: Literal_Inner = (count = 0, name = "")
+    let item: Literal_Item = (maybe = nil, plain = empty)
+    items.append(item)
+    items[0].plain = (name = "p", count = 300)
+    items[0].maybe = (count = 7, name = "q")
+    require items[0].plain.count == 300 and items[0].plain.name == "p"
+    let maybe = items[0].maybe
+    require maybe != nil and maybe.get().count == 7
+    require maybe.get().name == "q"
+    let count: uint = 9
+    let name: string = "r"
+    items[0].maybe = (name = name, count = count)
+    let exact = items[0].maybe
+    require exact != nil and exact.get().count == 9
+    require exact.get().name == "r"
+}
+
 func index_write_check() {
     var items = [1, 2]
     items[0] = 7
@@ -2125,6 +2189,7 @@ func start() -> nil {
     effect_paths_check()
     immutable_string_check()
     comparator_check()
+    search_check()
     loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()
@@ -2150,6 +2215,8 @@ func start() -> nil {
     tuples_check()
     index_write_check()
     index_field_write_check()
+    index_tuple_write_check()
+    index_field_tuple_write_check()
     primitive_operator_method_check()
     char_switch_check()
     hash_container_order_check()
