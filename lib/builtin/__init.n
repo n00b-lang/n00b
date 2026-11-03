@@ -168,6 +168,7 @@ package builtin {
     export containers.list.list
     export containers.list.l
     export containers.dict.Dict
+    export containers.dict.Dict_Cursor
     export containers.dict.dict
     export containers.dict.d
     export containers.set.Set
