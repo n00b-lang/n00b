@@ -357,6 +357,7 @@ core_list_decl(pt_logged_t);
 typedef struct {
     content_key_t            key;
     pt_set_t                 items;
+    pt_set_t                 widened;
     core_list_t(pt_logged_t) log;
     pt_memo_t                memo;
 } content_memo_t;
