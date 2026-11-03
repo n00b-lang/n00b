@@ -640,8 +640,11 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
          symbol_index++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)symbol_index);
+        bool generated = symbol && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method"));
         if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
-            || !symbol->decl_node) continue;
+            || (!symbol->decl_node && !(generated && symbol->scope)))
+            continue;
         n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
             N00BB_SIGNATURE_TYPEVARS_KEY);
         th_type *signature = n00bb_abi_type_index_symbol_type(index, symbol);
@@ -667,7 +670,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 || row->typevar_owner_type_index
                 || row->typevar_import_requirement_index) continue;
             if (!scope_index) {
-                parse_scope_t *scope = parse_tree_scope(symbol->decl_node);
+                parse_scope_t *scope = symbol->decl_node
+                    ? parse_tree_scope(symbol->decl_node) : symbol->scope;
                 if (!n00bb_abi_decl_find_scope(declarations, scope,
                         &scope_index) || !scope_index) return false;
             }
