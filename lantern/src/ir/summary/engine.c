@@ -35,6 +35,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->mapped, mapped_hash, mapped_eq);
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->contents_memo, content_hash, content_eq);
+    core_dict_init(&pt->widened_sets, widened_hash, widened_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
     flow_table_init(&pt->source_names, nullptr);
@@ -203,12 +204,17 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->contents_memo, entry) {
         content_memo_t *content = entry->value;
         core_list_free(content->items);
-        core_list_free(content->widened);
         core_list_free(content->log);
         memo_free(&content->memo);
         core_free(content);
     }
     core_dict_free(&pt->contents_memo);
+    core_dict_foreach(&pt->widened_sets, entry) {
+        pt_set_t *set = entry->value;
+        core_list_free(*set);
+        core_free(set);
+    }
+    core_dict_free(&pt->widened_sets);
     core_dict_foreach(&pt->flow_groups, entry) core_free(entry->value);
     core_dict_free(&pt->flow_groups);
     core_list_free(pt->described);
