@@ -253,20 +253,24 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     }
     bool *dirty = core_alloc_array(bool, count);
     bool *next_dirty = core_alloc_array(bool, count);
+    pt_t **engines = cyclic ? core_alloc_array(pt_t *, count) : nullptr;
     for (size_t i = 0; i < count; i++) dirty[i] = true;
+    for (size_t i = 0; engines && i < count; i++) engines[i] = nullptr;
+    size_t component_scope = engines ? ir_analysis_scope_begin() : 0;
     for (bool changed = true; changed;) {
         changed = false;
         for (size_t i = 0; i < count; i++) {
             if (!dirty[i]) continue;
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
             ir_summary_t *next    = ir_summary_new(nullptr, members[i]);
-            size_t scope = ir_analysis_scope_begin();
+            size_t scope = engines ? 0 : ir_analysis_scope_begin();
             if (summaries->escapes_only)
                 summarize_divergence(summaries, next, members[i]);
             else summarize_function(summaries, next, members[i],
                                     cyclic ? &settled[i] : nullptr);
-            summarize_paths(summaries, next, members[i]);
-            ir_analysis_scope_end(scope);
+            summarize_paths(summaries, next, members[i],
+                            engines ? &engines[i] : nullptr);
+            if (!engines) ir_analysis_scope_end(scope);
             if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
             prune_flows(&next->flows[IR_SFLOW_STORES]);
@@ -293,6 +297,13 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     }
     for (size_t i = 0; i < count; i++) core_list_free(callers[i]);
     core_free(callers);
+    for (size_t i = 0; engines && i < count; i++)
+        if (engines[i]) {
+            pt_free(engines[i]);
+            core_free(engines[i]);
+        }
+    if (engines) ir_analysis_scope_end(component_scope);
+    core_free(engines);
     core_free(dirty);
     core_free(next_dirty);
     core_free(settled);

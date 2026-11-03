@@ -243,18 +243,9 @@ release_writers(pt_t *pt)
 }
 
 static void
-pt_solve(pt_t *pt)
+pt_run(pt_t *pt)
 {
     size_t count = pt->order.len;
-    for (size_t i = 0; i < count; i++) {
-        const ir_instr_t *in = pt->order.data[i];
-        pt->dirty[i] = true;
-        if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
-            && tracks(pt, in->dest_local->type))
-            note_target(pt, in, local_site(pt, in->dest_local), nullptr,
-                        false);
-    }
-    pt->pending = count != 0;
     for (;;) {
         while (pt->pending) {
             pt->pending = false;
@@ -272,6 +263,51 @@ pt_solve(pt_t *pt)
         spread_escapes(pt);
         if (!pt->pending) break;
     }
+}
+
+static void
+pt_solve(pt_t *pt)
+{
+    size_t count = pt->order.len;
+    for (size_t i = 0; i < count; i++) {
+        const ir_instr_t *in = pt->order.data[i];
+        pt->dirty[i] = true;
+        if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
+            && tracks(pt, in->dest_local->type))
+            note_target(pt, in, local_site(pt, in->dest_local), nullptr,
+                        false);
+    }
+    pt->pending = count != 0;
+    pt_run(pt);
+}
+
+static void
+pt_resume(pt_t *pt)
+{
+    core_dict_foreach(&pt->mapped, entry) {
+        mapped_entry_t *mapped = entry->value;
+        core_list_free(mapped->items);
+        memo_free(&mapped->memo);
+        core_free(mapped);
+    }
+    core_dict_free(&pt->mapped);
+    core_dict_init(&pt->mapped, mapped_hash, mapped_eq);
+    core_dict_foreach(&pt->flow_groups, entry) core_free(entry->value);
+    core_dict_free(&pt->flow_groups);
+    core_dict_init(&pt->flow_groups, nullptr, nullptr);
+    for (size_t c = 0; c < pt->calls.len; c++) {
+        pt_callees_t *callees = &pt->calls.data[c];
+        callees->known = !callees->targets.unknown;
+        for (size_t t = 0; t < callees->callees.len; t++)
+            callees->known = callees->known
+                && callees->callees.data[t]->results_known;
+    }
+    for (size_t i = 0; i < pt->order.len; i++)
+        if (is_call(pt->order.data[i])) {
+            pt->dirty[i] = true;
+            pt->pending  = true;
+        }
+    pt_run(pt);
 }
 
 static void
@@ -689,18 +725,26 @@ explain_unknown(ir_summary_t *summary, const ir_switness_t *witness)
 
 static void
 summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
-                ir_func_t *f)
+                ir_func_t *f, pt_t **kept)
 {
-    pt_t pt;
-    pt_init(&pt, summaries, f, !summaries->escapes_only);
-    pt_solve(&pt);
-    pt.places = ir_func_places(f);
-    pt_record(&pt, summary);
-    summarize_results(&pt, summary);
-    describe_heap(&pt, summary, &pt.described);
-    name_heaps(&pt, summary);
-    if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
+    pt_t  local;
+    pt_t *pt = kept && *kept ? *kept : &local;
+    if (kept && *kept) pt_resume(pt);
+    else {
+        if (kept) {
+            pt    = core_alloc(pt_t);
+            *kept = pt;
+        }
+        pt_init(pt, summaries, f, !summaries->escapes_only);
+        pt_solve(pt);
+    }
+    pt->places = ir_func_places(f);
+    pt_record(pt, summary);
+    summarize_results(pt, summary);
+    describe_heap(pt, summary, &pt->described);
+    name_heaps(pt, summary);
+    if (pt->unknown_at) explain_unknown(summary, &pt->unknown);
     if (!summaries->escapes_only)
-        summarize_writes(summaries, f, &pt, summary);
-    pt_free(&pt);
+        summarize_writes(summaries, f, pt, summary);
+    if (!kept) pt_free(pt);
 }
