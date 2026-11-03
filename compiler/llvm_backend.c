@@ -815,6 +815,18 @@ record_member_extent(ir_module_t *module,
 }
 
 static bool
+empty_unaligned_member(ir_module_t *module, const record_shape_t *shape,
+                       const ir_final_member_layout_t *member)
+{
+    uint64_t bytes = 0;
+    uint32_t alignment = 1;
+    return member->bit_offset % 8 && !member->inline_element_count
+        && !packed_value_width(module, record_member_type(shape, member))
+        && record_member_extent(module, member, &bytes, &alignment)
+        && !bytes;
+}
+
+static bool
 record_shape_push(record_shape_t *shape, size_t capacity, LLVMTypeRef type,
                   uint64_t offset, bool byte_run)
 {
@@ -874,9 +886,14 @@ record_shape_build(ir_module_t *requester, th_type *type,
     bool ok = shape->slots && shape->elements && shape->offsets
         && shape->byte_runs && order;
     if (ok) record_layout_order(layout, order);
+    size_t stored = 0;
+    for (size_t i = 0; ok && i < count; i++)
+        if (empty_unaligned_member(module, shape, &layout->members[order[i]]))
+            shape->slots[order[i]] = (record_slot_t){.overlay = true};
+        else order[stored++] = order[i];
     uint64_t cursor = 0;
     uint32_t record_alignment = 1;
-    for (size_t i = 0; ok && i < count;) {
+    for (size_t i = 0; ok && i < stored;) {
         const ir_final_member_layout_t *member = &layout->members[order[i]];
         uint64_t width = member->inline_element_count ? 0
             : packed_value_width(module, record_member_type(shape, member));
@@ -894,7 +911,7 @@ record_shape_build(ir_module_t *requester, th_type *type,
         size_t j = i + 1;
         bool overlay = false;
         uint32_t overlay_alignment = alignment;
-        for (; j < count; j++) {
+        for (; j < stored; j++) {
             const ir_final_member_layout_t *next = &layout->members[order[j]];
             if (next->bit_offset / 8 >= last) break;
             uint64_t next_width = next->inline_element_count ? 0
@@ -943,7 +960,7 @@ record_shape_build(ir_module_t *requester, th_type *type,
             i = j;
             continue;
         }
-        uint64_t bound = j < count
+        uint64_t bound = j < stored
             ? layout->members[order[j]].bit_offset / 8 : stride_bits / 8;
         bool natural = j == i + 1 && !(member->bit_offset % 8) && sized
             && first + bytes <= bound;
