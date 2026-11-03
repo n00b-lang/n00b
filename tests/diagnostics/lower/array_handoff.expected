@@ -1,0 +1,6 @@
+tests/diagnostics/lower/array_handoff.n:12:5: error N00B-S0072: this keeps array parameter `items` where it outlives the call
+  tests/diagnostics/lower/array_handoff.n:12:5: note: this place outlives the call
+  help: take `items` as `consume`, or keep a copy
+tests/diagnostics/lower/array_handoff.n:16:5: error N00B-S0072: this keeps array parameter `items` where it outlives the call
+  tests/diagnostics/lower/array_handoff.n:5:5: note: `kept_items` outlives the call
+  help: take `items` as `consume`, or keep a copy
