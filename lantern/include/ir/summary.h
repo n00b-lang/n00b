@@ -105,6 +105,8 @@ typedef struct {
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
     bool (*global_reachable)(void *context, const ir_global_t *global);
+    uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
+                            const ir_summary_t *summary);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
@@ -290,6 +292,8 @@ const ir_spath_t *ir_summary_path_at(const ir_summary_t *summary,
                                      uint32_t index);
 void              ir_summary_add_path(ir_summary_t *summary,
                                       const ir_spath_t *path);
+void              ir_summary_paths_as_reads(ir_summary_t *summary,
+                                            uint64_t params);
 uint32_t          ir_summary_path_places(const ir_func_t *function,
                                          const ir_spath_t *path,
                                          ir_splace_t places[2]);

@@ -5325,6 +5325,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->boxed_hooks.finalizers);
     core_list_free(analysis->boxed_hooks.addresses);
     core_list_free(analysis->boxed_hooks.mutable_addresses);
+    core_list_free(analysis->bookkeeping_writes);
     core_list_free(analysis->record_requests);
     for (size_t p = 0; analysis->record_requests_indexed
          && p <= N00BB_RECORD_C; p++)

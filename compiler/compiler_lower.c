@@ -25088,6 +25088,92 @@ n00bb_summary_adjust(void *context, const ir_func_t *function, uint32_t flags)
     return n00bb_llvm_mutator_flags(function, flags);
 }
 
+static th_type *
+n00bb_bookkeeping_receiver(const ir_func_t *function)
+{
+    th_type *type = function->params[0] && function->params[0]->type
+        ? th_resolve(function->params[0]->type) : nullptr;
+    while (type && th_kind_of(type) == TH_INDIRECTION)
+        type = th_resolve(th_ind_referent(type));
+    return type && th_kind_of(type) == TH_NAMED ? type : nullptr;
+}
+
+static uint64_t
+n00bb_summary_bookkeeping(void *context, const ir_func_t *function,
+                          const ir_summary_t *summary)
+{
+    n00bb_link_analysis_t *analysis = context;
+    core_string_t root = function ? n00bb_function_root(function->name)
+                                  : (core_string_t){0};
+    if (!analysis || !function || !function->n_params
+        || (!core_string_eq(root, CORE_STRING_STATIC("__ref_create"))
+            && !core_string_eq(root, CORE_STRING_STATIC("__finalize"))))
+        return 0;
+    for (size_t i = analysis->bookkeeping_writes.len; i > 0; i--)
+        if (analysis->bookkeeping_writes.data[i - 1].function == function)
+            core_list_delete(analysis->bookkeeping_writes, i - 1);
+    th_type *receiver = n00bb_bookkeeping_receiver(function);
+    parse_scope_t *fields = receiver
+        ? record_scope_for_type(analysis->grammar, &analysis->units,
+                                receiver, nullptr) : nullptr;
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if (path->root != IR_SPLACE_PARAM || path->param
+            || !(path->flags & IR_SPATH_WRITE)) continue;
+        core_string_t offending = {0};
+        parse_scope_t *scope = fields;
+        th_type *owner = receiver;
+        for (uint32_t step = 0; !offending.data && step < path->depth;
+             step++) {
+            if (n00bb_builtin_member(path->steps[step])) continue;
+            parse_sym_entry_t *field = scope
+                ? parse_symtab_lookup_in(scope, path->steps[step]) : nullptr;
+            if (!field || !symbol_is_private(field)) {
+                offending = path->steps[step];
+                break;
+            }
+            th_type *next = field->type ? th_resolve(field->type) : nullptr;
+            while (next && th_kind_of(next) == TH_INDIRECTION)
+                next = th_resolve(th_ind_referent(next));
+            scope = next && th_kind_of(next) == TH_NAMED
+                ? record_scope_for_type(analysis->grammar, &analysis->units,
+                                        next, nullptr) : nullptr;
+            owner = next;
+        }
+        if (!offending.data) continue;
+        core_list_push(analysis->bookkeeping_writes,
+            ((n00bb_bookkeeping_write_t){function, offending, owner}));
+        break;
+    }
+    return 1;
+}
+
+static bool
+report_bookkeeping_writes(n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->bookkeeping_writes.len; i++) {
+        n00bb_bookkeeping_write_t *write = &analysis->bookkeeping_writes.data[i];
+        core_translation_unit_t *unit = nullptr;
+        for (size_t u = 0; !unit && u < analysis->units.len; u++)
+            if (tu_state(analysis->units.data[u])->ir_module
+                    == write->function->owner)
+                unit = analysis->units.data[u];
+        if (!unit) continue;
+        n00bb_tu_state_t *state = tu_state(unit);
+        core_string_t type_text = write->owner && state
+            ? n00bb_print_type(state->types, write->owner)
+            : CORE_STRING_STATIC("?");
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_BOOKKEEPING_WRITE, span_location(write->function->span),
+            N00B_TEXT_BOOKKEEPING_WRITE,
+            N00BB_ARGS(ARG_TEXT(n00bb_function_root(write->function->name)),
+                       ARG_TEXT(write->field), ARG_TEXT(type_text)));
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_KEEP_BOOKKEEPING_PRIVATE, N00BB_NO_ARGS);
+    }
+    return analysis->bookkeeping_writes.len == 0;
+}
+
 static void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
@@ -25098,6 +25184,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
+        .bookkeeping = n00bb_summary_bookkeeping,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_callback_handlers(analysis);
@@ -28469,6 +28556,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
 
     exclude_failed_functions(analysis, &units, marks);
     if (ok) ok = build_escape_facts(analysis)
+        && report_bookkeeping_writes(analysis)
         && attach_call_return_aliases(analysis)
         && publish_binding_escapes(analysis)
         && mark_diverging_calls(analysis);

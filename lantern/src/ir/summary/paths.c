@@ -543,6 +543,23 @@ ir_summary_merged_paths(const ir_summary_t *summary, ir_spath_list_t *into)
 }
 
 void
+ir_summary_paths_as_reads(ir_summary_t *summary, uint64_t params)
+{
+    if (!summary || !params) return;
+    path_list_t old = summary->paths;
+    summary->paths = core_list_new(ir_spath_t);
+    for (size_t i = 0; i < old.len; i++) {
+        ir_spath_t path = old.data[i];
+        if (path.root == IR_SPLACE_PARAM && path.param < 64
+            && params >> path.param & 1 && path.flags & IR_SPATH_WRITE)
+            path.flags = (uint8_t)((path.flags & ~IR_SPATH_WRITE)
+                                   | IR_SPATH_READ);
+        add_path_to(&summary->paths, &path);
+    }
+    core_list_free(old);
+}
+
+void
 ir_spath_list_release(ir_spath_list_t *paths)
 {
     core_list_free(*paths);

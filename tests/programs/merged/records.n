@@ -647,8 +647,8 @@ object Ref_Handle {
 }
 
 object Ref_Store {
-    slot:   Ref_Slot
-    handed: int
+    slot:           Ref_Slot
+    private handed: int
 }
 
 object Ref_Lent {
@@ -722,6 +722,11 @@ func ref_generic() -> int {
     let through_handle: Ref_Slot = ref_generic_read(h)
     let through_ref: Ref_Slot = ref_generic_read(plain)
     return through_handle.value + through_ref.value
+}
+
+func ref_viewed(view store: Ref_Store) -> int {
+    let lent: Ref_Lent = ref store
+    return lent.__value.value
 }
 
 func ref_created() -> int {
@@ -817,6 +822,7 @@ require fin_initialized_once() == 12
 fin_reset()
 require ref_through_handle() == 420
 require ref_created() == 46
+require ref_viewed(new[Ref_Store](8)) == 8
 require ref_generic() == 60
 let fin_kept: Fin_Value = fin_returned_temporary()
 require fin_kept.v == 5 and fin_count == 0

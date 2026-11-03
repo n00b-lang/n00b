@@ -12,6 +12,13 @@
 #include "lib/target.h"
 #include "parse/annot_walk.h"
 #include "parse/grammar.h"
+
+typedef struct {
+    const ir_func_t *function;
+    core_string_t    field;
+    th_type         *owner;
+} n00bb_bookkeeping_write_t;
+core_list_decl(n00bb_bookkeeping_write_t);
 #include "ir/exec_graph.h"
 #include "th/environment.h"
 
@@ -495,6 +502,7 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     n00bb_boxed_hooks_t boxed_hooks;
+    core_list_t(n00bb_bookkeeping_write_t) bookkeeping_writes;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;

@@ -1,0 +1,4 @@
+tests/diagnostics/lower/bookkeeping_writes.n:23:1: error N00B-S0071: `__ref_create` writes `handed`, which is not a private field of `Store`
+  help: `__ref_create` and `__finalize` may only update private bookkeeping fields of their own type
+tests/diagnostics/lower/bookkeeping_writes.n:28:1: error N00B-S0071: `__finalize` writes `handed`, which is not a private field of `Store`
+  help: `__ref_create` and `__finalize` may only update private bookkeeping fields of their own type
