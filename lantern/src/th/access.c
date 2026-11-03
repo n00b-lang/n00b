@@ -523,6 +523,10 @@ th_type *th_auto_deref(th_ctx *ctx, th_type *type)
             type = th_resolve(th_ind_referent(th_resolve(definition)));
             continue;
         }
+        if (th_kind_of(type) == TH_INDIRECTION) {
+            type = th_resolve(th_ind_referent(type));
+            continue;
+        }
         th_type *option_item = th_option_item(type);
         if (!option_item) break;
         type = th_resolve(option_item);
