@@ -53,7 +53,12 @@ int main(void)
         {S("z"), 1, 0, 0, 0, 64, false, 0},
         {S("b"), 2, 1, 8, 8, 8, false, 0},
     };
-    static const uint64_t zero_offsets[] = {0, 0};
+    static const uint64_t zero_offsets[] = {8, 0};
+    static const n00bb_record_field_t packed_zero[] = {
+        {S("k"), 1, 0, 24, 21, 1, false, 0},
+        {S("v"), 2, 1, 0, 0, 8, false, 0},
+    };
+    static const uint64_t packed_zero_offsets[] = {0, 24};
     static const n00bb_record_field_t tail[] = {
         {S("a"), 1, 0, 40, 40, 64, false, 0},
     };
@@ -97,6 +102,8 @@ int main(void)
                   false, 72, 64, second_offsets)
         && expect(S("zero-sized field"), zero, 2, N00BB_RECORD_DEFAULT,
                   false, 8, 64, zero_offsets)
+        && expect(S("zero-sized after packed"), packed_zero, 2,
+                  N00BB_RECORD_DEFAULT, false, 24, 8, packed_zero_offsets)
         && expect(S("tail reuse"), tail, 1, N00BB_RECORD_DEFAULT,
                   false, 40, 64, tail_offsets)
         && expect(S("named tie"), ties, 2, N00BB_RECORD_DEFAULT,
