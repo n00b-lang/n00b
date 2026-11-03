@@ -5094,7 +5094,7 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
                 seeds, seed_count, &analysis->specializations,
                 &analysis->specialization_requests,
-                &analysis->boxed_finalizers, failure)
+                &analysis->boxed_hooks, failure)
             && build_reachable_functions(analysis, &analysis->units,
                                          diagnostics);
         seed_count = 0;

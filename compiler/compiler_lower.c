@@ -17333,6 +17333,51 @@ n00bb_custom_reference_address(ir_lower_context_t *context,
         ? address : nullptr;
 }
 
+static ir_value_t *
+n00bb_open_reference_address(ir_lower_context_t *context,
+                             parse_grammar_t *grammar,
+                             parse_tree_t *referent, ir_value_t *reference,
+                             ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *target = parse_tree_type(referent);
+    th_type *address_type = target ? th_ind(types, 0, target) : nullptr;
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
+    th_param parameter = {.mode = TH_IN, .type = reference->type};
+    th_type *signature = address_type
+        ? th_func_with_error(types, address_type, nil_type, &parameter, 1,
+                             nullptr, nullptr, 0) : nullptr;
+    bool writable = lower->reference_write
+        || n00bb_referent_written(grammar, referent);
+    char buffer[80];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        writable ? "__n00bb_ref_address_mut_open#%016llx"
+                 : "__n00bb_ref_address_open#%016llx",
+        (unsigned long long)(signature ? th_hash(types, signature) : 0));
+    ir_func_t *placeholder = signature
+        ? ir_func_find(context->module, name) : nullptr;
+    if (!placeholder && signature)
+        placeholder = ir_func_add(context->module, name, signature,
+                                  IR_LINK_EXTERN);
+    ir_value_t *callee = placeholder
+        ? ir_func_address(context->module, placeholder) : nullptr;
+    ir_instr_t *call = callee
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    return call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_hook_"), address_type)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, reference)
+        && ir_instr_set_call_signature(call, signature)
+        && ir_value_set_indirect_access(lower->ir_context, call->dest,
+            writable ? IR_INDIRECT_ACCESS_READ_WRITE
+                     : IR_INDIRECT_ACCESS_READ)
+        && ir_annot_set(lower->ir_context, ir_value_annots(call->dest),
+            (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.reference_address"),
+                         .kind = IR_ANNOT_BOOL, .b = true})
+        ? call->dest : nullptr;
+}
+
 static bool
 n00bb_from_reference_address(ir_value_t *value)
 {
@@ -17389,6 +17434,9 @@ n00bb_record_field_address(ir_lower_context_t *context,
         if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_NAMED)
             return n00bb_custom_reference_address(context, grammar,
                                                   referent, pointer, span);
+        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_VAR)
+            return n00bb_open_reference_address(context, grammar, referent,
+                                                pointer, span);
         parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
         if ((!pointer || th_kind_of(th_resolve(pointer->type))
                 != TH_INDIRECTION) && symbol)
@@ -17403,9 +17451,13 @@ n00bb_record_field_address(ir_lower_context_t *context,
             grammar, unit, receiver, span);
         th_type *stored = storage
             ? th_resolve(th_ind_referent(th_resolve(storage->type))) : nullptr;
-        if (stored && th_kind_of(stored) == TH_NAMED) {
+        if (stored && (th_kind_of(stored) == TH_NAMED
+                       || th_kind_of(stored) == TH_VAR)) {
             ir_value_t *reference = n00bb_emit_indirect_read(context, storage,
                                                              stored, span);
+            if (reference && th_kind_of(stored) == TH_VAR)
+                return n00bb_open_reference_address(context, grammar,
+                    referent, reference, span);
             return reference ? n00bb_custom_reference_address(context,
                 grammar, referent, reference, span) : nullptr;
         }
@@ -22656,8 +22708,13 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_list_push(roots, analysis->reachable_functions.data[i]);
     for (size_t i = 0; i < analysis->specializations.len; i++)
         core_list_push(roots, analysis->specializations.data[i].instance);
-    for (size_t i = 0; i < analysis->boxed_finalizers.len; i++)
-        core_list_push(roots, analysis->boxed_finalizers.data[i].function);
+    for (size_t i = 0; i < analysis->boxed_hooks.finalizers.len; i++)
+        core_list_push(roots, analysis->boxed_hooks.finalizers.data[i].function);
+    for (size_t i = 0; i < analysis->boxed_hooks.addresses.len; i++)
+        core_list_push(roots, analysis->boxed_hooks.addresses.data[i].function);
+    for (size_t i = 0; i < analysis->boxed_hooks.mutable_addresses.len; i++)
+        core_list_push(roots,
+            analysis->boxed_hooks.mutable_addresses.data[i].function);
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);

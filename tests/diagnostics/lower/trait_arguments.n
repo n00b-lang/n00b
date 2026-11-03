@@ -1,0 +1,3 @@
+func too_many(r: 'R) -> 'T where 'R : Reference['T, 'U] {
+    return r.__value
+}

@@ -831,6 +831,20 @@ referent_projection(ictx *c, th_type *receiver)
     th_type *custom = resolved && th_kind_of(resolved) == TH_NAMED
         ? custom_referent(c, resolved) : nullptr;
     if (custom) return custom;
+    for (size_t i = 0; resolved && th_kind_of(resolved) == TH_VAR
+         && i < th_var_constraint_count(resolved); i++) {
+        th_constraint constraint = {0};
+        if (!th_var_constraint_at(resolved, i, &constraint)
+            || constraint.kind != TH_CON_METHOD
+            || (!core_string_eq(constraint.method.name,
+                                CORE_STRING_STATIC("__ref_address"))
+                && !core_string_eq(constraint.method.name,
+                                   CORE_STRING_STATIC("__ref_address_mut"))))
+            continue;
+        th_type *address = th_resolve(constraint.method.result);
+        if (address && th_kind_of(address) == TH_INDIRECTION)
+            return th_ind_referent(address);
+    }
     th_type *result = fresh(c);
     if (resolved && th_kind_of(resolved) == TH_VAR
         && th_unify_in_place(c->tc, resolved, th_ind(c->tc, 0, result)))

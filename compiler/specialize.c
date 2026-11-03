@@ -1074,13 +1074,10 @@ static ir_func_t *finalize_target(finalize_state_t *finalize,
                                   ir_span_t span, size_t depth);
 
 static ir_func_t *
-concrete_finalizer(finalize_state_t *finalize, ir_module_t *requester,
-                   ir_func_t *target, th_type *type)
+concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
+                  ir_func_t *target, th_type *actual)
 {
     th_ctx *types = ir_module_types(requester);
-    if (th_is_closed(ir_module_types(target->owner), target->type))
-        return target;
-    th_type *actual = finalize_signature(types, type);
     specializations_t *specializations = finalize->state->specializations;
     ir_func_t *copy = actual ? find_instance(specializations, target,
         th_hash(types, actual), types) : nullptr;
@@ -1100,6 +1097,43 @@ concrete_finalizer(finalize_state_t *finalize, ir_module_t *requester,
     core_list_push(*finalize->state->requests,
         ((n00bb_specialization_request_t){requester, copy}));
     return copy;
+}
+
+static ir_func_t *
+concrete_finalizer(finalize_state_t *finalize, ir_module_t *requester,
+                   ir_func_t *target, th_type *type)
+{
+    if (th_is_closed(ir_module_types(target->owner), target->type))
+        return target;
+    return concrete_instance(finalize, requester, target,
+        finalize_signature(ir_module_types(requester), type));
+}
+
+static ir_func_t *
+concrete_hook(finalize_state_t *finalize, ir_module_t *requester,
+              ir_func_t *target, th_type *receiver)
+{
+    th_ctx *types = ir_module_types(target->owner);
+    if (th_is_closed(types, target->type)) return target;
+    const th_param *self = th_func_param(target->type, 0);
+    core_list_t(type_binding_t) bindings = {0};
+    bool matched = self && match_type(types, self->type, receiver,
+                                      &bindings) && bindings.len;
+    const th_type **from = matched
+        ? core_alloc_array(const th_type *, bindings.len) : nullptr;
+    th_type **to = matched ? core_alloc_array(th_type *, bindings.len)
+                           : nullptr;
+    for (size_t i = 0; from && to && i < bindings.len; i++) {
+        from[i] = bindings.data[i].variable;
+        to[i] = bindings.data[i].actual;
+    }
+    th_type *actual = from && to ? th_type_clone_replacing(types,
+        target->type, from, to, bindings.len) : nullptr;
+    core_free(from);
+    core_free(to);
+    core_list_free(bindings);
+    return actual && th_is_closed(types, actual)
+        ? concrete_instance(finalize, requester, target, actual) : nullptr;
 }
 
 static ir_func_t *
@@ -1329,6 +1363,9 @@ finalize_target(finalize_state_t *finalize, ir_module_t *module,
     return glue;
 }
 
+static bool resolve_open_reference(finalize_state_t *finalize,
+                                   ir_instr_t *call);
+
 static bool
 specialize_finalizers(finalize_state_t *finalize, ir_func_t *caller)
 {
@@ -1337,6 +1374,10 @@ specialize_finalizers(finalize_state_t *finalize, ir_func_t *caller)
     for (uint32_t b = 0; b < caller->n_blocks; b++)
         for (uint32_t i = 0; i < caller->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = caller->blocks[b]->instrs[i];
+            if (!resolve_open_reference(finalize, in)) {
+                core_list_free(calls);
+                return false;
+            }
             if (finalize_placeholder(in)) core_list_push(calls, in);
             ir_annot_t *copy = ir_annot_get(&in->annots,
                 CORE_STRING_STATIC("n00bb.place_copy"));
@@ -1403,6 +1444,117 @@ specialize_finalizers(finalize_state_t *finalize, ir_func_t *caller)
     return valid;
 }
 
+static ir_func_t *
+hook_implementation(finalize_state_t *finalize, th_ctx *types,
+                    th_type *receiver, core_string_t root)
+{
+    scan_finalizers(finalize);
+    ir_func_t *generic = nullptr;
+    core_dict_foreach(&finalize->modules, item) {
+        ir_module_t *module = (ir_module_t *)item->key;
+        for (size_t f = 0; f < ir_func_count(module); f++) {
+            ir_func_t *candidate = ir_func_at(module, f);
+            ir_func_t *body = candidate && n00bb_names_function(root,
+                candidate->name) ? n00bb_cached_body(candidate) : nullptr;
+            const th_param *self = body && body->n_blocks
+                ? th_func_param(candidate->type, 0) : nullptr;
+            if (!self) continue;
+            th_ctx *candidate_types = ir_module_types(candidate->owner);
+            if (th_hash(candidate_types, self->type)
+                    == th_hash(types, receiver)) return candidate;
+            core_list_t(type_binding_t) bindings = {0};
+            if (!generic && !th_is_closed(candidate_types, self->type)
+                && match_type(candidate_types, self->type, receiver,
+                              &bindings))
+                generic = candidate;
+            core_list_free(bindings);
+        }
+    }
+    return generic;
+}
+
+static bool
+resolve_open_reference(finalize_state_t *finalize, ir_instr_t *call)
+{
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 2
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    bool mutable = callee && callee->kind == IR_VAL_FUNC && callee->owner
+        && n00bb_names_function(
+            CORE_STRING_STATIC("__n00bb_ref_address_mut_open"),
+            callee->owner->name);
+    if (!mutable && (!callee || callee->kind != IR_VAL_FUNC || !callee->owner
+            || !n00bb_names_function(
+                CORE_STRING_STATIC("__n00bb_ref_address_open"),
+                callee->owner->name))) return true;
+    ir_value_t *reference = ir_operand_value(&call->operands[1]);
+    th_ctx *types = ir_module_types(call->block->owner->owner);
+    th_type *receiver = reference ? th_resolve(reference->type) : nullptr;
+    if (!receiver || !th_is_closed(types, receiver)) return true;
+    if (th_kind_of(receiver) == TH_INDIRECTION) {
+        call->op = IR_OP_COPY;
+        call->operands[0] = call->operands[1];
+        call->n_operands = 1;
+        return true;
+    }
+    ir_func_t *target = hook_implementation(finalize, types, receiver,
+        mutable ? CORE_STRING_STATIC("__ref_address_mut")
+                : CORE_STRING_STATIC("__ref_address"));
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
+    th_param parameter = {.mode = TH_IN, .type = receiver};
+    th_type *signature = target && call->dest
+        ? th_func_with_error(types, call->dest->type, nil_type, &parameter,
+                             1, nullptr, nullptr, 0) : nullptr;
+    ir_value_t *bound = signature
+        ? ir_func_address(target->owner, target) : nullptr;
+    if (!bound) return false;
+    call->operands[0].value = bound;
+    return ir_instr_set_call_signature(call, signature);
+}
+
+static bool
+record_boxed_hook(finalize_state_t *finalize, ir_module_t *module,
+                  th_type *type, core_string_t root,
+                  core_list_t(n00bb_boxed_finalizer_t) *boxed)
+{
+    th_ctx *types = ir_module_types(module);
+    uint64_t hash = th_hash(types, type);
+    for (size_t i = 0; i < boxed->len; i++)
+        if (boxed->data[i].typehash == hash) return true;
+    ir_func_t *target = hook_implementation(finalize, types, type, root);
+    ir_func_t *function = target
+        ? concrete_hook(finalize, module, target, type) : nullptr;
+    if (function) core_list_push(*boxed,
+        ((n00bb_boxed_finalizer_t){hash, function}));
+    return true;
+}
+
+static bool
+record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
+{
+    core_list_t(n00bb_ir_func_ptr_t) modules =
+        core_list_new(n00bb_ir_func_ptr_t);
+    core_dict_foreach(&finalize->modules, item)
+        core_list_push(modules, (ir_func_t *)item->key);
+    bool valid = true;
+    for (size_t m = 0; valid && m < modules.len; m++) {
+        ir_module_t *module = (ir_module_t *)modules.data[m];
+        th_ctx *types = ir_module_types(module);
+        for (size_t t = 0; valid && t < ir_type_count(module); t++) {
+            th_type *type = ir_type_at(module, t);
+            type = type ? th_resolve(type) : nullptr;
+            if (!type || th_kind_of(type) != TH_NAMED
+                || !th_is_closed(types, type)) continue;
+            valid = record_boxed_hook(finalize, module, type,
+                    CORE_STRING_STATIC("__ref_address"), &boxed->addresses)
+                && record_boxed_hook(finalize, module, type,
+                    CORE_STRING_STATIC("__ref_address_mut"),
+                    &boxed->mutable_addresses);
+        }
+    }
+    core_list_free(modules);
+    return valid;
+}
+
 static bool
 record_boxed_finalizers(finalize_state_t *finalize,
                         core_list_t(n00bb_boxed_finalizer_t) *boxed)
@@ -1449,7 +1601,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
-    core_list_t(n00bb_boxed_finalizer_t) *boxed_finalizers,
+    n00bb_boxed_hooks_t *boxed_hooks,
     n00bb_specialization_failure_t *report)
 {
     if (!context || !functions || !instances || !requests
@@ -1610,8 +1762,9 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         }
         core_free(feasible);
     }
-    if (valid && boxed_finalizers)
-        valid = record_boxed_finalizers(&finalize, boxed_finalizers);
+    if (valid && boxed_hooks)
+        valid = record_boxed_finalizers(&finalize, &boxed_hooks->finalizers)
+            && record_boxed_addresses(&finalize, boxed_hooks);
     specializations_free(&specializations);
     core_dict_free(&inline_bodies);
     core_dict_free(&glue);

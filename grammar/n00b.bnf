@@ -814,6 +814,7 @@
 
 <one-constraint> ::= %"!=" <one-tspec>
                    | <trait-name>
+                   | <trait-name> %"[" <tspec-list> %"]"
 
 <trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 

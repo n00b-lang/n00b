@@ -382,6 +382,28 @@ n00bb_finalizer_instance(const core_list_t(n00bb_specialization_t)
 }
 
 static bool
+n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
+                       const n00bb_llvm_type_index_t *type_indices,
+                       size_t type_index_count,
+                       n00bb_llvm_finalizer_binding_t **out,
+                       size_t *out_count)
+{
+    if (!hooks->len) return true;
+    *out = calloc(hooks->len, sizeof(**out));
+    if (!*out) return false;
+    for (size_t b = 0; b < hooks->len; b++)
+        for (size_t t = 1; t < type_index_count; t++)
+            if (type_indices[t].typehash == hooks->data[b].typehash) {
+                (*out)[(*out_count)++] = (n00bb_llvm_finalizer_binding_t){
+                    .type_index = (uint32_t)t,
+                    .function = hooks->data[b].function,
+                };
+                break;
+            }
+    return true;
+}
+
+static bool
 n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                         core_translation_unit_t *const *units,
                         size_t unit_count,
@@ -658,6 +680,10 @@ typedef struct {
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
     const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
+    const n00bb_llvm_finalizer_binding_t *boxed_addresses;
+    size_t boxed_address_count;
+    const n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses;
+    size_t boxed_mutable_address_count;
     size_t boxed_finalizer_count;
 } module_entry_t;
 
@@ -736,7 +762,11 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
         && (!entry || (n00bb_llvm_backend_bind_finalizers(backend,
                 entry->finalizers, entry->finalizer_count)
             && n00bb_llvm_backend_bind_boxed_finalizers(backend,
-                entry->boxed_finalizers, entry->boxed_finalizer_count)));
+                entry->boxed_finalizers, entry->boxed_finalizer_count)
+            && n00bb_llvm_backend_bind_boxed_addresses(backend,
+                entry->boxed_addresses, entry->boxed_address_count,
+                entry->boxed_mutable_addresses,
+                entry->boxed_mutable_address_count)));
     const core_string_t *initializers = entry ? entry->initializers : nullptr;
     size_t initializer_count = entry ? entry->initializer_count : 0;
     size_t metadata_bytes = entry ? entry->metadata_bytes : 0;
@@ -1448,6 +1478,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t finalizer_count = 0;
     n00bb_llvm_finalizer_binding_t *boxed_finalizers = nullptr;
     size_t boxed_finalizer_count = 0;
+    n00bb_llvm_finalizer_binding_t *boxed_addresses = nullptr;
+    size_t boxed_address_count = 0;
+    n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses = nullptr;
+    size_t boxed_mutable_address_count = 0;
     n00bb_llvm_function_binding_t *function_indices = nullptr;
     size_t function_index_count = 0;
     const char *build_stage = "linking ABI metadata";
@@ -1492,25 +1526,19 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                     &analysis->specializations, &finalizers,
                     &finalizer_count);
             }
-            if (ok && analysis->boxed_finalizers.len) {
-                read_stage = "matching boxed finalizers";
-                boxed_finalizers = calloc(analysis->boxed_finalizers.len,
-                                          sizeof(*boxed_finalizers));
-                ok = boxed_finalizers != nullptr;
-                for (size_t b = 0; ok && b < analysis->boxed_finalizers.len;
-                     b++) {
-                    n00bb_boxed_finalizer_t boxed =
-                        analysis->boxed_finalizers.data[b];
-                    for (uint32_t t = 1; t < type_index_count; t++)
-                        if (type_indices[t].typehash == boxed.typehash) {
-                            boxed_finalizers[boxed_finalizer_count++] =
-                                (n00bb_llvm_finalizer_binding_t){
-                                    .type_index = t,
-                                    .function = boxed.function,
-                                };
-                            break;
-                        }
-                }
+            if (ok) {
+                read_stage = "matching boxed hooks";
+                ok = n00bb_bind_boxed_hooks(&analysis->boxed_hooks.finalizers,
+                        type_indices, type_index_count, &boxed_finalizers,
+                        &boxed_finalizer_count)
+                    && n00bb_bind_boxed_hooks(&analysis->boxed_hooks.addresses,
+                        type_indices, type_index_count, &boxed_addresses,
+                        &boxed_address_count)
+                    && n00bb_bind_boxed_hooks(
+                        &analysis->boxed_hooks.mutable_addresses,
+                        type_indices, type_index_count,
+                        &boxed_mutable_addresses,
+                        &boxed_mutable_address_count);
             }
             if (ok) {
                 read_stage = "matching function indices";
@@ -1653,6 +1681,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
             .boxed_finalizers = boxed_finalizers,
+            .boxed_addresses = boxed_addresses,
+            .boxed_address_count = boxed_address_count,
+            .boxed_mutable_addresses = boxed_mutable_addresses,
+            .boxed_mutable_address_count = boxed_mutable_address_count,
             .boxed_finalizer_count = boxed_finalizer_count,
         };
         module_object_t *item = module_emitter_slot(&emitter);
@@ -1966,6 +1998,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     free(global_bindings);
     free(finalizers);
     free(boxed_finalizers);
+    free(boxed_addresses);
+    free(boxed_mutable_addresses);
     free(function_indices);
     n00bb_native_cache_close(native_cache);
     n00bb_native_frames_free(native_frames);

@@ -7873,6 +7873,122 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     symbol->callable_contract = unified;
 }
 
+static void
+collect_trait_arguments(parse_grammar_t *grammar, parse_tree_t *node,
+                        core_list_t(th_type_ptr_t) *arguments)
+{
+    for (size_t i = 0; node && !core_tree_is_leaf(node)
+         && i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (NT_IS(grammar, child, "union-tspec"))
+            core_list_push(*arguments, parse_tree_type(child));
+        else if (NT_IS(grammar, child, "tspec-list"))
+            collect_trait_arguments(grammar, child, arguments);
+    }
+}
+
+static th_type *
+trait_method_signature(parse_sym_entry_t *method)
+{
+    th_type *signature = method && method->type
+        ? th_resolve(method->type) : nullptr;
+    while (signature && th_kind_of(signature) == TH_BINDER)
+        signature = th_resolve(th_binder_body(signature));
+    return signature && th_kind_of(signature) == TH_FUNCTION
+        && th_func_nparams(signature) ? signature : nullptr;
+}
+
+static core_string_t
+trait_receiver_name(th_type *signature)
+{
+    th_type *receiver = th_resolve(th_func_param(signature, 0)->type);
+    return th_kind_of(receiver) == TH_VAR ? th_var_name(receiver)
+                                          : (core_string_t){0};
+}
+
+static bool
+apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                      parse_tree_t *constraint_node, th_ctx *types,
+                      th_type *variable, parse_sym_entry_t *trait_symbol)
+{
+    parse_tree_t *list = CHILD_NT(grammar, constraint_node, "tspec-list");
+    if (!list) return true;
+    core_list_t(th_type_ptr_t) arguments = core_list_new(th_type_ptr_t);
+    collect_trait_arguments(grammar, list, &arguments);
+    parse_scope_t *members = trait_symbol ? trait_symbol->member_scope
+                                          : nullptr;
+    core_list_t(core_string_t) names = core_list_new(core_string_t);
+    for (parse_sym_entry_t *method = members ? members->first_in_scope
+                                             : nullptr;
+         method; method = method->next_in_scope) {
+        th_type *signature = trait_method_signature(method);
+        if (!signature) continue;
+        core_string_t receiver = trait_receiver_name(signature);
+        th_type **variables = nullptr;
+        size_t count = th_free_vars(types, signature, &variables);
+        for (size_t v = 0; v < count; v++) {
+            core_string_t name = th_var_name(variables[v]);
+            bool known = !name.data || core_string_eq(name, receiver);
+            for (size_t n = 0; !known && n < names.len; n++)
+                known = core_string_eq(names.data[n], name);
+            if (!known) core_list_push(names, name);
+        }
+    }
+    bool ok = names.len == arguments.len;
+    for (size_t i = 0; ok && i < arguments.len; i++)
+        ok = arguments.data[i] != nullptr;
+    if (!ok) {
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_TRAIT_ARGUMENT_COUNT, n00bb_node_span(constraint_node),
+            N00B_TEXT_TRAIT_ARGUMENT_COUNT,
+            N00BB_ARGS(ARG_TEXT(trait_symbol ? trait_symbol->name
+                                             : CORE_STRING_STATIC("?")),
+                       ARG_NUMBER((int64_t)names.len),
+                       ARG_NUMBER((int64_t)arguments.len)));
+    }
+    for (parse_sym_entry_t *method = ok && members ? members->first_in_scope
+                                                   : nullptr;
+         ok && method; method = method->next_in_scope) {
+        th_type *signature = trait_method_signature(method);
+        if (!signature) continue;
+        core_string_t receiver = trait_receiver_name(signature);
+        th_type **variables = nullptr;
+        size_t count = th_free_vars(types, signature, &variables);
+        th_type **replacements = count
+            ? core_alloc_array(th_type *, count) : nullptr;
+        for (size_t v = 0; v < count && (replacements || !count); v++) {
+            core_string_t name = th_var_name(variables[v]);
+            replacements[v] = nullptr;
+            if (name.data && core_string_eq(name, receiver))
+                replacements[v] = variable;
+            for (size_t n = 0; !replacements[v] && n < names.len; n++)
+                if (name.data && core_string_eq(names.data[n], name))
+                    replacements[v] = arguments.data[n];
+            if (!replacements[v]) replacements[v] = th_var(types);
+        }
+        th_type *instance = count && !replacements ? nullptr
+            : th_type_clone_replacing(types, signature,
+                (const th_type *const *)variables, replacements, count);
+        core_free(replacements);
+        ok = instance && th_kind_of(instance) == TH_FUNCTION;
+        core_list_t(th_param) rest = core_list_new(th_param);
+        for (size_t p = 1; ok && p < th_func_nparams(instance); p++)
+            core_list_push(rest, *th_func_param(instance, p));
+        th_type *call = ok ? th_func_with_error(types, th_func_ret(instance),
+            th_func_error(instance), rest.data, rest.len, nullptr, nullptr,
+            0) : nullptr;
+        core_list_free(rest);
+        ok = call && th_var_constrain(types, variable, (th_constraint){
+            .kind = TH_CON_METHOD,
+            .method = {.name = method->name,
+                       .result = th_func_ret(instance), .call = call},
+        });
+    }
+    core_list_free(names);
+    core_list_free(arguments);
+    return ok;
+}
+
 static bool
 apply_one_signature_constraint(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
@@ -7913,7 +8029,9 @@ apply_one_signature_constraint(parse_grammar_t *grammar,
         }
         constraint.kind = TH_CON_IMPLEMENTS;
         constraint.iface = core_buffer_string(&name);
-        if (!th_var_constrain(types, variable, constraint)) {
+        if (!th_var_constrain(types, variable, constraint)
+            || !apply_trait_arguments(grammar, unit, constraint_node, types,
+                                      variable, trait_symbol)) {
             core_buffer_release(&name);
             return false;
         }

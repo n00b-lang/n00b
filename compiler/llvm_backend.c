@@ -320,6 +320,10 @@ struct n00bb_llvm_backend_t {
     size_t finalizer_count;
     const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
     size_t boxed_finalizer_count;
+    const n00bb_llvm_finalizer_binding_t *boxed_addresses;
+    size_t boxed_address_count;
+    const n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses;
+    size_t boxed_mutable_address_count;
     pointer_set_t reachable;
     bool reachable_bound;
     ir_storage_origin_t *storage_origin;
@@ -13065,6 +13069,23 @@ n00bb_llvm_backend_bind_boxed_finalizers(
     return true;
 }
 
+bool
+n00bb_llvm_backend_bind_boxed_addresses(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_finalizer_binding_t *addresses, size_t count,
+    const n00bb_llvm_finalizer_binding_t *mutable_addresses,
+    size_t mutable_count)
+{
+    if (!backend || (count && !addresses)
+        || (mutable_count && !mutable_addresses) || backend->lowered)
+        return false;
+    backend->boxed_addresses = addresses;
+    backend->boxed_address_count = count;
+    backend->boxed_mutable_addresses = mutable_addresses;
+    backend->boxed_mutable_address_count = mutable_count;
+    return true;
+}
+
 struct n00bb_llvm_callback_bindings_t {
     core_list_t(callback_binding_t) list;
 };
@@ -13333,6 +13354,70 @@ emit_finalizer_dispatch(n00bb_llvm_backend_t *backend, const char *name,
     LLVMDisposeBuilder(builder);
     return valid || backend_error(diagnostics,
         "finalizer bridge target has an invalid native signature");
+}
+
+static bool
+emit_address_dispatch(n00bb_llvm_backend_t *backend, const char *name,
+                      const n00bb_llvm_finalizer_binding_t *bindings,
+                      size_t binding_count, core_diagnostics_t *diagnostics)
+{
+    LLVMModuleRef module = backend->module;
+    LLVMContextRef context = backend->context;
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef arguments[] = {i32, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(pointer, arguments, 2, false);
+    LLVMValueRef dispatch = LLVMGetNamedFunction(module, name);
+    if (!dispatch) dispatch = LLVMAddFunction(module, name, signature);
+    if (!dispatch || LLVMCountBasicBlocks(dispatch))
+        return backend_error(diagnostics,
+            "could not define the boxed reference dispatch");
+    LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(context,
+        dispatch, "entry");
+    LLVMBasicBlockRef missing = LLVMAppendBasicBlockInContext(context,
+        dispatch, "unbound");
+    LLVMPositionBuilderAtEnd(builder, entry);
+    LLVMValueRef branch = LLVMBuildSwitch(builder, LLVMGetParam(dispatch, 0),
+        missing, (unsigned)binding_count);
+    bool valid = true;
+    for (size_t i = 0; valid && i < binding_count; i++) {
+        ir_func_t *function = bindings[i].function;
+        LLVMTypeRef target_signature = function
+            ? function_type(module, function) : nullptr;
+        if (!target_signature
+            || LLVMGetTypeKind(LLVMGetReturnType(target_signature))
+                != LLVMPointerTypeKind
+            || LLVMCountParamTypes(target_signature) != 1) {
+            valid = false;
+            break;
+        }
+        LLVMTypeRef receiver = nullptr;
+        LLVMGetParamTypes(target_signature, &receiver);
+        core_buffer_t symbol = {0};
+        append_function_symbol(&symbol, function);
+        LLVMValueRef target = named_function(module,
+                                             core_buffer_string(&symbol));
+        if (!target) target = add_function(module,
+            core_buffer_string(&symbol), target_signature);
+        core_buffer_release(&symbol);
+        if (!target) { valid = false; break; }
+        LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(context,
+            dispatch, "address");
+        LLVMAddCase(branch, LLVMConstInt(i32, bindings[i].type_index, false),
+                    body);
+        LLVMPositionBuilderAtEnd(builder, body);
+        LLVMValueRef value = LLVMBuildLoad2(builder, receiver,
+            LLVMGetParam(dispatch, 1), "receiver");
+        LLVMValueRef address = LLVMBuildCall2(builder, target_signature,
+            target, &value, 1, "address");
+        LLVMBuildRet(builder, address);
+    }
+    LLVMPositionBuilderAtEnd(builder, missing);
+    LLVMBuildRet(builder, LLVMConstNull(pointer));
+    LLVMDisposeBuilder(builder);
+    return valid || backend_error(diagnostics,
+        "boxed reference dispatch target has an invalid native signature");
 }
 
 static bool
@@ -14072,7 +14157,14 @@ prepare_image(n00bb_llvm_backend_t *backend,
                 diagnostics)
             || !emit_finalizer_dispatch(backend, "n00bb_finalize_boxed",
                 backend->boxed_finalizers, backend->boxed_finalizer_count,
-                false, diagnostics))) return false;
+                false, diagnostics)
+            || !emit_address_dispatch(backend, "n00bb_ref_address_boxed",
+                backend->boxed_addresses, backend->boxed_address_count,
+                diagnostics)
+            || !emit_address_dispatch(backend, "n00bb_ref_address_mut_boxed",
+                backend->boxed_mutable_addresses,
+                backend->boxed_mutable_address_count, diagnostics)))
+        return false;
     if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
         LLVMTypeRef entry_params[] = {

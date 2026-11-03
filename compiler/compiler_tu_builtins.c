@@ -1070,6 +1070,31 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     boxed->type = invoke_signature;
     boxed->error_type = nil_type;
     boxed->callable_contract = invoke_contract;
+    th_type *address_result = payload_type
+        ? th_option(types, payload_type) : nullptr;
+    th_type *address_signature = address_result
+        ? th_func_with_error(types, address_result, nil_type,
+            invoke_parameters, 2, nullptr, nullptr, 0) : nullptr;
+    th_type *address_contract = address_signature
+        ? th_env_signature_contract(types, address_signature, nil_type)
+        : nullptr;
+    static const core_string_t address_names[] = {
+        CORE_STRING_STATIC("__ref_address_boxed"),
+        CORE_STRING_STATIC("__ref_address_mut_boxed"),
+    };
+    for (size_t i = 0; i < 2; i++) {
+        parse_sym_entry_t *address = address_contract
+            ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
+                               address_names[i], PARSE_SYM_FUNCTION, nullptr)
+            : nullptr;
+        if (!address || !parse_sym_set_binding(address,
+                CORE_STRING_STATIC("n00bb.abi.native"),
+                (void *)builtin_native_name(address_names[i])))
+            return false;
+        address->type = address_signature;
+        address->error_type = nil_type;
+        address->callable_contract = address_contract;
+    }
     return true;
 }
 
@@ -1869,6 +1894,25 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         || !th_env_register_function(environment,
             CORE_STRING_STATIC("builtins.__array_read"), CORE_STRING_STATIC("__read"), CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"),
             TH_ENV_PUBLIC, array_read_signature)) return false;
+
+    th_type *referent = th_var(types);
+    th_type *reference = th_ind(types, 0, referent);
+    th_param address_parameter = {.mode = TH_IN, .type = reference};
+    th_type *address_signature = reference
+        ? th_func_with_error(types, reference,
+            th_name(types, CORE_STRING_STATIC("nil")), &address_parameter, 1,
+            nullptr, nullptr, 0) : nullptr;
+    if (!address_signature
+        || !th_env_register_function(environment,
+            CORE_STRING_STATIC("builtins.__ref_address"),
+            CORE_STRING_STATIC("__ref_address"),
+            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"),
+            TH_ENV_PUBLIC, address_signature)
+        || !th_env_register_function(environment,
+            CORE_STRING_STATIC("builtins.__ref_address_mut"),
+            CORE_STRING_STATIC("__ref_address_mut"),
+            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"),
+            TH_ENV_PUBLIC, address_signature)) return false;
 
     th_type *slice_receiver = th_var(types);
     th_param slice_parameters[] = {

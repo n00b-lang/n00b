@@ -704,6 +704,26 @@ func ref_through_handle() -> int {
     return copy.value + slot.value
 }
 
+func ref_generic_read(r: 'R) -> 'T where 'R : Reference['T] {
+    return r.__value
+}
+
+func ref_generic_write(r: 'R, value: 'T)
+    where 'R : Mutable_Reference['T] {
+    r.__value = value
+}
+
+func ref_generic() -> int {
+    var slot: Ref_Slot = (value = 1)
+    let h: Ref_Handle = new[Ref_Handle](ref slot)
+    let plain: Ref[Ref_Slot] = ref slot
+    let replacement: Ref_Slot = (value = 30)
+    ref_generic_write(h, replacement)
+    let through_handle: Ref_Slot = ref_generic_read(h)
+    let through_ref: Ref_Slot = ref_generic_read(plain)
+    return through_handle.value + through_ref.value
+}
+
 func ref_created() -> int {
     let store: Ref_Store = new[Ref_Store](4)
     let lent: Ref_Lent = ref store
@@ -797,6 +817,7 @@ require fin_initialized_once() == 12
 fin_reset()
 require ref_through_handle() == 420
 require ref_created() == 46
+require ref_generic() == 60
 let fin_kept: Fin_Value = fin_returned_temporary()
 require fin_kept.v == 5 and fin_count == 0
 fin_reset()
