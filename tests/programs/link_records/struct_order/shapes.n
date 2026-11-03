@@ -1,0 +1,11 @@
+record Content {
+    start:       uint
+    end:         uint
+    label_start: uint
+    label_end:   uint
+}
+
+record Token {
+    id:      uint
+    content: Content?
+}
