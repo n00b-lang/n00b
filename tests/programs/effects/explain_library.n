@@ -1,0 +1,3 @@
+func shapes(table: Dict[string, int]) -> uint {
+    return table.len()
+}

@@ -1,0 +1,7 @@
+import alpha
+
+func h() {
+    alpha.note("x")
+}
+
+forbids_effect(h, alpha.Audited)

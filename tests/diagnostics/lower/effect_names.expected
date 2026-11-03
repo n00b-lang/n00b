@@ -1,0 +1,1 @@
+tests/diagnostics/lower/effect_names.n:8:1: error N00B-S0075: `Audited` could be `left.Audited` or `right.Audited`; write the one you mean

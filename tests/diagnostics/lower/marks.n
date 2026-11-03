@@ -1,0 +1,175 @@
+func read_env(key: string) -> string {
+    return key
+}
+
+func trim(text: string) -> string {
+    return text
+}
+
+func check(path: string) -> string fail: int {
+    if path == "" {
+        fail 1
+    }
+    return path
+}
+
+func open(path: string) -> int {
+    if path == "" {
+        return 0
+    }
+    return 1
+}
+
+mark Untrusted {
+    from read_env
+    cleared by check(path)
+    rejected by open(path)
+}
+
+func bad() -> int {
+    let name: string = trim(read_env("HOME"))
+    return open(name)
+}
+
+func good() -> int fail: int {
+    let name: string = read_env("HOME")
+    check(name)!
+    return open(name)
+}
+
+func reassigned() -> int fail: int {
+    var name: string = read_env("HOME")
+    check(name)!
+    name = read_env("PATH")
+    return open(name)
+}
+
+func wrapper(target: string) -> int {
+    return open(target)
+}
+
+func indirect() -> int {
+    return wrapper(read_env("X"))
+}
+
+func constant() -> int {
+    return open("config")
+}
+
+func tried() -> int {
+    let name: string = read_env("HOME")
+    try {
+        check(name)!
+        return open(name)
+    } fail(code) {
+        return open(name) + code
+    }
+}
+
+func normalized() -> int fail: int {
+    let name: string = read_env("HOME")
+    let safe: string = check(name)!
+    return open(safe)
+}
+
+func plain(path: string) -> string {
+    return path
+}
+
+mark Broken {
+    from read_env
+    cleared by plain(path)
+    rejected by open(nothing)
+    rejected by missing(path)
+}
+
+mark other.Thing {
+    from read_env
+}
+
+func listed() -> int {
+    var items: List[string] = new[List[string]]()
+    items.append(read_env("X"))
+    return open(items[0])
+}
+
+record Box {
+    path: string
+}
+
+func __init(modify self: Box, path: string) {
+    self.path = path
+}
+
+func boxed() -> int {
+    var box: Box = new[Box]("safe")
+    box.path = read_env("Y")
+    return open(box.path)
+}
+
+mark Secret {
+    from read_env
+}
+
+record Credentials {
+    user: string
+    password: string carries Secret
+}
+
+func __init(modify self: Credentials, user: string, password: string) {
+    self.user = user
+    self.password = password
+}
+
+record Token carries Secret {
+    value: string
+}
+
+func __init(modify self: Token, value: string) {
+    self.value = value
+}
+
+func log(text: string rejects Secret) -> int {
+    if text == "" {
+        return 0
+    }
+    return 1
+}
+
+func on_request(body: string carries Untrusted) -> int {
+    return open(body)
+}
+
+
+func leak(creds: Credentials) -> int {
+    return log(creds.password)
+}
+
+func fine(creds: Credentials) -> int {
+    return log(creds.user)
+}
+
+func token_leak(token: Token) -> int {
+    return log(token.value)
+}
+
+func probe() -> int fail: int {
+    var name: string = read_env("HOME")
+    may_carry(name, Untrusted)
+    check(name)!
+    !may_carry(name, Untrusted)
+    name = read_env("PATH")
+    may_carry(name, Untrusted)
+    let clean: string = "fixed"
+    !may_carry(clean, Untrusted)
+    if may_carry(clean, Untrusted) {
+        return 2
+    }
+    return open(clean)
+}
+
+func carries_still() -> int {
+    let name: string = read_env("HOME")
+    !may_carry(name, Untrusted)
+    return 1
+}

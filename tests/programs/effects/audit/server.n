@@ -1,0 +1,30 @@
+import audit_log
+
+func stamp() {
+    audit_log.note("stamp")
+}
+
+effect audit_log.Audited {
+    from stamp
+}
+
+func handle(n: int) -> int {
+    has_effect(audit_log.Audited)
+    audit_log.note("handle")
+    return n + 1
+}
+
+func maybe(n: int) -> int {
+    if n > 1 {
+        stamp()
+    }
+    return n
+}
+
+func batched(n: int) -> int {
+    forbids_effect(audit_log.Audited)
+    audit_log.flush()
+    return n
+}
+
+may_effect(maybe, audit_log.Audited) and !has_effect(maybe, audit_log.Audited)

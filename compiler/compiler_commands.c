@@ -374,6 +374,79 @@ child_status(core_process_status_t status)
     return status.exited ? status.code : 128 + status.code;
 }
 
+static core_string_t
+effects_module(core_string_t argv0, core_string_t name)
+{
+    core_diagnostics_t *d = core_diagnostics_new();
+    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0, d);
+    core_string_t found = {0};
+    int64_t dot = core_string_rfind_byte(name, '.');
+    core_string_t fallback = dot > 0
+        ? core_string_slice(name, 0, (size_t)dot) : name;
+    while (resolver && !found.data && dot > 0) {
+        core_string_t prefix = core_string_slice(name, 0, (size_t)dot);
+        core_buffer_t package = {0};
+        core_buffer_append_string(&package, prefix);
+        core_buffer_puts(&package, ".__init");
+        if (n00bb_resolver_has_source_module(resolver, prefix))
+            found = core_string_dup(prefix);
+        else if (n00bb_resolver_has_source_module(resolver,
+                     core_buffer_string(&package)))
+            found = core_string_dup(core_buffer_string(&package));
+        core_buffer_release(&package);
+        dot = core_string_rfind_byte(prefix, '.');
+    }
+    if (resolver) n00bb_resolver_free(resolver);
+    core_diagnostics_free(d);
+    return found.data ? found : core_string_dup(fallback);
+}
+
+static int
+explain_effects_command(const n00bb_invocation_t *invocation)
+{
+    bool json = false;
+    core_string_t operands[2] = {0};
+    int count = 0;
+    for (int i = invocation->command_at + 2; i < invocation->end; i++) {
+        core_string_t word = invocation->words[i];
+        if (core_string_eq(word, CORE_STRING_STATIC("--json"))) json = true;
+        else if (count < 2) operands[count++] = word;
+        else count = 3;
+    }
+    if (count < 1 || count > 2) {
+        parse_cmdr_print_command_help(invocation->cli,
+            CORE_STRING_STATIC("explain"), stderr);
+        return 2;
+    }
+    core_string_t input = count > 1 ? core_string_dup(operands[1])
+        : effects_module(invocation->argv0, operands[0]);
+    core_string_t compiler = core_os_executable_path(invocation->argv0);
+    char *arguments[] = {
+        core_string_to_cstr(compiler), "check", "--effects-of",
+        core_string_to_cstr(operands[0]),
+        json ? "--effects-json" : "--effects-explain",
+        core_string_to_cstr(input), nullptr,
+    };
+    core_free(compiler.data);
+    core_free(input.data);
+    core_buffer_t out = {0};
+    core_buffer_t err = {0};
+    core_process_status_t status = {0};
+    int launched = arguments[0] ? core_process_capture(arguments, nullptr, 0,
+                                                       &out, &err, &status)
+                                : ENOENT;
+    int code = launched ? 1 : child_status(status);
+    fwrite(out.data ? out.data : "", 1, out.byte_len, stdout);
+    if (code)
+        fwrite(err.data ? err.data : "", 1, err.byte_len, stderr);
+    core_buffer_release(&out);
+    core_buffer_release(&err);
+    core_free(arguments[0]);
+    core_free(arguments[3]);
+    core_free(arguments[5]);
+    return code;
+}
+
 static int
 run_command(const n00bb_invocation_t *invocation)
 {
@@ -763,6 +836,11 @@ n00bb_cli_preflight(n00bb_invocation_t *invocation, bool *handled)
         else parse_cmdr_print_command_help(cli, invocation->words[at], stdout);
         return 0;
     }
+    if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("explain"))
+        && at + 1 < invocation->end
+        && core_string_eq(invocation->words[at + 1],
+                          CORE_STRING_STATIC("effects")))
+        return explain_effects_command(invocation);
     if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("explain")) && at + 1 < invocation->end)
         return n00bb_explain_command(invocation->words[at + 1]);
     if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("completions")) && at + 1 < invocation->end) {

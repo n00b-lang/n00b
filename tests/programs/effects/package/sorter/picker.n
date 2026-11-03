@@ -1,0 +1,9 @@
+callback Pick {
+    call (a: int, b: int) -> int
+    handler (a: int, b: int) -> int
+}
+
+func pick(by: Pick, a: int, b: int) -> int {
+    forbids_effect(by, impure)
+    return by.call(a, b)
+}

@@ -1,6 +1,5 @@
 import sys.abi
 import sys.clock
-import sys.effects
 import sys.env
 import sys.fs
 import sys.random
@@ -543,44 +542,25 @@ func quiet_clock() -> uint {
     return __unobserved(sys.clock.now_ns())
 }
 
-const square_effects: u64 = __function_effects(ref effects_square)
-const square_is_quiet: bool = !sys.effects.has_effect(square_effects,
-                                                      sys.effects.may_io)
+const square_is_quiet: bool = forbids_effect(effects_square, input) and
+    forbids_effect(effects_square, output)
+
+forbids_effect(effects_square, writes_globals)
+forbids_effect(effects_square, impure) and may_effect(effects_square, panics)
+may_effect(bump, writes_globals) and forbids_effect(bump, output)
+may_effect(shout, output) and forbids_effect(shout, input)
+may_effect(sys.fs.read_file, input) and forbids_effect(sys.fs.read_file, output)
+may_effect(sys.env.args, env)
+may_effect(sys.clock.now_ns, clock) and forbids_effect(quiet_clock, clock)
+may_effect(effects_allocate, allocates)
+forbids_effect(effects_allocate, nondeterministic)
+may_effect(effects_random, random) and forbids_effect(effects_random, output)
+forbids_effect(effects_square, nondeterministic)
 
 func function_effects_check() {
     require square_is_quiet
-    let pure = __function_effects(ref effects_square)
-    require !sys.effects.has_effect(pure, sys.effects.writes_nonlocal)
-    require !sys.effects.has_effect(pure, sys.effects.may_io)
-    require sys.effects.has_effect(pure, sys.effects.traps_arithmetic)
-    require sys.effects.has_effect(__function_effects(ref bump),
-                                   sys.effects.writes_nonlocal)
-    require sys.effects.has_effect(__function_effects(ref shout),
-                                   sys.effects.may_io)
-    require !sys.effects.has_effect(__function_effects(ref bump),
-                                    sys.effects.may_io)
-    let printing = __function_effects(ref shout)
-    require sys.effects.has_effect(printing, sys.effects.may_output)
-    require !sys.effects.has_effect(printing, sys.effects.may_input)
-    let reading = __function_effects(ref sys.fs.read_file)
-    require sys.effects.has_effect(reading, sys.effects.may_input)
-    require !sys.effects.has_effect(reading, sys.effects.may_output)
-    require sys.effects.has_effect(__function_effects(ref sys.env.args),
-                                   sys.effects.reads_env)
-    require sys.effects.has_effect(__function_effects(ref sys.clock.now_ns),
-                                   sys.effects.reads_clock)
-    require !sys.effects.has_effect(__function_effects(ref quiet_clock),
-                                    sys.effects.reads_clock)
     require quiet_clock() != 0
-    let allocating = __function_effects(ref effects_allocate)
-    require sys.effects.has_effect(allocating, sys.effects.may_allocate)
-    require !sys.effects.has_effect(allocating, sys.effects.reads_clock)
-    require !sys.effects.has_effect(allocating, sys.effects.reads_env)
-    require !sys.effects.has_effect(pure, sys.effects.reads_clock)
-    let random = __function_effects(ref effects_random)
-    require sys.effects.has_effect(random, sys.effects.reads_random)
-    require !sys.effects.has_effect(random, sys.effects.may_io)
-    require !sys.effects.has_effect(pure, sys.effects.reads_random)
+    forbids_effect(effects_square, output)
 }
 
 func effects_random(modify buffer: Array[u8]) -> nil fail: int {
@@ -614,9 +594,16 @@ const dict_size_reads_live: bool = __function_reads(ref dict_size,
 const dict_size_reads_entries: bool = __function_reads(ref dict_size,
                                                        "table.__value.entries")
 
+func audit_mark(n: int) -> int {
+    return n
+}
+
+effect Audit {
+    from audit_mark
+}
+
 func audited_step(n: int) -> int {
-    __effect("audit")
-    return n + 1
+    return audit_mark(n) + 1
 }
 
 func audited_caller(n: int) -> int {
@@ -627,11 +614,11 @@ func unaudited(n: int) -> int {
     return n * 2
 }
 
+has_effect(audited_step, Audit) and has_effect(audited_caller, Audit)
+forbids_effect(unaudited, Audit)
+
 func effect_paths_check() {
     require audited_caller(1) == 4
-    require __function_has_effect(ref audited_step, "audit")
-    require __function_has_effect(ref audited_caller, "audit")
-    require !__function_has_effect(ref unaudited, "audit")
     require dict_size_reads_live
     require !dict_size_reads_entries
     require __function_reads(ref dict_size, "table.__value.index")

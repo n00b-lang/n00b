@@ -1,0 +1,1 @@
+tests/diagnostics/lower/trait_check_methods.n:6:5: error N00B-S0078: a check in `Render` that uses `or` or `not` can ask about only one of its methods

@@ -3,6 +3,15 @@
 
 #include "ir/ir.h"
 
+static inline core_string_t
+n00bb_native_symbol(ir_func_t *function)
+{
+    ir_annot_t *native = function ? ir_annot_get(&function->annots,
+        CORE_STRING_STATIC("n00bb.abi.native")) : nullptr;
+    return native && native->kind == IR_ANNOT_STR ? native->s
+                                                  : (core_string_t){0};
+}
+
 static inline ir_func_t *
 n00bb_cached_body(ir_func_t *function)
 {

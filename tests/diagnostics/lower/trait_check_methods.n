@@ -1,0 +1,38 @@
+trait Render {
+    func render(self: 'T) -> string
+    func size(self: 'T) -> int
+    !may_effect(render, output) or has_effect(render, clock)
+    !(may_effect(size, input) and may_effect(size, output))
+    forbids_effect(render, input) or forbids_effect(size, input)
+}
+
+record Plain {
+    v: int
+}
+
+func render(self: Plain) -> string {
+    return "plain"
+}
+
+func size(self: Plain) -> int {
+    return self.v
+}
+
+record Loud {
+    v: int
+}
+
+func render(self: Loud) -> string {
+    raw_debug("loud")
+    return "loud"
+}
+
+func size(self: Loud) -> int {
+    return self.v
+}
+
+func show(p: Plain, l: Loud) -> int {
+    _ = p.render()
+    _ = l.render()
+    return p.size() + l.size()
+}

@@ -12828,6 +12828,7 @@ free_tu_state(void *data)
     core_list_free(state->integer_shift_sites);
     core_dict_free(&state->integer_shift_seen);
     core_list_free(state->module_top_level_statements);
+    core_list_free(state->mark_annotations);
     core_list_free(state->assignment_patterns);
     core_list_free(state->declaration_patterns);
     core_list_free(state->literal_constants);
@@ -12884,6 +12885,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->finalized_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
+    state->mark_annotations = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->declaration_patterns = core_list_new(parse_tree_ptr_t);
     state->literal_constants = core_list_new(n00bb_literal_constant_t);

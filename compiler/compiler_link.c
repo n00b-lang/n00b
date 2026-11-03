@@ -5271,6 +5271,11 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .reachable_functions = core_list_new(n00bb_ir_func_ptr_t),
         .emitted_functions = core_list_new(n00bb_ir_func_ptr_t),
         .specializations = core_list_new(n00bb_specialization_t),
+        .effect_checks = core_list_new(n00bb_effect_check_t),
+        .trait_bounds = core_list_new(n00bb_trait_bound_t),
+        .user_effects = core_list_new(n00bb_user_effect_t),
+        .mark_questions = core_list_new(n00bb_mark_question_t),
+        .effect_natives = core_list_new(core_string_t),
         .specialization_requests =
             core_list_new(n00bb_specialization_request_t),
         .baked_roots = core_list_new(n00bb_baked_root_t),
@@ -5320,6 +5325,18 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     if (analysis->global_symbols_ready)
         core_dict_free(&analysis->global_symbols);
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
+    if (analysis->bounded_targets_ready)
+        core_dict_free(&analysis->bounded_targets);
+    for (size_t e = 0; e < analysis->user_effects.len; e++) {
+        core_free(analysis->user_effects.data[e].qualified.data);
+        core_list_free(analysis->user_effects.data[e].sources);
+        core_list_free(analysis->user_effects.data[e].handlers);
+    }
+    core_list_free(analysis->user_effects);
+    core_list_free(analysis->mark_questions);
+    core_list_free(analysis->effect_natives);
+    if (analysis->effect_functions_ready)
+        core_dict_free(&analysis->effect_functions);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
     core_list_free(analysis->boxed_hooks.finalizers);

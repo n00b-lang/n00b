@@ -1,0 +1,27 @@
+func read_env(key: string) -> string {
+    return key
+}
+
+mark Secret {
+    from read_env
+}
+
+func log(text: string rejects Secret) -> int {
+    if text == "" {
+        return 0
+    }
+    return 1
+}
+
+func unknown(text: string carries Nothing) -> int {
+    return log(text)
+}
+
+record Note {
+    text: string rejects Secret
+}
+
+callback Step {
+    call (text: string rejects Secret) -> int
+    handler (text: string) -> int
+}

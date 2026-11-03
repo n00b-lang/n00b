@@ -1973,6 +1973,13 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                 return false;
         return true;
     }
+    if (core_string_eq(name, CORE_STRING_STATIC("effect-query"))) {
+        pp_error(ctx, node, N00B_DIAG_EFFECT_QUESTION_IN_WHEN,
+                 N00B_TEXT_QUERY_IN_WHEN, N00BB_NO_ARGS);
+        n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+                          N00B_TEXT_USE_IF_FOR_QUERY, N00BB_NO_ARGS);
+        return false;
+    }
     bool permitted = false;
     for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
         if (core_string_eq(name, allowed[i])) {

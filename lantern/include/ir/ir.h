@@ -659,6 +659,8 @@ bool         ir_local_set_source_name(ir_func_t *f, ir_local_t *local,
 core_string_t ir_local_display_name(const ir_local_t *local);
 core_string_t ir_local_label(const ir_local_t *local);
 core_string_t ir_value_display_name(const ir_value_t *value);
+
+#define IR_SOURCE_NAME_KEY CORE_STRING_STATIC("ir.source_name")
 ir_local_t  *ir_local_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_value_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_local_value(ir_func_t *f, ir_local_t *local);
