@@ -7,6 +7,7 @@
 #include "language_hooks.h"
 #include "storage_placement.h"
 #include "compiler_tu.h"
+#include "qualified_names.h"
 #include "diagnostics.h"
 #include "preprocessor.h"
 
@@ -4238,6 +4239,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         CORE_STRING_STATIC("__count_trailing_zeros"),
         CORE_STRING_STATIC("__gc_memset"), CORE_STRING_STATIC("__gc_memcpy"),
         CORE_STRING_STATIC("__gc_invoke_finalizer"),
+        CORE_STRING_STATIC("__finalize_boxed"),
         CORE_STRING_STATIC("__volatile_load"),
         CORE_STRING_STATIC("__gc_signal_fence"),
         CORE_STRING_STATIC("__gc_prefetch"),
@@ -5300,6 +5302,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
+    core_list_free(analysis->boxed_finalizers);
     core_list_free(analysis->record_requests);
     for (size_t p = 0; analysis->record_requests_indexed
          && p <= N00BB_RECORD_C; p++)
@@ -5438,6 +5441,113 @@ register_flagset_operators(th_env *defaults, th_ctx *types,
     return ok;
 }
 
+static bool
+generated_finalize_needed(th_ctx *probe, th_ctx *types, th_type *type,
+                          size_t depth)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || depth >= 16) return false;
+    if (th_kind_of(resolved) == TH_VAR) return true;
+    th_type *item = th_option_item(resolved);
+    if (item) return generated_finalize_needed(probe, types, item, depth + 1);
+    size_t count = 0;
+    if (static_tuple_element_type(resolved, 0, &count)) {
+        for (size_t i = 0; i < count; i++)
+            if (generated_finalize_needed(probe, types,
+                    static_tuple_element_type(resolved, i, nullptr),
+                    depth + 1)) return true;
+        return false;
+    }
+    if (th_kind_of(resolved) != TH_NAMED
+        || n00bb_object_type(types, resolved)) return false;
+    th_type *shape = th_type_definition(types, resolved);
+    shape = shape ? th_resolve(shape) : nullptr;
+    if (!shape || th_kind_of(shape) != TH_RECORD) return false;
+    th_type *candidate = th_type_clone(probe, th_ind(types, 0, resolved));
+    th_env_method_t found = {0};
+    if (candidate && th_env_method_resolve(probe, candidate,
+            CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
+            &found) == TH_ENV_METHOD_FOUND
+        && !n00bb_generic_generated_finalizer(found.qualified_name))
+        return true;
+    for (size_t i = 0; i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && member->type && generated_finalize_needed(probe, types,
+                member->type, depth + 1)) return true;
+    }
+    return false;
+}
+
+static bool
+register_generated_finalizer(th_env *defaults, th_ctx *probe,
+                             n00bb_tu_state_t *state, parse_symtab_t *symbols,
+                             parse_grammar_t *grammar, core_link_unit_t *link,
+                             n00bb_link_analysis_t *analysis,
+                             core_translation_unit_t *unit,
+                             core_string_t package, parse_sym_entry_t *symbol,
+                             th_type *receiver)
+{
+    th_type *shape = th_type_definition(state->types, receiver);
+    shape = shape ? th_resolve(shape) : nullptr;
+    if (shape && th_kind_of(shape) == TH_INDIRECTION) {
+        th_type *fields = th_resolve(th_ind_referent(shape));
+        shape = fields && th_kind_of(fields) == TH_NAMED
+            ? th_type_definition(state->types, fields) : fields;
+        shape = shape ? th_resolve(shape) : nullptr;
+    }
+    if (!shape || th_kind_of(shape) != TH_RECORD) return true;
+    bool generic = !th_is_closed(state->types, receiver);
+    th_type *reference = th_ind(state->types, 0, receiver);
+    th_type *candidate = reference ? th_type_clone(probe, reference) : nullptr;
+    th_env_method_t found = {0};
+    if (!candidate || th_env_method_resolve(probe, candidate,
+            CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
+            &found) == TH_ENV_METHOD_FOUND) return true;
+    bool needed = false;
+    for (size_t i = 0; !needed && i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        needed = member && member->type && generated_finalize_needed(probe,
+            state->types, member->type, 1);
+    }
+    if (!needed) return true;
+    th_type *nil_type = th_name(state->types, CORE_STRING_STATIC("nil"));
+    th_param parameter = {.mode = TH_CONSUME, .type = reference};
+    th_type *signature = th_func_with_error(state->types, nil_type, nil_type,
+                                            &parameter, 1, nullptr, nullptr,
+                                            0);
+    core_buffer_t generated_name = {0};
+    core_buffer_printf(&generated_name, "__finalize#n00bb_%s%016llx",
+        generic ? "generic_" : "",
+        (unsigned long long)th_hash(state->types, receiver));
+    parse_symtab_enter_scope_all(symbols, module_scope(state));
+    parse_sym_entry_t *generated = signature && generated_name.data
+        ? parse_symtab_add(symbols, CORE_STRING_STATIC(""),
+            core_buffer_string(&generated_name), PARSE_SYM_FUNCTION, nullptr)
+        : nullptr;
+    parse_symtab_leave_scope_all(symbols);
+    core_buffer_release(&generated_name);
+    if (!generated) return false;
+    generated->type = generated->callable_contract = signature;
+    generated->error_type = nil_type;
+    generated->adt_kind = symbol->adt_kind;
+    generated->is_synthetic = true;
+    parse_sym_set_phases(generated, PARSE_SYM_PHASE_BOTH,
+        PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
+    if (!parse_sym_set_binding(generated,
+            CORE_STRING_STATIC("n00bb.generated-value-method"), receiver)
+        || !register_link_declaration(link, unit, grammar,
+            &analysis->declarations_by_symbol, generated)) return false;
+    core_buffer_t qualified = {0};
+    bool ok = append_environment_symbol_name(grammar, unit, generated,
+                                             &qualified)
+        && qualified.data
+        && th_env_register_function(defaults, core_buffer_string(&qualified),
+            CORE_STRING_STATIC("__finalize"), unit->module.identifier,
+            package, TH_ENV_PUBLIC, signature);
+    core_buffer_release(&qualified);
+    return ok;
+}
+
 bool
 register_builtin_value_defaults(th_env *defaults, const th_env *base,
                                  core_link_unit_t *link,
@@ -5532,6 +5642,12 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &visiting));
                 core_dict_free(&visiting);
+                if ((record || object) && !register_generated_finalizer(
+                        defaults, probe, state, symbols, grammar, link,
+                        analysis, unit, package, symbol, receiver)) {
+                    th_ctx_free(probe);
+                    return false;
+                }
                 if (!derive_equal && !derive_hash) continue;
                 for (size_t kind = 0; kind < 2; kind++) {
                     if (kind ? !derive_hash : !derive_equal) continue;

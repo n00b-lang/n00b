@@ -25,6 +25,11 @@ typedef struct {
 typedef struct ir_lower_context_t ir_lower_context_t;
 typedef bool (*ir_lower_bind_missing_fn)(ir_lower_context_t *context,
                                          parse_sym_entry_t *symbol);
+typedef bool (*ir_lower_write_binding_fn)(ir_lower_context_t *context,
+                                          parse_sym_entry_t *symbol,
+                                          bool written);
+typedef bool (*ir_lower_node_value_fn)(ir_lower_context_t *context,
+                                       parse_tree_t *node, ir_value_t *value);
 
 struct ir_lower_context_t {
     ir_module_t *module;
@@ -35,6 +40,8 @@ struct ir_lower_context_t {
     void *lower_private;
     void *user;
     ir_lower_bind_missing_fn bind_missing;
+    ir_lower_write_binding_fn write_binding;
+    ir_lower_node_value_fn node_value;
     uint64_t next_value_id;
     bool reachable;
 };

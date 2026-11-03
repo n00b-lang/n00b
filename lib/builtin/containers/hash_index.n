@@ -54,28 +54,28 @@ inline func first_lane(bits: u64) -> uint {
 inline func set_ctrl(self: Ref[Hash_Index], slot: uint, value: u64) {
     let group: uint = slot / group_slots
     let shift: u64  = cast[u64]((slot % group_slots) * 8)
-    let word:  u64  = self.ctrl[group]
-    self.ctrl[group] = (word & ~(cast[u64](0xff) << shift)) | (value << shift)
+    let word:  u64  = self.__value.ctrl[group]
+    self.__value.ctrl[group] = (word & ~(cast[u64](0xff) << shift)) | (value << shift)
 }
 
 inline func ctrl_at(self: Ref[Hash_Index], slot: uint) -> u64 {
     let shift: u64 = cast[u64]((slot % group_slots) * 8)
-    return (self.ctrl[slot / group_slots] >> shift) & 0xff
+    return (self.__value.ctrl[slot / group_slots] >> shift) & 0xff
 }
 
 inline func entry_at(self: Ref[Hash_Index], slot: uint) -> uint {
-    return cast[uint](self.slots[slot])
+    return cast[uint](self.__value.slots[slot])
 }
 
 inline func is_dead(self: Ref[Hash_Index], entry: uint) -> bool {
-    if __array_length(self.dead) == 0 {
+    if __array_length(self.__value.dead) == 0 {
         return false
     }
-    return ((self.dead[entry >> 6] >> cast[u64](entry & 63)) & 1) != 0
+    return ((self.__value.dead[entry >> 6] >> cast[u64](entry & 63)) & 1) != 0
 }
 
 inline func find_slot(self: Ref[Hash_Index], hash: u128) -> uint? {
-    let groups: uint = __array_length(self.ctrl)
+    let groups: uint = __array_length(self.__value.ctrl)
     if groups == 0 {
         return nil
     }
@@ -85,11 +85,11 @@ inline func find_slot(self: Ref[Hash_Index], hash: u128) -> uint? {
     var group: uint = cast[uint](mixed >> 7) & mask
     var step:  uint = 0
     while true {
-        let word: u64 = self.ctrl[group]
+        let word: u64 = self.__value.ctrl[group]
         var bits: u64 = match_tag(word, tag)
         while bits != 0 {
             let slot: uint = group * group_slots + first_lane(bits)
-            if self.hashes[cast[uint](self.slots[slot])] == hash {
+            if self.__value.hashes[cast[uint](self.__value.slots[slot])] == hash {
                 return slot
             }
             bits = bits & (bits - 1)
@@ -108,20 +108,20 @@ inline func find(self: Ref[Hash_Index], hash: u128) -> uint? {
     if slot == nil {
         return nil
     }
-    return cast[uint](self.slots[slot.get()])
+    return cast[uint](self.__value.slots[slot.get()])
 }
 
 inline func place(self: Ref[Hash_Index], mixed: u64, entry: uint) -> bool {
-    let mask:  uint = __array_length(self.ctrl) - 1
+    let mask:  uint = __array_length(self.__value.ctrl) - 1
     var group: uint = cast[uint](mixed >> 7) & mask
     var step:  uint = 0
     while true {
-        let free: u64 = match_free(self.ctrl[group])
+        let free: u64 = match_free(self.__value.ctrl[group])
         if free != 0 {
             let slot:  uint = group * group_slots + first_lane(free)
             let fresh: bool = ctrl_at(self, slot) == ctrl_empty
             set_ctrl(self, slot, tag_of(mixed))
-            self.slots[slot] = cast[u32] entry
+            self.__value.slots[slot] = cast[u32] entry
             return fresh
         }
         step += 1
@@ -131,18 +131,18 @@ inline func place(self: Ref[Hash_Index], mixed: u64, entry: uint) -> bool {
 }
 
 inline func insert(self: Ref[Hash_Index], hash: u128) -> uint? {
-    require self.growth_left > 0 and self.used < __array_length(self.hashes)
+    require self.__value.growth_left > 0 and self.__value.used < __array_length(self.__value.hashes)
     let existing: uint? = find(self, hash)
     if existing != nil {
         return existing
     }
-    let entry: uint = self.used
+    let entry: uint = self.__value.used
     if place(self, mix(hash), entry) {
-        self.growth_left -= 1
+        self.__value.growth_left -= 1
     }
-    self.hashes[entry] = hash
-    self.used = entry + 1
-    self.live += 1
+    self.__value.hashes[entry] = hash
+    self.__value.used = entry + 1
+    self.__value.live += 1
     return nil
 }
 
@@ -152,26 +152,26 @@ func rebuild(self: Ref[Hash_Index], wanted: uint) {
         slots *= 2
     }
     let groups: uint = slots / group_slots
-    self.ctrl = new[Array[u64]](cast[int] groups)
-    self.slots = new[Array[u32]](cast[int] slots)
+    self.__value.ctrl = new[Array[u64]](cast[int] groups)
+    self.__value.slots = new[Array[u32]](cast[int] slots)
     var group: uint = 0
     while group < groups {
-        self.ctrl[group] = empty_group
+        self.__value.ctrl[group] = empty_group
         group += 1
     }
     var entry: uint = 0
-    while entry < self.used {
+    while entry < self.__value.used {
         if !is_dead(self, entry) {
-            _ = place(self, mix(self.hashes[entry]), entry)
+            _ = place(self, mix(self.__value.hashes[entry]), entry)
         }
         entry += 1
     }
-    self.growth_left = slots - slots / 8 - self.live
+    self.__value.growth_left = slots - slots / 8 - self.__value.live
 }
 
 func reserve(self: Ref[Hash_Index], additional: uint) {
-    let needed: uint = self.used + additional
-    let stored: uint = __array_length(self.hashes)
+    let needed: uint = self.__value.used + additional
+    let stored: uint = __array_length(self.__value.hashes)
     if needed > stored {
         var next_stored: uint = 16
         while next_stored < needed {
@@ -180,58 +180,58 @@ func reserve(self: Ref[Hash_Index], additional: uint) {
         require next_stored <= 0xffffffff
         var hashes: Array[u128] = new[Array[u128]](cast[int] next_stored)
         var at: uint = 0
-        while at < self.used {
-            hashes[at] = self.hashes[at]
+        while at < self.__value.used {
+            hashes[at] = self.__value.hashes[at]
             at += 1
         }
-        self.hashes = hashes
-        if __array_length(self.dead) != 0 {
+        self.__value.hashes = hashes
+        if __array_length(self.__value.dead) != 0 {
             var dead: Array[u64] = new[Array[u64]](cast[int]((next_stored + 63) / 64))
             var word: uint = 0
-            while word < __array_length(self.dead) {
-                dead[word] = self.dead[word]
+            while word < __array_length(self.__value.dead) {
+                dead[word] = self.__value.dead[word]
                 word += 1
             }
-            self.dead = dead
+            self.__value.dead = dead
         }
     }
-    if self.growth_left < additional {
-        rebuild(self, self.live + additional + self.live / 2)
+    if self.__value.growth_left < additional {
+        rebuild(self, self.__value.live + additional + self.__value.live / 2)
     }
 }
 
 func compact(self: Ref[Hash_Index]) {
     var write: uint = 0
     var read:  uint = 0
-    while read < self.used {
+    while read < self.__value.used {
         if !is_dead(self, read) {
-            self.hashes[write] = self.hashes[read]
+            self.__value.hashes[write] = self.__value.hashes[read]
             write += 1
         }
         read += 1
     }
-    self.used = write
-    self.dead = new[Array[u64]](0)
-    rebuild(self, self.live + 1 + self.live / 2)
+    self.__value.used = write
+    self.__value.dead = new[Array[u64]](0)
+    rebuild(self, self.__value.live + 1 + self.__value.live / 2)
 }
 
 inline func should_compact(self: Ref[Hash_Index]) -> bool {
-    let removed: uint = self.used - self.live
-    return removed != 0 and removed * 4 >= self.used
+    let removed: uint = self.__value.used - self.__value.live
+    return removed != 0 and removed * 4 >= self.__value.used
 }
 
 inline func remove_at(self: Ref[Hash_Index], slot: uint) -> uint {
-    let entry: uint = cast[uint](self.slots[slot])
-    if match_empty(self.ctrl[slot / group_slots]) != 0 {
+    let entry: uint = cast[uint](self.__value.slots[slot])
+    if match_empty(self.__value.ctrl[slot / group_slots]) != 0 {
         set_ctrl(self, slot, ctrl_empty)
-        self.growth_left += 1
+        self.__value.growth_left += 1
     } else {
         set_ctrl(self, slot, ctrl_dead)
     }
-    if __array_length(self.dead) == 0 {
-        self.dead = new[Array[u64]](cast[int]((__array_length(self.hashes) + 63) / 64))
+    if __array_length(self.__value.dead) == 0 {
+        self.__value.dead = new[Array[u64]](cast[int]((__array_length(self.__value.hashes) + 63) / 64))
     }
-    self.dead[entry >> 6] = self.dead[entry >> 6] | (cast[u64](1) << cast[u64](entry & 63))
-    self.live -= 1
+    self.__value.dead[entry >> 6] = self.__value.dead[entry >> 6] | (cast[u64](1) << cast[u64](entry & 63))
+    self.__value.live -= 1
     return entry
 }

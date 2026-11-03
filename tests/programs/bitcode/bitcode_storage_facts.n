@@ -78,7 +78,7 @@ func expose_slot() {
 }
 
 let head: Ref[Chain_Node] = prepend(1, nil)
-require head.value == 1
+require head.__value.value == 1
 check_type_only_probe()
 publish_local()
 return_local()

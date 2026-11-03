@@ -23,9 +23,9 @@ var current: Ref[Chain_Node]? = head
 var expected: int = 127
 while current != nil {
     let node: Ref[Chain_Node] = current.get()
-    require node.value == expected
+    require node.__value.value == expected
     expected = expected - 1
-    current = node.next
+    current = node.__value.next
 }
 require expected == -1
 
@@ -38,9 +38,9 @@ while iteration < 100000 {
         var value: int = iteration
         while cursor != nil {
             let node: Ref[Chain_Node] = cursor.get()
-            require node.value == value
+            require node.__value.value == value
             value -= 1
-            cursor = node.next
+            cursor = node.__value.next
         }
         require value == iteration - 64
         recent = nil

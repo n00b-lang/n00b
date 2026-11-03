@@ -29,8 +29,8 @@ func referenced(entry: Entry) -> int {
 }
 
 func through_ref(other: Ref[Entry]) -> int {
-    if other.value != nil {
-        return other.value.get()
+    if other.__value.value != nil {
+        return other.__value.value.get()
     }
     return 1
 }

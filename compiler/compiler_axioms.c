@@ -174,6 +174,8 @@ static const n00bb_axiom_t axioms[] = {
     COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
     NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize",
            NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
+    NATIVE("__finalize_boxed", "n00bb_finalize_boxed",
+           NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
     NATIVE("__array_length", "__n00bb_array_length", 0, 0x1, 0),
     {.key = N00BB_AXIOM_NATIVE, .name = CORE_STRING_STATIC("__array_prefix"),
      .native = CORE_STRING_STATIC("__n00bb_array_prefix"),

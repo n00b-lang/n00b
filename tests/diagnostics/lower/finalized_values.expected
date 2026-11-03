@@ -1,0 +1,10 @@
+tests/diagnostics/lower/finalized_values.n:13:24: error N00B-S0068: `Guard` has a finalizer, so it cannot be copied out of `holder.guard`
+  help: move the whole variable instead, or build a new value
+tests/diagnostics/lower/finalized_values.n:18:12: error N00B-S0068: `Guard` has a finalizer, so it cannot be copied out of `holder.guard`
+  help: move the whole variable instead, or build a new value
+tests/diagnostics/lower/finalized_values.n:24:12: error N00B-S0003: `guard` is used here after it may have been moved
+  tests/diagnostics/lower/finalized_values.n:23:24: note: `guard` is moved here
+  help: a value with a finalizer moves when it is assigned; use the variable it moved to
+tests/diagnostics/lower/finalized_values.n:30:25: error N00B-S0003: `guard` is used here after it may have been moved
+  tests/diagnostics/lower/finalized_values.n:29:24: note: `guard` is moved here
+  help: a value with a finalizer moves when it is assigned; use the variable it moved to

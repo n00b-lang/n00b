@@ -1772,6 +1772,97 @@ cache_iteration_plan(parse_grammar_t *grammar,
     return true;
 }
 
+enum { N00BB_FINALIZE_DEPTH = 16 };
+
+static th_type *
+finalize_record_shape(n00bb_tu_state_t *state, th_type *type, bool open)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || th_is_poison(resolved)
+        || (!open && !th_is_closed(state->types, resolved))
+        || n00bb_object_type(state->types, resolved)) return nullptr;
+    th_type *shape = th_kind_of(resolved) == TH_NAMED
+        ? th_type_definition(state->types, resolved) : resolved;
+    shape = shape ? th_resolve(shape) : nullptr;
+    return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
+}
+
+bool
+n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
+                     th_env_method_t *method)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    if (!state || !type) return false;
+    th_type *reference = th_ind(state->types, 0, th_resolve(type));
+    th_env_method_t found = {0};
+    bool resolved = reference && th_env_method_resolve(state->types,
+        reference, CORE_STRING_STATIC("Finalize"),
+        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND
+        && !n00bb_generic_generated_finalizer(found.qualified_name);
+    if (resolved && method) *method = found;
+    return resolved;
+}
+
+static bool
+type_finalized_within(core_translation_unit_t *unit, th_type *type,
+                      bool open, size_t depth)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || depth >= N00BB_FINALIZE_DEPTH) return false;
+    if (open && th_kind_of(resolved) == TH_VAR) return true;
+    th_type *item = th_option_item(resolved);
+    if (item) return type_finalized_within(unit, item, open, depth + 1);
+    size_t count = 0;
+    if (static_tuple_element_type(resolved, 0, &count)) {
+        for (size_t i = 0; i < count; i++)
+            if (type_finalized_within(unit,
+                    static_tuple_element_type(resolved, i, nullptr), open,
+                    depth + 1)) return true;
+        return false;
+    }
+    th_type *shape = finalize_record_shape(state, resolved, open);
+    if (!shape) return false;
+    if (n00bb_type_finalizer(unit, resolved, nullptr)) return true;
+    for (size_t i = 0; i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && member->type
+            && type_finalized_within(unit, member->type, open, depth + 1))
+            return true;
+    }
+    return false;
+}
+
+static bool
+type_finalized_cached(core_translation_unit_t *unit, th_type *type,
+                      bool open)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    th_type *key = type ? th_resolve(type) : nullptr;
+    if (!state || !key) return false;
+    uintptr_t known = open ? 4 : 1;
+    uintptr_t yes = open ? 8 : 2;
+    uintptr_t cached = (uintptr_t)core_dict_get(&state->finalized_types, key,
+                                                nullptr);
+    if (cached & known) return (cached & yes) != 0;
+    bool finalized = type_finalized_within(unit, key, open, 0);
+    cached |= known | (finalized ? yes : 0);
+    core_dict_put(&state->finalized_types, key, (void *)cached);
+    return finalized;
+}
+
+bool
+n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
+{
+    return type_finalized_cached(unit, type, false);
+}
+
+bool
+n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type)
+{
+    return type_finalized_cached(unit, type, true);
+}
+
 bool
 n00bb_switch_case_integer(parse_grammar_t *grammar, parse_tree_t *node,
                          ir_lit_t *value)
@@ -12569,6 +12660,7 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
+    core_dict_free(&state->finalized_types);
     core_dict_free(&state->integer_edge_sites);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->trait_dispatchers);
@@ -12598,6 +12690,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
+    core_dict_init(&state->finalized_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);

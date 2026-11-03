@@ -95,6 +95,10 @@ void resolve_declaration_patterns(parse_grammar_t *grammar,
 bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                bool closed_only);
+bool n00bb_type_finalized(core_translation_unit_t *unit, th_type *type);
+bool n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type);
+bool n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
+                          th_env_method_t *method);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                            core_list_t(n00bb_tree_ptr_t) *arguments);
 core_string_t call_keyword_name(parse_tree_t *argument);
@@ -749,6 +753,7 @@ typedef struct {
     bool type_symbols_indexed;
     core_dict_t type_symbol_index;
     parse_tree_t *flagset_scope;
+    core_dict_t finalized_types;
 } n00bb_tu_state_t;
 static inline parse_tree_t *
 n00bb_tu_parsed_tree(const n00bb_tu_state_t *state)

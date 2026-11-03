@@ -181,7 +181,7 @@ func leak(view c: Counter_1) {
 }
 
 func leak_nested(view o: Outer) {
-    kept_leaf = o.x.inner
+    kept_leaf = o.x.__value.inner
 }
 func f(c: bool) -> int {
     var x: int

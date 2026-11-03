@@ -290,6 +290,57 @@ move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
     return true;
 }
 
+static void
+release_scope_finalizer(ir_func_t *function, ir_value_t *binding)
+{
+    ir_annots_t *annots = binding ? ir_value_annots(binding) : nullptr;
+    ir_annot_t *owned = annots ? ir_annot_get(annots,
+        CORE_STRING_STATIC("n00bb.finalize_owned")) : nullptr;
+    ir_local_t *flag = owned && owned->kind == IR_ANNOT_VALUE && owned->v
+        && owned->v->kind == IR_VAL_LOCAL ? owned->v->local : nullptr;
+    for (uint32_t b = 0; flag && b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+            if (in->op != IR_OP_COPY || in->dest_kind != IR_DEST_LOCAL
+                || in->dest_local != flag || !in->n_operands) continue;
+            ir_value_t *source = ir_operand_value(&in->operands[0]);
+            ir_instr_t *constant = source && source->kind == IR_VAL_INSTR
+                ? source->def : nullptr;
+            if (constant && constant->op == IR_OP_CONST
+                && constant->n_operands == 1
+                && constant->operands[0].kind == IR_OPD_CONST)
+                constant->operands[0].lit.i.mag = 0;
+        }
+    }
+}
+
+static bool
+retire_scope_finalizer(ir_ctx_t *context, ir_value_t *binding)
+{
+    ir_annots_t *annots = binding ? ir_value_annots(binding) : nullptr;
+    return !annots || !ir_annot_get(annots,
+            CORE_STRING_STATIC("n00bb.finalize_owned"))
+        || ir_annot_set(context, annots, (ir_annot_t){
+            .key = CORE_STRING_STATIC("n00bb.finalize_owned"),
+            .kind = IR_ANNOT_BOOL});
+}
+
+static bool
+retire_scope_finalizers(ir_ctx_t *context, ir_func_t *function)
+{
+    bool ok = true;
+    for (uint32_t p = 0; ok && p < function->n_params; p++)
+        ok = retire_scope_finalizer(context, function->params[p]);
+    for (uint32_t l = 0; ok && l < function->n_locals; l++)
+        ok = retire_scope_finalizer(context, function->locals[l]->value);
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++)
+        for (uint32_t i = 0; ok && i < function->blocks[b]->n_instrs; i++)
+            ok = retire_scope_finalizer(context,
+                                        function->blocks[b]->instrs[i]->dest);
+    return ok;
+}
+
 static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
                      ir_func_t *function)
@@ -310,6 +361,9 @@ annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
         }
     }
     bool ok = true;
+    for (size_t a = 0; a < found.len; a++)
+        if (!found.data[a].local)
+            release_scope_finalizer(function, found.data[a].allocation->dest);
     for (size_t a = 0; ok && a < found.len; a++)
         ok = ir_annot_set(context, &found.data[a].allocation->annots,
             (ir_annot_t){.key  = CORE_STRING_STATIC("ir.allocation_local"),
@@ -346,12 +400,15 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         core_dict_free(&escaping);
         bool ok = doms != nullptr;
         ir_analysis_scope_end(scope);
-        for (uint32_t m = 0; ok && m < count; m++)
+        for (uint32_t m = 0; ok && m < count; m++) {
+            release_scope_finalizer(function, moved[m]->value);
             ok = move_local_to_storage(function, types, moved[m], entry[m]);
+        }
         core_free(moved);
         core_free(entry);
         if (!ok) return false;
-        if (!annotate_allocations(context, summaries, function))
+        if (!annotate_allocations(context, summaries, function)
+            || !retire_scope_finalizers(context, function))
             return false;
     }
     return true;

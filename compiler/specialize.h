@@ -28,6 +28,12 @@ typedef struct {
 } n00bb_specialization_seed_t;
 
 typedef struct {
+    uint64_t typehash;
+    ir_func_t *function;
+} n00bb_boxed_finalizer_t;
+core_list_decl(n00bb_boxed_finalizer_t);
+
+typedef struct {
     core_buffer_t message;
     core_string_t module;
     core_string_t function;
@@ -35,6 +41,7 @@ typedef struct {
     core_string_t after;
     ir_span_t span;
     bool located;
+    bool finalized_copy;
 } n00bb_specialization_failure_t;
 
 static inline bool
@@ -48,6 +55,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
+    core_list_t(n00bb_boxed_finalizer_t) *boxed_finalizers,
     n00bb_specialization_failure_t *failure);
 
 #endif

@@ -32,12 +32,12 @@ if created != nil {
         tls_root = object
         var saw_tls_root: bool = false
         var tls_index: uint = 0
-        while tls_index < mutator.ntls_roots {
+        while tls_index < mutator.__value.ntls_roots {
             let entry: Ref[sys.gc.roots.TLS_Root_Entry] = sys.gc.roots.tls_root_at(mutator, tls_index)
-            if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_root) {
-                let root_type: Ref[sys.abi.Type_Record]? = sys.abi.type_at(entry.type_index)
+            if __abi_ref_address(entry.__value.address) == __abi_ref_address(ref tls_root) {
+                let root_type: Ref[sys.abi.Type_Record]? = sys.abi.type_at(entry.__value.type_index)
                 require root_type != nil
-                require root_type.get().tracing_index != 0
+                require root_type.get().__value.tracing_index != 0
                 saw_tls_root = true
             }
             tls_index += 1
@@ -46,7 +46,7 @@ if created != nil {
 
         __atomic_store(ref worker_heap, heap)
         let deadline: u64 = sys.clock.now_ns() + 5000000000
-        while __atomic_load(ref heap.nworkers) == 0 {
+        while __atomic_load(ref heap.__value.nworkers) == 0 {
             require sys.clock.now_ns() < deadline
             sys.threads.thread_yield()
         }
@@ -55,8 +55,8 @@ if created != nil {
         var complete: bool = false
         while !complete {
             sys.gc.handshake.safepoint(mutator)
-            sys.gc.sync.ticket_lock(ref heap.lock)
-            complete = heap.collections != 0
+            sys.gc.sync.ticket_lock(ref heap.__value.lock)
+            complete = heap.__value.collections != 0
             sys.gc.heap.unlock(heap)
             require complete or sys.clock.now_ns() < deadline
             sys.threads.thread_yield()
@@ -66,13 +66,13 @@ if created != nil {
         } else { require false }
 
         sys.gc.collect.collect(heap)
-        require heap.collections >= 2
+        require heap.__value.collections >= 2
         if tls_root != nil {
             require sys.gc.mark.is_marked(heap, tls_root.get())
         } else { require false }
 
-        __atomic_store(ref heap.shutdown, true)
-        while __atomic_load(ref heap.nworkers) != 0 {
+        __atomic_store(ref heap.__value.shutdown, true)
+        while __atomic_load(ref heap.__value.nworkers) != 0 {
             require sys.clock.now_ns() < deadline
             sys.threads.thread_yield()
         }

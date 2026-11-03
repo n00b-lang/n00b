@@ -57,7 +57,7 @@ private func element_row(probe: Array['E]) -> Ref[abi.Type_Record]? {
     if array_row == nil {
         return nil
     }
-    let components: abi.Range = array_row.get().components
+    let components: abi.Range = array_row.get().__value.components
     let index: i64 = __abi_range_index(components.first, components.count, 0)
     if index < 0 {
         return nil
@@ -66,12 +66,12 @@ private func element_row(probe: Array['E]) -> Ref[abi.Type_Record]? {
 }
 
 private func stride_bytes(row: Ref[abi.Type_Record]) -> uint {
-    let alignment: uint = row.alignment_bytes
+    let alignment: uint = row.__value.alignment_bytes
     if alignment == 0 {
         return 0
     }
-    var bytes: uint = row.size_bits / 8
-    if row.size_bits % 8 != 0 {
+    var bytes: uint = row.__value.size_bits / 8
+    if row.__value.size_bits % 8 != 0 {
         bytes += 1
     }
     return ((bytes + alignment - 1) / alignment) * alignment
@@ -80,8 +80,8 @@ private func stride_bytes(row: Ref[abi.Type_Record]) -> uint {
 private func plain_data(row: Ref[abi.Type_Record]) -> bool {
     let boolean: Ref[abi.Type_Record]? = __abi_type_for(typeof(false))
     let is_bool: bool = boolean != nil
-        and boolean.get().typehash == row.typehash
-    return row.tracing_index == 0 and row.flags & bits_flag == 0 and !is_bool
+        and boolean.get().__value.typehash == row.__value.typehash
+    return row.__value.tracing_index == 0 and row.__value.flags & bits_flag == 0 and !is_bool
 }
 
 private func open_file(path: string) -> int fail: string {
@@ -133,7 +133,7 @@ fence litmod embed(contents: string, site: litmod_site.Literal_Site)
         fail "'embed needs a concrete element type"
     }
     let row: Ref[abi.Type_Record] = found.get()
-    let name: string = (unsafe_cast[Ref[string]] (ref row.canonical_name)).__value
+    let name: string = (unsafe_cast[Ref[string]] (ref row.__value.canonical_name)).__value
     let stride: uint = stride_bytes(row)
     if !plain_data(row) or stride == 0 {
         fail "'embed cannot fill " + name +

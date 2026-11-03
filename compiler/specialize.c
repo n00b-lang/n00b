@@ -5,6 +5,7 @@
 #include "specialize.h"
 #include "cached_body.h"
 #include "compiler_tu.h"
+#include "qualified_names.h"
 #include "ir/doms.h"
 #include "ir/operands.h"
 #include "ir/pass.h"
@@ -952,11 +953,503 @@ specialize_callback(specialize_state_t *state, ir_func_t *caller,
         &retained->operands[0].value, handler_signature);
 }
 
+enum { FINALIZE_DEPTH = 16 };
+
+static ir_func_t *
+finalize_placeholder(const ir_instr_t *call)
+{
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 2
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    return callee && callee->kind == IR_VAL_FUNC && callee->owner
+        && n00bb_names_function(CORE_STRING_STATIC("__n00bb_finalize_open"),
+                                callee->owner->name)
+        ? callee->owner : nullptr;
+}
+
+typedef struct {
+    specialize_state_t *state;
+    core_dict_t        *glue;
+    function_list_t     finalizers;
+    size_t              scanned;
+    size_t              locals;
+    core_dict_t         heap_types;
+    core_dict_t         modules;
+    n00bb_specialization_failure_t *report;
+} finalize_state_t;
+
+static void
+scan_finalizers(finalize_state_t *finalize)
+{
+    const function_list_t *functions = finalize->state->functions;
+    for (; finalize->scanned < functions->len; finalize->scanned++) {
+        ir_func_t *function = functions->data[finalize->scanned];
+        ir_module_t *module = function ? function->owner : nullptr;
+        if (!module || !core_dict_add(&finalize->modules, module, 1))
+            continue;
+        for (size_t f = 0; f < ir_func_count(module); f++) {
+            ir_func_t *candidate = ir_func_at(module, f);
+            if (candidate && n00bb_names_function(
+                    CORE_STRING_STATIC("__finalize"), candidate->name))
+                core_list_push(finalize->finalizers, candidate);
+        }
+    }
+}
+
+static ir_func_t *
+finalizer_implementation(finalize_state_t *finalize, th_ctx *types,
+                         th_type *type)
+{
+    scan_finalizers(finalize);
+    th_type *reference = th_ind(types, 0, type);
+    ir_func_t *generic = nullptr;
+    for (size_t i = 0; reference && i < finalize->finalizers.len; i++) {
+        ir_func_t *candidate = finalize->finalizers.data[i];
+        ir_func_t *body = n00bb_cached_body(candidate);
+        if (!body || !body->n_blocks
+            || n00bb_generic_generated_finalizer(candidate->name)) continue;
+        th_ctx *candidate_types = ir_module_types(candidate->owner);
+        const th_param *self = th_func_param(candidate->type, 0);
+        if (!self) continue;
+        if (th_hash(candidate_types, self->type) == th_hash(types, reference))
+            return candidate;
+        core_list_t(type_binding_t) bindings = {0};
+        if (!generic && !th_is_closed(candidate_types, self->type)
+            && match_type(candidate_types, self->type, reference, &bindings))
+            generic = candidate;
+        core_list_free(bindings);
+    }
+    return generic;
+}
+
+static th_type *
+finalize_signature(th_ctx *types, th_type *type)
+{
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
+    th_param parameter = {.mode = TH_CONSUME, .type = th_ind(types, 0, type)};
+    return parameter.type
+        ? th_func_with_error(types, nil_type, nil_type, &parameter, 1,
+                             nullptr, nullptr, 0) : nullptr;
+}
+
+static th_type *
+finalize_record_fields(th_ctx *types, th_type *type)
+{
+    if (th_kind_of(type) != TH_NAMED || n00bb_object_type(types, type))
+        return nullptr;
+    th_type *shape = th_type_definition(types, type);
+    shape = shape ? th_resolve(shape) : nullptr;
+    return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
+}
+
+static bool
+finalizable(finalize_state_t *finalize, th_ctx *types, th_type *type,
+            size_t depth)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || depth >= FINALIZE_DEPTH
+        || !th_is_closed(types, resolved)) return false;
+    th_type *item = th_option_item(resolved);
+    if (item) return finalizable(finalize, types, item, depth + 1);
+    size_t count = 0;
+    if (static_tuple_element_type(resolved, 0, &count)) {
+        for (size_t i = 0; i < count; i++)
+            if (finalizable(finalize, types,
+                    static_tuple_element_type(resolved, i, nullptr),
+                    depth + 1)) return true;
+        return false;
+    }
+    th_type *shape = finalize_record_fields(types, resolved);
+    if (!shape) return false;
+    if (finalizer_implementation(finalize, types, resolved)) return true;
+    for (size_t i = 0; i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && finalizable(finalize, types, member->type, depth + 1))
+            return true;
+    }
+    return false;
+}
+
+static ir_func_t *finalize_target(finalize_state_t *finalize,
+                                  ir_module_t *module, th_type *type,
+                                  ir_span_t span, size_t depth);
+
+static ir_func_t *
+concrete_finalizer(finalize_state_t *finalize, ir_module_t *requester,
+                   ir_func_t *target, th_type *type)
+{
+    th_ctx *types = ir_module_types(requester);
+    if (th_is_closed(ir_module_types(target->owner), target->type))
+        return target;
+    th_type *actual = finalize_signature(types, type);
+    specializations_t *specializations = finalize->state->specializations;
+    ir_func_t *copy = actual ? find_instance(specializations, target,
+        th_hash(types, actual), types) : nullptr;
+    if (copy || !actual) return copy;
+    core_list_t(type_binding_t) bindings = {0};
+    bool matched = match_type(types, target->type, actual, &bindings)
+        && bindings.len;
+    copy = matched ? instantiate(finalize->state->context, target, actual,
+        &bindings, types, finalize->state->failure) : nullptr;
+    core_list_free(bindings);
+    if (!copy) return nullptr;
+    add_specialization(specializations,
+        ((specialization_t){target, copy, actual, SIZE_MAX}));
+    core_list_push(*finalize->state->instances,
+        ((n00bb_specialization_t){target, copy, actual}));
+    core_list_push(*finalize->state->functions, copy);
+    core_list_push(*finalize->state->requests,
+        ((n00bb_specialization_request_t){requester, copy}));
+    return copy;
+}
+
+static ir_func_t *
+heap_finalizer(finalize_state_t *finalize, th_ctx *types, th_type *type)
+{
+    scan_finalizers(finalize);
+    th_type *reference = th_ind(types, 0, type);
+    for (size_t i = 0; reference && i < finalize->finalizers.len; i++) {
+        ir_func_t *candidate = finalize->finalizers.data[i];
+        ir_func_t *body = n00bb_cached_body(candidate);
+        const th_param *self = th_func_param(candidate->type, 0);
+        th_ctx *candidate_types = ir_module_types(candidate->owner);
+        if (!body || !body->n_blocks || !self
+            || th_is_closed(candidate_types, self->type)) continue;
+        core_list_t(type_binding_t) bindings = {0};
+        bool matched = match_type(candidate_types, self->type, reference,
+                                  &bindings);
+        core_list_free(bindings);
+        if (matched) return body;
+    }
+    return nullptr;
+}
+
+static bool
+heap_fields_finalize(finalize_state_t *finalize, th_ctx *types,
+                     th_type *type)
+{
+    th_type *shape = th_type_definition(types, type);
+    shape = shape ? th_resolve(shape) : nullptr;
+    if (shape && th_kind_of(shape) == TH_INDIRECTION) {
+        th_type *fields = th_resolve(th_ind_referent(shape));
+        shape = fields && th_kind_of(fields) == TH_NAMED
+            ? th_type_definition(types, fields) : fields;
+        shape = shape ? th_resolve(shape) : nullptr;
+    }
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && finalizable(finalize, types, member->type, 0))
+            return true;
+    }
+    return false;
+}
+
+static bool
+heap_finalizer_instance(finalize_state_t *finalize, ir_func_t *caller,
+                        th_type *type, size_t depth)
+{
+    th_ctx *types = ir_module_types(caller->owner);
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth >= FINALIZE_DEPTH) return true;
+    if (th_kind_of(type) == TH_INDIRECTION)
+        return heap_finalizer_instance(finalize, caller,
+                                       th_ind_referent(type), depth + 1);
+    if (th_kind_of(type) != TH_NAMED || !th_named_nargs(type)
+        || !th_is_closed(types, type)
+        || !core_dict_add(&finalize->heap_types, th_hash(types, type) | 1, 1))
+        return true;
+    for (size_t i = 0; i < th_named_nargs(type); i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        if (argument && argument->kind == TH_ARG_TYPE
+            && !heap_finalizer_instance(finalize, caller, argument->type,
+                                        depth + 1)) return false;
+    }
+    ir_func_t *target = heap_finalizer(finalize, types, type);
+    if (!target || (n00bb_generic_generated_finalizer(target->name)
+                    && !heap_fields_finalize(finalize, types, type)))
+        return true;
+    return concrete_finalizer(finalize, caller->owner, target, type)
+        != nullptr;
+}
+
+static ir_value_t *
+glue_value(ir_block_t *block, ir_op_t op, th_type *type, ir_span_t span)
+{
+    ir_instr_t *in = ir_instr_add(block, op);
+    if (!in || !ir_instr_set_fresh_dest(in, "__n00bb_glue", type))
+        return nullptr;
+    in->span = span;
+    return in->dest;
+}
+
+static bool
+glue_call(finalize_state_t *finalize, ir_func_t *glue, ir_block_t *block,
+          ir_value_t *address, th_type *type, ir_span_t span, size_t depth)
+{
+    th_ctx *types = ir_module_types(glue->owner);
+    if (!finalizable(finalize, types, type, 0)) return true;
+    ir_func_t *target = finalize_target(finalize, glue->owner, type, span,
+                                        depth + 1);
+    ir_value_t *callee = target
+        ? ir_func_address(target->owner, target) : nullptr;
+    ir_value_t *consumed = callee
+        ? glue_value(block, IR_OP_CONSUME, address->type, span) : nullptr;
+    ir_value_t *done = consumed && ir_instr_operand_value(consumed->def,
+                                                         address)
+        ? glue_value(block, IR_OP_CALL,
+                     th_name(types, CORE_STRING_STATIC("nil")), span)
+        : nullptr;
+    th_type *signature = done ? finalize_signature(types, type) : nullptr;
+    return signature && ir_instr_operand_value(done->def, callee)
+        && ir_instr_operand_value(done->def, consumed)
+        && ir_instr_set_call_signature(done->def, signature);
+}
+
+static bool
+glue_copy_call(finalize_state_t *finalize, ir_func_t *glue,
+               ir_block_t *block, ir_value_t *value, th_type *type,
+               ir_span_t span, size_t depth)
+{
+    th_ctx *types = ir_module_types(glue->owner);
+    if (!finalizable(finalize, types, type, 0)) return true;
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__n00bb_glue_%zu", finalize->locals++);
+    ir_local_t *local = name.data
+        ? ir_local_add(glue, core_buffer_string(&name), type) : nullptr;
+    core_buffer_release(&name);
+    ir_instr_t *copy = local ? ir_instr_add(block, IR_OP_COPY) : nullptr;
+    if (!copy || !ir_instr_set_dest_local(copy, local)
+        || !ir_instr_operand_value(copy, value)) return false;
+    copy->span = span;
+    ir_value_t *address = glue_value(block, IR_OP_ADDRESS_OF,
+                                     th_ind(types, 0, type), span);
+    return address && ir_instr_operand_local(address->def, local)
+        && glue_call(finalize, glue, block, address, type, span, depth);
+}
+
+static bool
+glue_body(finalize_state_t *finalize, ir_func_t *glue, ir_value_t *self,
+          th_type *type, ir_span_t span, size_t depth)
+{
+    th_ctx *types = ir_module_types(glue->owner);
+    ir_block_t *block = ir_block_add(glue, CORE_STRING_STATIC("entry"));
+    if (!block) return false;
+    th_type *item = th_option_item(type);
+    size_t count = 0;
+    th_type *shape = item || static_tuple_element_type(type, 0, &count)
+        ? nullptr : finalize_record_fields(types, type);
+    if (shape) {
+        for (size_t i = 0; i < th_record_len(shape); i++) {
+            const th_member *member = th_record_member(shape, i);
+            if (!member || !finalizable(finalize, types,
+                                        member->type, 0)) continue;
+            ir_value_t *field = glue_value(block, IR_OP_FIELD,
+                th_ind(types, 0, member->type), span);
+            if (!field || !ir_instr_operand_value(field->def, self)
+                || !ir_instr_operand_name(field->def, member->name)
+                || !glue_call(finalize, glue, block, field, member->type,
+                              span, depth)) return false;
+        }
+    }
+    else {
+        ir_value_t *value = glue_value(block, IR_OP_LOAD, type, span);
+        if (!value || !ir_instr_operand_value(value->def, self)) return false;
+        for (size_t i = 0; !item && i < count; i++) {
+            th_type *element = static_tuple_element_type(type, i, nullptr);
+            ir_value_t *part = glue_value(block, IR_OP_EXTRACT_INDEX,
+                                          element, span);
+            if (!part || !ir_instr_operand_value(part->def, value)
+                || !ir_instr_operand_uint(part->def, i)
+                || !glue_copy_call(finalize, glue, block, part, element,
+                                   span, depth)) return false;
+        }
+        if (item) {
+            ir_value_t *absent = glue_value(block, IR_OP_OPTION_IS_NIL,
+                th_name(types, CORE_STRING_STATIC("bool")), span);
+            ir_block_t *present = ir_block_add(glue,
+                                               CORE_STRING_STATIC("present"));
+            ir_block_t *join = ir_block_add(glue, CORE_STRING_STATIC("done"));
+            ir_instr_t *branch = absent && present && join
+                && ir_instr_operand_value(absent->def, value)
+                ? ir_instr_add(block, IR_OP_BRANCH) : nullptr;
+            if (!branch || !ir_instr_operand_value(branch, absent)
+                || !ir_instr_operand_block(branch, join)
+                || !ir_instr_operand_block(branch, present)) return false;
+            branch->span = span;
+            ir_value_t *payload = glue_value(present, IR_OP_OPTION_GET, item,
+                                             span);
+            ir_instr_t *jump = payload
+                && ir_instr_operand_value(payload->def, value)
+                && glue_copy_call(finalize, glue, present, payload, item,
+                                  span, depth)
+                ? ir_instr_add(present, IR_OP_JUMP) : nullptr;
+            if (!jump || !ir_instr_operand_block(jump, join)) return false;
+            jump->span = span;
+            block = join;
+        }
+    }
+    ir_instr_t *ret = ir_instr_add(block, IR_OP_RETURN);
+    if (ret) ret->span = span;
+    return ret != nullptr;
+}
+
+static ir_func_t *
+finalize_target(finalize_state_t *finalize, ir_module_t *module,
+                th_type *type, ir_span_t span, size_t depth)
+{
+    th_ctx *types = ir_module_types(module);
+    th_type *resolved = th_resolve(type);
+    ir_func_t *implementation = finalizer_implementation(finalize,
+                                                         types, resolved);
+    if (implementation || depth >= FINALIZE_DEPTH) return implementation;
+    uint64_t hash = th_hash(types, resolved);
+    ir_func_t *glue = core_dict_get(finalize->glue, hash | 1, nullptr);
+    if (glue) return glue;
+    th_type *signature = finalize_signature(types, resolved);
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__n00bb_finalize_glue#%016llx",
+                       (unsigned long long)hash);
+    ir_func_t *existing = name.data
+        ? ir_func_find(module, core_buffer_string(&name)) : nullptr;
+    if (existing) {
+        core_buffer_release(&name);
+        core_dict_add(finalize->glue, hash | 1, existing);
+        return existing;
+    }
+    glue = signature && name.data ? ir_func_add(module,
+        core_buffer_string(&name), signature, IR_LINK_INTERNAL) : nullptr;
+    core_buffer_release(&name);
+    ir_value_t *self = glue ? ir_param_add(glue, CORE_STRING_STATIC("self"),
+        th_func_param(signature, 0)->type) : nullptr;
+    if (!self) return nullptr;
+    core_dict_add(finalize->glue, hash | 1, glue);
+    if (!glue_body(finalize, glue, self, resolved, span, depth))
+        return nullptr;
+    core_list_push(*finalize->state->functions, glue);
+    return glue;
+}
+
+static bool
+specialize_finalizers(finalize_state_t *finalize, ir_func_t *caller)
+{
+    th_ctx *types = ir_module_types(caller->owner);
+    core_list_t(selection_t) calls = core_list_new(selection_t);
+    for (uint32_t b = 0; b < caller->n_blocks; b++)
+        for (uint32_t i = 0; i < caller->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = caller->blocks[b]->instrs[i];
+            if (finalize_placeholder(in)) core_list_push(calls, in);
+            ir_annot_t *copy = ir_annot_get(&in->annots,
+                CORE_STRING_STATIC("n00bb.place_copy"));
+            if (!copy || copy->kind != IR_ANNOT_STR || !in->dest
+                || !finalizable(finalize, types, in->dest->type, 0))
+                continue;
+            const specialization_t *instance = instance_of(
+                finalize->state->specializations, caller);
+            ir_func_t *source = instance && instance->source
+                ? instance->source : caller;
+            n00bb_specialization_failure_t *report = finalize->report;
+            if (report) {
+                report->function = source->name;
+                report->module = ir_module_name(source->owner);
+                report->before = n00bb_print_type(types, in->dest->type);
+                report->after = copy->s;
+                report->span = in->span;
+                report->located = true;
+                report->finalized_copy = true;
+            }
+            core_list_free(calls);
+            return false;
+        }
+    bool valid = true;
+    for (uint32_t p = 0; valid && p < caller->n_params; p++)
+        valid = heap_finalizer_instance(finalize, caller,
+                                        caller->params[p]->type, 0);
+    for (uint32_t b = 0; valid && b < caller->n_blocks; b++)
+        for (uint32_t i = 0; valid && i < caller->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = caller->blocks[b]->instrs[i];
+            if (in->dest)
+                valid = heap_finalizer_instance(finalize, caller,
+                                                in->dest->type, 0);
+        }
+    for (size_t c = 0; valid && c < calls.len; c++) {
+        ir_instr_t *call = calls.data[c];
+        ir_value_t *consumed = ir_operand_value(&call->operands[1]);
+        th_type *reference = consumed && consumed->type
+            ? th_resolve(consumed->type) : nullptr;
+        th_type *type = reference && th_kind_of(reference) == TH_INDIRECTION
+            ? th_resolve(th_ind_referent(reference)) : nullptr;
+        if (!type || !th_is_closed(types, type)) continue;
+        if (!finalizable(finalize, types, type, 0)) {
+            ir_instr_t *consume = consumed->kind == IR_VAL_INSTR
+                ? consumed->def : nullptr;
+            valid = ir_instr_erase(call);
+            if (valid && consume && consume->op == IR_OP_CONSUME)
+                valid = ir_instr_erase(consume);
+            continue;
+        }
+        ir_func_t *target = finalize_target(finalize, caller->owner, type,
+                                            call->span, 0);
+        ir_value_t *bound = target
+            ? ir_func_address(target->owner, target) : nullptr;
+        th_type *signature = bound ? finalize_signature(types, type)
+                                   : nullptr;
+        valid = signature != nullptr;
+        if (valid) {
+            call->operands[0].value = bound;
+            valid = ir_instr_set_call_signature(call, signature);
+        }
+    }
+    core_list_free(calls);
+    return valid;
+}
+
+static bool
+record_boxed_finalizers(finalize_state_t *finalize,
+                        core_list_t(n00bb_boxed_finalizer_t) *boxed)
+{
+    scan_finalizers(finalize);
+    core_dict_t recorded;
+    core_dict_init(&recorded, nullptr, nullptr);
+    for (size_t i = 0; i < boxed->len; i++)
+        core_dict_add(&recorded, boxed->data[i].typehash | 1, 1);
+    core_list_t(n00bb_ir_func_ptr_t) modules =
+        core_list_new(n00bb_ir_func_ptr_t);
+    core_dict_foreach(&finalize->modules, item)
+        core_list_push(modules, (ir_func_t *)item->key);
+    bool valid = true;
+    for (size_t m = 0; valid && m < modules.len; m++) {
+        ir_module_t *module = (ir_module_t *)modules.data[m];
+        th_ctx *types = ir_module_types(module);
+        ir_span_t span = ir_module_span(module);
+        span.implied = true;
+        for (size_t t = 0; valid && t < ir_type_count(module); t++) {
+            th_type *type = ir_type_at(module, t);
+            type = type ? th_resolve(type) : nullptr;
+            if (!type || !th_is_closed(types, type)
+                || !finalizable(finalize, types, type, 0)) continue;
+            uint64_t hash = th_hash(types, type);
+            if (!core_dict_add(&recorded, hash | 1, 1)) continue;
+            ir_func_t *target = finalize_target(finalize, module, type,
+                                                span, 0);
+            ir_func_t *function = target
+                ? concrete_finalizer(finalize, module, target, type)
+                : nullptr;
+            valid = function != nullptr;
+            if (valid) core_list_push(*boxed,
+                ((n00bb_boxed_finalizer_t){hash, function}));
+        }
+    }
+    core_list_free(modules);
+    core_dict_free(&recorded);
+    return valid;
+}
+
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
+    core_list_t(n00bb_boxed_finalizer_t) *boxed_finalizers,
     n00bb_specialization_failure_t *report)
 {
     if (!context || !functions || !instances || !requests
@@ -969,11 +1462,19 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     core_dict_init(&inline_bodies, nullptr, nullptr);
     method_index_t methods = {.functions = functions};
     core_dict_init_string(&methods.by_name);
+    core_dict_t glue;
+    core_dict_init(&glue, nullptr, nullptr);
     specialize_state_t state = {
         .context = context, .specializations = &specializations,
         .instances = instances, .functions = functions,
         .requests = requests, .failure = failure,
     };
+    finalize_state_t finalize = {
+        .state = &state, .glue = &glue, .report = report,
+        .finalizers = core_list_new(n00bb_ir_func_ptr_t),
+    };
+    core_dict_init(&finalize.heap_types, nullptr, nullptr);
+    core_dict_init(&finalize.modules, nullptr, nullptr);
     bool valid = true;
     for (size_t i = 0; i < instances->len; i++)
         add_specialization(&specializations, ((specialization_t){
@@ -1008,7 +1509,11 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         th_ctx *caller_types = ir_module_types(caller->owner);
         bool open_caller = !th_is_closed(caller_types, caller->type)
             && parent == SIZE_MAX;
-        if (!open_caller) specialize_trait_operators(caller, &methods);
+        if (!open_caller) {
+            specialize_trait_operators(caller, &methods);
+            valid = specialize_finalizers(&finalize, caller);
+            if (!valid) break;
+        }
         bool *feasible = fold_static_type_tests(caller, caller_types);
         valid = feasible != nullptr;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {
@@ -1105,8 +1610,14 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         }
         core_free(feasible);
     }
+    if (valid && boxed_finalizers)
+        valid = record_boxed_finalizers(&finalize, boxed_finalizers);
     specializations_free(&specializations);
     core_dict_free(&inline_bodies);
+    core_dict_free(&glue);
+    core_list_free(finalize.finalizers);
+    core_dict_free(&finalize.heap_types);
+    core_dict_free(&finalize.modules);
     method_index_free(&methods);
     return valid;
 }

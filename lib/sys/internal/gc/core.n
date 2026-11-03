@@ -384,12 +384,12 @@ inline func meta_make(payload_bytes: uint, flags: u32) -> uint {
 func set_marking(heap: Ref[Heap], on: bool) {
     if on {
         __atomic_fetch_add(ref marking_heaps, 1)
-        if __atomic_exchange(ref heap.marking, true) {
+        if __atomic_exchange(ref heap.__value.marking, true) {
             __atomic_fetch_sub(ref marking_heaps, 1)
         }
         return
     }
-    if __atomic_exchange(ref heap.marking, false) {
+    if __atomic_exchange(ref heap.__value.marking, false) {
         __atomic_fetch_sub(ref marking_heaps, 1)
     }
 }
@@ -411,10 +411,10 @@ func array_flat_element_index(type_index: u32, flat_rank: u32) -> u32 {
         let array: Ref[internal.abi.Type_Record]? = internal.abi.type_at(current)
 
         if array != nil {
-            if array.get().kind != cast[u32](internal.abi.Type_Kind.array_type) {
+            if array.get().__value.kind != cast[u32](internal.abi.Type_Kind.array_type) {
                 return 0
             }
-            let component: int = internal.abi.range_index(array.get().components, 0)
+            let component: int = internal.abi.range_index(array.get().__value.components, 0)
             if component < 0 {
                 return 0
             }
@@ -429,11 +429,11 @@ func array_flat_element_index(type_index: u32, flat_rank: u32) -> u32 {
 
 func array_descriptor_bytes(shape: Ref[internal.abi.Array_Descriptor_Header]
                            ) -> uint {
-    if cast[uint](shape.rank) > (~cast[uint](0) - array_header_size) / 8 {
+    if cast[uint](shape.__value.rank) > (~cast[uint](0) - array_header_size) / 8 {
         return 0
     }
 
-    return array_header_size + cast[uint](shape.rank) * 8
+    return array_header_size + cast[uint](shape.__value.rank) * 8
 }
 
 inline func array_element_index(type_index: u32, flat_rank: u32) -> u32 {
@@ -444,10 +444,10 @@ inline func array_element_index(type_index: u32, flat_rank: u32) -> u32 {
     if array == nil {
         return 0
     }
-    if array.get().kind != cast[u32](internal.abi.Type_Kind.array_type) {
+    if array.get().__value.kind != cast[u32](internal.abi.Type_Kind.array_type) {
         return 0
     }
-    let component: i64 = internal.abi.range_index(array.get().components, 0)
+    let component: i64 = internal.abi.range_index(array.get().__value.components, 0)
     if component < 0 {
         return 0
     }
@@ -457,11 +457,11 @@ inline func array_element_index(type_index: u32, flat_rank: u32) -> u32 {
 inline func resolve_array_backing(type_index: u32,
                                   shape     : Ref[internal.abi.Array_Descriptor_Header]
                                  ) -> Array_Backing? {
-    if shape.rank == 0 or shape.flat_rank == 0 or shape.flat_rank > shape.rank {
+    if shape.__value.rank == 0 or shape.__value.flat_rank == 0 or shape.__value.flat_rank > shape.__value.rank {
         return nil
     }
 
-    let element_index: u32 = array_element_index(type_index, shape.flat_rank)
+    let element_index: u32 = array_element_index(type_index, shape.__value.flat_rank)
     let found: Ref[internal.abi.Type_Record]? = internal.abi.type_at(element_index)
 
     if found == nil {
@@ -469,17 +469,17 @@ inline func resolve_array_backing(type_index: u32,
     }
 
     let element:   Ref[internal.abi.Type_Record] = found.get()
-    let alignment: uint = cast[uint](element.alignment_bytes)
+    let alignment: uint = cast[uint](element.__value.alignment_bytes)
 
     if alignment == 0 or (alignment & (alignment - 1)) != 0 or
-        element.size_bits > max_element_bits {
+        element.__value.size_bits > max_element_bits {
         return nil
     }
 
     let mask:             uint = alignment - 1
     var data_mask:        uint = 7
-    let element_bytes:    uint = cast[uint]((element.size_bits + 7) >> 3)
-    let descriptor_bytes: uint = array_header_size + cast[uint](shape.rank) * 8
+    let element_bytes:    uint = cast[uint]((element.__value.size_bits + 7) >> 3)
+    let descriptor_bytes: uint = array_header_size + cast[uint](shape.__value.rank) * 8
 
     if mask > data_mask {
         data_mask = mask
@@ -510,26 +510,26 @@ func initialize_array_backing(payload      : Ref[byte],
                               payload_bytes: uint,
                               backing      : Ref[Array_Backing]
                              ) -> bool {
-    let offset: uint = backing.data_offset
+    let offset: uint = backing.__value.data_offset
 
     if offset > payload_bytes {
         return false
     }
 
-    let count: u64 = backing.shape.total_count
+    let count: u64 = backing.__value.shape.__value.total_count
 
-    if backing.packed_bits != 0 {
-        let required_bits:  u128 = cast[u128](count) * cast[u128](backing.packed_bits)
+    if backing.__value.packed_bits != 0 {
+        let required_bits:  u128 = cast[u128](count) * cast[u128](backing.__value.packed_bits)
         let required_bytes: u128 = (required_bits + 7) / 8
 
         if required_bytes > cast[u128](payload_bytes - offset) {
             return false
         }
-    } elif backing.stride != 0 and count > cast[u64]((payload_bytes - offset) / backing.stride) {
+    } elif backing.__value.stride != 0 and count > cast[u64]((payload_bytes - offset) / backing.__value.stride) {
         return false
     }
 
-    __gc_memcpy(payload, unsafe_cast[Ref[byte]] backing.shape, backing.descriptor_bytes)
+    __gc_memcpy(payload, unsafe_cast[Ref[byte]] backing.__value.shape, backing.__value.descriptor_bytes)
     return true
 }
 
@@ -572,7 +572,7 @@ inline func object_header_bytes() -> uint {
 }
 
 inline func object_bytes(header: Ref[Object_Header]) -> uint {
-    return object_header_bytes() + cast[uint](meta_payload_bytes(header.meta))
+    return object_header_bytes() + cast[uint](meta_payload_bytes(header.__value.meta))
 }
 
 inline func payload_of(header: Ref[Object_Header]) -> Ref[byte] {
@@ -609,7 +609,7 @@ func los_header_offset() -> uint {
 
         if header_type != nil {
             let header_row: Ref[internal.abi.Type_Record] = header_type.get()
-            let fields:     internal.abi.Range            = los_row.fields_or_arms
+            let fields:     internal.abi.Range            = los_row.__value.fields_or_arms
 
             require fields.count != 0
 
@@ -620,13 +620,13 @@ func los_header_offset() -> uint {
 
                 if field != nil {
                     let field_row: Ref[internal.abi.Field_Record] = field.get()
-                    let child:     Ref[internal.abi.Type_Record]? = internal.abi.type_at(field_row.child_type_index)
+                    let child:     Ref[internal.abi.Type_Record]? = internal.abi.type_at(field_row.__value.child_type_index)
 
                     if child != nil {
-                        require child.get().typehash == header_row.typehash
-                        require field_row.logical_bit_offset % 8 == 0
+                        require child.get().__value.typehash == header_row.__value.typehash
+                        require field_row.__value.logical_bit_offset % 8 == 0
 
-                        return cast[uint](field_row.logical_bit_offset / 8)
+                        return cast[uint](field_row.__value.logical_bit_offset / 8)
                     }
                 }
             }
@@ -644,22 +644,22 @@ func los_of(header: Ref[Object_Header]) -> Ref[Los_Obj] {
 }
 
 func committed_bytes(heap: Ref[Heap]) -> uint {
-    return heap.nblocks * block_bytes + heap.los_bytes + heap.los_cache_bytes
+    return heap.__value.nblocks * block_bytes + heap.__value.los_bytes + heap.__value.los_cache_bytes
 }
 
 func over_max(heap: Ref[Heap], request: uint) -> bool {
-    if heap.cfg.max_heap_bytes == 0 {
+    if heap.__value.cfg.max_heap_bytes == 0 {
         return false
     }
 
     let used: uint = committed_bytes(heap)
 
-    return used > heap.cfg.max_heap_bytes or request > heap.cfg.max_heap_bytes - used
+    return used > heap.__value.cfg.max_heap_bytes or request > heap.__value.cfg.max_heap_bytes - used
 }
 
 inline func bump_room(b: Ref[Bump]) -> uint {
-    let cursor: Ref[byte]? = b.cursor
-    let limit:  Ref[byte]? = b.limit
+    let cursor: Ref[byte]? = b.__value.cursor
+    let limit:  Ref[byte]? = b.__value.limit
 
     if cursor != nil {
         if limit != nil {
@@ -677,12 +677,12 @@ inline func bump_room(b: Ref[Bump]) -> uint {
 
 func cache_pop(b: Ref[Bump]) -> Ref[Block_Metadata]? {
     let empty: Ref[Block_Metadata]? = nil
-    let list:  Ref[Block_Metadata]? = __atomic_exchange(ref b.cache, empty)
+    let list:  Ref[Block_Metadata]? = __atomic_exchange(ref b.__value.cache, empty)
 
     if list != nil {
         let block: Ref[Block_Metadata] = list.get()
 
-        __atomic_store(ref b.cache, block.next)
+        __atomic_store(ref b.__value.cache, block.__value.next)
     }
 
     return list
@@ -716,16 +716,16 @@ func thread_index_value(mutator: Ref[Mutator]) -> Ref[byte] {
 func thread_index_mutator(value: Ref[byte], thread_id: uint) -> Ref[Mutator] {
     let mutator: Ref[Mutator] = unsafe_cast[Ref[Mutator]] value
 
-    require mutator.thread_id == thread_id
+    require mutator.__value.thread_id == thread_id
     return mutator
 }
 
 func read_epoch(blk: Ref[Block_Metadata]) -> u32 {
-    return __volatile_load(ref blk.sweep_epoch)
+    return __volatile_load(ref blk.__value.sweep_epoch)
 }
 
 func capacity(blk: Ref[Block_Metadata]) -> uint {
-    return cast[uint](blk.free_lines) * line_bytes
+    return cast[uint](blk.__value.free_lines) * line_bytes
 }
 
 func pop_list(head: Ref[Ref[Block_Metadata]?], count: Ref[uint])
@@ -736,52 +736,52 @@ func pop_list(head: Ref[Ref[Block_Metadata]?], count: Ref[uint])
         let blk:           Ref[Block_Metadata] = first.get()
         let current_count: uint                = count.__value
 
-        head.__value = blk.next
+        head.__value = blk.__value.next
         count.__value = current_count - 1
     }
     return first
 }
 
 func set_block_state(heap: Ref[Heap], blk: Ref[Block_Metadata], state: Block_State) {
-    let was_owned: bool = blk.state == cast[u8](Block_State.owned)
+    let was_owned: bool = blk.__value.state == cast[u8](Block_State.owned)
     let now_owned: bool = state == Block_State.owned
 
     if was_owned != now_owned {
         if was_owned {
-            __atomic_fetch_sub(ref heap.nowned, 1)
+            __atomic_fetch_sub(ref heap.__value.nowned, 1)
         } else {
-            __atomic_fetch_add(ref heap.nowned, 1)
+            __atomic_fetch_add(ref heap.__value.nowned, 1)
         }
     }
-    blk.state = cast[u8](state)
+    blk.__value.state = cast[u8](state)
 }
 
 func push_free(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
     set_block_state(heap, blk, Block_State.free)
 
-    blk.next = heap.free_blocks
-    heap.free_blocks = blk
-    heap.nfree += 1
+    blk.__value.next = heap.__value.free_blocks
+    heap.__value.free_blocks = blk
+    heap.__value.nfree += 1
 }
 
 func take_block(heap: Ref[Heap], prefer_free: bool) -> Ref[Block_Metadata]? {
-    if !prefer_free and heap.recyclable_blocks != nil {
-        return pop_list(ref heap.recyclable_blocks, ref heap.nrecyclable)
+    if !prefer_free and heap.__value.recyclable_blocks != nil {
+        return pop_list(ref heap.__value.recyclable_blocks, ref heap.__value.nrecyclable)
     }
-    if heap.free_blocks != nil {
-        return pop_list(ref heap.free_blocks, ref heap.nfree)
+    if heap.__value.free_blocks != nil {
+        return pop_list(ref heap.__value.free_blocks, ref heap.__value.nfree)
     }
 
-    return pop_list(ref heap.recyclable_blocks, ref heap.nrecyclable)
+    return pop_list(ref heap.__value.recyclable_blocks, ref heap.__value.nrecyclable)
 }
 
 func batch_size(heap: Ref[Heap]) -> uint {
-    var mutators: uint = heap.nmutators
+    var mutators: uint = heap.__value.nmutators
 
     if mutators == 0 {
         mutators = 1
     }
-    let share: uint = (heap.nfree + heap.nrecyclable) / (2 * mutators)
+    let share: uint = (heap.__value.nfree + heap.__value.nrecyclable) / (2 * mutators)
 
     if share < 1 {
         return 1
@@ -796,25 +796,25 @@ func own(heap   : Ref[Heap],
          mutator: Ref[Mutator],
          blk    : Ref[Block_Metadata],
          list   : Ref[Ref[Block_Metadata]?]) {
-    if heap.black_alloc {
-        ensure_mark_epoch(block_base(blk), heap.mark_epoch)
+    if heap.__value.black_alloc {
+        ensure_mark_epoch(block_base(blk), heap.__value.mark_epoch)
     }
     set_block_state(heap, blk, Block_State.owned)
 
-    blk.owner = mutator
-    blk.next = list.__value
+    blk.__value.owner = mutator
+    blk.__value.next = list.__value
 
     let owned: Ref[Block_Metadata]? = blk
 
     list.__value = owned
 
-    if !blk.on_owned {
-        blk.on_owned = true
-        blk.own_next = heap.owned
-        heap.owned = blk
+    if !blk.__value.on_owned {
+        blk.__value.on_owned = true
+        blk.__value.own_next = heap.__value.owned
+        heap.__value.owned = blk
     }
 
-    heap.alloc_since_gc += capacity(blk)
+    heap.__value.alloc_since_gc += capacity(blk)
 }
 
 func take_batch(heap       : Ref[Heap],
@@ -858,20 +858,20 @@ func bump_attach(mutator: Ref[Mutator],
                  bump   : Ref[Bump],
                  blk    : Ref[Block_Metadata]?) {
     var seen: u32 = 0
-    bump.cursor = nil
-    bump.limit = nil
-    bump.line = header_lines()
+    bump.__value.cursor = nil
+    bump.__value.limit = nil
+    bump.__value.line = header_lines()
 
     if blk != nil {
         seen = read_epoch(blk.get())
     }
 
-    bump.seen_epoch = seen
-    bump.blk = blk
+    bump.__value.seen_epoch = seen
+    bump.__value.blk = blk
 
     if blk != nil {
-        if mutator.black {
-            raise_black(blk.get(), mutator.heap.mark_epoch)
+        if mutator.__value.black {
+            raise_black(blk.get(), mutator.__value.heap.__value.mark_epoch)
         }
     }
 }
@@ -880,49 +880,49 @@ func block_init(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
     let base:          Ref[byte] = block_base(blk)
     let first_payload: uint      = header_lines() * line_bytes
 
-    blk.magic = block_magic
-    blk.free_lines = cast[u16]((block_bytes - first_payload) / line_bytes)
-    blk.sweep_epoch = heap.epoch
-    blk.state = cast[u8](Block_State.retired)
+    blk.__value.magic = block_magic
+    blk.__value.free_lines = cast[u16]((block_bytes - first_payload) / line_bytes)
+    blk.__value.sweep_epoch = heap.__value.epoch
+    blk.__value.state = cast[u8](Block_State.retired)
 
-    __atomic_store(ref blk.mark_epoch, heap.mark_epoch)
-    __atomic_store(ref blk.black_epoch, 0)
-    __atomic_store(ref blk.nfinal, 0)
-    __atomic_store(ref blk.in_final, false)
+    __atomic_store(ref blk.__value.mark_epoch, heap.__value.mark_epoch)
+    __atomic_store(ref blk.__value.black_epoch, 0)
+    __atomic_store(ref blk.__value.nfinal, 0)
+    __atomic_store(ref blk.__value.in_final, false)
 
-    let invalid_mark: u8 = cast[u8]((cast[uint](heap.epoch) + 128) % 256)
+    let invalid_mark: u8 = cast[u8]((cast[uint](heap.__value.epoch) + 128) % 256)
 
-    __gc_memset(ref blk.line_marks[0],
+    __gc_memset(ref blk.__value.line_marks[0],
                 cast[byte](invalid_mark),
                 lines_per_block)
 
-    if heap.cfg.poison_free {
+    if heap.__value.cfg.poison_free {
         let payload: Ref[byte] = __gc_byte_offset(base, first_payload)
 
         __gc_memset(payload, 0xdb, block_bytes - first_payload)
     }
 
-    blk.all_prev = nil
-    blk.all_next = heap.all_blocks
+    blk.__value.all_prev = nil
+    blk.__value.all_next = heap.__value.all_blocks
 
-    let previous: Ref[Block_Metadata]? = heap.all_blocks
+    let previous: Ref[Block_Metadata]? = heap.__value.all_blocks
 
     if previous != nil {
-        previous.get().all_prev = blk
+        previous.get().__value.all_prev = blk
     }
 
-    heap.all_blocks = blk
-    heap.nblocks += 1
+    heap.__value.all_blocks = blk
+    heap.__value.nblocks += 1
 }
 
 inline func block_mark_word(block: Ref[Block_Metadata], index: uint)
                            -> Ref[Atomic[uint]] {
-    return ref block.mark_bits[index]
+    return ref block.__value.mark_bits[index]
 }
 
 inline func block_start_word(block: Ref[Block_Metadata], index: uint)
                             -> Ref[Atomic[uint]] {
-    return ref block.start_bits[index]
+    return ref block.__value.start_bits[index]
 }
 
 inline func mark_word_at(base: Ref[byte], index: uint) -> Ref[Atomic[uint]] {
@@ -956,7 +956,7 @@ func ensure_mark_epoch(base: Ref[byte], epoch: u32) {
     require (epoch & mark_clearing) == 0
 
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
-    let word:     Ref[Atomic[u32]]    = ref metadata.mark_epoch
+    let word:     Ref[Atomic[u32]]    = ref metadata.__value.mark_epoch
     var seen:     u32                 = __atomic_load_acquire(word)
 
     while seen != epoch {
@@ -978,7 +978,7 @@ func ensure_mark_epoch(base: Ref[byte], epoch: u32) {
 }
 
 func raise_black(metadata: Ref[Block_Metadata], epoch: u32) {
-    let word:    Ref[Atomic[u32]] = ref metadata.black_epoch
+    let word:    Ref[Atomic[u32]] = ref metadata.__value.black_epoch
     var current: u32              = __atomic_load(word)
 
     while current < epoch {
@@ -994,7 +994,7 @@ inline func line_mark_at(base: Ref[byte], line: uint) -> Ref[Atomic[u8]] {
 
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
 
-    return ref metadata.line_marks[line]
+    return ref metadata.__value.line_marks[line]
 }
 
 inline func line_marked_in(base: Ref[byte], line: uint, epoch: u32) -> bool {
@@ -1025,7 +1025,7 @@ inline func mark_lines(base  : Ref[byte],
 inline func line_live(base: Ref[byte], line: uint) -> bool {
     let metadata: Ref[Block_Metadata] = block_metadata_at(base)
     let mark:     u8                  = __atomic_load_relaxed(line_mark_at(base, line))
-    let sweep:    u8                  = cast[u8](cast[uint](metadata.sweep_epoch) % 256)
+    let sweep:    u8                  = cast[u8](cast[uint](metadata.__value.sweep_epoch) % 256)
 
     return mark == sweep or mark == cast[u8](
         (cast[uint](sweep) + 1) % 256)
@@ -1047,7 +1047,7 @@ func scan_for_hole(bump : Ref[Bump], blk: Ref[Block_Metadata],
                    bytes: uint) -> bool {
     let base:  Ref[byte] = block_base(blk)
     let lines: uint      = block_bytes / line_bytes
-    var line:  uint      = bump.line
+    var line:  uint      = bump.__value.line
 
     while line < lines {
         while line < lines and line_used(base, line) {
@@ -1067,13 +1067,13 @@ func scan_for_hole(bump : Ref[Bump], blk: Ref[Block_Metadata],
         if (end - line) * line_bytes >= bytes {
             let limit: Ref[byte] = __gc_byte_offset(base, end * line_bytes)
 
-            bump.limit = limit
+            bump.__value.limit = limit
             __gc_signal_fence()
 
             let cursor: Ref[byte] = __gc_byte_offset(base, line * line_bytes)
 
-            bump.cursor = cursor
-            bump.line = end
+            bump.__value.cursor = cursor
+            bump.__value.line = end
             __gc_signal_fence()
 
             let clear:    byte = 0
@@ -1086,13 +1086,13 @@ func scan_for_hole(bump : Ref[Bump], blk: Ref[Block_Metadata],
         }
         line = end
     }
-    bump.line = lines
+    bump.__value.line = lines
 
     return false
 }
 
 func bump_next_hole(bump: Ref[Bump], bytes: uint) -> bool {
-    let candidate: Ref[Block_Metadata]? = bump.blk
+    let candidate: Ref[Block_Metadata]? = bump.__value.blk
 
     if candidate != nil {
         let blk: Ref[Block_Metadata] = candidate.get()
@@ -1100,9 +1100,9 @@ func bump_next_hole(bump: Ref[Bump], bytes: uint) -> bool {
         while true {
             let epoch: u32 = read_epoch(blk)
 
-            if epoch != bump.seen_epoch {
-                bump.seen_epoch = epoch
-                bump.line = header_lines()
+            if epoch != bump.__value.seen_epoch {
+                bump.__value.seen_epoch = epoch
+                bump.__value.line = header_lines()
             }
 
             let found: bool = scan_for_hole(bump, blk, bytes)

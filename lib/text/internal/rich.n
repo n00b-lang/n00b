@@ -36,9 +36,9 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
     }
     let src: Ref[Rich_Body] = __string_rich_body(s)
     var out: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
-                          base_style = src.base_style, opaque = src.opaque)
-    for i from 0 until cast[int] src.style_info.len() {
-        let r: Style_Record = src.style_info[i]
+                          base_style = src.__value.base_style, opaque = src.__value.opaque)
+    for i from 0 until cast[int] src.__value.style_info.len() {
+        let r: Style_Record = src.__value.style_info[i]
         if r.start_ix == nil {
             continue
         }

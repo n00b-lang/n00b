@@ -1,0 +1,2 @@
+tests/diagnostics/build/finalized_generic_copy.n:13:12: error N00B-S0068: 'first' copies `holder.item`, which is a `Guard` here; `Guard` has a finalizer, so it cannot be copied out of a field or element
+  help: move the whole variable instead, or build a new value

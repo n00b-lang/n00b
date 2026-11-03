@@ -10,17 +10,17 @@ func stop(heap: Ref[internal.gc.core.Heap]) {
         internal.threads.cpu_relax()
     }
 
-    let timeout_ns: u64                      = cast[u64](heap.cfg.world_timeout_ms) * 1000000
-    var current:    Ref[internal.gc.core.Mutator]? = heap.mutators
+    let timeout_ns: u64                      = cast[u64](heap.__value.cfg.world_timeout_ms) * 1000000
+    var current:    Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
         let mutator: Ref[internal.gc.core.Mutator] = current.get()
-        if mutator.thread_primary and mutator.thread_id != owner {
-            require internal.threads.thread_suspend(mutator.thread_control,
-                                              ref mutator.captured,
+        if mutator.__value.thread_primary and mutator.__value.thread_id != owner {
+            require internal.threads.thread_suspend(mutator.__value.thread_control,
+                                              ref mutator.__value.captured,
                                               timeout_ns) == 0
-            mutator.ctx_valid = true
+            mutator.__value.ctx_valid = true
         }
-        current = mutator.next
+        current = mutator.__value.next
     }
     internal.threads.thread_fence()
 }
@@ -29,15 +29,15 @@ func start(heap: Ref[internal.gc.core.Heap]) {
     let owner: uint = internal.threads.thread_id()
     require __atomic_load(ref world_owner) == owner
     internal.threads.thread_fence()
-    var current: Ref[internal.gc.core.Mutator]? = heap.mutators
+    var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
         let mutator: Ref[internal.gc.core.Mutator] = current.get()
-        if mutator.thread_primary and mutator.thread_id != owner {
-            require mutator.ctx_valid
-            require internal.threads.thread_resume(mutator.thread_control,
-                                             ref mutator.captured) == 0
+        if mutator.__value.thread_primary and mutator.__value.thread_id != owner {
+            require mutator.__value.ctx_valid
+            require internal.threads.thread_resume(mutator.__value.thread_control,
+                                             ref mutator.__value.captured) == 0
         }
-        current = mutator.next
+        current = mutator.__value.next
     }
     __atomic_store(ref world_owner, 0)
 }

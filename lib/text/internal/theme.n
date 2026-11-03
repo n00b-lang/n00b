@@ -532,7 +532,7 @@ private func name_eq(a: string, b: string) -> bool {
 
 func install(theme: Ref[Theme]) {
     themes_write_lock()
-    registered_themes[theme.name] = theme
+    registered_themes[theme.__value.name] = theme
     themes_write_unlock()
 }
 
@@ -545,7 +545,7 @@ func theme_lookup(name: string) -> Ref[Theme]? {
         return hit
     }
     for i from 0 until builtin_themes.len() {
-        if name_eq(builtin_themes[i].name, name) {
+        if name_eq(builtin_themes[i].__value.name, name) {
             return builtin_themes[i]
         }
     }
@@ -680,14 +680,14 @@ func set_role(self: Ref[Theme], role: string, style: Text_Style) {
     if theme_is_builtin(self) {
         panic("builtin themes are immutable; copy the theme first")
     }
-    put_binding(self.roles, true, role, style)
+    put_binding(self.__value.roles, true, role, style)
 }
 
 func set_style(self: Ref[Theme], name: string, style: Text_Style) {
     if theme_is_builtin(self) {
         panic("builtin themes are immutable; copy the theme first")
     }
-    put_binding(self.styles, false, name, style)
+    put_binding(self.__value.styles, false, name, style)
 }
 
 func style_for_tag(self: Theme, tag: string) -> Text_Style {

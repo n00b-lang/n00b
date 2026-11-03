@@ -493,7 +493,7 @@ released_handle(const n00b_t *g, writ_str_t fn)
 static writ_str_t
 raw_of(const n00b_t *g, const writ_type_view_t *type, writ_str_t owner)
 {
-    return writ_str_format(g->session, typed_handle(g, type) ? "unsafe_cast[uint] %.*s.raw" : "%.*s.raw", S(owner));
+    return writ_str_format(g->session, typed_handle(g, type) ? "unsafe_cast[uint] %.*s.__value.raw" : "%.*s.__value.raw", S(owner));
 }
 
 static const char *
@@ -1857,9 +1857,9 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __finalize(consume self: Ref[%.*s_Cell])", S(type));
     if (typed) {
-        writ_emit_open(emit, "if self.raw != nil and debug_enabled() and !__abi_baked_address(%.*s)", S(raw));
+        writ_emit_open(emit, "if self.__value.raw != nil and debug_enabled() and !__abi_baked_address(%.*s)", S(raw));
     } else {
-        writ_emit_open(emit, "if self.raw != 0 and debug_enabled()");
+        writ_emit_open(emit, "if self.__value.raw != 0 and debug_enabled()");
     }
     writ_emit_line(emit, "__fd_write(2, \"%.*s collected while open; releasing it\\n\")", S(type));
     writ_str_t key = writ_str_format(g->session, "cast[u64](%.*s)", S(raw));
@@ -2336,7 +2336,7 @@ static void
 emit_fixup(const wrapper_t *w, writ_emit_t *emit, writ_str_t name)
 {
     writ_str_t problem = writ_str_format(w->g->session, "__fixup_%.*s", S(name));
-    writ_emit_line(emit, "let %.*s: string? = __ffi_fixup(%.*s.raw)", S(problem), S(name));
+    writ_emit_line(emit, "let %.*s: string? = __ffi_fixup(%.*s.__value.raw)", S(problem), S(name));
     writ_emit_open(emit, "if %.*s != nil", S(problem));
     if (declares_failure(w)) {
         emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR), problem);
@@ -2358,7 +2358,7 @@ emit_closed_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim
         }
         writ_str_t name = local_name(w, p->item);
         if (!item->type || !item->type->nullable || guarded) {
-            writ_emit_open(emit, "if %.*s.raw == %s", S(name), raw_empty(w->g, item->type));
+            writ_emit_open(emit, "if %.*s.__value.raw == %s", S(name), raw_empty(w->g, item->type));
             if (declares_failure(w)) {
                 emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
                           writ_cstr("\"handle is closed\""));
@@ -3055,7 +3055,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     emit_event_sites(&w, emit, &params);
     emit_callback_spans(&w, emit, &params);
     if (w.receiver != WRIT_PLAN_NONE && consumes(&w, w.receiver)) {
-        writ_emit_line(emit, "self.raw = %s", raw_empty(g, plan->items[w.receiver].type));
+        writ_emit_line(emit, "self.__value.raw = %s", raw_empty(g, plan->items[w.receiver].type));
     }
     emit_text_checks(&w, emit, &params);
     if (multiple_success) {

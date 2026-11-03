@@ -14,43 +14,43 @@ func payload_in_current_stack(address: uint) -> bool {
 
 func escape_box(slot: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
-    let bytes: uint = internal.box.payload_bytes(view.type_field)
-    let storage: Ref[byte]? = view.payload
+    let bytes: uint = internal.box.payload_bytes(view.__value.type_field)
+    let storage: Ref[byte]? = view.__value.payload
     if bytes == 0 or storage == nil {
         return
     }
     let origin: Ref[byte] = storage.get()
     if payload_in_current_stack(__abi_ref_address(origin)) {
-        let index: u32 = view.type_field & 0x7fffffff
+        let index: u32 = view.__value.type_field & 0x7fffffff
         let copy: Ref[byte]? = internal.gc.alloc.allocate_runtime(index,
-            bytes, internal.box.type_row(index).alignment_bytes, nil)
+            bytes, internal.box.type_row(index).__value.alignment_bytes, nil)
         require copy != nil
         __gc_memcpy(copy.get(), origin, bytes)
-        view.payload = copy
+        view.__value.payload = copy
     }
     escape_box_inner(slot)
 }
 
 func escape_box_inner(slot: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
-    let index: u32 = view.type_field & 0x7fffffff
+    let index: u32 = view.__value.type_field & 0x7fffffff
     let row: Ref[internal.abi.Type_Record] = internal.box.type_row(index)
-    if row.kind == cast[u32](internal.abi.Type_Kind.box_type) {
-        let storage: Ref[byte]? = view.payload
+    if row.__value.kind == cast[u32](internal.abi.Type_Kind.box_type) {
+        let storage: Ref[byte]? = view.__value.payload
         if storage != nil {
             escape_box(unsafe_cast[Ref[Any]] storage.get())
         }
         return
     }
-    if row.kind != cast[u32](internal.abi.Type_Kind.record_type)
-        and row.kind != cast[u32](internal.abi.Type_Kind.tuple_type) {
+    if row.__value.kind != cast[u32](internal.abi.Type_Kind.record_type)
+        and row.__value.kind != cast[u32](internal.abi.Type_Kind.tuple_type) {
         return
     }
-    if row.size_bits <= 64 {
+    if row.__value.size_bits <= 64 {
         escape_fields(__gc_byte_offset(unsafe_cast[Ref[byte]] slot, 8), row)
         return
     }
-    let storage: Ref[byte]? = view.payload
+    let storage: Ref[byte]? = view.__value.payload
     if storage != nil {
         escape_fields(storage.get(), row)
     }
@@ -58,40 +58,40 @@ func escape_box_inner(slot: Ref[Any]) {
 
 func escape_nested(address: Ref[byte], type_index: u32) {
     let row: Ref[internal.abi.Type_Record] = internal.box.type_row(type_index)
-    if row.kind == cast[u32](internal.abi.Type_Kind.box_type) {
+    if row.__value.kind == cast[u32](internal.abi.Type_Kind.box_type) {
         escape_box(unsafe_cast[Ref[Any]] address)
     }
-    elif row.kind == cast[u32](internal.abi.Type_Kind.record_type)
-        or row.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
+    elif row.__value.kind == cast[u32](internal.abi.Type_Kind.record_type)
+        or row.__value.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
         escape_fields(address, row)
     }
 }
 
 func escape_fields(address: Ref[byte], row: Ref[internal.abi.Type_Record]) {
     var at: u32 = 0
-    while at < row.fields_or_arms.count {
+    while at < row.__value.fields_or_arms.count {
         let field: Ref[internal.abi.Field_Record] = internal.box.field_row(
             row, at)
         at += 1
-        if field.physical_runs.count != 1 {
+        if field.__value.physical_runs.count != 1 {
             continue
         }
         let run: Ref[internal.abi.Physical_Run_Record] = internal.box.run_at(
-            field.physical_runs, 0)
-        if run.bit_offset != 0 {
+            field.__value.physical_runs, 0)
+        if run.__value.bit_offset != 0 {
             continue
         }
-        escape_nested(__gc_byte_offset(address, run.byte_offset),
-                      field.child_type_index)
+        escape_nested(__gc_byte_offset(address, run.__value.byte_offset),
+                      field.__value.child_type_index)
     }
 }
 
 func value_bytes(value: Ref[Any],
                 row: Ref[internal.abi.Type_Record]) -> Ref[byte] {
-    if row.size_bits <= 64 {
+    if row.__value.size_bits <= 64 {
         return __gc_byte_offset(unsafe_cast[Ref[byte]] value, 8)
     }
-    let storage: Ref[byte]? = internal.box.box_view(value).payload
+    let storage: Ref[byte]? = internal.box.box_view(value).__value.payload
     require storage != nil
     return storage.get()
 }
@@ -100,7 +100,7 @@ func store_known(address: Ref[byte], value: Ref[Any], index: u32,
                         row: Ref[internal.abi.Type_Record]) {
     let source: Ref[byte] = value_bytes(value, row)
     internal.gc.alloc.barrier_runtime(source, index)
-    __gc_memcpy(address, source, (row.size_bits + 7) / 8)
+    __gc_memcpy(address, source, (row.__value.size_bits + 7) / 8)
 }
 
 func array_leaf(type_index: u32, depth: u32) -> u32 {
@@ -115,7 +115,7 @@ func array_leaf(type_index: u32, depth: u32) -> u32 {
 }
 
 func array_alignment(leaf: Ref[internal.abi.Type_Record]) -> u64 {
-    let alignment: u64 = cast[u64](leaf.alignment_bytes)
+    let alignment: u64 = cast[u64](leaf.__value.alignment_bytes)
     require alignment != 0 and alignment & (alignment - 1) == 0
     if alignment < 8 {
         return 8
@@ -130,18 +130,18 @@ func array_data_bytes(leaf: Ref[internal.abi.Type_Record], count: u64,
         return (count * packed + origin_bits + 7) / 8
     }
     let alignment_bits: u64 = alignment * 8
-    return count * (((leaf.size_bits + alignment_bits - 1) / alignment_bits)
+    return count * (((leaf.__value.size_bits + alignment_bits - 1) / alignment_bits)
                     * alignment)
 }
 
 func set_array_value(slot: Ref[Any], data: Ref[byte],
                      descriptor: Ref[byte]) {
-    let storage: Ref[byte]? = internal.box.box_view(slot).payload
+    let storage: Ref[byte]? = internal.box.box_view(slot).__value.payload
     require storage != nil
     let value: Ref[internal.abi.Array_Value] =
         unsafe_cast[Ref[internal.abi.Array_Value]] storage.get()
-    value.data = data
-    value.descriptor =
+    value.__value.data = data
+    value.__value.descriptor =
         unsafe_cast[Ref[internal.abi.Array_Descriptor_Header]] descriptor
 }
 
@@ -161,11 +161,11 @@ func new_array(type_index: u32, count: u64, rank: u32, flat_rank: u32,
     }
     let header: Ref[internal.abi.Array_Descriptor_Header] =
         unsafe_cast[Ref[internal.abi.Array_Descriptor_Header]] shape
-    header.total_count = count
-    header.rank = rank
-    header.flat_rank = flat_rank
-    header.flags = 0
-    header.reserved_zero = 0
+    header.__value.total_count = count
+    header.__value.rank = rank
+    header.__value.flat_rank = flat_rank
+    header.__value.flags = 0
+    header.__value.reserved_zero = 0
     var level: u32 = 0
     while level < rank {
         var extent: u64 = 0
@@ -186,26 +186,26 @@ func new_array(type_index: u32, count: u64, rank: u32, flat_rank: u32,
 
 func copy_array(source: Ref[Any], slot: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(source)
-    let type_index: u32 = view.type_field & 0x7fffffff
-    require internal.box.type_row(type_index).kind
+    let type_index: u32 = view.__value.type_field & 0x7fffffff
+    require internal.box.type_row(type_index).__value.kind
         == cast[u32](internal.abi.Type_Kind.array_type)
-    let storage: Ref[byte]? = view.payload
+    let storage: Ref[byte]? = view.__value.payload
     require storage != nil
     let array: Ref[internal.abi.Array_Value] =
         unsafe_cast[Ref[internal.abi.Array_Value]] storage.get()
-    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     require header != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
-    require descriptor.rank != 0 and descriptor.flat_rank != 0
-        and descriptor.flat_rank <= descriptor.rank
-        and descriptor.flags & 0xfffffff8 == 0
+    require descriptor.__value.rank != 0 and descriptor.__value.flat_rank != 0
+        and descriptor.__value.flat_rank <= descriptor.__value.rank
+        and descriptor.__value.flags & 0xfffffff8 == 0
     let leaf: Ref[internal.abi.Type_Record] = internal.box.type_row(
-        array_leaf(type_index, descriptor.flat_rank))
+        array_leaf(type_index, descriptor.__value.flat_rank))
     let alignment: u64 = array_alignment(leaf)
-    let header_bytes: u64 = 24 + cast[u64](descriptor.rank) * 8
+    let header_bytes: u64 = 24 + cast[u64](descriptor.__value.rank) * 8
     let data_offset: u64 = (header_bytes + alignment - 1) & ~(alignment - 1)
-    let data_bytes: u64 = array_data_bytes(leaf, descriptor.total_count,
-        cast[u64](descriptor.flags), alignment)
+    let data_bytes: u64 = array_data_bytes(leaf, descriptor.__value.total_count,
+        cast[u64](descriptor.__value.flags), alignment)
     var reserved: u64 = data_bytes
     if reserved == 0 {
         reserved = 1
@@ -217,7 +217,7 @@ func copy_array(source: Ref[Any], slot: Ref[Any]) {
                 header_bytes)
     let data: Ref[byte] = __gc_byte_offset(backing.get(), data_offset)
     if data_bytes != 0 {
-        let old: Ref[byte]? = array.data
+        let old: Ref[byte]? = array.__value.data
         require old != nil
         __gc_memcpy(data, old.get(), data_bytes)
     }
@@ -226,20 +226,20 @@ func copy_array(source: Ref[Any], slot: Ref[Any]) {
 
 func array_prefix(source: Ref[Any], count: u64, slot: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(source)
-    let type_index: u32 = view.type_field & 0x7fffffff
-    require internal.box.type_row(type_index).kind
+    let type_index: u32 = view.__value.type_field & 0x7fffffff
+    require internal.box.type_row(type_index).__value.kind
         == cast[u32](internal.abi.Type_Kind.array_type)
-    let storage: Ref[byte]? = view.payload
+    let storage: Ref[byte]? = view.__value.payload
     require storage != nil
     let value: Ref[internal.abi.Array_Value] =
         unsafe_cast[Ref[internal.abi.Array_Value]] storage.get()
-    let header: Ref[internal.abi.Array_Descriptor_Header]? = value.descriptor
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = value.__value.descriptor
     require header != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
     let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
         unsafe_cast[Ref[byte]] descriptor, 24)).__value
-    require descriptor.rank == 1 and descriptor.flat_rank == 1
-        and descriptor.reserved_zero == 0 and count <= descriptor.total_count
+    require descriptor.__value.rank == 1 and descriptor.__value.flat_rank == 1
+        and descriptor.__value.reserved_zero == 0 and count <= descriptor.__value.total_count
         and count <= length
     let block: Ref[byte]? = internal.gc.alloc.allocate_runtime(type_index,
         48, 8, nil)
@@ -250,15 +250,15 @@ func array_prefix(source: Ref[Any], count: u64, slot: Ref[Any]) {
     __gc_memcpy(shape, unsafe_cast[Ref[byte]] descriptor, 24)
     let shape_header: Ref[internal.abi.Array_Descriptor_Header] =
         unsafe_cast[Ref[internal.abi.Array_Descriptor_Header]] shape
-    shape_header.total_count = count
+    shape_header.__value.total_count = count
     (unsafe_cast[Ref[u64]] __gc_byte_offset(shape, 24)).__value = count
-    prefix.data = value.data
-    prefix.descriptor = shape_header
+    prefix.__value.data = value.__value.data
+    prefix.__value.descriptor = shape_header
     let result: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
-    result.extent = 0
-    result.stride = 0
-    result.type_field = type_index
-    result.payload = block
+    result.__value.extent = 0
+    result.__value.stride = 0
+    result.__value.type_field = type_index
+    result.__value.payload = block
 }
 
 func row_item_bits(leaf: Ref[internal.abi.Type_Record]) -> u64 {
@@ -266,9 +266,9 @@ func row_item_bits(leaf: Ref[internal.abi.Type_Record]) -> u64 {
     if packed != 0 {
         return packed
     }
-    let alignment_bits: u64 = cast[u64](leaf.alignment_bytes) * 8
+    let alignment_bits: u64 = cast[u64](leaf.__value.alignment_bytes) * 8
     require alignment_bits != 0
-    return ((leaf.size_bits + alignment_bits - 1) / alignment_bits) *
+    return ((leaf.__value.size_bits + alignment_bits - 1) / alignment_bits) *
         alignment_bits
 }
 
@@ -282,8 +282,8 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
     var array_type: u32 = 0
     let array: Ref[internal.abi.Array_Value] = internal.box.array_value_of(
         source, ref array_type)
-    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
-    let data: Ref[byte]? = array.data
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
+    let data: Ref[byte]? = array.__value.data
     require header != nil and data != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
     let position: u64 = internal.box.array_position(descriptor, index)
@@ -291,7 +291,7 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
         internal.abi.Type_Kind.array_type)
     var rank: u32 = 1
     var leaf_index: u32 = child
-    while internal.box.type_row(leaf_index).kind
+    while internal.box.type_row(leaf_index).__value.kind
         == cast[u32](internal.abi.Type_Kind.array_type) {
         leaf_index = internal.box.component_of(leaf_index,
             internal.abi.Type_Kind.array_type)
@@ -300,14 +300,14 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
     let leaf: Ref[internal.abi.Type_Record] = internal.box.type_row(
         leaf_index)
     let first_extent: u64 = extent_at(descriptor, 0)
-    require rank == descriptor.rank and rank >= 2
-        and descriptor.flat_rank >= 2 and descriptor.flat_rank <= rank
-        and leaf.alignment_bytes != 0 and first_extent != 0
-        and descriptor.total_count % first_extent == 0
-    let row_count: u64 = descriptor.total_count / first_extent
+    require rank == descriptor.__value.rank and rank >= 2
+        and descriptor.__value.flat_rank >= 2 and descriptor.__value.flat_rank <= rank
+        and leaf.__value.alignment_bytes != 0 and first_extent != 0
+        and descriptor.__value.total_count % first_extent == 0
+    let row_count: u64 = descriptor.__value.total_count / first_extent
     let packed: bool = internal.abi.packed_array_stride_bits(leaf) != 0
     let bit_offset: u64 = position * row_count * row_item_bits(leaf) +
-        cast[u64](descriptor.flags)
+        cast[u64](descriptor.__value.flags)
     var origin: u32 = 0
     if packed {
         origin = cast[u32](bit_offset & 7)
@@ -321,11 +321,11 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
     let shape: Ref[byte] = __gc_byte_offset(block.get(), 16)
     let suffix: Ref[internal.abi.Array_Descriptor_Header] =
         unsafe_cast[Ref[internal.abi.Array_Descriptor_Header]] shape
-    suffix.total_count = row_count
-    suffix.rank = rank - 1
-    suffix.flat_rank = descriptor.flat_rank - 1
-    suffix.flags = origin
-    suffix.reserved_zero = 0
+    suffix.__value.total_count = row_count
+    suffix.__value.rank = rank - 1
+    suffix.__value.flat_rank = descriptor.__value.flat_rank - 1
+    suffix.__value.flags = origin
+    suffix.__value.reserved_zero = 0
     var level: u32 = 1
     while level < rank {
         (unsafe_cast[Ref[u64]] __gc_byte_offset(shape,
@@ -335,13 +335,13 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
     }
     let value: Ref[internal.abi.Array_Value] =
         unsafe_cast[Ref[internal.abi.Array_Value]] block.get()
-    value.data = __gc_byte_offset(data.get(), bit_offset / 8)
-    value.descriptor = suffix
+    value.__value.data = __gc_byte_offset(data.get(), bit_offset / 8)
+    value.__value.descriptor = suffix
     let result: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
-    result.extent = 0
-    result.stride = 0
-    result.type_field = child
-    result.payload = block
+    result.__value.extent = 0
+    result.__value.stride = 0
+    result.__value.type_field = child
+    result.__value.payload = block
 }
 
 func copy_bit(source: Ref[byte], source_bit: u64, target: Ref[byte],
@@ -363,31 +363,31 @@ func array_replace_row(destination: Ref[Any], index: i64,
     let target_array: Ref[internal.abi.Array_Value] =
         internal.box.array_value_of(destination, ref array_type)
     let header: Ref[internal.abi.Array_Descriptor_Header]? =
-        target_array.descriptor
-    let target: Ref[byte]? = target_array.data
-    let source_storage: Ref[byte]? = internal.box.box_view(value).payload
+        target_array.__value.descriptor
+    let target: Ref[byte]? = target_array.__value.data
+    let source_storage: Ref[byte]? = internal.box.box_view(value).__value.payload
     require header != nil and target != nil and source_storage != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
     let position: u64 = internal.box.array_position(descriptor, index)
-    require descriptor.flat_rank >= 2
-        and descriptor.flat_rank <= descriptor.rank
+    require descriptor.__value.flat_rank >= 2
+        and descriptor.__value.flat_rank <= descriptor.__value.rank
     let source_array: Ref[internal.abi.Array_Value] =
         unsafe_cast[Ref[internal.abi.Array_Value]] source_storage.get()
     let source_header: Ref[internal.abi.Array_Descriptor_Header]? =
-        source_array.descriptor
-    let from: Ref[byte]? = source_array.data
+        source_array.__value.descriptor
+    let from: Ref[byte]? = source_array.__value.data
     require source_header != nil and from != nil
     let source_descriptor: Ref[internal.abi.Array_Descriptor_Header] =
         source_header.get()
     let first_extent: u64 = extent_at(descriptor, 0)
-    require first_extent != 0 and descriptor.total_count % first_extent == 0
-        and source_descriptor.rank == descriptor.rank - 1
-        and source_descriptor.flat_rank == descriptor.flat_rank - 1
-        and source_descriptor.flags & 0xfffffff8 == 0
-    let row_count: u64 = descriptor.total_count / first_extent
-    require source_descriptor.total_count == row_count
+    require first_extent != 0 and descriptor.__value.total_count % first_extent == 0
+        and source_descriptor.__value.rank == descriptor.__value.rank - 1
+        and source_descriptor.__value.flat_rank == descriptor.__value.flat_rank - 1
+        and source_descriptor.__value.flags & 0xfffffff8 == 0
+    let row_count: u64 = descriptor.__value.total_count / first_extent
+    require source_descriptor.__value.total_count == row_count
     var level: u32 = 1
-    while level < descriptor.rank {
+    while level < descriptor.__value.rank {
         require extent_at(source_descriptor, level - 1)
             == extent_at(descriptor, level)
         level += 1
@@ -395,7 +395,7 @@ func array_replace_row(destination: Ref[Any], index: i64,
     var leaf_index: u32 = internal.box.component_of(array_type,
         internal.abi.Type_Kind.array_type)
     level = 1
-    while level < descriptor.flat_rank {
+    while level < descriptor.__value.flat_rank {
         leaf_index = internal.box.component_of(leaf_index,
             internal.abi.Type_Kind.array_type)
         level += 1
@@ -406,8 +406,8 @@ func array_replace_row(destination: Ref[Any], index: i64,
     let item_bits: u64 = row_item_bits(leaf)
     let row_bits: u64 = row_count * item_bits
     let destination_start: u64 = position * row_bits +
-        cast[u64](descriptor.flags)
-    let source_start: u64 = cast[u64](source_descriptor.flags)
+        cast[u64](descriptor.__value.flags)
+    let source_start: u64 = cast[u64](source_descriptor.__value.flags)
     let target_byte: uint = __abi_ref_address(target.get()) +
         destination_start / 8
     let source_byte: uint = __abi_ref_address(from.get()) + source_start / 8
@@ -551,7 +551,7 @@ func array_with_length(count: uint) -> Array['T] {
     var extent: u64 = count
     var shape: Single_Shape = (total_count = 0, rank = 0, flat_rank = 0,
                                flags = 0, reserved_zero = 0, extent = 0)
-    new_array(internal.box.box_view(slot).type_field & 0x7fffffff, count, 1,
+    new_array(internal.box.box_view(slot).__value.type_field & 0x7fffffff, count, 1,
               1, unsafe_cast[Ref[byte]] ref extent,
               unsafe_cast[Ref[byte]] ref shape, slot)
     return __box_as(slot)
@@ -561,7 +561,7 @@ func array_with_shape(count: uint, rank: u32, flat_rank: u32,
                              scratch: Ref['S]) -> Array['T] {
     let slot: Ref[Any] = __result_box()
     let shape: Ref[byte] = internal.box.reference_address(__box_of(scratch))
-    new_array(internal.box.box_view(slot).type_field & 0x7fffffff, count,
+    new_array(internal.box.box_view(slot).__value.type_field & 0x7fffffff, count,
               rank, flat_rank,
               __gc_byte_offset(shape, 24 + cast[uint](rank) * 8), shape, slot)
     return __box_as(slot)
@@ -596,7 +596,7 @@ func array_clear_at(items: Ref[Array['T]], index: uint) {
 func new_storage() -> Ref['T] {
     let slot: Ref[Any] = __result_box()
     new_reference(internal.box.component_of(
-        internal.box.box_view(slot).type_field,
+        internal.box.box_view(slot).__value.type_field,
         internal.abi.Type_Kind.reference_type), slot)
     return __box_as(slot)
 }
@@ -635,38 +635,38 @@ func array_set_unsigned(items: Ref[Array['T]], index: u64,
 
 func new_reference(type_index: u32, slot: Ref[Any]) {
     let row: Ref[internal.abi.Type_Record] = internal.box.type_row(type_index)
-    var bytes: uint = (row.size_bits + 7) / 8
+    var bytes: uint = (row.__value.size_bits + 7) / 8
     if bytes == 0 {
         bytes = 1
     }
     let target: Ref[byte]? = internal.gc.alloc.allocate_runtime(type_index,
-        bytes, row.alignment_bytes, nil)
+        bytes, row.__value.alignment_bytes, nil)
     require target != nil
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
     let reference: Ref[internal.abi.Type_Record] = internal.box.type_row(
-        view.type_field & 0x7fffffff)
-    if reference.size_bits == 64 {
-        view.payload = target
+        view.__value.type_field & 0x7fffffff)
+    if reference.__value.size_bits == 64 {
+        view.__value.payload = target
         return
     }
-    let storage: Ref[byte]? = view.payload
-    require reference.size_bits == 128 and storage != nil
-        and row.semantic_width_bits != 0
-        and row.semantic_width_bits <= 0xffff
+    let storage: Ref[byte]? = view.__value.payload
+    require reference.__value.size_bits == 128 and storage != nil
+        and row.__value.semantic_width_bits != 0
+        and row.__value.semantic_width_bits <= 0xffff
     let bits: Ref[internal.abi.Bitptr_Value] =
         unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()
-    bits.base = target
-    bits.type_index = type_index
-    bits.start_bit = 0
-    bits.end_bit = cast[u16](row.semantic_width_bits)
+    bits.__value.base = target
+    bits.__value.type_index = type_index
+    bits.__value.start_bit = 0
+    bits.__value.end_bit = cast[u16](row.__value.semantic_width_bits)
 }
 
 func barrier_box(value: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(value)
-    let index: u32 = view.type_field & 0x7fffffff
+    let index: u32 = view.__value.type_field & 0x7fffffff
     let row: Ref[internal.abi.Type_Record] = internal.box.type_row(index)
-    if view.type_field & 0x80000000 != 0 or row.size_bits > 64 {
-        let storage: Ref[byte]? = view.payload
+    if view.__value.type_field & 0x80000000 != 0 or row.__value.size_bits > 64 {
+        let storage: Ref[byte]? = view.__value.payload
         require storage != nil
         internal.gc.alloc.barrier_runtime(storage.get(), index)
         return
@@ -676,25 +676,25 @@ func barrier_box(value: Ref[Any]) {
 }
 
 func store(address: Ref[byte], value: Ref[Any]) {
-    let index: u32 = internal.box.box_view(value).type_field & 0x7fffffff
+    let index: u32 = internal.box.box_view(value).__value.type_field & 0x7fffffff
     store_known(address, value, index, internal.box.type_row(index))
 }
 
 func write_at(location: Ref[internal.box.Location], value: Ref[Any]) {
-    let index: u32 = internal.box.box_view(value).type_field & 0x7fffffff
-    require index == location.type_index
+    let index: u32 = internal.box.box_view(value).__value.type_field & 0x7fffffff
+    require index == location.__value.type_index
     let child: Ref[internal.abi.Type_Record] = internal.box.type_row(index)
-    let address: Ref[byte]? = location.address
+    let address: Ref[byte]? = location.__value.address
     require address != nil
-    if location.bit_offset == 0 and location.width == child.size_bits
-        and location.width & 7 == 0 {
+    if location.__value.bit_offset == 0 and location.__value.width == child.__value.size_bits
+        and location.__value.width & 7 == 0 {
         store_known(address.get(), value, index, child)
         return
     }
     let source: Ref[byte] = value_bytes(value, child)
     var bit: uint = 0
-    while bit < location.width {
-        let target_bit: uint = location.bit_offset + bit
+    while bit < location.__value.width {
+        let target_bit: uint = location.__value.bit_offset + bit
         let from: byte = __gc_byte_offset(source, bit / 8).__value
         let into: Ref[byte] = __gc_byte_offset(address.get(), target_bit / 8)
         let existing: byte = into.__value

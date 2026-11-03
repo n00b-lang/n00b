@@ -519,15 +519,13 @@ th_type *th_auto_deref(th_ctx *ctx, th_type *type)
     while (type) {
         th_type *definition = th_kind_of(type) == TH_NAMED
             ? th_type_definition(ctx, type) : nullptr;
-        if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
-            type = th_resolve(definition);
-        th_type *option_item = th_option_item(type);
-        if (option_item) {
-            type = th_resolve(option_item);
+        if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION) {
+            type = th_resolve(th_ind_referent(th_resolve(definition)));
             continue;
         }
-        if (th_kind_of(type) != TH_INDIRECTION) break;
-        type = th_resolve(th_ind_referent(type));
+        th_type *option_item = th_option_item(type);
+        if (!option_item) break;
+        type = th_resolve(option_item);
     }
     return type;
 }

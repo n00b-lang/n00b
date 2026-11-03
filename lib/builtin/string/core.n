@@ -60,15 +60,15 @@ private func long_selector(n: uint, encoding: u8, tag: u64) -> u64 {
 }
 
 private inline func __string_tag(s: string) -> u8 {
-    return cast[u8](words(ref s).selector >> tag_shift)
+    return cast[u8](words(ref s).__value.selector >> tag_shift)
 }
 
 private func __string_encoding_bits(s: string) -> u8 {
-    return cast[u8]((words(ref s).selector >> encoding_shift) & 3)
+    return cast[u8]((words(ref s).__value.selector >> encoding_shift) & 3)
 }
 
 private inline func __string_byte_len(s: string) -> uint {
-    let selector: u64 = words(ref s).selector
+    let selector: u64 = words(ref s).__value.selector
     if selector >> tag_shift == 0 {
         return cast[uint]((selector >> 56) & 0xf)
     }
@@ -77,21 +77,21 @@ private inline func __string_byte_len(s: string) -> uint {
 
 private func __string_byte(s: string, i: uint) -> u8 {
     let view: Ref[String_Words] = words(ref s)
-    if view.selector >> tag_shift == 0 {
+    if view.__value.selector >> tag_shift == 0 {
         let cell: byte = __gc_byte_offset(unsafe_cast[Ref[byte]] view,
                                           cast[int] i).__value
         return cast[u8] cell
     }
-    let stored: byte = __gc_byte_offset(view.data, cast[int] i).__value
+    let stored: byte = __gc_byte_offset(view.__value.data, cast[int] i).__value
     return cast[u8] stored
 }
 
 private func __string_data(s: Ref[string]) -> Ref[byte] {
     let view: Ref[String_Words] = words(s)
-    if view.selector >> tag_shift == 0 {
+    if view.__value.selector >> tag_shift == 0 {
         return unsafe_cast[Ref[byte]] view
     }
-    return view.data
+    return view.__value.data
 }
 
 private func copy_bytes(target: Ref[byte], source: Ref[byte], n: uint) {
@@ -134,7 +134,7 @@ private func short_from(first: Ref[byte], first_n: uint, second: Ref[byte],
 
 private inline func short_bits(s: Ref[string], n: uint) -> u128 {
     let cells: Ref[Short_Words] = unsafe_cast[Ref[Short_Words]] s
-    let bits: u128 = cast[u128](cells.low) | (cast[u128](cells.high) << 64)
+    let bits: u128 = cast[u128](cells.__value.low) | (cast[u128](cells.__value.high) << 64)
     return bits & ((cast[u128](1) << (n * 8)) - 1)
 }
 
@@ -145,8 +145,8 @@ private inline func short_join(left: Ref[string], left_n: uint,
         (short_bits(right, n - left_n) << (left_n * 8))
     var made: string = ""
     let cells: Ref[Short_Words] = unsafe_cast[Ref[Short_Words]] ref made
-    cells.low = cast[u64](bits & 0xffffffffffffffff)
-    cells.high = cast[u64](bits >> 64) |
+    cells.__value.low = cast[u64](bits & 0xffffffffffffffff)
+    cells.__value.high = cast[u64](bits >> 64) |
         (cast[u64](n | (cast[uint](encoding) << 4)) << 56)
     return made
 }
@@ -173,14 +173,14 @@ private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
         return made
     }
     if share {
-        view.data = unsafe_cast[Ref[byte]] ref bytes[at]
-        view.selector = long_selector(n, encoding, str_tag_span)
+        view.__value.data = unsafe_cast[Ref[byte]] ref bytes[at]
+        view.__value.selector = long_selector(n, encoding, str_tag_span)
         return made
     }
     let copy: Ref[byte] = long_bytes(n)
     copy_array_bytes(copy, bytes.__value, at, n)
-    view.data = copy
-    view.selector = long_selector(n, encoding, str_tag_long)
+    view.__value.data = copy
+    view.__value.selector = long_selector(n, encoding, str_tag_long)
     return made
 }
 
@@ -192,8 +192,8 @@ private func long_bytes(n: uint) -> Ref[byte] {
 private func adopt_long(data: Ref[byte], n: uint, encoding: u8) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
-    view.data = data
-    view.selector = long_selector(n, encoding, str_tag_long)
+    view.__value.data = data
+    view.__value.selector = long_selector(n, encoding, str_tag_long)
     return made
 }
 
@@ -201,20 +201,20 @@ private func __string_span(s: string, at: uint, n: uint,
                            encoding: u8) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
-    view.data = __gc_byte_offset(words(ref s).data, cast[int] at)
-    view.selector = long_selector(n, encoding, str_tag_span)
+    view.__value.data = __gc_byte_offset(words(ref s).__value.data, cast[int] at)
+    view.__value.selector = long_selector(n, encoding, str_tag_span)
     return made
 }
 
 func __string_rich_body(s: string) -> Ref['T] {
-    return unsafe_cast[Ref['T]] words(ref s).data
+    return unsafe_cast[Ref['T]] words(ref s).__value.data
 }
 
 func __string_make_rich(body: Ref['T]) -> string {
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
-    view.data = unsafe_cast[Ref[byte]] body
-    view.selector = str_tag_rich << tag_shift
+    view.__value.data = unsafe_cast[Ref[byte]] body
+    view.__value.selector = str_tag_rich << tag_shift
     return made
 }
 
@@ -225,8 +225,8 @@ private func adopt_bytes(bytes: Ref[Array[u8]], n: uint, encoding: u8)
     }
     var made: string = ""
     let view: Ref[String_Words] = words(ref made)
-    view.data = unsafe_cast[Ref[byte]] ref bytes[0]
-    view.selector = long_selector(n, encoding, str_tag_long)
+    view.__value.data = unsafe_cast[Ref[byte]] ref bytes[0]
+    view.__value.selector = long_selector(n, encoding, str_tag_long)
     return made
 }
 
@@ -237,7 +237,7 @@ func tag(self: string) -> u8 {
 inline func text(self: string) -> string {
     var walked: string = self
     while __string_tag(walked) == cast[u8] str_tag_rich {
-        let body: Ref[string] = unsafe_cast[Ref[string]] words(ref walked).data
+        let body: Ref[string] = unsafe_cast[Ref[string]] words(ref walked).__value.data
         walked = body.__value
     }
     return walked
@@ -245,10 +245,10 @@ inline func text(self: string) -> string {
 
 inline func __text_bytes(base: Ref[string]) -> Ref[byte] {
     let view: Ref[String_Words] = words(base)
-    if view.selector >> tag_shift == 0 {
+    if view.__value.selector >> tag_shift == 0 {
         return unsafe_cast[Ref[byte]] view
     }
-    return view.data
+    return view.__value.data
 }
 
 private const fd_chunk_limit: uint = 0x7fffffff
@@ -501,22 +501,22 @@ func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
 
 func string_backing_at(s: string) -> uint {
     let view: Ref[String_Words] = words(ref s)
-    let tag: u64 = view.selector >> tag_shift
+    let tag: u64 = view.__value.selector >> tag_shift
     if tag != str_tag_long and tag != str_tag_span {
         return 0
     }
-    return __abi_ref_address(view.data)
+    return __abi_ref_address(view.__value.data)
 }
 
 func __string_storage(s: string) -> Array[u8]? {
     let view: Ref[String_Words] = words(ref s)
-    if view.selector >> tag_shift != str_tag_long {
+    if view.__value.selector >> tag_shift != str_tag_long {
         return nil
     }
-    let length: u64 = view.selector & length_mask
+    let length: u64 = view.__value.selector & length_mask
     var shape: Byte_Array_Shape = (total_count = length, rank = 1,
         flat_rank = 1, flags = 0, reserved_zero = 0, extent = length)
-    var value: Byte_Array_Value = (data = view.data, descriptor = ref shape)
+    var value: Byte_Array_Value = (data = view.__value.data, descriptor = ref shape)
     let storage: Ref[Array[u8]] = unsafe_cast[Ref[Array[u8]]] ref value
     return storage.__value
 }
@@ -540,7 +540,7 @@ func __text_byte_array(self: string) -> Array[u8] {
 private func __string_with_encoding(s: string, encoding: u8) -> string {
     var out: string = s
     let view: Ref[String_Words] = words(ref out)
-    view.selector = (view.selector & ~(cast[u64](3) << encoding_shift)) |
+    view.__value.selector = (view.__value.selector & ~(cast[u64](3) << encoding_shift)) |
         (cast[u64](encoding) << encoding_shift)
     return out
 }

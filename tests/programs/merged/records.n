@@ -358,9 +358,328 @@ func loads() -> bool {
     var copy: Atomic[u32] = width
     atomic_bump(copy)
     return flag and total == 15 and width == 5 and small == -3 and
-        ratio * 2.0 == 3.0 and h != nil and h.get().value == 7 and
+        ratio * 2.0 == 3.0 and h != nil and h.get().__value.value == 7 and
         copy == 6
 }
 
 require loads()
+
+record Fin_Value {
+    v: int
+}
+
+record Fin_Holder {
+    tag: int
+    f: Fin_Value
+}
+
+record Fin_Outer {
+    h: Fin_Holder
+    g: Fin_Value
+}
+
+object Fin_Box {
+    f: Fin_Value
+}
+
+var fin_count: int = 0
+var fin_order: int = 0
+
+func __finalize(consume self: Ref[Fin_Value]) {
+    fin_count += 1
+    fin_order = fin_order * 10 + self.__value.v
+}
+
+func __finalize(consume self: Ref[Fin_Outer]) {
+    fin_order = fin_order * 10 + 9
+}
+
+func fin_reset() {
+    fin_count = 0
+    fin_order = 0
+}
+
+func fin_make(v: int) -> Fin_Value {
+    let f: Fin_Value = (v = v)
+    return f
+}
+
+func fin_take(consume f: Fin_Value) -> int {
+    return f.v
+}
+
+func fin_peek(f: Fin_Value) -> int {
+    return f.v
+}
+
+func fin_peek_ref(f: Ref[Fin_Value]) -> int {
+    return f.__value.v
+}
+
+func fin_scoped() -> int {
+    var f: Fin_Value = (v = 1)
+    return 0
+}
+
+func fin_moved_to_callee() -> int {
+    var f: Fin_Value = (v = 2)
+    return fin_take(f)
+}
+
+func fin_early(flag: bool) -> int {
+    var f: Fin_Value = (v = 3)
+    if flag {
+        return 1
+    }
+    return f.v
+}
+
+func fin_looped() -> int {
+    var total: int = 0
+    var i: int = 0
+    while i < 3 {
+        let f: Fin_Value = (v = i + 1)
+        total += f.v
+        i += 1
+    }
+    return total
+}
+
+func fin_broken() -> int {
+    var i: int = 0
+    while true {
+        let f: Fin_Value = (v = 4)
+        if i == 2 {
+            break
+        }
+        i += 1
+    }
+    return i
+}
+
+func fin_reassigned() -> int {
+    var f: Fin_Value = (v = 5)
+    f = (v = 6)
+    return f.v
+}
+
+func fin_failing(flag: bool) -> int fail: string {
+    let f: Fin_Value = (v = 7)
+    if flag {
+        fail "no"
+    }
+    return f.v
+}
+
+func fin_caught() -> int {
+    try {
+        return fin_failing(true)!
+    } fail(message) {
+        return -1
+    }
+}
+
+func fin_moved_local() -> int {
+    let f: Fin_Value = (v = 1)
+    let g: Fin_Value = f
+    return g.v
+}
+
+func fin_held() -> int {
+    let f: Fin_Value = (v = 1)
+    let h: Fin_Holder = (tag = 7, f = f)
+    return h.tag
+}
+
+func fin_nested() -> int {
+    let h: Fin_Holder = (tag = 1, f = (v = 2))
+    let o: Fin_Outer = (h = h, g = (v = 3))
+    return o.h.tag
+}
+
+func fin_present() -> int {
+    let f: Fin_Value? = (v = 1)
+    return 0
+}
+
+func fin_absent() -> int {
+    let f: Fin_Value? = nil
+    return 0
+}
+
+func fin_paired() -> int {
+    let a: Fin_Value = (v = 2)
+    let b: Fin_Value = (v = 3)
+    let pair: Tuple[Fin_Value, int, Fin_Value] = (a, 5, b)
+    return pair[1]
+}
+
+func fin_addressed() -> int {
+    var f: Fin_Value = (v = 4)
+    return fin_peek_ref(ref f)
+}
+
+func fin_borrowed_temporary() -> int {
+    return fin_peek(fin_make(1))
+}
+
+func fin_field_of_temporary() -> int {
+    return fin_make(2).v
+}
+
+func fin_condition_temporary() -> int {
+    var n: int = 0
+    while fin_make(n).v < 3 {
+        n += 1
+    }
+    return n
+}
+
+func fin_returned_temporary() -> Fin_Value {
+    return fin_make(5)
+}
+
+func fin_block_value() -> int {
+    let n: int = {
+        let f: Fin_Value = (v = 1)
+        -> f.v + 10
+    }
+    return n
+}
+
+func fin_block_moved() -> int {
+    let g: Fin_Value = {
+        let f: Fin_Value = (v = 2)
+        -> f
+    }
+    return g.v
+}
+
+func fin_array_literal() -> int {
+    let items: Array[Fin_Value] = [(v = 1), (v = 2)]
+    return fin_count
+}
+
+func fin_short_circuit() -> int {
+    if fin_make(1).v == 0 or fin_make(2).v == 2 {
+        return 1
+    }
+    return 0
+}
+
+func fin_generic_sink(consume x: 'T) -> int {
+    return 1
+}
+
+func fin_generic_pass(consume x: 'T) -> 'T {
+    return x
+}
+
+func fin_generic_local(consume x: 'T) -> int {
+    var y: 'T = x
+    return 2
+}
+
+func fin_generic_chain(consume x: 'T) -> int {
+    return fin_generic_sink(fin_generic_pass(x))
+}
+
+record Fin_Wrap {
+    item: 'T
+    tag:  int
+}
+
+func __finalize(consume self: Ref[Fin_Wrap['T]]) {
+    fin_order = fin_order * 10 + 8
+}
+
+func fin_generic_tuple() -> int {
+    let t: Tuple[Fin_Value, int, Fin_Value] = (fin_make(1), 5, fin_make(2))
+    return fin_generic_sink(t)
+}
+
+func fin_generic_wrapped() -> int {
+    let w: Fin_Wrap[Fin_Value] = (item = fin_make(3), tag = 1)
+    return fin_generic_sink(w)
+}
+
+require fin_scoped() == 0
+require fin_count == 1 and fin_order == 1
+fin_reset()
+require fin_moved_to_callee() == 2
+require fin_count == 1 and fin_order == 2
+fin_reset()
+require fin_early(true) == 1 and fin_early(false) == 3
+require fin_count == 2 and fin_order == 33
+fin_reset()
+require fin_looped() == 6
+require fin_count == 3 and fin_order == 123
+fin_reset()
+require fin_broken() == 2
+require fin_count == 3 and fin_order == 444
+fin_reset()
+require fin_reassigned() == 6
+require fin_count == 2 and fin_order == 56
+fin_reset()
+require fin_caught() == -1
+require fin_count == 1 and fin_order == 7
+fin_reset()
+require fin_moved_local() == 1
+require fin_count == 1
+fin_reset()
+require fin_held() == 7
+require fin_count == 1
+fin_reset()
+require fin_nested() == 1
+require fin_count == 2 and fin_order == 923
+fin_reset()
+require fin_present() == 0 and fin_absent() == 0
+require fin_count == 1
+fin_reset()
+require fin_paired() == 5
+require fin_count == 2 and fin_order == 23
+fin_reset()
+require fin_addressed() == 4
+require fin_count == 1
+fin_reset()
+require fin_borrowed_temporary() == 1
+require fin_field_of_temporary() == 2
+require fin_count == 2
+fin_reset()
+require fin_condition_temporary() == 3
+require fin_count == 4
+fin_reset()
+require fin_block_value() == 11
+require fin_count == 1
+fin_reset()
+require fin_block_moved() == 2
+require fin_count == 1
+fin_reset()
+require fin_array_literal() == 0
+fin_reset()
+require fin_short_circuit() == 1
+require fin_count == 2 and fin_order == 12
+fin_reset()
+require fin_generic_sink(fin_make(4)) == 1
+require fin_count == 1 and fin_order == 4
+fin_reset()
+require fin_generic_local(fin_make(5)) == 2
+require fin_count == 1 and fin_order == 5
+fin_reset()
+require fin_generic_chain(fin_make(6)) == 1
+require fin_count == 1 and fin_order == 6
+fin_reset()
+require fin_generic_pass(fin_make(7)).v == 7
+require fin_count == 1
+fin_reset()
+require fin_generic_tuple() == 1
+require fin_count == 2 and fin_order == 12
+fin_reset()
+require fin_generic_wrapped() == 1
+require fin_count == 1 and fin_order == 83
+fin_reset()
+require fin_generic_sink(3) == 1
+let fin_kept: Fin_Value = fin_returned_temporary()
+require fin_kept.v == 5 and fin_count == 0
+fin_reset()
 __fd_write(2, "ok")

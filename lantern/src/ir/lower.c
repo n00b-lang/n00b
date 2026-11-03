@@ -390,7 +390,8 @@ ir_lower_set_node_value(ir_lower_context_t *context, parse_tree_t *node,
         || !lower_value_accessible(context, value))
         return false;
     core_dict_put(&state->values, node, value);
-    return true;
+    return !value || !context->node_value
+        || context->node_value(context, node, value);
 }
 
 bool
@@ -1517,10 +1518,33 @@ lower_type_is_reference_carrier(th_type *type)
     return item && lower_type_is_reference_carrier(item);
 }
 
+static ir_lower_result_t lower_write_binding_value(
+    ir_lower_context_t *context, ir_lower_symbol_binding_t *binding,
+    ir_value_t *value, bool initializes, ir_span_t span);
+
 static ir_lower_result_t
 lower_write_binding(ir_lower_context_t *context,
                     ir_lower_symbol_binding_t *binding, ir_value_t *value,
                     bool initializes, ir_span_t span)
+{
+    if (context->write_binding
+        && !context->write_binding(context, binding->symbol, false))
+        return lower_failure(context, IR_DIAG_INTERNAL, span,
+                             "could not prepare the assigned binding");
+    ir_lower_result_t result = lower_write_binding_value(context, binding,
+                                                         value, initializes,
+                                                         span);
+    if (result.status != IR_LOWER_FAILED && context->write_binding
+        && !context->write_binding(context, binding->symbol, true))
+        return lower_failure(context, IR_DIAG_INTERNAL, span,
+                             "could not record the assigned binding");
+    return result;
+}
+
+static ir_lower_result_t
+lower_write_binding_value(ir_lower_context_t *context,
+                          ir_lower_symbol_binding_t *binding,
+                          ir_value_t *value, bool initializes, ir_span_t span)
 {
     if (!initializes) {
         ir_execution_phase_t phase = ir_func_execution_phase(
@@ -1795,6 +1819,13 @@ lower_tree_node(parse_visit_t *visit)
     }
     state->terminated |= result.status == IR_LOWER_TERMINATED;
     core_dict_put(&state->values, visit->node, result.value);
+    if (result.value && state->context->node_value
+        && !state->context->node_value(state->context, visit->node,
+                                       result.value)) {
+        state->failed = true;
+        parse_tree_walk_stop(visit->walk);
+        return false;
+    }
     return true;
 }
 

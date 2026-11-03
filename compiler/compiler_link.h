@@ -494,6 +494,7 @@ typedef struct n00bb_link_analysis_t {
     ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
+    core_list_t(n00bb_boxed_finalizer_t) boxed_finalizers;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;

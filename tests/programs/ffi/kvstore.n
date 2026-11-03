@@ -56,10 +56,10 @@ func open(path: string) -> Store fail: Kv_Error {
 func collect() {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    let heap = mutator.get().heap
-    let before = heap.collections
+    let heap = mutator.get().__value.heap
+    let before = heap.__value.collections
     sys.gc.collect.collect(heap)
-    require heap.collections > before
+    require heap.__value.collections > before
     var round = 0
     while round < 64 {
         var junk: Array[u8] = new[Array[u8]](3)

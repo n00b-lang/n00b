@@ -32,43 +32,43 @@ func chunk_record() -> Ref[internal.abi.Type_Record] {
 
 func pool_lock(heap: Ref[internal.gc.core.Heap]) {
     var spins: u32 = 0
-    while __atomic_exchange_acquire(ref heap.pool_lock, 1) != 0 {
+    while __atomic_exchange_acquire(ref heap.__value.pool_lock, 1) != 0 {
         spins += 1
         if spins < pool_spins {
             internal.threads.cpu_relax()
             continue
         }
         spins = 0
-        let seq: u32 = internal.gc.sync.event_enter(ref heap.pool_free)
-        if __atomic_load(ref heap.pool_lock) != 0 {
-            internal.gc.sync.event_sleep(ref heap.pool_free, seq)
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.__value.pool_free)
+        if __atomic_load(ref heap.__value.pool_lock) != 0 {
+            internal.gc.sync.event_sleep(ref heap.__value.pool_free, seq)
         }
-        internal.gc.sync.event_leave(ref heap.pool_free)
+        internal.gc.sync.event_leave(ref heap.__value.pool_free)
     }
 }
 
 func pool_unlock(heap: Ref[internal.gc.core.Heap]) {
-    __atomic_store_release(ref heap.pool_lock, 0)
-    if __atomic_load_relaxed(ref heap.pool_free.sleepers) != 0 {
-        internal.gc.sync.event_signal(ref heap.pool_free)
+    __atomic_store_release(ref heap.__value.pool_lock, 0)
+    if __atomic_load_relaxed(ref heap.__value.pool_free.sleepers) != 0 {
+        internal.gc.sync.event_signal(ref heap.__value.pool_free)
     }
 }
 
 func wake_workers(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.sync.event_signal(ref heap.work_progress)
+    internal.gc.sync.event_signal(ref heap.__value.work_progress)
 }
 
 inline func is_marked(heap: Ref[internal.gc.core.Heap], payload: Ref[byte]) -> bool {
     let header: Ref[internal.gc.core.Object_Header] = internal.gc.core.header_of(payload)
-    let epoch:  u32                           = heap.mark_epoch
-    if (header.meta & internal.gc.core.obj_large) != 0 {
+    let epoch:  u32                           = heap.__value.mark_epoch
+    if (header.__value.meta & internal.gc.core.obj_large) != 0 {
         let obj: Ref[internal.gc.core.Los_Obj] = internal.gc.core.los_of(header)
-        return __atomic_load_relaxed(ref obj.marked) == epoch
+        return __atomic_load_relaxed(ref obj.__value.marked) == epoch
     }
     let block:   Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_of(header)
     let offset:  uint                           = __abi_ref_address(header) - __abi_ref_address(block)
     let granule: uint                           = offset / internal.gc.core.granule_bytes
-    if __atomic_load_acquire(ref block.mark_epoch) != epoch {
+    if __atomic_load_acquire(ref block.__value.mark_epoch) != epoch {
         return false
     }
     let bits: u64 = __atomic_load_relaxed(internal.gc.core.block_mark_word(block,
@@ -83,12 +83,12 @@ inline func mark_object(marker: Ref[internal.gc.core.Marker], payload: Ref[byte]
         let granule_bytes: uint                          = internal.gc.core.granule_bytes
         let extent:        uint                          = internal.gc.core.object_bytes(header)
         let bytes:         uint                          = ((extent + granule_bytes - 1) / granule_bytes) * granule_bytes
-        let heap:          Ref[internal.gc.core.Heap]          = marker.heap
-        let epoch:         u32                           = heap.mark_epoch
+        let heap:          Ref[internal.gc.core.Heap]          = marker.__value.heap
+        let epoch:         u32                           = heap.__value.mark_epoch
 
-        if (header.meta & internal.gc.core.obj_large) != 0 {
+        if (header.__value.meta & internal.gc.core.obj_large) != 0 {
             let large: Ref[internal.gc.core.Los_Obj] = internal.gc.core.los_of(header)
-            if __atomic_exchange_relaxed(ref large.marked, epoch) == epoch {
+            if __atomic_exchange_relaxed(ref large.__value.marked, epoch) == epoch {
                 return
             }
         } else {
@@ -97,9 +97,9 @@ inline func mark_object(marker: Ref[internal.gc.core.Marker], payload: Ref[byte]
             let offset:  uint                           = __abi_ref_address(header) - __abi_ref_address(base)
             let granule: uint                           = offset / granule_bytes
             let mask:    u64                            = cast[u64](1) << (granule % internal.gc.core.word_bits)
-            assert block.magic == internal.gc.core.block_magic
+            assert block.__value.magic == internal.gc.core.block_magic
             assert offset >= internal.gc.core.header_lines() * internal.gc.core.line_bytes
-            if __atomic_load_acquire(ref block.mark_epoch) != epoch {
+            if __atomic_load_acquire(ref block.__value.mark_epoch) != epoch {
                 internal.gc.core.ensure_mark_epoch(base, epoch)
             }
             let word: Ref[Atomic[u64]] = internal.gc.core.mark_word_at(
@@ -110,12 +110,12 @@ inline func mark_object(marker: Ref[internal.gc.core.Marker], payload: Ref[byte]
             internal.gc.core.mark_lines(base, offset, bytes, epoch)
         }
 
-        marker.marked += 1
-        marker.objects += 1
-        marker.bytes += bytes
-        let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(header.type_index)
+        marker.__value.marked += 1
+        marker.__value.objects += 1
+        marker.__value.bytes += bytes
+        let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(header.__value.type_index)
         if row != nil {
-            if row.get().tracing_index != 0 {
+            if row.get().__value.tracing_index != 0 {
                 push(marker, header)
             }
         } else {
@@ -126,9 +126,9 @@ inline func mark_object(marker: Ref[internal.gc.core.Marker], payload: Ref[byte]
 
 func mark_ambiguous(marker: Ref[internal.gc.core.Marker], address: uint) {
     let header: Ref[internal.gc.core.Object_Header]? = internal.gc.registry.find_object(
-        marker.heap, address)
+        marker.__value.heap, address)
     if header != nil {
-        marker.hits += 1
+        marker.__value.hits += 1
         mark_object(marker, internal.gc.core.payload_of(header.get()))
     }
 }
@@ -143,29 +143,29 @@ func barrier_slot_record() -> Ref[internal.abi.Type_Record] {
 }
 
 func barrier_flush_locked(mutator: Ref[internal.gc.core.Mutator]) {
-    let heap:  Ref[internal.gc.core.Heap] = mutator.heap
-    let count: uint                 = mutator.write_buffer_count
-    if count == 0 or mutator.write_buffer_epoch != heap.mark_epoch {
-        mutator.write_buffer_count = 0
+    let heap:  Ref[internal.gc.core.Heap] = mutator.__value.heap
+    let count: uint                 = mutator.__value.write_buffer_count
+    if count == 0 or mutator.__value.write_buffer_epoch != heap.__value.mark_epoch {
+        mutator.__value.write_buffer_count = 0
         return
     }
     let slot:       Ref[internal.abi.Type_Record] = barrier_slot_record()
     let slot_bytes: uint                         = internal.abi.size_bytes(slot)
-    if !internal.gc.heap.grow_array(ref heap.barrier_queue,
-        ref heap.barrier_queue_capacity, slot_bytes,
-        internal.abi.alignment_bytes(slot), heap.barrier_queue_count,
-        heap.barrier_queue_count + count) {
+    if !internal.gc.heap.grow_array(ref heap.__value.barrier_queue,
+        ref heap.__value.barrier_queue_capacity, slot_bytes,
+        internal.abi.alignment_bytes(slot), heap.__value.barrier_queue_count,
+        heap.__value.barrier_queue_count + count) {
         require false
     }
-    let queue: Ref[byte]? = heap.barrier_queue
+    let queue: Ref[byte]? = heap.__value.barrier_queue
     if queue != nil {
-        let source: Ref[Ref[byte]?] = ref mutator.write_buffer[0]
+        let source: Ref[Ref[byte]?] = ref mutator.__value.write_buffer[0]
         __gc_memcpy(__gc_byte_offset(queue.get(),
-            heap.barrier_queue_count * slot_bytes),
+            heap.__value.barrier_queue_count * slot_bytes),
             source, count * slot_bytes)
-        heap.barrier_queue_count += count
+        heap.__value.barrier_queue_count += count
         __gc_signal_fence()
-        mutator.write_buffer_count = 0
+        mutator.__value.write_buffer_count = 0
         return
     }
     require false
@@ -173,56 +173,56 @@ func barrier_flush_locked(mutator: Ref[internal.gc.core.Mutator]) {
 
 func flush_write_buffer(mutator: Ref[internal.gc.core.Mutator]) {
     internal.gc.handshake.safepoint(mutator)
-    if mutator.write_buffer_count == 0 {
+    if mutator.__value.write_buffer_count == 0 {
         return
     }
-    let heap: Ref[internal.gc.core.Heap] = mutator.heap
-    internal.gc.sync.ticket_lock(ref heap.lock)
+    let heap: Ref[internal.gc.core.Heap] = mutator.__value.heap
+    internal.gc.sync.ticket_lock(ref heap.__value.lock)
     barrier_flush_locked(mutator)
     internal.gc.heap.unlock(heap)
-    internal.gc.sync.event_signal(ref heap.work_progress)
+    internal.gc.sync.event_signal(ref heap.__value.work_progress)
 }
 
 func write_barrier(mutator: Ref[internal.gc.core.Mutator],
                           value: Ref[byte]?) {
-    let heap: Ref[internal.gc.core.Heap] = mutator.heap
+    let heap: Ref[internal.gc.core.Heap] = mutator.__value.heap
     if value != nil {
-        if !__atomic_load_relaxed(ref heap.marking) or
+        if !__atomic_load_relaxed(ref heap.__value.marking) or
             is_marked(heap, value.get()) {
             return
         }
 
-        if mutator.write_buffer_epoch != heap.mark_epoch {
-            mutator.write_buffer_count = 0
-            mutator.write_buffer_epoch = heap.mark_epoch
+        if mutator.__value.write_buffer_epoch != heap.__value.mark_epoch {
+            mutator.__value.write_buffer_count = 0
+            mutator.__value.write_buffer_epoch = heap.__value.mark_epoch
         }
-        let index: uint = mutator.write_buffer_count
+        let index: uint = mutator.__value.write_buffer_count
         assert index < internal.gc.core.write_buffer_cap
-        mutator.write_buffer[index] = value
+        mutator.__value.write_buffer[index] = value
         __gc_signal_fence()
-        mutator.write_buffer_count = index + 1
-        if mutator.write_buffer_count == internal.gc.core.write_buffer_cap {
+        mutator.__value.write_buffer_count = index + 1
+        if mutator.__value.write_buffer_count == internal.gc.core.write_buffer_cap {
             flush_write_buffer(mutator)
         }
     }
 }
 
 func barrier_queue_drain(marker: Ref[internal.gc.core.Marker]) {
-    let heap:  Ref[internal.gc.core.Heap] = marker.heap
-    let queue: Ref[byte]?           = heap.barrier_queue
-    if heap.barrier_queue_count == 0 {
+    let heap:  Ref[internal.gc.core.Heap] = marker.__value.heap
+    let queue: Ref[byte]?           = heap.__value.barrier_queue
+    if heap.__value.barrier_queue_count == 0 {
         return
     }
     if queue != nil {
         let slot_bytes: uint = internal.abi.size_bytes(barrier_slot_record())
         var index:      uint = 0
-        while index < heap.barrier_queue_count {
+        while index < heap.__value.barrier_queue_count {
             let address: Ref[byte] = __gc_byte_offset(queue.get(),
                 index * slot_bytes)
             mark_object(marker, __atomic_load(pointer_word_at(address)))
             index += 1
         }
-        heap.barrier_queue_count = 0
+        heap.__value.barrier_queue_count = 0
         return
     }
     require false
@@ -233,10 +233,10 @@ inline func managed_header(marker: Ref[internal.gc.core.Marker]?,
                     pointer: Ref[byte]) -> Ref[internal.gc.core.Object_Header]? {
     var heap: Ref[internal.gc.core.Heap]
     if marker != nil {
-        heap = marker.get().heap
+        heap = marker.get().__value.heap
     }
     elif mutator != nil {
-        heap = mutator.get().heap
+        heap = mutator.get().__value.heap
     }
     else {
         require false
@@ -286,11 +286,11 @@ func trace_children(marker: Ref[internal.gc.core.Marker]?,
             cast[u32]index)
         if entry != nil {
             let child: Ref[internal.abi.Trace_Child_Record] = entry.get()
-            var count: u64                                 = child.repeat_count
+            var count: u64                                 = child.__value.repeat_count
             if count == 0 {
                 count = 1
             }
-            require child.stride_bits % 8 == 0
+            require child.__value.stride_bits % 8 == 0
             if skip >= count {
                 skip -= count
                 ordinal += 1
@@ -304,11 +304,11 @@ func trace_children(marker: Ref[internal.gc.core.Marker]?,
                                       start_index + scanned)
                     return
                 }
-                let offset: uint = cast[uint](child.byte_offset +
-                    repetition * (child.stride_bits / 8))
+                let offset: uint = cast[uint](child.__value.byte_offset +
+                    repetition * (child.__value.stride_bits / 8))
                 trace_value(marker, mutator, owner,
                             __gc_byte_offset(address, offset),
-                            child.child_type_index, 0)
+                            child.__value.child_type_index, 0)
                 repetition += 1
                 scanned += 1
             }
@@ -328,7 +328,7 @@ func trace_fixed_children(marker: Ref[internal.gc.core.Marker]?,
     let found: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(trace_index)
     if found != nil {
         trace_children(marker, mutator, owner, address, type_index,
-                       found.get().fixed_children, start_index)
+                       found.get().__value.fixed_children, start_index)
         return
     }
     require false
@@ -361,11 +361,11 @@ func option_depth(type_index: u32) -> u64 {
     while true {
         let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(current)
         if row != nil {
-            if row.get().kind != cast[u32](internal.abi.Type_Kind.option_type) {
+            if row.get().__value.kind != cast[u32](internal.abi.Type_Kind.option_type) {
                 return depth
             }
             depth += 1
-            let child: i64 = internal.abi.range_index(row.get().components, 0)
+            let child: i64 = internal.abi.range_index(row.get().__value.components, 0)
             require child > 0
             current = cast[u32]child
         } else {
@@ -377,24 +377,24 @@ func option_depth(type_index: u32) -> u64 {
 func option_is_set(address: Ref[byte], trace: Ref[internal.abi.Trace_Record],
                    type_index: u32) -> bool {
     let found: Ref[internal.abi.Tag_Extractor_Record]? = internal.abi.tag_extractor_at(
-        trace.tag_extractor_index)
+        trace.__value.tag_extractor_index)
     if found != nil {
         let tag:  Ref[internal.abi.Tag_Extractor_Record] = found.get()
         let unit: Ref[byte]                             = __gc_byte_offset(address,
-            tag.unit_byte_offset)
-        if tag.kind == cast[u32](internal.abi.Tag_Kind.direct_bits) {
-            return (trace_unit(unit, tag.unit_width_bits) & tag.mask) != 0
+            tag.__value.unit_byte_offset)
+        if tag.__value.kind == cast[u32](internal.abi.Tag_Kind.direct_bits) {
+            return (trace_unit(unit, tag.__value.unit_width_bits) & tag.__value.mask) != 0
         }
-        if tag.kind == cast[u32](internal.abi.Tag_Kind.pointer_null) {
+        if tag.__value.kind == cast[u32](internal.abi.Tag_Kind.pointer_null) {
             return __atomic_load(pointer_word_at(unit)) != nil
         }
-        if tag.kind == cast[u32](internal.abi.Tag_Kind.bitptr_depth) {
+        if tag.__value.kind == cast[u32](internal.abi.Tag_Kind.bitptr_depth) {
             let base: Ref[byte]? = __atomic_load(pointer_word_at(address))
             if base != nil {
                 return true
             }
             let depth: u64 = option_depth(type_index)
-            let code:  u64 = trace_unit(unit, tag.unit_width_bits)
+            let code:  u64 = trace_unit(unit, tag.__value.unit_width_bits)
             require depth != 0 and code < depth
             return code < depth - 1
         }
@@ -408,26 +408,26 @@ func trace_variant(marker: Ref[internal.gc.core.Marker]?,
                    type_index: u32, trace: Ref[internal.abi.Trace_Record],
                    start_index: u64) {
     let found: Ref[internal.abi.Tag_Extractor_Record]? = internal.abi.tag_extractor_at(
-        trace.tag_extractor_index)
+        trace.__value.tag_extractor_index)
     if found != nil {
         let tag: Ref[internal.abi.Tag_Extractor_Record] = found.get()
-        require tag.kind == cast[u32](internal.abi.Tag_Kind.direct_bits)
+        require tag.__value.kind == cast[u32](internal.abi.Tag_Kind.direct_bits)
         let unit: Ref[byte] = __gc_byte_offset(address,
-            tag.unit_byte_offset)
-        let active: u64 = (trace_unit(unit, tag.unit_width_bits) & tag.mask) >> tag.lsb_position
+            tag.__value.unit_byte_offset)
+        let active: u64 = (trace_unit(unit, tag.__value.unit_width_bits) & tag.__value.mask) >> tag.__value.lsb_position
         if active == 0 {
             return
         }
         var ordinal: u32 = 0
-        while ordinal < trace.arms.count {
-            let index: i64 = internal.abi.range_index(trace.arms, ordinal)
+        while ordinal < trace.__value.arms.count {
+            let index: i64 = internal.abi.range_index(trace.__value.arms, ordinal)
             require index > 0
             let arm: Ref[internal.abi.Trace_Arm_Record]? = internal.abi.trace_arm_at(
                 cast[u32]index)
             if arm != nil {
-                if cast[u64](arm.get().tag_value) == active {
+                if cast[u64](arm.get().__value.tag_value) == active {
                     trace_children(marker, mutator, owner, address, type_index,
-                                   arm.get().children, start_index)
+                                   arm.get().__value.children, start_index)
                     return
                 }
             } else {
@@ -445,11 +445,11 @@ func trace_array_elements(marker: Ref[internal.gc.core.Marker]?,
                           address: Ref[byte], data: Ref[byte],
                           backing: Ref[internal.gc.core.Array_Backing],
                           type_index: u32, start_index: u64) {
-    require start_index <= backing.shape.total_count
-    if backing.element.tracing_index == 0 {
+    require start_index <= backing.__value.shape.__value.total_count
+    if backing.__value.element.__value.tracing_index == 0 {
         return
     }
-    var end_index: u64 = backing.shape.total_count
+    var end_index: u64 = backing.__value.shape.__value.total_count
     if end_index - start_index > scan_chunk and marker != nil {
         end_index = start_index + scan_chunk
         push_continuation(marker.get(), owner, address, type_index,
@@ -458,8 +458,8 @@ func trace_array_elements(marker: Ref[internal.gc.core.Marker]?,
     var index: u64 = start_index
     while index < end_index {
         trace_value(marker, mutator, owner,
-            __gc_byte_offset(data, cast[uint](index) * backing.stride),
-            backing.element_index, 0)
+            __gc_byte_offset(data, cast[uint](index) * backing.__value.stride),
+            backing.__value.element_index, 0)
         index += 1
     }
 }
@@ -469,8 +469,8 @@ func trace_array(marker: Ref[internal.gc.core.Marker]?,
                  owner: Ref[internal.gc.core.Object_Header]?, address: Ref[byte],
                  type_index: u32, start_index: u64) {
     let value:      Ref[internal.abi.Array_Value]              = unsafe_cast[Ref[internal.abi.Array_Value]] address
-    let data:       Ref[byte]?                                = value.data
-    let descriptor: Ref[internal.abi.Array_Descriptor_Header]? = value.descriptor
+    let data:       Ref[byte]?                                = value.__value.data
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header]? = value.__value.descriptor
     if data != nil and descriptor != nil {
         visit_managed_pointer(marker, mutator, data)
         visit_managed_pointer(marker, mutator,
@@ -496,7 +496,7 @@ func trace_array_backing(marker: Ref[internal.gc.core.Marker]?,
             internal.gc.core.array_descriptor_at(address))
     require resolved != nil
     var backing: internal.gc.core.Array_Backing = resolved.get()
-    require cast[u64](backing.data_offset) <= internal.gc.core.meta_payload_bytes(owner.meta)
+    require cast[u64](backing.data_offset) <= internal.gc.core.meta_payload_bytes(owner.__value.meta)
     trace_array_elements(marker, mutator, owner, address,
         __gc_byte_offset(address, backing.data_offset), ref backing,
         type_index, start_index)
@@ -509,14 +509,14 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
     let found: Ref[internal.abi.Type_Record]? = internal.abi.type_at(type_index)
     if found != nil {
         let row: Ref[internal.abi.Type_Record] = found.get()
-        if row.tracing_index == 0 or
-            row.kind == cast[u32](internal.abi.Type_Kind.foreign_type) {
+        if row.__value.tracing_index == 0 or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.foreign_type) {
             return
         }
         if start_index == 0 {
-            let flat: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(row.tracing_index)
+            let flat: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(row.__value.tracing_index)
             if flat != nil {
-                let words: internal.abi.Range = flat.get().pointer_words
+                let words: internal.abi.Range = flat.get().__value.pointer_words
                 if words.count != 0 {
                     var word: u32 = 0
                     while word < words.count {
@@ -529,10 +529,10 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
                 }
             }
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.array_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.array_type) {
             if owner != nil {
                 if address == internal.gc.core.payload_of(owner.get()) and
-                    (owner.get().meta & internal.gc.core.obj_array_backing) != 0 {
+                    (owner.get().__value.meta & internal.gc.core.obj_array_backing) != 0 {
                     trace_array_backing(marker, mutator, owner.get(), address,
                                         type_index, start_index)
                     return
@@ -542,25 +542,25 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
                         start_index)
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.string_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.string_type) {
             require start_index == 0
             visit_managed_pointer(marker, mutator,
                                   internal.abi.string_backing_at(address))
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.box_type) or
-            row.kind == cast[u32](internal.abi.Type_Kind.union_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.box_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.union_type) {
             require start_index == 0
             let box:        Ref[internal.abi.Box_Value]    = unsafe_cast[Ref[internal.abi.Box_Value]] address
-            let item_index: u32                           = box.type_field & 0x7fffffff
+            let item_index: u32                           = box.__value.type_field & 0x7fffffff
             let item:       Ref[internal.abi.Type_Record]? = internal.abi.type_at(item_index)
             require item != nil
-            let payload: Ref[byte]? = box.payload
-            if item.get().size_bits > 64 and payload != nil
+            let payload: Ref[byte]? = box.__value.payload
+            if item.get().__value.size_bits > 64 and payload != nil
                 and managed_header(marker, mutator, payload.get()) == nil {
                 trace_value(marker, mutator, owner, payload.get(),
                             item_index, 0)
-            } elif item.get().size_bits > 64 {
+            } elif item.get().__value.size_bits > 64 {
                 visit_managed_pointer(marker, mutator, payload)
             } else {
                 trace_value(marker, mutator, owner,
@@ -568,29 +568,29 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
             }
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.callback_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.callback_type) {
             require start_index == 0
             let callback_value: Ref[internal.abi.Callback_Value] = unsafe_cast[Ref[internal.abi.Callback_Value]] address
             visit_managed_pointer(marker, mutator,
-                                  callback_value.environment)
+                                  callback_value.__value.environment)
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) or
-            row.kind == cast[u32](internal.abi.Type_Kind.object_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.reference_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.object_type) {
             require start_index == 0
             let target: Ref[byte]? = __atomic_load(pointer_word_at(address))
             visit_managed_pointer(marker, mutator, target)
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.record_type) or
-            row.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.record_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
             trace_fixed_children(marker, mutator, owner, address, type_index,
-                                 row.tracing_index, start_index)
+                                 row.__value.tracing_index, start_index)
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.variant_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.variant_type) {
             let trace: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(
-                row.tracing_index)
+                row.__value.tracing_index)
             if trace != nil {
                 trace_variant(marker, mutator, owner, address, type_index,
                               trace.get(), start_index)
@@ -598,20 +598,20 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
             }
         }
         require start_index == 0
-        if row.kind == cast[u32](internal.abi.Type_Kind.option_type) or
-            row.kind == cast[u32](internal.abi.Type_Kind.wrapper_type) or
-            row.kind == cast[u32](internal.abi.Type_Kind.atomic_type) {
+        if row.__value.kind == cast[u32](internal.abi.Type_Kind.option_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.wrapper_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.atomic_type) {
             let trace_found: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(
-                row.tracing_index)
+                row.__value.tracing_index)
             if trace_found != nil {
                 let trace: Ref[internal.abi.Trace_Record] = trace_found.get()
-                if row.kind != cast[u32](internal.abi.Type_Kind.option_type) or
+                if row.__value.kind != cast[u32](internal.abi.Type_Kind.option_type) or
                     option_is_set(address, trace, type_index) {
                     let child: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(
-                        trace.child_trace_index)
+                        trace.__value.child_trace_index)
                     if child != nil {
                         trace_value(marker, mutator, owner, address,
-                                    child.get().type_index, 0)
+                                    child.get().__value.type_index, 0)
                         return
                     }
                 } else {
@@ -631,7 +631,7 @@ func packet_at(chunk: Ref[internal.gc.core.Packet_Chunk], index: uint,
 }
 
 func packet_get_locked(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Packet] {
-    if heap.pool_empty == nil {
+    if heap.__value.pool_empty == nil {
         let header_bytes: uint       = internal.abi.size_bytes(chunk_record())
         let packet_bytes: uint       = internal.abi.size_bytes(packet_record())
         let alignment:    uint       = internal.abi.alignment_bytes(packet_record())
@@ -639,16 +639,16 @@ func packet_get_locked(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core
         let mapping:      Ref[byte]? = internal.memory.map_zeroed(bytes, alignment)
         if mapping != nil {
             let chunk: Ref[internal.gc.core.Packet_Chunk] = unsafe_cast[Ref[internal.gc.core.Packet_Chunk]] mapping.get()
-            chunk.bytes = bytes
-            chunk.next = heap.pool_chunks
-            heap.pool_chunks = chunk
+            chunk.__value.bytes = bytes
+            chunk.__value.next = heap.__value.pool_chunks
+            heap.__value.pool_chunks = chunk
 
             var index: uint = 0
             while index < internal.gc.core.packet_chunk {
                 let packet: Ref[internal.gc.core.Packet] = packet_at(chunk, index,
                     header_bytes, packet_bytes)
-                packet.next = heap.pool_empty
-                heap.pool_empty = packet
+                packet.__value.next = heap.__value.pool_empty
+                heap.__value.pool_empty = packet
                 index += 1
             }
         } else {
@@ -656,42 +656,42 @@ func packet_get_locked(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core
         }
     }
 
-    let candidate: Ref[internal.gc.core.Packet]? = heap.pool_empty
+    let candidate: Ref[internal.gc.core.Packet]? = heap.__value.pool_empty
     if candidate != nil {
         let packet: Ref[internal.gc.core.Packet] = candidate.get()
-        heap.pool_empty = packet.next
-        packet.next = nil
-        packet.n = 0
+        heap.__value.pool_empty = packet.__value.next
+        packet.__value.next = nil
+        packet.__value.n = 0
         return packet
     }
     require false
 }
 
 func packet_put_locked(heap: Ref[internal.gc.core.Heap], packet: Ref[internal.gc.core.Packet]) {
-    if packet.n != 0 {
-        packet.next = heap.pool_full
-        heap.pool_full = packet
+    if packet.__value.n != 0 {
+        packet.__value.next = heap.__value.pool_full
+        heap.__value.pool_full = packet
     } else {
-        packet.next = heap.pool_empty
-        heap.pool_empty = packet
+        packet.__value.next = heap.__value.pool_empty
+        heap.__value.pool_empty = packet
     }
 }
 
 func pool_free_all(heap: Ref[internal.gc.core.Heap]) {
-    var current: Ref[internal.gc.core.Packet_Chunk]? = heap.pool_chunks
+    var current: Ref[internal.gc.core.Packet_Chunk]? = heap.__value.pool_chunks
     while current != nil {
         let chunk: Ref[internal.gc.core.Packet_Chunk] = current.get()
-        current = chunk.next
-        internal.memory.unmap(chunk, chunk.bytes)
+        current = chunk.__value.next
+        internal.memory.unmap(chunk, chunk.__value.bytes)
     }
-    heap.pool_chunks = nil
-    heap.pool_full = nil
-    heap.pool_empty = nil
+    heap.__value.pool_chunks = nil
+    heap.__value.pool_full = nil
+    heap.__value.pool_empty = nil
 }
 
 func mark_quiescent(heap: Ref[internal.gc.core.Heap]) -> bool {
     pool_lock(heap)
-    let quiescent: bool = heap.pool_full == nil and heap.pool_active == 0
+    let quiescent: bool = heap.__value.pool_full == nil and heap.__value.pool_active == 0
     pool_unlock(heap)
     return quiescent
 }
@@ -704,55 +704,55 @@ func marker_init(out marker: internal.gc.core.Marker,
 }
 
 func marker_stats(marker: Ref[internal.gc.core.Marker]) {
-    let heap: Ref[internal.gc.core.Heap] = marker.heap
-    __atomic_fetch_add_relaxed(ref heap.cnt_objects, marker.objects)
-    __atomic_fetch_add_relaxed(ref heap.cnt_bytes, marker.bytes)
-    if marker.worker {
-        __atomic_fetch_add_relaxed(ref heap.cnt_worker_objects, marker.objects)
+    let heap: Ref[internal.gc.core.Heap] = marker.__value.heap
+    __atomic_fetch_add_relaxed(ref heap.__value.cnt_objects, marker.__value.objects)
+    __atomic_fetch_add_relaxed(ref heap.__value.cnt_bytes, marker.__value.bytes)
+    if marker.__value.worker {
+        __atomic_fetch_add_relaxed(ref heap.__value.cnt_worker_objects, marker.__value.objects)
     }
-    __atomic_fetch_add_relaxed(ref heap.cnt_stack_words, marker.stack_words)
-    __atomic_fetch_add_relaxed(ref heap.cnt_frame_slots, marker.frame_slots)
-    __atomic_fetch_add_relaxed(ref heap.cnt_hits, marker.hits)
-    marker.objects = 0
-    marker.bytes = 0
-    marker.stack_words = 0
-    marker.frame_slots = 0
-    marker.hits = 0
+    __atomic_fetch_add_relaxed(ref heap.__value.cnt_stack_words, marker.__value.stack_words)
+    __atomic_fetch_add_relaxed(ref heap.__value.cnt_frame_slots, marker.__value.frame_slots)
+    __atomic_fetch_add_relaxed(ref heap.__value.cnt_hits, marker.__value.hits)
+    marker.__value.objects = 0
+    marker.__value.bytes = 0
+    marker.__value.stack_words = 0
+    marker.__value.frame_slots = 0
+    marker.__value.hits = 0
 }
 
 func reserve_out(marker: Ref[internal.gc.core.Marker], need: uint) {
-    let heap:      Ref[internal.gc.core.Heap] = marker.heap
+    let heap:      Ref[internal.gc.core.Heap] = marker.__value.heap
     var published: bool                 = false
     pool_lock(heap)
-    if !marker.holding {
-        heap.pool_active += 1
-        marker.holding = true
+    if !marker.__value.holding {
+        heap.__value.pool_active += 1
+        marker.__value.holding = true
     }
-    let output: Ref[internal.gc.core.Packet]? = marker.output
+    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
     if output != nil {
-        if output.get().n + need > internal.gc.core.packet_cap {
+        if output.get().__value.n + need > internal.gc.core.packet_cap {
             packet_put_locked(heap, output.get())
-            marker.output = nil
+            marker.__value.output = nil
             published = true
         }
     }
-    if marker.output == nil {
-        marker.output = packet_get_locked(heap)
+    if marker.__value.output == nil {
+        marker.__value.output = packet_get_locked(heap)
     }
     pool_unlock(heap)
     if published {
         wake_workers(heap)
-        internal.gc.sync.event_signal(ref heap.mark_progress)
+        internal.gc.sync.event_signal(ref heap.__value.mark_progress)
     }
 }
 
 inline func out_has_room(marker: Ref[internal.gc.core.Marker], need: uint) -> bool {
-    if !marker.holding {
+    if !marker.__value.holding {
         return false
     }
-    let output: Ref[internal.gc.core.Packet]? = marker.output
+    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
     if output != nil {
-        return output.get().n + need <= internal.gc.core.packet_cap
+        return output.get().__value.n + need <= internal.gc.core.packet_cap
     }
     return false
 }
@@ -761,15 +761,15 @@ inline func push(marker: Ref[internal.gc.core.Marker], header: Ref[internal.gc.c
     if !out_has_room(marker, 1) {
         reserve_out(marker, 1)
     }
-    let output: Ref[internal.gc.core.Packet]? = marker.output
+    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
     if output != nil {
         let packet: Ref[internal.gc.core.Packet]       = output.get()
-        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.entries[packet.n]
-        entry.header = header
-        entry.value_address = internal.gc.core.payload_of(header)
-        entry.type_index = header.type_index
-        entry.start_index = 0
-        packet.n += 1
+        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[packet.__value.n]
+        entry.__value.header = header
+        entry.__value.value_address = internal.gc.core.payload_of(header)
+        entry.__value.type_index = header.__value.type_index
+        entry.__value.start_index = 0
+        packet.__value.n += 1
         return
     }
     require false
@@ -782,30 +782,30 @@ func push_continuation(marker: Ref[internal.gc.core.Marker],
     if !out_has_room(marker, 1) {
         reserve_out(marker, 1)
     }
-    let output: Ref[internal.gc.core.Packet]? = marker.output
+    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
     if output != nil {
         let packet: Ref[internal.gc.core.Packet]       = output.get()
-        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.entries[packet.n]
-        entry.header = header
-        entry.value_address = address
-        entry.type_index = type_index
-        entry.start_index = start_index
-        packet.n += 1
+        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[packet.__value.n]
+        entry.__value.header = header
+        entry.__value.value_address = address
+        entry.__value.type_index = type_index
+        entry.__value.start_index = start_index
+        packet.__value.n += 1
         return
     }
     require false
 }
 
 func marker_flush(marker: Ref[internal.gc.core.Marker]) {
-    let heap:   Ref[internal.gc.core.Heap]    = marker.heap
-    let input:  Ref[internal.gc.core.Packet]? = marker.input
-    let output: Ref[internal.gc.core.Packet]? = marker.output
+    let heap:   Ref[internal.gc.core.Heap]    = marker.__value.heap
+    let input:  Ref[internal.gc.core.Packet]? = marker.__value.input
+    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
     var any:    bool                    = false
     if input != nil {
-        any = input.get().n != 0
+        any = input.get().__value.n != 0
     }
     if output != nil {
-        any = any or output.get().n != 0
+        any = any or output.get().__value.n != 0
     }
     marker_stats(marker)
     pool_lock(heap)
@@ -815,34 +815,34 @@ func marker_flush(marker: Ref[internal.gc.core.Marker]) {
     if output != nil {
         packet_put_locked(heap, output.get())
     }
-    marker.input = nil
-    marker.output = nil
-    if marker.holding {
-        heap.pool_active -= 1
-        marker.holding = false
+    marker.__value.input = nil
+    marker.__value.output = nil
+    if marker.__value.holding {
+        heap.__value.pool_active -= 1
+        marker.__value.holding = false
     }
     pool_unlock(heap)
     if any {
         wake_workers(heap)
     }
-    internal.gc.sync.event_signal(ref heap.mark_progress)
+    internal.gc.sync.event_signal(ref heap.__value.mark_progress)
 }
 
 func take(marker: Ref[internal.gc.core.Marker]) -> bool {
-    let heap: Ref[internal.gc.core.Heap] = marker.heap
+    let heap: Ref[internal.gc.core.Heap] = marker.__value.heap
     pool_lock(heap)
-    let full: Ref[internal.gc.core.Packet]? = heap.pool_full
+    let full: Ref[internal.gc.core.Packet]? = heap.__value.pool_full
     if full != nil {
         let packet: Ref[internal.gc.core.Packet] = full.get()
-        heap.pool_full = packet.next
-        let input: Ref[internal.gc.core.Packet]? = marker.input
+        heap.__value.pool_full = packet.__value.next
+        let input: Ref[internal.gc.core.Packet]? = marker.__value.input
         if input != nil {
             packet_put_locked(heap, input.get())
         }
-        marker.input = packet
-        if !marker.holding {
-            heap.pool_active += 1
-            marker.holding = true
+        marker.__value.input = packet
+        if !marker.__value.holding {
+            heap.__value.pool_active += 1
+            marker.__value.holding = true
         }
     }
     pool_unlock(heap)
@@ -862,35 +862,35 @@ func barrier_value(mutator: Ref[internal.gc.core.Mutator],
 func marker_drain(marker: Ref[internal.gc.core.Marker], budget: uint) -> uint {
     var done: uint = 0
     while true {
-        let input: Ref[internal.gc.core.Packet]? = marker.input
+        let input: Ref[internal.gc.core.Packet]? = marker.__value.input
         if input != nil {
             let packet: Ref[internal.gc.core.Packet] = input.get()
-            if packet.n != 0 {
+            if packet.__value.n != 0 {
                 if budget != 0 and done >= budget {
                     marker_flush(marker)
                     return done
                 }
-                if packet.n > prefetch_ahead {
+                if packet.__value.n > prefetch_ahead {
                     let ahead: Ref[internal.gc.core.Packet_Entry] =
-                        ref packet.entries[packet.n - 1 - prefetch_ahead]
-                    let header: Ref[internal.gc.core.Object_Header]? = ahead.header
+                        ref packet.__value.entries[packet.__value.n - 1 - prefetch_ahead]
+                    let header: Ref[internal.gc.core.Object_Header]? = ahead.__value.header
                     if header != nil {
                         __gc_prefetch(header.get())
                     } else {
-                        let address: Ref[byte]? = ahead.value_address
+                        let address: Ref[byte]? = ahead.__value.value_address
                         if address != nil {
                             __gc_prefetch(address.get())
                         }
                     }
                 }
-                packet.n -= 1
-                let entry: Ref[internal.gc.core.Packet_Entry] = ref packet.entries[
-                    packet.n]
-                let header:  Ref[internal.gc.core.Object_Header]? = entry.header
-                let address: Ref[byte]?                     = entry.value_address
+                packet.__value.n -= 1
+                let entry: Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[
+                    packet.__value.n]
+                let header:  Ref[internal.gc.core.Object_Header]? = entry.__value.header
+                let address: Ref[byte]?                     = entry.__value.value_address
                 if address != nil {
                     trace_value(marker, nil, header, address.get(),
-                                entry.type_index, entry.start_index)
+                                entry.__value.type_index, entry.__value.start_index)
                 } else {
                     require false
                 }
@@ -898,11 +898,11 @@ func marker_drain(marker: Ref[internal.gc.core.Marker], budget: uint) -> uint {
                 continue
             }
         }
-        let output: Ref[internal.gc.core.Packet]? = marker.output
+        let output: Ref[internal.gc.core.Packet]? = marker.__value.output
         if output != nil {
-            if output.get().n != 0 {
-                marker.input = output
-                marker.output = input
+            if output.get().__value.n != 0 {
+                marker.__value.input = output
+                marker.__value.output = input
                 continue
             }
         }
@@ -915,24 +915,24 @@ func marker_drain(marker: Ref[internal.gc.core.Marker], budget: uint) -> uint {
 }
 
 func drain_to_termination(marker: Ref[internal.gc.core.Marker]) {
-    let heap:  Ref[internal.gc.core.Heap] = marker.heap
+    let heap:  Ref[internal.gc.core.Heap] = marker.__value.heap
     var spins: u32                  = 0
     while true {
         marker_drain(marker, 0)
-        let seq: u32 = internal.gc.sync.event_enter(ref heap.mark_progress)
+        let seq: u32 = internal.gc.sync.event_enter(ref heap.__value.mark_progress)
         if mark_quiescent(heap) {
-            internal.gc.sync.event_leave(ref heap.mark_progress)
+            internal.gc.sync.event_leave(ref heap.__value.mark_progress)
             return
         }
-        let full: Ref[internal.gc.core.Packet]? = __volatile_load(ref heap.pool_full)
+        let full: Ref[internal.gc.core.Packet]? = __volatile_load(ref heap.__value.pool_full)
         spins += 1
         if full != nil or spins < pause_spins {
-            internal.gc.sync.event_leave(ref heap.mark_progress)
+            internal.gc.sync.event_leave(ref heap.__value.mark_progress)
             internal.threads.cpu_relax()
             continue
         }
         spins = 0
-        internal.gc.sync.event_sleep(ref heap.mark_progress, seq)
-        internal.gc.sync.event_leave(ref heap.mark_progress)
+        internal.gc.sync.event_sleep(ref heap.__value.mark_progress, seq)
+        internal.gc.sync.event_leave(ref heap.__value.mark_progress)
     }
 }

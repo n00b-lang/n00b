@@ -1,0 +1,32 @@
+record Guard {
+    id: int
+}
+
+record Holder {
+    guard: Guard
+}
+
+func __finalize(consume self: Ref[Guard]) {
+}
+
+func copy_field(holder: Holder) -> int {
+    let guard: Guard = holder.guard
+    return guard.id
+}
+
+func return_field(holder: Holder) -> Guard {
+    return holder.guard
+}
+
+func use_after_move() -> int {
+    let guard: Guard = (id = 1)
+    let moved: Guard = guard
+    return guard.id + moved.id
+}
+
+func move_twice() -> int {
+    let guard: Guard = (id = 2)
+    let first: Guard = guard
+    let second: Guard = guard
+    return first.id + second.id
+}
