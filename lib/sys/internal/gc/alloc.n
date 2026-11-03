@@ -329,8 +329,15 @@ func refill_locked(heap: Ref[internal.gc.core.Heap],
             break
         }
     }
-    var blocks: Ref[internal.gc.core.Block_Metadata]? = internal.gc.core.take_batch(
-        heap, mutator, prefer_free)
+    // A medium object (`prefer_free`) takes recyclable blocks only when no
+    // free block can be had: their holes may all be too small for it, and
+    // cycling through them would never end.
+    var blocks: Ref[internal.gc.core.Block_Metadata]? = nil
+    if prefer_free {
+        blocks = internal.gc.core.take_free_batch(heap, mutator)
+    } else {
+        blocks = internal.gc.core.take_batch(heap, mutator, false)
+    }
     if blocks == nil {
         blocks = grow_batch(heap, mutator)
     }
@@ -339,6 +346,9 @@ func refill_locked(heap: Ref[internal.gc.core.Heap],
         internal.gc.collect.collect_full_locked(heap)
         internal.gc.collect.sweep_all(heap)
         blocks = internal.gc.core.take_batch(heap, mutator, prefer_free)
+    }
+    if blocks == nil and prefer_free {
+        blocks = internal.gc.core.take_batch(heap, mutator, true)
     }
     return blocks
 }

@@ -587,6 +587,7 @@ typedef struct {
     size_t with_count;
     size_t try_count;
     size_t final_base;
+    size_t loop_base;
     bool reachable;
 } n00bb_literal_frame_t;
 
@@ -613,6 +614,10 @@ typedef struct {
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
     size_t final_base;
+    // Loops below this index belong to the function a static literal
+    // producer is being built inside of; the producer's return must not
+    // clean them up.
+    size_t loop_base;
     core_list_t(n00bb_copyout_t) parameters_to_copy_out;
     core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
     core_list_t(n00bb_narrowed_root_t) narrowed_roots;
@@ -9488,6 +9493,7 @@ n00bb_restore_literal_context(ir_lower_context_t *context,
     lower->tries.len = frame.try_count;
     lower->finals.len = lower->final_base;
     lower->final_base = frame.final_base;
+    lower->loop_base = frame.loop_base;
     lower->has_active_literal = false;
 }
 
@@ -9754,12 +9760,14 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
             .with_count = lower->withs.len,
             .try_count = lower->tries.len,
             .final_base = lower->final_base,
+            .loop_base = lower->loop_base,
             .reachable = context->reachable,
         };
         lower->has_active_literal = true;
         lower->withs.len = 0;
         lower->tries.len = 0;
         lower->final_base = lower->finals.len;
+        lower->loop_base = lower->loops.len;
         context->module = module;
         context->function = producer;
         context->block = entry;
@@ -10865,7 +10873,7 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
         n00bb_loop_frame_t *loop = nullptr;
         n00bb_with_item_t *with_item = nullptr;
         uint64_t with_order = 0;
-        for (size_t i = lower->loops.len; i > 0; i--) {
+        for (size_t i = lower->loops.len; i > lower->loop_base; i--) {
             n00bb_loop_frame_t *candidate = &lower->loops.data[i - 1];
             if (!candidate->active || !candidate->is_container
                 || !candidate->cleanup_active
@@ -12177,7 +12185,9 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         if (n00bb_option_type_element(base->type, &option_item)) {
             base = n00bb_promote_option(context, base_node, base, option_item,
                                         span);
-            if (!base) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+            // The field's address is found from the base node's value.
+            if (!base || !ir_lower_set_node_value(context, base_node, base))
+                return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
         }
         if (th_kind_of(th_resolve(base->type)) == TH_INDIRECTION
             || n00bb_reference_definition(ir_module_types(context->module),

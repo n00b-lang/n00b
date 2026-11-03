@@ -723,6 +723,21 @@ func search_check() {
     require sort.search(none, 3) == 0
 }
 
+// An empty list literal inside a loop over a collection: the literal is
+// built in its own function, which must not clean up the loop's cursor.
+func empty_list_in_loop_check() {
+    var words: List[string] = []
+    words.append("a")
+    words.append("b")
+    var total: uint = 0
+    for w in words {
+        var parts: List[string] = []
+        parts.append(w)
+        total += parts.len()
+    }
+    require total == 2
+}
+
 func loop_items_widen_check() {
     var total: int = 0
     for n in [1, 2, 255, 256] {
@@ -2190,6 +2205,7 @@ func start() -> nil {
     immutable_string_check()
     comparator_check()
     search_check()
+    empty_list_in_loop_check()
     loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()

@@ -1,0 +1,25 @@
+// A field read through a top-level optional object once a nil check has
+// narrowed it.
+
+record Entry {
+    items: List[int]
+    on:    bool
+}
+
+object Holder {
+    slot:  Entry?
+    count: int
+}
+
+func __init(self: Holder) {
+    self.slot = (items = [3, 4], on = true)
+    self.count = 7
+}
+
+var holder: Holder? = new[Holder]()
+let found: Holder? = holder
+require found != nil
+require found.count == 7
+let entry: Entry? = found.slot
+require entry != nil and entry.on
+require entry.items.len() == 2 and entry.items[1] == 4
