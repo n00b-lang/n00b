@@ -1,4 +1,5 @@
 import containers.view
+import containers.lease
 
 record Cursor {
     view:  containers.view.View['T]
@@ -31,4 +32,31 @@ inline func next(modify self: Cursor['T]) -> 'T? {
 }
 
 func cleanup(consume self: Cursor['T]) {
+}
+
+record Lease_Cursor {
+    lease: containers.lease.Lease['T]
+    end:   uint
+    index: uint
+}
+
+func __init(modify self: Lease_Cursor['T],
+            consume lease: containers.lease.Lease['T], end: uint) {
+    self.lease = lease
+    self.end = end
+    self.index = 0
+}
+
+inline func next(modify self: Lease_Cursor['T]) -> 'T? {
+    if self.index >= self.end {
+        containers.lease.release(self.lease)
+        return nil
+    }
+    let value: 'T = self.lease.__value[self.index]
+    self.index += 1
+    return value
+}
+
+func cleanup(consume self: Lease_Cursor['T]) {
+    containers.lease.release(self.lease)
 }

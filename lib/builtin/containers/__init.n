@@ -85,6 +85,7 @@ package containers.lease {
     export containers.lease.leased
     export containers.lease.release
     export containers.lease.writable
+    export containers.lease.replace_storage
 }
 
 package containers.traits {
