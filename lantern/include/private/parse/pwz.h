@@ -5,11 +5,14 @@
 #include "lib/arena.h"
 
 typedef struct pwz_exp_t pwz_exp_t;
+typedef struct pwz_res_t pwz_res_t;
 typedef struct pwz_cxt_t pwz_cxt_t;
 
 typedef pwz_exp_t *pwz_exp_ptr_t;
+typedef pwz_res_t *pwz_res_ptr_t;
 
 core_list_decl(pwz_exp_ptr_t);
+core_list_decl(pwz_res_ptr_t);
 
 #define PWZ_MEM_IN_PROGRESS_BIT ((int32_t)(1u << 31))
 
@@ -22,7 +25,7 @@ typedef struct pwz_cxt_node_t {
 
 typedef struct pwz_mem_t {
     pwz_cxt_node_t *parents;
-    pwz_exp_t      *result;
+    pwz_res_t      *result;
     int32_t         start_pos;
     int32_t         end_pos;
     uint32_t        refcount;
@@ -77,7 +80,7 @@ typedef struct pwz_cxt_t {
     union {
         struct {
             pwz_mem_t     *mem;
-            pwz_exp_ptr_t *left;
+            pwz_res_ptr_t *left;
             pwz_exp_ptr_t *right;
             int16_t        nright;
         } seq;
@@ -91,7 +94,7 @@ typedef pwz_cxt_t *pwz_cxt_ptr_t;
 
 core_list_decl(pwz_cxt_ptr_t);
 
-typedef enum {
+typedef enum : uint8_t {
     PWZ_TOK,
     PWZ_SEQ,
     PWZ_ALT,
@@ -125,8 +128,27 @@ struct pwz_exp_t {
     };
 };
 
+// A node of the parse forest the derivation builds. It is kept apart from
+// the grammar's pwz_exp_t so that it fits in 16 bytes: a parse allocates
+// several per token and keeps them until the tree is built. Only a packed
+// node (PWZ_ALT, nt_id -1) uses `alts`; its name comes from nt_id.
+struct pwz_res_t {
+    pwz_exp_kind_t  kind;
+    pwz_list_role_t list_role;
+    int16_t         rule_ix;
+    int16_t         nt_id;
+    int16_t         nchildren;
+    union {
+        int32_t                     tid;
+        pwz_res_ptr_t              *children;
+        core_list_t(pwz_res_ptr_t) *alts;
+    };
+};
+
+static_assert(sizeof(pwz_res_t) == 16, "pwz_res_t must stay compact");
+
 typedef struct {
-    pwz_exp_t *result;
+    pwz_res_t *result;
     pwz_mem_t *mem;
 } pwz_zipper_t;
 
@@ -136,7 +158,7 @@ typedef parse_tree_t *parse_tree_ptr_t;
 core_list_decl(parse_tree_ptr_t);
 
 typedef struct {
-    pwz_exp_t *exp;
+    pwz_res_t *exp;
     int32_t    pos;
     int32_t    score;
     int32_t    end_pos;
@@ -160,7 +182,7 @@ typedef struct {
     parse_token_info_t *tok;
     pwz_cxt_t        *cxt;
     pwz_exp_t        *exp;
-    pwz_exp_t        *result;
+    pwz_res_t        *result;
     pwz_mem_t        *mem;
 } pwz_step_t;
 
@@ -194,13 +216,13 @@ struct parse_pwz_parser_t {
     size_t                       collect_threshold;
     core_list_t(pwz_zipper_t)    worklist;
     core_list_t(pwz_zipper_t)    worklist_swap;
-    core_list_t(pwz_exp_ptr_t)   tops;
+    core_list_t(pwz_res_ptr_t)   tops;
     core_list_t(pwz_step_t)      steps;
     core_list_t(pwz_score_entry_t) score_cache;
     int32_t                    *score_index;
     size_t                      score_index_cap;
 
-    pwz_exp_t                  *longest_top;
+    pwz_res_t                  *longest_top;
     int32_t                     longest_end;
 
     parse_token_stream_t         *stream;
@@ -213,7 +235,7 @@ struct parse_pwz_parser_t {
     parse_tree_array_t      result_trees;
 
     pwz_mem_t                   *mem_bottom;
-    pwz_exp_t                   *exp_bottom;
+    pwz_res_t                   *res_bottom;
 
     int32_t                     error_pos;
     bool                        error_unterminated;

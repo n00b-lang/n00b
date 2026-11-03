@@ -1179,24 +1179,28 @@ dump_link_unit(core_link_unit_t *link)
     }
 }
 
+typedef struct {
+    int64_t indent;
+    int64_t dedent;
+} layout_tids_t;
+
+static bool
+is_ignored_layout(parse_token_info_t *token, void *ud)
+{
+    layout_tids_t *tids = ud;
+    return token && parse_token_ignore_if_no_match(token)
+        && (parse_token_tid(token) == tids->indent
+            || parse_token_tid(token) == tids->dedent);
+}
+
 static bool
 discard_ignored_layout(parse_grammar_t *grammar, parse_token_stream_t *tokens)
 {
-    int64_t indent = parse_terminal_id(
-        grammar, CORE_STRING_STATIC("INDENT"));
-    int64_t dedent = parse_terminal_id(
-        grammar, CORE_STRING_STATIC("DEDENT"));
-    for (int32_t i = 0; i < scan_stream_token_count(tokens);) {
-        parse_token_info_t *token = scan_stream_get(tokens, i);
-        if (token && parse_token_ignore_if_no_match(token)
-            && (parse_token_tid(token) == indent
-                || parse_token_tid(token) == dedent)) {
-            if (!scan_stream_token_to_trivia(tokens, i)) return false;
-            continue;
-        }
-        i++;
-    }
-    return true;
+    layout_tids_t tids = {
+        .indent = parse_terminal_id(grammar, CORE_STRING_STATIC("INDENT")),
+        .dedent = parse_terminal_id(grammar, CORE_STRING_STATIC("DEDENT")),
+    };
+    return scan_stream_tokens_to_trivia(tokens, is_ignored_layout, &tids);
 }
 
 static void
