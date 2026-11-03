@@ -271,6 +271,7 @@ struct pt_t {
     core_dict_t            stored;
     core_dict_t            contents_memo;
     uint64_t               cuts;
+    uint64_t               delta_since;
     core_dict_t            valued;
     bool                   positional;
     core_dict_t            external_index;
@@ -348,9 +349,16 @@ typedef struct {
 } content_key_t;
 
 typedef struct {
-    content_key_t key;
-    pt_set_t      items;
-    pt_memo_t     memo;
+    pt_item_t item;
+    uint64_t  generation;
+} pt_logged_t;
+core_list_decl(pt_logged_t);
+
+typedef struct {
+    content_key_t            key;
+    pt_set_t                 items;
+    core_list_t(pt_logged_t) log;
+    pt_memo_t                memo;
 } content_memo_t;
 
 typedef struct {
@@ -413,6 +421,7 @@ static bool resolved_eq(const void *a, const void *b);
 typedef struct {
     core_list_t(uint64_t) *resolving;
     bool                   positional;
+    uint64_t               delta_since;
 } pt_memo_frame_t;
 
 static bool memo_stale(pt_t *pt, const pt_memo_t *memo);
