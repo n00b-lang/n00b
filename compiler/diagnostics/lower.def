@@ -370,6 +370,17 @@ N00B_DIAG(HANDLED_ELSEWHERE, "N00B-S0080", WARNING,
     "`handled by` removes an effect from callers, so it belongs in the\n"
     "package that declares the effect. Then everything that stops the effect\n"
     "is listed in one place.")
+N00B_DIAG(MARK_REJECTED, "N00B-S0081", ERROR,
+    "a value that may carry a mark is passed to a parameter that rejects it",
+    "A mark follows data from the functions that produce it, through every\n"
+    "value computed from it. A parameter that rejects the mark can't be\n"
+    "given such a value. Check it with one of the mark's validators first.")
+N00B_DIAG(MARK_DECLARATION, "N00B-S0082", ERROR,
+    "a mark declaration names something it can't use",
+    "`mark Name { from f; cleared by g(p); rejected by h(p) }` declares a\n"
+    "mark. `f`, `g` and `h` must be functions, `p` one of their parameters,\n"
+    "and a validator (`cleared by`) must be able to fail. A mark is declared\n"
+    "in the module that owns it.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

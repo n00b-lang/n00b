@@ -101,6 +101,13 @@ static ir_value_t *fresh(P *p, ir_instr_t *in, const ir_local_t *l)
             return nullptr;
         }
     }
+    if (value && target && l->source_name.u8_bytes
+        && !ir_annot_set(ctx, target, (ir_annot_t){
+            .key = CORE_STRING_STATIC("ir.source_name"),
+            .kind = IR_ANNOT_STR, .s = l->source_name})) {
+        p->ok = false;
+        return nullptr;
+    }
     return value;
 }
 

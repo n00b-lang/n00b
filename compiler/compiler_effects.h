@@ -25,6 +25,7 @@ typedef enum {
     N00BB_QUERY_MAY_READ,
     N00BB_QUERY_MAY_WRITE,
     N00BB_QUERY_MAY_LEND,
+    N00BB_QUERY_MAY_CARRY,
 } n00bb_query_t;
 
 size_t n00bb_effect_name_count(void);
@@ -54,6 +55,7 @@ typedef struct {
 n00bb_query_t n00bb_query_named(core_string_t word);
 core_string_t n00bb_query_word(n00bb_query_t query);
 bool n00bb_query_about_effect(n00bb_query_t query);
+int64_t n00bb_parameter_named(const ir_func_t *function, core_string_t name);
 bool n00bb_must_effect(ir_summaries_t *summaries, ir_func_t *function,
                        uint64_t bits, const n00bb_user_effect_t *user);
 bool n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,

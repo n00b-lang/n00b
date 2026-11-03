@@ -21,6 +21,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_axioms.h"
 #include "compiler_buffer_borrow.h"
 #include "compiler_effects.h"
+#include "compiler_marks.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "config.h"
@@ -20442,6 +20443,12 @@ static bool record_trait_checks(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
                                 ir_module_t *module, ir_ctx_t *context,
                                 int32_t file_id);
+static bool record_mark_annotations(parse_grammar_t *grammar,
+                                    core_translation_unit_t *unit,
+                                    n00bb_link_analysis_t *analysis,
+                                    ir_ctx_t *context);
+static bool restore_declarations(n00bb_link_analysis_t *analysis);
+static bool publish_declarations(n00bb_link_analysis_t *analysis);
 
 bool
 initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
@@ -20752,6 +20759,15 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                          link, producer_stage))
             return ir_initialization_error(units->data[i],
                 "could not register context hooks in Lantern IR");
+    if (!restore_declarations(analysis))
+        return ir_initialization_error(units->len ? units->data[0] : nullptr,
+            "could not restore declarations from a linked interface");
+    for (size_t i = 0; i < units->len; i++)
+        if (!tu_state(units->data[i])->interface_module
+            && !record_mark_annotations(grammar, units->data[i], analysis,
+                                        ir_context))
+            return ir_initialization_error(units->data[i],
+                "could not record mark annotations in Lantern IR");
     return true;
 }
 
@@ -23162,14 +23178,14 @@ effect_declaration_name(parse_grammar_t *grammar,
 }
 
 static bool
-declares_effect(parse_grammar_t *grammar, core_translation_unit_t *unit,
-                core_string_t name)
+declares_named(parse_grammar_t *grammar, core_translation_unit_t *unit,
+               core_string_t nonterminal, core_string_t name)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     for (size_t i = 0; state && i < state->module_top_level_statements.len;
          i++) {
         parse_tree_t *statement = state->module_top_level_statements.data[i];
-        if (nt_is(grammar, statement, CORE_STRING_STATIC("effect-decl"))
+        if (nt_is(grammar, statement, nonterminal)
             && core_string_eq(effect_declaration_name(grammar, unit,
                                                       statement), name))
             return true;
@@ -23179,6 +23195,8 @@ declares_effect(parse_grammar_t *grammar, core_translation_unit_t *unit,
 
 static const core_string_t effect_declaration_key =
     CORE_STRING_STATIC("n00bb.effect.declaration");
+static const core_string_t mark_declaration_key =
+    CORE_STRING_STATIC("n00bb.mark.declaration");
 
 static ir_func_t *
 metadata_stub(ir_module_t *module, core_string_t name)
@@ -23215,13 +23233,13 @@ append_qualified(core_buffer_t *out, const core_translation_unit_t *unit,
 }
 
 static bool
-records_effect(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-               core_string_t leaf)
+records_named(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
+              core_string_t prefix, core_string_t leaf)
 {
     ir_module_t *module = cached_ir_module(analysis, unit);
     if (!module) return false;
     core_buffer_t name = {0};
-    core_buffer_puts(&name, "__n00bb_effect#");
+    core_buffer_append_string(&name, prefix);
     append_qualified(&name, unit, leaf);
     bool found = ir_func_find(module, core_buffer_string(&name)) != nullptr;
     core_buffer_release(&name);
@@ -23237,35 +23255,155 @@ module_matches(core_string_t module, core_string_t prefix)
         && module.data[module.u8_bytes - prefix.u8_bytes - 1] == '.';
 }
 
-static core_translation_unit_t *
-effect_owner(parse_grammar_t *grammar, core_translation_unit_t *root,
-             core_string_t name, core_string_t *leaf)
+typedef bool (*declares_fn)(n00bb_link_analysis_t *analysis,
+                            parse_grammar_t *grammar,
+                            core_translation_unit_t *unit, core_string_t leaf);
+
+static bool
+effect_declared(n00bb_link_analysis_t *analysis, parse_grammar_t *grammar,
+                core_translation_unit_t *unit, core_string_t leaf)
 {
-    *leaf = n00bb_name_leaf(name);
-    core_string_t prefix = leaf->u8_bytes < name.u8_bytes
-        ? core_string_slice(name, 0, name.u8_bytes - leaf->u8_bytes - 1)
+    return declares_named(grammar, unit, CORE_STRING_STATIC("effect-decl"),
+                          leaf)
+        || records_named(analysis, unit, CORE_STRING_STATIC("__n00bb_effect#"),
+                         leaf);
+}
+
+static bool
+mark_declared(n00bb_link_analysis_t *analysis, parse_grammar_t *grammar,
+              core_translation_unit_t *unit, core_string_t leaf)
+{
+    return declares_named(grammar, unit, CORE_STRING_STATIC("mark-decl"), leaf)
+        || records_named(analysis, unit, CORE_STRING_STATIC("__n00bb_mark#"),
+                         leaf);
+}
+
+static bool
+function_declared(n00bb_link_analysis_t *analysis, parse_grammar_t *grammar,
+                  core_translation_unit_t *unit, core_string_t leaf)
+{
+    (void)grammar;
+    ir_module_t *module = cached_ir_module(analysis, unit);
+    return module && ir_func_find(module, leaf);
+}
+
+typedef struct {
+    core_translation_unit_t *unit;
+    core_translation_unit_t *other;
+    core_string_t            leaf;
+} declaration_t;
+
+static void
+note_declaration(declaration_t *found, core_translation_unit_t *unit)
+{
+    if (!found->unit) found->unit = unit;
+    else if (found->unit != unit && !found->other) found->other = unit;
+}
+
+static void
+note_exported(n00bb_link_analysis_t *analysis, parse_grammar_t *grammar,
+              core_translation_unit_t *unit, core_string_t package,
+              core_string_t leaf, declares_fn declares, declaration_t *found)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+        const n00bb_package_declaration_t *declaration =
+            &state->package_declarations.data[p];
+        if (package.u8_bytes && !core_string_eq(declaration->name, package))
+            continue;
+        for (size_t e = 0; e < declaration->exports.len; e++) {
+            core_translation_unit_t *source =
+                declaration->exports.data[e].source_unit;
+            if (source && declares(analysis, grammar, source, leaf))
+                note_declaration(found, source);
+        }
+    }
+}
+
+static declaration_t
+declaring_unit(parse_grammar_t *grammar, core_translation_unit_t *root,
+               core_string_t name, declares_fn declares)
+{
+    declaration_t found = {.leaf = n00bb_name_leaf(name)};
+    core_string_t prefix = found.leaf.u8_bytes < name.u8_bytes
+        ? core_string_slice(name, 0, name.u8_bytes - found.leaf.u8_bytes - 1)
         : (core_string_t){0};
+    n00bb_link_analysis_t *analysis = tu_state(root)
+        ? tu_state(root)->link_analysis : nullptr;
+    if (!prefix.u8_bytes) {
+        if (declares(analysis, grammar, root, found.leaf)) {
+            found.unit = root;
+            return found;
+        }
+        for (size_t i = 0; i < root->imports.len; i++) {
+            core_translation_unit_t *unit = root->imports.data[i];
+            if (declares(analysis, grammar, unit, found.leaf))
+                note_declaration(&found, unit);
+            note_exported(analysis, grammar, unit, (core_string_t){0},
+                          found.leaf, declares, &found);
+        }
+        return found;
+    }
     core_list_t(core_translation_unit_ptr_t) pending =
         core_list_new(core_translation_unit_ptr_t);
     core_dict_t visited;
     core_dict_init(&visited, nullptr, nullptr);
     core_list_push(pending, root);
-    core_translation_unit_t *found = nullptr;
-    n00bb_link_analysis_t *analysis = tu_state(root)
-        ? tu_state(root)->link_analysis : nullptr;
-    for (size_t at = 0; !found && at < pending.len; at++) {
+    for (size_t at = 0; !found.other && at < pending.len; at++) {
         core_translation_unit_t *unit = pending.data[at];
         if (!core_dict_add(&visited, unit, unit)) continue;
         if (module_matches(unit->module.identifier, prefix)
-            && (declares_effect(grammar, unit, *leaf)
-                || records_effect(analysis, unit, *leaf)))
-            found = unit;
-        for (size_t i = 0; !found && i < unit->imports.len; i++)
+            && declares(analysis, grammar, unit, found.leaf))
+            note_declaration(&found, unit);
+        note_exported(analysis, grammar, unit, prefix, found.leaf, declares,
+                      &found);
+        for (size_t i = 0; i < unit->imports.len; i++)
             core_list_push(pending, unit->imports.data[i]);
     }
     core_dict_free(&visited);
     core_list_free(pending);
     return found;
+}
+
+static bool report_ambiguous(core_diagnostics_t *diagnostics,
+                             const core_translation_unit_t *unit,
+                             n00bb_diag_t id, core_diag_location_t location,
+                             core_string_t name, const declaration_t *found);
+
+static bool
+resolve_reported(core_diagnostics_t *diagnostics,
+                 const core_translation_unit_t *reporter, n00bb_diag_t id,
+                 core_diag_location_t location, parse_grammar_t *grammar,
+                 core_translation_unit_t *unit, core_string_t name,
+                 declares_fn declares, n00bb_text_t missing,
+                 declaration_t *found)
+{
+    *found = declaring_unit(grammar, unit, name, declares);
+    if (report_ambiguous(diagnostics, reporter, id, location, name, found))
+        return false;
+    if (found->unit) return true;
+    n00bb_report(diagnostics, reporter, id, location, missing,
+                 N00BB_ARGS(ARG_TEXT(name)));
+    return false;
+}
+
+static bool
+report_ambiguous(core_diagnostics_t *diagnostics,
+                 const core_translation_unit_t *unit, n00bb_diag_t id,
+                 core_diag_location_t location, core_string_t name,
+                 const declaration_t *found)
+{
+    if (!found->other) return false;
+    core_buffer_t first = {0};
+    core_buffer_t second = {0};
+    append_qualified(&first, found->unit, found->leaf);
+    append_qualified(&second, found->other, found->leaf);
+    n00bb_report(diagnostics, unit, id, location, N00B_TEXT_NAMED_IN_TWO_MODULES,
+        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(core_buffer_string(&first)),
+                   ARG_TEXT(core_buffer_string(&second))));
+    core_buffer_release(&first);
+    core_buffer_release(&second);
+    return true;
 }
 
 static bool
@@ -23276,11 +23414,11 @@ resolve_effect(parse_grammar_t *grammar, core_translation_unit_t *unit,
         core_buffer_append_string(out, name);
         return true;
     }
-    core_string_t leaf = {0};
-    core_translation_unit_t *owner = unit
-        ? effect_owner(grammar, unit, name, &leaf) : nullptr;
-    if (!owner) return false;
-    append_qualified(out, owner, leaf);
+    declaration_t found = unit
+        ? declaring_unit(grammar, unit, name, effect_declared)
+        : (declaration_t){0};
+    if (!found.unit || found.other) return false;
+    append_qualified(out, found.unit, found.leaf);
     return true;
 }
 
@@ -23294,6 +23432,15 @@ named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
         ? canonical_symbol(symbol) : nullptr;
 }
 
+static bool
+clause_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("effect-source"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("mark-clearer"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("mark-rejecter"));
+}
+
 static core_list_t(parse_tree_ptr_t)
 effect_clauses(parse_grammar_t *grammar, parse_tree_t *declaration)
 {
@@ -23303,8 +23450,7 @@ effect_clauses(parse_grammar_t *grammar, parse_tree_t *declaration)
     while (stack.len) {
         parse_tree_t *node = stack.data[--stack.len];
         if (!node || core_tree_is_leaf(node)) continue;
-        if (nt_is(grammar, node, CORE_STRING_STATIC("effect-source"))
-            || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler"))) {
+        if (clause_node(grammar, node)) {
             core_list_push(clauses, node);
             continue;
         }
@@ -23322,10 +23468,183 @@ module_function(n00bb_link_analysis_t *analysis, core_string_t module,
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         ir_module_t *owner = cached_ir_module(analysis, analysis->units.data[u]);
-        if (owner && core_string_eq(ir_module_name(owner), module))
-            return n00bb_cached_body(ir_func_find(owner, name));
+        if (!owner || !core_string_eq(ir_module_name(owner), module)) continue;
+        ir_func_t *function = ir_func_find(owner, name);
+        if (!function) {
+            core_buffer_t qualified = {0};
+            core_buffer_append_string(&qualified, module);
+            core_buffer_putc(&qualified, '.');
+            core_buffer_append_string(&qualified, name);
+            function = ir_func_find(owner, core_buffer_string(&qualified));
+            core_buffer_release(&qualified);
+        }
+        return n00bb_cached_body(function);
     }
     return nullptr;
+}
+
+static const core_string_t mark_rules_key =
+    CORE_STRING_STATIC("n00bb.mark.rules");
+
+static parse_tree_t *
+annotated_owner(parse_grammar_t *grammar, parse_tree_t *annotation)
+{
+    for (parse_tree_t *node = parse_tree_parent(annotation); node;
+         node = parse_tree_parent(node))
+        if (nt_is(grammar, node, CORE_STRING_STATIC("pos-param"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("type-decl-one"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("record-decl")))
+            return node;
+    return nullptr;
+}
+
+static core_string_t
+declared_type_name(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    while (node && !nt_is(grammar, node, CORE_STRING_STATIC("record-decl")))
+        node = parse_tree_parent(node);
+    parse_sym_entry_t *symbol = node ? parse_tree_sym(node) : nullptr;
+    core_string_t name = {0};
+    if (!symbol || !symbol->type
+        || !th_named_info(th_resolve(symbol->type), &name, nullptr, nullptr))
+        return (core_string_t){0};
+    return name;
+}
+
+static int64_t
+formal_index(parse_grammar_t *grammar, parse_tree_t *parameter)
+{
+    parse_tree_t *formal = parameter;
+    while (formal && !nt_is(grammar, formal, CORE_STRING_STATIC("formal")))
+        formal = parse_tree_parent(formal);
+    parse_tree_t *formals = formal;
+    while (formals && !nt_is(grammar, formals, CORE_STRING_STATIC("formals")))
+        formals = parse_tree_parent(formals);
+    core_list_t(parse_tree_ptr_t) stack = core_list_new(parse_tree_ptr_t);
+    if (formals) core_list_push(stack, formals);
+    int64_t index = -1;
+    for (int64_t seen = 0; index < 0 && stack.len;) {
+        parse_tree_t *node = stack.data[--stack.len];
+        if (!node || core_tree_is_leaf(node)) continue;
+        if (nt_is(grammar, node, CORE_STRING_STATIC("formal"))) {
+            if (node == formal) index = seen;
+            seen++;
+            continue;
+        }
+        for (size_t i = core_tree_num_children(node); i > 0; i--)
+            core_list_push(stack, core_tree_child(node, i - 1));
+    }
+    core_list_free(stack);
+    return index;
+}
+
+static bool
+annotation_target(parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
+                  parse_tree_t *owner, core_buffer_t *entry)
+{
+    if (nt_is(grammar, owner, CORE_STRING_STATIC("pos-param"))) {
+        parse_sym_entry_t *parameter = parse_tree_sym(owner);
+        parse_tree_t *definition = parse_tree_parent(owner);
+        while (definition && !function_symbol_at(grammar, definition))
+            definition = parse_tree_parent(definition);
+        parse_sym_entry_t *function = (parse_sym_entry_t *)
+            function_symbol_at(grammar, definition);
+        ir_func_t *ir = function && analysis
+            ? link_ir_function_for_symbol(analysis, canonical_symbol(function))
+            : nullptr;
+        int64_t index = ir && parameter ? formal_index(grammar, owner) : -1;
+        if (index < 0) return false;
+        core_buffer_puts(entry, "param\t");
+        core_buffer_append_string(entry, ir_module_name(ir->owner));
+        core_buffer_putc(entry, '\t');
+        core_buffer_append_string(entry, ir->name);
+        core_buffer_printf(entry, "\t%lld", (long long)index);
+        return true;
+    }
+    core_string_t type = declared_type_name(grammar, owner);
+    if (!type.u8_bytes) return false;
+    bool field = nt_is(grammar, owner, CORE_STRING_STATIC("type-decl-one"));
+    if (field) core_buffer_puts(entry, "field\t");
+    else core_buffer_puts(entry, "type\t");
+    core_buffer_append_string(entry, type);
+    if (field) {
+        parse_tree_t *name = nullptr;
+        for (size_t c = 0; !name && c < core_tree_num_children(owner); c++)
+            if (core_tree_is_leaf(core_tree_child(owner, c)))
+                name = core_tree_child(owner, c);
+        core_buffer_putc(entry, '\t');
+        core_buffer_append_string(entry, first_token_text(name));
+    }
+    return true;
+}
+
+static bool
+record_mark_annotation(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                       n00bb_link_analysis_t *analysis, ir_ctx_t *context,
+                       parse_tree_t *annotation)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    parse_tree_t *form = core_tree_num_children(annotation)
+        ? core_tree_child(annotation, 0) : nullptr;
+    bool rejects = form && nt_is(grammar, form,
+                                 CORE_STRING_STATIC("mark-rejects"));
+    parse_tree_t *mark = form ? child_nt(grammar, form,
+        CORE_STRING_STATIC("effect-query-name")) : nullptr;
+    core_string_t name = source_text_of(unit, mark);
+    parse_tree_t *owner = annotated_owner(grammar, annotation);
+    declaration_t found = {0};
+    if (!resolve_reported(diagnostics, unit, N00B_DIAG_MARK_DECLARATION,
+            link_source_location(mark ? mark : annotation), grammar, unit,
+            name, mark_declared, N00B_TEXT_NOT_A_MARK, &found))
+        return true;
+    core_translation_unit_t *declaring = found.unit;
+    core_string_t leaf = found.leaf;
+    if (rejects && owner
+        && !nt_is(grammar, owner, CORE_STRING_STATIC("pos-param"))) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_MARK_DECLARATION,
+            link_source_location(annotation), N00B_TEXT_REJECTS_ONLY_PARAMETERS,
+            N00BB_ARGS(ARG_TEXT(name)));
+        return true;
+    }
+    core_buffer_t entry = {0};
+    if (rejects) core_buffer_puts(&entry, "rejects\t");
+    else core_buffer_puts(&entry, "carries\t");
+    append_qualified(&entry, declaring, leaf);
+    core_buffer_putc(&entry, '\t');
+    bool ok = true;
+    if (!owner || !annotation_target(grammar, analysis, owner, &entry))
+        n00bb_report(diagnostics, unit, N00B_DIAG_MARK_DECLARATION,
+            link_source_location(annotation), N00B_TEXT_MARK_ANNOTATION_TARGET,
+            N00BB_ARGS(ARG_TEXT(name)));
+    else {
+        core_buffer_t stub_name = {0};
+        core_buffer_puts(&stub_name, "__n00bb_mark_rule#");
+        core_buffer_append_string(&stub_name, unit->module.identifier);
+        ir_func_t *stub = metadata_stub(state->ir_module,
+                                        core_buffer_string(&stub_name));
+        core_buffer_release(&stub_name);
+        ok = stub
+            && ir_annot_set(context, &stub->annots, (ir_annot_t){
+                   .key = mark_rules_key, .kind = IR_ANNOT_STR,
+                   .s = ir_strdup(context, unit->module.identifier)})
+            && ir_func_add_effect(stub, core_buffer_string(&entry));
+    }
+    core_buffer_release(&entry);
+    return ok;
+}
+
+static bool
+record_mark_annotations(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        n00bb_link_analysis_t *analysis, ir_ctx_t *context)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool ok = true;
+    for (size_t a = 0; ok && state && a < state->mark_annotations.len; a++)
+        ok = record_mark_annotation(grammar, unit, analysis, context,
+                                    state->mark_annotations.data[a]);
+    return ok;
 }
 
 static bool
@@ -23343,6 +23662,148 @@ tab_fields(core_string_t text, core_string_t *fields, size_t count)
     }
     return true;
 }
+
+#define DECLARATIONS_KEY   "n00b.module-declarations"
+#define DECLARATIONS_OWNER "declarations:"
+
+enum { DECLARATIONS_VERSION = 1 };
+
+static core_string_t
+declaration_key(core_string_t stub)
+{
+    if (core_string_starts_with(stub, CORE_STRING_STATIC("__n00bb_effect#")))
+        return effect_declaration_key;
+    if (core_string_starts_with(stub, CORE_STRING_STATIC("__n00bb_mark#")))
+        return mark_declaration_key;
+    if (core_string_starts_with(stub, CORE_STRING_STATIC("__n00bb_mark_rule#")))
+        return mark_rules_key;
+    if (core_string_starts_with(stub,
+                                CORE_STRING_STATIC("__n00bb_trait_check#")))
+        return trait_check_key;
+    return (core_string_t){0};
+}
+
+static void
+encode_declarations(ir_module_t *module, core_buffer_t *out)
+{
+    for (size_t f = 0; f < ir_func_count(module); f++) {
+        ir_func_t *stub = ir_func_at(module, f);
+        core_string_t key = declaration_key(stub->name);
+        ir_annot_t *declared = key.u8_bytes
+            ? ir_annot_get(&stub->annots, key) : nullptr;
+        if (!declared || declared->kind != IR_ANNOT_STR) continue;
+        core_buffer_puts(out, "S\t");
+        core_buffer_append_string(out, stub->name);
+        core_buffer_putc(out, '\t');
+        core_buffer_append_string(out, declared->s);
+        core_buffer_putc(out, '\n');
+        for (uint32_t e = 0;; e++) {
+            core_string_t entry = ir_func_effect_at(stub, e);
+            if (!entry.u8_bytes) break;
+            core_buffer_puts(out, "E\t");
+            core_buffer_append_string(out, entry);
+            core_buffer_putc(out, '\n');
+        }
+    }
+}
+
+static bool
+publish_declarations(n00bb_link_analysis_t *analysis)
+{
+    th_env *environment = analysis ? analysis->interface_environment
+                                   : nullptr;
+    if (!environment || th_env_is_frozen(environment)) return true;
+    core_buffer_t owner = {0};
+    core_buffer_t data = {0};
+    bool ok = true;
+    for (size_t u = 0; ok && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module || state->interface_module) continue;
+        owner.byte_len = 0;
+        data.byte_len = 0;
+        encode_declarations(state->ir_module, &data);
+        if (!data.byte_len) continue;
+        core_buffer_puts(&owner, DECLARATIONS_OWNER);
+        core_buffer_append_string(&owner, ir_module_name(state->ir_module));
+        core_string_t name = core_buffer_string(&owner);
+        ok = th_env_replace_metadata(environment, TH_ENV_METADATA_ENVIRONMENT,
+                 name, CORE_STRING_STATIC(DECLARATIONS_KEY),
+                 DECLARATIONS_VERSION, data.data, data.byte_len)
+            || th_env_register_metadata(environment,
+                 TH_ENV_METADATA_ENVIRONMENT, name,
+                 CORE_STRING_STATIC(DECLARATIONS_KEY), DECLARATIONS_VERSION,
+                 data.data, data.byte_len);
+    }
+    core_buffer_release(&owner);
+    core_buffer_release(&data);
+    return ok;
+}
+
+static bool
+decode_declarations(ir_ctx_t *context, ir_module_t *module,
+                    core_string_t text)
+{
+    ir_func_t *stub = nullptr;
+    while (text.u8_bytes) {
+        int64_t end = core_string_find_byte(text, '\n');
+        size_t length = end < 0 ? text.u8_bytes : (size_t)end;
+        core_string_t line = core_string_slice(text, 0, length);
+        text = end < 0 ? (core_string_t){0}
+            : core_string_slice(text, length + 1, text.u8_bytes - length - 1);
+        core_string_t fields[3];
+        if (core_string_starts_with(line, CORE_STRING_STATIC("E\t"))) {
+            if (stub && !ir_func_add_effect(stub, core_string_slice(line, 2,
+                                                    line.u8_bytes - 2)))
+                return false;
+            continue;
+        }
+        stub = nullptr;
+        if (!tab_fields(line, fields, 3)) continue;
+        core_string_t key = declaration_key(fields[1]);
+        stub = key.u8_bytes ? metadata_stub(module, fields[1]) : nullptr;
+        if (stub) stub->span = IR_SPAN_UNKNOWN;
+        if (stub && !ir_annot_set(context, &stub->annots, (ir_annot_t){
+                .key = key, .kind = IR_ANNOT_STR,
+                .s = ir_strdup(context, fields[2])}))
+            return false;
+    }
+    return true;
+}
+
+static bool
+restore_declarations(n00bb_link_analysis_t *analysis)
+{
+    core_string_t prefix = CORE_STRING_STATIC(DECLARATIONS_OWNER);
+    for (size_t e = 0; e < analysis->linked_interface_count; e++) {
+        const th_env *environment = analysis->linked_interfaces[e];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t view;
+            if (!th_env_metadata_at(environment, m, &view)
+                || view.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || !core_string_eq(view.key,
+                                   CORE_STRING_STATIC(DECLARATIONS_KEY))
+                || !core_string_starts_with(view.owner_name, prefix))
+                continue;
+            core_string_t name = core_string_slice(view.owner_name,
+                prefix.u8_bytes, view.owner_name.u8_bytes - prefix.u8_bytes);
+            for (size_t u = 0; u < analysis->units.len; u++) {
+                n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+                ir_module_t *module = state && state->interface_module
+                    ? cached_ir_module(analysis, analysis->units.data[u])
+                    : nullptr;
+                if (!module || view.version != DECLARATIONS_VERSION
+                    || !core_string_eq(ir_module_name(module), name))
+                    continue;
+                if (!decode_declarations(analysis->ir_context, module,
+                        (core_string_t){.data = (char *)view.data,
+                                        .u8_bytes = view.size}))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 
 static n00bb_user_effect_t *
 user_effect(n00bb_link_analysis_t *analysis, core_string_t qualified)
@@ -23388,36 +23849,51 @@ release_user_effects(n00bb_link_analysis_t *analysis)
     analysis->effect_functions_ready = false;
 }
 
+typedef void (*stub_fn)(void *context, core_translation_unit_t *unit,
+                        ir_func_t *stub, core_string_t declared);
+
+static void
+for_each_stub(n00bb_link_analysis_t *analysis, core_string_t prefix,
+              core_string_t key, stub_fn visit, void *context)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        ir_module_t *module = cached_ir_module(analysis, unit);
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *stub = ir_func_at(module, f);
+            ir_annot_t *declared = core_string_starts_with(stub->name, prefix)
+                ? ir_annot_get(&stub->annots, key) : nullptr;
+            if (declared && declared->kind == IR_ANNOT_STR)
+                visit(context, unit, stub, declared->s);
+        }
+    }
+}
+
+static void
+collect_user_effect(void *context, core_translation_unit_t *unit,
+                    ir_func_t *stub, core_string_t declared)
+{
+    n00bb_link_analysis_t *analysis = context;
+    n00bb_user_effect_t *effect = user_effect(analysis, declared);
+    if (!effect) {
+        core_list_push(analysis->user_effects, ((n00bb_user_effect_t){
+            .qualified = core_string_dup(declared),
+            .sources = core_list_new(n00bb_effect_clause_t),
+            .handlers = core_list_new(n00bb_effect_clause_t),
+        }));
+        effect = &analysis->user_effects.data[analysis->user_effects.len - 1];
+    }
+    collect_effect_entries(analysis, unit, stub, effect);
+}
+
 static void
 collect_user_effects(n00bb_link_analysis_t *analysis)
 {
     release_user_effects(analysis);
     core_dict_init(&analysis->effect_functions, nullptr, nullptr);
     analysis->effect_functions_ready = true;
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        ir_module_t *module = cached_ir_module(analysis, unit);
-        for (size_t f = 0; module && f < ir_func_count(module); f++) {
-            ir_func_t *stub = ir_func_at(module, f);
-            ir_annot_t *declared = core_string_starts_with(stub->name,
-                    CORE_STRING_STATIC("__n00bb_effect#"))
-                ? ir_annot_get(&stub->annots, effect_declaration_key)
-                : nullptr;
-            if (!declared || declared->kind != IR_ANNOT_STR) continue;
-            n00bb_user_effect_t *effect = user_effect(analysis, declared->s);
-            if (!effect) {
-                core_list_push(analysis->user_effects,
-                    ((n00bb_user_effect_t){
-                        .qualified = core_string_dup(declared->s),
-                        .sources = core_list_new(n00bb_effect_clause_t),
-                        .handlers = core_list_new(n00bb_effect_clause_t),
-                    }));
-                effect = &analysis->user_effects.data[
-                    analysis->user_effects.len - 1];
-            }
-            collect_effect_entries(analysis, unit, stub, effect);
-        }
-    }
+    for_each_stub(analysis, CORE_STRING_STATIC("__n00bb_effect#"),
+                  effect_declaration_key, collect_user_effect, analysis);
 }
 
 static bool
@@ -23485,10 +23961,88 @@ callback_parameter(parse_grammar_t *grammar, core_translation_unit_t *unit,
 }
 
 static bool
+check_mark_question(ir_lower_context_t *context, parse_grammar_t *grammar,
+                    parse_tree_t *node, effect_query_parts_t *parts)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_span_t span = lower_span_for_tree(context, node);
+    parse_sym_entry_t *symbol = parts->function
+        ? attached_symbol(grammar, lower->unit, parts->function) : nullptr;
+    if (!symbol || !enclosing_function_symbol(grammar, node)
+        || (symbol->kind != PARSE_SYM_VARIABLE
+            && symbol->kind != PARSE_SYM_PARAM)) {
+        lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
+            N00B_TEXT_MAY_CARRY_NEEDS_LOCAL, N00BB_NO_ARGS);
+        return false;
+    }
+    declaration_t found = {0};
+    if (!resolve_reported(lower_diagnostics(context), lower_unit(context),
+            N00B_DIAG_EFFECT_QUESTION, span_location(span), grammar,
+            lower->unit, parts->name, mark_declared, N00B_TEXT_NOT_A_MARK,
+            &found))
+        return false;
+    core_buffer_t qualified = {0};
+    append_qualified(&qualified, found.unit, found.leaf);
+    parts->effect = ir_strdup(lower->ir_context,
+                              core_buffer_string(&qualified));
+    core_buffer_release(&qualified);
+    return true;
+}
+
+static ir_instr_t *
+emit_mark_question(ir_lower_context_t *context, parse_grammar_t *grammar,
+                   parse_tree_t *node, const effect_query_parts_t *parts,
+                   ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
+                                                parts->function);
+    ir_value_t *value = symbol ? ir_lower_bound_value(context, symbol)
+                               : nullptr;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    if (!value || !boolean || !state || !state->link_analysis) return nullptr;
+    th_param param = {.mode = TH_IN, .type = value->type};
+    th_type *signature = th_func_with_error(types, boolean,
+        th_name(types, CORE_STRING_STATIC("nil")), &param, 1, nullptr,
+        nullptr, 0);
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, N00BB_MARK_QUERY "%016llx",
+        (unsigned long long)th_hash(types, signature));
+    ir_func_t *function = ir_func_find(context->module,
+                                       core_buffer_string(&name));
+    if (!function && signature)
+        function = ir_func_add(context->module, core_buffer_string(&name),
+                               signature, IR_LINK_EXTERN);
+    core_buffer_release(&name);
+    ir_value_t *callee = function
+        ? ir_func_address(context->module, function) : nullptr;
+    ir_instr_t *call = callee
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    bool emitted = call
+        && ir_lower_set_temp_dest(context, call,
+                                  CORE_STRING_STATIC("__n00bb_mark_query_"),
+                                  boolean)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, value)
+        && ir_instr_set_call_signature(call, signature);
+    if (!emitted) return nullptr;
+    core_list_push(state->link_analysis->mark_questions,
+        ((n00bb_mark_question_t){.node = node, .call = call,
+                                 .mark = parts->effect, .answer = true}));
+    return call;
+}
+
+static bool
 check_effect_query(ir_lower_context_t *context, parse_grammar_t *grammar,
                    parse_tree_t *node, effect_query_parts_t *parts,
                    ir_func_t **subject_out)
 {
+    if (parts->query == N00BB_QUERY_MAY_CARRY) {
+        *subject_out = nullptr;
+        return check_mark_question(context, grammar, node, parts);
+    }
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *state = tu_state(lower->unit);
     ir_span_t span = lower_span_for_tree(context, node);
@@ -23523,18 +24077,18 @@ check_effect_query(ir_lower_context_t *context, parse_grammar_t *grammar,
     }
     if (n00bb_query_about_effect(parts->query)) {
         const n00bb_effect_name_t *effect = n00bb_effect_named(parts->name);
-        core_buffer_t qualified = {0};
-        bool known = resolve_effect(grammar, lower->unit, parts->name,
-                                    &qualified);
-        parts->effect = known ? ir_strdup(lower->ir_context,
-                                          core_buffer_string(&qualified))
-                              : (core_string_t){0};
-        core_buffer_release(&qualified);
-        if (!known) {
-            lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
-                N00B_TEXT_NOT_AN_EFFECT, N00BB_ARGS(ARG_TEXT(parts->name)));
+        declaration_t found = {0};
+        if (!effect && !resolve_reported(lower_diagnostics(context),
+                lower_unit(context), N00B_DIAG_EFFECT_QUESTION,
+                span_location(span), grammar, lower->unit, parts->name,
+                effect_declared, N00B_TEXT_NOT_AN_EFFECT, &found))
             return false;
-        }
+        core_buffer_t qualified = {0};
+        if (effect) core_buffer_append_string(&qualified, parts->name);
+        else append_qualified(&qualified, found.unit, found.leaf);
+        parts->effect = ir_strdup(lower->ir_context,
+                                  core_buffer_string(&qualified));
+        core_buffer_release(&qualified);
         if (parts->query == N00BB_QUERY_HAS_EFFECT && effect
             && effect->group) {
             lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
@@ -23574,6 +24128,13 @@ n00bb_lower_effect_query(ir_lower_context_t *context, parse_visit_t *visit,
     if (!check_effect_query(context, visit->grammar, visit->node, &parts,
                             &subject))
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    if (parts.query == N00BB_QUERY_MAY_CARRY) {
+        ir_instr_t *question = emit_mark_question(context, visit->grammar,
+                                                  visit->node, &parts, span);
+        return question ? (ir_lower_result_t){IR_LOWER_VALUE, question->dest}
+                        : lower_internal(context, span,
+                                         "could not emit a mark question");
+    }
     if (!subject)
         return lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
             N00B_TEXT_CALLBACK_QUERY_VALUE,
@@ -23704,6 +24265,10 @@ valid_check_query(void *context, parse_tree_t *query,
     ir_func_t *subject = nullptr;
     if (!check_effect_query(lowering, lower->grammar, query, parts, &subject))
         return false;
+    if (parts->query == N00BB_QUERY_MAY_CARRY)
+        return emit_mark_question(lowering, lower->grammar, query, parts,
+                                  lower_span_for_tree(lowering, query))
+            != nullptr;
     if (subject || parts->callback < 0) return true;
     if (!core_option_is_set(core_list_find(validation->conjuncts, query))) {
         lower_report(lowering, N00B_DIAG_EFFECT_QUESTION,
@@ -23723,6 +24288,22 @@ valid_check_query(void *context, parse_tree_t *query,
 }
 
 static bool
+add_clause_entry(ir_func_t *stub, core_string_t kind, const ir_func_t *function,
+                 int64_t param)
+{
+    core_buffer_t entry = {0};
+    core_buffer_append_string(&entry, kind);
+    core_buffer_putc(&entry, '\t');
+    core_buffer_append_string(&entry, ir_module_name(function->owner));
+    core_buffer_putc(&entry, '\t');
+    core_buffer_append_string(&entry, function->name);
+    if (param >= 0) core_buffer_printf(&entry, "\t%lld", (long long)param);
+    bool added = ir_func_add_effect(stub, core_buffer_string(&entry));
+    core_buffer_release(&entry);
+    return added;
+}
+
+static bool
 record_effect_clause(ir_lower_context_t *context, ir_func_t *stub,
                      parse_sym_entry_t *symbol, bool handled)
 {
@@ -23730,30 +24311,26 @@ record_effect_clause(ir_lower_context_t *context, ir_func_t *stub,
     n00bb_tu_state_t *state = tu_state(lower->unit);
     ir_func_t *function = state && state->link_analysis
         ? link_ir_function_for_symbol(state->link_analysis, symbol) : nullptr;
-    if (!function) return true;
-    core_buffer_t entry = {0};
-    if (handled) core_buffer_puts(&entry, "handled\t");
-    else core_buffer_puts(&entry, "from\t");
-    core_buffer_append_string(&entry, ir_module_name(function->owner));
-    core_buffer_putc(&entry, '\t');
-    core_buffer_append_string(&entry, function->name);
-    bool added = ir_func_add_effect(stub, core_buffer_string(&entry));
-    core_buffer_release(&entry);
-    return added;
+    return !function || add_clause_entry(stub, handled
+        ? CORE_STRING_STATIC("handled") : CORE_STRING_STATIC("from"),
+        function, -1);
 }
 
 static ir_func_t *
-effect_stub(ir_lower_context_t *context, core_string_t qualified)
+declaration_stub(ir_lower_context_t *context, core_string_t prefix,
+                 core_string_t key, core_string_t qualified,
+                 parse_tree_t *declaration)
 {
     n00bb_lower_context_t *lower = context->user;
     core_buffer_t name = {0};
-    core_buffer_puts(&name, "__n00bb_effect#");
+    core_buffer_append_string(&name, prefix);
     core_buffer_append_string(&name, qualified);
     ir_func_t *stub = metadata_stub(context->module,
                                     core_buffer_string(&name));
     core_buffer_release(&name);
+    if (stub) stub->span = lower_span_for_tree(context, declaration);
     return stub && ir_annot_set(lower->ir_context, &stub->annots, (ir_annot_t){
-               .key = effect_declaration_key, .kind = IR_ANNOT_STR,
+               .key = key, .kind = IR_ANNOT_STR,
                .s = ir_strdup(lower->ir_context, qualified)})
         ? stub : nullptr;
 }
@@ -23775,16 +24352,22 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
             N00B_TEXT_EFFECT_IS_BUILT_IN, N00BB_ARGS(ARG_TEXT(name)));
         return ir_lower_prune_node(context, visit->node);
     }
-    core_string_t leaf = {0};
-    core_translation_unit_t *owner = effect_owner(grammar, lower->unit, name,
-                                                  &leaf);
-    if (!owner)
-        lower_report(context, N00B_DIAG_EFFECT_DECLARATION, span,
-            N00B_TEXT_NOT_AN_EFFECT, N00BB_ARGS(ARG_TEXT(name)));
+    declaration_t found = {0};
+    bool resolved = resolve_reported(lower_diagnostics(context),
+        lower_unit(context), N00B_DIAG_EFFECT_DECLARATION, span_location(span),
+        grammar, lower->unit, name, effect_declared, N00B_TEXT_NOT_AN_EFFECT,
+        &found);
+    if (!resolved && found.other)
+        return ir_lower_prune_node(context, visit->node);
+    core_translation_unit_t *owner = resolved ? found.unit : nullptr;
+    core_string_t leaf = found.leaf;
     core_buffer_t qualified = {0};
     if (owner) append_qualified(&qualified, owner, leaf);
     ir_func_t *stub = owner
-        ? effect_stub(context, core_buffer_string(&qualified)) : nullptr;
+        ? declaration_stub(context, CORE_STRING_STATIC("__n00bb_effect#"),
+                           effect_declaration_key,
+                           core_buffer_string(&qualified), visit->node)
+        : nullptr;
     core_buffer_release(&qualified);
     core_string_t declaring = owner ? n00bb_package_id(owner)
                                     : (core_string_t){0};
@@ -23815,11 +24398,115 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
             lower_report(context, N00B_DIAG_HANDLED_ELSEWHERE,
                 lower_span_for_tree(context, clause),
                 N00B_TEXT_HANDLED_OUTSIDE_PACKAGE,
-                N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(declaring),
-                           ARG_TEXT(writing)));
+                N00BB_ARGS(ARG_TEXT(name),
+                           ARG_TEXT(n00bb_package_namespace(owner)),
+                           ARG_TEXT(n00bb_package_namespace(lower->unit))));
     }
     core_list_free(clauses);
     return ir_lower_prune_node(context, visit->node);
+}
+
+
+static bool
+record_mark_rule(ir_lower_context_t *context, ir_func_t *stub,
+                 parse_tree_t *clause, bool clears)
+{
+    n00bb_lower_context_t *lower = context->user;
+    parse_grammar_t *grammar = lower->grammar;
+    parse_tree_t *target = child_nt(grammar, clause,
+                                    CORE_STRING_STATIC("effect-query-name"));
+    parse_tree_t *parameter = core_tree_num_children(clause) > 4
+        ? core_tree_child(clause, 4) : nullptr;
+    core_string_t name = source_text_of(lower->unit, target);
+    declaration_t found = target
+        ? declaring_unit(grammar, lower->unit, name, function_declared)
+        : (declaration_t){0};
+    if (report_ambiguous(lower_diagnostics(context), lower_unit(context),
+                         N00B_DIAG_MARK_DECLARATION,
+                         span_location(lower_span_for_tree(context, target)),
+                         name, &found))
+        return true;
+    core_translation_unit_t *owner = found.unit;
+    core_string_t leaf = found.leaf;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    ir_module_t *module = owner && state
+        ? cached_ir_module(state->link_analysis, owner) : nullptr;
+    ir_func_t *function = module ? ir_func_find(module, leaf) : nullptr;
+    ir_span_t span = lower_span_for_tree(context, target ? target : clause);
+    if (!function) {
+        lower_report(context, N00B_DIAG_MARK_DECLARATION, span,
+            N00B_TEXT_EFFECT_NEEDS_FUNCTION, N00BB_ARGS(ARG_TEXT(name)));
+        return true;
+    }
+    core_string_t wanted = parameter ? first_token_text(parameter)
+                                     : (core_string_t){0};
+    int64_t index = n00bb_parameter_named(function, wanted);
+    if (index < 0) {
+        lower_report(context, N00B_DIAG_MARK_DECLARATION, span,
+            N00B_TEXT_NO_PARAMETER_NAMED,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(wanted)));
+        return true;
+    }
+    th_type *signature = th_resolve(function->type);
+    th_type *failure = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_error(signature) : nullptr;
+    if (clears && (!failure || th_is_nil(th_resolve(failure)))) {
+        lower_report(context, N00B_DIAG_MARK_DECLARATION, span,
+            N00B_TEXT_VALIDATOR_NEEDS_FAIL, N00BB_ARGS(ARG_TEXT(name)));
+        return true;
+    }
+    return add_clause_entry(stub, clears ? CORE_STRING_STATIC("cleared")
+                                         : CORE_STRING_STATIC("rejected"),
+                            function, index);
+}
+
+static bool
+n00bb_lower_mark_declaration(ir_lower_context_t *context,
+                             parse_visit_t *visit, bool entering,
+                             void *opaque)
+{
+    (void)opaque;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    if (!entering || !lower) return true;
+    parse_grammar_t *grammar = visit->grammar;
+    core_string_t name = effect_declaration_name(grammar, lower->unit,
+                                                 visit->node);
+    if (core_string_find_byte(name, '.') >= 0) {
+        lower_report(context, N00B_DIAG_MARK_DECLARATION,
+            lower_span_for_tree(context, visit->node),
+            N00B_TEXT_MARK_DECLARED_ELSEWHERE, N00BB_ARGS(ARG_TEXT(name)));
+        return ir_lower_prune_node(context, visit->node);
+    }
+    core_buffer_t qualified = {0};
+    append_qualified(&qualified, lower->unit, name);
+    ir_func_t *stub = declaration_stub(context,
+        CORE_STRING_STATIC("__n00bb_mark#"), mark_declaration_key,
+        core_buffer_string(&qualified), visit->node);
+    core_buffer_release(&qualified);
+    bool ok = stub != nullptr;
+    core_list_t(parse_tree_ptr_t) clauses = effect_clauses(grammar,
+                                                           visit->node);
+    for (size_t c = 0; ok && c < clauses.len; c++) {
+        parse_tree_t *clause = clauses.data[c];
+        if (nt_is(grammar, clause, CORE_STRING_STATIC("effect-source"))) {
+            parse_tree_t *expression = child_nt(grammar, clause,
+                CORE_STRING_STATIC("expression"));
+            parse_sym_entry_t *symbol = named_function(grammar, lower->unit,
+                                                       expression);
+            if (!symbol)
+                lower_report(context, N00B_DIAG_MARK_DECLARATION,
+                    lower_span_for_tree(context, expression ? expression
+                                                            : clause),
+                    N00B_TEXT_EFFECT_NEEDS_FUNCTION,
+                    N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit,
+                        expression ? expression : clause))));
+            else ok = record_effect_clause(context, stub, symbol, false);
+        }
+        else ok = record_mark_rule(context, stub, clause,
+            nt_is(grammar, clause, CORE_STRING_STATIC("mark-clearer")));
+    }
+    core_list_free(clauses);
+    return ok && ir_lower_prune_node(context, visit->node);
 }
 
 static bool
@@ -24299,6 +24986,9 @@ static ir_summary_t *
 n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
                     const ir_func_t *function)
 {
+    if (!function->n_blocks && core_string_starts_with(function->name,
+            CORE_STRING_STATIC(N00BB_MARK_QUERY)))
+        return ir_summary_new(summaries, function);
     if (n00bb_is_callback_bound(function)) {
         n00bb_link_analysis_t *analysis = context;
         ir_summary_t *summary = ir_summary_bounded(summaries, function,
@@ -25389,6 +26079,16 @@ check_query_value(check_eval_t *eval, parse_tree_t *node, ir_func_t **subject,
         return false;
     if (callback_parameter(grammar, eval->check->unit, node, parts) >= 0)
         return true;
+    if (parts->query == N00BB_QUERY_MAY_CARRY) {
+        bool found = false;
+        bool answer = false;
+        for (size_t q = 0; q < eval->analysis->mark_questions.len; q++)
+            if (eval->analysis->mark_questions.data[q].node == node) {
+                found = true;
+                answer = answer || eval->analysis->mark_questions.data[q].answer;
+            }
+        return answer || !found;
+    }
     *subject = effect_query_subject(eval->analysis, grammar,
                                     eval->check->unit, node, parts);
     core_buffer_t effect = {0};
@@ -25487,11 +26187,34 @@ bound_witness_flag(const ir_summary_t *summary, core_string_t effect_name)
 }
 
 static void
+report_false_query(check_eval_t *eval, parse_tree_t *node, core_string_t piece)
+{
+    if (!eval->explained++)
+        n00bb_report(eval->diagnostics, eval->check->unit,
+            N00B_DIAG_EFFECT_CHECK_FALSE,
+            n00bb_node_span(eval->check->statement),
+            N00B_TEXT_CHECK_IS_FALSE, N00BB_ARGS(ARG_TEXT(piece)));
+    else
+        n00bb_report_secondary(eval->diagnostics, eval->check->unit,
+            n00bb_node_span(node), N00B_TEXT_CHECK_ALSO_FALSE,
+            N00BB_ARGS(ARG_TEXT(piece)));
+    core_free(piece.data);
+}
+
+static void
 explain_query(check_eval_t *eval, parse_tree_t *node, bool value)
 {
     ir_func_t *subject = nullptr;
     effect_query_parts_t parts;
     (void)check_query_value(eval, node, &subject, &parts);
+    if (parts.query == N00BB_QUERY_MAY_CARRY) {
+        report_false_query(eval, node, n00bb_text(
+            value ? N00B_TEXT_MAY_CARRY_HERE : N00B_TEXT_DOES_NOT_CARRY_HERE,
+            N00BB_ARGS(ARG_TEXT(source_text_of(eval->check->unit,
+                                               parts.function)),
+                       ARG_TEXT(parts.name))));
+        return;
+    }
     if (!subject) return;
     core_string_t function = n00bb_function_root(subject->name);
     bool present = parts.query == N00BB_QUERY_FORBIDS_EFFECT ? !value : value;
@@ -25527,17 +26250,7 @@ explain_query(check_eval_t *eval, parse_tree_t *node, bool value)
                           ARG_TEXT(parts.name));
         break;
     }
-    core_string_t piece = n00bb_text(text, args);
-    if (!eval->explained++)
-        n00bb_report(eval->diagnostics, eval->check->unit,
-            N00B_DIAG_EFFECT_CHECK_FALSE,
-            n00bb_node_span(eval->check->statement),
-            N00B_TEXT_CHECK_IS_FALSE, N00BB_ARGS(ARG_TEXT(piece)));
-    else
-        n00bb_report_secondary(eval->diagnostics, eval->check->unit,
-            n00bb_node_span(node), N00B_TEXT_CHECK_ALSO_FALSE,
-            N00BB_ARGS(ARG_TEXT(piece)));
-    core_free(piece.data);
+    report_false_query(eval, node, n00bb_text(text, args));
     if (!present || !effect || !summary
         || (parts.query != N00BB_QUERY_MAY_EFFECT
             && parts.query != N00BB_QUERY_FORBIDS_EFFECT))
@@ -25863,6 +26576,344 @@ check_callback_bounds(n00bb_link_analysis_t *analysis)
                 }
         }
     }
+    return holds;
+}
+
+typedef struct {
+    ir_span_t span;
+    uint32_t  param;
+} mark_site_t;
+core_list_decl(mark_site_t);
+
+typedef struct {
+    n00bb_link_analysis_t     *analysis;
+    core_list_t(core_string_t) names;
+    core_list_t(mark_site_t)   reported;
+    n00bb_marks_t              marks;
+    size_t                     violations;
+} mark_check_t;
+
+static bool
+parse_rule(mark_check_t *check, core_string_t module, core_string_t name,
+           core_string_t index, uint64_t bit, n00bb_mark_rule_t *rule)
+{
+    ir_func_t *function = module_function(check->analysis, module, name);
+    uint64_t param = 0;
+    size_t consumed = 0;
+    if (!function
+        || (index.u8_bytes
+            && (!core_string_parse_u64(index, 10, &param, &consumed)
+                || consumed != index.u8_bytes)))
+        return false;
+    *rule = (n00bb_mark_rule_t){.function = function,
+                                .param = (uint32_t)param, .marks = bit};
+    return true;
+}
+
+static void
+collect_mark_rules(mark_check_t *check, ir_func_t *stub, uint64_t bit)
+{
+    for (uint32_t e = 0;; e++) {
+        core_string_t entry = ir_func_effect_at(stub, e);
+        core_string_t fields[4];
+        if (!entry.u8_bytes) break;
+        bool from = core_string_starts_with(entry, CORE_STRING_STATIC("from\t"));
+        n00bb_mark_rule_t rule;
+        if (!tab_fields(entry, fields, from ? 3 : 4)
+            || !parse_rule(check, fields[1], fields[2],
+                           from ? (core_string_t){0} : fields[3], bit, &rule))
+            continue;
+        if (from) core_list_push(check->marks.sources, rule);
+        else if (core_string_eq(fields[0], CORE_STRING_STATIC("cleared")))
+            core_list_push(check->marks.clears, rule);
+        else core_list_push(check->marks.rejects, rule);
+    }
+}
+
+static void
+collect_mark(void *context, core_translation_unit_t *unit, ir_func_t *stub,
+             core_string_t declared)
+{
+    mark_check_t *check = context;
+    if (check->names.len >= 64) {
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_MARK_DECLARATION, span_location(stub->span),
+            N00B_TEXT_TOO_MANY_MARKS, N00BB_ARGS(ARG_TEXT(declared)));
+        check->violations++;
+        return;
+    }
+    uint64_t bit = 1ull << check->names.len;
+    core_list_push(check->names, declared);
+    collect_mark_rules(check, stub, bit);
+}
+
+static uint64_t
+mark_bit(const mark_check_t *check, core_string_t qualified)
+{
+    for (size_t m = 0; m < check->names.len; m++)
+        if (core_string_eq(check->names.data[m], qualified))
+            return 1ull << m;
+    return 0;
+}
+
+static void
+collect_annotation_rules(void *context, core_translation_unit_t *unit,
+                         ir_func_t *stub, core_string_t declared)
+{
+    (void)unit;
+    (void)declared;
+    mark_check_t *check = context;
+    for (uint32_t e = 0;; e++) {
+        core_string_t entry = ir_func_effect_at(stub, e);
+        core_string_t fields[6];
+        if (!entry.u8_bytes) break;
+        if (!tab_fields(entry, fields, 3)) continue;
+        uint64_t bit = mark_bit(check, fields[1]);
+        if (!bit) continue;
+        bool rejects = core_string_eq(fields[0],
+                                      CORE_STRING_STATIC("rejects"));
+        n00bb_mark_rule_t rule;
+        if (core_string_starts_with(fields[2], CORE_STRING_STATIC("param\t"))
+            && tab_fields(entry, fields, 6)) {
+            if (!parse_rule(check, fields[3], fields[4], fields[5], bit,
+                            &rule)) continue;
+            if (rejects) core_list_push(check->marks.rejects, rule);
+            else core_list_push(check->marks.seeds, rule);
+        }
+        else if (core_string_starts_with(fields[2],
+                                         CORE_STRING_STATIC("field\t"))
+                 && tab_fields(entry, fields, 5))
+            core_list_push(check->marks.carriers, ((n00bb_mark_carrier_t){
+                .type = fields[3], .field = fields[4], .marks = bit}));
+        else if (core_string_starts_with(fields[2],
+                                         CORE_STRING_STATIC("type\t"))
+                 && tab_fields(entry, fields, 4))
+            core_list_push(check->marks.carriers, ((n00bb_mark_carrier_t){
+                .type = fields[3], .marks = bit}));
+    }
+}
+
+static void
+collect_marks(mark_check_t *check)
+{
+    for_each_stub(check->analysis, CORE_STRING_STATIC("__n00bb_mark#"),
+                  mark_declaration_key, collect_mark, check);
+    for_each_stub(check->analysis, CORE_STRING_STATIC("__n00bb_mark_rule#"),
+                  mark_rules_key, collect_annotation_rules, check);
+}
+
+static void
+mark_names(const mark_check_t *check, uint64_t marks, core_buffer_t *out)
+{
+    for (size_t m = 0; m < check->names.len; m++)
+        if (marks >> m & 1) {
+            if (out->byte_len) core_buffer_puts(out, ", ");
+            core_buffer_append_string(out,
+                                      n00bb_name_leaf(check->names.data[m]));
+        }
+}
+
+static core_string_t
+local_source_name(const ir_value_t *value)
+{
+    ir_annots_t *annots = value ? ir_value_annots((ir_value_t *)value)
+                                : nullptr;
+    ir_annot_t *name = annots
+        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.source_name"))
+        : nullptr;
+    return name && name->kind == IR_ANNOT_STR ? name->s : (core_string_t){0};
+}
+
+static core_string_t
+value_name(const ir_value_t *value)
+{
+    for (int depth = 0; value && depth < 32; depth++) {
+        if (value->kind == IR_VAL_PARAM) return value->name;
+        core_string_t name = local_source_name(value);
+        if (name.u8_bytes) return name;
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                           : nullptr;
+        value = def && def->op == IR_OP_COPY && def->n_operands
+            ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return CORE_STRING_STATIC("this argument");
+}
+
+static bool
+call_target_text(core_buffer_t *out, const ir_instr_t *call)
+{
+    ir_func_t *target = call ? n00bb_direct_call_target(call) : nullptr;
+    out->byte_len = 0;
+    if (target) function_name_text(out, target);
+    return target != nullptr;
+}
+
+static bool
+already_reported(mark_check_t *check, const n00bb_mark_violation_t *violation)
+{
+    ir_span_t span = violation->call->span;
+    for (size_t r = 0; r < check->reported.len; r++) {
+        const mark_site_t *site = &check->reported.data[r];
+        if (site->param == violation->param
+            && site->span.file == span.file
+            && site->span.start_byte == span.start_byte
+            && site->span.end_byte == span.end_byte)
+            return true;
+    }
+    core_list_push(check->reported, ((mark_site_t){
+        .span = span, .param = violation->param}));
+    return false;
+}
+
+static void
+report_mark_violation(void *context, const n00bb_mark_violation_t *violation)
+{
+    mark_check_t *check = context;
+    n00bb_link_analysis_t *analysis = check->analysis;
+    core_translation_unit_t *unit = unit_for_module(analysis,
+                                                    violation->caller->owner);
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    if (!state || state->interface_module
+        || already_reported(check, violation)) return;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_buffer_t marks = {0};
+    mark_names(check, violation->marks, &marks);
+    core_buffer_t callee = {0};
+    function_name_text(&callee, violation->callee);
+    core_string_t value = value_name(violation->argument);
+    core_string_t param = violation->param < violation->callee->n_params
+            && violation->callee->params[violation->param]
+        ? violation->callee->params[violation->param]->name
+        : CORE_STRING_STATIC("?");
+    n00bb_report(diagnostics, unit, N00B_DIAG_MARK_REJECTED,
+        span_location(violation->call->span), N00B_TEXT_MAY_CARRY_REJECTED,
+        N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(core_buffer_string(&marks)),
+                   ARG_TEXT(param), ARG_TEXT(core_buffer_string(&callee))));
+    check->violations++;
+    core_buffer_t text = {0};
+    if (call_target_text(&text, violation->origin))
+        n00bb_report_secondary(diagnostics, nullptr,
+            span_location(violation->origin->span), N00B_TEXT_MARK_COMES_FROM,
+            N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(core_buffer_string(&text))));
+    if (violation->carrier && !violation->by_type)
+        n00bb_report_secondary(diagnostics, nullptr,
+            span_location(violation->caller->span),
+            N00B_TEXT_PARAMETER_CARRIES,
+            N00BB_ARGS(ARG_TEXT(violation->carrier->name),
+                       ARG_TEXT(core_buffer_string(&marks))));
+    else if (violation->carrier) {
+        core_string_t type = {0};
+        if (th_named_info(th_resolve(violation->carrier->type), &type, nullptr,
+                          nullptr))
+            n00bb_report_secondary(diagnostics, nullptr,
+                span_location(violation->call->span), N00B_TEXT_TYPE_CARRIES,
+                N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(type)),
+                           ARG_TEXT(core_buffer_string(&marks))));
+    }
+    if (violation->field)
+        n00bb_report_secondary(diagnostics, nullptr,
+            span_location(violation->field->span), N00B_TEXT_FIELD_CARRIES,
+            N00BB_ARGS(ARG_TEXT(violation->field->operands[1].name),
+                       ARG_TEXT(core_buffer_string(&marks))));
+    if (call_target_text(&text, violation->via))
+        n00bb_report_secondary(diagnostics, nullptr,
+            span_location(violation->via->span), N00B_TEXT_MARK_PASSES_THROUGH,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&text))));
+    if (call_target_text(&text, violation->sink))
+        n00bb_report_secondary(diagnostics, nullptr,
+            span_location(violation->sink->span), N00B_TEXT_MARK_REACHES,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&callee)), ARG_TEXT(param),
+                       ARG_TEXT(core_buffer_string(&text))));
+    ir_func_t *clearer = nullptr;
+    for (size_t r = 0; !clearer && r < check->marks.clears.len; r++)
+        if (check->marks.clears.data[r].marks & violation->marks)
+            clearer = check->marks.clears.data[r].function;
+    text.byte_len = 0;
+    if (clearer) {
+        function_name_text(&text, clearer);
+        n00bb_report_help(diagnostics, N00B_TEXT_CHECK_IT_FIRST,
+                          N00BB_ARGS(ARG_TEXT(core_buffer_string(&text))));
+    }
+    else n00bb_report_help(diagnostics, N00B_TEXT_MARK_HAS_NO_VALIDATOR,
+                           N00BB_ARGS(ARG_TEXT(core_buffer_string(&marks))));
+    core_buffer_release(&text);
+    core_buffer_release(&marks);
+    core_buffer_release(&callee);
+}
+
+static bool
+fold_mark_questions(n00bb_link_analysis_t *analysis)
+{
+    bool folded = true;
+    for (size_t q = 0; q < analysis->mark_questions.len; q++) {
+        ir_instr_t *call = analysis->mark_questions.data[q].call;
+        call->op = IR_OP_CONST;
+        call->n_operands = 0;
+        call->n_mods = 0;
+        folded = ir_instr_operand_uint(call,
+                     analysis->mark_questions.data[q].answer) && folded;
+    }
+    return folded;
+}
+
+static bool
+check_marks(n00bb_link_analysis_t *analysis)
+{
+    if (n00bb_compile_phase() != PARSE_SYM_PHASE_RUNTIME)
+        return fold_mark_questions(analysis);
+    mark_check_t check = {
+        .analysis = analysis, .names = core_list_new(core_string_t),
+        .reported = core_list_new(mark_site_t),
+        .marks = {
+            .functions = core_list_new(n00bb_ir_func_ptr_t),
+            .sources = core_list_new(n00bb_mark_rule_t),
+            .clears = core_list_new(n00bb_mark_rule_t),
+            .rejects = core_list_new(n00bb_mark_rule_t),
+            .seeds = core_list_new(n00bb_mark_rule_t),
+            .carriers = core_list_new(n00bb_mark_carrier_t),
+            .summaries = analysis->summaries,
+            .report = report_mark_violation,
+        },
+    };
+    check.marks.context = &check;
+    check.marks.questions = &analysis->mark_questions;
+    collect_marks(&check);
+    for (size_t q = 0; q < analysis->mark_questions.len; q++)
+        analysis->mark_questions.data[q].marks = mark_bit(&check,
+            analysis->mark_questions.data[q].mark);
+    if (check.marks.rejects.len || analysis->mark_questions.len) {
+        core_dict_t seen;
+        core_dict_init(&seen, nullptr, nullptr);
+        for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
+            ir_func_t *body = n00bb_cached_body(
+                analysis->emitted_functions.data[f]);
+            if (body && body->n_blocks && core_dict_add(&seen, body, body))
+                core_list_push(check.marks.functions, body);
+        }
+        for (size_t u = 0; u < analysis->units.len; u++) {
+            n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+            if (!state || !state->ir_module || state->interface_module)
+                continue;
+            for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+                ir_func_t *body = n00bb_cached_body(
+                    ir_func_at(state->ir_module, f));
+                if (body && body->n_blocks && core_dict_add(&seen, body, body))
+                    core_list_push(check.marks.functions, body);
+            }
+        }
+        core_dict_free(&seen);
+        n00bb_check_marks(&check.marks);
+    }
+    if (!fold_mark_questions(analysis)) check.violations++;
+    bool holds = check.violations == 0;
+    core_list_free(check.names);
+    core_list_free(check.reported);
+    core_list_free(check.marks.functions);
+    core_list_free(check.marks.sources);
+    core_list_free(check.marks.clears);
+    core_list_free(check.marks.rejects);
+    core_list_free(check.marks.seeds);
+    core_list_free(check.marks.carriers);
     return holds;
 }
 
@@ -30221,6 +31272,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         CORE_STRING_STATIC("effect-decl"), n00bb_lower_effect_declaration,
         nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
+        CORE_STRING_STATIC("mark-decl"), n00bb_lower_mark_declaration,
+        nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("simple-lit"), n00bb_lower_static_litmod, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("list-lit"), n00bb_lower_static_litmod, nullptr)
@@ -30582,9 +31636,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                           false)
         && fold_function_effects(analysis);
     if (ok) {
+        bool marks = check_marks(analysis);
         bool checks = evaluate_effect_checks(analysis);
         bool traits = check_trait_implementations(analysis);
-        ok = check_callback_bounds(analysis) && checks && traits;
+        analysis->mark_questions.len = 0;
+        ok = check_callback_bounds(analysis) && checks && traits && marks;
     }
     core_list_free(initializer_functions);
     rule_facts_begin(analysis, link, &runtime_init.entry_functions);
@@ -30617,7 +31673,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         bool returns = validate_missing_returns(analysis);
         bool asserts = validate_assert_side_effects(analysis);
         ok = ((returns && asserts) || explained_by_errors(&units))
-            && n00bb_publish_function_summaries(analysis);
+            && n00bb_publish_function_summaries(analysis)
+            && publish_declarations(analysis);
     }
     if (ok && analyze_runtime_init)
         ok = validate_uninitialized_global_reads(link, analysis,

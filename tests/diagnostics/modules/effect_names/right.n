@@ -1,0 +1,6 @@
+func note(_entry: string) {
+}
+
+effect Audited {
+    from note
+}

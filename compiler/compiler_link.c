@@ -5274,6 +5274,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .effect_checks = core_list_new(n00bb_effect_check_t),
         .trait_bounds = core_list_new(n00bb_trait_bound_t),
         .user_effects = core_list_new(n00bb_user_effect_t),
+        .mark_questions = core_list_new(n00bb_mark_question_t),
         .specialization_requests =
             core_list_new(n00bb_specialization_request_t),
         .baked_roots = core_list_new(n00bb_baked_root_t),
@@ -5331,6 +5332,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_list_free(analysis->user_effects.data[e].handlers);
     }
     core_list_free(analysis->user_effects);
+    core_list_free(analysis->mark_questions);
     if (analysis->effect_functions_ready)
         core_dict_free(&analysis->effect_functions);
     core_list_free(analysis->specializations);

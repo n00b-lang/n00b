@@ -1174,6 +1174,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             core_list_push(state->module_top_level_statements, statement);
         }
+        if (NT_IS(grammar, node, "mark-annotation"))
+            core_list_push(state->mark_annotations, node);
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);

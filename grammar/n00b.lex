@@ -33,7 +33,9 @@
                    "litmod", "modify", "consume", "where", "count", "by",
                    "union", "from", "all", "struct", "object", "view",
                    "fn", "function", "not", "null", "None",
-                   "elseif", "effect", "handled")
+                   "elseif", "effect", "handled", "mark",
+                   "cleared", "rejected", "carries",
+                   "rejects")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

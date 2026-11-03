@@ -1,0 +1,12 @@
+import alpha
+
+func g() {
+    alpha.note("x")
+}
+
+func h() {
+    alpha.flush()
+}
+
+has_effect(g, alpha.Audited)
+forbids_effect(h, alpha.Audited)

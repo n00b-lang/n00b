@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compiler_effects.h"
+#include "compiler_marks.h"
 #include "compiler_tu.h"
 #include "driver.h"
 #include "abi_record_layout.h"
@@ -524,6 +525,7 @@ typedef struct n00bb_link_analysis_t {
     core_dict_t bounded_targets;
     bool bounded_targets_ready;
     core_list_t(n00bb_user_effect_t) user_effects;
+    core_list_t(n00bb_mark_question_t) mark_questions;
     core_dict_t effect_functions;
     bool effect_functions_ready;
     core_list_t(n00bb_specialization_request_t) specialization_requests;

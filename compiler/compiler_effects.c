@@ -112,6 +112,7 @@ static const core_string_t query_words[] = {
     [N00BB_QUERY_MAY_READ]       = CORE_STRING_STATIC("may_read"),
     [N00BB_QUERY_MAY_WRITE]      = CORE_STRING_STATIC("may_write"),
     [N00BB_QUERY_MAY_LEND]       = CORE_STRING_STATIC("may_lend"),
+    [N00BB_QUERY_MAY_CARRY]      = CORE_STRING_STATIC("may_carry"),
 };
 
 n00bb_query_t
@@ -136,8 +137,8 @@ n00bb_query_about_effect(n00bb_query_t query)
         || query == N00BB_QUERY_HAS_EFFECT;
 }
 
-static int64_t
-parameter_named(const ir_func_t *function, core_string_t name)
+int64_t
+n00bb_parameter_named(const ir_func_t *function, core_string_t name)
 {
     for (uint32_t p = 0; function && p < function->n_params; p++)
         if (function->params[p]
@@ -257,7 +258,7 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
         : (flags & IR_SUMMARY_CALLS_UNKNOWN)
             || ir_summary_has_effect(summary, name)
             || (user && n00bb_function_listed(&user->sources, subject));
-    int64_t param = parameter_named(subject, name);
+    int64_t param = n00bb_parameter_named(subject, name);
     uint8_t role = param >= 0
         ? n00bb_parameter_role(subject, summary, (uint32_t)param) : 0;
     switch (query) {
@@ -277,6 +278,7 @@ n00bb_query_answer(ir_summaries_t *summaries, ir_func_t *subject,
         return (role & N00BB_ROLE_WRITES) != 0;
     case N00BB_QUERY_MAY_LEND:
         return (role & N00BB_ROLE_LENDS) != 0;
+    case N00BB_QUERY_MAY_CARRY:
     case N00BB_QUERY_NONE:
         break;
     }
