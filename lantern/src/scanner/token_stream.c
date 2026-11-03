@@ -678,15 +678,13 @@ scan_stream_previous_token(parse_token_stream_t *ts,
     return ts->tokens[lo - 1];
 }
 
-bool
-scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
+// Fold `token` and its trivia into the leading trivia of `next`, or the
+// trailing trivia of `previous` when there is no next token, then free it.
+// The caller removes the token's slot from the stream.
+static bool
+fold_token_into_trivia(parse_token_stream_t *ts, parse_token_info_t *token,
+                       parse_token_info_t *next, parse_token_info_t *previous)
 {
-    if (!ts || ts->edits_enabled || pos < 0
-        || !ensure_filled(ts, pos) || pos >= ts->token_count) {
-        return false;
-    }
-
-    parse_token_info_t *token = ts->tokens[pos];
     size_t start = parse_token_start_byte(token);
     size_t end = parse_token_end_byte(token);
     parse_scanner_t *scanner = ts->scanner;
@@ -726,13 +724,11 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
         trailing = next;
     }
 
-    if (pos + 1 < ts->token_count) {
-        parse_token_info_t *next = ts->tokens[pos + 1];
+    if (next) {
         *tail = parse_token_leading_trivia(next);
         parse_token_set_leading_trivia(next, head);
     }
-    else if (pos > 0) {
-        parse_token_info_t *previous = ts->tokens[pos - 1];
+    else if (previous) {
         parse_trivia_t *previous_head = parse_token_trailing_trivia(previous);
         parse_trivia_t **previous_tail = &previous_head;
         while (*previous_tail) {
@@ -751,6 +747,26 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
     parse_token_set_leading_trivia(token, nullptr);
     parse_token_set_trailing_trivia(token, nullptr);
     free_stream_token(token);
+    return true;
+}
+
+bool
+scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
+{
+    if (!ts || ts->edits_enabled || pos < 0
+        || !ensure_filled(ts, pos) || pos >= ts->token_count) {
+        return false;
+    }
+
+    parse_token_info_t *next = pos + 1 < ts->token_count
+                                   ? ts->tokens[pos + 1]
+                                   : nullptr;
+    parse_token_info_t *previous = pos > 0 ? ts->tokens[pos - 1] : nullptr;
+
+    if (!fold_token_into_trivia(ts, ts->tokens[pos], next, previous)) {
+        return false;
+    }
+
     memmove(ts->tokens + pos, ts->tokens + pos + 1,
             (size_t)(ts->token_count - pos - 1) * sizeof(*ts->tokens));
     ts->token_count--;
@@ -759,6 +775,66 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
     }
     ts->exhausted = false;
     return true;
+}
+
+// One-pass form of scan_stream_token_to_trivia over every token `drop`
+// selects. Removing tokens one at a time shifts the array tail per removal,
+// which is quadratic in the stream length.
+bool
+scan_stream_tokens_to_trivia(parse_token_stream_t *ts,
+                             bool (*drop)(parse_token_info_t *, void *),
+                             void *ud)
+{
+    if (!ts || ts->edits_enabled || !drop) {
+        return false;
+    }
+
+    while (ensure_filled(ts, ts->token_count)) {
+    }
+
+    int32_t count    = ts->token_count;
+    int32_t kept     = 0;
+    int32_t kept_pos = 0;
+    bool    ok       = true;
+    int32_t read     = 0;
+
+    for (; read < count; read++) {
+        parse_token_info_t *token = ts->tokens[read];
+
+        if (drop(token, ud)) {
+            parse_token_info_t *next = read + 1 < count
+                                           ? ts->tokens[read + 1]
+                                           : nullptr;
+            parse_token_info_t *previous = kept > 0 ? ts->tokens[kept - 1]
+                                                    : nullptr;
+
+            if (fold_token_into_trivia(ts, token, next, previous)) {
+                continue;
+            }
+            ok = false;
+            break;
+        }
+
+        if (read < ts->pos) {
+            kept_pos++;
+        }
+        ts->tokens[kept++] = token;
+    }
+
+    for (; read < count; read++) {
+        if (read < ts->pos) {
+            kept_pos++;
+        }
+        ts->tokens[kept++] = ts->tokens[read];
+    }
+
+    if (kept != count) {
+        ts->token_count = kept;
+        ts->pos         = kept_pos;
+        ts->exhausted   = false;
+    }
+
+    return ok;
 }
 
 int32_t

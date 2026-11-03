@@ -151,6 +151,98 @@ test_stream_token_to_trivia(void)
     parse_grammar_free(g);
 }
 
+static bool
+drop_tid(parse_token_info_t *token, void *ud)
+{
+    return parse_token_tid(token) == *(int64_t *)ud;
+}
+
+// Appends every token's leading and trailing trivia, in stream order, so two
+// streams can be compared for where their trivia ended up.
+static size_t
+trivia_layout(parse_token_stream_t *stream, char *out, size_t cap)
+{
+    size_t len = 0;
+
+    for (int32_t i = 0; i < scan_stream_token_count(stream); i++) {
+        parse_token_info_t *token = scan_stream_get(stream, i);
+        parse_trivia_t     *lists[2] = {parse_token_leading_trivia(token),
+                                        parse_token_trailing_trivia(token)};
+
+        for (size_t l = 0; l < 2; l++) {
+            for (parse_trivia_t *t = lists[l]; t; t = t->next) {
+                if (len + t->text.u8_bytes + 1 >= cap) {
+                    return len;
+                }
+                memcpy(out + len, t->text.data, t->text.u8_bytes);
+                len += t->text.u8_bytes;
+            }
+            out[len++] = '|';
+        }
+    }
+
+    return len;
+}
+
+static void
+test_stream_tokens_to_trivia(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    parse_register_terminal(g, S("+"));
+
+    int64_t       plus  = parse_terminal_id(g, S("+"));
+    core_string_t input = S("a + + b + c +");
+
+    core_buffer_t *one_buf = nullptr;
+    parse_scanner_t *one_scanner = nullptr;
+    parse_token_stream_t *one = scan_tokenize(g, input, &one_buf,
+                                              &one_scanner);
+    bool one_ok = true;
+
+    while (scan_stream_next(one)) {
+    }
+
+    for (int32_t i = 0; i < scan_stream_token_count(one);) {
+        parse_token_info_t *token = scan_stream_get(one, i);
+        if (token && drop_tid(token, &plus)) {
+            one_ok = one_ok && scan_stream_token_to_trivia(one, i);
+            continue;
+        }
+        i++;
+    }
+
+    core_buffer_t *batch_buf = nullptr;
+    parse_scanner_t *batch_scanner = nullptr;
+    parse_token_stream_t *batch = scan_tokenize(g, input, &batch_buf,
+                                                &batch_scanner);
+
+    while (scan_stream_next(batch)) {
+    }
+
+    bool batch_ok = scan_stream_tokens_to_trivia(batch, drop_tid, &plus);
+
+    char   one_layout[256];
+    char   batch_layout[256];
+    size_t one_len   = trivia_layout(one, one_layout, sizeof(one_layout));
+    size_t batch_len = trivia_layout(batch, batch_layout,
+                                     sizeof(batch_layout));
+
+    check("batch trivia conversion drops every selected token",
+          one_ok && batch_ok && scan_stream_token_count(batch) == 3
+              && scan_stream_token_count(one) == 3);
+    check("batch trivia conversion places trivia as one-at-a-time does",
+          one_len == batch_len && one_len > 0
+              && memcmp(one_layout, batch_layout, one_len) == 0);
+
+    scan_token_stream_free(batch);
+    scan_scanner_free(batch_scanner);
+    core_buffer_free(batch_buf);
+    scan_token_stream_free(one);
+    scan_scanner_free(one_scanner);
+    core_buffer_free(one_buf);
+    parse_grammar_free(g);
+}
+
 int
 main(void)
 {
@@ -220,6 +312,7 @@ main(void)
 
     test_the_grammar_is_the_operator_table();
     test_stream_token_to_trivia();
+    test_stream_tokens_to_trivia();
 
     return report("fe tokenizer");
 }

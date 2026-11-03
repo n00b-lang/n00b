@@ -64,6 +64,10 @@ extern parse_token_info_t *scan_stream_previous_token(
 
 extern bool scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos);
 
+extern bool scan_stream_tokens_to_trivia(
+    parse_token_stream_t *ts, bool (*drop)(parse_token_info_t *, void *),
+    void *ud);
+
 extern int32_t scan_stream_token_count(parse_token_stream_t *ts);
 
 extern void scan_stream_reset(parse_token_stream_t *ts);
