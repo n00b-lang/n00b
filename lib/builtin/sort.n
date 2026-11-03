@@ -141,3 +141,17 @@ func sort(modify items: Array['T]) where 'T : Comparable {
     let by: Comparator['T] = callback[Comparator](ref natural_compare)
     sort_by(items, by)
 }
+
+func search(items: Array['T], value: 'T) -> uint where 'T : Comparable {
+    var low:  uint = 0
+    var high: uint = __array_length(items)
+    while low < high {
+        let mid: uint = low + (high - low) / 2
+        if items[mid].__cmp(value) == Comparison.less {
+            low = mid + 1
+        } else {
+            high = mid
+        }
+    }
+    return low
+}
