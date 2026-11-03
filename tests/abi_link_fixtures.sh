@@ -35,7 +35,7 @@ for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
     builtin.containers.set builtin.containers.tree builtin.hex \
     builtin.bitptr builtin.abi builtin.containers.buffer builtin.io.format \
     builtin.string.style builtin.litmod_site builtin.embed builtin.floating \
-    builtin.integer builtin.ascii; do
+    builtin.integer builtin.ascii builtin.reference; do
     N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
         --output "$tmp/$module.n00bm" "$module" 2>"$tmp/$module.err" || {
         cat "$tmp/$module.err"
