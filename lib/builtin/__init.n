@@ -177,6 +177,7 @@ package builtin {
     export containers.view.View
     export containers.errors.Container_Err
     export cursor.Cursor
+    export cursor.Lease_Cursor
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup
@@ -211,6 +212,7 @@ package sort {
 
 package cursor {
     export cursor.Cursor
+    export cursor.Lease_Cursor
     export cursor.iter
     export cursor.next
     export cursor.cleanup

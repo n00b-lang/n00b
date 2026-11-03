@@ -61,6 +61,13 @@ func writable(self: Leasable['T]) -> Ref[Array['T]] {
     return ref self.storage
 }
 
+func replace_storage(self: Leasable['T], consume storage: Array['T]) {
+    if leased(self) {
+        self.leases = new[Lease_Count]()
+    }
+    self.storage = storage
+}
+
 func len(self: Leasable['T]) -> uint {
     return __array_length(self.storage)
 }
