@@ -143,6 +143,8 @@ typedef struct {
 core_list_decl(pt_item_t);
 typedef core_list_t(pt_item_t) pt_set_t;
 core_list_decl(pt_set_t);
+typedef const pt_set_t *pt_set_ptr_t;
+core_list_decl(pt_set_ptr_t);
 
 typedef struct {
     pt_item_t                        item;
@@ -270,6 +272,7 @@ struct pt_t {
     core_dict_t            mapped;
     core_dict_t            stored;
     core_dict_t            contents_memo;
+    core_dict_t            widened_sets;
     uint64_t               cuts;
     uint64_t               delta_since;
     core_dict_t            valued;
@@ -357,7 +360,7 @@ core_list_decl(pt_logged_t);
 typedef struct {
     content_key_t            key;
     pt_set_t                 items;
-    pt_set_t                 widened;
+    const pt_set_t          *widened;
     core_list_t(pt_logged_t) log;
     pt_memo_t                memo;
 } content_memo_t;

@@ -422,6 +422,49 @@ log_new_items(pt_t *pt, core_list_t(pt_logged_t) *log, const pt_set_t *old,
                                                 pt->generation}));
 }
 
+static core_hash_value_t
+widened_hash(void *key)
+{
+    const pt_set_t   *set  = key;
+    core_hash_value_t hash = set->len;
+    for (size_t i = 0; i < set->len; i++) {
+        const pt_item_t *item = &set->data[i];
+        hash = hash * 1000003
+            ^ ((core_hash_value_t)item->loc.site * 31 + item->kind * 7
+               + item->flow)
+            ^ (core_hash_value_t)(uintptr_t)item->origin;
+    }
+    return hash;
+}
+
+static bool
+widened_eq(const void *a, const void *b)
+{
+    const pt_set_t *x = a, *y = b;
+    if (x->len != y->len) return false;
+    for (size_t i = 0; i < x->len; i++)
+        if (set_order(&x->data[i], &y->data[i])
+            || !item_covers(&x->data[i], &y->data[i])
+            || !item_covers(&y->data[i], &x->data[i]))
+            return false;
+    return true;
+}
+
+static const pt_set_t *
+intern_widened(pt_t *pt, pt_set_t *set)
+{
+    bool      found  = false;
+    pt_set_t *shared = core_dict_get(&pt->widened_sets, set, &found);
+    if (found) {
+        core_list_free(*set);
+        return shared;
+    }
+    shared  = core_alloc(pt_set_t);
+    *shared = *set;
+    core_dict_put(&pt->widened_sets, shared, shared);
+    return shared;
+}
+
 static content_memo_t *
 content_entry(pt_t *pt, const pt_loc_t *loc)
 {
@@ -445,9 +488,10 @@ content_entry(pt_t *pt, const pt_loc_t *loc)
         if (pt->cuts != cuts) entry->memo.computed = false;
         log_new_items(pt, &entry->log, &old, &entry->items);
         core_list_free(old);
-        entry->widened.len = 0;
+        pt_set_t widened = (pt_set_t){0};
         for (size_t i = 0; i < entry->items.len; i++)
-            set_add(pt, &entry->widened, anywhere_below(entry->items.data[i]));
+            set_add(pt, &widened, anywhere_below(entry->items.data[i]));
+        entry->widened = intern_widened(pt, &widened);
     }
     memo_use(pt, &entry->memo);
     return entry;
@@ -473,7 +517,8 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
 }
 
 static void
-content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into,
+              core_list_t(pt_set_ptr_t) *merged)
 {
     if (pt->reading.len || pt->delta_since) {
         pt_set_t reached = (pt_set_t){0};
@@ -481,7 +526,11 @@ content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
         merge_widened(pt, into, &reached, true);
         return;
     }
-    set_merge(pt, into, &content_entry(pt, loc)->widened);
+    const pt_set_t *widened = content_entry(pt, loc)->widened;
+    for (size_t m = 0; m < merged->len; m++)
+        if (merged->data[m] == widened) return;
+    core_list_push(*merged, widened);
+    set_merge(pt, into, widened);
 }
 
 static bool
@@ -652,7 +701,8 @@ static void
 aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
            const pt_loc_t *loc, pt_set_t *into)
 {
-    const ir_spath_t *read = &loc->path;
+    const ir_spath_t         *read   = &loc->path;
+    core_list_t(pt_set_ptr_t) merged = core_list_new(pt_set_ptr_t);
     for (size_t e = 0; e < count; e++) {
         uint32_t site = sites[e];
         for (size_t a = 0; a < pt->sites.data[site].aliases.len; a++) {
@@ -676,7 +726,7 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
                                          target));
                 if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
                     target.loc.path.flags |= IR_SPATH_DEEP;
-                    content_below(pt, &target.loc, into);
+                    content_below(pt, &target.loc, into, &merged);
                 }
                 continue;
             }
@@ -694,6 +744,7 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
             content_at(pt, &target.loc, into);
         }
     }
+    core_list_free(merged);
 }
 
 static void
