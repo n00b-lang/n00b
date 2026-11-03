@@ -828,6 +828,25 @@ func take_batch(heap       : Ref[Heap],
     return list
 }
 
+func take_free_batch(heap: Ref[Heap], mutator: Ref[Mutator])
+    -> Ref[Block_Metadata]? {
+    var list:  Ref[Block_Metadata]? = nil
+    let count: uint                 = batch_size(heap)
+    var index: uint                 = 0
+
+    while index < count and heap.__value.free_blocks != nil {
+        let candidate: Ref[Block_Metadata]? = pop_list(
+            ref heap.__value.free_blocks, ref heap.__value.nfree)
+        if candidate != nil {
+            own(heap, mutator, candidate, ref list)
+            index += 1
+        } else {
+            break
+        }
+    }
+    return list
+}
+
 func resolve_header_lines() -> uint {
     let probe: Ref[Block_Metadata]? = nil
     let row:   Ref[internal.abi.Type_Record]?

@@ -890,7 +890,7 @@ finalize_target(finalize_state_t *finalize, ir_module_t *module,
     if (implementation || depth >= FINALIZE_DEPTH) return implementation;
     uint64_t hash = th_hash(types, resolved);
     ir_func_t *glue = core_dict_get(finalize->glue, hash | 1, nullptr);
-    if (glue) return glue;
+    if (glue && glue->owner == module) return glue;
     th_type *signature = finalize_signature(types, resolved);
     core_buffer_t name = {0};
     core_buffer_printf(&name, "__n00bb_finalize_glue#%016llx",
@@ -899,7 +899,7 @@ finalize_target(finalize_state_t *finalize, ir_module_t *module,
         ? ir_func_find(module, core_buffer_string(&name)) : nullptr;
     if (existing) {
         core_buffer_release(&name);
-        core_dict_add(finalize->glue, hash | 1, existing);
+        core_dict_put(finalize->glue, hash | 1, existing);
         return existing;
     }
     glue = signature && name.data ? ir_func_add(module,
@@ -908,7 +908,7 @@ finalize_target(finalize_state_t *finalize, ir_module_t *module,
     ir_value_t *self = glue ? ir_param_add(glue, CORE_STRING_STATIC("self"),
         th_func_param(signature, 0)->type) : nullptr;
     if (!self) return nullptr;
-    core_dict_add(finalize->glue, hash | 1, glue);
+    core_dict_put(finalize->glue, hash | 1, glue);
     if (!glue_body(finalize, glue, self, resolved, span, depth))
         return nullptr;
     core_list_push(*finalize->state->functions, glue);
@@ -1005,6 +1005,13 @@ hook_implementation(finalize_state_t *finalize, th_ctx *types,
                                 (core_string_t){0}, method);
 }
 
+static core_string_t
+hook_method(bool mutable)
+{
+    return mutable ? CORE_STRING_STATIC("__ref_address_mut")
+                   : CORE_STRING_STATIC("__ref_address");
+}
+
 static bool
 resolve_open_reference(finalize_state_t *finalize, ir_instr_t *call)
 {
@@ -1025,8 +1032,7 @@ resolve_open_reference(finalize_state_t *finalize, ir_instr_t *call)
         return true;
     }
     ir_func_t *target = hook_implementation(finalize, types, receiver,
-        mutable ? CORE_STRING_STATIC("__ref_address_mut")
-                : CORE_STRING_STATIC("__ref_address"));
+                                            hook_method(mutable));
     th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
     th_param parameter = {.mode = TH_IN, .type = receiver};
     th_type *signature = target && call->dest
@@ -1042,19 +1048,30 @@ resolve_open_reference(finalize_state_t *finalize, ir_instr_t *call)
 
 static bool
 record_boxed_hook(finalize_state_t *finalize, ir_module_t *module,
-                  th_type *type, core_string_t root,
+                  th_type *type, bool mutable, core_dict_t *seen,
                   core_list_t(n00bb_boxed_finalizer_t) *boxed)
 {
     th_ctx *types = ir_module_types(module);
     uint64_t hash = th_hash(types, type);
-    for (size_t i = 0; i < boxed->len; i++)
-        if (boxed->data[i].typehash == hash) return true;
-    ir_func_t *target = hook_implementation(finalize, types, type, root);
+    if (core_dict_contains(seen, (void *)(uintptr_t)(hash | 1))) return true;
+    ir_func_t *target = hook_implementation(finalize, types, type,
+                                            hook_method(mutable));
     ir_func_t *function = target
         ? concrete_hook(finalize, module, target, type) : nullptr;
-    if (function) core_list_push(*boxed,
-        ((n00bb_boxed_finalizer_t){hash, function}));
+    if (function) {
+        core_list_push(*boxed, ((n00bb_boxed_finalizer_t){hash, function}));
+        core_dict_add(seen, hash | 1, 1);
+    }
     return true;
+}
+
+static void
+seen_hooks(core_dict_t *seen,
+           const core_list_t(n00bb_boxed_finalizer_t) *boxed)
+{
+    core_dict_init(seen, nullptr, nullptr);
+    for (size_t i = 0; i < boxed->len; i++)
+        core_dict_add(seen, boxed->data[i].typehash | 1, 1);
 }
 
 static bool
@@ -1065,6 +1082,9 @@ record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
         core_list_new(n00bb_ir_func_ptr_t);
     core_dict_foreach(&finalize->modules, item)
         core_list_push(modules, (ir_func_t *)item->key);
+    core_dict_t seen, seen_mutable;
+    seen_hooks(&seen, &boxed->addresses);
+    seen_hooks(&seen_mutable, &boxed->mutable_addresses);
     bool valid = true;
     for (size_t m = 0; valid && m < modules.len; m++) {
         ir_module_t *module = (ir_module_t *)modules.data[m];
@@ -1074,13 +1094,15 @@ record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
             type = type ? th_resolve(type) : nullptr;
             if (!type || th_kind_of(type) != TH_NAMED
                 || !th_is_closed(types, type)) continue;
-            valid = record_boxed_hook(finalize, module, type,
-                    CORE_STRING_STATIC("__ref_address"), &boxed->addresses)
-                && record_boxed_hook(finalize, module, type,
-                    CORE_STRING_STATIC("__ref_address_mut"),
-                    &boxed->mutable_addresses);
+            valid = record_boxed_hook(finalize, module, type, false, &seen,
+                                      &boxed->addresses)
+                && record_boxed_hook(finalize, module, type, true,
+                                     &seen_mutable,
+                                     &boxed->mutable_addresses);
         }
     }
+    core_dict_free(&seen);
+    core_dict_free(&seen_mutable);
     core_list_free(modules);
     return valid;
 }

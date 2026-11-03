@@ -332,8 +332,9 @@ finalizer_instance(const n00bb_abi_semantics_t *facts, th_ctx *ctx,
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
             const th_param *self = function && function->n_blocks
-                && n00bb_names_function(CORE_STRING_STATIC("__finalize"),
-                                        function->name)
+                && (n00bb_generic_generated_finalizer(function->name)
+                    || n00bb_names_function(CORE_STRING_STATIC("__finalize"),
+                                            function->name))
                 ? th_func_param(function->type, 0) : nullptr;
             if (self && th_hash(ir_module_types(module), self->type)
                     == wanted) return true;
@@ -488,10 +489,12 @@ n00bb_abi_link_semantic_rows(
         th_env_method_status_t status = th_env_method_resolve(ctx, reference,
             CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
             &method);
+        bool generic = status == TH_ENV_METHOD_FOUND
+            && (n00bb_generic_generated_finalizer(method.qualified_name)
+                || (method.signature
+                    && !th_is_closed(ctx, method.signature)));
         if (status == TH_ENV_METHOD_NOT_FOUND
-            || (status == TH_ENV_METHOD_FOUND
-                && !th_is_closed(ctx, method.signature)
-                && !finalizer_instance(facts, ctx, reference)))
+            || (generic && !finalizer_instance(facts, ctx, reference)))
             continue;
         uint32_t function_index = 0;
         valid = status == TH_ENV_METHOD_FOUND

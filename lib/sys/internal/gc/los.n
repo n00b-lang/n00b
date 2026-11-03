@@ -90,6 +90,7 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
     }
     if __abi_ref_address(obj.__value.mapping) == __abi_ref_address(obj) and
         obj.__value.mapped_bytes == obj.__value.bytes and
+        obj.__value.bytes > los_threshold and
         obj.__value.bytes <= los_cache_object and
         heap.__value.los_cache_bytes + obj.__value.mapped_bytes <= limit {
         let index: uint = size_class(obj.__value.bytes)

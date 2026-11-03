@@ -498,7 +498,7 @@ func visit_record_arm(graph: Ref[Graph], source: u32, address: Ref[byte],
     let tag: Ref[internal.abi.Tag_Extractor_Record] = found
     let active: u64 = (internal.gc.mark.trace_unit(
         __gc_byte_offset(address, tag.__value.unit_byte_offset), tag.__value.unit_width_bits)
-        & tag.__value.mask) >> tag.__value.lsb_position
+        >> tag.__value.lsb_position) & tag.__value.mask
     var ordinal: u32 = 0
     while ordinal < trace.__value.arms.count {
         let index: i64 = internal.abi.range_index(trace.__value.arms, ordinal)
@@ -675,7 +675,7 @@ func visit_variant(graph: Ref[Graph], source: u32, address: Ref[byte],
     require tag.__value.kind == cast[u32](internal.abi.Tag_Kind.direct_bits)
     let unit: Ref[byte] = __gc_byte_offset(address, tag.__value.unit_byte_offset)
     let active: u64 = (internal.gc.mark.trace_unit(unit, tag.__value.unit_width_bits)
-        & tag.__value.mask) >> tag.__value.lsb_position
+        >> tag.__value.lsb_position) & tag.__value.mask
     if active == 0 {
         return
     }

@@ -370,7 +370,8 @@ func option_is_set(address: Ref[byte], trace: Ref[internal.abi.Trace_Record],
         let unit: Ref[byte]                             = __gc_byte_offset(address,
             tag.__value.unit_byte_offset)
         if tag.__value.kind == cast[u32](internal.abi.Tag_Kind.direct_bits) {
-            return (trace_unit(unit, tag.__value.unit_width_bits) & tag.__value.mask) != 0
+            return ((trace_unit(unit, tag.__value.unit_width_bits) >> tag.__value.lsb_position) &
+                tag.__value.mask) != 0
         }
         if tag.__value.kind == cast[u32](internal.abi.Tag_Kind.pointer_null) {
             return __atomic_load(pointer_word_at(unit)) != nil
@@ -401,7 +402,7 @@ func trace_variant(marker: Ref[internal.gc.core.Marker]?,
         require tag.__value.kind == cast[u32](internal.abi.Tag_Kind.direct_bits)
         let unit: Ref[byte] = __gc_byte_offset(address,
             tag.__value.unit_byte_offset)
-        let active: u64 = (trace_unit(unit, tag.__value.unit_width_bits) & tag.__value.mask) >> tag.__value.lsb_position
+        let active: u64 = (trace_unit(unit, tag.__value.unit_width_bits) >> tag.__value.lsb_position) & tag.__value.mask
         if active == 0 {
             return
         }
