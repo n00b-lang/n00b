@@ -1,0 +1,20 @@
+# ../../../../lantern/grammars/lua.bnf ../lex/lua.lex ../../../../lantern/tests/samples/s.lua
+local                  3:1  local
+function               3:7  function
+IDENTIFIER             3:16  f
+(                      3:17  (
+IDENTIFIER             3:18  a
+,                      3:19  ,
+IDENTIFIER             3:21  b
+)                      3:22  )
+local                  4:3  local
+IDENTIFIER             4:9  s
+=                      4:11  =
+STRING                 4:13  [[raw]]
+return                 5:3  return
+IDENTIFIER             5:10  a
++                      5:12  +
+IDENTIFIER             5:14  b
++                      5:16  +
+INTEGER                5:18  0xff
+end                    6:1  end

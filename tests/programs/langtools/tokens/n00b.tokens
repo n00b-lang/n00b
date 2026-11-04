@@ -1,0 +1,75 @@
+# ../../../../grammar/n00b.bnf ../lex/n00b.lex ../samples/sample.n
+NEWLINE                2:1
+import                 2:1  import
+IDENTIFIER             2:8  sys
+.                      2:11  .
+IDENTIFIER             2:12  env
+NEWLINE                3:1
+NEWLINE                4:1
+NEWLINE                5:1
+record                 5:1  record
+IDENTIFIER             5:8  Point
+{                      5:14  {
+NEWLINE                6:1
+INDENT                 6:1
+IDENTIFIER             6:5  x
+:                      6:6  :
+IDENTIFIER             6:8  int
+NEWLINE                7:1
+IDENTIFIER             7:5  y
+:                      7:6  :
+IDENTIFIER             7:8  int
+NEWLINE                8:1
+DEDENT                 8:1
+}                      8:1  }
+NEWLINE                9:1
+NEWLINE                10:1
+func                   10:1  func
+IDENTIFIER             10:6  describe
+(                      10:14  (
+IDENTIFIER             10:15  p
+:                      10:16  :
+IDENTIFIER             10:18  Point
+)                      10:23  )
+->                     10:25  ->
+IDENTIFIER             10:28  string
+{                      10:35  {
+NEWLINE                11:1
+INDENT                 11:1
+let                    11:5  let
+IDENTIFIER             11:9  grammar
+=                      11:17  =
+EMBED                  11:19  [-- spec text --]'bnf
+NEWLINE                12:1
+let                    12:5  let
+IDENTIFIER             12:9  typed
+=                      12:15  =
+STRING_LIT             12:17  "text"'T
++                      12:26  +
+HEX_LIT                12:28  0x1F
+NEWLINE                13:1
+let                    13:5  let
+IDENTIFIER             13:9  café
+=                      13:14  =
+CHAR_LIT               13:16  'c'
+NEWLINE                14:1
+if                     14:5  if
+IDENTIFIER             14:8  p
+.                      14:9  .
+IDENTIFIER             14:10  x
+>                      14:12  >
+INT_LIT                14:14  0
+:                      14:15  :
+NEWLINE                15:1
+INDENT                 15:1
+return                 15:9  return
+STRING_LIT             15:16  "positive\x41"
+NEWLINE                16:1
+DEDENT                 16:1
+NEWLINE                16:1
+return                 16:5  return
+STRING_LIT             16:12  "other"
+NEWLINE                17:1
+DEDENT                 17:1
+}                      17:1  }
+NEWLINE                18:1

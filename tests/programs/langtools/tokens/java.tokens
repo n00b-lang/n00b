@@ -1,0 +1,37 @@
+# ../../../../lantern/grammars/java.bnf ../lex/java.lex ../../../../lantern/tests/samples/s.java
+package                2:1  package
+IDENTIFIER             2:9  com
+.                      2:12  .
+IDENTIFIER             2:13  x
+;                      2:14  ;
+public                 3:1  public
+class                  3:8  class
+IDENTIFIER             3:14  A
+{                      3:16  {
+private                4:5  private
+static                 4:13  static
+final                  4:20  final
+long                   4:26  long
+IDENTIFIER             4:31  N
+=                      4:33  =
+INTEGER                4:35  1_000L
+;                      4:41  ;
+public                 5:5  public
+IDENTIFIER             5:12  String
+IDENTIFIER             5:19  f
+(                      5:20  (
+IDENTIFIER             5:21  String
+IDENTIFIER             5:28  s
+)                      5:29  )
+{                      5:31  {
+char                   6:9  char
+IDENTIFIER             6:14  c
+=                      6:16  =
+CHAR                   6:18  'x'
+;                      6:21  ;
+return                 7:9  return
+TEXT_BLOCK             7:16  """
+            block"""
+;                      8:21  ;
+}                      9:5  }
+}                      10:1  }

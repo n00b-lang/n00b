@@ -1,0 +1,18 @@
+# ../../../../lantern/grammars/swift.bnf ../lex/swift.lex ../samples/edge.swift
+let                    1:1  let
+IDENTIFIER             1:5  a
+=                      1:7  =
+STRING                 1:9  #"raw \(x) "q""#
+NEWLINE                2:1
+let                    2:1  let
+IDENTIFIER             2:5  b
+=                      2:7  =
+STRING                 2:9  ##"more"#here"##
+NEWLINE                3:1
+let                    3:1  let
+IDENTIFIER             3:5  c
+=                      3:7  =
+IMPLICIT_PARAM         3:9  $0
++                      3:12  +
+IMPLICIT_PARAM         3:14  $12
+NEWLINE                4:1

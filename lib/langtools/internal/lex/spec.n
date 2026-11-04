@@ -1,0 +1,293 @@
+import internal.diag
+
+// A lex spec after loading: every block with its settings merged from the
+// spec it extends and from the block it is `like`.
+
+record Value {
+    text:   string
+    quoted: bool
+    span:   internal.diag.Span
+}
+
+enum Op { set = 0, add, remove }
+
+// One `key: values` line. Commas split the values into groups: in
+// `prefix: 0x, any case` the groups are [0x] and [any, case].
+record Setting {
+    key:    string
+    op:     Op
+    groups: List[List[Value]]
+    own:    bool
+    span:   internal.diag.Span
+}
+
+// A block's variants, such as INTEGER's `hex`, are blocks too: their
+// settings apply on top of the block's own.
+record Block {
+    name:     string
+    kind:     string
+    settings: List[Setting]
+    variants: List[Block]
+    own:      bool
+    span:     internal.diag.Span
+}
+
+func __init(modify self: Block, name: string, span: internal.diag.Span) {
+    self.name = name
+    self.kind = ""
+    self.settings = []
+    self.variants = []
+    self.own = true
+    self.span = span
+}
+
+// The settings of each form a block stands for: the block itself, with its
+// `decimal` variant folded in, then each other variant with the block's
+// settings under its own.
+func forms(b: Block) -> List[List[Setting]] {
+    var main: List[Setting] = b.settings
+    for let v in b.variants {
+        if v.name == "decimal" {
+            main = overlay(main, v.settings)
+        }
+    }
+    var out: List[List[Setting]] = []
+    out.append(main)
+    for let v in b.variants {
+        if v.name != "decimal" {
+            out.append(overlay(b.settings, v.settings))
+        }
+    }
+    return out
+}
+
+// A variant's settings over its block's: a key the variant sets replaces
+// the block's, and an `add` line, such as `add suffix:`, is one more line.
+private func overlay(base: List[Setting], top: List[Setting])
+    -> List[Setting] {
+    var out: List[Setting] = []
+    for let s in base {
+        var keep: bool = true
+        for let t in top {
+            keep = keep and !(t.key == s.key and t.op == Op.set)
+        }
+        if keep {
+            out.append(s)
+        }
+    }
+    for let t in top {
+        out.append(t)
+    }
+    return out
+}
+
+record Spec {
+    source_name: string
+    blocks:      List[Block]
+    escapes:     Dict[string, Setting]
+    sets:        Dict[string, Setting]
+}
+
+func __init(modify self: Spec, source_name: string) {
+    self.source_name = source_name
+    self.blocks = []
+    self.escapes = new[Dict[string, Setting]]()
+    self.sets = new[Dict[string, Setting]]()
+}
+
+func find_block(spec: Spec, name: string) -> Block? {
+    for let b in spec.blocks {
+        if b.name == name {
+            return b
+        }
+    }
+    return nil
+}
+
+func setting(block: Block, key: string) -> Setting? {
+    for let s in block.settings {
+        if s.key == key {
+            return s
+        }
+    }
+    return nil
+}
+
+// Every setting for `key`. A key written on several lines, such as
+// `suffix`, has several.
+func settings(block: Block, key: string) -> List[Setting] {
+    var out: List[Setting] = []
+    for let s in block.settings {
+        if s.key == key {
+            out.append(s)
+        }
+    }
+    return out
+}
+
+// The values of a setting, all groups and repeats flattened.
+func values(block: Block, key: string) -> List[Value] {
+    var out: List[Value] = []
+    for let s in settings(block, key) {
+        for let group in s.groups {
+            for let v in group {
+                out.append(v)
+            }
+        }
+    }
+    return out
+}
+
+func words(block: Block, key: string) -> List[string] {
+    var out: List[string] = []
+    for let v in values(block, key) {
+        out.append(v.text)
+    }
+    return out
+}
+
+func first(block: Block, key: string) -> string {
+    let all: List[Value] = values(block, key)
+    if all.len() == 0 {
+        return ""
+    }
+    return all[0].text
+}
+
+func has(block: Block, key: string) -> bool {
+    return setting(block, key) != nil
+}
+
+func is_yes(block: Block, key: string) -> bool {
+    return first(block, key) == "yes"
+}
+
+// True when a later group of the setting reads `words`, as in the
+// `any case` of `prefix: 0x, any case`.
+func has_modifier(block: Block, key: string, phrase: string) -> bool {
+    let s: Setting? = setting(block, key)
+    if s == nil {
+        return false
+    }
+    let groups: List[List[Value]] = s.groups
+    for i: uint from 1 until groups.len() {
+        var spelled: List[string] = []
+        for let v in groups[i] {
+            spelled.append(v.text)
+        }
+        if join(spelled, " ") == phrase {
+            return true
+        }
+    }
+    return false
+}
+
+// The first group of a setting: the values before any comma.
+func head(block: Block, key: string) -> List[Value] {
+    let s: Setting? = setting(block, key)
+    if s == nil or s.groups.len() == 0 {
+        return []
+    }
+    return s.groups[0]
+}
+
+func is_token_block(name: string) -> bool {
+    let n: uint = byte_len(name)
+    if n == 0 {
+        return false
+    }
+    for i: uint from 0 until n {
+        let b: u8 = byte_at(name, i)
+        if !((b >= 0x41 and b <= 0x5a) or (b >= 0x30 and b <= 0x39) or
+             b == 0x5f) {
+            return false
+        }
+    }
+    let first: u8 = byte_at(name, 0)
+    return first >= 0x41 and first <= 0x5a
+}
+
+// Built-in kinds a token block can be `like`, and the special lowercase
+// blocks. Each lists the keys it accepts.
+const token_keys: Array[string] = ["like", "emits", "on-error"]
+
+func kind_keys(kind: string) -> Array[string] {
+    let found: Array[string]? = all_kind_keys()[kind]
+    if found == nil {
+        return []
+    }
+    return found
+}
+
+private func all_kind_keys() -> Dict[string, Array[string]] {
+    var out: Dict[string, Array[string]] = new[Dict[string, Array[string]]]()
+    out["identifier"] = ["set", "start", "add", "remove", "add_start",
+        "remove_start", "add_continue", "prefix", "normalize",
+        "mixed-scripts", "confusables", "emoji", "scripts"]
+    out["integer"] = ["digits", "prefix", "separator", "suffix", "allow",
+        "sign"]
+    out["float"] = ["digits", "prefix", "separator", "fraction", "exponent",
+        "suffix", "allow", "sign"]
+    out["string"] = ["quotes", "multiline", "prefix", "pairs", "nested",
+        "escape", "escapes", "raw", "pad", "length", "interpolate",
+        "braces-are-tokens", "start", "middle", "end"]
+    out["comment"] = ["line", "block", "nested", "region"]
+    out["comments"] = ["line", "block", "nested", "region"]
+    out["regex"] = ["delimiters", "flags", "not-after"]
+    out["sigil"] = ["sigil", "then", "not-if-closed", "modifier-after"]
+    out["heredoc"] = ["opener", "label", "rest-of-line", "end-may-indent",
+        "end-may-continue", "body-indent"]
+    out["fence"] = ["open", "close", "stretch", "body", "padding", "label",
+        "bidi"]
+    out["embed"] = ["code", "open-tag", "close-tag"]
+    out["directive"] = ["line-starts-with", "end-token"]
+    out["directives"] = ["line-starts-with", "end-token"]
+    out["layout"] = ["brackets", "continue", "indent", "newline",
+        "end-of-file", "statement-end", "newlines-in-brackets",
+        "newline-after-dedent", "dedent-must-match"]
+    out["source"] = ["space", "newline", "reject", "unknown", "bidi",
+        "indent-with", "tab-width", "mixed-indent"]
+    return out
+}
+
+func token_kinds() -> Array[string] {
+    return ["identifier", "integer", "float", "string", "comment", "regex",
+            "sigil", "heredoc", "fence", "embed", "directive"]
+}
+
+const special_blocks: Array[string] = ["source", "layout", "comments",
+    "directives"]
+
+// Keys whose values are character-set expressions.
+const set_keys: Array[string] = ["space", "newline", "reject", "digits",
+    "set", "start"]
+
+// Identifier set operations: applied in order, never replaced by key.
+const set_ops: Array[string] = ["set", "start", "add", "remove", "add_start",
+    "remove_start", "add_continue"]
+
+func known_key(key: string) -> bool {
+    if listed(token_keys, key) {
+        return true
+    }
+    for kind in token_kinds() {
+        if listed(kind_keys(kind), key) {
+            return true
+        }
+    }
+    for kind in special_blocks {
+        if listed(kind_keys(kind), key) {
+            return true
+        }
+    }
+    return false
+}
+
+func listed(names: Array[string], name: string) -> bool {
+    for n in names {
+        if n == name {
+            return true
+        }
+    }
+    return false
+}

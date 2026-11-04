@@ -1,0 +1,1609 @@
+import unicode
+import unicode.query
+import unicode.security
+import text
+import internal.diag
+import internal.scan
+import internal.grammar.model
+import internal.lex.tokens
+import internal.lex.chars
+import internal.lex.compile
+
+object Run {
+    lx:             internal.lex.compile.Lexer
+    ctx:            internal.lex.tokens.Context
+    sc:             internal.scan.Scanner
+    tokens:         List[internal.lex.tokens.Token]
+    stopped:        bool
+    depth:          uint
+    indents:        List[uint]
+    line_start:     bool
+    line_has_token: bool
+    continued:      bool
+    modes:          List[Mode]
+    fresh_line:     bool
+    directive:      internal.lex.compile.Directive?
+    skip_from:      uint
+    skip_to:        uint
+    queue:          List[Queued]
+    queue_ready:    bool
+    outside:        bool
+    blocks:         List[uint]
+    pending_block:  bool
+}
+
+record Queued {
+    h:     internal.lex.compile.Heredoc
+    tag:   string
+    token: uint
+}
+
+func __init(self: Run, lx: internal.lex.compile.Lexer, source: string) {
+    self.lx = lx
+    self.ctx = new[internal.lex.tokens.Context](lx.g, source)
+    self.sc = new[internal.scan.Scanner](source, "lex")
+    self.tokens = []
+    self.stopped = false
+    self.depth = 0
+    self.indents = []
+    self.line_start = true
+    self.line_has_token = false
+    self.continued = false
+    self.modes = []
+    self.fresh_line = true
+    self.directive = nil
+    self.skip_from = 0
+    self.skip_to = 0
+    self.queue = []
+    self.queue_ready = false
+    self.outside = lx.embeds.len() > 0
+    self.blocks = []
+    self.pending_block = false
+}
+
+object Digits {
+    count:     uint
+    after:     bool
+    need:      bool
+    malformed: bool
+}
+
+func __init(self: Digits, after: bool) {
+    self.count = 0
+    self.after = after
+    self.need = false
+    self.malformed = false
+}
+
+private func char_at(r: Run, at: uint) -> char {
+    return internal.scan.decode_at(r.sc.src, at)
+}
+
+private func current(r: Run) -> char {
+    return char_at(r, r.sc.pos)
+}
+
+private func is_space(r: Run, c: char) -> bool {
+    return internal.lex.compile.is_space(r.lx, c)
+}
+
+private func is_line_end(r: Run, c: char) -> bool {
+    return internal.lex.compile.is_line_end(r.lx, c)
+}
+
+private func emit(r: Run, start: uint,
+                  class: internal.grammar.model.Token_Id?) {
+    r.tokens.append(internal.lex.tokens.emit(r.ctx, start, r.sc.pos,
+                                             class = class))
+}
+
+private func emit_class(r: Run, start: uint,
+                        class: internal.grammar.model.Token_Id?) {
+    if class != nil {
+        emit(r, start, class)
+    }
+}
+
+private func recovery_for(r: Run, class: internal.grammar.model.Token_Id?)
+    -> internal.lex.compile.Recovery? {
+    if class == nil {
+        return nil
+    }
+    let found: internal.lex.compile.Recovery? =
+        r.lx.recoveries[internal.grammar.model.raw_token_id(class)]
+    if found != nil and found.stop {
+        return nil
+    }
+    if found == nil {
+        return (sync = [], consume = false, stop = false,
+                class = class)
+    }
+    return found
+}
+
+private func error(r: Run, code: string, message: string,
+                   from: internal.scan.Mark,
+                   class: internal.grammar.model.Token_Id? = nil)
+    -> internal.lex.compile.Recovery? {
+    internal.scan.report(r.sc, internal.scan.diagnostic(r.sc, code, message,
+        internal.scan.span_from(r.sc, from)))
+    let recovery: internal.lex.compile.Recovery? = recovery_for(r, class)
+    if recovery == nil {
+        r.stopped = true
+    }
+    return recovery
+}
+
+private func sync(r: Run, recovery: internal.lex.compile.Recovery) {
+    let sc: internal.scan.Scanner = r.sc
+    if recovery.sync.len() == 0 {
+        return
+    }
+    while !internal.scan.at_end(sc) {
+        for s in recovery.sync {
+            if internal.scan.at_text(sc, s) {
+                if recovery.consume {
+                    internal.scan.advance(sc, byte_len(s))
+                    if s == "\n" {
+                        r.line_start = true
+                        r.fresh_line = true
+                        r.line_has_token = false
+                    }
+                }
+                return
+            }
+        }
+        internal.scan.step_char(sc)
+    }
+}
+
+private func recover_string(r: Run, q: internal.lex.compile.Quoted,
+                            stop: Stop, from: internal.scan.Mark,
+                            class: internal.grammar.model.Token_Id?) {
+    let at: internal.scan.Mark = internal.scan.mark(r.sc)
+    var code: string = "unterminated-string"
+    var message: string = "this string is never closed"
+    if stop == Stop.newline {
+        code = "string-newline"
+        message = "this string runs past the end of the line"
+    }
+    let recovery: internal.lex.compile.Recovery? = recovery_for(r, q.class)
+    if recovery == nil {
+        if stop == Stop.newline {
+            emit(r, from.byte, class)
+        }
+        error(r, code, message, from)
+        return
+    }
+    sync(r, recovery)
+    emit(r, from.byte, recovery.class)
+    internal.scan.report(r.sc, internal.scan.diagnostic(r.sc, code, message,
+        internal.scan.span_from(r.sc, from)))
+}
+
+private func comment(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    var best: internal.lex.compile.Comment? = nil
+    var best_len: uint = 0
+    var level: uint = 0
+    let first: uint = cast[uint](byte_at(sc.src, sc.pos))
+    for index in r.lx.comment_starts[first] {
+        let k: internal.lex.compile.Comment = r.lx.comments[index]
+        if !internal.scan.at_text(sc, k.open) {
+            continue
+        }
+        var n: uint = byte_len(k.open)
+        var fills: uint = 0
+        if byte_len(k.fill) > 0 {
+            while internal.scan.at_text(sc, k.fill, at = n) {
+                n += byte_len(k.fill)
+                fills += 1
+            }
+            if fills == 0 {
+                continue
+            }
+        }
+        if best == nil or n > best_len {
+            best = k
+            best_len = n
+            level = fills
+        }
+    }
+    if best == nil {
+        return false
+    }
+    let k: internal.lex.compile.Comment = best
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.advance(sc, best_len)
+    if byte_len(k.close) == 0 {
+        while !internal.scan.at_end(sc) and !is_line_end(r, current(r)) {
+            internal.scan.step_char(sc)
+        }
+    }
+    elif level >= 2 and internal.scan.at_text(sc, k.close) {
+        // `/**/`: the stars run straight into the closer.
+        internal.scan.advance(sc, byte_len(k.close))
+    }
+    else {
+        let close: string =
+            text.repeat(k.fill, cast[u64](level)) + k.close
+        var depth: uint = 1
+        while !internal.scan.at_end(sc) and depth > 0 {
+            if k.nested and internal.scan.at_text(sc, k.open) {
+                internal.scan.advance(sc, byte_len(k.open))
+                depth += 1
+                continue
+            }
+            if internal.scan.at_text(sc, close) {
+                internal.scan.advance(sc, byte_len(close))
+                depth -= 1
+                continue
+            }
+            internal.scan.step_char(sc)
+        }
+        if depth > 0 {
+            error(r, "unterminated-comment", "this comment is never closed",
+                  from)
+            return true
+        }
+    }
+    if k.class != nil {
+        emit(r, from.byte, k.class)
+    }
+    return true
+}
+
+private func escape(r: Run, e: internal.lex.compile.Escapes) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    if internal.scan.at_end(sc) {
+        return false
+    }
+    for let p in e.prefixes {
+        if !internal.scan.at_text(sc, p.prefix) {
+            continue
+        }
+        internal.scan.advance(sc, byte_len(p.prefix))
+        for i: uint from 0 until p.width {
+            if internal.scan.at_end(sc) or
+                !internal.lex.chars.has(p.digits, current(r)) {
+                return false
+            }
+            internal.scan.step_char(sc)
+        }
+        return true
+    }
+    let c: char = current(r)
+    internal.scan.step_char(sc)
+    return !e.constrained or internal.lex.chars.has(e.chars, c)
+}
+
+private func quoted(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    var best: internal.lex.compile.Quoted? = nil
+    let first: uint = cast[uint](byte_at(sc.src, sc.pos))
+    for index in r.lx.string_starts[first] {
+        if internal.scan.at_text(sc, r.lx.strings[index].open) {
+            best = r.lx.strings[index]
+            break
+        }
+    }
+    if best == nil {
+        return false
+    }
+    let q: internal.lex.compile.Quoted = best
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.advance(sc, byte_len(q.open))
+    var mode: Mode = new[Mode](q)
+    let stop: Stop = body(r, mode, from)
+    if stop == Stop.hole {
+        emit(r, from.byte, q.class)
+        mode.in_hole = true
+        mode.at_open = q.holes
+        r.modes.append(mode)
+        return true
+    }
+    if stop == Stop.newline or stop == Stop.eof {
+        recover_string(r, q, stop, from, q.class)
+        return true
+    }
+    if stop == Stop.error {
+        return true
+    }
+    emit(r, from.byte, q.class)
+    if q.scalar and mode.scalars != 1 {
+        error(r, "character-length",
+              "a character literal holds exactly one character", from,
+              class = q.class)
+    }
+    return true
+}
+
+enum Stop { closed = 0, hole, newline, eof, error }
+
+object Mode {
+    q:        internal.lex.compile.Quoted
+    scalars:  uint
+    nesting:  uint
+    depth:    uint
+    in_hole:  bool
+    at_open:  bool
+}
+
+func __init(self: Mode, q: internal.lex.compile.Quoted) {
+    self.q = q
+    self.scalars = 0
+    self.nesting = 0
+    self.depth = 0
+    self.in_hole = false
+    self.at_open = false
+}
+
+private func body(r: Run, m: Mode, from: internal.scan.Mark) -> Stop {
+    let sc: internal.scan.Scanner = r.sc
+    let q: internal.lex.compile.Quoted = m.q
+    let nests: bool = q.nested and q.nest_open != q.close
+    while true {
+        if internal.scan.at_end(sc) {
+            return Stop.eof
+        }
+        if !q.raw and byte_len(q.escape) > 0 and
+            internal.scan.at_text(sc, q.escape) {
+            let at: internal.scan.Mark = internal.scan.mark(sc)
+            internal.scan.advance(sc, byte_len(q.escape))
+            if !escape(r, q.escapes) and
+                error(r, "bad-escape", "unknown escape sequence", at,
+                      class = q.class) == nil {
+                return Stop.error
+            }
+            m.scalars += 1
+            continue
+        }
+        if byte_len(q.hole_open) > 0 and internal.scan.at_text(sc, q.hole_open) {
+            if !q.holes {
+                internal.scan.advance(sc, byte_len(q.hole_open))
+            }
+            return Stop.hole
+        }
+        if nests and internal.scan.at_text(sc, q.nest_open) {
+            internal.scan.advance(sc, byte_len(q.nest_open))
+            m.nesting += 1
+            m.scalars += 1
+            continue
+        }
+        if internal.scan.at_text(sc, q.close) {
+            internal.scan.advance(sc, byte_len(q.close))
+            if m.nesting > 0 {
+                m.nesting -= 1
+                m.scalars += 1
+                continue
+            }
+            return Stop.closed
+        }
+        if !q.multiline and is_line_end(r, current(r)) {
+            return Stop.newline
+        }
+        internal.scan.step_char(sc)
+        m.scalars += 1
+    }
+    return Stop.error
+}
+
+private func resume(r: Run, m: Mode, from: internal.scan.Mark) {
+    let stop: Stop = body(r, m, from)
+    if stop == Stop.hole {
+        emit(r, from.byte, m.q.mid_class)
+        m.in_hole = true
+        m.at_open = m.q.holes
+        return
+    }
+    r.modes.pop()
+    if stop == Stop.newline or stop == Stop.eof {
+        recover_string(r, m.q, stop, from, m.q.end_class)
+    }
+    elif stop == Stop.closed {
+        emit(r, from.byte, m.q.end_class)
+    }
+}
+
+private func hole_close(r: Run) -> bool {
+    if r.modes.len() == 0 {
+        return false
+    }
+    let m: Mode = r.modes[r.modes.len() - 1]
+    if !m.in_hole {
+        return false
+    }
+    let sc: internal.scan.Scanner = r.sc
+    let open: string = m.q.hole_open
+    if m.at_open and internal.scan.at_text(sc, open) {
+        m.at_open = false
+        return false
+    }
+    if internal.scan.at_text(sc, m.q.hole_close) {
+        if m.depth > 0 {
+            m.depth -= 1
+            return false
+        }
+        m.in_hole = false
+        if m.q.holes {
+            return false
+        }
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        internal.scan.advance(sc, byte_len(m.q.hole_close))
+        resume(r, m, from)
+        return true
+    }
+    if byte_len(open) > 0 and
+        byte_at(sc.src, sc.pos) == byte_at(open, byte_len(open) - 1) {
+        m.depth += 1
+    }
+    return false
+}
+
+private func scan_digits(r: Run, digits: internal.lex.chars.Char_Set,
+                         form: internal.lex.compile.Number_Form,
+                         state: Digits) {
+    var started: bool = state.after
+    var last_sep: bool = false
+    while !internal.scan.at_end(r.sc) {
+        let c: char = current(r)
+        if internal.lex.chars.has(digits, c) {
+            internal.scan.step_char(r.sc)
+            state.count += 1
+            state.after = true
+            state.need = false
+            started = true
+            last_sep = false
+            continue
+        }
+        if !internal.lex.chars.has(form.sep, c) {
+            break
+        }
+        internal.scan.step_char(r.sc)
+        if !state.after and !(form.sep_repeat and last_sep and started) {
+            state.malformed = true
+        }
+        state.after = false
+        state.need = !form.sep_trailing
+        last_sep = true
+    }
+    if state.need {
+        state.malformed = true
+    }
+}
+
+private func number(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    let plain: internal.lex.compile.Number_Form? = r.lx.plain
+    var lead: uint = 0
+    if plain != nil and internal.lex.chars.has(plain.sign, current(r)) {
+        lead = 1
+    }
+    let c: char = char_at(r, sc.pos + lead)
+    let leading: bool = c == '.' and plain != nil and plain.leading and
+        internal.lex.chars.has(plain.digits,
+                                 char_at(r, sc.pos + lead + 1))
+    if !is_ascii_digit(c) and !leading {
+        return false
+    }
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.advance(sc, lead)
+    var chosen: internal.lex.compile.Number_Form? = nil
+    if leading {
+        chosen = plain
+    }
+    else {
+        for let form in r.lx.numbers {
+            if byte_len(form.prefix) == 0 or
+                internal.scan.at_text(sc, form.prefix) {
+                chosen = form
+                break
+            }
+        }
+    }
+    if chosen == nil {
+        internal.scan.reset(sc, from)
+        return false
+    }
+    let form: internal.lex.compile.Number_Form = chosen
+    var is_float: bool = false
+    var point_seen: bool = false
+    var state: Digits = new[Digits](false)
+    if leading {
+        is_float = true
+        point_seen = true
+        internal.scan.step(sc)
+        scan_digits(r, form.digits, form, state)
+    }
+    else {
+        internal.scan.advance(sc, byte_len(form.prefix))
+        state.after = byte_len(form.prefix) > 0 and form.after_prefix
+        scan_digits(r, form.digits, form, state)
+        if form.point and current(r) == '.' {
+            let next: char = char_at(r, sc.pos + 1)
+            if internal.lex.chars.has(form.digits, next) or
+                (form.trailing and next != '.') {
+                is_float = true
+                point_seen = true
+                internal.scan.step(sc)
+                state.after = false
+                state.need = false
+                scan_digits(r, form.digits, form, state)
+            }
+        }
+    }
+    var malformed: bool = state.malformed or state.count == 0
+    if internal.lex.chars.has(form.exp, current(r)) {
+        is_float = true
+        internal.scan.step(sc)
+        if current(r) == '+' or current(r) == '-' {
+            internal.scan.step(sc)
+        }
+        var exp: Digits = new[Digits](false)
+        scan_digits(r, r.lx.decimal, form, exp)
+        malformed = malformed or exp.malformed or exp.count == 0
+    }
+    elif point_seen and form.needs_exponent {
+        malformed = true
+    }
+    var class: internal.grammar.model.Token_Id? = form.int_class
+    if is_float {
+        class = form.float_class
+    }
+    var suffix: internal.lex.compile.Suffix? = nil
+    for let s in form.suffixes {
+        if !internal.scan.at_text(sc, s.text) {
+            continue
+        }
+        let fits: bool = !(s.integer and is_float) and
+            !(s.float_only and !is_float)
+        if fits or suffix == nil {
+            suffix = s
+        }
+        if fits {
+            break
+        }
+    }
+    if suffix != nil {
+        let s: internal.lex.compile.Suffix = suffix
+        internal.scan.advance(sc, byte_len(s.text))
+        if s.class != nil {
+            class = s.class
+        }
+        malformed = malformed or (s.integer and is_float) or
+            (s.float_only and !is_float)
+    }
+    if !internal.scan.at_end(sc) and
+        internal.lex.compile.continues_identifier(r.lx, current(r)) {
+        malformed = true
+    }
+    emit(r, from.byte, class)
+    if malformed {
+        error(r, "bad-number", "this number is malformed", from,
+              class = class)
+    }
+    return true
+}
+
+private func last_id(r: Run) -> u128? {
+    if r.tokens.len() == 0 {
+        return nil
+    }
+    return internal.grammar.model.raw_token_id(r.tokens[r.tokens.len() - 1].id)
+}
+
+private func regex(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    let previous: u128? = last_id(r)
+    for let x in r.lx.regexes {
+        if !internal.scan.at_text(sc, x.open) or
+            (previous != nil and x.not_after[previous] != nil) {
+            continue
+        }
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        internal.scan.advance(sc, byte_len(x.open))
+        var in_class: bool = false
+        while true {
+            if internal.scan.at_end(sc) {
+                error(r, "unterminated-regex", "this regex is never closed",
+                      from)
+                return true
+            }
+            let c: char = current(r)
+            if is_line_end(r, c) {
+                emit(r, from.byte, x.class)
+                error(r, "regex-newline",
+                      "this regex runs past the end of the line", from)
+                return true
+            }
+            if c == '\\' {
+                internal.scan.step_char(sc)
+                if !internal.scan.at_end(sc) {
+                    internal.scan.step_char(sc)
+                }
+                continue
+            }
+            if c == '[' or c == ']' {
+                in_class = c == '['
+                internal.scan.step(sc)
+                continue
+            }
+            if !in_class and internal.scan.at_text(sc, x.close) {
+                internal.scan.advance(sc, byte_len(x.close))
+                break
+            }
+            internal.scan.step_char(sc)
+        }
+        while !internal.scan.at_end(sc) and
+            internal.lex.chars.has(x.flags, current(r)) {
+            internal.scan.step_char(sc)
+        }
+        emit(r, from.byte, x.class)
+        return true
+    }
+    return false
+}
+
+private func sigil_body(r: Run, digits: bool, at: uint) -> uint {
+    var end: uint = at
+    while end < r.sc.n {
+        let c: char = char_at(r, end)
+        if digits and !is_ascii_digit(c) {
+            break
+        }
+        if !digits and !internal.grammar.model.is_identifier_continue(c) {
+            break
+        }
+        end += internal.scan.char_width(r.sc.src, end)
+    }
+    return end
+}
+
+private func sigil(r: Run, before_string: bool) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    var best: internal.lex.compile.Sigil? = nil
+    for let g in r.lx.sigils {
+        if g.before_string != before_string or
+            !internal.scan.at_text(sc, g.prefix) {
+            continue
+        }
+        let n: uint = byte_len(g.prefix)
+        let after: char = char_at(r, sc.pos + n)
+        if (g.digits and !is_ascii_digit(after)) or
+            (!g.digits and !internal.grammar.model.is_identifier_start(after)) {
+            continue
+        }
+        if g.unless_closed {
+            let end: uint = sigil_body(r, false, sc.pos + n)
+            if internal.scan.at_text(sc, g.prefix, at = end - sc.pos) {
+                continue
+            }
+        }
+        best = g
+        break
+    }
+    if best == nil {
+        return false
+    }
+    let g: internal.lex.compile.Sigil = best
+    let previous: u128? = last_id(r)
+    let attach: bool = previous != nil and
+        r.tokens[r.tokens.len() - 1].end == sc.pos and
+        g.attach_after[previous] != nil
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    internal.scan.advance(sc, byte_len(g.prefix))
+    let name: uint = sc.pos
+    internal.scan.advance(sc, sigil_body(r, g.digits, sc.pos) - sc.pos)
+    if attach {
+        let last: uint = r.tokens.len() - 1
+        if r.tokens[last].modifier != nil {
+            error(r, "postfix-invalid",
+                  "a token can carry only one postfix modifier", from)
+            return true
+        }
+        r.tokens[last].end = sc.pos
+        r.tokens[last].modifier = name
+        return true
+    }
+    emit(r, from.byte, g.class)
+    return true
+}
+
+private func pads(r: Run, c: char) -> bool {
+    return is_space(r, c)
+}
+
+private func fence(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    for let f in r.lx.fences {
+        if !internal.scan.at_text(sc, f.open) {
+            continue
+        }
+        var at: uint = sc.pos + byte_len(f.open)
+        var level: uint = 0
+        while byte_len(f.fill) > 0 and
+            internal.scan.at_text(sc, f.fill, at = at - sc.pos) {
+            at += byte_len(f.fill)
+            level += 1
+        }
+        if level < f.minimum {
+            continue
+        }
+        let label_start: uint = at
+        let body_at: bool = byte_len(f.body_open) == 0 or
+            internal.scan.at_text(sc, f.body_open, at = at - sc.pos)
+        if f.label and !body_at and
+            internal.grammar.model.is_identifier_start(char_at(r, at)) {
+            at += internal.scan.char_width(sc.src, at)
+            while at < sc.n and
+                internal.grammar.model.is_identifier_continue(char_at(r, at)) {
+                at += internal.scan.char_width(sc.src, at)
+            }
+        }
+        let label_end: uint = at
+        if byte_len(f.body_open) > 0 and
+            !internal.scan.at_text(sc, f.body_open, at = at - sc.pos) {
+            continue
+        }
+        at += byte_len(f.body_open)
+        if f.pad != internal.lex.compile.Pad.none {
+            let padded: uint = at
+            while at < sc.n and pads(r, char_at(r,at)) {
+                at += internal.scan.char_width(sc.src, at)
+            }
+            if f.pad == internal.lex.compile.Pad.required and at == padded {
+                continue
+            }
+        }
+        let close: string = f.body_close +
+            text.repeat(f.fill, cast[u64](level)) + f.close
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        var search: int = cast[int] at
+        var end: int? = nil
+        var content_end: uint = at
+        while end == nil {
+            let found: int? = find_bytes(sc.src, close,
+                                         start = cast[uint](search))
+            if found == nil {
+                internal.scan.advance(sc, sc.n - sc.pos)
+                error(r, "unterminated-fence", "this fence is never closed",
+                      from)
+                return true
+            }
+            let hit: uint = cast[uint](found)
+            var trimmed: uint = hit
+            if f.pad != internal.lex.compile.Pad.none {
+                while trimmed > at and pads(r, char_at(r,trimmed - 1)) {
+                    trimmed -= 1
+                }
+            }
+            if f.pad != internal.lex.compile.Pad.required or trimmed < hit {
+                end = cast[int](hit + byte_len(close))
+                content_end = trimmed
+            }
+            else {
+                search = found + 1
+            }
+        }
+        internal.scan.advance(sc, cast[uint](end.get()) - sc.pos)
+        emit(r, from.byte, f.class)
+        set_content(r, at, content_end, label_start, label_end)
+        return true
+    }
+    return false
+}
+
+private func directive(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    for let d in r.lx.directives {
+        if !internal.scan.at_text(sc, d.open) {
+            continue
+        }
+        if d.class != nil and terminal_min(r, byte_len(d.open) + 1) {
+            r.directive = d
+            return true
+        }
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        while !internal.scan.at_end(sc) and !is_line_end(r, current(r)) {
+            let end: uint? = internal.scan.continuation_end(sc.src, sc.pos,
+                                                            "\\")
+            if end != nil {
+                internal.scan.advance(sc, end - sc.pos)
+                continue
+            }
+            internal.scan.step_char(sc)
+        }
+        if d.class != nil {
+            emit(r, from.byte, d.class)
+        }
+        return true
+    }
+    return false
+}
+
+private func directive_end(r: Run) {
+    let d: internal.lex.compile.Directive? = r.directive
+    r.directive = nil
+    step_line_end(r)
+    r.line_start = true
+    r.line_has_token = false
+    if d != nil {
+        emit_class(r, r.sc.pos,d.eol)
+    }
+}
+
+private func step_line_end(r: Run) {
+    let sc: internal.scan.Scanner = r.sc
+    if internal.scan.peek(sc) == '\r' and
+        internal.scan.peek(sc, ahead = 1) == '\n' {
+        internal.scan.step(sc)
+    }
+    internal.scan.step_char(sc)
+}
+
+private func region(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    var best: internal.lex.compile.Region? = nil
+    var n: uint = 0
+    for let g in r.lx.regions {
+        if internal.scan.at_text(sc, g.open) and byte_len(g.open) > n {
+            best = g
+            n = byte_len(g.open)
+        }
+        if internal.scan.at_text(sc, g.close) and byte_len(g.close) > n {
+            best = g
+            n = byte_len(g.close)
+        }
+    }
+    if best == nil {
+        return false
+    }
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    if r.line_has_token {
+        error(r, "region-not-alone",
+              "a region anchor must be alone on its line", from)
+        return true
+    }
+    internal.scan.advance(sc, n)
+    let line: string = best.line
+    while !internal.scan.at_end(sc) and !is_line_end(r, current(r)) and
+        !internal.scan.at_text(sc, line) {
+        internal.scan.step_char(sc)
+    }
+    if internal.scan.at_end(sc) or is_line_end(r, current(r)) {
+        error(r, "region-malformed", "a region anchor must end with `" +
+              line + "`", from)
+        return true
+    }
+    internal.scan.advance(sc, byte_len(line))
+    while !internal.scan.at_end(sc) and !is_line_end(r, current(r)) {
+        if !is_space(r, current(r)) {
+            error(r, "region-not-alone",
+                  "a region anchor must be alone on its line", from)
+            return true
+        }
+        internal.scan.step_char(sc)
+    }
+    return true
+}
+
+private func terminator_line(r: Run, h: internal.lex.compile.Heredoc,
+                             tag: string, body: uint) -> Tuple[uint, uint]? {
+    let src: string = r.sc.src
+    var line: uint = body
+    while line <= r.sc.n {
+        var at: uint = line
+        if h.terminator_indent {
+            at = internal.scan.skip_blanks_at(src, at)
+        }
+        let end: uint = at + byte_len(tag)
+        if internal.scan.matches_at(src, at, tag) {
+            let width: uint = internal.scan.line_end_width(src, end)
+            if end == r.sc.n or width > 0 {
+                return (line, end + width)
+            }
+            if h.terminator_tail and !internal.lex.compile.continues_identifier(
+                r.lx, char_at(r, end)) {
+                return (line, end)
+            }
+        }
+        let newline: int? = find_bytes(src, "\n", start = line)
+        if newline == nil {
+            return nil
+        }
+        line = cast[uint](newline) + 1
+    }
+    return nil
+}
+
+private func heredoc(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    for let h in r.lx.heredocs {
+        if !internal.scan.at_text(sc, h.open) {
+            continue
+        }
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        let src: string = sc.src
+        var at: uint = sc.pos + byte_len(h.open)
+        var tag_start: uint = at
+        var tag_end: uint = at
+        let quote: char = char_at(r, at)
+        if quote == '\'' or quote == '"' {
+            if (quote == '\'' and !h.single) or (quote == '"' and !h.double) {
+                error(r, "heredoc-quote", "this heredoc tag cannot be quoted",
+                      from)
+                return true
+            }
+            tag_start = at + 1
+            tag_end = tag_start
+            while tag_end < sc.n and char_at(r, tag_end) != quote and
+                byte_at(src, tag_end) != 0x0a {
+                tag_end += 1
+            }
+            if tag_end >= sc.n or char_at(r, tag_end) != quote {
+                error(r, "heredoc-tag", "this heredoc tag is never closed",
+                      from)
+                return true
+            }
+            at = tag_end + 1
+        }
+        else {
+            if !h.unquoted {
+                error(r, "heredoc-quote", "this heredoc tag must be quoted",
+                      from)
+                return true
+            }
+            if !internal.grammar.model.is_identifier_start(char_at(r, at)) {
+                continue
+            }
+            at += internal.scan.char_width(src, at)
+            while at < sc.n and
+                internal.grammar.model.is_identifier_continue(char_at(r, at)) {
+                at += internal.scan.char_width(src, at)
+            }
+            tag_end = at
+        }
+        if tag_end == tag_start {
+            error(r, "heredoc-tag", "a heredoc needs a tag", from)
+            return true
+        }
+        let tag: string = byte_slice(src, cast[int](tag_start),
+                                     cast[int](tag_end))
+        if h.queue {
+            internal.scan.advance(sc, at - sc.pos)
+            emit(r, from.byte, h.class)
+            r.queue.append((h = h, tag = tag, token = r.tokens.len() - 1))
+            return true
+        }
+        var line_end: uint = at
+        while line_end < sc.n and byte_at(src, line_end) != 0x0a {
+            line_end += 1
+        }
+        var body: uint = line_end
+        if line_end < sc.n {
+            body = line_end + 1
+        }
+        let found: Tuple[uint, uint]? = terminator_line(r, h, tag, body)
+        internal.scan.advance(sc, at - sc.pos)
+        emit(r, from.byte, h.class)
+        if found == nil {
+            error(r, "unterminated-heredoc", "this heredoc is never closed",
+                  from)
+            return true
+        }
+        set_content(r, body, found[0], tag_start, tag_end)
+        r.skip_from = body
+        r.skip_to = found[1]
+        return true
+    }
+    return false
+}
+
+private func set_content(r: Run, start: uint, end: uint, label_start: uint,
+                         label_end: uint) {
+    r.tokens[r.tokens.len() - 1].content = (start = start, end = end,
+        label_start = label_start, label_end = label_end)
+}
+
+private func queued_bodies(r: Run) {
+    r.queue_ready = false
+    let sc: internal.scan.Scanner = r.sc
+    for let q in r.queue {
+        let found: Tuple[uint, uint]? = terminator_line(r, q.h, q.tag, sc.pos)
+        if found == nil {
+            error(r, "unterminated-heredoc", "this heredoc is never closed",
+                  internal.scan.mark(sc))
+            return
+        }
+        var token: internal.lex.tokens.Token = r.tokens[q.token]
+        token.content = (start = sc.pos, end = found[0],
+                         label_start = 0, label_end = 0)
+        r.tokens[cast[int](q.token)] = token
+        internal.scan.advance(sc, found[1] - sc.pos)
+    }
+    r.queue = []
+}
+
+private func outside(r: Run) {
+    let sc: internal.scan.Scanner = r.sc
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    var hit: internal.lex.compile.Embed? = nil
+    var nearest: uint = sc.n
+    for let e in r.lx.embeds {
+        let found: int? = find_bytes(sc.src, e.open, start = sc.pos)
+        if found != nil and cast[uint](found) < nearest {
+            nearest = cast[uint](found)
+            hit = e
+        }
+    }
+    internal.scan.advance(sc, nearest - sc.pos)
+    if sc.pos > from.byte {
+        emit(r, from.byte, r.lx.embeds[0].class)
+        return
+    }
+    if hit == nil {
+        return
+    }
+    internal.scan.advance(sc, byte_len(hit.open))
+    r.outside = false
+    r.line_start = true
+    r.line_has_token = false
+    r.fresh_line = true
+    emit_class(r, from.byte, hit.open_class)
+}
+
+private func embed_close(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    for let e in r.lx.embeds {
+        if byte_len(e.close) > 0 and internal.scan.at_text(sc, e.close) {
+            let from: internal.scan.Mark = internal.scan.mark(sc)
+            internal.scan.advance(sc, byte_len(e.close))
+            r.outside = true
+            emit_class(r, from.byte, e.close_class)
+            return true
+        }
+    }
+    return false
+}
+
+private func starts(r: Run, b: u8, bit: u32) -> bool {
+    return internal.lex.compile.can_start(r.lx, b, bit)
+}
+
+private func track_bracket(r: Run, b: u8) {
+    let delta: i8 = r.lx.bracket_delta[cast[uint](b)]
+    if delta > 0 {
+        r.depth += 1
+    }
+    elif delta < 0 and r.depth > 0 {
+        r.depth -= 1
+    }
+}
+
+private func terminal(r: Run) -> bool {
+    return terminal_min(r, 1)
+}
+
+private func terminal_min(r: Run, min_len: uint) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    let first: u8 = byte_at(sc.src, sc.pos)
+    for index in r.lx.terminals[cast[uint](first)] {
+        let lit: internal.grammar.model.Literal = r.lx.g.literals[index]
+        let n: uint = byte_len(lit.text)
+        if n < min_len {
+            return false
+        }
+        if !internal.scan.at_text(sc, lit.text) {
+            continue
+        }
+        if r.lx.boundary[index] and sc.pos + n < sc.n and
+            internal.lex.compile.continues_identifier(r.lx,
+                                                      char_at(r, sc.pos + n)) {
+            continue
+        }
+        let start: uint = sc.pos
+        internal.scan.advance(sc, n)
+        r.tokens.append(internal.lex.tokens.literal_token(lit.id, start,
+                                                          sc.pos))
+        track_bracket(r, first)
+        return true
+    }
+    return false
+}
+
+// Identifier rules are tried in order; a rule whose class isn't the
+// grammar's identifier class (Ruby's CONSTANT) leaves keywords to it.
+private func identifier(r: Run) -> bool {
+    let c: char = current(r)
+    for let rule in r.lx.identifiers {
+        if !internal.lex.chars.contains(rule.start, c) {
+            continue
+        }
+        let sc: internal.scan.Scanner = r.sc
+        let from: internal.scan.Mark = internal.scan.mark(sc)
+        internal.scan.step_char(sc)
+        while !internal.scan.at_end(sc) and
+            internal.lex.chars.contains(rule.cont, current(r)) {
+            internal.scan.step_char(sc)
+        }
+        var class: internal.grammar.model.Token_Id? = rule.class
+        if class != nil and !is_identifier_class(class) and
+            internal.grammar.model.find_literal(r.lx.g,
+                internal.scan.slice(sc, from.byte)) != nil {
+            for let other in r.lx.identifiers {
+                let other_class: internal.grammar.model.Token_Id? = other.class
+                if other_class != nil and is_identifier_class(other_class) {
+                    class = other_class
+                }
+            }
+        }
+        emit(r, from.byte, class)
+        check_profile(r, rule.profile, from, class)
+        return true
+    }
+    return false
+}
+
+private func is_identifier_class(id: internal.grammar.model.Token_Id) -> bool {
+    return internal.grammar.model.raw_token_id(id) ==
+        internal.grammar.model.identifier_token_id
+}
+
+// Reports an identifier problem as the profile's policy says.
+private func flag(r: Run, policy: internal.lex.compile.Policy, code: string,
+                  message: string, from: internal.scan.Mark,
+                  class: internal.grammar.model.Token_Id?) -> bool {
+    if policy == internal.lex.compile.Policy.allow {
+        return false
+    }
+    if policy == internal.lex.compile.Policy.warn {
+        internal.scan.report(r.sc, new[internal.diag.Diagnostic]("lex/" + code,
+            message, internal.scan.span_from(r.sc, from),
+            severity = internal.diag.Severity.warning))
+        return true
+    }
+    error(r, code, message, from, class = class)
+    return true
+}
+
+private func check_profile(r: Run, p: internal.lex.compile.Profile,
+                           from: internal.scan.Mark,
+                           class: internal.grammar.model.Token_Id?) {
+    let spelling: string = internal.scan.slice(r.sc, from.byte)
+    if encoding_of(spelling) == Str_Encoding.ascii and
+        p.confusables == internal.lex.compile.Policy.allow {
+        return
+    }
+    var at: uint = 0
+    while at < byte_len(spelling) {
+        let c: char = internal.scan.decode_at(spelling, at)
+        at += internal.scan.char_width(spelling, at)
+        if p.scripts.len() > 0 {
+            let script: u16 = unicode.query.script(c)
+            if p.scripts[script] == nil and script != p.common and
+                script != p.inherited {
+                error(r, "identifier-script", "`" + spelling +
+                      "` uses a script this language does not allow", from,
+                      class = class)
+                return
+            }
+        }
+        if cast[u32](c) >= 0x80 and
+            unicode.has_property(c, unicode.Property.extended_pictographic) and
+            flag(r, p.emoji, "identifier-emoji", "`" + spelling +
+                 "` contains an emoji", from, class) {
+            return
+        }
+    }
+    if unicode.security.has_mixed_scripts(spelling) and
+        flag(r, p.mixed, "identifier-mixed-scripts", "`" + spelling +
+             "` mixes writing systems", from, class) {
+        return
+    }
+    var normal: string = spelling
+    if p.normalize == "NFC" and !unicode.is_nfc(spelling) {
+        normal = unicode.nfc(byte_slice(spelling, 0,
+                                        cast[int](byte_len(spelling))))
+    }
+    elif p.normalize == "NFKC" {
+        normal = unicode.nfkc(byte_slice(spelling, 0,
+                                         cast[int](byte_len(spelling))))
+    }
+    if normal != spelling {
+        let span: internal.diag.Span = internal.scan.span_from(r.sc, from)
+        var d: internal.diag.Diagnostic = internal.scan.diagnostic(r.sc,
+            "identifier-not-normalized", "`" + spelling +
+            "` is not in " + p.normalize + " form", span)
+        d.fixes.append(internal.scan.fix("write it as `" + normal + "`", span,
+                                         normal))
+        internal.scan.report(r.sc, d)
+        if recovery_for(r, class) == nil {
+            r.stopped = true
+        }
+        return
+    }
+    if p.confusables != internal.lex.compile.Policy.allow and
+        unicode.security.skeleton(byte_slice(spelling, 0,
+            cast[int](byte_len(spelling)))) != spelling {
+        flag(r, p.confusables, "identifier-confusable", "`" + spelling +
+             "` can be confused with other identifiers", from, class)
+    }
+}
+
+private func fallback(r: Run) {
+    let sc: internal.scan.Scanner = r.sc
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    let first: u8 = byte_at(sc.src, sc.pos)
+    internal.scan.step_char(sc)
+    let spelling: string = internal.scan.slice(sc, from.byte)
+    r.tokens.append(internal.lex.tokens.literal_token(
+        internal.grammar.model.literal_token_id(spelling), from.byte, sc.pos))
+    track_bracket(r, first)
+    if r.lx.reject and
+        internal.grammar.model.find_literal(r.lx.g, spelling) == nil {
+        error(r, "unexpected-character", "unexpected `" + spelling + "`", from)
+        if r.lx.recover {
+            r.stopped = false
+        }
+    }
+}
+
+private func newlines_visible(r: Run) -> bool {
+    return r.depth == 0 or r.lx.layout.bracket_newlines
+}
+
+private func ends_statement(r: Run) -> bool {
+    if r.tokens.len() == 0 {
+        return false
+    }
+    let raw: u128 =
+        internal.grammar.model.raw_token_id(r.tokens[r.tokens.len() - 1].id)
+    return r.lx.layout.values[raw] != nil or
+        r.lx.layout.after_ids[raw] != nil
+}
+
+private func terminate(r: Run) {
+    let l: internal.lex.compile.Layout = r.lx.layout
+    let terminator: internal.grammar.model.Token_Id? = l.terminator
+    if terminator == nil {
+        return
+    }
+    if l.terminator_class {
+        emit(r, r.sc.pos, terminator)
+    }
+    else {
+        r.tokens.append(internal.lex.tokens.literal_token(terminator,
+            r.sc.pos, r.sc.pos))
+    }
+}
+
+private func line_comment_at(r: Run, at: uint) -> bool {
+    for open in r.lx.line_comments {
+        if internal.scan.matches_at(r.sc.src, at, open) {
+            return true
+        }
+    }
+    return false
+}
+
+private func indentation(r: Run) {
+    let l: internal.lex.compile.Layout = r.lx.layout
+    let sc: internal.scan.Scanner = r.sc
+    r.line_start = false
+    var at: uint = sc.pos
+    var column: uint = 0
+    var spaces: bool = false
+    var tabs: bool = false
+    while at < sc.n {
+        let b: u8 = byte_at(sc.src, at)
+        if b == 0x20 {
+            spaces = true
+            column += 1
+        }
+        elif b == 0x09 {
+            tabs = true
+            column += l.tab_width - column % l.tab_width
+        }
+        else {
+            break
+        }
+        at += 1
+    }
+    if at >= sc.n or is_line_end(r, char_at(r, at)) or line_comment_at(r, at) {
+        r.continued = false
+        return
+    }
+    let from: internal.scan.Mark = internal.scan.mark(sc)
+    if tabs and l.reject_tabs {
+        error(r, "tab-indentation", "tabs are not allowed in indentation",
+              from)
+        return
+    }
+    if spaces and l.reject_spaces {
+        error(r, "space-indentation", "indent with tabs, not spaces", from)
+        return
+    }
+    if tabs and spaces and l.reject_mixed {
+        error(r, "mixed-indentation",
+              "indentation mixes tabs and spaces", from)
+        return
+    }
+    if r.depth > 0 or r.continued {
+        r.continued = false
+        return
+    }
+    var top: uint = 0
+    if r.indents.len() > 0 {
+        top = r.indents[r.indents.len() - 1]
+    }
+    if column > top {
+        r.indents.append(column)
+        if r.pending_block {
+            r.blocks.append(r.indents.len())
+            r.pending_block = false
+        }
+        emit_class(r, r.sc.pos,l.indent)
+        return
+    }
+    r.pending_block = false
+    if column == top {
+        return
+    }
+    var keep: uint = r.indents.len()
+    while keep > 0 and r.indents[keep - 1] > column {
+        keep -= 1
+    }
+    var landed: uint = 0
+    if keep > 0 {
+        landed = r.indents[keep - 1]
+    }
+    if landed != column and l.reject_unmatched {
+        error(r, "dedent-mismatch",
+              "this line does not match any enclosing indentation", from)
+        return
+    }
+    var closed_block: bool = false
+    while r.indents.len() > keep {
+        r.indents.pop()
+        while r.blocks.len() > 0 and
+            r.indents.len() < r.blocks[r.blocks.len() - 1] {
+            r.blocks.pop()
+            closed_block = true
+        }
+        emit_class(r, r.sc.pos,l.dedent)
+    }
+    if closed_block and l.dedent_newline {
+        emit_class(r, r.sc.pos,l.newline)
+    }
+}
+
+private func line_end(r: Run) {
+    let l: internal.lex.compile.Layout = r.lx.layout
+    let sc: internal.scan.Scanner = r.sc
+    let significant: bool = newlines_visible(r) and
+        (r.line_has_token or l.newline_each)
+    let insert: bool = terminate_ready(r)
+    step_line_end(r)
+    r.line_start = true
+    r.continued = false
+    if insert {
+        terminate(r)
+    }
+    elif significant and l.newline != nil {
+        let previous: u128? = last_id(r)
+        r.pending_block = previous != nil and previous == 0x3a
+        emit_class(r, r.sc.pos,l.newline)
+    }
+    r.line_has_token = false
+}
+
+private func terminate_ready(r: Run) -> bool {
+    let l: internal.lex.compile.Layout = r.lx.layout
+    return l.terminator != nil and r.line_has_token and r.depth == 0 and
+        ends_statement(r)
+}
+
+private func continuation(r: Run) -> bool {
+    let sc: internal.scan.Scanner = r.sc
+    let end: uint? = internal.scan.continuation_end(sc.src, sc.pos,
+                                                    r.lx.layout.line_continue)
+    if end == nil {
+        return false
+    }
+    internal.scan.advance(sc, end - sc.pos)
+    r.line_start = true
+    r.continued = true
+    return true
+}
+
+private func finish(r: Run) {
+    let l: internal.lex.compile.Layout = r.lx.layout
+    if terminate_ready(r) {
+        terminate(r)
+    }
+    elif r.line_has_token and newlines_visible(r) {
+        emit_class(r, r.sc.pos,l.newline)
+    }
+    while r.indents.len() > 0 {
+        r.indents.pop()
+        emit_class(r, r.sc.pos,l.dedent)
+    }
+    emit_class(r, r.sc.pos,l.eof)
+}
+
+func scan(lx: internal.lex.compile.Lexer, source: string) -> Scan {
+    var r: Run = new[Run](lx, source)
+    let lines: bool = internal.lex.compile.uses_lines(lx.layout)
+    while !r.stopped and !r.sc.halted {
+        if r.outside {
+            if internal.scan.at_end(r.sc) {
+                break
+            }
+            outside(r)
+            continue
+        }
+        if r.queue_ready {
+            queued_bodies(r)
+            continue
+        }
+        if r.skip_to > 0 and r.sc.pos >= r.skip_from {
+            internal.scan.advance(r.sc, r.skip_to - r.sc.pos)
+            r.skip_from = 0
+            r.skip_to = 0
+            let fresh: bool = byte_at(r.sc.src, r.sc.pos - 1) == 0x0a
+            r.line_start = fresh
+            r.fresh_line = fresh
+            continue
+        }
+        if r.line_start and lx.layout.indent != nil {
+            indentation(r)
+            if r.stopped {
+                break
+            }
+        }
+        if internal.scan.at_end(r.sc) {
+            break
+        }
+        if r.modes.len() > 0 and !r.modes[r.modes.len() - 1].in_hole {
+            resume(r, r.modes[r.modes.len() - 1], internal.scan.mark(r.sc))
+            r.line_has_token = true
+            continue
+        }
+        let c: char = current(r)
+        if is_line_end(r, c) {
+            r.fresh_line = true
+            r.queue_ready = r.queue.len() > 0
+            if r.directive != nil {
+                directive_end(r)
+                continue
+            }
+            if lines {
+                line_end(r)
+                continue
+            }
+            step_line_end(r)
+            continue
+        }
+        if is_space(r, c) or internal.lex.chars.contains(lx.rejected, c) {
+            internal.scan.step_char(r.sc)
+            continue
+        }
+        let b: u8 = byte_at(r.sc.src, r.sc.pos)
+        if continuation(r) or
+            (starts(r, b, internal.lex.compile.starts_embed_close) and
+             embed_close(r)) or
+            (starts(r, b, internal.lex.compile.starts_region) and region(r)) or
+            comment(r) {
+            continue
+        }
+        let fresh: bool = r.fresh_line
+        r.fresh_line = false
+        r.line_has_token = true
+        if fresh and starts(r, b, internal.lex.compile.starts_directive) and
+            directive(r) {
+            continue
+        }
+        let sigils: bool = starts(r, b, internal.lex.compile.starts_sigil)
+        if !((starts(r, b, internal.lex.compile.starts_heredoc) and
+              heredoc(r)) or
+             (starts(r, b, internal.lex.compile.starts_fence) and fence(r)) or
+             (sigils and sigil(r, true)) or quoted(r) or number(r) or
+             (sigils and sigil(r, false)) or
+             (starts(r, b, internal.lex.compile.starts_regex) and regex(r)) or
+             hole_close(r) or terminal(r) or identifier(r)) {
+            fallback(r)
+        }
+    }
+    if r.modes.len() > 0 and !r.stopped {
+        error(r, "unterminated-string", "this string is never closed",
+              internal.scan.mark(r.sc))
+    }
+    if !r.stopped and !r.sc.halted {
+        finish(r)
+    }
+    check_source(r)
+    return (tokens = r.tokens,
+            diagnostics = internal.diag.sorted_by_position(r.sc.diags))
+}
+
+func tokenize(lx: internal.lex.compile.Lexer, source: string)
+    -> List[internal.lex.tokens.Token] fail: List[internal.diag.Diagnostic] {
+    let result: Scan = scan(lx, source)
+    for let d in result.diagnostics {
+        if d.severity == internal.diag.Severity.error {
+            fail result.diagnostics
+        }
+    }
+    return result.tokens
+}
+
+record Scan {
+    tokens:      List[internal.lex.tokens.Token]
+    diagnostics: List[internal.diag.Diagnostic]
+}
+
+private func bidi_control(code: u32) -> bool {
+    return code == 0x061c or code == 0x200e or code == 0x200f or
+        (code >= 0x202a and code <= 0x202e) or
+        (code >= 0x2066 and code <= 0x2069)
+}
+
+// One pass over the whole source for characters the spec rejects anywhere,
+// in strings and comments too: the `source` block's `reject` set, and
+// bidirectional controls under the `bidi` policy.
+private func check_source(r: Run) {
+    let lx: internal.lex.compile.Lexer = r.lx
+    let src: string = r.sc.src
+    var walker: internal.scan.Scanner = new[internal.scan.Scanner](src, "lex")
+    var t: uint = 0
+    var at: uint = 0
+    while at < r.sc.n {
+        let b: u8 = byte_at(src, at)
+        let width: uint = internal.scan.char_width(src, at)
+        var c: char = cast[char] b
+        if b >= 0x80 {
+            c = internal.scan.decode_at(src, at)
+        }
+        var code: string = ""
+        var policy: internal.lex.compile.Policy =
+            internal.lex.compile.Policy.reject
+        if b >= 0x80 and bidi_control(cast[u32] c) {
+            while t < r.tokens.len() and r.tokens[t].end <= at {
+                t += 1
+            }
+            policy = lx.bidi
+            if t < r.tokens.len() and r.tokens[t].start <= at {
+                let own: internal.lex.compile.Policy? = lx.bidi_classes[
+                    internal.grammar.model.raw_token_id(r.tokens[t].id)]
+                if own != nil {
+                    policy = own
+                }
+            }
+            code = "bidi-control"
+        }
+        elif internal.lex.chars.contains(lx.rejected, c) and
+            !(at == 0 and cast[u32](c) == 0xfeff) {
+            code = "rejected-character"
+        }
+        if byte_len(code) > 0 and policy != internal.lex.compile.Policy.allow {
+            var severity: internal.diag.Severity = internal.diag.Severity.error
+            if policy == internal.lex.compile.Policy.warn {
+                severity = internal.diag.Severity.warning
+            }
+            var message: string = "U+" + hex(cast[u32] c) +
+                " is not allowed in this language's source"
+            if code == "bidi-control" {
+                message = "bidirectional control character U+" +
+                    hex(cast[u32] c) +
+                    " can make code read differently than it runs"
+            }
+            internal.scan.advance(walker, at - walker.pos)
+            let from: internal.scan.Mark = internal.scan.mark(walker)
+            internal.scan.advance(walker, width)
+            internal.scan.report(r.sc, new[internal.diag.Diagnostic](
+                "lex/" + code, message, internal.scan.span_from(walker, from),
+                severity = severity))
+        }
+        at += width
+    }
+}

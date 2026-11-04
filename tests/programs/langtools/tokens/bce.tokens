@@ -1,0 +1,23 @@
+# ../../../../lantern/grammars/bce.bnf ../lex/bce.lex ../../../../lantern/tests/samples/s.bce
+PP_DIRECTIVE           1:1  %include <stdio.h>
+%if                    2:1  %if
+IDENTIFIER             2:5  FOO
+PP_EOL                 3:1
+int                    3:1  int
+IDENTIFIER             3:5  f
+(                      3:6  (
+void                   3:7  void
+)                      3:11  )
+{                      4:1  {
+var                    5:5  var
+int                    5:9  int
+IDENTIFIER             5:13  x
+=                      5:15  =
+INTEGER                5:17  1
+;                      5:18  ;
+return                 6:5  return
+IDENTIFIER             6:12  x
+;                      6:13  ;
+}                      7:1  }
+%endif                 8:1  %endif
+PP_EOL                 9:1

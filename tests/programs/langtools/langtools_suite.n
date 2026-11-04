@@ -1,4 +1,7 @@
 import langtools
+import langtools.grammar
+import langtools.lex
+import text
 import sys.fs
 import sys.env
 
@@ -16,9 +19,9 @@ func span(start: uint, end: uint) -> langtools.Span {
         start_col = cast[u32](start) + 1, end_col = cast[u32](end) + 1)
 }
 
-func load(text: string) -> langtools.Grammar? {
+func load(text: string) -> langtools.grammar.Grammar? {
     try {
-        return langtools.load_ebnf(text, source_name = "test.bnf")!
+        return langtools.grammar.load(text, source_name = "test.bnf")!
     } fail(diags) {
         return nil
     }
@@ -26,10 +29,10 @@ func load(text: string) -> langtools.Grammar? {
 
 func codes(text: string) -> string {
     try {
-        let g: langtools.Grammar = langtools.load_ebnf(text)!
+        let g: langtools.grammar.Grammar = langtools.grammar.load(text)!
         return "loaded"
     } fail(diags) {
-        var out: List[string] = new[List[string]]()
+        var out: List[string] = []
         for let d in diags {
             out.append(d.code)
         }
@@ -39,8 +42,8 @@ func codes(text: string) -> string {
 
 func diagnostics(text: string) -> List[langtools.Diagnostic] {
     try {
-        let g: langtools.Grammar = langtools.load_ebnf(text)!
-        return new[List[langtools.Diagnostic]]()
+        let g: langtools.grammar.Grammar = langtools.grammar.load(text)!
+        return []
     } fail(diags) {
         return diags
     }
@@ -56,7 +59,7 @@ func diag_checks() {
           "    1 | abc def ghi\n      |     ^^^\n\n  help: try harder\n",
           "render")
 
-    var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+    var fixes: List[langtools.Fix] = []
     let replace: langtools.Fix = (message = "a", span = span(0, 3),
                                   replacement = "XYZ")
     let insert_one: langtools.Fix = (message = "b", span = span(0, 0),
@@ -72,34 +75,34 @@ func diag_checks() {
     check(langtools.apply_fixes("abc def", fixes) == "12XYZ def",
           "apply_fixes orders inserts first and skips overlaps")
 
-    var names: List[string] = new[List[string]]()
+    var names: List[string] = []
     names.append("term")
     names.append("expression")
     names.append("s")
     let trem: string? = langtools.closest_match("trem", names)
-    check(trem != nil and trem.get() == "term", "closest_match transposition")
+    check(trem != nil and trem == "term", "closest_match transposition")
     let expresion: string? = langtools.closest_match("expresion", names)
-    check(expresion != nil and expresion.get() == "expression",
+    check(expresion != nil and expresion == "expression",
           "closest_match deletion")
     check(langtools.closest_match("a", names) == nil,
           "closest_match leaves short names alone")
 }
 
 func id_checks() {
-    check(langtools.raw_token_id(langtools.literal_token_id("+")) == 0x2b,
+    check(langtools.grammar.raw_token_id(langtools.grammar.literal_token_id("+")) == 0x2b,
           "single codepoint id")
-    check(langtools.raw_token_id(langtools.literal_token_id("é")) == 0xe9,
+    check(langtools.grammar.raw_token_id(langtools.grammar.literal_token_id("é")) == 0xe9,
           "non-ASCII codepoint id")
-    check(langtools.raw_token_id(langtools.literal_token_id(">>=")) ==
+    check(langtools.grammar.raw_token_id(langtools.grammar.literal_token_id(">>=")) ==
           313332964004109437735777710839930297445, "XXH3-128 id")
-    check(langtools.raw_token_id(langtools.class_token_id(0)) == 0x110001,
+    check(langtools.grammar.raw_token_id(langtools.grammar.class_token_id(0)) == 0x110001,
           "first declared class id")
-    check(langtools.literal_token_id("if") == langtools.literal_token_id("if"),
+    check(langtools.grammar.literal_token_id("if") == langtools.grammar.literal_token_id("if"),
           "Token_Id equality")
-    check(langtools.is_identifier_shaped("match") and
-          langtools.is_identifier_shaped("_x1") and
-          !langtools.is_identifier_shaped("+=") and
-          !langtools.is_identifier_shaped("1x"), "identifier shape")
+    check(langtools.grammar.is_identifier_shaped("match") and
+          langtools.grammar.is_identifier_shaped("_x1") and
+          !langtools.grammar.is_identifier_shaped("+=") and
+          !langtools.grammar.is_identifier_shaped("1x"), "identifier shape")
 }
 
 const feature_grammar: string = [-
@@ -108,6 +111,7 @@ identifier: %NAME
 tokens: %NUMBER
 trivia: %COMMENT
 elastic: %NEWLINE
+trailing: %NOTE
 start: <stmt>
 
 <expr> ::= <term> (("+" | %"-") <term>)*
@@ -118,58 +122,77 @@ start: <stmt>
 -]
 
 func feature_checks() {
-    let loaded: langtools.Grammar? = load(feature_grammar)
+    let loaded: langtools.grammar.Grammar? = load(feature_grammar)
     check(loaded != nil, "feature grammar loads")
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.grammar.Grammar = loaded
     check(g.rules.len() == 3, "rule count")
-    check(langtools.start_rule(g).name == "stmt", "start directive")
-    let stmt: langtools.Rule? = langtools.find_rule(g, "stmt")
-    check(stmt != nil and stmt.get().alts.len() == 2 and
-          stmt.get().defs.len() == 2, "merged definitions")
-    check(langtools.identifier_class(g).name == "NAME", "identifier directive")
-    check(langtools.raw_token_id(langtools.identifier_class(g).id) ==
+    check(langtools.grammar.start_rule(g).name == "stmt", "start directive")
+    let stmt: langtools.grammar.Rule? = langtools.grammar.find_rule(g, "stmt")
+    check(stmt != nil and stmt.alts.len() == 2 and
+          stmt.defs.len() == 2, "merged definitions")
+    check(langtools.grammar.identifier_class(g).name == "NAME", "identifier directive")
+    check(langtools.grammar.raw_token_id(langtools.grammar.identifier_class(g).id) ==
           0x110000, "identifier id")
-    let number: langtools.Token_Class? = langtools.find_class(g, "NUMBER")
-    let comment: langtools.Token_Class? = langtools.find_class(g, "COMMENT")
-    let newline: langtools.Token_Class? = langtools.find_class(g, "NEWLINE")
+    let number: langtools.grammar.Token_Class? = langtools.grammar.find_class(g, "NUMBER")
+    let comment: langtools.grammar.Token_Class? = langtools.grammar.find_class(g, "COMMENT")
+    let newline: langtools.grammar.Token_Class? = langtools.grammar.find_class(g, "NEWLINE")
     check(number != nil and
-          langtools.raw_token_id(number.get().id) == 0x110001,
+          langtools.grammar.raw_token_id(number.id) == 0x110001,
           "first declared class")
     check(comment != nil and
-          comment.get().policy == langtools.Token_Policy.trivia and
-          langtools.raw_token_id(comment.get().id) == 0x110002,
+          comment.policy == langtools.grammar.Token_Policy.trivia and
+          langtools.grammar.raw_token_id(comment.id) == 0x110002,
           "trivia class")
     check(newline != nil and
-          newline.get().policy == langtools.Token_Policy.elastic,
+          newline.policy == langtools.grammar.Token_Policy.elastic,
           "elastic class")
-    check(langtools.is_hard_keyword(g, "let"), "hard keyword")
-    check(langtools.is_soft_keyword(g, "match"), "soft keyword")
-    check(!langtools.is_soft_keyword(g, "+") and !langtools.is_hard_keyword(g, "+"),
+    let note: langtools.grammar.Token_Class? = langtools.grammar.find_class(g, "NOTE")
+    check(note != nil and
+          note.policy == langtools.grammar.Token_Policy.trailing and
+          langtools.grammar.raw_token_id(note.id) == 0x110004,
+          "trailing class")
+    check(langtools.grammar.is_hard_keyword(g, "let"), "hard keyword")
+    check(langtools.grammar.is_soft_keyword(g, "match"), "soft keyword")
+    check(!langtools.grammar.is_soft_keyword(g, "+") and !langtools.grammar.is_hard_keyword(g, "+"),
           "punctuation is not a keyword")
-    check(langtools.find_literal(g, "é\t") != nil, "escapes decode")
+    check(langtools.grammar.find_literal(g, "é\t") != nil, "escapes decode")
 
-    let text: string = langtools.format_grammar(g, show_ids = true)
-    let again: langtools.Grammar? = load(langtools.format_grammar(g))
+    let text: string = langtools.grammar.format(g, show_ids = true)
+    let again: langtools.grammar.Grammar? = load(langtools.grammar.format(g))
     check(again != nil and
-          langtools.format_grammar(again.get(), show_ids = true) == text,
+          langtools.grammar.format(again, show_ids = true) == text,
           "format round trip")
 }
 
-let literal_grammar: langtools.Grammar = [-
+let literal_grammar: langtools.grammar.Grammar = [-
 tokens: %NUMBER
 start: <sum>
 <sum> ::= %NUMBER ("+" %NUMBER)*
 -]'bnf
 
+let literal_lex: langtools.lex.Spec = [-
+extends: typical
+comments { line: "#" }
+escapes c: \n \t
+STRING { escapes: c }
+-]'lex
+
 func literal_checks() {
-    check(langtools.start_rule(literal_grammar).name == "sum",
+    check(langtools.grammar.start_rule(literal_grammar).name == "sum",
           "bnf literal start")
     check(literal_grammar.rules.len() == 1 and
-          langtools.find_class(literal_grammar, "NUMBER") != nil,
+          langtools.grammar.find_class(literal_grammar, "NUMBER") != nil,
           "bnf literal contents")
+    let comments: langtools.lex.Block? =
+        langtools.lex.find_block(literal_lex, "comments")
+    check(comments != nil and
+          langtools.lex.words(comments, "line").len() == 1 and
+          literal_lex.escapes["c"] != nil and
+          langtools.lex.find_block(literal_lex, "IDENTIFIER") != nil,
+          "lex literal contents")
 }
 
 func bad_input_checks() {
@@ -229,7 +252,7 @@ func bad_input_checks() {
     check(codes("<a> ::= %\"x\" ::= %\"y\"\n") == "ebnf/unexpected-token",
           "unexpected-token")
 
-    var many: List[string] = new[List[string]]()
+    var many: List[string] = []
     for i: uint from 0 until 120 {
         many.append("@x\n")
     }
@@ -253,7 +276,7 @@ const broken_grammar: string = [-
 
 func fix_checks() {
     let broken: string = broken_grammar
-    var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+    var fixes: List[langtools.Fix] = []
     for let d in diagnostics(broken) {
         for let f in d.fixes {
             fixes.append(f)
@@ -263,36 +286,55 @@ func fix_checks() {
     check(load(repaired) != nil, "fixes repair the grammar")
 }
 
+func class_of(g: langtools.grammar.Grammar, name: string)
+    -> langtools.grammar.Token_Id? {
+    let found: langtools.grammar.Token_Class? =
+        langtools.grammar.find_class(g, name)
+    if found == nil {
+        return nil
+    }
+    return found.id
+}
+
 func lex_checks() {
-    let loaded: langtools.Grammar? = load(feature_grammar)
+    let loaded: langtools.grammar.Grammar? = load(feature_grammar)
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.grammar.Grammar = loaded
     let source: string = "let match + é\t ;; x"
-    let ctx: langtools.Lex_Context = new[langtools.Lex_Context](g, source)
-    let name: langtools.Token_Id? = ctx.classes["NAME"]
-    let comment: langtools.Token_Id? = ctx.classes["COMMENT"]
+    let ctx: langtools.lex.Context = new[langtools.lex.Context](g, source)
+    let name: langtools.grammar.Token_Id? = class_of(g, "NAME")
+    let comment: langtools.grammar.Token_Id? = class_of(g, "COMMENT")
     check(name != nil and comment != nil, "context class ids")
     if name == nil or comment == nil {
         return
     }
-    let hard: langtools.Token = langtools.emit(ctx, 0, 3, class = name.get())
-    check(hard.id == langtools.literal_token_id("let") and hard.alt_id == nil,
+    let hard: langtools.lex.Token = langtools.lex.emit(ctx, 0, 3, class = name)
+    check(hard.id == langtools.grammar.literal_token_id("let") and hard.alt_id == nil,
           "hard keyword re-labelled")
-    let soft: langtools.Token = langtools.emit(ctx, 4, 9, class = name.get())
-    check(soft.id == name.get() and soft.alt_id != nil and
-          soft.alt_id.get() == langtools.literal_token_id("match"),
+    let soft: langtools.lex.Token = langtools.lex.emit(ctx, 4, 9, class = name)
+    check(soft.id == name and soft.alt_id != nil and
+          soft.alt_id.get() == langtools.grammar.literal_token_id("match"),
           "soft keyword alternate id")
-    let plus: langtools.Token = langtools.emit(ctx, 10, 11)
-    check(langtools.raw_token_id(plus.id) == 0x2b, "unclassed codepoint")
-    let fixed: langtools.Token = langtools.emit(ctx, 12, 15)
-    check(fixed.id == langtools.literal_token_id("é\t"), "unclassed hash")
-    let trivia: langtools.Token = langtools.emit(ctx, 16, 18,
-                                                 class = comment.get())
-    check(trivia.flags.trivia and !trivia.flags.elastic, "trivia flag")
-    let plain: langtools.Token = langtools.emit(ctx, 19, 20, class = name.get())
-    check(plain.id == name.get() and plain.alt_id == nil, "plain identifier")
+    let plus: langtools.lex.Token = langtools.lex.emit(ctx, 10, 11)
+    check(langtools.grammar.raw_token_id(plus.id) == 0x2b, "unclassed codepoint")
+    let fixed: langtools.lex.Token = langtools.lex.emit(ctx, 12, 15)
+    check(fixed.id == langtools.grammar.literal_token_id("é\t"), "unclassed hash")
+    let trivia: langtools.lex.Token = langtools.lex.emit(ctx, 16, 18,
+                                                 class = comment)
+    check(trivia.flags.trivia and !trivia.flags.elastic
+          and !trivia.flags.trailing, "trivia flag")
+    let note: langtools.grammar.Token_Id? = class_of(g, "NOTE")
+    check(note != nil, "trailing class id")
+    if note != nil {
+        let trailing: langtools.lex.Token = langtools.lex.emit(ctx, 16, 18,
+                                                       class = note)
+        check(trailing.flags.trivia and trailing.flags.trailing,
+              "trailing flag")
+    }
+    let plain: langtools.lex.Token = langtools.lex.emit(ctx, 19, 20, class = name)
+    check(plain.id == name and plain.alt_id == nil, "plain identifier")
 }
 
 func read_text(path: string) -> string? {
@@ -336,13 +378,13 @@ func lantern_counts() -> Dict[string, Tuple[uint, uint]] {
     return counts
 }
 
-func convert(path: string, original: string) -> langtools.Grammar? {
+func convert(path: string, original: string) -> langtools.grammar.Grammar? {
     var text: string = original
     for round: uint from 0 until 20 {
         try {
-            return langtools.load_ebnf(text, source_name = path)!
+            return langtools.grammar.load(text, source_name = path)!
         } fail(diags) {
-            var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+            var fixes: List[langtools.Fix] = []
             for let d in diags {
                 if d.fixes.len() == 0 and d.code != "ebnf/too-many-errors" {
                     check(false, path + ": no fix for " + d.code)
@@ -365,25 +407,355 @@ func corpus_check(path: string, expected: Dict[string, Tuple[uint, uint]]) {
         check(false, path + ": cannot read")
         return
     }
-    let loaded: langtools.Grammar? = convert(path, text.get())
+    let loaded: langtools.grammar.Grammar? = convert(path, text)
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.grammar.Grammar = loaded
     var alts: uint = 0
     for let rule in g.rules {
         alts += rule.alts.len()
     }
     let want: Tuple[uint, uint]? = expected[base_name(path)]
     check(want != nil, path + ": expected counts")
-    check(want == nil or (want.get()[0] == g.rules.len()
-                          and want.get()[1] == alts),
+    check(want == nil or (want[0] == g.rules.len()
+                          and want[1] == alts),
           path + ": counts match Lantern")
-    let formatted: string = langtools.format_grammar(g, show_ids = true)
-    let again: langtools.Grammar? = load(langtools.format_grammar(g))
+    let formatted: string = langtools.grammar.format(g, show_ids = true)
+    let again: langtools.grammar.Grammar? = load(langtools.grammar.format(g))
     check(again != nil and
-          langtools.format_grammar(again.get(), show_ids = true) == formatted,
+          langtools.grammar.format(again, show_ids = true) == formatted,
           path + ": round trip")
+}
+
+func dir_name(path: string) -> string {
+    let name: uint = byte_len(base_name(path))
+    return byte_slice(path, 0, cast[int](byte_len(path) - name))
+}
+
+func render_tokens(g: langtools.grammar.Grammar, source: string,
+                   tokens: List[langtools.lex.Token]) -> string {
+    var names: Dict[u128, string] = new[Dict[u128, string]]()
+    for let c in g.classes {
+        names[langtools.grammar.raw_token_id(c.id)] = c.name
+    }
+    for let lit in g.literals {
+        names[langtools.grammar.raw_token_id(lit.id)] = lit.text
+    }
+    var out: List[string] = []
+    var line: uint = 1
+    var col: uint = 1
+    var at: uint = 0
+    for i: uint from 0 until tokens.len() {
+        let t: langtools.lex.Token = tokens[i]
+        while at < t.start {
+            let b: u8 = byte_at(source, at)
+            if b == 0x0a {
+                line += 1
+                col = 1
+            }
+            elif (b & 0xc0) != 0x80 {
+                col += 1
+            }
+            at += 1
+        }
+        let spelling: string = byte_slice(source, t.start, t.end)
+        let named: string? = names[langtools.grammar.raw_token_id(t.id)]
+        var name: string = named.get_or_else(spelling)
+        if len(name) < 22 {
+            name = name + text.repeat(" ", cast[uint](22 - len(name)))
+        }
+        var row: string = name + " " + decimal(line) + ":" + decimal(col)
+        if byte_len(spelling) > 0 {
+            row = row + "  " + spelling
+        }
+        out.append(row)
+    }
+    return join(out, "\n") + "\n"
+}
+
+// The spec a lex spec extends, from its `extends:` line.
+func base_of(spec: string) -> string? {
+    for line in text.split(spec, "\n") {
+        if byte_len(line) > 8 and byte_slice(line, 0, 8) == "extends:" {
+            return text.trim(byte_slice(line, 8, byte_len(line)))
+        }
+    }
+    return nil
+}
+
+// Loads a spec file, first loading the spec it extends from the same
+// directory.
+func load_spec(path: string, spec: string) -> langtools.lex.Spec
+    fail: List[langtools.Diagnostic] {
+    var bases: Dict[string, langtools.lex.Spec] =
+        new[Dict[string, langtools.lex.Spec]]()
+    let base: string? = base_of(spec)
+    if base != nil and base != "typical" {
+        let base_path: string = dir_name(path) + base + ".lex"
+        let base_text: string? = read_text(base_path)
+        if base_text != nil {
+            bases[base] = load_spec(base_path, base_text)!
+        }
+    }
+    return langtools.lex.load(spec, source_name = path, bases = bases)!
+}
+
+func token_check(path: string) {
+    let golden: string? = read_text(path)
+    if golden == nil {
+        check(false, path + ": cannot read")
+        return
+    }
+    let all: string = golden
+    let found: int? = find_bytes(all, "\n")
+    if found == nil {
+        check(false, path + ": no header line")
+        return
+    }
+    let newline: int = found
+    let header: List[string] = text.split(byte_slice(all, 2, newline), " ")
+    let dir: string = dir_name(path)
+    let grammar_text: string? = read_text(dir + header[0])
+    let spec_text: string? = read_text(dir + header[1])
+    let source: string? = read_text(dir + header[2])
+    if grammar_text == nil or spec_text == nil or source == nil {
+        check(false, path + ": cannot read its inputs")
+        return
+    }
+    let g: langtools.grammar.Grammar? = convert(header[0], grammar_text)
+    if g == nil {
+        return
+    }
+    let spec_path: string = dir + header[1]
+    var lx: langtools.lex.Lexer
+    try {
+        let spec: langtools.lex.Spec = load_spec(spec_path, spec_text)!
+        lx = langtools.lex.compile(spec, g)!
+    } fail(diags) {
+        check(false, spec_path + ": " + langtools.render_all(diags,
+            (name = spec_path, text = spec_text)))
+        return
+    }
+    try {
+        let tokens: List[langtools.lex.Token] =
+            langtools.lex.tokenize(lx, source)!
+        let want: string = byte_slice(all, newline + 1,
+                                      cast[int](byte_len(all)))
+        check(render_tokens(g, source, tokens) == want,
+              path + ": tokens match")
+    } fail(diags) {
+        check(false, path + ": " + langtools.render_all(diags,
+            (name = path, text = source)))
+    }
+}
+
+func lex_lexer(spec: string) -> langtools.lex.Lexer
+    fail: List[langtools.Diagnostic] {
+    let g: langtools.grammar.Grammar = langtools.grammar.load(
+        "identifier: %IDENTIFIER\ntokens: %STRING, %NUMBER, %CHAR\n" +
+        "elastic: %INDENT, %DEDENT, %NEWLINE\nstart: <s>\n" +
+        "<s> ::= (%STRING | %NUMBER | %CHAR | %IDENTIFIER | \"+\")*\n")!
+    let s: langtools.lex.Spec = langtools.lex.load(spec)!
+    return langtools.lex.compile(s, g)!
+}
+
+func recovery_checks() {
+    try {
+        let lx: langtools.lex.Lexer = lex_lexer([-
+escapes e: \n
+STRING {
+    like:     string
+    quotes:   '"'
+    escape:   \
+    escapes:  e
+    on-error: skip to '"' \n
+}
+NUMBER { like: integer   digits: decimal }
+-])!
+        let result: langtools.lex.Scan =
+            langtools.lex.scan(lx, "\"a\\q\" 12x \"open\n7")
+        check(result.tokens.len() == 5, "recovery keeps scanning (got " +
+              decimal(result.tokens.len()) + " tokens)")
+        check(result.diagnostics.len() == 3, "recovery reports each error")
+    } fail(diags) {
+        check(false, "recovery spec loads")
+    }
+}
+
+// The first problem a spec and source produce, or "ok".
+func lex_codes(spec: string, source: string) -> string {
+    try {
+        let lx: langtools.lex.Lexer = lex_lexer(spec)!
+        let tokens: List[langtools.lex.Token] =
+            langtools.lex.tokenize(lx, source)!
+        return "ok"
+    } fail(diags) {
+        return diags[0].code
+    }
+}
+
+func codes_are(spec: string, source: string, want: string, probe: string) {
+    let got: string = lex_codes(spec, source)
+    check(got == want, probe + " (got `" + got + "`)")
+}
+
+func tokenize_checks() {
+    let strings: string = [-
+escapes e: \n \t \\ \"
+STRING { like: string   quotes: '"'   escape: \   escapes: e }
+CHAR   { like: string   quotes: "'"   escape: \   length: 1 }
+NUMBER {
+    like:     float
+    digits:   decimal
+    fraction: ., optional
+    exponent: e E
+}
+comments { block: /* */   nested: yes }
+source   { unknown: reject }
+-]
+    codes_are(strings, "\"a\\n\" + 'b' + 1.5e3 /* x /* y */ */", "ok",
+              "tokenize ok")
+    codes_are(strings, "\"abc", "lex/unterminated-string",
+              "unterminated-string")
+    codes_are(strings, "\"a\nb\"", "lex/string-newline", "string-newline")
+    codes_are(strings, "\"a\\q\"", "lex/bad-escape", "bad-escape")
+    codes_are(strings, "'ab'", "lex/character-length", "character-length")
+    codes_are(strings, "1e", "lex/bad-number", "bad-number")
+    codes_are(strings, "12abc", "lex/bad-number", "bad-number identifier tail")
+    codes_are(strings, "/* a /* b */", "lex/unterminated-comment",
+              "unterminated nested comment")
+    codes_are(strings, "1 $ 2", "lex/unexpected-character", "fallback reject")
+    codes_are("STRNG { like: string   quotes: '\"' }\n", "",
+              "lex/unknown-class", "unknown-class")
+    codes_are("STRING { like: string   quotes: '\"'   escapes: nope }\n", "",
+              "lex/unknown-escapes", "unknown escape set")
+    let acute: string = from_char(cast[char] 0x0301)
+    let cyrillic_u: string = from_char(cast[char] 0x0443)
+    let grin: string = from_char(cast[char] 0x1f600)
+    let rlo: string = from_char(cast[char] 0x202e)
+    let nbsp: string = from_char(cast[char] 0xa0)
+    let ident: string = "IDENTIFIER { like: identifier   set: XID   add: _   "
+    codes_are(ident + "normalize: NFC }\n", "cafe" + acute,
+              "lex/identifier-not-normalized", "identifier-not-normalized")
+    codes_are(ident + "mixed-scripts: reject }\n", "pa" + cyrillic_u + "pal",
+              "lex/identifier-mixed-scripts", "identifier-mixed-scripts")
+    codes_are(ident + "mixed-scripts: warn }\n", "pa" + cyrillic_u + "pal",
+              "ok", "mixed scripts only warn")
+    codes_are(ident + "emoji: reject }\n", "x" + grin,
+              "lex/identifier-emoji", "identifier-emoji")
+    codes_are(ident + "emoji: allow }\n", "x" + grin, "ok", "emoji allowed")
+    codes_are(ident + "normalize: NFC   mixed-scripts: reject }\n",
+              "caf" + from_char(cast[char] 0xe9), "ok", "profile accepts NFC")
+    codes_are(ident + "normalize: maybe }\n", "", "lex/bad-value",
+              "identifier bad-value")
+    codes_are("source { bidi: reject }\n" +
+              "STRING { like: string   quotes: '\"' }\n",
+              "\"a" + rlo + "b\"", "lex/bidi-control", "bidi-control")
+    codes_are("source { bidi: allow }\n" +
+              "STRING { like: string   quotes: '\"' }\n",
+              "\"a" + rlo + "b\"", "ok", "bidi allow")
+    codes_are("extends: typical\n", "a +" + nbsp + "b",
+              "lex/rejected-character", "typical rejects a no-break space")
+    codes_are("extends: typical\nsource { space: Whitespace - Newline }\n",
+              "a +" + nbsp + "b", "ok", "a space can be any space")
+    recovery_checks()
+    codes_are("STRING { like: heredoc   opener: <<   label: word }\n",
+              "x = <<EOT\nbody\n", "lex/unterminated-heredoc",
+              "unterminated-heredoc")
+    codes_are("STRING { like: string   prefix: r   quotes: '\"'   " +
+              "pad: \"#\", at least one }\n", "r#\"abc",
+              "lex/unterminated-fence", "unterminated-fence")
+    codes_are("STRING { like: regex   delimiters: / / }\n", "/ab\nc/",
+              "lex/regex-newline", "regex-newline")
+    codes_are("comments { region: \"#[\" \"#]\", ends-with \"#\" }\n" +
+              "NUMBER { like: integer   digits: decimal }\n", "1 #[x#\n",
+              "lex/region-not-alone", "region-not-alone")
+    let fences: string = [-
+NUMBER { like: integer   digits: decimal }
+comments { block: /* */, stretch * }
+source { unknown: reject }
+-]
+    codes_are(fences, "1 /** a */ b **/ 2", "ok", "fence comment nests")
+    codes_are(fences, "1 /**/ 2 /***/ 3", "ok", "empty fence comments")
+    codes_are(fences, "1 /** a */ 2", "lex/unterminated-comment",
+              "fence comment needs its own closer")
+    let indents: string = [-
+NUMBER { like: integer   digits: decimal }
+layout {
+    indent:            INDENT DEDENT
+    newline:           NEWLINE
+    dedent-must-match: yes
+}
+source {
+    indent-with:  spaces
+    mixed-indent: reject
+}
+-]
+    codes_are(indents, "1\n    2\n    3\n4\n", "ok", "indentation ok")
+    codes_are(indents, "1\n\t2\n", "lex/tab-indentation", "tab-indentation")
+    codes_are(indents, "1\n    2\n  3\n", "lex/dedent-mismatch",
+              "dedent-mismatch")
+    codes_are("NUMBER { like: integer   digits: decimal }\n" +
+              "layout { indent: INDENT DEDENT }\n" +
+              "source { mixed-indent: reject }\n",
+              "1\n \t2\n", "lex/mixed-indentation", "mixed-indentation")
+    codes_are("layout { newlines-in-brackets: maybe }\n", "", "lex/bad-value",
+              "layout bad-value")
+}
+
+func lex_spec_check(path: string) {
+    let text: string? = read_text(path)
+    if text == nil {
+        check(false, path + ": cannot read")
+        return
+    }
+    try {
+        let spec: langtools.lex.Spec = load_spec(path, text)!
+        check(spec.blocks.len() > 0, path + ": has blocks")
+    } fail(diags) {
+        for let d in diags {
+            check(false, path + ": " + d.code + " " + d.message)
+        }
+    }
+}
+
+func lex_codes(text: string) -> string {
+    try {
+        let spec: langtools.lex.Spec = langtools.lex.load(text)!
+        return ""
+    } fail(diags) {
+        var codes: List[string] = []
+        for let d in diags {
+            codes.append(d.code)
+        }
+        return join(codes, " ")
+    }
+}
+
+func lex_load_checks() {
+    check(lex_codes("comments { line: // }\n" +
+                    "STRING { like: string   quotes: '\"' }\n") == "",
+          "lex spec loads")
+    check(lex_codes("STRING:\n    like: string\n    quotes: '\"'\n") == "",
+          "indented block")
+    check(lex_codes("STRING {\n    like string\n    quotes '\"'\n}\n") == "",
+          "keys without colons")
+    check(lex_codes("REGEX {\n    like: regex\n    not-after: A B\n" +
+                    "               C D\n}\n") == "", "continued setting")
+    check(lex_codes("STRING { like: strng }\n") == "lex/unknown-like",
+          "unknown kind")
+    check(lex_codes("STRING { like: string   raww: yes }\n") ==
+          "lex/unknown-key", "unknown key")
+    check(lex_codes("STRING { quotes: '\"' }\n") == "lex/missing-like",
+          "new block needs like")
+    check(lex_codes("STRING {\n    like: string\n") == "lex/unclosed-block",
+          "unclosed block")
+    check(lex_codes("extends: nope\n") == "lex/unknown-base", "unknown base")
+    check(lex_codes("extends: typical\nremove: NOPE\n") == "lex/unknown-block",
+          "remove of a missing block")
+    check(lex_codes("extends: typical\nSTRING { quotes: \"'\" }\n") == "",
+          "base blocks keep their kind")
 }
 
 diag_checks()
@@ -393,11 +765,24 @@ literal_checks()
 bad_input_checks()
 fix_checks()
 lex_checks()
+lex_load_checks()
+tokenize_checks()
 let expected: Dict[string, Tuple[uint, uint]] = lantern_counts()
 let args: List[string] = sys.env.args()
 check(args.len() > 1, "corpus grammars given")
 for i: uint from 1 until args.len() {
-    corpus_check(args[i], expected)
+    let path: string = args[i]
+    if byte_len(path) > 4
+        and byte_slice(path, byte_len(path) - 4, byte_len(path)) == ".lex" {
+        lex_spec_check(path)
+    }
+    elif byte_len(path) > 7 and byte_slice(path, byte_len(path) - 7,
+                                           byte_len(path)) == ".tokens" {
+        token_check(path)
+    }
+    else {
+        corpus_check(path, expected)
+    }
 }
 if failures == 0 {
     __fd_write(2, "ok")

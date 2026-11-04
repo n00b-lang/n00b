@@ -1,0 +1,25 @@
+# ../../../../lantern/grammars/ruby.bnf ../lex/ruby.lex ../samples/edge.rb
+IDENTIFIER             1:1  x
+=                      1:3  =
+HEREDOC                1:5  <<~SQL
++                      1:12  +
+HEREDOC                1:14  <<-OTHER
+NEWLINE                2:1
+CVAR                   6:1  @@total
++=                     6:9  +=
+IVAR                   6:12  @n
+*                      6:15  *
+GVAR                   6:17  $g
+NEWLINE                7:1
+IDENTIFIER             7:1  y
+=                      7:3  =
+STRING                 7:5  %q(a (nested) b)
++                      7:22  +
+REGEX                  7:24  /re[/]x/i
+NEWLINE                8:1
+IDENTIFIER             8:1  z
+=                      8:3  =
+IDENTIFIER             8:5  a
+/                      8:7  /
+IDENTIFIER             8:9  b
+NEWLINE                9:1
