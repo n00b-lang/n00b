@@ -1135,6 +1135,19 @@ func gc_los_allocate() {
                         heap.__value.los = nil
                         sys.gc.los.release(heap, object)
                     } else { require false }
+                    // A small object is here only for its alignment, so
+                    // releasing it must not file it under a size class.
+                    let small: Ref[byte]? = sys.gc.los.allocate_locked(
+                        heap, mutator, type_index, 64, 32, false)
+                    if small != nil {
+                        let tiny: Ref[sys.gc.core.Los_Obj] = sys.gc.core.los_of(
+                            sys.gc.core.header_of(small.get()))
+                        assert tiny.__value.bytes <= sys.gc.los.los_threshold
+                        assert tiny.__value.mapped_bytes == tiny.__value.bytes
+                        heap.__value.los = nil
+                        sys.gc.los.release(heap, tiny)
+                        assert heap.__value.los_count == 0
+                    } else { require false }
                     sys.gc.los.cache_drain(heap)
                 } else { require false }
                 sys.memory.unmap(mutator, mutator_bytes)
@@ -2788,6 +2801,71 @@ func gc_destroy_blocked_finalizer() {
     } else { require false }
 }
 
+// An optional record whose presence bit shares a byte with the record's
+// bools. The collector must read that bit where it sits; reading the byte's
+// low bit instead sees the record as absent, so nothing inside it is marked
+// and a finalizer runs on an object that is still in use. `first` is false
+// so the low bit is clear.
+record Watched {
+    live: bool
+}
+
+var watched_live: Atomic[uint] = 0
+var watched_dead: Atomic[uint] = 0
+
+func __finalize(consume self: Ref[Watched]) {
+    if self.__value.live {
+        __atomic_fetch_add(ref watched_live, 1)
+    } else {
+        __atomic_fetch_add(ref watched_dead, 1)
+    }
+}
+
+func watched(live: bool) -> Ref[Watched] {
+    var w: Watched = (live = live)
+    return ref w
+}
+
+record Flagged {
+    item:   Ref[Watched]
+    first:  bool
+    second: bool
+}
+
+object Flagged_Holder {
+    slot: Flagged?
+}
+
+func __init(self: Flagged_Holder) {
+    self.slot = (item = watched(true), first = false, second = true)
+}
+
+var flagged_holder: Flagged_Holder? = nil
+
+func flagged_intact(holder: Flagged_Holder) -> bool {
+    let kept: Flagged? = holder.slot
+    return kept != nil and !kept.first and kept.second and kept.item.__value.live
+}
+
+func gc_option_tag() {
+    flagged_holder = new[Flagged_Holder]()
+    // Dead objects are finalized by the collections that would also miss the
+    // live one; making them is also what brings those collections.
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while __atomic_load(ref watched_dead) < 1024 {
+        require __os_now_ns() < deadline
+        for i: int from 0 until 64 {
+            watched(false)
+        }
+        __gc_enter_blocking()
+        __os_thread_yield()
+        __gc_leave_blocking()
+    }
+    require __atomic_load(ref watched_live) == 0
+    let holder: Flagged_Holder? = flagged_holder
+    require holder != nil and flagged_intact(holder)
+}
+
 gc_atomic()
 gc_atomic_rmw_u32()
 gc_byte_offset()
@@ -2828,4 +2906,5 @@ gc_user_generic_object_finalizer()
 gc_boxed_finalizer_dispatch()
 gc_boxed_reference_dispatch()
 gc_destroy_blocked_finalizer()
+gc_option_tag()
 __fd_write(2, "ok")

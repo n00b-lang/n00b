@@ -33,6 +33,12 @@ runtime)
     N00B_PATH="$program_dir" "$compiler" build --generic --verify-analyses \
         --output "$tmp/generic" "$program_dir/bitcode_generic.n"
     "$tmp/generic"
+    "$compiler" build --output "$tmp/narrowed_global_field" \
+        "$program_dir/bitcode_narrowed_global_field.n"
+    "$tmp/narrowed_global_field"
+    "$compiler" build --output "$tmp/generic_finalizer_probe" \
+        "$program_dir/bitcode_generic_finalizer_probe.n"
+    "$tmp/generic_finalizer_probe"
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
@@ -73,6 +79,17 @@ build-time)
         '^  --> .*bitcode_comptime_fail.n:2:13$'
     grep -q 'error N00B-B0012: the build-time program' \
         "$tmp/bitcode_comptime_fail.out"
+    # Only static literals are baked at build time. Literals of runtime
+    # values are made where they are used, so a program with only those
+    # skips the build-time stage.
+    "$compiler" build --profile-compile --output "$tmp/build_time_skipped" \
+        "$program_dir/bitcode_build_time_skipped.n" \
+        2>"$tmp/build_time_skipped.err"
+    if grep -q '^PROFILE build-time ' "$tmp/build_time_skipped.err"; then
+        echo 'the build-time stage ran without static literals' >&2
+        exit 1
+    fi
+    test "$("$tmp/build_time_skipped")" = 3
     ;;
 *)
     echo "unknown part $part" >&2

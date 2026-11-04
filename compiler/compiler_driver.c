@@ -3915,6 +3915,82 @@ n00bb_format_type_names(parse_grammar_t *grammar, parse_tree_t *node,
         };
 }
 
+// The leaf token at the first or last edge of a subtree.
+static parse_token_info_t *
+n00bb_format_edge_token(parse_tree_t *node, bool last)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        size_t count = core_tree_num_children(node);
+        if (!count) return nullptr;
+        node = core_tree_child(node, last ? count - 1 : 0);
+    }
+    return node ? parse_node_token(node) : nullptr;
+}
+
+// The `new[List[T]]()` an expression consists of, if it is one: an empty
+// list built with no arguments.
+static parse_tree_t *
+n00bb_format_empty_list(parse_grammar_t *grammar, parse_tree_t *node,
+                        core_string_t source)
+{
+    while (node && !core_tree_is_leaf(node)
+           && !nt_is(grammar, node, CORE_STRING_STATIC("new-expr"))
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    if (!node || core_tree_is_leaf(node)
+        || !nt_is(grammar, node, CORE_STRING_STATIC("new-expr"))
+        || child_nt(grammar, node, CORE_STRING_STATIC("call-args")))
+        return nullptr;
+    parse_tree_t *type = child_nt(grammar, node,
+                                  CORE_STRING_STATIC("type-spec"));
+    parse_token_info_t *first = type
+        ? n00bb_format_edge_token(type, false) : nullptr;
+    if (!first) return nullptr;
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(first);
+    if (end > source.u8_bytes || end - start != 4
+        || memcmp(source.data + start, "List", 4))
+        return nullptr;
+    return node;
+}
+
+// Rewrites `new[List[T]]()` as `[]` where the list's type is already
+// written down: a typed declaration, a `return`, or an assignment to an
+// existing place. Call arguments are left alone, since a parameter may be
+// generic.
+static void
+n00bb_format_empty_lists(parse_grammar_t *grammar, parse_tree_t *node,
+                         core_string_t source,
+                         n00bb_format_type_insertion_t *insertions,
+                         size_t *used, size_t capacity)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    parse_tree_t *value = nullptr;
+    if ((nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
+         && child_nt(grammar, node, CORE_STRING_STATIC("type-spec")))
+        || nt_is(grammar, node, CORE_STRING_STATIC("return-stmt"))
+        || (nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt"))
+            && child_nt(grammar, node, CORE_STRING_STATIC("place"))))
+        value = child_nt(grammar, node, CORE_STRING_STATIC("expression"));
+    parse_tree_t *list = value
+        ? n00bb_format_empty_list(grammar, value, source) : nullptr;
+    parse_token_info_t *first = list
+        ? n00bb_format_edge_token(list, false) : nullptr;
+    parse_token_info_t *last = list
+        ? n00bb_format_edge_token(list, true) : nullptr;
+    if (first && last && *used < capacity) {
+        insertions[(*used)++] = (n00bb_format_type_insertion_t){
+            .at = parse_token_start_byte(first),
+            .end = parse_token_end_byte(last),
+            .type = core_string_dup(CORE_STRING_STATIC("[]")),
+        };
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        n00bb_format_empty_lists(grammar, core_tree_child(node, i), source,
+                                 insertions, used, capacity);
+}
+
 static core_string_t
 n00bb_format_canonical_type(core_string_t printed)
 {
@@ -3962,10 +4038,13 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
     n00bb_format_type_insertion_t *insertions =
         core_alloc_array(n00bb_format_type_insertion_t, capacity + 1);
     size_t used = 0;
-    if (state->lex && state->lex->parser)
-        n00bb_format_type_names(grammar,
-            parse_pwz_get_tree(state->lex->parser), source,
-            insertions, &used, capacity, false);
+    if (state->lex && state->lex->parser) {
+        parse_tree_t *tree = parse_pwz_get_tree(state->lex->parser);
+        n00bb_format_type_names(grammar, tree, source, insertions, &used,
+                                capacity, false);
+        n00bb_format_empty_lists(grammar, tree, source, insertions, &used,
+                                 capacity);
+    }
     for (parse_scope_t *scope = symtab->all_scopes; scope;
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -4125,6 +4204,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     bool check = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--check"));
     bool normalize = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--normalize"));
+    bool keep_layout = normalize && parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--keep-layout"));
     bool ascii_tags = n00bb_setting_bool(N00BB_KEY_FMT_ASCII_TAGS);
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -4169,33 +4250,45 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             continue;
         }
         core_string_t print_source = normalized.data ? normalized : source;
-        if (normalized_parser) tree = parse_pwz_get_tree(normalized_parser);
-        parse_print_opts_t options = {
-            .source = print_source,
-            .width = 88,
-            .indent = 4,
-        };
-        core_string_t printed = parse_tree_print(grammar, tree, &options);
-        core_string_t restored = printed.data
-            ? n00bb_format_restore_breaks(grammar, print_source, printed)
-            : (core_string_t){0};
-        parse_pwz_free(normalized_parser);
-        scan_token_stream_free(normalized_tokens);
-        core_free(normalized.data);
-        core_free(printed.data);
-        core_string_t aligned = restored.data ? n00bb_format_align(restored)
-                                              : (core_string_t){0};
-        core_free(restored.data);
-        core_string_t signatures = aligned.data
-            ? n00bb_format_signatures(grammar, aligned) : (core_string_t){0};
-        core_free(aligned.data);
-        core_string_t channels = signatures.data
-            ? n00bb_format_channels(grammar, signatures) : (core_string_t){0};
-        core_free(signatures.data);
-        core_string_t formatted = channels.data
-            ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
-            : (core_string_t){0};
-        core_free(channels.data);
+        core_string_t formatted = {0};
+        if (keep_layout) {
+            formatted = core_string_dup(print_source);
+            parse_pwz_free(normalized_parser);
+            scan_token_stream_free(normalized_tokens);
+            core_free(normalized.data);
+        }
+        else {
+            if (normalized_parser)
+                tree = parse_pwz_get_tree(normalized_parser);
+            parse_print_opts_t options = {
+                .source = print_source,
+                .width = 88,
+                .indent = 4,
+            };
+            core_string_t printed = parse_tree_print(grammar, tree, &options);
+            core_string_t restored = printed.data
+                ? n00bb_format_restore_breaks(grammar, print_source, printed)
+                : (core_string_t){0};
+            parse_pwz_free(normalized_parser);
+            scan_token_stream_free(normalized_tokens);
+            core_free(normalized.data);
+            core_free(printed.data);
+            core_string_t aligned = restored.data
+                ? n00bb_format_align(restored) : (core_string_t){0};
+            core_free(restored.data);
+            core_string_t signatures = aligned.data
+                ? n00bb_format_signatures(grammar, aligned)
+                : (core_string_t){0};
+            core_free(aligned.data);
+            core_string_t channels = signatures.data
+                ? n00bb_format_channels(grammar, signatures)
+                : (core_string_t){0};
+            core_free(signatures.data);
+            formatted = channels.data
+                ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
+                : (core_string_t){0};
+            core_free(channels.data);
+        }
         if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
             n00bb_internal_error(requests->diagnostics, unit,
                 (core_diag_location_t){}, "formatting",
@@ -4846,7 +4939,12 @@ build_time_work_possible(const n00bb_link_analysis_t *analysis)
         n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
         if (!state || state->build_time_use.has_location) return true;
         if (state->interface_module) continue;
-        if (state->literal_site_nodes.len) return true;
+        // Only static literals are baked; the rest run where they are used.
+        for (size_t j = 0; j < state->literal_site_nodes.len; j++) {
+            n00bb_node_facts_t *facts = n00bb_node_facts(
+                state->literal_site_nodes.data[j]);
+            if (facts && facts->static_literal) return true;
+        }
         parse_scope_t *scope = module_scope(state);
         for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope
                                                : nullptr;
@@ -5581,10 +5679,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && deferred_build_time && link_analysis
         && build_time_work_possible(link_analysis))
     {
+        double started = profile_compile ? n00bb_profile_seconds() : 0;
         located = fork_build_time_stage(argc, argv, argv0, cli,
             &invocation.parsed, link, link_analysis, cli_diagnostics,
             &build_time_reported);
         args = invocation.parsed;
+        if (profile_compile)
+            fprintf(stderr, "PROFILE build-time %.3f\n",
+                    n00bb_profile_seconds() - started);
     }
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),

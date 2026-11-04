@@ -88,8 +88,11 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
     if limit < los_cache_min {
         limit = los_cache_min
     }
+    // A small object is here only for its alignment; the cache is sorted by
+    // size classes that start above `los_threshold`.
     if __abi_ref_address(obj.__value.mapping) == __abi_ref_address(obj) and
         obj.__value.mapped_bytes == obj.__value.bytes and
+        obj.__value.bytes > los_threshold and
         obj.__value.bytes <= los_cache_object and
         heap.__value.los_cache_bytes + obj.__value.mapped_bytes <= limit {
         let index: uint = size_class(obj.__value.bytes)
