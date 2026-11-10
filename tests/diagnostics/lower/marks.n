@@ -177,3 +177,45 @@ func carries_still() -> int {
 func token_caller(token: Token) -> int {
     return token_leak(token)
 }
+
+func source_one() -> string {
+    return "one"
+}
+
+func source_two() -> string {
+    return "two"
+}
+
+func vet_one(path: string) -> string fail: int {
+    return check(path)!
+}
+
+func vet_two(path: string) -> string fail: int {
+    return check(path)!
+}
+
+func sink_one(path: string) -> int {
+    _ = path
+    return 1
+}
+
+func sink_two(path: string) -> int {
+    _ = path
+    return 2
+}
+
+mark Listed {
+    from: source_one, source_two
+    cleared_by: vet_one(path), vet_two(path)
+    rejected_by: sink_one(path), sink_two(path)
+}
+
+func listed_leaks() -> int {
+    return sink_one(source_two()) + sink_two(source_one())
+}
+
+func listed_vetted() -> int fail: int {
+    let first: string = vet_one(source_one())!
+    let second: string = vet_two(source_two())!
+    return sink_one(first) + sink_two(second)
+}

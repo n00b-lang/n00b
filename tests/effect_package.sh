@@ -59,9 +59,10 @@ status=0
 test "$status" = 9 \
     || fail "the program built from library interfaces exited $status, not 9"
 N00B_PATH="$sources" "$compiler" check "$sources/handles.n" >"$tmp/out" 2>&1 \
-    || fail "handles.n failed"
-grep -q 'N00B-S0080.*package `alpha`.*package `beta`' "$tmp/out" \
-    || fail "handled_by from another package didn't warn"
+    || fail "handled_by from another package didn't stop the effect"
+if grep -q 'handled_by' "$tmp/out"; then
+    fail "handled_by from another package warned"
+fi
 N00B_PATH="$sources" "$compiler" check sorter.facade >"$tmp/out" 2>&1 \
     || fail "sorter failed to check"
 for round in fresh cached; do

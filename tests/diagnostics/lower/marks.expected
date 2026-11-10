@@ -91,3 +91,21 @@ tests/diagnostics/lower/marks.n:173:5: error N00B-S0073: this check is false: `n
   help: change the code so the check holds, or change the check
 tests/diagnostics/lower/marks.n:177:6: warning N00B-N0019: function `token_caller` is never called
   help: call it or delete it
+tests/diagnostics/lower/marks.n:189:6: warning N00B-N0019: function `vet_one` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:193:6: warning N00B-N0019: function `vet_two` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:197:6: warning N00B-N0019: function `sink_one` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:202:6: warning N00B-N0019: function `sink_two` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:213:6: warning N00B-N0019: function `listed_leaks` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:214:12: error N00B-S0081: this argument may carry `Listed`, but `path` of `marks.sink_one` rejects it
+  tests/diagnostics/lower/marks.n:214:21: note: this argument comes from `marks.source_two`
+  help: check it with `marks.vet_one` first
+tests/diagnostics/lower/marks.n:214:37: error N00B-S0081: this argument may carry `Listed`, but `path` of `marks.sink_two` rejects it
+  tests/diagnostics/lower/marks.n:214:46: note: this argument comes from `marks.source_one`
+  help: check it with `marks.vet_one` first
+tests/diagnostics/lower/marks.n:217:6: warning N00B-N0019: function `listed_vetted` is never called
+  help: call it or delete it

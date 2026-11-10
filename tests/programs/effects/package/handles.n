@@ -3,3 +3,5 @@ import beta
 func f() {
     beta.quiet()
 }
+
+forbids_effect(f, alpha.Audited)

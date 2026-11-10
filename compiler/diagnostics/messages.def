@@ -802,7 +802,6 @@ N00B_TEXT(MARK_HAS_NO_VALIDATOR, "`{0}` has no validator, so pass a value that d
 N00B_TEXT(PARAMETER_CARRIES, "parameter `{0}` carries `{1}` by its declaration")
 N00B_TEXT(FIELD_CARRIES, "field `{0}` carries `{1}`")
 N00B_TEXT(TYPE_CARRIES, "every `{0}` carries `{1}`")
-N00B_TEXT(HANDLED_OUTSIDE_PACKAGE, "`handled_by` for `{0}`, which package `{1}` declares, is written in package `{2}`")
 N00B_TEXT(HAS_EFFECT_TAKES_ONE, "`has_effect` takes a single effect, but `{0}` is a group")
 N00B_TEXT(NO_PARAMETER_NAMED, "`{0}` has no parameter `{1}`")
 N00B_TEXT(QUERY_NEEDS_FUNCTION, "the first argument of `{0}` must name a function")

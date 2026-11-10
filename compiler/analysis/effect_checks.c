@@ -300,11 +300,11 @@ named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
 static bool
 clause_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, node, CORE_STRING_STATIC("effect-source"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler"))
+    return nt_is(grammar, node, CORE_STRING_STATIC("effect-source-item"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler-item"))
         || nt_is(grammar, node, CORE_STRING_STATIC("effect-scope"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("mark-clearer"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("mark-rejecter"));
+        || nt_is(grammar, node, CORE_STRING_STATIC("mark-clearer-item"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("mark-rejecter-item"));
 }
 
 static core_list_t(parse_tree_ptr_t)
@@ -1368,9 +1368,6 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
                            core_buffer_string(&qualified), visit->node)
         : nullptr;
     core_buffer_release(&qualified);
-    core_string_t declaring = owner ? n00bb_package_id(owner)
-                                    : (core_string_t){0};
-    core_string_t writing = n00bb_package_id(lower->unit);
     core_list_t(parse_tree_ptr_t) clauses = effect_clauses(grammar,
                                                            visit->node);
     bool scoped = false;
@@ -1390,7 +1387,7 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
                                             CORE_STRING_STATIC("expression"));
         parse_tree_t *site = expression ? expression : clause;
         bool handled = nt_is(grammar, clause,
-                             CORE_STRING_STATIC("effect-handler"));
+                             CORE_STRING_STATIC("effect-handler-item"));
         parse_sym_entry_t *symbol = named_function(grammar, lower->unit,
                                                    expression);
         bool rejected = builtin && symbol
@@ -1413,14 +1410,6 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
                 lower_span_for_tree(context, site),
                 N00B_TEXT_EFFECT_NEEDS_FUNCTION,
                 N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, site))));
-        else if (handled && owner && owner != lower->unit
-                 && !core_string_eq(declaring, writing))
-            lower_report(context, N00B_DIAG_HANDLED_ELSEWHERE,
-                lower_span_for_tree(context, clause),
-                N00B_TEXT_HANDLED_OUTSIDE_PACKAGE,
-                N00BB_ARGS(ARG_TEXT(name),
-                           ARG_TEXT(n00bb_package_namespace(owner)),
-                           ARG_TEXT(n00bb_package_namespace(lower->unit))));
     }
     core_list_free(clauses);
     return ir_lower_prune_node(context, visit->node);
@@ -1434,8 +1423,8 @@ record_mark_rule(ir_lower_context_t *context, ir_func_t *stub,
     parse_grammar_t *grammar = lower->grammar;
     parse_tree_t *target = child_nt(grammar, clause,
                                     CORE_STRING_STATIC("effect-query-name"));
-    parse_tree_t *parameter = core_tree_num_children(clause) > 4
-        ? core_tree_child(clause, 4) : nullptr;
+    parse_tree_t *parameter = core_tree_num_children(clause) > 2
+        ? core_tree_child(clause, 2) : nullptr;
     core_string_t name = source_text_of(lower->unit, target);
     declaration_t found = target
         ? declaring_unit(grammar, lower->unit, name, function_declared)
@@ -1508,7 +1497,7 @@ n00bb_lower_mark_declaration(ir_lower_context_t *context,
                                                            visit->node);
     for (size_t c = 0; ok && c < clauses.len; c++) {
         parse_tree_t *clause = clauses.data[c];
-        if (nt_is(grammar, clause, CORE_STRING_STATIC("effect-source"))) {
+        if (nt_is(grammar, clause, CORE_STRING_STATIC("effect-source-item"))) {
             parse_tree_t *expression = child_nt(grammar, clause,
                 CORE_STRING_STATIC("expression"));
             parse_sym_entry_t *symbol = named_function(grammar, lower->unit,
@@ -1523,7 +1512,7 @@ n00bb_lower_mark_declaration(ir_lower_context_t *context,
             else ok = record_effect_clause(context, stub, symbol, false);
         }
         else ok = record_mark_rule(context, stub, clause,
-            nt_is(grammar, clause, CORE_STRING_STATIC("mark-clearer")));
+            nt_is(grammar, clause, CORE_STRING_STATIC("mark-clearer-item")));
     }
     core_list_free(clauses);
     return ok && ir_lower_prune_node(context, visit->node);

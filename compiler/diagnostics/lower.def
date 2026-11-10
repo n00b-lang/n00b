@@ -327,13 +327,9 @@ N00B_DIAG(EFFECT_DECLARATION, "N00B-S0079", ERROR,
     "don't get it. Both must name functions. `scope` limits how far the\n"
     "effect reaches: `caller`, `package` or `thread` (the default). Only the\n"
     "declaring module can give a scope, and built-in effects always reach\n"
-    "the whole thread. Adding clauses to another module's effect needs its\n"
-    "qualified name.")
-N00B_DIAG(HANDLED_ELSEWHERE, "N00B-S0080", WARNING,
-    "`handled_by` is written outside the package that declares the effect",
-    "`handled_by` removes an effect from callers, so it belongs in the\n"
-    "package that declares the effect. Then everything that stops the effect\n"
-    "is listed in one place.")
+    "the whole thread. `from` and `handled_by` can list several functions,\n"
+    "separated by commas. Adding clauses to another module's effect needs\n"
+    "its qualified name.")
 N00B_DIAG(MARK_REJECTED, "N00B-S0081", ERROR,
     "a value that may carry a mark is passed to a parameter that rejects it",
     "A mark follows data from the functions that produce it, through every\n"
@@ -343,8 +339,9 @@ N00B_DIAG(MARK_DECLARATION, "N00B-S0082", ERROR,
     "a mark declaration names something it can't use",
     "`mark Name { from: f; cleared_by: g(p); rejected_by: h(p) }` declares\n"
     "a mark. `f`, `g` and `h` must be functions, `p` one of their parameters,\n"
-    "and a validator (`cleared_by`) must be able to fail. A mark is declared\n"
-    "in the module that owns it.")
+    "and a validator (`cleared_by`) must be able to fail. Each clause can\n"
+    "list several, separated by commas. A mark is declared in the module\n"
+    "that owns it.")
 N00B_DIAG(CONSTANT_ESCAPE, "N00B-S0083", ERROR,
     "a reference to read-only memory is kept where it could be written",
     "Nothing reachable from a constant or a `View` may change. Keeping a\n"

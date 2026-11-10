@@ -129,3 +129,26 @@ effect allocates {
     from: stamp
     scope: package
 }
+
+func list_time() {
+}
+
+func closes_both() {
+    list_time()
+}
+
+effect Listed {
+    from: stamp, list_time
+    handled_by: close_out, closes_both
+}
+
+func lists() {
+    list_time()
+}
+
+func closes_listed() {
+    closes_both()
+}
+
+has_effect(stamps, Listed) and has_effect(lists, Listed)
+forbids_effect(closes_listed, Listed) and forbids_effect(closes, Listed)
