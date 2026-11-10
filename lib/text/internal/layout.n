@@ -59,7 +59,7 @@ private func resolve_opt_dim(dim: Layout_Dim?, available: i64, unset: i64)
     if dim == nil {
         return unset
     }
-    let d: Layout_Dim = dim.get()
+    let d: Layout_Dim = dim
     return resolve(d, available)
 }
 

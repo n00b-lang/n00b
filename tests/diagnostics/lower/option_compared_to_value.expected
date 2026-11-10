@@ -1,0 +1,2 @@
+tests/diagnostics/lower/option_compared_to_value.n:5:9: error N00B-S0084: a `u32?` may be nil, so it cannot be compared with a `u32` until it is tested
+  help: test it against nil first; once the test shows it holds a value, it compares as that value

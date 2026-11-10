@@ -1,2 +1,5 @@
+tests/diagnostics/lower/finalized_field_unset.n:2:5: warning N00B-N0022: field `id` of `Guard` is never used
+tests/diagnostics/lower/finalized_field_unset.n:5:8: warning N00B-N0023: type `Holder` is never used
+  help: remove it
 tests/diagnostics/lower/finalized_field_unset.n:13:1: error N00B-S0069: `__init` never sets `guard`, whose type `Guard` has a finalizer
   help: set every field that holds a value with a finalizer in `__init`

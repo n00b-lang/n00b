@@ -127,7 +127,7 @@ func format_bytes(fd: int, bytes: Ref[Array[u8]], len: uint,
     if !fmt.literal and force_hex {
         var h: uint = 0
         while h < len {
-            out += write_byte_hex(fd, bytes[h], false)!
+            out += write_byte_hex(fd, bytes.__value[h], false)!
             h += 1
         }
         return out
@@ -138,7 +138,7 @@ func format_bytes(fd: int, bytes: Ref[Array[u8]], len: uint,
     out += format_byte(fd, 0x22)!
     var i: uint = 0
     while i < len {
-        let c: u8 = bytes[i]
+        let c: u8 = bytes.__value[i]
         switch c {
             case 0x5c, 0x22 {
                 out += write_escape(fd, c)!

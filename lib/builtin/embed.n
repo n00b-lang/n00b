@@ -57,7 +57,7 @@ private func element_row(probe: Array['E]) -> Ref[abi.Type_Record]? {
     if array_row == nil {
         return nil
     }
-    let components: abi.Range = array_row.get().__value.components
+    let components: abi.Range = array_row.__value.components
     let index: i64 = __abi_range_index(components.first, components.count, 0)
     if index < 0 {
         return nil
@@ -80,7 +80,7 @@ private func stride_bytes(row: Ref[abi.Type_Record]) -> uint {
 private func plain_data(row: Ref[abi.Type_Record]) -> bool {
     let boolean: Ref[abi.Type_Record]? = __abi_type_for(typeof(false))
     let is_bool: bool = boolean != nil
-        and boolean.get().__value.typehash == row.__value.typehash
+        and boolean.__value.typehash == row.__value.typehash
     return row.__value.tracing_index == 0 and row.__value.flags & bits_flag == 0 and !is_bool
 }
 
@@ -132,7 +132,7 @@ fence litmod embed(contents: string, site: litmod_site.Literal_Site)
     if found == nil {
         fail "'embed needs a concrete element type"
     }
-    let row: Ref[abi.Type_Record] = found.get()
+    let row: Ref[abi.Type_Record] = found
     let name: string = (unsafe_cast[Ref[string]] (ref row.__value.canonical_name)).__value
     let stride: uint = stride_bytes(row)
     if !plain_data(row) or stride == 0 {

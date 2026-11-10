@@ -1,0 +1,2 @@
+const LOW = -5
+const BIG = 300

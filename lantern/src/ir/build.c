@@ -111,6 +111,12 @@ struct ib_node {
 };
 
 typedef struct {
+    ir_instr_t *in;
+    uint32_t    operand;
+    ir_span_t   span;
+} pending_ref_t;
+
+typedef struct {
     ir_ctx_t            *ctx;
     ir_module_t         *m;
     ir_diags_t          *d;
@@ -120,6 +126,10 @@ typedef struct {
 
     const ir_profile_t *const *profiles;
     size_t                     n_profiles;
+
+    pending_ref_t *pending;
+    size_t         n_pending;
+    size_t         cap_pending;
 } B;
 
 static ir_value_t *global_value(B *b, core_string_t name);
@@ -2377,7 +2387,31 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
     }
 
     if (o->refkind == IR_VAL_GLOBAL) {
-        ir_instr_operand_value(in, global_value(b, o->text));
+        ir_value_t *global = global_value(b, o->text);
+
+        if (global) {
+            ir_instr_operand_value(in, global);
+
+            return;
+        }
+        ir_value_t *later = ir_alloc(b->ctx, sizeof(ir_value_t));
+
+        b->pending = ir_grow(b->ctx, b->pending, &b->cap_pending,
+                             b->n_pending + 1, sizeof(pending_ref_t));
+        if (!later || !b->pending) {
+            bfail(b, o->span, CORE_STRING_STATIC("unknown value"));
+
+            return;
+        }
+        later->kind = IR_VAL_GLOBAL;
+        later->name = ir_strdup(b->ctx, o->text);
+        if (!ir_instr_operand_value(in, later)) {
+            bfail(b, o->span, CORE_STRING_STATIC("unknown value"));
+
+            return;
+        }
+        b->pending[b->n_pending++] = (pending_ref_t){
+            .in = in, .operand = in->n_operands - 1, .span = o->span};
 
         return;
     }
@@ -2514,7 +2548,9 @@ static void *r_func(parse_reduce_t *r)
                 return nullptr;
             }
         } else if (p && !p->neg && p->refkind == IR_VAL_INSTR && p->type) {
-            ir_param_add(f, p->text, p->type);
+            if ((th_mode)p->uval != TH_OUT) {
+                ir_param_add(f, p->text, p->type);
+            }
         } else if (p && !p->neg && p->refkind == IR_VAL_GLOBAL && p->type) {
             if (!ir_kwparam_add(f, p->text, p->type)) {
                 bfail(b, p->span,
@@ -2528,6 +2564,14 @@ static void *r_func(parse_reduce_t *r)
     for (size_t i = 0; i < pv.len; i++) {
         ib_node *p = pv.data[i];
         if (!p || !p->text.data || !p->l1) continue;
+        if (!p->neg && p->refkind == IR_VAL_INSTR
+            && (th_mode)p->uval == TH_OUT) {
+            if (!p->l1->n) continue;
+            bfail(b, p->span,
+                  CORE_STRING_STATIC(
+                      "an out parameter has no value to annotate"));
+            return nullptr;
+        }
         ir_value_t *value = ir_value_find(f, p->text);
         if (!value) {
             bfail(b, p->span,
@@ -2775,6 +2819,23 @@ static void resolve_global_initializers(B *b)
     }
 }
 
+static void resolve_pending_refs(B *b)
+{
+    for (size_t i = 0; i < b->n_pending && !b->failed; i++) {
+        pending_ref_t *ref     = &b->pending[i];
+        ir_operand_t  *operand = &ref->in->operands[ref->operand];
+        ir_value_t    *value   = global_value(b, operand->value->name);
+
+        if (!value) {
+            bfail(b, ref->span, CORE_STRING_STATIC("unknown value"));
+
+            return;
+        }
+        operand->value = value;
+        ir_instr_use_added(ref->in, ref->operand);
+    }
+}
+
 ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
                              const ir_profile_t *const *profiles,
                              size_t n_profiles, ir_diags_t *d)
@@ -2926,6 +2987,7 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
     reg(&b, w, CORE_STRING_STATIC("module"), r_module);
 
     parse_tree_walk_reduce(w, parse_pwz_get_tree(p));
+    resolve_pending_refs(&b);
     resolve_global_initializers(&b);
     parse_tree_walk_free(w);
     ir_typelang_lower_free(b.types);

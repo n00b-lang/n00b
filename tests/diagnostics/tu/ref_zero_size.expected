@@ -1,6 +1,9 @@
+tests/diagnostics/tu/ref_zero_size.n:2:5: warning N00B-N0022: field `unit` of `Marker` is never used
 tests/diagnostics/tu/ref_zero_size.n:5:16: error N00B-T0587: `nil` takes no storage, so it cannot be referenced
   help: use the value itself, which is always `nil`
 tests/diagnostics/tu/ref_zero_size.n:6:19: error N00B-T0587: `Marker` takes no storage, so it cannot be referenced
   help: use the value itself, which is always `nil`
 tests/diagnostics/tu/ref_zero_size.n:7:17: error N00B-T0587: `Tuple[nil, nil]` takes no storage, so it cannot be referenced
   help: use the value itself, which is always `nil`
+tests/diagnostics/tu/ref_zero_size.n:8:5: warning N00B-N0024: `foreign_nil` is never used
+  help: remove it

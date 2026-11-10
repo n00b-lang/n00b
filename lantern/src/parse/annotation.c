@@ -1,5 +1,4 @@
 #include "parse/annotation.h"
-#include "parse/infer.h"
 #include "private/parse/grammar.h"
 #include "lib/alloc.h"
 
@@ -27,7 +26,6 @@ parse_annot_new(parse_annot_kind_t kind)
     a->type_ref        = PARSE_CHILD_NONE;
     a->value_ref       = PARSE_CHILD_NONE;
     a->notrivia_ref    = PARSE_CHILD_NONE;
-    a->adt_keyword_ref = PARSE_CHILD_NONE;
 
     return a;
 }
@@ -43,24 +41,16 @@ parse_annot_clone(const parse_annotation_t *a)
 
     *c = *a;
 
-    c->infer_ast = parse_infer_clone(a->infer_ast);
-
     c->args_text          = core_string_dup(a->args_text);
     c->source_origin      = core_string_dup(a->source_origin);
     c->scope_tag          = core_string_dup(a->scope_tag);
-    c->type_spec          = core_string_dup(a->type_spec);
-    c->infer_expr         = core_string_dup(a->infer_expr);
-    c->adt_kind           = core_string_dup(a->adt_kind);
     c->visibility_spec    = core_string_dup(a->visibility_spec);
     c->op_kind            = core_string_dup(a->op_kind);
     c->sym_kind           = core_string_dup(a->sym_kind);
     c->disambig_predicate = core_string_dup(a->disambig_predicate);
 
-    c->mutability           = core_string_dup(a->mutability);
     c->ns_name              = core_string_dup(a->ns_name);
     c->direction            = core_string_dup(a->direction);
-    c->emit_action          = core_string_dup(a->emit_action);
-    c->val_expr             = core_string_dup(a->val_expr);
 
     if (core_list_len(a->tags) > 0) {
         c->tags = core_list_new(core_string_t);
@@ -68,41 +58,10 @@ parse_annot_clone(const parse_annotation_t *a)
             core_list_push(c->tags, core_string_dup(a->tags.data[i]));
     }
 
-    if (core_list_len(a->emit_operands) > 0) {
-        c->emit_operands = core_list_new(parse_child_ref_t);
-        for (size_t i = 0; i < core_list_len(a->emit_operands); i++) {
-            parse_child_ref_t ref = a->emit_operands.data[i];
-            ref.name = core_string_dup(ref.name);
-            core_list_push(c->emit_operands, ref);
-        }
-    }
-
-    if (core_list_len(a->constraints) > 0) {
-        c->constraints = core_list_new(parse_con_spec_t);
-
-        for (size_t i = 0; i < core_list_len(a->constraints); i++) {
-            parse_con_spec_t s = a->constraints.data[i];
-            parse_con_spec_t d = {
-                .kind  = s.kind,
-                .name  = core_string_dup(s.name),
-                .types = core_list_new(core_string_t),
-                .index = s.index,
-            };
-
-            for (size_t j = 0; j < core_list_len(s.types); j++) {
-                core_list_push(d.types, core_string_dup(s.types.data[j]));
-            }
-
-            core_list_push(c->constraints, d);
-        }
-    }
-
-    c->val_ref.name         = core_string_dup(a->val_ref.name);
     c->name_ref.name        = core_string_dup(a->name_ref.name);
     c->type_ref.name        = core_string_dup(a->type_ref.name);
     c->value_ref.name       = core_string_dup(a->value_ref.name);
     c->notrivia_ref.name    = core_string_dup(a->notrivia_ref.name);
-    c->adt_keyword_ref.name = core_string_dup(a->adt_keyword_ref.name);
 
     return c;
 }
@@ -114,21 +73,12 @@ parse_annot_free(parse_annotation_t *a)
         return;
     }
 
-    parse_infer_free(a->infer_ast);
-
     core_string_t owned[] = {
         a->args_text,
         a->source_origin,
-        a->mutability,
         a->ns_name,
         a->direction,
-        a->emit_action,
-        a->val_expr,
-        a->val_ref.name,
         a->scope_tag,
-        a->type_spec,
-        a->infer_expr,
-        a->adt_kind,
         a->visibility_spec,
         a->op_kind,
         a->sym_kind,
@@ -137,29 +87,11 @@ parse_annot_free(parse_annotation_t *a)
         a->type_ref.name,
         a->value_ref.name,
         a->notrivia_ref.name,
-        a->adt_keyword_ref.name,
     };
 
     for (size_t i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
         core_free(owned[i].data);
     }
-
-    for (size_t i = 0; i < core_list_len(a->constraints); i++) {
-        parse_con_spec_t *s = &a->constraints.data[i];
-
-        for (size_t j = 0; j < core_list_len(s->types); j++) {
-            core_free(s->types.data[j].data);
-        }
-
-        core_list_free(s->types);
-        core_free(s->name.data);
-    }
-
-    core_list_free(a->constraints);
-
-    for (size_t i = 0; i < core_list_len(a->emit_operands); i++)
-        core_free(a->emit_operands.data[i].name.data);
-    core_list_free(a->emit_operands);
 
     for (size_t i = 0; i < core_list_len(a->tags); i++)
         core_free(a->tags.data[i].data);
@@ -367,3 +299,4 @@ parse_nt_find_direct_annot(const parse_nonterm_t *nt, parse_annot_kind_t kind)
     }
     return nullptr;
 }
+

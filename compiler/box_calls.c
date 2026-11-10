@@ -4,6 +4,7 @@
 #include "cached_body.h"
 #include "compiler_cache.h"
 #include "compiler_lower.h"
+#include "compiler_lower_emit.h"
 #include "qualified_names.h"
 #include "sequence_transfer.h"
 #include "ir/layout.h"
@@ -21,6 +22,8 @@ typedef struct {
     core_dict_t emitted;
     core_dict_t type_indices;
     ir_func_t *indexed_function;
+    n00bb_comparison_t comparison;
+    core_buffer_t detail;
 } box_calls_t;
 
 typedef enum {
@@ -60,11 +63,23 @@ retarget(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
     th_ctx *types = ir_module_types(target->owner);
     th_type **variables = nullptr;
     size_t count = th_free_vars(types, target->type, &variables);
-    if (count != actual_count) return false;
+    if (count != actual_count) {
+        core_string_t printed = th_print(types, target->type);
+        core_buffer_printf(&calls->detail,
+            "`%.*s` has %zu type variables where %zu were supplied (%.*s)",
+            (int)target->name.u8_bytes, target->name.data, count,
+            actual_count, (int)printed.u8_bytes, printed.data);
+        return false;
+    }
     th_type *signature = th_type_clone_replacing(types, target->type,
         (const th_type *const *)variables, actuals, count);
     ir_value_t *callee = ir_func_address(target->owner, target);
-    if (!signature || !callee) return false;
+    if (!signature || !callee) {
+        core_buffer_printf(&calls->detail, "`%.*s` %s",
+            (int)target->name.u8_bytes, target->name.data,
+            signature ? "has no address" : "could not be instantiated");
+        return false;
+    }
     instruction->op = IR_OP_CALL;
     instruction->n_operands = 0;
     instruction->n_mods = 0;
@@ -479,6 +494,7 @@ own_operand(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
                                        transfers);
     if (!owned) return false;
     instruction->operands[index].value = owned;
+    ir_instr_use_added(instruction, index);
     return true;
 }
 
@@ -497,7 +513,10 @@ box_raw_arguments(box_calls_t *calls, ir_func_t *caller,
             || th_is_closed(types, type)
             || address_storage(caller, value, 0) != ADDRESS_RAW) continue;
         ir_value_t *boxed = slot_reference(calls, caller, instruction, value);
-        if (boxed) operand->value = boxed;
+        if (boxed) {
+            operand->value = boxed;
+            ir_instr_use_added(instruction, k);
+        }
     }
     return true;
 }
@@ -740,23 +759,9 @@ plan_pattern(pattern_plan_t *plan, th_type *pattern)
                            / sizeof(plan->variables[0])) return false;
         uint32_t slot = plan->slots;
         plan->variables[plan->slots++] = pattern;
-        th_type *contracts[16];
-        uint32_t contract_count = 0;
-        for (size_t i = 0; i < th_var_constraint_count(pattern); i++) {
-            th_constraint constraint;
-            if (!th_var_constraint_at(pattern, i, &constraint)) return false;
-            if (constraint.kind == TH_CON_METHOD) continue;
-            th_type *contract = constraint.kind == TH_CON_IMPLEMENTS
-                ? trait_contract(types, constraint.iface) : nullptr;
-            if (!contract || contract_count == 16) return false;
-            contracts[contract_count++] = contract;
-        }
-        bool ok = plan_word(plan, 2, nullptr, false)
+        return plan_word(plan, 2, nullptr, false)
             && plan_word(plan, slot, nullptr, false)
-            && plan_word(plan, contract_count, nullptr, false);
-        for (uint32_t i = 0; ok && i < contract_count; i++)
-            ok = plan_word(plan, 0, contracts[i], true);
-        return ok;
+            && plan_word(plan, 0, nullptr, false);
     }
     case TH_SEQUENCE:
     case TH_INDIRECTION: {
@@ -1217,16 +1222,12 @@ static bool
 rewrite_open_finalize(box_calls_t *calls, ir_func_t *caller,
                       ir_instr_t *instruction)
 {
-    ir_value_t *callee = instruction->n_operands == 2
-        && instruction->operands[0].kind == IR_OPD_VALUE
+    ir_value_t *address = n00bb_open_call(instruction,
+            CORE_STRING_STATIC("__n00bb_finalize_open"))
         && instruction->operands[1].kind == IR_OPD_VALUE
-        ? instruction->operands[0].value : nullptr;
-    ir_value_t *address = callee ? instruction->operands[1].value : nullptr;
+        ? instruction->operands[1].value : nullptr;
     th_type *reference = address ? th_resolve(address->type) : nullptr;
-    if (!callee || callee->kind != IR_VAL_FUNC || !callee->owner
-        || !n00bb_names_function(CORE_STRING_STATIC("__n00bb_finalize_open"),
-                                 callee->owner->name)
-        || !reference || th_kind_of(reference) != TH_INDIRECTION
+    if (!reference || th_kind_of(reference) != TH_INDIRECTION
         || th_is_closed(ir_module_types(caller->owner), reference))
         return true;
     th_type *referent = th_ind_referent(reference);
@@ -1240,18 +1241,11 @@ static bool
 rewrite_open_reference(box_calls_t *calls, ir_func_t *caller,
                        ir_instr_t *instruction)
 {
-    ir_value_t *callee = instruction->n_operands == 2
-        && instruction->operands[0].kind == IR_OPD_VALUE
-        && instruction->operands[1].kind == IR_OPD_VALUE
-        ? instruction->operands[0].value : nullptr;
-    bool mutable = callee && callee->kind == IR_VAL_FUNC && callee->owner
-        && n00bb_names_function(
-            CORE_STRING_STATIC("__n00bb_ref_address_mut_open"),
-            callee->owner->name);
-    if (!mutable && (!callee || callee->kind != IR_VAL_FUNC || !callee->owner
-            || !n00bb_names_function(
-                CORE_STRING_STATIC("__n00bb_ref_address_open"),
-                callee->owner->name))) return true;
+    bool mutable = n00bb_open_call(instruction,
+        CORE_STRING_STATIC("__n00bb_ref_address_mut_open")) != nullptr;
+    if ((!mutable && !n00bb_open_call(instruction,
+             CORE_STRING_STATIC("__n00bb_ref_address_open")))
+        || instruction->operands[1].kind != IR_OPD_VALUE) return true;
     ir_value_t *source = instruction->operands[1].value;
     th_type *address = instruction->dest
         ? th_resolve(instruction->dest->type) : nullptr;
@@ -1332,7 +1326,6 @@ rewrite_alloc(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction)
     return !target || retarget(calls, caller, instruction, target, &element,
                                1, nullptr, 0);
 }
-
 
 static int
 index_entry(ir_module_t *module, const ir_value_t *index)
@@ -1572,127 +1565,220 @@ rewrite_sequence_set(box_calls_t *calls, ir_func_t *caller,
                     arguments, 3);
 }
 
-enum { DISPATCH_CACHE_ARMS = 8 };
-
-typedef struct {
-    ir_instr_t *edge;
-    uint32_t operand;
-    ir_block_t *arm;
-} dispatch_arm_t;
-core_list_decl(dispatch_arm_t);
+static bool
+primitive_arm_method(ir_module_t *module, th_type *receiver,
+                     core_string_t method)
+{
+    ir_class_t class = ir_machine_of(module, receiver).class;
+    if (!n00bb_primitive_operator(class, method)) return false;
+    if (core_string_eq(method, CORE_STRING_STATIC("__equal"))) return true;
+    if (class == IR_CLASS_BOOL) return false;
+    if (core_string_eq(method, CORE_STRING_STATIC("__cmp"))) return true;
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(method);
+    return operator && !operator->shift
+        && (!operator->unsigned_only || n00bb_bitwise_type(receiver));
+}
 
 static bool
-dispatch_chain_arms(ir_func_t *dispatcher, core_list_t(dispatch_arm_t) *arms)
+open_dispatch_operand(ir_module_t *module, ir_instr_t *call, uint32_t operand)
 {
-    ir_block_t *block = ir_block_entry(dispatcher);
-    for (uint32_t guard = 0; block && guard < dispatcher->n_blocks; guard++) {
-        ir_instr_t *term = ir_block_terminator(block);
-        if (term && term->op == IR_OP_JUMP && term->n_operands == 1
-            && term->operands[0].kind == IR_OPD_BLOCK) {
-            core_list_push(*arms, ((dispatch_arm_t){term, 0,
-                                                    term->operands[0].block}));
-            return true;
-        }
-        if (!term || term->op != IR_OP_BRANCH || term->n_operands != 3
-            || term->operands[1].kind != IR_OPD_BLOCK
-            || term->operands[2].kind != IR_OPD_BLOCK) return false;
-        core_list_push(*arms, ((dispatch_arm_t){term, 1,
-                                                term->operands[1].block}));
-        block = term->operands[2].block;
-        ir_instr_t *next = ir_block_terminator(block);
-        if (next && next->op == IR_OP_UNREACHABLE) return true;
-    }
-    return false;
+    th_type *signature = ir_instr_call_signature(call);
+    signature = signature ? th_resolve(signature) : nullptr;
+    const th_param *formal = signature
+        && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, operand - 1) : nullptr;
+    ir_value_t *argument = ir_operand_value(&call->operands[operand]);
+    th_type *type = formal && formal->type ? formal->type
+        : argument ? argument->type : nullptr;
+    return type && !th_is_closed(ir_module_types(module), type);
 }
 
 static ir_value_t *
-dispatch_call(box_calls_t *calls, ir_func_t *caller, ir_block_t *block,
-              core_string_t name, th_type *result, ir_value_t **arguments,
-              size_t count, ir_span_t span)
+emitted_value(ir_lower_context_t *context, ir_op_t op, th_type *type,
+              ir_value_t *operand, th_type *tested, ir_span_t span)
 {
-    ir_func_t *target = runtime_function(calls, name);
-    ir_instr_t *call = target ? fresh_instruction(block, block->n_instrs,
-        span, IR_OP_CALL, result) : nullptr;
-    return call && retarget(calls, caller, call, target, nullptr, 0,
-                            arguments, count) ? call->dest : nullptr;
+    ir_instr_t *in = ir_lower_emit_instruction(context, op, span);
+    return in && ir_lower_set_temp_dest(context, in,
+            CORE_STRING_STATIC("__n00bb_box_"), type)
+        && ir_instr_operand_value(in, operand)
+        && (!tested || ir_instr_operand_type(in, tested)) ? in->dest : nullptr;
+}
+
+static ir_value_t *
+primitive_arm(box_calls_t *calls, ir_lower_context_t *context,
+              ir_instr_t *call, th_type *receiver, core_string_t method)
+{
+    ir_module_t *module = context->module;
+    ir_value_t *operands[2] = {0};
+    for (uint32_t o = 1; o < 3; o++) {
+        ir_value_t *argument = ir_operand_value(&call->operands[o]);
+        operands[o - 1] = argument && open_dispatch_operand(module, call, o)
+            ? emitted_value(context, IR_OP_TYPE_NARROW, receiver, argument,
+                            receiver, call->span)
+            : argument;
+        if (!operands[o - 1]) return nullptr;
+    }
+    bool boxed = ir_type_eq(module, call->dest->type,
+                            ir_operand_value(&call->operands[1])->type);
+    th_type *result = boxed ? receiver : call->dest->type;
+    ir_value_t *value = core_string_eq(method, CORE_STRING_STATIC("__cmp"))
+        ? n00bb_emit_three_way(context, result,
+              n00bb_comparison_members(calls->analysis, &calls->comparison,
+                                       result),
+              operands[0], operands[1], call->span)
+        : n00bb_emit_primitive(context, method, result, operands[0],
+                               operands[1], call->span);
+    return value && boxed ? emitted_value(context, IR_OP_BOX,
+        call->dest->type, value, nullptr, call->span) : value;
+}
+
+static core_string_t
+dispatch_block_name(char *buffer, size_t size, ir_func_t *function,
+                    const char *kind)
+{
+    return n00bb_format_name(buffer, size, "__n00bb_dispatch_%s_%u", kind,
+                             function->n_blocks);
 }
 
 static bool
-cache_dispatcher(box_calls_t *calls, ir_func_t *dispatcher)
+expand_primitive_dispatch(box_calls_t *calls, ir_lower_context_t *context,
+                          ir_instr_t *call)
 {
-    if (!ir_annot_get(&dispatcher->annots,
-                      CORE_STRING_STATIC("n00bb.closed_dispatcher"))
-        || !dispatcher->n_params) return true;
-    core_list_t(dispatch_arm_t) arms = core_list_new(dispatch_arm_t);
-    if (!dispatch_chain_arms(dispatcher, &arms)
-        || arms.len < DISPATCH_CACHE_ARMS) {
-        core_list_free(arms);
+    ir_func_t *function = context->function;
+    ir_module_t *module = context->module;
+    th_ctx *types = ir_module_types(module);
+    th_type *truth = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("bool"));
+    ir_instr_t *selection = ir_operand_value(&call->operands[0])->def;
+    core_string_t method = selection->operands[1].name;
+    ir_value_t *subject = ir_operand_value(&call->operands[1]);
+    ir_span_t span = call->span;
+    char name[64];
+    ir_block_t *test = call->block;
+    ir_block_t *join = ir_block_split(test, call->index,
+        dispatch_block_name(name, sizeof(name), function, "join"));
+    ir_block_t *fallback = join ? ir_block_add(function,
+        dispatch_block_name(name, sizeof(name), function, "rtti")) : nullptr;
+    size_t users = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            for (uint32_t o = 0; o < in->n_operands; o++)
+                users += ir_operand_value(&in->operands[o])
+                    == selection->dest;
+        }
+    if (!fallback || !ir_instr_move(call, fallback, 0)
+        || (users == 1 && !ir_instr_move(selection, fallback, 0)))
+        return false;
+    ir_instr_t *phi = ir_instr_generated(join, IR_OP_PHI, span,
+        CORE_STRING_STATIC("n00bb.box"), 0);
+    if (!phi || !ir_instr_set_fresh_dest(phi, "__n00bb_box_",
+                                         call->dest->type))
+        return false;
+    ir_value_replace_uses(function, call->dest, phi->dest, nullptr, nullptr);
+    const ir_profile_t *profile = n00bb_type_profile();
+    for (size_t s = 0; s < profile->n_scalars; s++) {
+        const ir_scalar_t *scalar = &profile->scalars[s];
+        th_type *receiver = scalar->role != IR_ROLE_TYPESPEC
+            ? th_name(types, scalar->type_text) : nullptr;
+        if (!receiver || !primitive_arm_method(module, receiver, method))
+            continue;
+        ir_block_t *arm = ir_block_add(function, dispatch_block_name(name,
+            sizeof(name), function, "arm"));
+        ir_block_t *next = arm ? ir_block_add(function, dispatch_block_name(
+            name, sizeof(name), function, "test")) : nullptr;
+        if (!next) return false;
+        context->block = test;
+        context->reachable = true;
+        ir_value_t *condition = emitted_value(context, IR_OP_TYPE_TEST, truth,
+                                              subject, receiver, span);
+        for (uint32_t o = 2; condition && o < call->n_operands; o++) {
+            ir_value_t *operand = ir_operand_value(&call->operands[o]);
+            if (!operand || !open_dispatch_operand(module, call, o)) continue;
+            ir_value_t *matches = emitted_value(context, IR_OP_TYPE_TEST,
+                                                truth, operand, receiver, span);
+            condition = matches ? n00bb_emit_binary_ir(context, IR_OP_AND,
+                truth, condition, matches, span) : nullptr;
+        }
+        ir_instr_t *branch = condition
+            ? ir_lower_emit_terminator(context, IR_OP_BRANCH, span) : nullptr;
+        if (!branch || !ir_instr_operand_value(branch, condition)
+            || !ir_instr_operand_block(branch, arm)
+            || !ir_instr_operand_block(branch, next)) return false;
+        context->block = arm;
+        context->reachable = true;
+        ir_value_t *result = primitive_arm(calls, context, call, receiver,
+                                           method);
+        if (!result || !n00bb_emit_jump(context, join, span)
+            || !ir_instr_operand_phi_arm(phi, arm, result)) return false;
+        test = next;
+    }
+    context->block = test;
+    context->reachable = true;
+    if (!n00bb_emit_jump(context, fallback, span)) return false;
+    context->block = fallback;
+    context->reachable = true;
+    return n00bb_emit_jump(context, join, span)
+        && ir_instr_operand_phi_arm(phi, fallback, call->dest);
+}
+
+static bool
+expand_primitive_dispatches(box_calls_t *calls, ir_func_t *function)
+{
+    if (th_is_closed(ir_module_types(function->owner), function->type))
         return true;
-    }
-    th_ctx *types = ir_module_types(dispatcher->owner);
-    th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
-    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
-    th_type *nil = th_name(types, CORE_STRING_STATIC("nil"));
-    ir_block_t *chain = ir_block_entry(dispatcher);
-    ir_span_t span = arms.data[0].edge->span;
-    core_string_t module = ir_module_name(dispatcher->owner);
-    core_buffer_t identity = {0};
-    core_buffer_printf(&identity, "%.*s.%.*s", (int)module.u8_bytes,
-        module.data, (int)dispatcher->name.u8_bytes, dispatcher->name.data);
-    uint64_t site = core_xxh3_64bits_raw(identity.data, identity.byte_len);
-    core_buffer_release(&identity);
-    ir_block_t *probe = ir_block_add_entry(dispatcher,
-        CORE_STRING_STATIC("__n00bb_dispatch_probe"));
-    ir_block_t *cached = ir_block_add(dispatcher,
-        CORE_STRING_STATIC("__n00bb_dispatch_cached"));
-    ir_value_t *receiver = dispatcher->params[0];
-    ir_value_t *index = probe && cached
-        ? type_index_of_value(calls, dispatcher, receiver, arms.data[0].edge)
-        : nullptr;
-    ir_value_t *key = index ? typed_constant(dispatcher, probe,
-        probe->n_instrs, span, site, CORE_STRING_STATIC("uint")) : nullptr;
-    ir_value_t *probe_arguments[] = {key, index};
-    ir_value_t *arm = key ? dispatch_call(calls, dispatcher, probe,
-        CORE_STRING_STATIC("dispatch_arm"), u32, probe_arguments, 2, span)
-        : nullptr;
-    ir_value_t *zero = arm ? typed_constant(dispatcher, probe,
-        probe->n_instrs, span, 0, CORE_STRING_STATIC("u32")) : nullptr;
-    ir_instr_t *missed = zero ? fresh_instruction(probe, probe->n_instrs,
-        span, IR_OP_EQ, boolean) : nullptr;
-    ir_instr_t *branch = missed ? ir_instr_add(probe, IR_OP_BRANCH) : nullptr;
-    ir_instr_t *select = branch ? ir_instr_add(cached, IR_OP_SWITCH) : nullptr;
-    bool ok = select && ir_instr_operand_value(missed, arm)
-        && ir_instr_operand_value(missed, zero)
-        && ir_instr_operand_value(branch, missed->dest)
-        && ir_instr_operand_block(branch, chain)
-        && ir_instr_operand_block(branch, cached)
-        && ir_instr_operand_value(select, arm)
-        && ir_instr_operand_default(select, chain);
-    if (branch) branch->span = span;
-    if (select) select->span = span;
-    for (size_t k = 0; ok && k < arms.len; k++) {
-        dispatch_arm_t *entry = &arms.data[k];
-        core_buffer_t record_name = {0};
-        core_buffer_printf(&record_name, "__n00bb_dispatch_record_%zu", k);
-        ir_block_t *record = record_name.data ? ir_block_add(dispatcher,
-            core_buffer_string(&record_name)) : nullptr;
-        core_buffer_release(&record_name);
-        ir_value_t *ordinal = record ? typed_constant(dispatcher, record, 0,
-            span, k + 1, CORE_STRING_STATIC("u32")) : nullptr;
-        ir_value_t *record_arguments[] = {key, index, ordinal};
-        ir_value_t *recorded = ordinal ? dispatch_call(calls, dispatcher,
-            record, CORE_STRING_STATIC("dispatch_record"), nil,
-            record_arguments, 3, span) : nullptr;
-        ir_instr_t *jump = recorded ? ir_instr_add(record, IR_OP_JUMP)
-                                    : nullptr;
-        ok = jump && ir_instr_operand_block(jump, entry->arm)
-            && ir_instr_operand_switch_arm(select, (ir_int_t)(k + 1),
-                                           entry->arm);
-        if (jump) jump->span = span;
-        if (ok) entry->edge->operands[entry->operand].block = record;
-    }
-    core_list_free(arms);
+    core_list_t(n00bb_ir_instr_ptr_t) sites =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *call = function->blocks[b]->instrs[i];
+            ir_value_t *callee = call->n_operands == 3 && call->dest
+                ? ir_call_callee(call) : nullptr;
+            ir_instr_t *selection = callee ? callee->def : nullptr;
+            ir_value_t *subject = selection
+                && selection->op == IR_OP_TRAIT_METHOD
+                && selection->n_operands >= 2
+                && selection->operands[1].kind == IR_OPD_NAME
+                ? ir_operand_value(&call->operands[1]) : nullptr;
+            if (subject && subject->type
+                && th_kind_of(th_resolve(subject->type)) == TH_VAR)
+                core_list_push(sites, call);
+        }
+    ir_lower_context_t context = {
+        .module = function->owner,
+        .function = function,
+    };
+    bool ok = true;
+    for (size_t s = 0; ok && s < sites.len; s++)
+        ok = expand_primitive_dispatch(calls, &context, sites.data[s]);
+    core_list_free(sites);
     return ok;
+}
+
+static void
+report_unrewritten(box_calls_t *calls, ir_func_t *function,
+                   const ir_instr_t *instruction, const char *step)
+{
+    n00bb_link_analysis_t *analysis = calls->analysis;
+    core_translation_unit_t *unit = unit_for_ir_module(analysis,
+                                                       function->owner);
+    bool owned = unit != nullptr;
+    if (!unit && analysis->units.len) unit = analysis->units.data[0];
+    core_string_t spelling = instruction
+        ? ir_op_spelling(instruction->op) : CORE_STRING_STATIC("dispatch");
+    core_string_t module = ir_module_name(function->owner);
+    n00bb_internal_error(unit ? core_translation_unit_diagnostics(unit)
+                              : nullptr,
+        unit, instruction && owned ? n00bb_span_location(instruction->span)
+                                   : (core_diag_location_t){},
+        "rewriting boxed operations",
+        "could not %s `%.*s` in `%.*s.%.*s` for boxed values%s%.*s", step,
+        (int)spelling.u8_bytes, spelling.data,
+        (int)module.u8_bytes, module.data,
+        (int)function->name.u8_bytes, function->name.data,
+        calls->detail.byte_len ? ": " : "",
+        (int)calls->detail.byte_len,
+        calls->detail.data ? calls->detail.data : "");
 }
 
 static bool
@@ -1705,14 +1791,25 @@ rewrite_emitted(box_calls_t *calls)
             analysis->emitted_functions.data[f]);
         if (!function || !function->n_blocks
             || runtime_module(calls,function->owner)) continue;
-        if (!cache_dispatcher(calls, function)) return false;
+        if (!expand_primitive_dispatches(calls, function)) {
+            report_unrewritten(calls, function, nullptr,
+                               "add primitive arms to");
+            return false;
+        }
         for (uint32_t b = 0; b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
             for (uint32_t i = 0; i < block->n_instrs; i++) {
                 ir_instr_t *instruction = block->instrs[i];
-                if (!own_sequence_operands(calls,function, instruction)
-                    || !box_raw_arguments(calls,function, instruction))
+                if (!own_sequence_operands(calls,function, instruction)) {
+                    report_unrewritten(calls, function, instruction,
+                                       "own the sequence operands of");
                     return false;
+                }
+                if (!box_raw_arguments(calls,function, instruction)) {
+                    report_unrewritten(calls, function, instruction,
+                                       "box the raw arguments of");
+                    return false;
+                }
                 bool rewritten = true;
                 switch (instruction->op) {
                 case IR_OP_LOAD:
@@ -1802,7 +1899,11 @@ rewrite_emitted(box_calls_t *calls)
                 default:
                     break;
                 }
-                if (!rewritten) return false;
+                if (!rewritten) {
+                    report_unrewritten(calls, function, instruction,
+                                       "rewrite");
+                    return false;
+                }
             }
         }
     }
@@ -1858,5 +1959,6 @@ n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
     if (ok) emit_callees(&calls, reached);
     core_dict_free(&calls.emitted);
     core_dict_free(&calls.type_indices);
+    core_buffer_release(&calls.detail);
     return ok;
 }

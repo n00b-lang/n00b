@@ -2,7 +2,7 @@ import sys.abi
 
 let maybe_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(0)
 if maybe_row != nil {
-    let row: Ref[sys.abi.Type_Record] = maybe_row.get()
+    let row: Ref[sys.abi.Type_Record] = maybe_row
     assert __abi_ref_address(row) != 0
     let bits: Ref[u64] = ref row.__value.size_bits
     assert __abi_ref_address(bits) != 0
@@ -16,7 +16,7 @@ let array_probe: Ref[sys.abi.Array_Descriptor_Header]? = nil
 let array_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(array_probe))
 if array_row != nil {
     let expected_size: uint = 24
-    assert sys.abi.size_bytes(array_row.get()) == expected_size
+    assert sys.abi.size_bytes(array_row) == expected_size
 } else {
     require false
 }

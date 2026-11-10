@@ -1,0 +1,5 @@
+func pick(view x: (int | string)) -> int {
+    return 1
+}
+
+let picked = pick(true)

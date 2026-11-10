@@ -29,11 +29,9 @@ bool             n00bb_ffi_generate(void *ffi, core_translation_unit_t *unit, co
                                     core_string_t module, n00bb_literal_origin_t origin, core_string_t text,
                                     core_buffer_t *source, n00bb_native_declarations_t *natives,
                                     n00bb_line_origins_t *origins);
-size_t           n00bb_ffi_input_count(const n00bb_ffi_t *ffi);
-core_string_t    n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index);
 bool             n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output);
 size_t           n00bb_ffi_shim_count(const n00bb_ffi_t *ffi);
-n00bb_ffi_file_t n00bb_ffi_shim_at(const n00bb_ffi_t *ffi, size_t index);
+bool             n00bb_ffi_has_exports(const n00bb_ffi_t *ffi);
 size_t           n00bb_ffi_archive_count(const n00bb_ffi_t *ffi);
 core_string_t    n00bb_ffi_archive_at(const n00bb_ffi_t *ffi, size_t index);
 size_t           n00bb_ffi_library_count(const n00bb_ffi_t *ffi);

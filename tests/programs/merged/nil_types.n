@@ -93,7 +93,7 @@ func container_check() {
     let literal: Dict[string, nil] = {"a": nil, "b": nil}
     require literal.len() == 2
     let inferred = {"x": nil}
-    require inferred["x"]
+    require inferred["x"] != nil
 
     var keyed = new[Dict[nil, int]]()
     require !keyed.contains(nil)
@@ -102,14 +102,14 @@ func container_check() {
     require keyed.len() == 1
     let only = keyed[nil]
     require only != nil
-    require only.get() == 4
+    require only == 4
 
-    var units: Set[nil] = new[Set[nil]]()
-    require units.add(nil)
-    require !units.add(nil)
+    var units: Dict[nil, nil] = new[Dict[nil, nil]]()
+    require units.add(nil, nil)
+    require !units.add(nil, nil)
     require units.len() == 1
     var seen = 0
-    for unit in units {
+    for unit in units.keys() {
         require unit == nil
         seen += 1
     }
@@ -130,8 +130,8 @@ func container_check() {
 }
 
 func set_check() {
-    let a: Set[int] = {1, 2, 3}
-    let b: Set[int] = {3, 4}
+    let a: Dict[int, nil] = {1, 2, 3}
+    let b: Dict[int, nil] = {3, 4}
     require a.contains(2)
     require !a.contains(9)
     require (a + b).len() == 4
@@ -139,10 +139,10 @@ func set_check() {
     require (a & b).len() == 1
     require (a ^ b).len() == 3
     var total = 0
-    for v in a { total += v }
+    for v in a.keys() { total += v }
     require total == 6
-    var words = new[Set[string]]()
-    require words.add("x")
+    var words = new[Dict[string, nil]]()
+    require words.add("x", nil)
     require words.remove("x")
     require words.len() == 0
 }
@@ -204,11 +204,11 @@ func condition_check() {
     let hit = d["a"]
     let miss = d["z"]
     var seen = 0
-    if hit { seen += 1 }
-    if miss { seen += 10 }
-    if hit and miss == nil { seen += 100 }
-    while miss { seen += 1000 }
-    require hit
+    if hit != nil { seen += 1 }
+    if miss != nil { seen += 10 }
+    if hit != nil and miss == nil { seen += 100 }
+    while miss != nil { seen += 1000 }
+    require hit != nil
     require seen == 101
 }
 

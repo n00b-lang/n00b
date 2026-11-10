@@ -29,6 +29,8 @@ typedef struct {
 
 int core_process_start(const core_process_spec_t *spec, core_process_t *out);
 bool core_process_wait(core_process_t process, core_process_status_t *out);
+bool core_process_wait_timeout(core_process_t process, uint64_t milliseconds,
+                               core_process_status_t *out, bool *timed_out);
 bool core_process_wait_any(const core_process_t *processes, size_t count,
                            size_t *which, core_process_status_t *out);
 const char *core_process_signal_name(int signal);

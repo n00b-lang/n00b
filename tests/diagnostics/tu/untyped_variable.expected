@@ -1,0 +1,2 @@
+tests/diagnostics/tu/untyped_variable.n:1:5: error N00B-T0586: cannot infer the type of `untyped`: it has no type or initial value, and nothing assigned to it settles one
+  help: give it a type, as in `var untyped: int`

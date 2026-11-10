@@ -56,13 +56,23 @@ typedef uint8_t (*ir_path_step_fn)(void *context, const ir_instr_t *in,
 ir_instr_t *ir_call_outcome_branch(const ir_instr_t *terminator,
                                    bool *true_is_success);
 uint8_t     ir_path_apply(uint8_t state, uint8_t effect);
+uint32_t    ir_phase_successor(const ir_instr_t *terminator, bool comptime);
 bool        ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
                           void *context, ir_path_exits_t *exits);
 uint8_t     ir_paths_state(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
                            void *context, const ir_instr_t *at);
 
+typedef struct ir_paths_solution_t ir_paths_solution_t;
+
+ir_paths_solution_t *ir_paths_solve(ir_func_t *f, uint8_t entry,
+                                    ir_path_step_fn step, void *context);
+uint8_t ir_paths_solution_state(const ir_paths_solution_t *solution,
+                                const ir_instr_t *at);
+void    ir_paths_solution_free(ir_paths_solution_t *solution);
+
 typedef bool (*ir_call_diverges_fn)(void *context, const ir_instr_t *call);
-typedef bool (*ir_const_varies_fn)(void *context, const ir_instr_t *constant);
+typedef int (*ir_branch_decides_fn)(void *context,
+                                    const ir_instr_t *condition);
 
 typedef enum : uint8_t {
     IR_DEAD_UNREACHED,
@@ -80,7 +90,7 @@ typedef struct ir_dead_code_t ir_dead_code_t;
 
 ir_dead_code_t       *ir_dead_code_build(ir_func_t *f,
                                          ir_call_diverges_fn diverges,
-                                         ir_const_varies_fn varies,
+                                         ir_branch_decides_fn decides,
                                          void *context);
 void                  ir_dead_code_free(ir_dead_code_t *dead);
 bool                  ir_dead_code_instr(const ir_dead_code_t *dead,

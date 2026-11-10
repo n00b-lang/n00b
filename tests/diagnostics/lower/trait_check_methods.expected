@@ -1,1 +1,7 @@
 tests/diagnostics/lower/trait_check_methods.n:6:5: error N00B-S0078: a check in `Render` that uses `or` or `not` can ask about only one of its methods
+tests/diagnostics/lower/trait_check_methods.n:10:5: warning N00B-N0020: field `v` of `Plain` is read but never set
+tests/diagnostics/lower/trait_check_methods.n:22:5: warning N00B-N0020: field `v` of `Loud` is read but never set
+tests/diagnostics/lower/trait_check_methods.n:25:1: error N00B-S0078: `render` implements `Render.render`, but the trait's check is false for it
+  tests/diagnostics/lower/trait_check_methods.n:4:5: note: `Render` checks this here
+tests/diagnostics/lower/trait_check_methods.n:34:6: warning N00B-N0019: function `show` is never called
+  help: call it or delete it

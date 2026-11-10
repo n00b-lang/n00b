@@ -1,23 +1,39 @@
 tests/diagnostics/lower/effect_bounds.n:6:16: note N00B-S0064: parameter `by` could be `view`: `pick_both` never writes anything reachable from it
 tests/diagnostics/lower/effect_bounds.n:11:14: note N00B-S0064: parameter `by` could be `view`: `forward` never writes anything reachable from it
+tests/diagnostics/lower/effect_bounds.n:16:6: warning N00B-N0019: function `careless` is never called
+  help: call it or delete it
 tests/diagnostics/lower/effect_bounds.n:16:15: note N00B-S0064: parameter `by` could be `view`: `careless` never writes anything reachable from it
 tests/diagnostics/lower/effect_bounds.n:17:12: error N00B-S0077: `pick_both` requires a check on `by` that the compiler can't show for this argument
   help: pass a function that meets the check, or forward a parameter that has the same check
 tests/diagnostics/lower/effect_bounds.n:21:5: error N00B-S0075: a check on the callback `by` can only use `forbids_effect` or `has_effect`
+tests/diagnostics/lower/effect_bounds.n:25:6: warning N00B-N0019: function `larger` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_bounds.n:32:6: warning N00B-N0019: function `noisy` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_bounds.n:40:6: warning N00B-N0019: function `good` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_bounds.n:45:6: warning N00B-N0019: function `bad` is never called
+  help: call it or delete it
 tests/diagnostics/lower/effect_bounds.n:47:12: error N00B-S0077: `pick_both` requires `by` never to do `impure`, but this callback may do it
   tests/diagnostics/lower/effect_bounds.n:33:5: note: `noisy` calls `builtin.io.debug.raw_debug`
   lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
   lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
   lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
   help: pass a function that meets the check, or forward a parameter that has the same check
+tests/diagnostics/lower/effect_bounds.n:51:5: warning N00B-N0020: field `id` of `Key` is read but never set
 tests/diagnostics/lower/effect_bounds.n:54:1: error N00B-S0078: `hash` implements `Hash.hash`, which must never do `impure`, but it may
   tests/diagnostics/lower/effect_bounds.n:55:5: note: `hash` calls `builtin.io.debug.raw_debug`
   lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
   lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
   lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
-  lib/builtin/hashing.n:7:5: note: `Hash` checks this here
+  lib/builtin/hashing.n:8:5: note: `Hash` checks this here
 tests/diagnostics/lower/effect_bounds.n:63:1: error N00B-S0078: `__add` implements `Add.__add`, which must never do `impure`, but it may
   tests/diagnostics/lower/effect_bounds.n:64:5: note: `__add` calls `builtin.io.debug.raw_debug`
   lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
   lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
   lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
+tests/diagnostics/lower/effect_bounds.n:68:6: warning N00B-N0019: function `lookup` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_bounds.n:68:13: note N00B-S0064: parameter `table` could be `view`: `lookup` never writes anything reachable from it
+tests/diagnostics/lower/effect_bounds.n:72:6: warning N00B-N0019: function `total` is never called
+  help: call it or delete it

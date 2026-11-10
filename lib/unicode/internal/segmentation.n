@@ -154,7 +154,7 @@ private func wb_lookahead_is(it: internal.types.Break_Iter,
             continue
         }
 
-        let w: internal.types.Wb = word_break(c.get())
+        let w: internal.types.Wb = word_break(c)
 
         if wb_transparent(w) {
             continue
@@ -191,7 +191,7 @@ private func word_next(modify it: internal.types.Break_Iter, first_cp: char) -> 
             continue
         }
 
-        let ncp: char = n.get()
+        let ncp: char = n
         let cur_wb: internal.types.Wb = word_break(ncp)
 
         if prev_wb == internal.types.Wb.cr and cur_wb == internal.types.Wb.lf {
@@ -399,7 +399,7 @@ private func sb8_finds_lower(it: internal.types.Break_Iter) -> bool {
             continue
         }
 
-        let w: internal.types.Sb = sentence_break(c.get())
+        let w: internal.types.Sb = sentence_break(c)
 
         if w == internal.types.Sb.format or w == internal.types.Sb.extend {
             continue
@@ -450,7 +450,7 @@ private func sentence_next(modify it: internal.types.Break_Iter,
             continue
         }
 
-        let cur_sb: internal.types.Sb = sentence_break(n.get())
+        let cur_sb: internal.types.Sb = sentence_break(n)
 
         if prev_sb == internal.types.Sb.cr and cur_sb == internal.types.Sb.lf {
             if it.sb_term_phase >= 1 and it.sb_term_phase <= 3 {
@@ -582,7 +582,10 @@ private func sentence_next(modify it: internal.types.Break_Iter,
     return it.byte_pos
 }
 
-func next(modify self: internal.types.Break_Iter) -> u32? {
+func __cleanup(consume self: internal.types.Break_Iter) {
+}
+
+func __next(modify self: internal.types.Break_Iter) -> u32? {
     let len: uint = byte_len(self.text)
 
     if cast[uint](self.byte_pos) >= len {
@@ -595,7 +598,7 @@ func next(modify self: internal.types.Break_Iter) -> u32? {
         return nil
     }
 
-    let cp: char = first.get()
+    let cp: char = first
 
     if self.kind == internal.types.Break_Type.word {
         return word_next(self, cp)
@@ -628,7 +631,7 @@ func next(modify self: internal.types.Break_Iter) -> u32? {
             continue
         }
 
-        let ncp: char = n.get()
+        let ncp: char = n
         let cur_gcb: internal.types.Gcb = grapheme_break(ncp)
         let cur_incb: internal.types.Incb = incb(ncp)
         let cur_ep: bool = is_ep(ncp)
@@ -704,7 +707,7 @@ func grapheme_count(s: string) -> u64 {
     var it: internal.types.Break_Iter = grapheme_iter(s)
     var n: u64 = 0
 
-    while next(it) != nil {
+    while __next(it) != nil {
         n += 1
     }
 

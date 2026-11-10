@@ -1,0 +1,15 @@
+callback Step {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func bump(value: int) -> int {
+    return value + 1
+}
+
+func same(a: 'T, b: 'T) -> bool {
+    return a == b
+}
+
+let step: Step = callback[Step](ref bump)
+require same(step, step)

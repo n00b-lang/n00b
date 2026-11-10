@@ -14,7 +14,7 @@ func __init(self: Tagged['T], value: 'T) {
     self.value = value
 }
 
-func __equal(self: Tagged['T], other: Tagged['T]) -> bool {
+func __equal(view self: Tagged['T], view other: Tagged['T]) -> bool {
     return true
 }
 

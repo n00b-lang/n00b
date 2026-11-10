@@ -6,27 +6,6 @@ trait Appendable {
     func append(self: 'L, value: 'T) -> nil
 }
 
-trait ListLike {
-    func append(self: 'L, value: 'T, front: bool = false) -> nil
-    func pop(self: 'L, front: bool = false) -> 'T?
-    func insert(self: 'L, index: int, value: 'T) -> nil
-}
-
-trait Associative {
-    func get(self: 'D, key: 'K) -> 'V?
-    func put(self: 'D, key: 'K, value: 'V) -> 'V?
-    func add(self: 'D, key: 'K, value: 'V) -> bool
-    func replace(self: 'D, key: 'K, value: 'V) -> bool
-    func remove(self: 'D, key: 'K) -> bool
-    func contains(self: 'D, key: 'K) -> bool
-}
-
-trait SetLike {
-    func contains(self: 'S, value: 'T) -> bool
-    func add(self: 'S, value: 'T) -> bool
-    func remove(self: 'S, value: 'T) -> bool
-}
-
 trait TreeLike {
     func parent(self: 'T) -> 'T?
     func child_count(self: 'T) -> uint

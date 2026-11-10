@@ -157,10 +157,10 @@ static void test_n00b_function_failure_channel(void)
 {
     ir_ctx_t     *ctx     = ir_ctx_new();
     th_ctx       *th      = ir_ctx_types(ctx);
-    th_type      *failure = nullptr;
     core_string_t err     = {};
-    th_type      *fn      = ir_typelang_parse_function(
-        th, S("(`a, `a) -> `a fail: `e"), &failure, &err);
+    th_type      *fn      = ir_typelang_parse(
+        th, S("(`a, `a) -> `a fail: `e"), &err);
+    th_type      *failure = fn ? th_func_error(fn) : nullptr;
     bool shared  = fn && th_func_error(fn) == failure &&
                   th_func_nparams(fn) == 2 &&
                   th_func_param(fn, 0)->type == th_func_param(fn, 1)->type &&
@@ -175,48 +175,13 @@ static void test_n00b_function_failure_channel(void)
                                 ? ir_typelang_parse(th, printed, &err)
                                 : nullptr;
     if (!printed.data || core_string_find(printed, S("fail:")) < 0
-        || !roundtrip || th_unify(th, fn, roundtrip) == nullptr) {
+        || !roundtrip || th_meet(th, fn, roundtrip) == nullptr) {
         printf("FAIL  printed function types retain their failure channel: "
                "%.*s\n",
                PS(or_else(err, or_else(printed, S("no printed type")))));
         fails++;
     }
     core_free(err.data);
-    err = (core_string_t){};
-
-    failure = nullptr;
-    fn      = ir_typelang_parse_function(
-        th, S("(`a) -> `a fail: `e where `a: Copy + != string"), &failure,
-        &err);
-    th_constraint constraint = {0};
-    bool          retained =
-        fn && th_func_nparams(fn) == 1 &&
-        th_var_constraint_count(th_func_param(fn, 0)->type) == 2 &&
-        th_var_constraint_at(th_func_param(fn, 0)->type, 0, &constraint) &&
-        constraint.kind == TH_CON_IMPLEMENTS &&
-        core_string_eq(constraint.iface, S("Copy"));
-    if (!retained) {
-        printf("FAIL  typelang function where constraints: %.*s\n",
-               PS(or_else(err, S("constraint was not retained"))));
-        fails++;
-    }
-    core_free(err.data);
-    th_type *scheme       = fn ? th_generalize(th, fn) : nullptr;
-    th_type *instantiated = scheme ? th_instantiate(th, scheme) : nullptr;
-    if (instantiated && th_func_nparams(instantiated) == 1 &&
-        th_var_constraint_count(th_func_param(instantiated, 0)->type) == 2)
-        retained = true;
-    else
-        retained = false;
-    if (!scheme || !th_func_error(instantiated) ||
-        core_string_find(th_print(th, scheme),
-                         S("where `a: Copy + != string")) < 0 ||
-        core_string_find(th_print(th, scheme), S("fail:")) < 0)
-        retained = false;
-    if (!retained) {
-        printf("FAIL  generalization dropped a function where constraint\n");
-        fails++;
-    }
     ir_ctx_free(ctx);
 }
 
@@ -233,7 +198,7 @@ static void test_consume_parameter_mode(void)
 
     if (!parameter || parameter->mode != TH_CONSUME || !printed.data
         || !core_string_eq(printed, S("(consume int) -> void")) || !roundtrip
-        || th_unify(th, fn, roundtrip) == nullptr) {
+        || th_meet(th, fn, roundtrip) == nullptr) {
         printf("FAIL  consume parameter mode round-trip: %.*s\n",
                PS(or_else(err, or_else(printed, S("missing type")))));
         fails++;

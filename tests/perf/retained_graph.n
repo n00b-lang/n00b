@@ -20,7 +20,7 @@ func sum(head: Ref[Node]?) -> int {
     var total = 0
     var cursor: Ref[Node]? = head
     while cursor != nil {
-        let node: Ref[Node] = cursor.get()
+        let node: Ref[Node] = cursor
         total += node.value
         cursor = node.next
     }

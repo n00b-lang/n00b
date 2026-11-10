@@ -5,8 +5,8 @@ func total(text: string) -> uint {
         return nested_items.reports(text)!
     } fail(failures) {
         var sum: uint = 0
-        for let report in failures {
-            for let fix in report.fixes {
+        for report in failures {
+            for fix in report.fixes {
                 sum += fix.at
             }
         }

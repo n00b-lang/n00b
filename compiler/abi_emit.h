@@ -57,6 +57,10 @@ typedef struct {
 } n00bb_abi_index_table_t;
 
 void n00bb_abi_index_table_release(n00bb_abi_index_table_t *table);
+core_string_t n00bb_abi_baked_node_symbol(core_string_t package,
+                                          core_string_t module,
+                                          size_t ordinal,
+                                          core_target_object_format_t format);
 
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,

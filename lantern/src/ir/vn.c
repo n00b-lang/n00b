@@ -1,6 +1,7 @@
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
-#include "ir/memssa.h"
+#include "ir/pdg.h"
+#include "ir/pdg_memory.h"
 #include "ir/typelang.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
@@ -27,7 +28,8 @@ core_list_decl(vn_word_t);
 
 struct ir_value_numbers_t {
     ir_func_t                    *f;
-    ir_memssa_t                  *memssa;
+    const ir_pdg_t               *pdg;
+    ir_pdg_memory_t                  *memssa;
     core_dict_t                   of_value;
     core_dict_t                   by_key;
     core_list_t(vn_key_ptr_t)     keys;
@@ -38,6 +40,8 @@ enum {
     KEY_INT_CONSTANT = 1u << 20,
     KEY_MEMORY,
     KEY_PHI,
+    KEY_LOCAL,
+    KEY_GLOBAL,
 };
 
 static core_hash_value_t
@@ -250,16 +254,16 @@ stored_value(const ir_instr_t *store)
 static uint32_t
 element_forwarded(ir_value_numbers_t *n, const ir_instr_t *in)
 {
-    uint32_t access = ir_memssa_access_of(n->memssa, in, IR_ACCESS_LOAD);
+    uint32_t access = ir_pdg_memory_access_of(n->memssa, in, IR_ACCESS_LOAD);
     if (access == UINT32_MAX
-        || ir_memssa_element_link_count(n->memssa, access) != 1)
+        || ir_pdg_memory_element_link_count(n->memssa, access) != 1)
         return 0;
-    uint32_t def = ir_memssa_element_link(n->memssa, access, 0);
-    const ir_memdef_t *store = ir_memssa_def(n->memssa, def);
+    uint32_t def = ir_pdg_memory_element_link(n->memssa, access, 0);
+    const ir_memdef_t *store = ir_pdg_memory_def(n->memssa, def);
     const ir_value_t *value = store && store->instr
         ? stored_value(store->instr) : nullptr;
     if (!value || !in->dest
-        || ir_memssa_element_relation(n->memssa, def, access)
+        || ir_pdg_memory_element_relation(n->memssa, def, access)
             != IR_ELEMENT_SAME
         || !ir_type_eq(n->f->owner, in->dest->type, value->type))
         return 0;
@@ -271,10 +275,14 @@ forwarded(ir_value_numbers_t *n, const ir_instr_t *in, uint32_t address)
 {
     if (!n->memssa) return 0;
     const ir_value_t *base = nullptr, *index = nullptr;
-    if (ir_memssa_element_of(in, &base, &index))
+    if (ir_pdg_memory_element_of(in, &base, &index))
         return element_forwarded(n, in);
-    uint32_t def = ir_memssa_def_before(n->memssa, in);
-    const ir_memdef_t *reaching = ir_memssa_def(n->memssa, def);
+    uint32_t def = in->op == IR_OP_LOAD
+        ? ir_pdg_memory_slot_def(n->memssa, ir_pdg_memory_access_of(
+              n->memssa, in, IR_ACCESS_LOAD))
+        : UINT32_MAX;
+    if (def == UINT32_MAX) def = ir_pdg_memory_def_before(n->memssa, in);
+    const ir_memdef_t *reaching = ir_pdg_memory_def(n->memssa, def);
     const ir_instr_t *store = reaching && reaching->kind == IR_MEMDEF_STORE
         ? reaching->instr : nullptr;
     if (!store) return 0;
@@ -349,11 +357,36 @@ phi_number(ir_value_numbers_t *n, const ir_instr_t *in)
 }
 
 static uint32_t
+local_read_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
+{
+    const ir_value_t *source = in->operands[0].value;
+    bool global = source->kind == IR_VAL_GLOBAL && source->global;
+    uint32_t version = source->kind == IR_VAL_LOCAL
+        ? ir_pdg_local_version(n->pdg, in, source->local) : 0;
+    if (global && n->memssa) {
+        uint32_t def = ir_pdg_memory_slot_def(n->memssa,
+            ir_pdg_memory_access_of(n->memssa, in, IR_ACCESS_LOAD));
+        version = def != UINT32_MAX ? def + 1 : 0;
+    }
+    if (!version) return fresh(n);
+    core_list_t(vn_word_t) words = core_list_new(vn_word_t);
+    core_list_push(words, (uint64_t)(global ? KEY_GLOBAL : KEY_LOCAL));
+    core_list_push(words, global
+        ? (uint64_t)(uintptr_t)ir_global_identity(source->global)
+        : (uint64_t)(uintptr_t)source->local);
+    core_list_push(words, (uint64_t)version);
+    core_list_push(words, in->dest ? th_hash(types, in->dest->type) : 0);
+    uint32_t number = keyed(n, &words, 0, 0);
+    core_list_free(words);
+    return number;
+}
+
+static uint32_t
 instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
 {
     if (in->op == IR_OP_COPY && in->n_operands == 1
         && in->operands[0].kind == IR_OPD_VALUE) {
-        if (reads_variable_storage(in)) return fresh(n);
+        if (reads_variable_storage(in)) return local_read_number(n, in, types);
         uint32_t number = operand_number(n, in->operands[0].value);
         return number ? number : fresh(n);
     }
@@ -393,8 +426,13 @@ instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
             core_list_free(words);
             return forward;
         }
+        uint32_t version = ir_pdg_memory_def_before(n->memssa, in);
+        uint32_t slot = in->op == IR_OP_LOAD
+            ? ir_pdg_memory_slot_def(n->memssa, ir_pdg_memory_access_of(
+                  n->memssa, in, IR_ACCESS_LOAD))
+            : UINT32_MAX;
         core_list_push(words, (uint64_t)KEY_MEMORY);
-        core_list_push(words, (uint64_t)ir_memssa_def_before(n->memssa, in));
+        core_list_push(words, (uint64_t)(slot != UINT32_MAX ? slot : version));
     }
     uint32_t number = keyed(n, &words, 0, 0);
     core_list_free(words);
@@ -402,12 +440,14 @@ instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
 }
 
 ir_value_numbers_t *
-ir_value_numbers_build(ir_func_t *f, ir_memssa_t *memssa)
+ir_value_numbers_build(ir_func_t *f, const ir_pdg_t *pdg)
 {
+    ir_pdg_memory_t *memssa = ir_pdg_memory(pdg);
     ir_doms_t *doms = f ? ir_func_doms(f) : nullptr;
     if (!doms) return nullptr;
     ir_value_numbers_t *n = core_alloc(ir_value_numbers_t);
     n->f = f;
+    n->pdg = pdg;
     n->memssa = memssa;
     core_dict_init(&n->of_value, nullptr, nullptr);
     core_dict_init(&n->by_key, key_hash, key_eq);

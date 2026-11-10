@@ -261,14 +261,6 @@ static th_type *kid_type(parse_reduce_t *r, size_t i)
 
 static void *r_pass(parse_reduce_t *r) { return kid(r, 0); }
 
-static void *r_pass_nonnull(parse_reduce_t *r)
-{
-    for (size_t i = 0; i < r->n_kids; i++)
-        if (kid(r, i))
-            return kid(r, i);
-    return nullptr;
-}
-
 static void *r_paren_form(parse_reduce_t *r)
 {
     return r->n_kids == 3 ? kid(r, 1) : kid(r, 0);
@@ -1000,111 +992,6 @@ static void *r_param_list(parse_reduce_t *r)
     return list;
 }
 
-static th_type *function_tvar(bctx *c, core_string_t name)
-{
-    bool   found = false;
-    size_t at    = (size_t)(uintptr_t)core_dict_get(&c->fv_index, &name,
-                                                    &found);
-    if (found)
-        return c->free_vars.data[at].type;
-
-    th_type       *type = th_var(c->th);
-    core_string_t *key  = core_dict_string_key_copy(name);
-    core_list_push(c->free_vars, ((freev){.name = key, .type = type}));
-    core_dict_put(&c->fv_index, key, c->free_vars.len - 1);
-    return type;
-}
-
-static void constrain_function_items(bctx *c, void *value,
-                                     core_string_t *variable, th_type **type)
-{
-    parse_reduce_list_t *list = parse_reduce_as_list(value);
-    if (list) {
-        for (size_t i = 0; i < list->n; i++)
-            constrain_function_items(c, list->v[i], variable, type);
-        return;
-    }
-
-    tl_node *node = value;
-    if (!node || node->magic != TL_NODE_MAGIC)
-        return;
-    if (node->kind == TL_NAME) {
-        if (!variable->data) {
-            *variable = node->name;
-            *type     = function_tvar(c, node->name);
-        } else {
-            th_var_constrain(c->th, *type,
-                             (th_constraint){.kind  = TH_CON_IMPLEMENTS,
-                                             .iface = node->name});
-        }
-    } else if (node->kind == TL_TYPE && *type) {
-        th_var_constrain(
-            c->th, *type,
-            (th_constraint){.kind = TH_CON_EXCLUDES, .target = node->type});
-    }
-}
-
-static void *r_function_constraint(parse_reduce_t *r)
-{
-    bctx         *c       = r->thunk;
-    core_string_t subject = {0};
-    for (size_t i = 0; i < r->n_kids; i++) {
-        parse_tree_t *child = core_tree_child(r->node, i);
-        if (core_tree_is_leaf(child) &&
-            parse_tree_leaf_tid(child) == tid_ident) {
-            subject = parse_tree_leaf_text(child);
-            break;
-        }
-    }
-    if (!subject.data)
-        return nullptr;
-    core_string_t variable = subject;
-    th_type      *type     = function_tvar(c, variable);
-    for (size_t i = 0; i < r->n_kids; i++) {
-        parse_tree_t *child = core_tree_child(r->node, i);
-        if (core_tree_is_leaf(child) &&
-            parse_tree_leaf_tid(child) == tid_ident &&
-            core_string_eq(parse_tree_leaf_text(child), subject))
-            continue;
-        constrain_function_items(c, kid(r, i), &variable, &type);
-    }
-    return nullptr;
-}
-
-static size_t reduced_count(void *value)
-{
-    parse_reduce_list_t *list = parse_reduce_as_list(value);
-    if (list) {
-        size_t count = 0;
-        for (size_t i = 0; i < list->n; i++)
-            count += reduced_count(list->v[i]);
-        return count;
-    }
-    return value ? 1 : 0;
-}
-
-static void reduced_fill(void *value, parse_reduce_list_t *out, size_t *at)
-{
-    parse_reduce_list_t *list = parse_reduce_as_list(value);
-    if (list) {
-        for (size_t i = 0; i < list->n; i++)
-            reduced_fill(list->v[i], out, at);
-    } else if (value)
-        out->v[(*at)++] = value;
-}
-
-static void *r_function_constraint_items(parse_reduce_t *r)
-{
-    size_t count = 0;
-    for (size_t i = 0; i < r->n_kids; i++)
-        count += reduced_count(kid(r, i));
-    parse_reduce_list_t *items = parse_reduce_list_new(count);
-    size_t               at    = 0;
-    for (size_t i = 0; i < r->n_kids; i++)
-        reduced_fill(kid(r, i), items, &at);
-    return items;
-}
-
 static void *r_function(parse_reduce_t *r)
 {
     bctx *c                      = r->thunk;
@@ -1277,9 +1164,6 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
     REG("param", r_param);
     REG("param-list", r_param_list);
     REG("function", r_function);
-    REG("function-constraint", r_function_constraint);
-    REG("function-constraint-item", r_pass_nonnull);
-    REG("function-constraint-items", r_function_constraint_items);
     REG("function-error", r_function_error);
     REG("function-result", r_function_result);
 #undef REG
@@ -1290,7 +1174,7 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
     return ok;
 }
 
-static th_type *lower(bctx *c, parse_tree_t *tree, th_type **failure_out)
+static th_type *lower(bctx *c, parse_tree_t *tree)
 {
     parse_tree_walk_t *w = parse_tree_walk_new(c->g, c);
 
@@ -1302,21 +1186,17 @@ static th_type *lower(bctx *c, parse_tree_t *tree, th_type **failure_out)
 
     tl_node *reduced = parse_tree_walk_reduce(w, tree);
     th_type *out     = as_type(reduced);
-    if (failure_out && reduced && reduced->magic == TL_NODE_MAGIC)
-        *failure_out = reduced->error_type;
 
     parse_tree_walk_free(w);
 
     return out;
 }
 static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
-                    core_string_t *err, th_type **failure_out)
+                    core_string_t *err)
 {
     if (err) {
         *err = (core_string_t){};
     }
-    if (failure_out)
-        *failure_out = nullptr;
 
     parse_grammar_t *g = load_grammar();
 
@@ -1347,7 +1227,7 @@ static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
 
         core_dict_init_string(&c.fv_index);
 
-        out = lower(&c, parse_pwz_get_tree(p), failure_out);
+        out = lower(&c, parse_pwz_get_tree(p));
 
         if (!out && err) {
             *err = msg(c.err.data
@@ -1402,13 +1282,6 @@ bool ir_typelang_install(parse_tree_walk_t *w, parse_grammar_t *g,
         parse_walk_reduce_leaf_in(w, parse_nt_unit(g, union_type->name),
                                   r_int_leaf_or_str, c);
     }
-
-    parse_nonterm_t *constraint =
-        parse_find_nonterm(g, CORE_STRING_STATIC("function-constraint"));
-    if (constraint) {
-        parse_walk_reduce_leaf_in(w, parse_nt_unit(g, constraint->name),
-                                  r_int_leaf_or_str, c);
-    }
     bool ok = install(w, g, c);
     return ok;
 }
@@ -1436,13 +1309,7 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l)
 th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
                            core_string_t *err)
 {
-    return src.data ? run(ctx, src, nullptr, err, nullptr) : nullptr;
-}
-
-th_type *ir_typelang_parse_function(th_ctx *ctx, core_string_t src,
-                                    th_type **failure, core_string_t *err)
-{
-    return src.data ? run(ctx, src, nullptr, err, failure) : nullptr;
+    return src.data ? run(ctx, src, nullptr, err) : nullptr;
 }
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
@@ -1452,7 +1319,7 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
     }
 
     core_string_t err = {};
-    th_type      *t   = run(types, spec, nullptr, &err, nullptr);
+    th_type      *t   = run(types, spec, nullptr, &err);
 
     core_free(err.data);
 
@@ -1462,5 +1329,5 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
 th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
                                   size_t *consumed, core_string_t *err)
 {
-    return run(ctx, src, consumed, err, nullptr);
+    return run(ctx, src, consumed, err);
 }

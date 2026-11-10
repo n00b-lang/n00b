@@ -7,6 +7,8 @@ N00BB_SETTING(BUILD_TARGET, "build", "target", CHOICE, "host",
         "host arm64-macos x86_64-linux arm64-linux x86_64-windows"))
 N00BB_SETTING(BUILD_NATIVE, "build", "native", BOOL, NATIVE_DEFAULT)
 N00BB_SETTING(BUILD_LTO, "build", "lto", BOOL, "false")
+N00BB_SETTING(BUILD_COMPTIME_TIMEOUT, "build", "comptime_timeout", INT, "60",
+    RANGE(0, 86400))
 N00BB_SETTING(BUILD_PANIC_TRAP, "build", "panic_trap", BOOL, "false")
 N00BB_SETTING(BUILD_UNCHECKED_WIDE_NARROWING, "build",
     "unchecked_wide_narrowing", BOOL, "false")

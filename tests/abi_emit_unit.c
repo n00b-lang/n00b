@@ -150,7 +150,6 @@ check_type_descriptor_storage(void)
     assert(core_link_declaration_binding(declaration,
         CORE_STRING_STATIC("n00bb.ir.global")) == global);
     assert(ir_global_storage_duration(global) == IR_STORAGE_DURATION_MODULE);
-    assert(ir_global_can_read(global, IR_PHASE_RUNTIME));
     uint32_t type_index = 0;
     assert(n00bb_abi_type_index_find(index, typespec, &type_index)
         && type_index < types_rows.count

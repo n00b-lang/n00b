@@ -60,7 +60,7 @@ record Money {
     cents: int
 }
 
-func __add(self: Money, other: Money) -> Money {
+func __add(view self: Money, view other: Money) -> Money {
     raw_debug("adding")
     return (cents = self.cents + other.cents)
 }

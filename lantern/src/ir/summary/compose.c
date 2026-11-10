@@ -224,32 +224,97 @@ ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
     return callee_effect(summary, flags, outcome);
 }
 
+struct ir_summary_state_query_t {
+    ir_func_t            *f;
+    uint8_t               entry;
+    ir_splace_t           place;
+    core_dict_t           cache;
+    flow_query_t          q;
+    ir_paths_solution_t  *whole;
+    bool                  split;
+    path_list_t           leaves;
+    flow_query_t         *leaf_queries;
+    ir_paths_solution_t **leaf_solutions;
+};
+
+ir_summary_state_query_t *
+ir_summary_state_query(ir_summaries_t *summaries, ir_func_t *f,
+                       const ir_splace_t *place, uint8_t entry)
+{
+    pt_t *pt = function_engine(summaries, f);
+    if (!pt) return nullptr;
+    ir_summary_state_query_t *query = core_alloc(ir_summary_state_query_t);
+    query->f     = f;
+    query->entry = entry;
+    query->place = *place;
+    core_dict_init(&query->cache, nullptr, nullptr);
+    query->q = (flow_query_t){.summaries = summaries, .f = f, .pt = pt,
+                              .target = &query->place,
+                              .path_places = &query->cache};
+    query->whole = ir_paths_solve(f, entry, flow_step, &query->q);
+    return query;
+}
+
+static void
+split_leaves(ir_summary_state_query_t *query)
+{
+    query->split  = true;
+    query->leaves = place_leaves(query->f, &query->place);
+    query->leaf_queries = core_alloc_array(flow_query_t,
+                                           query->leaves.len + 1);
+    query->leaf_solutions = core_alloc_array(ir_paths_solution_t *,
+                                             query->leaves.len + 1);
+}
+
+uint8_t
+ir_summary_state_query_at(ir_summary_state_query_t *query,
+                          const ir_instr_t *in)
+{
+    if (!query) return IR_PATH_UNPASSED;
+    uint8_t state = ir_paths_solution_state(query->whole, in);
+    if (!(state & IR_PATH_UNPASSED)) return state;
+    if (!query->split) split_leaves(query);
+    ir_spath_t read  = read_path(&query->place, in);
+    bool       first = true;
+    for (size_t l = 0; query->leaves.data[0].depth && l < query->leaves.len;
+         l++) {
+        if (!paths_overlap(&query->leaves.data[l], &read)) continue;
+        if (!query->leaf_solutions[l]) {
+            query->leaf_queries[l]      = query->q;
+            query->leaf_queries[l].leaf = &query->leaves.data[l];
+            query->leaf_solutions[l] = ir_paths_solve(query->f, query->entry,
+                flow_step, &query->leaf_queries[l]);
+        }
+        state = combine_leaf(state,
+            ir_paths_solution_state(query->leaf_solutions[l], in), first);
+        first = false;
+    }
+    return state;
+}
+
+void
+ir_summary_state_query_free(ir_summary_state_query_t *query)
+{
+    if (!query) return;
+    ir_paths_solution_free(query->whole);
+    for (size_t l = 0; query->split && l < query->leaves.len; l++)
+        ir_paths_solution_free(query->leaf_solutions[l]);
+    if (query->split) core_list_free(query->leaves);
+    core_free(query->leaf_queries);
+    core_free(query->leaf_solutions);
+    path_places_free(&query->cache);
+    core_free(query);
+}
+
 uint8_t
 ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                         const ir_splace_t *place, uint8_t entry,
                         const ir_instr_t *in)
 {
-    pt_t *pt = function_engine(summaries, f);
-    if (!pt) return IR_PATH_UNPASSED;
-    core_dict_t cache;
-    core_dict_init(&cache, nullptr, nullptr);
-    flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
-                      .target = place, .path_places = &cache};
-    uint8_t state = ir_paths_state(f, entry, flow_step, &q, in);
-    if (state & IR_PATH_UNPASSED) {
-        ir_spath_t  read   = read_path(place, in);
-        path_list_t leaves = place_leaves(f, place);
-        bool first = true;
-        for (size_t l = 0; leaves.data[0].depth && l < leaves.len; l++) {
-            if (!paths_overlap(&leaves.data[l], &read)) continue;
-            q.leaf = &leaves.data[l];
-            state  = combine_leaf(state,
-                ir_paths_state(f, entry, flow_step, &q, in), first);
-            first  = false;
-        }
-        core_list_free(leaves);
-    }
-    path_places_free(&cache);
+    ir_summary_state_query_t *query = ir_summary_state_query(summaries, f,
+                                                             place, entry);
+    uint8_t state = ir_summary_state_query_at(query, in);
+    ir_summary_state_query_free(query);
     return state;
 }
 
@@ -346,7 +411,7 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
     case IR_OP_BOX:
         return IR_SUMMARY_MAY_ALLOCATE;
     case IR_OP_BUFFER_AS_STRING:
-    case IR_OP_BUFFER_BORROW_END:
+    case IR_OP_BUFFER_SLICE_END:
         return IR_SUMMARY_MAY_COLLECT;
     default:
         return 0;
@@ -484,14 +549,14 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_REINTERPRETS, reinterpret, nullptr,
                   (core_string_t){0});
     ir_sites_t  *sites  = ir_func_sites(f);
-    ir_ranges_t *prove_ranges = (!summaries->hooks
+    ir_abcd_t *prove_ranges = (!summaries->hooks
                                  || !summaries->hooks->defer_trap_proofs)
         && (ir_module_props(f->owner) & IR_PROP_SSA)
-        ? ir_func_ranges(f) : nullptr;
+        ? ir_func_abcd(f) : nullptr;
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
         if (site->kind != IR_SITE_TRAP
-            || (prove_ranges && ir_range_trap_proven(prove_ranges,
+            || (prove_ranges && ir_abcd_trap_proven(prove_ranges,
                                                      site->instr))) continue;
         uint8_t kind = trap_kind(site->instr);
         add_flags(summary, IR_SUMMARY_MAY_TRAP, site->instr, nullptr,

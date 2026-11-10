@@ -64,8 +64,14 @@ th_env_encode(const th_env *env, core_buffer_t *out)
         put_text(&body, entry->module);
         put_text(&body, entry->package);
         put_u32(&body, (uint32_t)entry->visibility);
-        put_u32(&body, th_type_writer_add(types, entry->contract));
+        put_u64(&body, entry->requirement_count);
+        put_u32(&body, th_type_writer_add(types,
+                                          th_env_function_copy_source(entry)));
         put_u64(&body, entry->required_params);
+        for (size_t r = 0; r < entry->requirement_count; r++) {
+            put_u32(&body, (uint32_t)entry->requirement_kinds[r]);
+            put_text(&body, entry->requirement_traits[r]);
+        }
     }
     put_u64(&body, env->values.len);
     for (size_t i = 0; i < env->values.len; i++) {
@@ -230,11 +236,32 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
         core_string_t module = get_text(&c);
         core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
-        th_type *contract = get_type(&c);
+        uint64_t requirement_count = get_u64(&c);
+        th_type *copied = get_type(&c);
         uint64_t required = get_u64(&c);
-        ok = !c.failed && th_env_register_function_contract(env, qualified,
-            root, module, package, visibility, contract)
-            && th_env_set_function_required(env, qualified, required);
+        if (requirement_count > SIZE_MAX / sizeof(core_string_t)) {
+            ok = false;
+            break;
+        }
+        th_con_kind *kinds = requirement_count
+            ? core_alloc_array(th_con_kind, requirement_count) : nullptr;
+        core_string_t *traits = requirement_count
+            ? core_alloc_array(core_string_t, requirement_count) : nullptr;
+        for (uint64_t r = 0; !c.failed && r < requirement_count; r++) {
+            kinds[r] = (th_con_kind)get_u32(&c);
+            traits[r] = get_text(&c);
+        }
+        th_env_function_t function = {
+            .qualified_name = qualified, .root_name = root,
+            .module = module, .package = package, .visibility = visibility,
+            .required_params = required,
+            .requirement_kinds = kinds, .requirement_traits = traits,
+            .requirement_count = requirement_count,
+        };
+        ok = !c.failed && copied && th_env_copy_function(env, &function,
+                                                         copied);
+        core_free(kinds);
+        core_free(traits);
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {

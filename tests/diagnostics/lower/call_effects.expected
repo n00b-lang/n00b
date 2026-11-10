@@ -1,0 +1,2 @@
+tests/diagnostics/lower/call_effects.n:18:1: warning N00B-S0062: this call has no effect and its result is ignored: `peek` changes nothing the caller can see and has no other effect
+tests/diagnostics/lower/call_effects.n:19:1: warning N00B-S0062: this call has no effect and its result is ignored: `scratch` changes nothing the caller can see and has no other effect

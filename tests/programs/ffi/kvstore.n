@@ -56,7 +56,7 @@ func open(path: string) -> Store fail: Kv_Error {
 func collect() {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    let heap = mutator.get().__value.heap
+    let heap = mutator.__value.heap
     let before = heap.__value.collections
     sys.gc.collect.collect(heap)
     require heap.__value.collections > before

@@ -17,6 +17,8 @@
 #include "driver.h"
 #include "builtin_types.h"
 #include "n00bb_version.h"
+#include "cached_body.h"
+#include "ir/analyses.h"
 #include "ir/archive.h"
 #include "ir/summary.h"
 #include "lib/alloc.h"
@@ -206,6 +208,18 @@ sections_set(core_list_t(cache_section_t) *sections, core_string_t name,
     return true;
 }
 
+static void
+sections_remove(core_list_t(cache_section_t) *sections, core_string_t name)
+{
+    for (size_t i = 0; i < sections->len; i++) {
+        if (!core_string_eq(sections->data[i].name, name)) continue;
+        core_free(sections->data[i].name.data);
+        free(sections->data[i].data);
+        core_list_delete(*sections, i);
+        return;
+    }
+}
+
 static bool cache_check_only;
 
 void
@@ -217,8 +231,7 @@ n00bb_cache_set_check_only(bool check_only)
 static bool
 objects_optional(void)
 {
-    return cache_check_only
-        || n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
+    return cache_check_only;
 }
 
 static core_string_t
@@ -229,14 +242,18 @@ object_kind(void)
 }
 
 static core_string_t
+runtime_object_kind(void)
+{
+    return n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
+        ? CORE_STRING_STATIC("runtime-bitcode")
+        : CORE_STRING_STATIC("runtime-native");
+}
+
+static core_string_t
 phase_name(void)
 {
-    bool comptime = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
-    if (cache_check_only)
-        return comptime ? CORE_STRING_STATIC("check-comptime")
-                        : CORE_STRING_STATIC("check-runtime");
-    return comptime ? CORE_STRING_STATIC("comptime")
-                    : CORE_STRING_STATIC("runtime");
+    return cache_check_only ? CORE_STRING_STATIC("check")
+                            : CORE_STRING_STATIC("program");
 }
 
 static int
@@ -449,11 +466,7 @@ inline_dependencies(const core_list_t(cache_scc_t) *sccs, cache_scc_t *scc,
             for (uint32_t b = 0; b < function->n_blocks; b++)
                 for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                     ir_instr_t *call = function->blocks[b]->instrs[i];
-                    ir_value_t *callee = call->op == IR_OP_CALL
-                        && call->n_operands
-                        ? ir_operand_value(&call->operands[0]) : nullptr;
-                    ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-                        ? callee->owner : nullptr;
+                    ir_func_t *target = ir_call_function(call);
                     if (!target || !ir_func_is_always_inline(target))
                         continue;
                     size_t owner = scc_of_module_name(sccs,
@@ -650,6 +663,8 @@ struct n00bb_cache_t {
     core_list_t(cache_instance_t) instances;
     n00bb_cache_locate_fn locate;
     void *locate_context;
+    core_buffer_t refreeze;
+    core_buffer_t unstored;
 };
 
 static uint64_t
@@ -969,20 +984,25 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
 }
 
 static bool
-entry_excluded(const cache_entry_t *entry, core_string_t excluded)
+name_listed(core_string_t list, core_string_t name)
 {
     size_t at = 0;
-    while (excluded.data && at < excluded.u8_bytes) {
-        core_string_t rest = core_string_slice(excluded, at,
-                                               excluded.u8_bytes - at);
+    while (list.data && at < list.u8_bytes) {
+        core_string_t rest = core_string_slice(list, at, list.u8_bytes - at);
         int64_t comma = core_string_find_byte(rest, ',');
         core_string_t item = core_string_slice(rest, 0,
             comma >= 0 ? (size_t)comma : rest.u8_bytes);
-        for (size_t m = 0; m < entry->members.len; m++)
-            if (core_string_eq(entry->members.data[m].name, item))
-                return true;
-        at = comma >= 0 ? at + (size_t)comma + 1 : excluded.u8_bytes;
+        if (core_string_eq(name, item)) return true;
+        at = comma >= 0 ? at + (size_t)comma + 1 : list.u8_bytes;
     }
+    return false;
+}
+
+static bool
+entry_excluded(const cache_entry_t *entry, core_string_t excluded)
+{
+    for (size_t m = 0; m < entry->members.len; m++)
+        if (name_listed(excluded, entry->members.data[m].name)) return true;
     return false;
 }
 
@@ -1135,15 +1155,6 @@ object_path(const n00bb_cache_t *cache, uint64_t key, core_buffer_t *path)
     object_path_in(cache->shared, key, path);
 }
 
-static void
-variant_path_in(core_string_t root, uint64_t key, uint64_t variant,
-                core_buffer_t *path)
-{
-    core_buffer_printf(path, "%.*s/%016llx.%016llx.n00bo",
-                       (int)root.u8_bytes, root.data,
-                       (unsigned long long)key, (unsigned long long)variant);
-}
-
 static bool
 in_phase(core_string_t name)
 {
@@ -1170,19 +1181,6 @@ drop_phase_sections(core_list_t(cache_section_t) *sections)
 }
 
 static bool
-replace_phase_sections(core_list_t(cache_section_t) *into,
-                       const core_list_t(cache_section_t) *from)
-{
-    drop_phase_sections(into);
-    bool ok = true;
-    for (size_t i = 0; ok && i < from->len; i++)
-        if (in_phase(from->data[i].name))
-            ok = sections_set(into, from->data[i].name, from->data[i].data,
-                              from->data[i].length);
-    return ok;
-}
-
-static bool
 sections_equal(const cache_section_t *left, const cache_section_t *right)
 {
     return left && right && left->length == right->length
@@ -1202,100 +1200,15 @@ phase_section_in(const core_list_t(cache_section_t) *sections,
 }
 
 static bool
-store_dispatch_variant(core_string_t root, uint64_t key,
-                       const core_list_t(cache_section_t) *sections)
-{
-    const cache_section_t *dispatch = phase_section_in(sections,
-        CORE_STRING_STATIC("dispatch"));
-    if (!dispatch || dispatch->length <= 4) return true;
-    core_buffer_t path = {0};
-    variant_path_in(root, key, core_xxh3_64bits_raw(dispatch->data,
-                                                    dispatch->length), &path);
-    core_list_t(cache_section_t) variant = core_list_new(cache_section_t);
-    uint8_t *existing = nullptr;
-    size_t existing_bytes = 0;
-    if (read_file(core_buffer_string(&path), &existing, &existing_bytes)
-        && !sections_parse(existing, existing_bytes, &variant)) {
-        sections_release(&variant);
-        variant = core_list_new(cache_section_t);
-    }
-    core_free(existing);
-    core_buffer_t serialized = {0};
-    bool ok = replace_phase_sections(&variant, sections);
-    if (ok) sections_serialize(&variant, &serialized);
-    ok = ok && core_os_write_file_atomic(core_buffer_string(&path), serialized.data,
-                                 serialized.byte_len);
-    core_buffer_release(&serialized);
-    sections_release(&variant);
-    core_buffer_release(&path);
-    return ok;
-}
-
-static bool
 reference_holds(n00bb_cache_t *cache, const cache_entry_t *entry,
                 core_string_t reference)
 {
     for (size_t m = 0; m < entry->members.len; m++)
         if (core_string_eq(entry->members.data[m].name, reference))
             return true;
-    if (!module_has_key(cache, reference, 0)) {
-        const cache_section_t *dispatch = phase_section_in(&entry->sections,
-            CORE_STRING_STATIC("dispatch"));
-        return dispatch && dispatch->length > 4;
-    }
+    if (!module_has_key(cache, reference, 0)) return false;
     cache_entry_t *referenced = selected_entry(cache, reference);
     return referenced && (!referenced->deferred || entry->deferred);
-}
-
-static bool
-adopt_dispatch_variant(n00bb_cache_t *cache, cache_entry_t *entry,
-                       const core_buffer_t *dispatch)
-{
-    uint64_t variant = buffer_hash(dispatch);
-    const core_string_t roots[] = {cache->directory, cache->shared};
-    const cache_section_t current = {
-        .data = (uint8_t *)dispatch->data, .length = dispatch->byte_len,
-    };
-    bool adopted = false;
-    for (size_t r = 0; !adopted && r < 2; r++) {
-        if (r && core_string_eq(roots[r], roots[0])) break;
-        core_buffer_t path = {0};
-        variant_path_in(roots[r], entry->key, variant, &path);
-        cache_entry_t candidate = {.key = entry->key,
-                                   .deferred = entry->deferred};
-        uint8_t *bytes = nullptr;
-        size_t length = 0;
-        bool ok = read_file(core_buffer_string(&path), &bytes, &length)
-            && entry_parse(&candidate, bytes, length)
-            && candidate.freshness == entry->freshness
-            && candidate.interface_identity == entry->interface_identity
-            && sections_equal(phase_section_in(&candidate.sections,
-                   CORE_STRING_STATIC("dispatch")), &current)
-            && sections_equal(phase_section_in(&candidate.sections,
-                   CORE_STRING_STATIC("interface")),
-                   phase_section_in(&entry->sections,
-                   CORE_STRING_STATIC("interface")));
-        bool holds = true;
-        for (size_t i = 0; ok && holds && i < candidate.references.len; i++)
-            holds = reference_holds(cache, &candidate,
-                                    candidate.references.data[i]);
-        ok = ok && (holds || (!cache->strict && entry->deferred));
-        adopted = ok && replace_phase_sections(&entry->sections,
-                                               &candidate.sections);
-        if (adopted) {
-            core_list_t(core_string_t) references = entry->references;
-            entry->references = candidate.references;
-            candidate.references = references;
-            core_list_t(cache_link_t) summaries = entry->import_summaries;
-            entry->import_summaries = candidate.import_summaries;
-            candidate.import_summaries = summaries;
-            entry->summary_identity = candidate.summary_identity;
-        }
-        core_free(bytes);
-        entry_release(&candidate);
-        core_buffer_release(&path);
-    }
-    return adopted;
 }
 
 static bool
@@ -1471,6 +1384,8 @@ n00bb_cache_free(n00bb_cache_t *cache)
         sections_release(&cache->instances.data[i].sections);
     core_list_free(cache->instances);
     core_buffer_release(&cache->flags);
+    core_buffer_release(&cache->refreeze);
+    core_buffer_release(&cache->unstored);
     core_free(cache->directory.data);
     core_free(cache->shared.data);
     core_free(cache->stdlib_root.data);
@@ -1559,6 +1474,21 @@ n00bb_cache_declaration_sites(const n00bb_cache_t *cache,
 }
 
 bool
+n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
+                         core_buffer_t *out)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = loaded_member(cache, module, &entry);
+    const cache_section_t *section = member
+        ? phase_section(entry, CORE_STRING_STATIC("unused"), member->name)
+        : nullptr;
+    if (!section) return false;
+    out->byte_len = 0;
+    core_buffer_append(out, (const char *)section->data, section->length);
+    return true;
+}
+
+bool
 n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
                             const core_translation_unit_t *unit,
                             core_diagnostics_t *into)
@@ -1614,6 +1544,14 @@ n00bb_cache_log_restart(core_string_t reason)
     core_string_t phase = phase_name();
     cache_log("%.*s restart %.*s", (int)phase.u8_bytes, phase.data,
               (int)reason.u8_bytes, reason.data);
+}
+
+void
+n00bb_cache_log_runtime_object(core_string_t module)
+{
+    core_string_t phase = phase_name();
+    cache_log("%.*s runtime object %.*s", (int)phase.u8_bytes, phase.data,
+              (int)module.u8_bytes, module.data);
 }
 
 static bool
@@ -1679,72 +1617,12 @@ n00bb_cache_unloadable_modules(const n00bb_cache_t *cache, core_buffer_t *out)
     for (size_t e = 0; cache && cache->ir_load_failed
          && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
-        const cache_section_t *dispatch = phase_section(entry,
-            CORE_STRING_STATIC("dispatch"), (core_string_t){0});
-        if (entry->load != ENTRY_VALID
-            || (!entry->deferred && (!dispatch || dispatch->length <= 4)))
-            continue;
+        if (entry->load != ENTRY_VALID || !entry->deferred) continue;
         for (size_t m = 0; m < entry->members.len; m++) {
             if (out->byte_len) core_buffer_putc(out, ',');
             core_buffer_append_string(out, entry->members.data[m].name);
         }
     }
-}
-
-static core_translation_unit_t *
-analysis_unit(n00bb_link_analysis_t *analysis, core_string_t module)
-{
-    for (size_t i = 0; module.data && i < analysis->units.len; i++) {
-        core_translation_unit_t *unit = analysis->units.data[i];
-        if (core_string_eq(module, unit->module.identifier)) return unit;
-    }
-    return nullptr;
-}
-
-static bool
-dispatch_holds(n00bb_cache_t *cache, n00bb_link_analysis_t *analysis,
-               const th_env *environment, cache_entry_t *entry)
-{
-    const cache_section_t *section = phase_section(entry,
-        CORE_STRING_STATIC("dispatch"), (core_string_t){0});
-    if (!section) return true;
-    manifest_reader_t r = {section->data, section->length, 0, false};
-    uint32_t count = read_u32(&r);
-    core_buffer_t current = {0};
-    put_u32(&current, count);
-    bool matches = true;
-    bool known = true;
-    for (uint32_t i = 0; !r.failed && known && i < count; i++) {
-        core_string_t module = read_text(&r);
-        core_string_t package = read_text(&r);
-        core_string_t trait = read_text(&r);
-        core_string_t method = read_text(&r);
-        uint64_t recorded = read_u64(&r);
-        core_translation_unit_t *unit = r.failed ? nullptr
-            : analysis_unit(analysis, module);
-        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        uint64_t now = recorded;
-        if (state && state->types)
-            known = th_ctx_set_environment_scope(state->types,
-                    module, package)
-                && n00bb_dispatch_fingerprint(state->types, environment,
-                    trait, method, &now);
-        matches = matches && known && now == recorded;
-        put_text(&current, module);
-        put_text(&current, package);
-        put_text(&current, trait);
-        put_text(&current, method);
-        put_u64(&current, now);
-        core_free(module.data);
-        core_free(package.data);
-        core_free(trait.data);
-        core_free(method.data);
-    }
-    bool holds = !r.failed && matches;
-    if (!holds && !r.failed && known && !entry->loaded)
-        holds = adopt_dispatch_variant(cache, entry, &current);
-    core_buffer_release(&current);
-    return holds;
 }
 
 static bool
@@ -1772,111 +1650,6 @@ next_summary_hint(core_string_t *rest, core_string_t *phase,
     return false;
 }
 
-static bool
-hinted_summary(core_string_t module, uint64_t *value)
-{
-    core_string_t rest = n00bb_handoff()->cache_summaries;
-    core_string_t phase = {0}, name = {0};
-    uint64_t hint = 0;
-    bool found = false;
-    while (next_summary_hint(&rest, &phase, &name, &hint))
-        if (core_string_eq(phase, phase_name()) && core_string_eq(name, module)) {
-            *value = hint;
-            found = true;
-        }
-    return found;
-}
-
-static bool
-import_summaries_hold(const n00bb_cache_t *cache, const cache_entry_t *entry)
-{
-    for (size_t i = 0; i < entry->import_summaries.len; i++) {
-        const cache_entry_t *owner = nullptr;
-        core_string_t name = entry->import_summaries.data[i].name;
-        uint64_t actual = 0;
-        if (loaded_member(cache, name, &owner)) {
-            if (owner->stale) continue;
-            actual = owner->summary_identity;
-        } else if (!hinted_summary(name, &actual)) continue;
-        if (actual != entry->import_summaries.data[i].value) return false;
-    }
-    return true;
-}
-
-static bool
-entry_context_holds(n00bb_cache_t *cache, n00bb_link_analysis_t *analysis,
-                    const th_env *environment, cache_entry_t *entry)
-{
-    return import_summaries_hold(cache, entry)
-        && dispatch_holds(cache, analysis, environment, entry);
-}
-
-static bool
-same_members(const cache_entry_t *left, const cache_entry_t *right)
-{
-    bool same = left->members.len == right->members.len;
-    for (size_t m = 0; same && m < left->members.len; m++)
-        same = core_string_eq(left->members.data[m].name,
-                              right->members.data[m].name);
-    return same;
-}
-
-static bool
-select_alternate(n00bb_cache_t *cache, n00bb_link_analysis_t *analysis,
-                 const th_env *environment, cache_entry_t *entry)
-{
-    for (size_t e = 0; !entry->loaded && e < cache->entries.len; e++) {
-        cache_entry_t *candidate = &cache->entries.data[e];
-        bool usable = candidate->alternate && !candidate->loaded
-            && candidate->interface_identity == entry->interface_identity
-            && same_members(candidate, entry);
-        for (size_t i = 0; usable && i < candidate->references.len; i++)
-            usable = reference_holds(cache, candidate,
-                                     candidate->references.data[i]);
-        if (!usable || !entry_context_holds(cache, analysis, environment,
-                                            candidate))
-            continue;
-        candidate->alternate = false;
-        candidate->state = ENTRY_VALID;
-        candidate->load = ENTRY_VALID;
-        candidate->interface = entry->interface;
-        entry->interface = nullptr;
-        entry->alternate = true;
-        entry->state = ENTRY_INVALID;
-        entry->load = ENTRY_INVALID;
-        return true;
-    }
-    return false;
-}
-
-bool
-n00bb_cache_check_dispatch(n00bb_cache_t *cache,
-                           n00bb_link_analysis_t *analysis,
-                           const th_env *environment)
-{
-    if (!cache || !analysis || !environment) return true;
-    bool changed = true;
-    for (size_t round = 0; changed && round <= cache->entries.len; round++) {
-        changed = false;
-        for (size_t e = 0; e < cache->entries.len; e++) {
-            cache_entry_t *entry = &cache->entries.data[e];
-            if (entry->load != ENTRY_VALID) continue;
-            uint64_t summary = entry->summary_identity;
-            if (!entry_context_holds(cache, analysis, environment, entry))
-                changed |= select_alternate(cache, analysis, environment,
-                                            entry);
-            changed |= entry->summary_identity != summary;
-        }
-    }
-    for (size_t e = 0; e < cache->entries.len; e++) {
-        cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load == ENTRY_VALID
-            && !entry_context_holds(cache, analysis, environment, entry))
-            entry->stale = true;
-    }
-    return true;
-}
-
 void
 n00bb_cache_stale_modules(const n00bb_cache_t *cache, core_buffer_t *out)
 {
@@ -1897,20 +1670,27 @@ n00bb_cache_stale_modules(const n00bb_cache_t *cache, core_buffer_t *out)
 }
 
 void
-n00bb_cache_objectless_modules(const n00bb_cache_t *cache, core_buffer_t *out)
+n00bb_cache_note_refreeze(n00bb_cache_t *cache, core_string_t module)
 {
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t m = 0; m < entry->members.len; m++) {
-            core_string_t name = entry->members.data[m].name;
-            if (phase_section(entry, object_kind(), name)
-                && phase_section(entry, CORE_STRING_STATIC("abi"), name))
-                continue;
-            if (out->byte_len) core_buffer_putc(out, ',');
-            core_buffer_append_string(out, name);
-        }
-    }
+    if (!cache || !module.u8_bytes) return;
+    if (cache->refreeze.byte_len) core_buffer_putc(&cache->refreeze, ',');
+    core_buffer_append_string(&cache->refreeze, module);
+}
+
+void
+n00bb_cache_skip_store(n00bb_cache_t *cache, core_string_t module)
+{
+    if (!cache || !module.u8_bytes) return;
+    if (cache->unstored.byte_len) core_buffer_putc(&cache->unstored, ',');
+    core_buffer_append_string(&cache->unstored, module);
+}
+
+void
+n00bb_cache_refreeze_modules(const n00bb_cache_t *cache, core_buffer_t *out)
+{
+    if (cache && cache->refreeze.byte_len)
+        core_buffer_append(out, cache->refreeze.data,
+                           cache->refreeze.byte_len);
 }
 
 bool
@@ -1983,14 +1763,10 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
     bool ok = collect_sccs(link, &sccs, false);
     for (size_t s = 0; ok && s < sccs.len; s++)
         if (!sccs.data[s].cached) scc_function_roots(&sccs.data[s], &roots);
-    size_t missing = 0;
-    for (size_t r = 0; r < roots.len; r++)
-        if (!ir_summary_of(analysis->summaries, roots.data[r]))
-            roots.data[missing++] = roots.data[r];
-    roots.len = missing;
+    ir_summary_hooks_t proven = analysis->summary_hooks;
+    proven.defer_trap_proofs = false;
     ir_summaries_t *summaries = ok && roots.len
-        ? ir_summaries_compute(roots.data, roots.len,
-                               &analysis->summary_hooks)
+        ? ir_summaries_compute(roots.data, roots.len, &proven)
         : nullptr;
     ok = ok && (summaries || !roots.len);
     cache->summary_identities.len = 0;
@@ -2005,11 +1781,8 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         for (size_t f = 0; ok && f < functions.len; f++) {
             put_text(&input, ir_module_name(functions.data[f]->owner));
             put_text(&input, functions.data[f]->name);
-            ir_summary_t *summary = ir_summary_of(analysis->summaries,
-                                                  functions.data[f]);
-            if (!summary) summary = ir_summary_of(summaries,
-                                                  functions.data[f]);
-            ok = ir_summary_encode_identity(summary, &input);
+            ok = ir_summary_encode_identity(
+                ir_summary_of(summaries, functions.data[f]), &input);
         }
         core_list_push(cache->summary_identities, ((cache_link_t){
             .name = scc->members.data[0]->module.identifier,
@@ -2101,41 +1874,25 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     const cache_section_t *abi = member
         ? phase_section(entry, CORE_STRING_STATIC("abi"), member->name)
         : nullptr;
-    if (!code || !abi) return false;
+    const cache_section_t *mutators = member
+        ? phase_section(entry, CORE_STRING_STATIC("mutators"), member->name)
+        : nullptr;
+    if (!code || !abi || !mutators) return false;
+    const cache_section_t *runtime = phase_section(entry,
+        runtime_object_kind(), member->name);
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
         .object = code->data, .object_bytes = code->length,
         .abi = abi->data, .abi_bytes = abi->length,
+        .runtime_object = runtime ? runtime->data : nullptr,
+        .runtime_object_bytes = runtime ? runtime->length : 0,
+        .mutators = mutators->data, .mutators_bytes = mutators->length,
     };
     return true;
 }
 
 static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
-
-static bool
-cache_has_marker(const n00bb_cache_t *cache, core_string_t marker)
-{
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load == ENTRY_VALID && entry->loaded
-            && phase_section(entry, marker, (core_string_t){0}))
-            return true;
-    }
-    return false;
-}
-
-bool
-n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
-{
-    return cache_has_marker(cache, CORE_STRING_STATIC("build-time-capture"));
-}
-
-bool
-n00bb_cache_needs_literal_capture(const n00bb_cache_t *cache)
-{
-    return cache_has_marker(cache, CORE_STRING_STATIC("literal-capture"));
-}
 
 static bool
 read_request_text(const uint8_t *data, size_t size, size_t *at,
@@ -2430,101 +2187,6 @@ n00bb_symbol_use_key(core_buffer_t *out, const core_translation_unit_t *unit,
     core_buffer_append_string(out, symbol->name);
 }
 
-static core_translation_unit_t *
-node_owner_unit(parse_tree_t *node)
-{
-    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
-        parse_scope_t *scope = parse_tree_scope(at);
-        if (scope && scope->owner_unit) return scope->owner_unit;
-    }
-    return nullptr;
-}
-
-static bool
-used_by(const parse_sym_entry_t *symbol, core_translation_unit_t *unit)
-{
-    for (size_t u = 0; u < symbol->use_count; u++)
-        if (node_owner_unit(symbol->use_nodes[u]) == unit) return true;
-    return false;
-}
-
-static void
-put_symbol_uses(core_buffer_t *out, const n00bb_link_analysis_t *analysis,
-                core_translation_unit_t *member)
-{
-    core_buffer_t items = {0};
-    core_buffer_t key = {0};
-    uint32_t count = 0;
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        core_translation_unit_t *unit = analysis->units.data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        if (unit == member || !state || !state->annotations) continue;
-        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
-             scope; scope = scope->all_next)
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if ((symbol->kind != PARSE_SYM_FUNCTION && !symbol->is_field)
-                    || !used_by(symbol, member))
-                    continue;
-                n00bb_symbol_use_key(&key, unit, scope, symbol);
-                put_text(&items, core_buffer_string(&key));
-                count++;
-            }
-    }
-    put_u32(out, count);
-    if (items.byte_len) core_buffer_append(out, items.data, items.byte_len);
-    core_buffer_release(&items);
-    core_buffer_release(&key);
-}
-
-void
-n00bb_symbol_uses_init(n00bb_symbol_uses_t *uses)
-{
-    core_dict_init_string(&uses->keys);
-    uses->owned = core_list_new(n00bb_use_key_t);
-}
-
-void
-n00bb_symbol_uses_release(n00bb_symbol_uses_t *uses)
-{
-    for (size_t i = 0; i < uses->owned.len; i++)
-        core_dict_string_key_free(uses->owned.data[i]);
-    core_list_free(uses->owned);
-    core_dict_free(&uses->keys);
-}
-
-bool
-n00bb_symbol_uses_contains(n00bb_symbol_uses_t *uses, core_string_t key)
-{
-    return core_dict_contains(&uses->keys, &key);
-}
-
-bool
-n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
-                        n00bb_symbol_uses_t *into)
-{
-    const cache_entry_t *entry = nullptr;
-    const cache_member_t *member = loaded_member(cache, module, &entry);
-    const cache_section_t *section = member
-        ? phase_section(entry, CORE_STRING_STATIC("uses"), member->name)
-        : nullptr;
-    if (!section) return false;
-    manifest_reader_t reader = {
-        .data = section->data, .length = section->length,
-    };
-    uint32_t count = read_u32(&reader);
-    for (uint32_t i = 0; !reader.failed && i < count; i++) {
-        core_string_t key = read_text(&reader);
-        if (reader.failed) break;
-        if (!n00bb_symbol_uses_contains(into, key)) {
-            n00bb_use_key_t owned = core_dict_string_key_copy(key);
-            core_list_push(into->owned, owned);
-            core_dict_put(&into->keys, owned, (void *)1);
-        }
-        core_free(key.data);
-    }
-    return !reader.failed;
-}
 
 typedef struct {
     const core_diagnostic_t *const *items;
@@ -2575,7 +2237,9 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
-        attached = core_diag_is_advisory(item->severity) || (note && attached);
+        attached = note ? attached
+            : core_diag_is_advisory(item->severity)
+                && !n00bb_diag_reports_unused(item->code);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){
@@ -2644,27 +2308,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     if (references.byte_len)
         core_buffer_append(&manifest, references.data, references.byte_len);
     core_buffer_release(&references);
-    core_buffer_t dispatch = {0};
-    uint32_t dispatch_count = 0;
-    for (size_t m = 0; m < scc->members.len; m++)
-        dispatch_count += (uint32_t)tu_state(scc->members.data[m])
-            ->dispatch_records.len;
-    put_u32(&dispatch, dispatch_count);
-    for (size_t m = 0; m < scc->members.len; m++) {
-        core_translation_unit_t *member = scc->members.data[m];
-        n00bb_tu_state_t *member_state = tu_state(member);
-        for (size_t d = 0; d < member_state->dispatch_records.len; d++) {
-            const n00bb_dispatch_record_t *record =
-                &member_state->dispatch_records.data[d];
-            core_string_t package = n00bb_package_id(member);
-            put_bytes(&dispatch, member->module.identifier.data,
-                      member->module.identifier.u8_bytes);
-            put_bytes(&dispatch, package.data, package.u8_bytes);
-            put_text(&dispatch, record->trait);
-            put_text(&dispatch, record->method);
-            put_u64(&dispatch, record->fingerprint);
-        }
-    }
     core_string_t root = scc_directory(cache, scc);
     core_buffer_t path = {0};
     object_path_in(root, scc->key, &path);
@@ -2680,14 +2323,8 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     const cache_section_t new_ir = {
         .data = (uint8_t *)ir->data, .length = ir->byte_len,
     };
-    const cache_section_t new_dispatch = {
-        .data = (uint8_t *)dispatch.data, .length = dispatch.byte_len,
-    };
     if (!sections_equal(phase_section_in(&sections, CORE_STRING_STATIC("ir")),
-                        &new_ir)
-        || !sections_equal(phase_section_in(&sections,
-                               CORE_STRING_STATIC("dispatch")),
-                           &new_dispatch))
+                        &new_ir))
         drop_phase_sections(&sections);
     core_buffer_t name = {0};
     phase_section_name(&name, CORE_STRING_STATIC("manifest"));
@@ -2707,27 +2344,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                 requests.data, requests.byte_len);
         core_buffer_release(&requests);
     }
-    phase_section_name(&name, CORE_STRING_STATIC("dispatch"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-                            dispatch.data, dispatch.byte_len);
-    core_buffer_release(&dispatch);
-    bool needs_capture = false;
-    bool needs_literals = false;
-    for (size_t m = 0; m < scc->members.len; m++) {
-        n00bb_tu_state_t *member = tu_state(scc->members.data[m]);
-        needs_capture = needs_capture || member->needs_build_time_capture;
-        needs_literals = needs_literals || member->needs_literal_capture;
-    }
-    if (needs_capture) {
-        phase_section_name(&name, CORE_STRING_STATIC("build-time-capture"));
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                (const uint8_t *)"", 0);
-    }
-    if (needs_literals) {
-        phase_section_name(&name, CORE_STRING_STATIC("literal-capture"));
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                (const uint8_t *)"", 0);
-    }
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
         const n00bb_cache_module_object_t *object = module_object(objects,
@@ -2742,6 +2358,16 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             module_section_name(&name, CORE_STRING_STATIC("abi"), module);
             ok = ok && sections_set(&sections, core_buffer_string(&name),
                                     object->abi, object->abi_bytes);
+            module_section_name(&name, CORE_STRING_STATIC("mutators"), module);
+            ok = ok && sections_set(&sections, core_buffer_string(&name),
+                object->mutators ? object->mutators : (const uint8_t *)"",
+                object->mutators_bytes);
+            module_section_name(&name, runtime_object_kind(), module);
+            if (object->runtime_object)
+                ok = ok && sections_set(&sections,
+                    core_buffer_string(&name), object->runtime_object,
+                    object->runtime_object_bytes);
+            else sections_remove(&sections, core_buffer_string(&name));
         }
         core_buffer_t warnings = {0};
         core_translation_unit_t *root = analysis->units.len
@@ -2756,14 +2382,13 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                               : (const uint8_t *)"",
                                 warnings.byte_len);
         core_buffer_release(&warnings);
-        core_buffer_t uses = {0};
-        put_symbol_uses(&uses, analysis, scc->members.data[m]);
-        module_section_name(&name, CORE_STRING_STATIC("uses"), module);
+        const core_buffer_t *unused =
+            &tu_state(scc->members.data[m])->unused_facts;
+        module_section_name(&name, CORE_STRING_STATIC("unused"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                uses.data ? (const uint8_t *)uses.data
-                                          : (const uint8_t *)"",
-                                uses.byte_len);
-        core_buffer_release(&uses);
+                                unused->data ? (const uint8_t *)unused->data
+                                             : (const uint8_t *)"",
+                                unused->byte_len);
         const core_buffer_t *sites =
             &tu_state(scc->members.data[m])->declaration_sites;
         module_section_name(&name, CORE_STRING_STATIC("sites"), module);
@@ -2776,8 +2401,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
     ok = ok && core_os_write_file_atomic(core_buffer_string(&path), serialized.data,
-                                 serialized.byte_len)
-        && store_dispatch_variant(root, scc->key, &sections);
+                                 serialized.byte_len);
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
         core_buffer_t index = {0};
@@ -2967,6 +2591,15 @@ scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
 }
 
 static bool
+allocates_direct(const ir_func_t *function)
+{
+    ir_summary_t *summary = function->n_blocks
+        ? ir_summary_of(ir_analysis_summaries(), function) : nullptr;
+    return summary
+        && (ir_summary_flags(summary) & IR_SUMMARY_ALLOCATES_DIRECT);
+}
+
+static bool
 instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
              uint64_t *key)
 {
@@ -2990,6 +2623,19 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     for (size_t i = 0; i < owners.len; i++) {
         put_u64(&input, sccs->data[owners.data[i]].interface_identity);
         put_u64(&input, sccs->data[owners.data[i]].summary_identity);
+    }
+    ir_module_t *module = item->instance->owner;
+    for (size_t f = 0; f < ir_func_count(module); f++) {
+        ir_func_t *function = ir_func_at(module, f);
+        put_u32(&input, allocates_direct(function));
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_func_t *callee = n00bb_direct_call_target(
+                    function->blocks[b]->instrs[i]);
+                if (!callee || !allocates_direct(callee)) continue;
+                put_text(&input, ir_module_name(callee->owner));
+                put_text(&input, callee->name);
+            }
     }
     *key = buffer_hash(&input);
     core_buffer_release(&input);
@@ -3060,11 +2706,15 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     }
     const cache_section_t *code = section_named(&found->sections,
         core_buffer_string(&name));
+    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
+    const cache_section_t *mutators = section_named(&found->sections,
+        core_buffer_string(&name));
     core_buffer_release(&name);
-    if (!code) return false;
+    if (!code || !mutators) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
         .object = code->data, .object_bytes = code->length,
+        .mutators = mutators->data, .mutators_bytes = mutators->length,
     };
     return true;
 }
@@ -3090,6 +2740,10 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     phase_section_name(&name, object_kind());
     bool ok = sections_set(&sections, core_buffer_string(&name),
                            object->object, object->object_bytes);
+    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
+        object->mutators ? object->mutators : (const uint8_t *)"",
+        object->mutators_bytes);
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
@@ -3122,7 +2776,12 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
     for (size_t s = 0; ok && s < sccs->len; s++) {
         cache_scc_t *scc = &sccs->data[s];
+        bool unstored = false;
+        for (size_t m = 0; !unstored && m < scc->members.len; m++)
+            unstored = name_listed(core_buffer_string(&cache->unstored),
+                                   scc->members.data[m]->module.identifier);
         const cache_snapshot_t *snapshot = scc->root || scc->cached
+                || unstored
             ? nullptr
             : snapshot_for(cache, scc->members.data[0]->module.identifier);
         if (snapshot)

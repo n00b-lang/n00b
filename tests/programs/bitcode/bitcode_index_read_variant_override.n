@@ -13,7 +13,7 @@ trait Index_Read {
 }
 
 func __read(self: Array[Choice], index: int) -> Other {
-    let result: Other = (value = 9)
+    result = (value = 9)
     return result
 }
 

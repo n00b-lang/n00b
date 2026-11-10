@@ -2,22 +2,22 @@
 #include "ir/analyses.h"
 #include "ir/abcd.h"
 #include "ir/liveness.h"
-#include "ir/ranges.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
+#include "lib/dict.h"
 #include "lib/hash.h"
 #include "lib/list.h"
+#include "th/typehash.h"
 
 struct ir_func_analyses_t {
     uint64_t            fingerprint;
     uint64_t            epoch;
+    uint64_t            checked;
     ir_doms_t          *doms;
     ir_pdg_t           *pdg;
     ir_places_t        *places;
-    ir_memssa_t        *memssa;
     ir_value_numbers_t *numbers;
     ir_sites_t         *sites;
-    ir_ranges_t        *ranges;
     ir_abcd_t          *abcd;
     ir_live_t          *live;
 };
@@ -29,6 +29,20 @@ static _Thread_local core_list_t(ir_func_ptr_t) scope_owned;
 static _Thread_local size_t scope_depth;
 static _Thread_local ir_summaries_t *bound_summaries;
 static _Thread_local uint64_t summary_epoch = 1;
+static _Thread_local size_t read_only_depth;
+static _Thread_local uint64_t read_only_epoch;
+
+void
+ir_analysis_read_only_begin(void)
+{
+    if (!read_only_depth++) read_only_epoch++;
+}
+
+void
+ir_analysis_read_only_end(void)
+{
+    if (read_only_depth) read_only_depth--;
+}
 
 ir_summaries_t *
 ir_analysis_bind_summaries(ir_summaries_t *summaries)
@@ -81,22 +95,39 @@ mix_annots(uint64_t h, const ir_annots_t *annots, bool with)
 }
 
 static uint64_t
-mix_value(uint64_t h, const ir_value_t *value, bool annots)
+mix_type(uint64_t h, th_type *type, core_dict_t *seen, uint32_t depth)
+{
+    h = mix(h, (uint64_t)(uintptr_t)type);
+    if (!type || depth > 64 || !core_dict_add(seen, type, type)) return h;
+    if (th_kind_of(type) == TH_VAR) {
+        h = mix(h, th_var_revision(type));
+        th_type *resolved = th_resolve(type);
+        return resolved == type ? h
+                                : mix_type(h, resolved, seen, depth + 1);
+    }
+    for (size_t c = 0; c < th_child_count(type); c++)
+        h = mix_type(h, th_child(type, c), seen, depth + 1);
+    return h;
+}
+
+static uint64_t
+mix_value(uint64_t h, const ir_value_t *value, bool annots,
+          core_dict_t *seen)
 {
     if (!value) return mix(h, 0);
     h = mix(h, (uint64_t)(uintptr_t)value);
-    h = mix(h, (uint64_t)(uintptr_t)value->type);
+    h = mix_type(h, value->type, seen, 0);
     return mix_annots(h, &value->annots, annots);
 }
 
 static uint64_t
-mix_outside_types(uint64_t h, const ir_instr_t *in)
+mix_outside_types(uint64_t h, const ir_instr_t *in, core_dict_t *seen)
 {
     for (uint32_t o = 0; o < in->n_operands; o++) {
         const ir_value_t *value = ir_operand_value(&in->operands[o]);
         if (value && (value->kind == IR_VAL_GLOBAL
                       || value->kind == IR_VAL_FUNC))
-            h = mix(h, (uint64_t)(uintptr_t)value->type);
+            h = mix_type(h, value->type, seen, 0);
     }
     return h;
 }
@@ -104,17 +135,19 @@ mix_outside_types(uint64_t h, const ir_instr_t *in)
 static uint64_t
 fingerprint(const ir_func_t *f, bool annots)
 {
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
     uint64_t h = mix(0, f->n_blocks);
-    h = mix(h, (uint64_t)(uintptr_t)f->type);
+    h = mix_type(h, f->type, &seen, 0);
     h = mix_annots(h, &f->annots, annots);
     h = mix(h, f->n_params);
     for (uint32_t p = 0; p < f->n_params; p++)
-        h = mix_value(h, f->params[p], annots);
+        h = mix_value(h, f->params[p], annots, &seen);
     h = mix(h, f->n_locals);
     for (uint32_t l = 0; l < f->n_locals; l++) {
         const ir_local_t *local = f->locals[l];
         h = mix(h, (uint64_t)(uintptr_t)local);
-        h = mix(h, (uint64_t)(uintptr_t)local->type);
+        h = mix_type(h, local->type, &seen, 0);
         h = mix(h, local->address_taken);
         if (local->value) h = mix_annots(h, &local->value->annots, annots);
     }
@@ -127,13 +160,13 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix(h, (uint64_t)(uintptr_t)in);
             h = mix(h, in->op);
             h = mix(h, in->dest_kind);
-            h = mix_value(h, in->dest, annots);
+            h = mix_value(h, in->dest, annots, &seen);
             h = mix(h, (uint64_t)(uintptr_t)in->dest_local);
             h = mix(h, in->n_operands);
             if (in->n_operands)
                 h = mix(h, core_xxh3_64bits_raw(in->operands,
                     in->n_operands * sizeof(ir_operand_t)));
-            h = mix_outside_types(h, in);
+            h = mix_outside_types(h, in, &seen);
             h = mix(h, in->n_mods);
             if (in->n_mods)
                 h = mix(h, core_xxh3_64bits_raw(in->mods,
@@ -143,6 +176,7 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix_annots(h, &in->annots, annots);
         }
     }
+    core_dict_free(&seen);
     return h;
 }
 
@@ -172,12 +206,10 @@ release_summary_dependents(struct ir_func_analyses_t *slot)
 {
     ir_abcd_free(slot->abcd);
     slot->abcd = nullptr;
-    ir_ranges_free(slot->ranges);
-    slot->ranges = nullptr;
     ir_value_numbers_free(slot->numbers);
     slot->numbers = nullptr;
-    ir_memssa_free(slot->memssa);
-    slot->memssa = nullptr;
+    ir_pdg_free(slot->pdg);
+    slot->pdg = nullptr;
     slot->epoch = summary_epoch;
 }
 
@@ -194,11 +226,9 @@ current_slot(ir_func_t *f)
     ir_sites_free(slot->sites);
     slot->sites = nullptr;
     ir_places_free(slot->places);
-    ir_pdg_free(slot->pdg);
     ir_live_free(slot->live);
     ir_doms_free(slot->doms);
     slot->places = nullptr;
-    slot->pdg = nullptr;
     slot->live = nullptr;
     slot->doms = nullptr;
     slot->fingerprint = now;
@@ -210,7 +240,15 @@ static _Thread_local const ir_func_t *building;
 static struct ir_func_analyses_t *
 valid_slot(ir_func_t *f)
 {
-    return building == f ? slot_of(f) : current_slot(f);
+    if (building == f) return slot_of(f);
+    if (!read_only_depth) return current_slot(f);
+    struct ir_func_analyses_t *slot = slot_of(f);
+    if (slot->checked != read_only_epoch) {
+        slot = current_slot(f);
+        slot->checked = read_only_epoch;
+    }
+    else if (slot->epoch != summary_epoch) release_summary_dependents(slot);
+    return slot;
 }
 
 ir_doms_t *
@@ -223,7 +261,7 @@ ir_func_doms(ir_func_t *f)
 }
 
 ir_pdg_t *
-ir_func_pdg(ir_func_t *f)
+ir_func_control(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
     struct ir_func_analyses_t *slot = valid_slot(f);
@@ -235,6 +273,19 @@ ir_func_pdg(ir_func_t *f)
         building = outer;
     }
     return slot->pdg;
+}
+
+ir_pdg_t *
+ir_func_pdg(ir_func_t *f)
+{
+    ir_pdg_t *pdg = ir_func_control(f);
+    if (pdg) {
+        const ir_func_t *outer = building;
+        building = f;
+        ir_pdg_complete(pdg);
+        building = outer;
+    }
+    return pdg;
 }
 
 ir_places_t *
@@ -251,30 +302,16 @@ ir_func_places(ir_func_t *f)
     return slot->places;
 }
 
-ir_memssa_t *
-ir_func_memssa(ir_func_t *f)
-{
-    if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = valid_slot(f);
-    if (!slot->memssa) {
-        const ir_func_t *outer = building;
-        building = f;
-        slot->memssa = ir_memssa_build(f);
-        building = outer;
-    }
-    return slot->memssa;
-}
-
 ir_value_numbers_t *
 ir_func_value_numbers(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
     struct ir_func_analyses_t *slot = valid_slot(f);
     if (!slot->numbers) {
-        ir_memssa_t *memssa = ir_func_memssa(f);
+        ir_pdg_t *pdg = ir_func_pdg(f);
         const ir_func_t *outer = building;
         building = f;
-        slot->numbers = ir_value_numbers_build(f, memssa);
+        slot->numbers = ir_value_numbers_build(f, pdg);
         building = outer;
     }
     return slot->numbers;
@@ -294,28 +331,14 @@ ir_func_sites(ir_func_t *f)
     return slot->sites;
 }
 
-ir_ranges_t *
-ir_func_ranges(ir_func_t *f)
-{
-    if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = valid_slot(f);
-    if (!slot->ranges) {
-        const ir_func_t *outer = building;
-        building = f;
-        slot->ranges = ir_ranges_build(f);
-        building = outer;
-    }
-    return slot->ranges;
-}
-
 ir_abcd_t *
 ir_func_abcd(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
     struct ir_func_analyses_t *slot = valid_slot(f);
     if (!slot->abcd) {
-        ir_func_ranges(f);
         ir_func_value_numbers(f);
+        ir_func_pdg(f);
         const ir_func_t *outer = building;
         building = f;
         slot->abcd = ir_abcd_build(f);
@@ -336,10 +359,8 @@ ir_func_release_analyses(ir_func_t *f)
     if (!f || !f->analyses) return;
     struct ir_func_analyses_t *slot = f->analyses;
     ir_abcd_free(slot->abcd);
-    ir_ranges_free(slot->ranges);
     ir_sites_free(slot->sites);
     ir_value_numbers_free(slot->numbers);
-    ir_memssa_free(slot->memssa);
     ir_places_free(slot->places);
     ir_pdg_free(slot->pdg);
     ir_live_free(slot->live);

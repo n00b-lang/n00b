@@ -10,7 +10,6 @@ import internal.gc.mark
 import internal.gc.mutator
 import internal.gc.registry
 import internal.gc.roots
-import internal.gc.sync
 import internal.gc.world
 
 package sys.gc {
@@ -62,10 +61,6 @@ package sys.gc.registry {
 
 package sys.gc.roots {
     export internal.gc.roots
-}
-
-package sys.gc.sync {
-    export internal.gc.sync
 }
 
 package sys.gc.world {

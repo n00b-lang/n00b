@@ -1,1 +1,4 @@
+tests/diagnostics/link/constructor_keyword.n:2:5: warning N00B-N0022: field `n` of `Holder` is never used
+tests/diagnostics/link/constructor_keyword.n:5:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
 tests/diagnostics/link/constructor_keyword.n:9:17: error N00B-T0024: none of the 1 visible `__init` functions of `Holder` accepts these arguments

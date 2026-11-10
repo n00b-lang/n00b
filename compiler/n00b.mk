@@ -2,9 +2,11 @@ RUNTIME_SRCS := runtime/runtime_abi.c runtime/runtime_allocate.c \
     runtime/runtime_abi_io.c runtime/runtime_panic.c runtime/runtime_dwarf.c \
     runtime/runtime_ffi.c runtime/runtime_unwind.c runtime/runtime_abi_storage.c \
     runtime/native_frame_runtime.c runtime/builtin_os.c runtime/builtin_os_stw.c \
-    runtime/builtin_os_blocking.c \
+    runtime/builtin_os_blocking.c runtime/runtime_comptime.c \
+    runtime/runtime_comptime_stub.c runtime/runtime_main.c \
     runtime/builtin_abi.c abi/abi_directory.c abi/abi_string.c
-N00B_SRCS := $(wildcard compiler/*.c) abi/abi_directory.c abi/abi_string.c \
+COMPTIME_RUNTIME_SRC := runtime/comptime/n00b_comptime.c
+N00B_SRCS := $(wildcard compiler/*.c) $(wildcard compiler/lower/*.c) $(wildcard compiler/analysis/*.c) abi/abi_directory.c abi/abi_string.c \
     runtime/runtime_native_roots.c
 
 N00B_OBJ := $(BUILD)/obj
@@ -36,7 +38,8 @@ N00B_DEFINES := \
     -DN00BB_LAYOUT_WRIT_PROFILES="\"share/writ/profiles\"" \
     -DN00BB_LAYOUT_WRIT_CONTRACTS="\"share/writ/contracts\"" \
     -DN00BB_RUNTIME_ARCHIVE="\"$(notdir $(RUNTIME_LIB))\"" \
-    -DN00BB_RUNTIME_BITCODE="\"$(notdir $(RUNTIME_BITCODE))\""
+    -DN00BB_RUNTIME_BITCODE="\"$(notdir $(RUNTIME_BITCODE))\"" \
+    -DN00BB_COMPTIME_RUNTIME="\"$(notdir $(COMPTIME_RUNTIME))\""
 N00B_CFLAGS := $(BASE_CFLAGS) $(OPT) $(N00B_INC) -I$(SRC)/writ/include \
     $(LLVM_CFLAGS) $(N00B_DEFINES)
 RUNTIME_CFLAGS := $(BASE_CFLAGS) -O3 -g -fno-omit-frame-pointer $(N00B_INC) \
@@ -82,6 +85,10 @@ $(RUNTIME_LIB): $(RUNTIME_OBJS)
 
 $(RUNTIME_BITCODE): $(RUNTIME_LTO_OBJS)
 	$(LLVM_LINK) $^ -o $@
+
+$(COMPTIME_RUNTIME): $(COMPTIME_RUNTIME_SRC) $(call flags_file,runtime)
+	@mkdir -p $(dir $@)
+	$(CC) $(RUNTIME_CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 cross_triple_x86_64-windows := x86_64-w64-windows-gnu
 

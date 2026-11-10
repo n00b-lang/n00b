@@ -1,5 +1,11 @@
 tests/diagnostics/lower/conditions.n:2:4: error N00B-T1000: `n` is `u8`, but an `if` condition must be `bool`
   help: write the comparison you mean, such as `n != 0`
+tests/diagnostics/lower/conditions.n:5:8: warning N00B-N0023: type `Point` is never used
+  help: remove it
+tests/diagnostics/lower/conditions.n:9:8: warning N00B-N0023: type `Counter` is never used
+  help: remove it
+tests/diagnostics/lower/conditions.n:13:6: warning N00B-N0019: function `fill` is never called
+  help: call it or delete it
 tests/diagnostics/lower/conditions.n:18:10: error N00B-S0016: `c` is an `in` parameter, so it cannot be passed to `out` parameter `c` of `fill`
   tests/diagnostics/lower/conditions.n:17:11: note: `c` is declared here
   help: declare `c` as `modify c`, or copy it into a `var` and pass that

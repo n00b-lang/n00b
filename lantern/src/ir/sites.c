@@ -1,5 +1,6 @@
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
+#include "ir/pdg.h"
 #include "ir/sites.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
@@ -284,38 +285,152 @@ merge_state(uint8_t *into, uint8_t state)
     return changed;
 }
 
+typedef enum : uint8_t {
+    PHASE_ANY,
+    PHASE_COMPTIME,
+    PHASE_RUNTIME,
+} phase_t;
+
 static uint8_t *paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
-                            void *context, ir_path_exits_t *exits);
+                            void *context, phase_t phase,
+                            ir_path_exits_t *exits);
+
+static const ir_instr_t *
+branch_condition(const ir_instr_t *terminator)
+{
+    const ir_value_t *condition = terminator && terminator->op == IR_OP_BRANCH
+            && terminator->n_operands == 3
+        ? ir_operand_value(&terminator->operands[0]) : nullptr;
+    return condition && condition->kind == IR_VAL_INSTR ? condition->def
+                                                        : nullptr;
+}
+
+static uint32_t
+phase_successor(const ir_instr_t *terminator, phase_t phase)
+{
+    const ir_instr_t *condition = branch_condition(terminator);
+    if (phase == PHASE_ANY || !condition) return UINT32_MAX;
+    if (ir_pdg_reads_comptime(condition))
+        return phase == PHASE_COMPTIME ? 0 : 1;
+    return phase == PHASE_COMPTIME && ir_pdg_asks_frozen(condition)
+        ? 1 : UINT32_MAX;
+}
+
+uint32_t
+ir_phase_successor(const ir_instr_t *terminator, bool comptime)
+{
+    return phase_successor(terminator,
+                           comptime ? PHASE_COMPTIME : PHASE_RUNTIME);
+}
+
+static bool
+branches_on_phase(ir_func_t *f)
+{
+    for (uint32_t b = 0; f && b < f->n_blocks; b++)
+        if (ir_pdg_reads_comptime(branch_condition(
+                ir_block_terminator(f->blocks[b])))) return true;
+    return false;
+}
 
 bool
 ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
               void *context, ir_path_exits_t *exits)
 {
-    uint8_t *incoming = paths_solve(f, entry, step, context, exits);
-    bool solved = incoming != nullptr;
-    core_free(incoming);
+    if (!branches_on_phase(f)) {
+        uint8_t *incoming = paths_solve(f, entry, step, context, PHASE_ANY,
+                                        exits);
+        bool solved = incoming != nullptr;
+        core_free(incoming);
+        return solved;
+    }
+    ir_path_exits_t comptime = {0}, runtime = {0};
+    uint8_t *first = paths_solve(f, entry, step, context, PHASE_COMPTIME,
+                                 &comptime);
+    uint8_t *second = first ? paths_solve(f,
+        comptime.returned ? comptime.returned : entry, step, context,
+        PHASE_RUNTIME, &runtime) : nullptr;
+    *exits = (ir_path_exits_t){
+        .returned = comptime.returned | runtime.returned,
+        .failed = comptime.failed | runtime.failed,
+    };
+    bool solved = second != nullptr;
+    core_free(first);
+    core_free(second);
     return solved;
+}
+
+static uint8_t
+state_at(ir_path_step_fn step, void *context, const uint8_t *incoming,
+         const ir_instr_t *at)
+{
+    uint8_t state = incoming[at->block->index];
+    for (uint32_t i = 0; state && i < at->index; i++)
+        state = ir_path_apply(state, step_of(step, context,
+                                             at->block->instrs[i],
+                                             IR_PATH_ANY));
+    return state;
+}
+
+struct ir_paths_solution_t {
+    ir_path_step_fn step;
+    void           *context;
+    uint8_t        *first;
+    uint8_t        *second;
+    bool            phased;
+};
+
+ir_paths_solution_t *
+ir_paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+               void *context)
+{
+    ir_paths_solution_t *solution = core_alloc(ir_paths_solution_t);
+    *solution = (ir_paths_solution_t){.step = step, .context = context,
+                                      .phased = branches_on_phase(f)};
+    ir_path_exits_t exits;
+    solution->first = paths_solve(f, entry, step, context,
+        solution->phased ? PHASE_COMPTIME : PHASE_ANY, &exits);
+    if (solution->phased && solution->first)
+        solution->second = paths_solve(f,
+            exits.returned ? exits.returned : entry, step, context,
+            PHASE_RUNTIME, &exits);
+    return solution;
+}
+
+uint8_t
+ir_paths_solution_state(const ir_paths_solution_t *solution,
+                        const ir_instr_t *at)
+{
+    if (!solution || !solution->first) return IR_PATH_UNPASSED;
+    uint8_t state = state_at(solution->step, solution->context,
+                             solution->first, at);
+    if (!solution->phased) return state;
+    if (!solution->second) return IR_PATH_UNPASSED;
+    return state | state_at(solution->step, solution->context,
+                            solution->second, at);
+}
+
+void
+ir_paths_solution_free(ir_paths_solution_t *solution)
+{
+    if (!solution) return;
+    core_free(solution->first);
+    core_free(solution->second);
+    core_free(solution);
 }
 
 uint8_t
 ir_paths_state(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
                void *context, const ir_instr_t *at)
 {
-    ir_path_exits_t exits;
-    uint8_t *incoming = paths_solve(f, entry, step, context, &exits);
-    if (!incoming) return IR_PATH_UNPASSED;
-    uint8_t state = incoming[at->block->index];
-    for (uint32_t i = 0; state && i < at->index; i++)
-        state = ir_path_apply(state, step_of(step, context,
-                                             at->block->instrs[i],
-                                             IR_PATH_ANY));
-    core_free(incoming);
+    ir_paths_solution_t *solution = ir_paths_solve(f, entry, step, context);
+    uint8_t state = ir_paths_solution_state(solution, at);
+    ir_paths_solution_free(solution);
     return state;
 }
 
 static uint8_t *
 paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
-            ir_path_exits_t *exits)
+            phase_t phase, ir_path_exits_t *exits)
 {
     *exits = (ir_path_exits_t){0};
     ir_doms_t  *doms  = f ? ir_func_doms(f) : nullptr;
@@ -360,10 +475,11 @@ paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
             }
             ir_block_t *true_block = deferred
                 ? ir_succ_of(&terminator->operands[1]) : nullptr;
+            uint32_t only = phase_successor(terminator, phase);
             for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
                  s++) {
                 ir_block_t *succ = ir_succ_at(terminator, s);
-                if (!succ) continue;
+                if (!succ || (only != UINT32_MAX && s != only)) continue;
                 uint8_t edge = state;
                 if (deferred) {
                     bool success = (succ == true_block) == true_is_success;
@@ -385,7 +501,7 @@ struct ir_dead_code_t {
     bool                        *covered;
     int64_t                     *cut;
     core_list_t(ir_dead_site_t)  sites;
-    ir_const_varies_fn           varies;
+    ir_branch_decides_fn         decides;
     void                        *context;
 };
 
@@ -406,10 +522,15 @@ constant_condition(const ir_dead_code_t *dead, const ir_instr_t *terminator,
         || terminator->n_operands != 3) return false;
     const ir_value_t *condition = ir_operand_value(&terminator->operands[0]);
     const ir_instr_t *def = condition ? condition->def : nullptr;
+    int decided = def && dead->decides ? dead->decides(dead->context, def)
+                                       : -1;
+    if (decided >= 0) {
+        *truth = decided != 0;
+        return true;
+    }
     if (!def || def->op != IR_OP_CONST || def->n_operands != 1
         || def->operands[0].kind != IR_OPD_CONST
-        || def->operands[0].lit.is_float
-        || (dead->varies && dead->varies(dead->context, def))) return false;
+        || def->operands[0].lit.is_float) return false;
     *truth = def->operands[0].lit.i.mag != 0;
     return true;
 }
@@ -465,7 +586,7 @@ add_dead_site(ir_dead_code_t *dead, const ir_instr_t *site,
 
 ir_dead_code_t *
 ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges,
-                   ir_const_varies_fn varies, void *context)
+                   ir_branch_decides_fn decides, void *context)
 {
     if (!f || !f->n_blocks) return nullptr;
     ir_dead_code_t *dead = core_alloc(ir_dead_code_t);
@@ -474,7 +595,7 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges,
     dead->covered = core_alloc_array(bool, f->n_blocks);
     dead->cut     = core_alloc_array(int64_t, f->n_blocks);
     dead->sites   = core_list_new(ir_dead_site_t);
-    dead->varies  = varies;
+    dead->decides = decides;
     dead->context = context;
     for (uint32_t b = 0; b < f->n_blocks; b++) dead->cut[b] = -1;
     ir_block_t *entry = ir_block_entry(f);

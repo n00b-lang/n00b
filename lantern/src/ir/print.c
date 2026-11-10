@@ -731,33 +731,41 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
 
     bool first = true;
 
-    for (uint32_t i = 0; i < f->n_params; i++) {
-        if (f->params[i]->is_keyword || f->params[i]->is_rest) continue;
+    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
         const th_param *parameter = th_func_param(f->type, i);
+        ir_value_t     *value     = ir_func_param_value(f, (uint32_t)i);
         core_buffer_printf(b, "%s", first ? "" : ", ");
-        if (parameter && parameter->mode != TH_IN)
+        if (parameter->mode != TH_IN)
             core_buffer_printf(b, "%s ", param_mode_spelling(parameter->mode));
+        if (value) {
+            core_buffer_puts(b, "%");
+            put_text(b, value->name);
+            core_buffer_puts(b, ": ");
+            put_type(b, m, value->type);
+            put_annots(b, m, ir_value_annots(value));
+        }
+        else {
+            core_buffer_printf(b, "%%arg%zu: ", i);
+            put_type(b, m, parameter->type);
+            if (ir_func_parameter_is_optional(f, (uint32_t)i))
+                core_buffer_puts(b, " !ir.optional_parameter(true)");
+        }
+        first = false;
+    }
+
+    size_t mapped = 0;
+    for (size_t i = 0; i < th_func_nparams(f->type); i++)
+        mapped += th_func_param(f->type, i)->mode != TH_OUT;
+    for (uint32_t i = 0, k = 0; i < f->n_params; i++) {
+        if (f->params[i]->is_keyword || f->params[i]->is_rest
+            || k++ < mapped) continue;
+        core_buffer_printf(b, "%s", first ? "" : ", ");
         core_buffer_puts(b, "%");
         put_text(b, f->params[i]->name);
         core_buffer_puts(b, ": ");
         put_type(b, m, f->params[i]->type);
         put_annots(b, m, ir_value_annots(f->params[i]));
         first = false;
-    }
-
-    if (!f->n_params) {
-        for (size_t i = 0; i < th_func_nparams(f->type); i++) {
-            const th_param *parameter = th_func_param(f->type, i);
-            core_buffer_printf(b, "%s", first ? "" : ", ");
-            if (parameter->mode != TH_IN)
-                core_buffer_printf(b, "%s ",
-                                   param_mode_spelling(parameter->mode));
-            core_buffer_printf(b, "%%arg%zu: ", i);
-            put_type(b, m, parameter->type);
-            if (ir_func_parameter_is_optional(f, (uint32_t)i))
-                core_buffer_puts(b, " !ir.optional_parameter(true)");
-            first = false;
-        }
     }
 
     const th_param *rest = th_func_rest(f->type);
@@ -924,17 +932,6 @@ put_shape_constraint(core_buffer_t *b, const ir_shape_t *shape)
         case IR_SHAPE_EXTENT_STATIC:
             core_buffer_printf(b, "static:%llu",
                 (unsigned long long)extent.static_value);
-            break;
-        case IR_SHAPE_EXTENT_COMPTIME:
-            core_buffer_puts(b, "comptime");
-            if (extent.producer) {
-                core_buffer_puts(b, ":producer=");
-                put_text(b, extent.producer->name);
-            }
-            else if (extent.producer_identifier.data) {
-                core_buffer_puts(b, ":producer=");
-                put_text(b, extent.producer_identifier);
-            }
             break;
         case IR_SHAPE_EXTENT_RUNTIME:
             core_buffer_puts(b, "runtime");

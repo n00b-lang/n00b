@@ -1,0 +1,4 @@
+var count: int
+if comptime() {
+    count = 2
+}

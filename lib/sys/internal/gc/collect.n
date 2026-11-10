@@ -9,8 +9,8 @@ import internal.gc.los
 import internal.gc.mark
 import internal.gc.registry
 import internal.gc.roots
-import internal.gc.sync
 import internal.gc.world
+import internal.locks
 import internal.threads
 import internal.memory
 
@@ -20,25 +20,27 @@ const concurrent_force_pct: uint = 200
 const sweep_batch:          uint = 16
 
 func stop_world(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.sync.event_signal(ref heap.__value.work_progress)
-    internal.gc.sync.ticket_lock(ref heap.__value.fin)
-    heap.__value.fin_held = true
+    internal.gc.mark.wake_workers(heap)
+    internal.locks.mutex_lock(ref heap.__value.fin)
+    internal.gc.registry.write_lock(heap)
+    internal.gc.mark.pool_lock(heap)
     __atomic_store(ref heap.__value.stw, true)
     heap.__value.pause_start = __unobserved(__os_now_ns())
     internal.gc.world.stop(heap)
+    internal.gc.mark.pool_unlock(heap)
+    internal.gc.registry.write_unlock(heap)
 }
 
 func start_world(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.world.start(heap)
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         mutator.__value.ctx_valid = false
         current = mutator.__value.next
     }
     __atomic_store(ref heap.__value.stw, false)
-    heap.__value.fin_held = false
-    internal.gc.sync.ticket_unlock(ref heap.__value.fin)
+    internal.locks.mutex_unlock(ref heap.__value.fin)
     heap.__value.last_pause_ns = __unobserved(__os_now_ns()) - heap.__value.pause_start
     heap.__value.pauses += 1
     heap.__value.total_pause_ns += heap.__value.last_pause_ns
@@ -49,10 +51,10 @@ func start_world(heap: Ref[internal.gc.core.Heap]) {
     heap.__value.cycle.pauses += 1
     let ready: Ref[(u64, Ref[byte]?) -> nil]? = heap.__value.cfg.on_pause
     if ready != nil {
-        let handler: Ref[(u64, Ref[byte]?) -> nil] = ready.get()
+        let handler: Ref[(u64, Ref[byte]?) -> nil] = ready
         handler.call(heap.__value.last_pause_ns, heap.__value.cfg.telemetry_user)
     }
-    internal.gc.sync.event_signal(ref heap.__value.work_progress)
+    internal.gc.mark.wake_workers(heap)
 }
 
 func emit_cycle(heap: Ref[internal.gc.core.Heap], kind: i32) {
@@ -63,7 +65,7 @@ func emit_cycle(heap: Ref[internal.gc.core.Heap], kind: i32) {
     info.stragglers = cast[u32](heap.__value.hs_stragglers) - info.stragglers
     let ready: Ref[(internal.gc.core.Cycle_Info, Ref[byte]?) -> nil]? = heap.__value.cfg.on_cycle
     if ready != nil {
-        let handler: Ref[(internal.gc.core.Cycle_Info, Ref[byte]?) -> nil] = ready.get()
+        let handler: Ref[(internal.gc.core.Cycle_Info, Ref[byte]?) -> nil] = ready
         handler.call(info, heap.__value.cfg.telemetry_user)
     }
 }
@@ -77,7 +79,7 @@ func stack_word_width() -> uint {
     let probe: uint                          = 0
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
     if row != nil {
-        let width: uint = internal.abi.size_bytes(row.get())
+        let width: uint = internal.abi.size_bytes(row)
         require width != 0
         return width
     }
@@ -116,7 +118,7 @@ const frame_row_whole:    u32  = 1
 func context_pc(snapshot: Ref[internal.threads.Thread_Context]) -> uint {
     let pc: Ref[byte]? = snapshot.__value.pc
     if pc != nil {
-        return __abi_ref_address(pc.get())
+        return __abi_ref_address(pc)
     }
     return 0
 }
@@ -139,12 +141,12 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
     var return_address: uint       = pc
     var callee_mapped:  bool       = false
     while frame != nil {
-        let address: uint = __abi_ref_address(frame.get())
+        let address: uint = __abi_ref_address(frame)
         let frame_info: Ref[internal.abi.Native_Frame_Record]? =
             internal.gc.frames.frame_for(return_address)
         var record_offset: i128 = 0
         if frame_info != nil {
-            record_offset = cast[i128](frame_info.get().__value.record_offset)
+            record_offset = cast[i128](frame_info.__value.record_offset)
         } elif !chained {
             break
         }
@@ -156,27 +158,27 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
             record_end > cast[i128](limit) {
             break
         }
-        let frame_record: Ref[byte] = __gc_byte_offset(frame.get(), record_offset)
+        let frame_record: Ref[byte] = __gc_byte_offset(frame, record_offset)
         let caller:       uint      = stack_word_at(frame_record)
         var ceiling:      uint      = limit
         if caller > address and caller < limit {
             ceiling = caller
         }
         var mapped: bool = false
-        if frame_info != nil and (frame_info.get().__value.flags & frame_row_whole) == 0 {
-            mapped = scan_native_frame(marker, start, frame.get(), frame_record,
-                                       ceiling, frame_info.get())
+        if frame_info != nil and (frame_info.__value.flags & frame_row_whole) == 0 {
+            mapped = scan_native_frame(marker, start, frame, frame_record,
+                                       ceiling, frame_info)
         }
         if !mapped or !callee_mapped {
-            scan_words(marker, start, frame.get())
+            scan_words(marker, start, frame)
         }
         callee_mapped = mapped
-        start = frame.get()
+        start = frame
         return_address = stack_word_at(__gc_byte_offset(frame_record, width))
         if caller <= address or caller >= limit {
             break
         }
-        frame = __gc_byte_offset(frame.get(), caller - address)
+        frame = __gc_byte_offset(frame, caller - address)
     }
     if limit > __abi_ref_address(start) {
         scan_words(marker, start, high)
@@ -221,7 +223,7 @@ func scan_context_registers(marker: Ref[internal.gc.core.Marker],
 func required_stack_high(mutator: Ref[internal.gc.core.Mutator]) -> Ref[byte] {
     let high: Ref[byte]? = mutator.__value.stack_hi
     if high != nil {
-        return high.get()
+        return high
     }
     require false
 }
@@ -258,7 +260,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
         scan_context_registers(marker, ref mutator.__value.captured)
         let self_sp: Ref[byte]? = mutator.__value.captured.sp
         if self_sp != nil {
-            scan_stack(marker, self_sp.get(), mutator.__value.captured.fp,
+            scan_stack(marker, self_sp, mutator.__value.captured.fp,
                 context_pc(ref mutator.__value.captured), high, false)
         } else {
             require false
@@ -267,7 +269,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
         scan_context_registers(marker, ref mutator.__value.captured)
         let blocked_sp: Ref[byte]? = mutator.__value.blocked_sp
         if blocked_sp != nil {
-            scan_stack(marker, blocked_sp.get(), mutator.__value.captured.fp,
+            scan_stack(marker, blocked_sp, mutator.__value.captured.fp,
                 context_pc(ref mutator.__value.captured), high, false)
         } else {
             require false
@@ -277,7 +279,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
         scan_context_registers(marker, ref mutator.__value.captured)
         let stopped_sp: Ref[byte]? = mutator.__value.captured.sp
         if stopped_sp != nil {
-            scan_stack(marker, stopped_sp.get(), mutator.__value.captured.fp, 0,
+            scan_stack(marker, stopped_sp, mutator.__value.captured.fp, 0,
                 high, true)
         } else {
             require false
@@ -295,13 +297,13 @@ func mark_global_roots(marker: Ref[internal.gc.core.Marker]) {
         }
         let address: Ref[byte]? = internal.abi.storage_address(storage_index)
         if row != nil {
-            if row.get().__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) and
-                row.get().__value.symbol_index != 0 and address == nil {
+            if row.__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) and
+                row.__value.symbol_index != 0 and address == nil {
                 require false
             }
             if address != nil {
-                internal.gc.mark.trace_root(marker, address.get(),
-                    row.get().__value.type_index)
+                internal.gc.mark.trace_root(marker, address,
+                    row.__value.type_index)
             }
         }
         storage_index += 1
@@ -319,7 +321,7 @@ func mark_roots(marker: Ref[internal.gc.core.Marker]) {
     internal.gc.finalize.mark_locked(marker)
     var current: Ref[internal.gc.core.Mutator]? = marker.__value.heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         if mutator.__value.thread_primary {
             mark_thread_roots(marker, mutator, true)
         } else {
@@ -336,16 +338,16 @@ func reserve_bump(marker: Ref[internal.gc.core.Marker],
     if limit != nil {
         let heap:  Ref[internal.gc.core.Heap]           = marker.__value.heap
         let block: Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_of_bytes(
-            __gc_byte_offset(limit.get(), -1))
+            __gc_byte_offset(limit, -1))
         let base:           Ref[byte] = internal.gc.core.block_base(block)
         let base_address:   uint      = __abi_ref_address(base)
         let payload_start:  uint      = base_address + internal.gc.core.header_lines() * internal.gc.core.line_bytes
         let block_end:      uint      = base_address + internal.gc.core.block_bytes
-        let limit_address:  uint      = __abi_ref_address(limit.get())
+        let limit_address:  uint      = __abi_ref_address(limit)
         var low:            uint      = payload_start
         var cursor_address: uint      = 0
         if cursor != nil {
-            cursor_address = __abi_ref_address(cursor.get())
+            cursor_address = __abi_ref_address(cursor)
         }
         let cursor_in_block: bool = cursor_address > payload_start and cursor_address <= block_end
         if cursor_in_block and cursor_address - payload_start > internal.gc.los.los_threshold {
@@ -364,7 +366,7 @@ func reserve_bump(marker: Ref[internal.gc.core.Marker],
             let header: Ref[internal.gc.core.Object_Header]? = internal.gc.registry.find_object(heap, cursor_address - 1)
             if header != nil {
                 internal.gc.mark.mark_object(marker,
-                    internal.gc.core.payload_of(header.get()))
+                    internal.gc.core.payload_of(header))
             }
         }
     }
@@ -375,7 +377,7 @@ func reserve_bumps(marker: Ref[internal.gc.core.Marker]) {
     let self_thread: uint                     = internal.threads.thread_id()
     var current:     Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator:  Ref[internal.gc.core.Mutator] = current.get()
+        let mutator:  Ref[internal.gc.core.Mutator] = current
         let inflight: bool                    = mutator.__value.thread_id != self_thread
         reserve_bump(marker, ref mutator.__value.small, inflight)
         reserve_bump(marker, ref mutator.__value.overflow, inflight)
@@ -387,7 +389,7 @@ func drain_barrier_buffers(marker: Ref[internal.gc.core.Marker]) {
     let heap:    Ref[internal.gc.core.Heap]     = marker.__value.heap
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         if mutator.__value.write_buffer_epoch == heap.__value.mark_epoch {
             var index: uint = 0
             while index < mutator.__value.write_buffer_count {
@@ -490,7 +492,7 @@ func prune_owned(heap: Ref[internal.gc.core.Heap], sweep: bool) {
     var slot:    Ref[Ref[internal.gc.core.Block_Metadata]?] = ref heap.__value.owned
     var current: Ref[internal.gc.core.Block_Metadata]?      = slot.__value
     while current != nil {
-        let block: Ref[internal.gc.core.Block_Metadata] = current.get()
+        let block: Ref[internal.gc.core.Block_Metadata] = current
         if block.__value.state == cast[u8](internal.gc.core.Block_State.owned) {
             if sweep {
                 sweep_block(heap, block, heap.__value.epoch)
@@ -519,7 +521,7 @@ func sweep_some(heap: Ref[internal.gc.core.Heap], count: uint) -> bool {
         if remaining == 0 {
             break
         }
-        let block: Ref[internal.gc.core.Block_Metadata] = candidate.get()
+        let block: Ref[internal.gc.core.Block_Metadata] = candidate
         heap.__value.sweep_cursor = block.__value.all_next
         if block.__value.state != cast[u8](internal.gc.core.Block_State.owned) and
             block.__value.sweep_epoch != epoch {
@@ -537,7 +539,7 @@ func sweep_some(heap: Ref[internal.gc.core.Heap], count: uint) -> bool {
         if remaining == 0 {
             break
         }
-        let obj: Ref[internal.gc.core.Los_Obj] = large.get()
+        let obj: Ref[internal.gc.core.Los_Obj] = large
         if __atomic_load_relaxed(ref obj.__value.marked) == epoch {
             cursor = ref obj.__value.next
         } else {
@@ -615,8 +617,8 @@ func begin_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
     sweep_all(heap)
     var block: Ref[internal.gc.core.Block_Metadata]? = heap.__value.all_blocks
     while block != nil {
-        assert block.get().__value.sweep_epoch == heap.__value.epoch
-        block = block.get().__value.all_next
+        assert block.__value.sweep_epoch == heap.__value.epoch
+        block = block.__value.all_next
     }
     assert __atomic_load(ref heap.__value.nunswept) == 0
 
@@ -626,7 +628,7 @@ func begin_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
         typeof(heap.__value.cycle))
     if row != nil {
         __gc_memset(ref heap.__value.cycle, 0,
-            internal.abi.size_bytes(row.get()))
+            internal.abi.size_bytes(row))
     } else {
         require false
     }
@@ -671,7 +673,7 @@ func reclaim_cache(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.
     var current: Ref[internal.gc.core.Block_Metadata]? = __atomic_exchange(
         ref bump.__value.cache, empty)
     while current != nil {
-        let block: Ref[internal.gc.core.Block_Metadata] = current.get()
+        let block: Ref[internal.gc.core.Block_Metadata] = current
         current = block.__value.next
         internal.gc.core.set_block_state(heap, block, internal.gc.core.Block_State.retired)
     }
@@ -680,7 +682,7 @@ func reclaim_cache(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.
 func reclaim_caches(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         reclaim_cache(heap, ref mutator.__value.small)
         reclaim_cache(heap, ref mutator.__value.overflow)
         current = mutator.__value.next
@@ -690,7 +692,7 @@ func reclaim_caches(heap: Ref[internal.gc.core.Heap]) {
 func release_los(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Los_Obj]? = heap.__value.release_los
     while current != nil {
-        let obj: Ref[internal.gc.core.Los_Obj] = current.get()
+        let obj: Ref[internal.gc.core.Los_Obj] = current
         heap.__value.release_los = obj.__value.next
         internal.gc.registry.los_unregister(heap, obj)
         internal.memory.unmap(obj.__value.mapping, obj.__value.mapped_bytes)
@@ -719,7 +721,7 @@ func finish_cycle(heap: Ref[internal.gc.core.Heap], fresh: bool) {
     prune_owned(heap, true)
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         mutator.__value.black = false
         mutator.__value.write_buffer_count = 0
         __atomic_store(ref mutator.__value.hs_state,
@@ -756,12 +758,12 @@ func start_marking_locked(heap: Ref[internal.gc.core.Heap]) {
 
 func request_cycle(heap: Ref[internal.gc.core.Heap]) {
     __atomic_store(ref heap.__value.cycle_requested, true)
-    internal.gc.sync.event_signal(ref heap.__value.work_progress)
+    internal.gc.mark.wake_workers(heap)
 }
 
 func cycle_done(heap: Ref[internal.gc.core.Heap]) {
     __atomic_store(ref heap.__value.cycle_active, false)
-    internal.gc.sync.event_signal(ref heap.__value.cycle_ended)
+    internal.gc.core.signal(ref heap.__value.cycle_ended)
 }
 
 func claim_cycle(heap: Ref[internal.gc.core.Heap]) {
@@ -780,7 +782,7 @@ func collect_full_locked(heap: Ref[internal.gc.core.Heap]) {
 
 func collect(heap: Ref[internal.gc.core.Heap]) {
     claim_cycle(heap)
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     collect_full_locked(heap)
     sweep_all(heap)
     internal.gc.heap.unlock(heap)
@@ -792,7 +794,7 @@ func collect_start(heap: Ref[internal.gc.core.Heap]) {
         request_cycle(heap)
         return
     }
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     if __atomic_load(ref heap.__value.phase) != cast[u32](internal.gc.core.Phase.marking) {
         start_marking_locked(heap)
     }
@@ -800,7 +802,7 @@ func collect_start(heap: Ref[internal.gc.core.Heap]) {
 }
 
 func collect_step(heap: Ref[internal.gc.core.Heap], max_objects: uint) -> bool {
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     if __atomic_load(ref heap.__value.phase) != cast[u32](internal.gc.core.Phase.marking) {
         internal.gc.heap.unlock(heap)
         return false
@@ -822,7 +824,7 @@ func collect_finish(heap: Ref[internal.gc.core.Heap]) {
         internal.gc.handshake.wait_for_cycle(heap)
         return
     }
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     remark_locked(heap)
     internal.gc.heap.unlock(heap)
 }
@@ -869,7 +871,8 @@ func worker(heap: Ref[internal.gc.core.Heap]) {
             cycle_done(heap)
             did += 1
         } elif !stopped and phase == cast[u32](internal.gc.core.Phase.sweeping) and
-            internal.gc.sync.ticket_trylock(ref heap.__value.lock) {
+            internal.locks.mutex_try_lock(ref heap.__value.lock,
+                                          timeout_ns = 0) {
             if sweep_some(heap, sweep_batch) {
                 did += 1
             }
@@ -877,7 +880,14 @@ func worker(heap: Ref[internal.gc.core.Heap]) {
         }
 
         if did == 0 {
-            internal.threads.thread_yield()
+            internal.locks.condition_lock(ref heap.__value.work_progress)
+            if !__atomic_load(ref heap.__value.shutdown)
+                and !__atomic_load(ref heap.__value.cycle_requested) {
+                internal.locks.condition_wait(ref heap.__value.work_progress,
+                    timeout_ns = internal.gc.core.wait_slice_ns,
+                    unlock = false)
+            }
+            internal.locks.condition_unlock(ref heap.__value.work_progress)
         }
     }
 

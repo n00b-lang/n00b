@@ -22,28 +22,12 @@ static bool source_spelling(const pctx *c)
     return c->options && c->options->source_spelling;
 }
 
-static bool integer_constraint(const th_type *var, bool *is_unsigned)
-{
-    for (size_t i = 0; var && i < var->var.cons.len; i++) {
-        const th_constraint *k = &var->var.cons.data[i];
-        if (k->kind != TH_CON_INTEGER) continue;
-        if (is_unsigned) *is_unsigned = k->integer.flags & TH_INTEGER_UNSIGNED;
-        return true;
-    }
-    return false;
-}
-
 static void source_variable(core_buffer_t *b, const th_type *var)
 {
-    bool is_unsigned = false;
     if (var && var->var.name.data) {
         core_buffer_putc(b, '\'');
         core_buffer_append_string(b, var->var.name);
     }
-    else if (integer_constraint(var, &is_unsigned))
-        core_buffer_append_string(b, is_unsigned
-            ? CORE_STRING_STATIC("{unsigned integer}")
-            : CORE_STRING_STATIC("{integer}"));
     else
         core_buffer_putc(b, '_');
 }
@@ -614,201 +598,6 @@ static void emit(pctx *c, core_buffer_t *b, const th_type *root)
     core_list_free(w);
 }
 
-static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
-{
-    switch (k->kind) {
-    case TH_CON_KIND:
-        core_buffer_printf(b, "kind(%u)", (unsigned)k->type_kind);
-        break;
-    case TH_CON_INTEGER:
-        if (k->integer.flags & TH_INTEGER_UNSIGNED)
-            core_buffer_puts(b, "integer(unsigned)");
-        else
-            core_buffer_puts(b, "integer");
-        break;
-    case TH_CON_IMPLEMENTS:
-        core_buffer_append_string(b, k->iface);
-        break;
-
-    case TH_CON_UNIFIES:
-        core_buffer_puts(b, "== ");
-        emit(c, b, k->target);
-        break;
-
-    case TH_CON_EXCLUDES:
-        core_buffer_puts(b, "!= ");
-        emit(c, b, k->target);
-        break;
-
-    case TH_CON_PROMOTES:
-        core_buffer_puts(b, "promotes_to ");
-        emit(c, b, k->target);
-        break;
-
-    case TH_CON_ONE_OF:
-        core_buffer_puts(b, "one_of(");
-
-        for (size_t i = 0; i < k->one_of.n; i++) {
-            if (i) {
-                core_buffer_puts(b, ", ");
-            }
-            emit(c, b, k->one_of.types[i]);
-        }
-        core_buffer_puts(b, ")");
-        break;
-
-    case TH_CON_HAS_FIELD:
-        if (k->field.auto_deref) {
-            core_buffer_puts(b, "has_field_auto_deref(");
-        }
-        else {
-            core_buffer_puts(b, "has_field(");
-        }
-        core_buffer_append_string(b, k->field.name);
-        core_buffer_puts(b, ": ");
-        emit(c, b, k->field.type);
-        core_buffer_puts(b, ")");
-        break;
-
-    case TH_CON_HAS_PARAM:
-        core_buffer_printf(b, "has_param(%llu, ",
-                          (unsigned long long)k->param.index);
-        emit(c, b, k->param.type);
-        core_buffer_puts(b, ")");
-        break;
-
-    case TH_CON_METHOD:
-        core_buffer_puts(b, "method(");
-        core_buffer_append_string(b, k->method.name);
-        core_buffer_puts(b, ": ");
-        emit(c, b, k->method.result);
-        if (k->method.call) {
-            core_buffer_puts(b, ", args: ");
-            emit(c, b, k->method.call);
-        }
-        core_buffer_puts(b, ")");
-        break;
-    }
-}
-
-static void emit_where(pctx *c, core_buffer_t *b, th_type *type)
-{
-    const th_type *r = th_resolve_c(type);
-
-    if (!r || r->kind != TH_VAR || !r->var.cons.len) {
-        return;
-    }
-
-    core_buffer_puts(b, " where `");
-    core_buffer_append_string(b, r->var.name.data ? r->var.name
-                                                  : CORE_STRING_STATIC("t"));
-    core_buffer_puts(b, ": ");
-
-    for (size_t i = 0; i < r->var.cons.len; i++) {
-        if (i) {
-            core_buffer_puts(b, " + ");
-        }
-        emit_constraint(c, b, &r->var.cons.data[i]);
-    }
-}
-
-static void emit_free_where(pctx *c, core_buffer_t *b, th_type *type)
-{
-    const th_type *root = th_resolve_c(type);
-    if (!root || root->kind == TH_BINDER) return;
-    if (root->kind == TH_VAR) {
-        emit_where(c, b, type);
-        return;
-    }
-
-    th_type **vars = nullptr;
-    size_t nvars = th_free_vars(c->ctx, type, &vars);
-    bool started = false;
-
-    for (size_t i = 0; i < nvars; i++) {
-        const th_type *var = th_resolve_c(vars[i]);
-        if (!var || var->kind != TH_VAR || !var->var.cons.len) continue;
-
-        if (started) core_buffer_puts(b, ", `");
-        else core_buffer_puts(b, " where `");
-        if (var->var.has_index) varname(b, 0, var->var.index);
-        else core_buffer_append_string(b, var->var.name.data
-                                              ? var->var.name
-                                              : CORE_STRING_STATIC("t"));
-        core_buffer_puts(b, ": ");
-        for (size_t j = 0; j < var->var.cons.len; j++) {
-            if (j) core_buffer_puts(b, " + ");
-            emit_constraint(c, b, &var->var.cons.data[j]);
-        }
-        started = true;
-    }
-}
-
-static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
-{
-    const th_type *scheme = th_resolve_c(type);
-    if (!scheme || scheme->kind != TH_BINDER || !scheme->binder.qvars) return;
-    const th_type *body = th_resolve_c(scheme->binder.body);
-    if (!body || body->kind != TH_FUNCTION) return;
-
-    bool started = false;
-    for (uint64_t i = 0; i < scheme->binder.arity; i++) {
-        const th_type *var = th_resolve_c(scheme->binder.qvars[i]);
-        if (!var || var->kind != TH_VAR || !var->var.cons.len) continue;
-        if (!started) {
-            core_buffer_puts(b, " where ");
-            started = true;
-        }
-        else core_buffer_puts(b, ", ");
-        core_buffer_putc(b, '`');
-        varname(b, 0, i);
-        core_buffer_puts(b, ": ");
-        for (size_t j = 0; j < var->var.cons.len; j++) {
-            if (j) core_buffer_puts(b, " + ");
-            emit_constraint(c, b, &var->var.cons.data[j]);
-        }
-    }
-}
-
-static void emit_source_requirements(core_buffer_t *b, const th_type *var,
-                                     bool *started)
-{
-    var = th_resolve_c(var);
-    if (!var || var->kind != TH_VAR || !var->var.name.data) return;
-    bool listed = false;
-    for (size_t i = 0; i < var->var.cons.len; i++) {
-        const th_constraint *k = &var->var.cons.data[i];
-        if (k->kind != TH_CON_IMPLEMENTS || !k->iface.data) continue;
-        if (!listed) {
-            core_buffer_append_string(b, *started
-                ? CORE_STRING_STATIC(", ") : CORE_STRING_STATIC(" where "));
-            source_variable(b, var);
-            core_buffer_puts(b, ": ");
-        }
-        else core_buffer_puts(b, " + ");
-        core_buffer_append_string(b, k->iface);
-        listed = true;
-        *started = true;
-    }
-}
-
-static void emit_source_where(pctx *c, core_buffer_t *b, th_type *type)
-{
-    const th_type *root = th_resolve_c(type);
-    if (!root) return;
-    bool started = false;
-    if (root->kind == TH_BINDER) {
-        for (uint64_t i = 0; root->binder.qvars && i < root->binder.arity;
-             i++)
-            emit_source_requirements(b, root->binder.qvars[i], &started);
-        return;
-    }
-    th_type **vars = nullptr;
-    size_t nvars = th_free_vars(c->ctx, type, &vars);
-    for (size_t i = 0; i < nvars; i++)
-        emit_source_requirements(b, vars[i], &started);
-}
-
 core_string_t
 th_print_with_options(th_ctx *ctx, th_type *type,
                       const th_print_options_t *options)
@@ -822,13 +611,6 @@ th_print_with_options(th_ctx *ctx, th_type *type,
     core_buffer_t b = {0};
 
     emit(&c, &b, type);
-    if (options && options->source_spelling) {
-        if (!options->omit_constraints) emit_source_where(&c, &b, type);
-    }
-    else if (!options || !options->omit_constraints) {
-        emit_free_where(&c, &b, type);
-        emit_binder_where(&c, &b, type);
-    }
 
     if (!b.data) {
         return th_strdup(ctx, CORE_STRING_STATIC(""));

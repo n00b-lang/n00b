@@ -1,0 +1,2 @@
+tests/diagnostics/tu/one_of_bound.n:5:14: error N00B-T0049: `bool` cannot be used here: it is not one of `(int | string)`
+  help: pass a value of one of the types in `(int | string)`, or convert it to one of them

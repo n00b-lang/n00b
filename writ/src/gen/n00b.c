@@ -56,9 +56,6 @@ canonical_name(const n00b_t *g, core_buffer_t *out, writ_str_t name)
         const char *from;
         const char *to;
     } renames[] = {
-        {"Ref", "ref"},
-        {"Array", "array"},
-        {"List", "builtin.containers.list.List"},
         {"Ffi_Bytes", "builtin.ffi.Ffi_Bytes"},
         {"i64", "int"},
         {"u64", "uint"},
@@ -76,53 +73,118 @@ canonical_name(const n00b_t *g, core_buffer_t *out, writ_str_t name)
     core_buffer_printf(out, "%.*s.%.*s", S(g->type_namespace), S(name));
 }
 
-static void
-canonical_type(const n00b_t *g, core_buffer_t *out, writ_str_t text)
+static const writ_n00b_type_t *
+type_node(const n00b_t *g, writ_n00b_type_kind_t kind, writ_str_t name, const writ_n00b_type_t *item)
 {
-    for (size_t i = 0; i < text.length;) {
-        char c = text.data[i];
-        bool word = c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-        if (!word) {
-            core_buffer_printf(out, "%c", c);
-            i++;
-            continue;
+    writ_n00b_type_t *node = writ_alloc(g->session, sizeof(*node));
+    *node = (writ_n00b_type_t){.kind = kind, .name = name, .item = item};
+    return node;
+}
+
+static const writ_n00b_type_t *
+named(const n00b_t *g, writ_str_t name)
+{
+    return type_node(g, WRIT_N00B_TYPE_NAMED, name, nullptr);
+}
+
+static const writ_n00b_type_t *
+ref_of(const n00b_t *g, const writ_n00b_type_t *item)
+{
+    return type_node(g, WRIT_N00B_TYPE_REF, (writ_str_t){0}, item);
+}
+
+static const writ_n00b_type_t *
+array_of(const n00b_t *g, const writ_n00b_type_t *item)
+{
+    return type_node(g, WRIT_N00B_TYPE_ARRAY, (writ_str_t){0}, item);
+}
+
+static const writ_n00b_type_t *
+option_of(const n00b_t *g, const writ_n00b_type_t *item)
+{
+    return type_node(g, WRIT_N00B_TYPE_OPTION, (writ_str_t){0}, item);
+}
+
+static bool
+mentions_ffi_bytes(const writ_n00b_type_t *type)
+{
+    for (; type; type = type->item) {
+        if (type->kind == WRIT_N00B_TYPE_NAMED && writ_str_eq(type->name, writ_cstr("builtin.ffi.Ffi_Bytes"))) {
+            return true;
         }
-        size_t start = i;
-        while (i < text.length
-               && (text.data[i] == '_' || (text.data[i] >= 'a' && text.data[i] <= 'z')
-                   || (text.data[i] >= 'A' && text.data[i] <= 'Z') || (text.data[i] >= '0' && text.data[i] <= '9'))) {
-            i++;
-        }
-        canonical_name(g, out, (writ_str_t){text.data + start, i - start});
+    }
+    return false;
+}
+
+static bool
+ffi_bytes_ref(const writ_n00b_type_t *type)
+{
+    return type && type->kind == WRIT_N00B_TYPE_REF && type->item->kind == WRIT_N00B_TYPE_NAMED
+        && writ_str_eq(type->item->name, writ_cstr("Ffi_Bytes"));
+}
+
+static const writ_n00b_type_t *
+byte_array_ref(const n00b_t *g)
+{
+    return ref_of(g, array_of(g, named(g, writ_cstr("u8"))));
+}
+
+static writ_str_t
+type_text(const n00b_t *g, const writ_n00b_type_t *type)
+{
+    if (!type) {
+        return writ_cstr("nil");
+    }
+    switch (type->kind) {
+    case WRIT_N00B_TYPE_REF:
+        return writ_str_format(g->session, "Ref[%.*s]", S(type_text(g, type->item)));
+    case WRIT_N00B_TYPE_ARRAY:
+        return writ_str_format(g->session, "Array[%.*s]", S(type_text(g, type->item)));
+    case WRIT_N00B_TYPE_LIST:
+        return writ_str_format(g->session, "List[%.*s]", S(type_text(g, type->item)));
+    case WRIT_N00B_TYPE_OPTION:
+        return writ_str_format(g->session, "%.*s?", S(type_text(g, type->item)));
+    default:
+        return type->name;
     }
 }
 
-static void
-add_extern_with(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_str_t *params, size_t count,
-                writ_str_t result, bool pure, writ_span_t declared_at)
+static const writ_n00b_type_t *
+canonical_tree(const n00b_t *g, const writ_n00b_type_t *type)
 {
-    core_buffer_t signature = {0};
-    core_buffer_printf(&signature, "(");
-    for (size_t i = 0; i < count; i++) {
-        core_buffer_printf(&signature, "%s", i ? ", " : "");
-        canonical_type(g, &signature, params[i]);
+    if (type->kind == WRIT_N00B_TYPE_NAMED) {
+        core_buffer_t name = {0};
+        canonical_name(g, &name, type->name);
+        writ_str_t text = writ_str_copy(g->session, name.data, name.byte_len);
+        core_buffer_release(&name);
+        return named(g, text);
     }
-    core_buffer_printf(&signature, ") -> ");
-    canonical_type(g, &signature, result);
-    core_buffer_printf(&signature, " fail: nil");
+    writ_str_t name = type->kind == WRIT_N00B_TYPE_LIST ? writ_cstr("builtin.containers.list.List") : type->name;
+    return type_node(g, type->kind, name, canonical_tree(g, type->item));
+}
+
+static void
+add_extern_with(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params,
+                size_t count, const writ_n00b_type_t *result, bool pure, writ_span_t declared_at)
+{
+    const writ_n00b_type_t **canonical = writ_alloc(g->session, sizeof(*canonical) * (count ? count : 1));
+    for (size_t i = 0; i < count; i++) {
+        canonical[i] = canonical_tree(g, params[i]);
+    }
     core_list_push(*g->externs, ((writ_n00b_extern_t){
                                     .name = name,
                                     .symbol = symbol,
-                                    .signature = writ_str_copy(g->session, signature.data, signature.byte_len),
+                                    .params = canonical,
+                                    .params_count = count,
+                                    .result = canonical_tree(g, result),
                                     .pure = pure,
                                     .declared_at = declared_at,
                                 }));
-    core_buffer_release(&signature);
 }
 
 static void
-add_extern(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_str_t *params, size_t count,
-           writ_str_t result)
+add_extern(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params, size_t count,
+           const writ_n00b_type_t *result)
 {
     add_extern_with(g, name, symbol, params, count, result, false, (writ_span_t){0});
 }
@@ -156,7 +218,7 @@ typedef struct {
     uint32_t     item;
     writ_str_t   name;
     writ_str_t   c_type;
-    writ_str_t   n00b_type;
+    const writ_n00b_type_t *n00b_type;
     size_t       parts;
     bool         storage;
     bool         borrow;
@@ -217,10 +279,16 @@ is_text_repr(writ_str_t repr)
     return writ_str_eq(repr, writ_cstr("string"));
 }
 
+static const writ_n00b_type_t *
+buffer_tree(const n00b_t *g)
+{
+    return array_of(g, named(g, prim(g, "u%u", 8)));
+}
+
 static writ_str_t
 buffer_type(const n00b_t *g)
 {
-    return writ_str_format(g->session, "Array[%.*s]", S(prim(g, "u%u", 8)));
+    return type_text(g, buffer_tree(g));
 }
 
 static bool is_result(const writ_plan_item_view_t *item);
@@ -268,8 +336,8 @@ lifted_record(const n00b_t *g, const writ_type_view_t *type)
     return liftable_record(g->model, record) ? record : nullptr;
 }
 
-static writ_str_t
-item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
+static const writ_n00b_type_t *
+item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
 {
     const writ_plan_item_view_t *item = &plan->items[index];
     writ_str_t repr = writ_binding_slot_repr(g->b, fn, item->name);
@@ -280,31 +348,37 @@ item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
         present.nullable = false;
         writ_plan_view_t view = *plan;
         view.items = &present;
-        return writ_str_format(g->session, "%.*s?", S(item_type(g, fn, &view, 0)));
+        return option_of(g, item_tree(g, fn, &view, 0));
     }
     switch (item->shape) {
     case WRIT_SHAPE_BYTES:
         if (is_text_repr(repr)) {
-            return writ_cstr("string");
+            return named(g, writ_cstr("string"));
         }
-        return optional_result(item) ? writ_str_format(g->session, "%.*s?", S(buffer_type(g))) : buffer_type(g);
+        return optional_result(item) ? option_of(g, buffer_tree(g)) : buffer_tree(g);
     case WRIT_SHAPE_TEXT:
-        return repr.length && !is_text_repr(repr) ? buffer_type(g) : writ_cstr("string");
+        return repr.length && !is_text_repr(repr) ? buffer_tree(g) : named(g, writ_cstr("string"));
     case WRIT_SHAPE_ARRAY:
-        return writ_str_format(g->session, "Array[%.*s]", S(scalar_type(g, element)));
+        return array_of(g, named(g, scalar_type(g, element)));
     case WRIT_SHAPE_REST_PACK:
-        return writ_str_format(g->session, writ_str_eq(repr, writ_cstr("array")) ? "Array[%.*s]" : "List[%.*s]",
-                               S(scalar_type(g, item->type)));
+        return type_node(g, writ_str_eq(repr, writ_cstr("array")) ? WRIT_N00B_TYPE_ARRAY : WRIT_N00B_TYPE_LIST,
+                         (writ_str_t){0}, named(g, scalar_type(g, item->type)));
     case WRIT_SHAPE_OPTIONAL:
-        return writ_str_format(g->session, "%.*s?", S(scalar_type(g, element)));
+        return option_of(g, named(g, scalar_type(g, element)));
     case WRIT_SHAPE_CALLBACK:
-        return writ_binding_type(g->b, item->type->name);
+        return named(g, writ_binding_type(g->b, item->type->name));
     default:
         if (record_target(item) && lifted_record(g, record_target(item)) && optional_result(item)) {
-            return writ_str_format(g->session, "%.*s?", S(scalar_type(g, record_target(item))));
+            return option_of(g, named(g, scalar_type(g, record_target(item))));
         }
-        return scalar_type(g, record_target(item) ? record_target(item) : item->type);
+        return named(g, scalar_type(g, record_target(item) ? record_target(item) : item->type));
     }
+}
+
+static writ_str_t
+item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
+{
+    return type_text(g, item_tree(g, fn, plan, index));
 }
 
 static bool
@@ -405,7 +479,7 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
                        : provided_callback(g, fn, plan, index).length ? PARAM_PROVIDED
                                                                       : PARAM_CALLBACK;
             param.c_type = writ_cstr("uint64_t");
-            param.n00b_type = writ_cstr("u64");
+            param.n00b_type = named(g, writ_cstr("u64"));
             core_list_push(*params, param);
             continue;
         }
@@ -413,23 +487,21 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
             if (count == 2) {
                 param.kind = PARAM_VALUE;
                 param.text = writ_str_eq(item_type(g, fn, plan, index), writ_cstr("string"));
-                param.n00b_type = param.text ? writ_cstr("Ref[Array[u8]]")
-                                             : writ_str_format(g->session, "Ref[%.*s]",
-                                                               S(item_type(g, fn, plan, index)));
+                param.n00b_type = ref_of(g, param.text ? array_of(g, named(g, writ_cstr("u8")))
+                                                       : item_tree(g, fn, plan, index));
                 param.borrow = item->after_call == WRIT_AFTER_BORROWED
                             && writ_str_eq(writ_binding_slot_repr(g->b, fn, item->name), writ_cstr("borrow"));
             } else if (writ_c_by_pointer(&g->c, item) || record_target(item)) {
                 const writ_type_view_t *record = record_target(item) ? record_target(item) : item->type;
                 bool opaque = opaque_record(g, record);
                 param.kind = opaque ? PARAM_STORAGE : PARAM_RECORD;
-                param.n00b_type = opaque ? writ_str_format(g->session, "Ref[%.*s]", S(buffer_type(g)))
-                                         : writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, record)));
+                param.n00b_type = ref_of(g, opaque ? buffer_tree(g) : named(g, scalar_type(g, record)));
             } else if (is_pointer(param.c_type)) {
                 param.kind = PARAM_ADDRESS;
-                param.n00b_type = writ_cstr("uint");
+                param.n00b_type = named(g, writ_cstr("uint"));
             } else {
                 param.kind = PARAM_SCALAR;
-                param.n00b_type = item_type(g, fn, plan, index);
+                param.n00b_type = item_tree(g, fn, plan, index);
             }
             core_list_push(*params, param);
             continue;
@@ -438,14 +510,15 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
         bool bytes = ends_with(param.c_type, "_bytes_t *");
         bool address = ends_with(param.c_type, "**") || count == 2;
         param.storage = !bytes && !address && opaque_record(g, item->type);
-        param.n00b_type = bytes           ? writ_cstr("Ref[Ffi_Bytes]")
-                          : address       ? writ_cstr("Ref[uint]")
-                          : param.storage ? writ_str_format(g->session, "Ref[%.*s]", S(buffer_type(g)))
-                                          : writ_str_format(g->session, "Ref[%.*s]", S(scalar_type(g, item->type)));
+        param.n00b_type = ref_of(g, bytes           ? named(g, writ_cstr("Ffi_Bytes"))
+                                    : address       ? named(g, writ_cstr("uint"))
+                                    : param.storage ? buffer_tree(g)
+                                                    : named(g, scalar_type(g, item->type)));
         core_list_push(*params, param);
         if (count == 2) {
             shim_param_t length = {.kind = PARAM_OUT, .item = index, .c_type = c_params[1].type,
-                                   .name = c_params[1].name, .n00b_type = writ_cstr("Ref[uint]"), .parts = 1};
+                                   .name = c_params[1].name, .n00b_type = ref_of(g, named(g, writ_cstr("uint"))),
+                                   .parts = 1};
             core_list_push(*params, length);
         }
     }
@@ -639,7 +712,7 @@ static bool
 text_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim_param_t *param)
 {
     return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
-        && ends_with(param->n00b_type, "Ffi_Bytes]")
+        && ffi_bytes_ref(param->n00b_type)
         && writ_str_eq(item_type(g, fn, plan, param->item), writ_cstr("string"));
 }
 
@@ -649,7 +722,7 @@ cstr_result(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, const shim
     (void)g;
     (void)fn;
     return param->kind == PARAM_OUT && is_result(&plan->items[param->item])
-        && plan->items[param->item].shape == WRIT_SHAPE_TEXT && !ends_with(param->n00b_type, "Ffi_Bytes]");
+        && plan->items[param->item].shape == WRIT_SHAPE_TEXT && !ffi_bytes_ref(param->n00b_type);
 }
 
 typedef bool (*param_match_fn)(const n00b_t *g, size_t fn, const writ_plan_view_t *plan,
@@ -732,7 +805,7 @@ optional_bytes_param(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, c
                      const shim_param_t *param)
 {
     (void)params;
-    return param->kind == PARAM_OUT && ends_with(param->n00b_type, "Ffi_Bytes]")
+    return param->kind == PARAM_OUT && ffi_bytes_ref(param->n00b_type)
         && optional_result(&plan->items[param->item]) && !record_target(&plan->items[param->item])
         && !text_result(g, fn, plan, param);
 }
@@ -1081,11 +1154,13 @@ emit_n00b_array_takers(const n00b_t *g, writ_emit_t *emit)
     core_list_t(type_view_ptr_t) elements = array_elements(g);
     for (size_t e = 0; e < elements.len; e++) {
         writ_str_t name = array_element_name(g, elements.data[e]);
-        writ_str_t array = writ_str_format(g->session, "Array[%.*s]", S(name));
+        const writ_n00b_type_t *array_tree = array_of(g, named(g, name));
+        writ_str_t array = type_text(g, array_tree);
         writ_str_t take = writ_str_format(g->session, "__ffi_array_take_%.*s", S(name));
-        writ_str_t params[] = {writ_cstr("uint"), writ_cstr("uint"), writ_str_format(g->session, "Ref[%.*s]", S(array))};
+        const writ_n00b_type_t *params[] = {named(g, writ_cstr("uint")), named(g, writ_cstr("uint")),
+                                            ref_of(g, array_tree)};
         add_extern(g, take, writ_str_format(g->session, "%.*s_take_array_%.*s", S(g->shim), S(name)), params, 3,
-                   writ_cstr("nil"));
+                   named(g, writ_cstr("nil")));
         writ_emit_line(emit, "");
         writ_emit_open(emit, "func __ffi_take_array_%.*s(data: uint, length: uint) -> %.*s", S(name), S(array));
         writ_emit_line(emit, "var items: %.*s = new[%.*s](cast[int]length)", S(array), S(array));
@@ -1167,7 +1242,7 @@ emit_n00b_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_vie
                        const writ_slot_view_t **fields, size_t count)
 {
     writ_str_t type = writ_binding_type(g->b, record->name);
-    writ_str_t take_params[WRIT_C_MAX_ARITY + 1] = {writ_cstr("Ref[Ffi_Bytes]")};
+    const writ_n00b_type_t *take_params[WRIT_C_MAX_ARITY + 1] = {ref_of(g, named(g, writ_cstr("Ffi_Bytes")))};
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __ffi_take_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s", S(record->name), S(type));
     writ_emit_line(emit, "let value: Ffi_Bytes = bytes.__value");
@@ -1175,17 +1250,18 @@ emit_n00b_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_vie
     for (size_t f = 0; f < count; f++) {
         writ_str_t length = writ_str_format(g->session, "__ffi_%.*s_%.*s_length", S(record->name),
                                             S(fields[f]->name));
-        writ_str_t length_params[] = {writ_cstr("uint")};
+        const writ_n00b_type_t *length_params[] = {named(g, writ_cstr("uint"))};
         add_extern(g, length, field_symbol(g, record, fields[f]->name, "_length"), length_params, 1,
-                   writ_cstr("uint"));
-        writ_str_t array = writ_str_format(g->session, "Array[%.*s]", S(scalar_type(g, fields[f]->type->target)));
-        take_params[f + 1] = writ_str_format(g->session, "Ref[%.*s]", S(array));
+                   named(g, writ_cstr("uint")));
+        const writ_n00b_type_t *array_tree = array_of(g, named(g, scalar_type(g, fields[f]->type->target)));
+        writ_str_t array = type_text(g, array_tree);
+        take_params[f + 1] = ref_of(g, array_tree);
         writ_emit_text(emit, "%s%.*s = new[%.*s](cast[int]%.*s(value.data))", f ? ", " : "",
                        S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)), S(array), S(length));
     }
     writ_emit_line(emit, ")");
     add_extern(g, writ_str_format(g->session, "__ffi_%.*s_take", S(record->name)),
-               field_symbol(g, record, writ_cstr("take"), ""), take_params, count + 1, writ_cstr("nil"));
+               field_symbol(g, record, writ_cstr("take"), ""), take_params, count + 1, named(g, writ_cstr("nil")));
     writ_emit_text(emit, "__ffi_%.*s_take(bytes", S(record->name));
     for (size_t f = 0; f < count; f++) {
         writ_emit_text(emit, ", ref lifted.%.*s", S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)));
@@ -1233,12 +1309,12 @@ emit_cstr_c_helpers(const n00b_t *g, writ_emit_t *emit)
 static void
 emit_cstr_n00b_helpers(const n00b_t *g, writ_emit_t *emit)
 {
-    writ_str_t length_params[] = {writ_cstr("uint")};
-    writ_str_t copy_params[] = {writ_cstr("uint"), writ_cstr("Ref[Array[u8]]")};
+    const writ_n00b_type_t *length_params[] = {named(g, writ_cstr("uint"))};
+    const writ_n00b_type_t *copy_params[] = {named(g, writ_cstr("uint")), byte_array_ref(g)};
     add_extern(g, writ_cstr("__ffi_cstr_length"), writ_str_format(g->session, "%.*s_cstr_length", S(g->shim)),
-               length_params, 1, writ_cstr("uint"));
+               length_params, 1, named(g, writ_cstr("uint")));
     add_extern(g, writ_cstr("__ffi_cstr_copy"), writ_str_format(g->session, "%.*s_cstr_copy", S(g->shim)),
-               copy_params, 2, writ_cstr("nil"));
+               copy_params, 2, named(g, writ_cstr("nil")));
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool");
     writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))");
@@ -1633,8 +1709,8 @@ static void
 emit_table(writ_emit_t *emit, writ_str_t table, writ_str_t element)
 {
     writ_emit_line(emit,
-                   "var %.*s: Ffi_Table[%.*s] = (slots = new[List[%.*s?]](), free = new[List[int]](), owners = "
-                   "new[List[uint]]())",
+                   "var %.*s: Ffi_Table[%.*s] = (slots = new[Array[%.*s?]](0), owners = new[Array[uint]](0), "
+                   "next_free = new[Array[uint]](0), count = 0, free_head = 0)",
                    S(table), S(element), S(element));
 }
 
@@ -1648,12 +1724,17 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_str_t copy = writ_str_format(g->session, "__%.*s_arguments_copy", S(snake));
     writ_str_t store = writ_str_format(g->session, "__%.*s_result_store", S(snake));
     if (packed) {
-        writ_str_t params[] = {writ_cstr("uint"), writ_str_format(g->session, "Ref[%.*s_Arguments]", S(name))};
-        add_extern(g, copy, callback_helper_symbol(g, callback, "arguments_copy"), params, 2, writ_cstr("nil"));
+        const writ_n00b_type_t *params[] = {
+            named(g, writ_cstr("uint")),
+            ref_of(g, named(g, writ_str_format(g->session, "%.*s_Arguments", S(name)))),
+        };
+        add_extern(g, copy, callback_helper_symbol(g, callback, "arguments_copy"), params, 2,
+                   named(g, writ_cstr("nil")));
     }
     if (returns) {
-        writ_str_t params[] = {writ_cstr("uint"), result};
-        add_extern(g, store, callback_helper_symbol(g, callback, "result_store"), params, 2, writ_cstr("nil"));
+        const writ_n00b_type_t *params[] = {named(g, writ_cstr("uint")), named(g, result)};
+        add_extern(g, store, callback_helper_symbol(g, callback, "result_store"), params, 2,
+                   named(g, writ_cstr("nil")));
     }
     writ_str_t entry = writ_str_format(g->session, "%.*s_Callback", S(name));
     writ_str_t table = callback_table(g, name, "callbacks");
@@ -1674,7 +1755,7 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_emit_line(emit, "__ffi_table_free(%.*s, handle)", S(table));
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func %.*s(handle: u64, arguments: uint, result: uint) -> i32",
+    writ_emit_open(emit, "func %.*s(handle: u64, arguments: uint, returned: uint) -> i32",
                    S(callback_table(g, name, "dispatch")));
     writ_emit_line(emit, "let entry = __ffi_table_get(%.*s, handle)", S(table));
     writ_emit_open(emit, "if entry == nil");
@@ -1686,7 +1767,7 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
         writ_emit_line(emit, "var packed: %.*s_Arguments", S(name));
         writ_emit_line(emit, "%.*s(arguments, ref packed)", S(copy));
     }
-    writ_emit_text(emit, returns ? "%.*s(result, value.call(" : "value.call(", S(store));
+    writ_emit_text(emit, returns ? "%.*s(returned, value.call(" : "value.call(", S(store));
     bool first = true;
     for (size_t i = 0; i < callback->slots_count; i++) {
         if (i != receiver) {
@@ -1735,6 +1816,7 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
 
 static bool contract_has_event(const n00b_t *g, writ_str_t id);
 static void emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys);
+static void emit_event_key(writ_emit_t *emit, writ_str_t id, writ_str_t key);
 
 static writ_str_t
 cell_constructor(const n00b_t *g, writ_str_t type)
@@ -1865,11 +1947,11 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_str_t key = writ_str_format(g->session, "cast[u64](%.*s)", S(raw));
     writ_str_t release_event = writ_str_format(g->session, "%.*s:release:%.*s", S(g->shim), S(handle->name));
     if (contract_has_event(g, release_event)) {
-        emit_event(emit, release_event, key);
+        emit_event_key(emit, release_event, key);
     }
     writ_str_t release_call = writ_str_format(g->session, "%.*s:%.*s", S(g->shim), S(release->fn->contract_name));
     if (contract_has_event(g, release_call)) {
-        emit_event(emit, release_call, key);
+        emit_event_key(emit, release_call, key);
     }
     writ_emit_line(emit, "let released = __%.*s(%.*s)", S(writ_c_plan_name(&g->c, release)), S(raw));
     writ_emit_close(emit, nullptr);
@@ -1967,7 +2049,7 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     (void)emit;
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
-    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (2 * params.len + 1));
+    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (2 * params.len + 1));
     size_t typed = 0;
     for (size_t i = 0; i < params.len; i++) {
         if (params.data[i].kind != PARAM_OWNED && params.data[i].kind != PARAM_PROVIDED) {
@@ -1976,7 +2058,7 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     }
     for (size_t i = 0; i < params.len; i++) {
         if (keeps_until(plan, &params.data[i])) {
-            types[typed++] = writ_cstr("Ref[uint]");
+            types[typed++] = ref_of(g, named(g, writ_cstr("uint")));
         }
     }
     writ_str_t ret = writ_c_returns_directly(&g->c, plan) ? writ_c_return_type(&g->c, plan) : writ_cstr("int32_t");
@@ -1988,7 +2070,7 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
                           : is_pointer(ret)               ? writ_cstr("uint")
                                                           : scalar_type(g, direct ? direct->type : nullptr);
     add_extern_with(g, writ_str_format(g->session, "__%.*s", S(writ_c_plan_name(&g->c, plan))), shim_symbol(g, plan),
-                    types, typed, n00b_ret, plan->fn->is_pure, plan->fn->declared_at);
+                    types, typed, named(g, n00b_ret), plan->fn->is_pure, plan->fn->declared_at);
     core_list_free(params);
 }
 
@@ -2007,7 +2089,8 @@ local_name(const wrapper_t *w, uint32_t item)
     if (item == w->receiver) {
         return writ_cstr("self");
     }
-    return writ_profile_name(w->g->profile, WRIT_NAMING_FIELD, w->plan->items[item].name);
+    writ_str_t name = writ_profile_name(w->g->profile, WRIT_NAMING_FIELD, w->plan->items[item].name);
+    return writ_str_eq(name, writ_cstr("result")) ? writ_cstr("returned") : name;
 }
 
 static uint32_t
@@ -2272,7 +2355,7 @@ lifted(const wrapper_t *w, const shim_param_t *param)
     const writ_plan_item_view_t *item = &w->plan->items[param->item];
     writ_str_t name = local_name(w, param->item);
     writ_session_t *session = w->g->session;
-    if (ends_with(param->n00b_type, "Ffi_Bytes]")) {
+    if (ffi_bytes_ref(param->n00b_type)) {
         const writ_record_view_t *record = lifted_record(w->g, record_target(item));
         if (record) {
             return writ_str_format(session, "__ffi_take_%s%.*s(ref %.*s)", optional_result(item) ? "optional_" : "",
@@ -2341,7 +2424,7 @@ emit_fixup(const wrapper_t *w, writ_emit_t *emit, writ_str_t name)
     if (declares_failure(w)) {
         emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR), problem);
     } else {
-        writ_emit_line(emit, "panic(%.*s.get())", S(problem));
+        writ_emit_line(emit, "panic(%.*s)", S(problem));
     }
     writ_emit_close(emit, nullptr);
 }
@@ -2596,7 +2679,7 @@ emit_keyword_record(const wrapper_t *w, writ_emit_t *emit, uint32_t item, const 
             writ_emit_line(emit, "%.*s.%.*s = %.*s", S(local), S(key), S(source));
         } else {
             writ_emit_open(emit, "if %.*s != nil", S(source));
-            writ_emit_line(emit, "%.*s.%.*s = %.*s.get()", S(local), S(key), S(source));
+            writ_emit_line(emit, "%.*s.%.*s = %.*s", S(local), S(key), S(source));
             if (record->presence == WRIT_PRESENCE_MASK) {
                 writ_emit_line(emit, "%.*s.%.*s = %.*s.%.*s | %llu", S(local), S(presence), S(local), S(presence),
                                (unsigned long long)1 << bit);
@@ -2644,7 +2727,7 @@ result_local(const wrapper_t *w)
             return local_name(w, i);
         }
     }
-    return writ_cstr("result");
+    return writ_cstr("returned");
 }
 
 static writ_str_t
@@ -2778,6 +2861,12 @@ static void
 emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys)
 {
     writ_emit_line(emit, "__ffi_event(\"%.*s\", [%.*s]'array, __os_thread_id())", S(id), S(keys));
+}
+
+static void
+emit_event_key(writ_emit_t *emit, writ_str_t id, writ_str_t key)
+{
+    writ_emit_line(emit, "__ffi_event_key(\"%.*s\", %.*s, __os_thread_id())", S(id), S(key));
 }
 
 static void
@@ -2983,11 +3072,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             writ_str_t local = p->name.length && !writ_str_eq(p->name, plan->items[p->item].name)
                                  ? writ_str_format(g->session, "%.*s_length", S(local_name(&w, p->item)))
                                  : local_name(&w, p->item);
-            writ_str_t type = writ_str_eq(p->n00b_type, writ_cstr("Ref[Ffi_Bytes]")) ? writ_cstr("Ffi_Bytes")
-                              : writ_str_eq(p->n00b_type, writ_cstr("Ref[uint]"))
-                                  ? writ_cstr("uint")
-                                  : writ_str_format(g->session, "%.*s", (int)(p->n00b_type.length - 5),
-                                                    p->n00b_type.data + 4);
+            writ_str_t type = type_text(g, p->n00b_type->item);
             const writ_type_view_t *item_type_view = plan->items[p->item].type;
             writ_str_t zero = writ_str_eq(type, writ_cstr("Ffi_Bytes")) ? writ_cstr("(data = 0, length = 0)")
                               : writ_str_eq(type, writ_cstr("bool"))    ? writ_cstr("false")
@@ -2999,7 +3084,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     }
     emit_closed_checks(&w, emit, &params);
     emit_callback_registrations(&w, emit, &params);
-    writ_emit_text(emit, "%s__%.*s(", can_fail(&w) ? "let outcome = " : out_count ? "let result = " : "",
+    writ_emit_text(emit, "%s__%.*s(", can_fail(&w) ? "let outcome = " : out_count ? "let returned = " : "",
                    S(writ_c_plan_name(&g->c, plan)));
     bool passed = false;
     for (size_t i = 0; i < params.len; i++) {
@@ -3081,12 +3166,12 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             emit_values(&w, emit, &params, outs, out_count, true);
         }
     } else if (!can_fail(&w) && out_count == 1 && plan->items[outs[0]].shape == WRIT_SHAPE_TEXT) {
-        emit_text_check(&w, emit, writ_cstr("result"), false);
-        writ_emit_line(emit, "return result_text");
+        emit_text_check(&w, emit, writ_cstr("returned"), false);
+        writ_emit_line(emit, "return returned_text");
     } else if (!can_fail(&w) && out_count == 1 && is_handle(&plan->items[outs[0]])) {
-        writ_emit_line(emit, "return %.*s", S(construct_handle(&w, outs[0], writ_cstr("result"))));
+        writ_emit_line(emit, "return %.*s", S(construct_handle(&w, outs[0], writ_cstr("returned"))));
     } else if (!can_fail(&w) && out_count) {
-        writ_emit_line(emit, "return result");
+        writ_emit_line(emit, "return returned");
     } else if (out_count == 1) {
         for (uint32_t o = 0; plan->items[outs[0]].optional && o < plan->outcomes_count; o++) {
             if (plan->outcomes[o].kind == WRIT_OUTCOME_SUCCESS && !lifts_in(plan, o, outs[0])) {
@@ -3132,19 +3217,19 @@ raw_type(const n00b_t *g, const writ_type_view_t *type)
 static void
 emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_bound_fn_t bound)
 {
-    writ_str_t *types = writ_alloc(g->session, sizeof(writ_str_t) * (fn->slots_count ? fn->slots_count : 1));
+    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count ? fn->slots_count : 1));
     for (size_t s = 0; s < fn->slots_count; s++) {
-        types[s] = raw_type(g, fn->slots[s].type);
+        types[s] = named(g, raw_type(g, fn->slots[s].type));
     }
     writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
     add_extern_with(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types,
-                    fn->slots_count, result, fn->is_pure, fn->declared_at);
+                    fn->slots_count, named(g, result), fn->is_pure, fn->declared_at);
     writ_emit_line(emit, "");
     mark(g, emit, fn->declared_at, fn->contract_name);
     writ_emit_text(emit, "func %.*s_raw(", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
-        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(types[s]));
+        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(type_text(g, types[s])));
     }
     writ_emit_line(emit, ") -> %.*s {", S(result));
     writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
@@ -3237,21 +3322,25 @@ n00b_text(const n00b_t *g)
     }
     bool takes_bytes = false;
     for (size_t i = 0; i < g->externs->len; i++) {
-        takes_bytes = takes_bytes || strstr(g->externs->data[i].signature.data, "Ffi_Bytes");
+        const writ_n00b_extern_t *declared = &g->externs->data[i];
+        for (size_t p = 0; p < declared->params_count; p++) {
+            takes_bytes = takes_bytes || mentions_ffi_bytes(declared->params[p]);
+        }
+        takes_bytes = takes_bytes || mentions_ffi_bytes(declared->result);
     }
     if (shim_keeps(g)) {
-        writ_str_t kept_params[] = {writ_cstr("u64")};
+        const writ_n00b_type_t *kept_params[] = {named(g, writ_cstr("u64"))};
         add_extern(g, writ_cstr("__ffi_kept_release"), writ_str_format(g->session, "%.*s_kept_free", S(g->shim)),
-                   kept_params, 1, writ_cstr("nil"));
+                   kept_params, 1, named(g, writ_cstr("nil")));
         writ_emit_line(&emit, "");
         writ_emit_line(&emit, "func __ffi_kept_free(kept: u64) {");
         writ_emit_line(&emit, "    __ffi_kept_release(kept)");
         writ_emit_line(&emit, "}");
     }
     if (takes_bytes) {
-        writ_str_t take_params[] = {writ_cstr("Ref[Ffi_Bytes]"), writ_cstr("Ref[Array[u8]]")};
+        const writ_n00b_type_t *take_params[] = {ref_of(g, named(g, writ_cstr("Ffi_Bytes"))), byte_array_ref(g)};
         add_extern(g, writ_cstr("__ffi_bytes_take"), writ_str_format(g->session, "%.*s_take_bytes", S(g->shim)),
-                   take_params, 2, writ_cstr("nil"));
+                   take_params, 2, named(g, writ_cstr("nil")));
         writ_emit_line(&emit, "");
         writ_emit_line(&emit, "func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {");
         writ_emit_line(&emit, "    let value: Ffi_Bytes = bytes.__value");
@@ -3491,7 +3580,7 @@ emit_export_call(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, bool bi
         }
     }
     mark(g, emit, w->bound.provided_at, w->bound.provide);
-    writ_emit_text(emit, "%s%.*s%s%.*s(", binds ? "let result" : "", S(annotation), binds ? " = " : "",
+    writ_emit_text(emit, "%s%.*s%s%.*s(", binds ? "let returned" : "", S(annotation), binds ? " = " : "",
                    S(w->bound.provide));
     bool first = true;
     for (uint32_t i = 0; i < plan->items_count; i++) {
@@ -3524,7 +3613,7 @@ emit_export_outputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, cons
     const writ_plan_view_t *plan = w->plan;
     uint32_t optional = count == 1 && plan->items[outs[0]].optional ? outs[0] : WRIT_PLAN_NONE;
     if (optional != WRIT_PLAN_NONE) {
-        writ_emit_open(emit, "if result == nil");
+        writ_emit_open(emit, "if returned == nil");
         emit_export_success(g, emit, plan, false, optional);
         writ_emit_close(emit, nullptr);
     }
@@ -3532,17 +3621,17 @@ emit_export_outputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, cons
         const writ_plan_item_view_t *item = &plan->items[outs[r]];
         writ_str_t whole = export_slot_named(g, plan, outs[r], WRIT_PART_WHOLE);
         if (is_handle(item) && whole.length) {
-            writ_emit_line(emit, "__export_store(%.*s, cast[uint]__ffi_table_insert(__handles_%.*s, result))", S(whole),
+            writ_emit_line(emit, "__export_store(%.*s, cast[uint]__ffi_table_insert(__handles_%.*s, returned))", S(whole),
                            S(item->type->name));
         } else if (is_handle(item)) {
-            writ_emit_line(emit, "return cast[uint]__ffi_table_insert(__handles_%.*s, result)", S(item->type->name));
+            writ_emit_line(emit, "return cast[uint]__ffi_table_insert(__handles_%.*s, returned)", S(item->type->name));
             return;
         } else if (item->shape == WRIT_SHAPE_TEXT) {
-            writ_emit_line(emit, "return __export_text(result)");
+            writ_emit_line(emit, "return __export_text(returned)");
             return;
         } else if (lifted_record(g, record_target(item))) {
             if (item->nullable) {
-                writ_emit_open(emit, "if result == nil");
+                writ_emit_open(emit, "if returned == nil");
                 writ_emit_line(emit, "return 0");
                 writ_emit_close(emit, nullptr);
             }
@@ -3551,17 +3640,16 @@ emit_export_outputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, cons
             size_t field_count = counted_fields(g, record, fields);
             writ_emit_text(emit, "return __export_keep_%.*s(%.*s", S(record->name), S(export_subject(g, w)));
             for (size_t f = 0; f < field_count; f++) {
-                writ_emit_text(emit, ", result.%.*s",
+                writ_emit_text(emit, ", returned.%.*s",
                                S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)));
             }
             writ_emit_line(emit, ")");
             return;
         } else if (item->shape == WRIT_SHAPE_SCALAR && !whole.length) {
-            writ_emit_line(emit, optional != WRIT_PLAN_NONE ? "return cast[i64]result.get()" : "return cast[i64]result");
+            writ_emit_line(emit, "return cast[i64]returned");
             return;
         } else if (item->shape == WRIT_SHAPE_BYTES) {
-            writ_emit_line(emit, optional != WRIT_PLAN_NONE ? "var bytes: Array[u8] = result.get()"
-                                                            : "var bytes: Array[u8] = result");
+            writ_emit_line(emit, "var bytes: Array[u8] = returned");
             writ_emit_line(emit, "__export_own_bytes(ref bytes, %.*s, %.*s)",
                            S(export_slot_named(g, plan, outs[r], WRIT_PART_POINTER)),
                            S(export_slot_named(g, plan, outs[r], WRIT_PART_LENGTH)));
@@ -3646,9 +3734,9 @@ emit_export_handles(const n00b_t *g, writ_emit_t *emit)
 static void
 emit_export_holds(const n00b_t *g, writ_emit_t *emit)
 {
-    writ_str_t address[] = {writ_cstr("Ref[Array[u8]]")};
+    const writ_n00b_type_t *address[] = {byte_array_ref(g)};
     add_extern(g, writ_cstr("__export_address"), writ_str_format(g->session, "%.*s_export_address", S(g->shim)),
-               address, 1, writ_cstr("uint"));
+               address, 1, named(g, writ_cstr("uint")));
     writ_emit_line(emit, "");
     writ_emit_open(emit, "record Export_Hold");
     writ_emit_line(emit, "private handle: uint");
@@ -3716,12 +3804,12 @@ emit_export_record_keep(const n00b_t *g, writ_emit_t *emit, const writ_record_vi
                         const writ_slot_view_t **fields, size_t count)
 {
     writ_str_t fill = writ_str_format(g->session, "__export_%.*s_fill", S(record->name));
-    writ_str_t params[WRIT_C_MAX_ARITY + 1] = {writ_cstr("Ref[Array[u8]]")};
+    const writ_n00b_type_t *params[WRIT_C_MAX_ARITY + 1] = {byte_array_ref(g)};
     for (size_t f = 0; f < count; f++) {
-        params[f + 1] = writ_str_format(g->session, "Ref[Array[%.*s]]", S(scalar_type(g, fields[f]->type->target)));
+        params[f + 1] = ref_of(g, array_of(g, named(g, scalar_type(g, fields[f]->type->target))));
     }
     add_extern(g, fill, writ_str_format(g->session, "%.*s_export_%.*s_fill", S(g->shim), S(record->name)), params,
-               count + 1, writ_cstr("nil"));
+               count + 1, named(g, writ_cstr("nil")));
     writ_emit_line(emit, "");
     writ_emit_text(emit, "func __export_keep_%.*s(handle: uint", S(record->name));
     for (size_t f = 0; f < count; f++) {
@@ -3821,18 +3909,20 @@ export_n00b_text(const n00b_t *g)
     writ_emit_init(&emit);
     emit_export_imports(g, &emit);
     emit_types(g, &emit, false);
-    writ_str_t address[] = {writ_cstr("uint"), writ_cstr("uint")};
-    writ_str_t copy_in[] = {writ_cstr("uint"), writ_cstr("Ref[Array[u8]]")};
-    writ_str_t store[] = {writ_cstr("uint"), writ_cstr("uint")};
-    writ_str_t own[] = {writ_cstr("Ref[Array[u8]]"), writ_cstr("uint"), writ_cstr("uint")};
+    const writ_n00b_type_t *word = named(g, writ_cstr("uint"));
+    const writ_n00b_type_t *nil = named(g, writ_cstr("nil"));
+    const writ_n00b_type_t *address[] = {word, word};
+    const writ_n00b_type_t *copy_in[] = {word, byte_array_ref(g)};
+    const writ_n00b_type_t *store[] = {word, word};
+    const writ_n00b_type_t *own[] = {byte_array_ref(g), word, word};
     add_extern(g, writ_cstr("__export_failed"), writ_str_format(g->session, "%.*s_export_failed", S(g->shim)),
-               address, 2, writ_cstr("nil"));
+               address, 2, nil);
     add_extern(g, writ_cstr("__export_copy_in"), writ_str_format(g->session, "%.*s_export_copy_in", S(g->shim)),
-               copy_in, 2, writ_cstr("nil"));
+               copy_in, 2, nil);
     add_extern(g, writ_cstr("__export_store"), writ_str_format(g->session, "%.*s_export_store", S(g->shim)), store,
-               2, writ_cstr("nil"));
+               2, nil);
     add_extern(g, writ_cstr("__export_own_bytes"),
-               writ_str_format(g->session, "%.*s_export_own_bytes", S(g->shim)), own, 3, writ_cstr("nil"));
+               writ_str_format(g->session, "%.*s_export_own_bytes", S(g->shim)), own, 3, nil);
     emit_cstr_n00b_helpers(g, &emit);
     emit_export_holds(g, &emit);
     emit_record_takers(g, &emit, emit_export_record_keep);

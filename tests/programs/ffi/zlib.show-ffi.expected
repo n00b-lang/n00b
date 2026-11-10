@@ -171,8 +171,8 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: Error {
 }
 
 func compress_bound(source_len: u64) -> u64 {
-    let result = __compressBound(source_len)
-    return result
+    let returned = __compressBound(source_len)
+    return returned
 }
 
 func uncompress(dest_capacity: u64, source: Array[u8]) -> Array[u8] fail: Error {
@@ -193,24 +193,24 @@ func uncompress(dest_capacity: u64, source: Array[u8]) -> Array[u8] fail: Error 
 
 func adler32(adler: u64, buf: Array[u8]) -> u64 fail: Error {
     var buf_value = buf
-    var result: u64 = 0
-    let outcome = __adler32(adler, ref buf_value, ref result)
+    var returned: u64 = 0
+    let outcome = __adler32(adler, ref buf_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "adler32")
         fail failure
     }
-    return result
+    return returned
 }
 
 func crc32(crc: u64, buf: Array[u8]) -> u64 fail: Error {
     var buf_value = buf
-    var result: u64 = 0
-    let outcome = __crc32(crc, ref buf_value, ref result)
+    var returned: u64 = 0
+    let outcome = __crc32(crc, ref buf_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "crc32")
         fail failure
     }
-    return result
+    return returned
 }
 
 func deflate_init(modify strm: Stream, level: i32) fail: Error {

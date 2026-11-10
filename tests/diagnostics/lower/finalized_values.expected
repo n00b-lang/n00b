@@ -1,3 +1,6 @@
+tests/diagnostics/lower/finalized_values.n:2:5: warning N00B-N0021: field `id` of `Guard` is set but never read
+tests/diagnostics/lower/finalized_values.n:5:8: warning N00B-N0023: type `Holder` is never used
+  help: remove it
 tests/diagnostics/lower/finalized_values.n:13:24: error N00B-S0068: `Guard` has a finalizer, so it cannot be copied out of `holder.guard`
   help: move the whole variable instead, or build a new value
 tests/diagnostics/lower/finalized_values.n:18:12: error N00B-S0068: `Guard` has a finalizer, so it cannot be copied out of `holder.guard`

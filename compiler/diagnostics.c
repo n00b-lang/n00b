@@ -192,3 +192,16 @@ n00bb_install_crash_handler(void)
 {
 }
 #endif
+
+core_diag_location_t
+n00bb_span_location(ir_span_t span)
+{
+    if (!ir_span_known(span)) return (core_diag_location_t){0};
+    return (core_diag_location_t){
+        .line = span.start_line,
+        .column = span.start_col,
+        .end_line = span.end_line,
+        .end_column = span.end_col,
+        .has_location = true,
+    };
+}

@@ -115,7 +115,7 @@ func closest_match(name: string, candidates: List[string]) -> string? {
     }
     var best: string? = nil
     var best_distance: uint = limit + 1
-    for let candidate in candidates {
+    for candidate in candidates {
         let other: uint = byte_len(candidate)
         if (length > other and length - other > limit) or
             (other > length and other - length > limit) or candidate == name {
@@ -193,12 +193,12 @@ func render(d: Diagnostic, src: Source) -> string {
     out.append("    " + text.repeat(" ", byte_len(number)) + " | " +
                caret_row(line, d.span) + "\n")
     if d.help != nil {
-        out.append("\n  help: " + d.help.get() + "\n")
+        out.append("\n  help: " + d.help + "\n")
     }
-    for let fix in d.fixes {
+    for fix in d.fixes {
         out.append("  fix: " + fix.message + "\n")
     }
-    for let related in d.related {
+    for related in d.related {
         out.append("  note: " + related.message + " (" +
                    location(src.name, related.span) + ")\n")
     }
@@ -207,7 +207,7 @@ func render(d: Diagnostic, src: Source) -> string {
 
 func render_all(diags: List[Diagnostic], src: Source) -> string {
     var out: List[string] = new[List[string]]()
-    for let d in diags {
+    for d in diags {
         out.append(render(d, src))
     }
     return join(out, "\n")
@@ -216,7 +216,7 @@ func render_all(diags: List[Diagnostic], src: Source) -> string {
 func stable_order(starts: List[uint]) -> Array[uint] {
     var keys: Array[u128] = new[Array[u128]](starts.len())
     var given: uint = 0
-    for let start in starts {
+    for start in starts {
         keys[given] = (cast[u128](start) << 64) | cast[u128](given)
         given += 1
     }
@@ -230,7 +230,7 @@ func stable_order(starts: List[uint]) -> Array[uint] {
 
 func sorted_by_position(diags: List[Diagnostic]) -> List[Diagnostic] {
     var starts: List[uint] = new[List[uint]]()
-    for let d in diags {
+    for d in diags {
         starts.append(d.span.start_byte)
     }
     var out: List[Diagnostic] = new[List[Diagnostic]]()
@@ -242,7 +242,7 @@ func sorted_by_position(diags: List[Diagnostic]) -> List[Diagnostic] {
 
 func apply_fixes(source: string, fixes: List[Fix]) -> string {
     var starts: List[uint] = new[List[uint]]()
-    for let fix in fixes {
+    for fix in fixes {
         var key: uint = fix.span.start_byte * 2
         if fix.span.end_byte > fix.span.start_byte {
             key += 1

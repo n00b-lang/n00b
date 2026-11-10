@@ -19,3 +19,7 @@ audit_log.note: (string) -> nil
 audit_log.flush: () -> nil
   no effects      
   named           audit_log.Audited, handled here  audit_log.note (5:5)
+server.n:11:6: warning N00B-N0019: function `handle` is never called
+  help: call it or delete it
+server.n:24:6: warning N00B-N0019: function `batched` is never called
+  help: call it or delete it

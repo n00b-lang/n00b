@@ -1,5 +1,4 @@
-TEST_PROGRAMS := abi-static-graph-test \
-    writ-coexistence \
+TEST_PROGRAMS := writ-coexistence \
     builtin-os-test \
     builtin-abi-test \
     runtime-abi-io-test \
@@ -31,10 +30,6 @@ TEST_PROGRAMS := abi-static-graph-test \
     llvm-native-cache-test \
     llvm-stack-maps-test \
     llvm-frame-roots-test
-
-abi-static-graph-test_SOURCES := tests/abi_static_graph.c \
-    compiler/abi_static_graph.c
-abi-static-graph-test_LIBS := $(LANTERN_LIB)
 
 writ-coexistence_SOURCES := tests/writ_coexistence.c
 writ-coexistence_LIBS := $(WRIT_LIB) $(LANTERN_LIB)

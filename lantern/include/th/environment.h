@@ -34,25 +34,6 @@ typedef struct {
   th_type *contract;
 } th_env_method_requirement_t;
 
-typedef struct {
-  th_type *receiver_type;
-  th_env_method_t method;
-} th_env_dispatch_entry_t;
-
-typedef struct {
-  core_string_t method_name;
-  th_env_method_t implementation;
-} th_env_vtable_slot_t;
-
-typedef struct {
-  core_string_t trait_name;
-  th_type *concrete_type;
-  uint64_t concrete_type_hash;
-  th_env_vtable_slot_t *slots;
-  size_t slot_count;
-  size_t required_slot_count;
-} th_env_vtable_plan_t;
-
 typedef enum {
   TH_ENV_METHOD_NOT_FOUND,
   TH_ENV_METHOD_FOUND,
@@ -198,11 +179,22 @@ bool th_env_register_function_contract(
     th_env *environment, core_string_t qualified_name, core_string_t root_name,
     core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *contract);
+bool th_env_replace_function_contract(th_env *environment,
+                                      core_string_t qualified_name,
+                                      const th_type *contract);
 bool th_env_set_function_required(th_env *environment,
                                   core_string_t qualified_name,
                                   size_t required);
 size_t th_env_function_required(const th_env *environment,
                                 core_string_t qualified_name);
+bool th_env_set_function_requirements(th_env *environment,
+                                      core_string_t qualified_name,
+                                      const th_trait_requirement *requirements,
+                                      size_t count);
+size_t th_env_function_requirements(const th_env *environment,
+                                    core_string_t qualified_name,
+                                    th_trait_requirement *requirements,
+                                    size_t max_requirements);
 bool th_env_register_value(th_env *environment, core_string_t qualified_name,
                            core_string_t root_name, core_string_t module,
                            core_string_t package,
@@ -235,9 +227,6 @@ bool th_env_type_visible(const th_ctx *context,
                          core_string_t qualified_type_name);
 bool th_env_implements(th_ctx *context, th_type *receiver,
                        core_string_t trait_name);
-bool th_env_method_lookup(th_ctx *context, th_type *receiver,
-                          core_string_t trait_name, core_string_t method_name,
-                          th_env_method_t *method);
 th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
                                              core_string_t trait_name,
                                              core_string_t method_name,
@@ -249,20 +238,11 @@ bool th_env_type_pattern_subsumes(const th_type *general,
                                   const th_type *specific);
 bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
                                  const th_type *candidate);
-size_t th_env_method_candidates(th_ctx *context, core_string_t trait_name,
-                                core_string_t method_name,
-                                th_env_method_t *methods, size_t max_methods);
-th_env_method_status_t th_env_method_plan_dispatch(
-    th_ctx *context, core_string_t trait_name, core_string_t method_name,
-    th_type *const *receiver_types, size_t receiver_count,
-    th_env_dispatch_entry_t *entries, size_t capacity,
-    size_t *required_count, bool *direct_call);
-th_env_method_status_t th_env_trait_vtable_plan(
-    th_ctx *context, core_string_t trait_name, th_type *concrete_type,
-    th_env_vtable_slot_t *slots, size_t capacity, size_t *required_count,
-    th_env_vtable_plan_t *plan);
 size_t th_env_method_requirements(
     th_ctx *context, core_string_t method_name,
     th_env_method_requirement_t *requirements, size_t max_requirements);
+size_t th_env_method_candidates(th_ctx *context, core_string_t trait_name,
+                                core_string_t method_name,
+                                th_env_method_t *methods, size_t max_methods);
 
 #endif

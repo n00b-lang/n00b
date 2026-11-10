@@ -1,0 +1,2 @@
+tests/diagnostics/link/private_record_literal.n:4:29: error N00B-N0006: `Secret` has a private field `hidden`, so a field tuple outside module `shapes` cannot build it
+  help: build it with a function of module `shapes`

@@ -82,6 +82,25 @@ n00bb_diag_lookup(core_string_t code, n00bb_diag_t *out)
     return true;
 }
 
+bool
+n00bb_diag_reports_unused(core_string_t code)
+{
+    n00bb_diag_t id;
+    if (!code.data || !n00bb_diag_lookup(code, &id)) return false;
+    switch (id) {
+    case N00B_DIAG_UNUSED_FUNCTION:
+    case N00B_DIAG_FIELD_NEVER_SET:
+    case N00B_DIAG_FIELD_NEVER_READ:
+    case N00B_DIAG_FIELD_NEVER_USED:
+    case N00B_DIAG_UNUSED_TYPE:
+    case N00B_DIAG_UNUSED_GLOBAL:
+    case N00B_DIAG_GLOBAL_NEVER_READ:
+        return true;
+    default:
+        return false;
+    }
+}
+
 
 core_string_t
 n00bb_text_form(n00bb_text_t id)

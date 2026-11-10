@@ -108,7 +108,7 @@ inline func find(self: Ref[Hash_Index], hash: u128) -> uint? {
     if slot == nil {
         return nil
     }
-    return cast[uint](self.__value.slots[slot.get()])
+    return cast[uint](self.__value.slots[slot])
 }
 
 inline func place(self: Ref[Hash_Index], mixed: u64, entry: uint) -> bool {

@@ -272,12 +272,18 @@ reporter_frame(text_t name)
 }
 
 static bool
+module_frame(text_t name)
+{
+    return text_equal(function_part(name), TEXT("__n00bb_module_init"));
+}
+
+static bool
 shown_frame(text_t name)
 {
     if (!name.length || text_equal(name, TEXT("main"))
         || reporter_frame(name)) return false;
     text_t function = function_part(name);
-    if (text_equal(function, TEXT("__n00bb_module_init"))) return true;
+    if (module_frame(name)) return true;
     if (text_starts(function, TEXT("__n00bb_"))) return false;
     return !library_frame(name) || !text_starts(function, TEXT("__"));
 }
@@ -673,11 +679,6 @@ put_site_message(const failure_record_t *failure)
         put(detail);
         put_byte('`');
         return;
-    case N00BB_FAILURE_UNINITIALIZED:
-        put(TEXT("global `"));
-        put(text_from(text, last_dot(text)));
-        put(TEXT("` is read before it is initialized"));
-        return;
     case N00BB_FAILURE_ALLOCATION_SIZE:
         put_byte('`');
         put(detail);
@@ -720,6 +721,11 @@ put_site_message(const failure_record_t *failure)
         put_operand(failure, 0);
         put(TEXT(", found "));
         put_operand(failure, 1);
+        return;
+    case N00BB_FAILURE_NO_IMPLEMENTATION:
+        put(TEXT("no implementation of `"));
+        put(text);
+        put(TEXT("` for this value's type"));
         return;
     case N00BB_FAILURE_NULL_CALLBACK:
         put(TEXT("call through `"));
@@ -861,7 +867,8 @@ put_backtrace(uint64_t count)
     for (uint64_t i = 0; i < count; i++) {
         text_t name = trace_frames[i].name;
         place_t place = frame_place(&trace_frames[i]);
-        if (!shown_frame(name) || (!place.present && library_frame(name)))
+        if (!shown_frame(name) || (!place.present
+                && (library_frame(name) || module_frame(name))))
             continue;
         text_t shown = source_name(name);
         if (shown_any && text_equal(shown, previous_name)

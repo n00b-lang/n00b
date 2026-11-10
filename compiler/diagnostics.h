@@ -83,6 +83,7 @@ core_diag_severity_t n00bb_diag_severity(n00bb_diag_t id);
 core_string_t n00bb_diag_title(n00bb_diag_t id);
 core_string_t n00bb_diag_explanation(n00bb_diag_t id);
 bool n00bb_diag_lookup(core_string_t code, n00bb_diag_t *out);
+bool n00bb_diag_reports_unused(core_string_t code);
 
 bool n00bb_diag_did_you_mean(core_diagnostics_t *diagnostics,
                              core_string_t name,
@@ -96,3 +97,4 @@ n00bb_internal_error(core_diagnostics_t *diagnostics,
                      const char *format, ...);
 int n00bb_explain_command(core_string_t code);
 void n00bb_install_crash_handler(void);
+core_diag_location_t n00bb_span_location(ir_span_t span);

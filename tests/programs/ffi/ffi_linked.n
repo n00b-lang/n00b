@@ -219,15 +219,17 @@ func twice(value: i32) -> i32 {
     return value * 2
 }
 
-var doublers: Ffi_Table[Doubler] = (slots = new[List[Doubler?]](), free = new[List[int]](),
-                                    owners = new[List[uint]]())
+var doublers: Ffi_Table[Doubler] = (slots = new[Array[Doubler?]](0),
+                                    owners = new[Array[uint]](0),
+                                    next_free = new[Array[uint]](0), count = 0,
+                                    free_head = 0)
 
-func dispatch_doubler(handle: u64, arguments: uint, result: uint) -> i32 {
+func dispatch_doubler(handle: u64, arguments: uint, returned: uint) -> i32 {
     let doubler = __ffi_table_get(doublers, handle)
     if doubler == nil {
         return -1
     }
-    dispatch.write_int_raw(result, doubler.call(dispatch.read_int_raw(arguments)))
+    dispatch.write_int_raw(returned, doubler.call(dispatch.read_int_raw(arguments)))
     return 0
 }
 

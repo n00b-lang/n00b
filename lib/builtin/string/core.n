@@ -165,7 +165,7 @@ private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
         let cells: Ref[byte] = unsafe_cast[Ref[byte]] view
         var i: uint = 0
         while i < n {
-            __gc_byte_offset(cells, cast[int] i).__value = cast[byte] bytes[at + i]
+            __gc_byte_offset(cells, cast[int] i).__value = cast[byte] bytes.__value[at + i]
             i += 1
         }
         __gc_byte_offset(cells, cast[int] short_selector).__value =
@@ -355,7 +355,7 @@ func len(self: string) -> uint {
     return utf8_char_count(base, bytes)
 }
 
-func __add(self: string, other: string) -> string {
+func __add(view self: string, view other: string) -> string {
     let left: string = text(self)
     let right: string = text(other)
     let left_length: uint = __string_byte_len(left)
@@ -384,7 +384,7 @@ private func either_rich(left: string, right: string) -> bool {
     return __string_tag(left) == rich or __string_tag(right) == rich
 }
 
-func __equal(self: string, other: string) -> bool {
+func __equal(view self: string, view other: string) -> bool {
     if either_rich(self, other) {
         return string.style.cmp_string_value(self, other) == 0
     }
@@ -404,7 +404,7 @@ func __equal(self: string, other: string) -> bool {
     return true
 }
 
-func __cmp(self: string, other: string) -> Comparison {
+func __cmp(view self: string, view other: string) -> Comparison {
     if either_rich(self, other) {
         let order: int = string.style.cmp_string_value(self, other)
         if order < 0 {
@@ -478,7 +478,7 @@ private func utf8_sequence(bytes: Array[u8], at: uint, remaining: uint)
     return length
 }
 
-func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
+func __string_from_utf8(bytes: Ref[Array[u8]], out_text: Ref[string])
     -> bool {
     let length: uint = __array_length(bytes.__value)
     var ascii: bool = true
@@ -495,7 +495,7 @@ func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
     if ascii {
         encoding = 1
     }
-    result.__value = __string_make(bytes, 0, length, encoding, true)
+    out_text.__value = __string_make(bytes, 0, length, encoding, true)
     return true
 }
 
@@ -525,7 +525,7 @@ func __text_byte_array(self: string) -> Array[u8] {
     let base: string = text(self)
     let storage: Array[u8]? = __string_storage(base)
     if storage != nil {
-        return storage.get()
+        return storage
     }
     let len: uint = __string_byte_len(base)
     var copy: Array[u8] = new[Array[u8]](cast[int] len)
@@ -553,7 +553,7 @@ private func raw_len(src: Ref[Array[u8]], at: uint, byte_len: int) -> uint {
         return cast[uint] byte_len
     }
     var n: uint = 0
-    while at + n < total and src[at + n] != 0 {
+    while at + n < total and src.__value[at + n] != 0 {
         n += 1
     }
     return n
@@ -574,7 +574,7 @@ func from_raw(src: Ref[Array[u8]], byte_len: int, at: uint = 0,
     var enc: Str_Encoding
     if unsafe {
         require encoding != nil
-        enc = encoding.get_or_else(Str_Encoding.binary)
+        enc = encoding
     }
     elif encoding.get_or_else(Str_Encoding.ascii) == Str_Encoding.binary {
         enc = Str_Encoding.binary
@@ -583,7 +583,7 @@ func from_raw(src: Ref[Array[u8]], byte_len: int, at: uint = 0,
         enc = encoding_of(probe)
         if encoding != nil {
             require enc != Str_Encoding.binary and
-                cast[u8](enc) <= cast[u8] encoding.get()
+                cast[u8](enc) <= cast[u8] encoding
         }
     }
     return __string_make(src, at, len, cast[u8] enc, !copy)
@@ -611,7 +611,7 @@ func to_cstring(self: string, copy: bool = false, buf: Array[u8]? = nil)
     let tag: u64 = cast[u64] __string_tag(self)
     let storage: Array[u8]? = __string_storage(self)
     if !copy and storage != nil {
-        return storage.get()
+        return storage
     }
     if !copy and tag == str_tag_short {
         var direct: Array[u8] = new[Array[u8]](cast[int](len) + 1)
@@ -693,11 +693,11 @@ func find_bytes(self: string, sub: string, start: uint? = 0,
     let sublen: int = cast[int] byte_len(sub)
     var b: int = 0
     if start != nil {
-        b = cast[int] start.get()
+        b = cast[int] start
     }
     var e: int = slen
     if end != nil {
-        e = cast[int] end.get()
+        e = cast[int] end
     }
     if b > slen {
         return nil
@@ -845,7 +845,7 @@ func decode_escapes(raw: string) -> string fail: string {
         i += 1
         let simple: u8? = simple_escape(e)
         if simple != nil {
-            out[len] = simple.get()
+            out[len] = simple
             len += 1
             continue
         }
@@ -872,7 +872,7 @@ func decode_escapes(raw: string) -> string fail: string {
             if digit == nil {
                 fail "a string has a numeric escape with a non-hex digit"
             }
-            cp = (cp << 4) | digit.get()
+            cp = (cp << 4) | digit
             k += 1
         }
         i += digits

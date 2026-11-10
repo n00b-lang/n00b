@@ -400,12 +400,26 @@ struct writ_gen_n00b_request_t @size(64) @align(8) {
     shim_prefix: writ_str_t @32
     type_namespace: writ_str_t @48
 }
-struct writ_n00b_extern_t @size(88) @align(8) {
+enum writ_n00b_type_kind_t : c_uint {
+    WRIT_N00B_TYPE_NAMED = 0,
+    WRIT_N00B_TYPE_REF = 1,
+    WRIT_N00B_TYPE_ARRAY = 2,
+    WRIT_N00B_TYPE_LIST = 3,
+    WRIT_N00B_TYPE_OPTION = 4,
+}
+struct writ_n00b_type_t @size(32) @align(8) {
+    kind: writ_n00b_type_kind_t @0
+    name: writ_str_t @8
+    item: ?writ_n00b_type_t @24
+}
+struct writ_n00b_extern_t @size(96) @align(8) {
     name: writ_str_t @0
     symbol: writ_str_t @16
-    signature: writ_str_t @32
-    pure: bool @48
-    declared_at: writ_span_t @56
+    params: ??writ_n00b_type_t @32
+    params_count: usize @40
+    result: ?writ_n00b_type_t @48
+    pure: bool @56
+    declared_at: writ_span_t @64
 }
 struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0

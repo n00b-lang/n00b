@@ -144,7 +144,7 @@ func check(packed_p: Packed?) -> int {
     if packed_p == nil {
         return 0
     }
-    return packed_p.get().count
+    return packed_p.count
 }
 
 var packed_p: Packed = base
@@ -301,7 +301,7 @@ func limit_of(failure: Failure) -> u32 {
     if limit == nil {
         return 0
     }
-    return limit.get()
+    return limit
 }
 
 let failure_plain = new[Failure](cast[i64]1, "named", limit = 7)
@@ -358,7 +358,7 @@ func loads() -> bool {
     var copy: Atomic[u32] = width
     atomic_bump(copy)
     return flag and total == 15 and width == 5 and small == -3 and
-        ratio * 2.0 == 3.0 and h != nil and h.get().__value.value == 7 and
+        ratio * 2.0 == 3.0 and h != nil and h.__value.value == 7 and
         copy == 6
 }
 
@@ -786,12 +786,12 @@ func lease_list_find(items: List[int], wanted: int) -> int {
 
 func lease_list_cursor() -> int {
     var items: List[int] = [4, 5]
-    var walk: Lease_Cursor[int] = items.iter()
+    var walk: Lease_Cursor[int] = items.__iterator()
     var total: int = 0
-    var item: int? = walk.next()
+    var item: int? = walk.__next()
     while item != nil {
-        total += item.get()
-        item = walk.next()
+        total += item
+        item = walk.__next()
     }
     require !leased(items.items)
     return total

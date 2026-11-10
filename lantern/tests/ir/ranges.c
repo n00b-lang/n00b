@@ -1,5 +1,5 @@
 #include "ir/analyses.h"
-#include "ir/ranges.h"
+#include "ir/abcd.h"
 #include "ir/summary.h"
 #include "harness.h"
 
@@ -21,29 +21,40 @@ bind_summaries(ir_module_t *m)
 static bool
 range_is(ir_func_t *f, const ir_value_t *value, ir_int_t lo, ir_int_t hi)
 {
-    ir_ranges_t *ranges = ir_ranges_build(f);
-    ir_interval_t range = {0};
-    bool ok = ir_range_of(ranges, value, nullptr, &range) && range.lo == lo
-        && range.hi == hi;
-    ir_ranges_free(ranges);
+    ir_abcd_t *ranges = ir_abcd_build(f);
+    ir_abcd_range_t range = {0};
+    bool ok = ir_abcd_range_of(ranges, value, nullptr, &range)
+        && range.seen.lo == lo && range.seen.hi == hi;
+    ir_abcd_free(ranges);
+    return ok;
+}
+
+static bool
+unbounded_is(ir_func_t *f, const ir_value_t *value, bool below, bool above)
+{
+    ir_abcd_t *ranges = ir_abcd_build(f);
+    ir_abcd_range_t range = {0};
+    bool ok = ir_abcd_range_of(ranges, value, nullptr, &range)
+        && range.unbounded_min == below && range.unbounded_max == above;
+    ir_abcd_free(ranges);
     return ok;
 }
 
 static ir_overflow_t
 overflow_of(const ir_instr_t *in)
 {
-    ir_ranges_t *ranges = ir_ranges_build(in->block->owner);
-    ir_overflow_t overflow = ir_range_overflow(ranges, in, nullptr, nullptr);
-    ir_ranges_free(ranges);
+    ir_abcd_t *ranges = ir_abcd_build(in->block->owner);
+    ir_overflow_t overflow = ir_abcd_overflow(ranges, in, nullptr, nullptr);
+    ir_abcd_free(ranges);
     return overflow;
 }
 
 static bool
 sub_safe(const ir_instr_t *sub)
 {
-    ir_ranges_t *ranges = ir_ranges_build(sub->block->owner);
-    bool safe = ir_range_unsigned_sub_safe(ranges, sub);
-    ir_ranges_free(ranges);
+    ir_abcd_t *ranges = ir_abcd_build(sub->block->owner);
+    bool safe = ir_abcd_unsigned_sub_safe(ranges, sub);
+    ir_abcd_free(ranges);
     return safe;
 }
 
@@ -148,21 +159,24 @@ static void test_negated_guards_and_earlier_traps_refine(void)
     ir_instr_operand_value(big_return, second->dest);
     ir_instr_t *small_return = ir_instr_add(small, IR_OP_RETURN);
     ir_instr_operand_value(small_return, input);
-    ir_ranges_t *ranges = ir_ranges_build(f);
-    ir_interval_t at_first = {0}, at_second = {0};
+    ir_abcd_t *ranges = ir_abcd_build(f);
+    ir_abcd_range_t at_first = {0}, at_second = {0};
     check("a branch on a negated comparison refines its operand",
-          ir_range_of(ranges, input, first, &at_first)
-          && at_first.lo == 10 && at_first.hi == 127);
+          ir_abcd_range_of(ranges, input, first, &at_first)
+          && at_first.seen.lo == 10 && at_first.seen.hi == 127);
+    check("a refined parameter stays unbounded only above",
+          !at_first.unbounded_min && at_first.unbounded_max);
     check("a trapping add bounds its operand afterwards",
-          ir_range_of(ranges, input, second, &at_second)
-          && at_second.lo == 10 && at_second.hi == 126);
+          ir_abcd_range_of(ranges, input, second, &at_second)
+          && at_second.seen.lo == 10 && at_second.seen.hi == 126
+          && !at_second.unbounded_max);
     check("the first add may still overflow",
-          ir_range_overflow(ranges, first, nullptr, nullptr)
+          ir_abcd_overflow(ranges, first, nullptr, nullptr)
               == IR_OVERFLOW_MAY);
     check("the repeated add cannot overflow",
-          ir_range_overflow(ranges, second, nullptr, nullptr)
+          ir_abcd_overflow(ranges, second, nullptr, nullptr)
               == IR_OVERFLOW_NEVER);
-    ir_ranges_free(ranges);
+    ir_abcd_free(ranges);
     ir_ctx_free(ctx);
 }
 
@@ -179,21 +193,22 @@ static void test_cached_ranges_follow_mods_and_scopes(void)
                              false);
     ir_instr_t *ret = ir_instr_add(b, IR_OP_RETURN);
     ir_instr_operand_value(ret, sum->dest);
-    ir_interval_t before = {0}, after = {0};
-    ir_ranges_t *outer = ir_func_ranges(f);
+    ir_abcd_range_t before = {0}, after = {0};
+    ir_abcd_t *outer = ir_func_abcd(f);
     check("a wrapping add covers its type",
-          ir_range_of(outer, sum->dest, nullptr, &before)
-          && before.lo == 0 && before.hi == 255);
+          ir_abcd_range_of(outer, sum->dest, nullptr, &before)
+          && before.seen.lo == 0 && before.seen.hi == 255
+          && before.unbounded_min && before.unbounded_max);
     size_t scope = ir_analysis_scope_begin();
     check("a per-query scope reuses the enclosing phase's ranges",
-          ir_func_ranges(f) == outer);
+          ir_func_abcd(f) == outer);
     ir_analysis_scope_end(scope);
     check("closing the scope keeps the enclosing phase's ranges",
-          ir_func_ranges(f) == outer);
+          ir_func_abcd(f) == outer);
     ir_instr_add_mod(sum, S("trap"));
     check("adding a mod rebuilds the cached ranges",
-          ir_range_of(ir_func_ranges(f), sum->dest, nullptr, &after)
-          && after.lo == 1 && after.hi == 255);
+          ir_abcd_range_of(ir_func_abcd(f), sum->dest, nullptr, &after)
+          && after.seen.lo == 1 && after.seen.hi == 255);
     ir_ctx_free(ctx);
 }
 
@@ -263,6 +278,8 @@ static void test_loop_induction_is_bounded_by_its_guard(void)
     ir_instr_operand_value(ret, phi->dest);
     check("a guarded induction variable converges to its guard",
           range_is(f, phi->dest, 0, 10));
+    check("a guarded induction variable is bounded on both sides",
+          unbounded_is(f, phi->dest, false, false));
     check("the guarded increment cannot overflow",
           overflow_of(next) == IR_OVERFLOW_NEVER);
     ir_ctx_free(ctx);
@@ -324,6 +341,8 @@ static void test_int64_domain_boundaries(void)
     ir_block_add(f, S("entry"));
     check("signed 64-bit parameters use the complete range",
           range_is(f, signed_value, INT64_MIN, INT64_MAX));
+    check("public parameters are unbounded on both sides",
+          unbounded_is(f, signed_value, true, true));
     check("unsigned 64-bit parameters use the complete range",
           range_is(f, unsigned_value, 0, ((ir_int_t)1 << 64) - 1));
 
@@ -505,16 +524,16 @@ static void test_loop_index_proofs(void)
     ir_instr_add(exit, IR_OP_RETURN);
 
     ir_summaries_t *summaries = bind_summaries(m);
-    ir_ranges_t *proofs = ir_ranges_build(f);
+    ir_abcd_t *proofs = ir_abcd_build(f);
     check("checked mask and pure call bound an SSA loop index",
-          ir_range_index_proven(proofs, index));
+          ir_abcd_index_proven(proofs, index));
     check("a different Array does not inherit the bound",
-          !ir_range_index_proven(proofs, wrong_array));
+          !ir_abcd_index_proven(proofs, wrong_array));
     check("an unrelated unsigned index keeps its bounds check",
-          !ir_range_index_proven(proofs, unchecked));
+          !ir_abcd_index_proven(proofs, unchecked));
     check("wrapping subtraction cannot establish a nonzero bound",
-          !ir_range_index_proven(proofs, unsafe));
-    ir_ranges_free(proofs);
+          !ir_abcd_index_proven(proofs, unsafe));
+    ir_abcd_free(proofs);
     ir_summaries_free(summaries);
     ir_ctx_free(ctx);
 }
@@ -667,14 +686,14 @@ static void test_checked_index_seeds_loop_bounds(void)
     ir_instr_operand_block(back, header);
     ir_instr_add(exit, IR_OP_RETURN);
 
-    ir_ranges_t *proofs = ir_ranges_build(f);
+    ir_abcd_t *proofs = ir_abcd_build(f);
     check("initial checked access keeps its bounds check",
-          !ir_range_index_proven(proofs, guard));
+          !ir_abcd_index_proven(proofs, guard));
     check("checked access bounds a loop-carried index",
-          ir_range_index_proven(proofs, shift));
+          ir_abcd_index_proven(proofs, shift));
     check("checked access does not bound a different sequence",
-          !ir_range_index_proven(proofs, wrong));
-    ir_ranges_free(proofs);
+          !ir_abcd_index_proven(proofs, wrong));
+    ir_abcd_free(proofs);
     ir_ctx_free(ctx);
 }
 
@@ -736,12 +755,12 @@ static void test_index_proof_invalidated_by_effects(void)
         ir_instr_operand_value(index, slots);
         ir_instr_operand_value(index, at->dest);
         ir_instr_add(block, IR_OP_RETURN);
-        ir_ranges_t *proofs = ir_ranges_build(f);
+        ir_abcd_t *proofs = ir_abcd_build(f);
         check(mode == 0 ? "writes invalidate index bounds proofs"
               : mode == 1 ? "opaque calls invalidate index bounds proofs"
               : "local assignments invalidate index bounds proofs",
-              !ir_range_index_proven(proofs, index));
-        ir_ranges_free(proofs);
+              !ir_abcd_index_proven(proofs, index));
+        ir_abcd_free(proofs);
     }
     ir_ctx_free(ctx);
 }
@@ -835,17 +854,17 @@ static void test_length_helper_and_disjoint_writes(void)
     ir_instr_add(block, IR_OP_RETURN);
 
     ir_summaries_t *summaries = bind_summaries(m);
-    ir_ranges_t *proofs = ir_ranges_build(f);
+    ir_abcd_t *proofs = ir_abcd_build(f);
     check("a pure helper returns the length of the indexed field",
-          ir_range_index_proven(proofs, index));
-    ir_ranges_free(proofs);
+          ir_abcd_index_proven(proofs, index));
+    ir_abcd_free(proofs);
     count_store->operands[0].value = slots->dest;
     count_store->operands[1].value = slots_value->dest;
     element->operands[1].value = hash;
-    proofs = ir_ranges_build(f);
+    proofs = ir_abcd_build(f);
     check("replacing the measured Array invalidates the helper bound",
-          !ir_range_index_proven(proofs, index));
-    ir_ranges_free(proofs);
+          !ir_abcd_index_proven(proofs, index));
+    ir_abcd_free(proofs);
     ir_summaries_free(summaries);
     ir_ctx_free(ctx);
 }
@@ -890,12 +909,12 @@ static void test_branch_guard_proves_index(void)
     ir_instr_t *outside_return = ir_instr_add(outside, IR_OP_RETURN);
     ir_instr_operand_value(outside_return, unguarded->dest);
 
-    ir_ranges_t *proofs = ir_ranges_build(f);
+    ir_abcd_t *proofs = ir_abcd_build(f);
     check("a dominating index < length test proves the access",
-          ir_range_index_proven(proofs, guarded));
+          ir_abcd_index_proven(proofs, guarded));
     check("the failing arm of the test keeps its bounds check",
-          !ir_range_index_proven(proofs, unguarded));
-    ir_ranges_free(proofs);
+          !ir_abcd_index_proven(proofs, unguarded));
+    ir_abcd_free(proofs);
     ir_ctx_free(ctx);
 }
 

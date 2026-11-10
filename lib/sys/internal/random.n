@@ -3,10 +3,10 @@ func fill(modify buffer: Array[u8]) -> nil fail: int {
     if count == 0 {
         return
     }
-    let result: int = __os_random_bytes(unsafe_cast[Ref[byte]] ref buffer[0],
+    let status = __os_random_bytes(unsafe_cast[Ref[byte]] ref buffer[0],
                                         count)
-    if result < 0 {
-        fail result
+    if status < 0 {
+        fail status
     }
 }
 

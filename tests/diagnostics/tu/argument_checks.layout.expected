@@ -1,12 +1,7 @@
-tests/diagnostics/tu/argument_checks.n:5:3: error: parameter 1 (`x`) of `s` is `i16`, but this argument is `{unsigned integer}`
+tests/diagnostics/tu/argument_checks.n:5:1: warning: this call has no effect and its result is ignored: `s` changes nothing the caller can see and has no other effect; its result depends on argument 1
 
     5 | s(1 << 4)
-      |   ^^^^^^ expected `i16`
-
-  `s` is declared here:
-
-    1 | func s(x: i16) -> i16 {
-      |      ^
+      | ^^^^^^^^^
 
 tests/diagnostics/tu/argument_checks.n:11:14: error: parameter 1 (`cache_kb`) of `take` is `u32?`, but this argument is `string`
 
@@ -18,10 +13,24 @@ tests/diagnostics/tu/argument_checks.n:11:14: error: parameter 1 (`cache_kb`) of
      6 | func take(cache_kb: u32?) -> u32 {
        |      ^^^^
 
+tests/diagnostics/tu/argument_checks.n:12:8: warning: type `Counter` is never used
+
+    12 | object Counter {
+       |        ^^^^^^^
+
+  help: remove it
+
+tests/diagnostics/tu/argument_checks.n:16:6: warning: function `drop` is never called
+
+    16 | func drop(consume c: Counter) {
+       |      ^^^^
+
+  help: call it or delete it
+
 tests/diagnostics/tu/argument_checks.n:20:10: error: `c` is an `in` parameter, so it cannot be passed to a `consume` parameter
 
     20 |     drop(c)
-       |          ^ borrowed, not owned
+       |          ^ the caller still owns this value
 
   `c` is declared here:
 
@@ -30,12 +39,21 @@ tests/diagnostics/tu/argument_checks.n:20:10: error: `c` is an `in` parameter, s
 
   help: pass a copy, or declare `c` as `consume`
 
-tests/diagnostics/tu/argument_checks.n:28:17: error: this value is reached through `view` parameter `c`, so it can only be passed to a `view` parameter
+tests/diagnostics/tu/argument_checks.n:23:6: warning: function `read` is never called
 
-    28 |     return read(c)
-       |                 ^ read-only through `c`
+    23 | func read(c: Counter) -> int {
+       |      ^^^^
 
-  `c` is declared here:
+  help: call it or delete it
+
+tests/diagnostics/tu/argument_checks.n:23:11: note: parameter `c` could be `view`: `read` never writes anything reachable from it
+
+    23 | func read(c: Counter) -> int {
+       |           ^
+
+tests/diagnostics/tu/argument_checks.n:27:6: warning: function `pass_view` is never called
 
     27 | func pass_view(view c: Counter) -> int {
-       |                     ^
+       |      ^^^^^^^^^
+
+  help: call it or delete it

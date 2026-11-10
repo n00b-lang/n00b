@@ -30,6 +30,41 @@ N00B_DIAG(START_SIGNATURE, "N00B-B0105", ERROR,
     "    func start() -> nil {\n"
     "    }\n"
     "Report failure by raising or panicking rather than returning a value.")
+N00B_DIAG(COMPTIME_START_SIGNATURE, "N00B-B0109", ERROR,
+    "the program's `comptime_start` function has the wrong signature",
+    "`comptime_start` in the root module runs once at build time, after the\n"
+    "module's initializer and before the program's state is frozen. It\n"
+    "takes no parameters and returns nothing:\n"
+    "    func comptime_start() -> nil {\n"
+    "    }")
+N00B_DIAG(COMPTIME_RUN_FAILED, "N00B-B0110", ERROR,
+    "a module's comptime run fails",
+    "Each module's initializer runs once at build time with `comptime()`\n"
+    "true, and the state it leaves is frozen into the program. The run\n"
+    "crashed, failed, or exited with a nonzero status, so there is no state\n"
+    "to freeze. Its output appears above.")
+N00B_DIAG(COMPTIME_TIMEOUT, "N00B-B0111", ERROR,
+    "a module's comptime run does not finish in time",
+    "A module's comptime run is stopped after `build.comptime_timeout`\n"
+    "seconds (60 by default). Raise the limit with `--comptime-timeout`,\n"
+    "or pass 0 to remove it.")
+N00B_DIAG(COMPTIME_EARLY_EXIT, "N00B-B0112", ERROR,
+    "an imported module exits during its comptime run",
+    "An imported module's comptime state is frozen when its initializer\n"
+    "finishes. Exiting before then, even with status 0, leaves nothing to\n"
+    "freeze. Only the program's root module may exit during comptime.")
+N00B_DIAG(COMPTIME_NOT_FREEZABLE, "N00B-B0113", ERROR,
+    "a module's comptime state cannot be frozen into the program",
+    "When a module's comptime run finishes, every value its globals reach\n"
+    "is copied into the program image. A value that points to memory the\n"
+    "program does not own, such as foreign memory or another module's\n"
+    "globals, cannot be copied.")
+N00B_DIAG(COMPTIME_IMPORT_CHANGE_DROPPED, "N00B-B0114", WARNING,
+    "a module's comptime run changes an imported module's state",
+    "An imported module's state is frozen when its own comptime finishes.\n"
+    "Changes another module's comptime makes to it are seen for the rest of\n"
+    "that run but are not kept in the program. Changes made from\n"
+    "`comptime_start` in the root module are kept.")
 N00B_DIAG(RUNTIME_LIBRARY_MISSING, "N00B-B0106", ERROR,
     "the n00b runtime library is missing from the toolchain",
     "Every executable links against the runtime library that ships with the\n"

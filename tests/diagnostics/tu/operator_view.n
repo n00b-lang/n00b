@@ -1,0 +1,26 @@
+record Meter {
+    value: int
+}
+
+func __add(left: Meter, view right: Meter) -> Meter {
+    result = (value = left.value + right.value)
+    return result
+}
+
+func __add_assign(modify self: Meter, other: Meter) {
+    self.value += other.value
+}
+
+func __negate(view self: Meter) -> Meter {
+    result = (value = -self.value)
+    return result
+}
+
+func combine(left: 'T, right: 'T) -> 'T where 'T: Add {
+    return left + right
+}
+
+let a: Meter = (value = 1)
+let b: Meter = (value = 2)
+require combine(a, b).value == 3
+require (-a).value == -1

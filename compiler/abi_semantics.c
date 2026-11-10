@@ -76,11 +76,14 @@ static bool
 function_index_for_method(th_ctx *ctx,
                           const n00bb_abi_selected_objects_t *selected,
                           const n00bb_abi_index_plan_t *plan,
-                          const th_env_method_t *method,
+                          const th_env_method_t *method, bool direct,
                           uint32_t *out)
 {
     uint64_t hash = th_hash(ctx, method->contract);
     uint32_t found = 0;
+    uint32_t adapter = 0;
+    core_buffer_t adapter_name = {0};
+    n00bb_dispatch_adapter_name(&adapter_name, method->qualified_name);
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
         const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
@@ -97,8 +100,21 @@ function_index_for_method(th_ctx *ctx,
                 view, N00B_ABI_TABLE_FUNCTION, local);
             if (!function || !function->symbol_index) continue;
             n00bb_abi_string_view_t name;
-            if (!n00bb_abi_object_string(view, &function->name, &name))
+            if (!n00bb_abi_object_string(view, &function->name, &name)) {
+                core_buffer_release(&adapter_name);
                 return false;
+            }
+            if (adapter_name.data
+                && same_string(name, core_buffer_string(&adapter_name))) {
+                uint32_t mapped;
+                if (!n00bb_abi_index_plan_map(plan, input,
+                        N00B_ABI_TABLE_FUNCTION, local, &mapped) || !mapped) {
+                    core_buffer_release(&adapter_name);
+                    return false;
+                }
+                adapter = mapped;
+                continue;
+            }
             core_string_t leaf = n00bb_name_leaf(method->qualified_name);
             core_string_t qualified_leaf =
                 leaf.data != method->qualified_name.data
@@ -114,13 +130,19 @@ function_index_for_method(th_ctx *ctx,
             if (!signature || signature->typehash != hash) continue;
             uint32_t mapped;
             if (found || !n00bb_abi_index_plan_map(plan, input,
-                    N00B_ABI_TABLE_FUNCTION, local, &mapped) || !mapped)
+                    N00B_ABI_TABLE_FUNCTION, local, &mapped) || !mapped) {
+                core_buffer_release(&adapter_name);
                 return false;
+            }
             found = mapped;
         }
     }
-    *out = found;
-    return found != 0;
+    core_buffer_release(&adapter_name);
+    const th_param *receiver = method->contract
+        ? th_func_param(method->contract, 0) : nullptr;
+    bool concrete = receiver && th_is_closed(ctx, receiver->type);
+    *out = direct ? found : adapter ? adapter : concrete ? 0 : found;
+    return adapter || found;
 }
 
 static bool
@@ -331,7 +353,6 @@ n00bb_abi_link_semantic_rows(
     if (!facts || !facts->environment || !selected || !plan || !types
         || types->record_bytes != sizeof(n00b_abi_type_v1)) return false;
     th_ctx *ctx = th_ctx_new();
-    th_ctx_set_probe_errors_observable(ctx, false);
     core_list_t(receiver_t) receivers = {0};
     core_list_t(specialization_t) specializations = {0};
     core_list_t(n00b_abi_dispatch_v1) dispatch = {0};
@@ -432,7 +453,9 @@ n00bb_abi_link_semantic_rows(
                         CORE_STRING_STATIC("builtins")))
                     continue;
                 valid = function_index_for_method(ctx, selected, plan,
-                    &chosen, &function_index) && entries.len < UINT32_MAX;                if (valid) core_list_push(entries,
+                    &chosen, false, &function_index)
+                    && entries.len < UINT32_MAX;
+                if (valid && function_index) core_list_push(entries,
                     ((n00b_abi_dispatch_entry_v1){
                         receiver.index, function_index,
                     }));
@@ -472,7 +495,7 @@ n00bb_abi_link_semantic_rows(
             continue;
         uint32_t function_index = 0;
         valid = status == TH_ENV_METHOD_FOUND
-            && function_index_for_method(ctx, selected, plan, &method,
+            && function_index_for_method(ctx, selected, plan, &method, true,
                                          &function_index);
         if (valid) row->finalizer_function_index = function_index;
     }

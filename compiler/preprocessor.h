@@ -58,7 +58,6 @@ typedef struct {
     const core_string_t *syntax_preferences;
     size_t syntax_preference_count;
     bool release_mode;
-    bool build_time;
     bool disable_syntax_warnings;
     n00bb_preprocessor_import_fn load_import;
     n00bb_preprocessor_implicit_import_fn load_implicit_import;
@@ -67,7 +66,6 @@ typedef struct {
     n00bb_preprocessor_prepare_import_fn prepare_import;
     n00bb_preprocessor_import_shape_fn record_import;
     n00bb_preprocessor_selected_body_fn selected_body;
-    n00bb_preprocessor_selected_body_fn build_time_use;
     void *selected_body_context;
     n00bb_preprocessor_litmod_fn register_litmod;
     n00bb_preprocessor_litmod_alias_fn register_litmod_alias;

@@ -10,7 +10,6 @@
 #include "lib/buffer.h"
 
 #include "annot_bnf.h"
-#include "infer_bnf.h"
 #include "lex_bnf.h"
 
 #include <pthread.h>
@@ -25,74 +24,6 @@ bool
 parse_annot_building(void)
 {
     return building != nullptr;
-}
-
-static bool
-load_hook(parse_grammar_t *g, core_string_t text, core_string_t start,
-          core_string_t hook)
-{
-    if (!text.data || !start.data) {
-        return true;
-    }
-
-    if (!parse_bnf_load(text, start, g)) {
-        return false;
-    }
-
-    parse_nonterm_t *lhs = parse_nonterm(g, hook);
-    parse_match_t    m   = {.kind  = PARSE_MATCH_NT,
-                          .nt_id = parse_nonterm(g, start)->id};
-
-    parse_add_rule_v(g, lhs->id, 1, &m);
-
-    return true;
-}
-
-static const int64_t type_stops[] = {
-    ',', '[', ']', '(', ')', PARSE_TOK_STRING_LIT,
-};
-
-static const parse_match_set_t type_atom = {
-    .ids    = type_stops,
-    .n      = sizeof type_stops / sizeof type_stops[0],
-    .negate = true,
-};
-
-static const int64_t nest_stops[] = {'[', ']', '(', ')'};
-
-static const parse_match_set_t nest_atom = {
-    .ids    = nest_stops,
-    .n      = sizeof nest_stops / sizeof nest_stops[0],
-    .negate = true,
-};
-
-static void
-add_type_span(parse_grammar_t *g)
-{
-    parse_nonterm_t *type = parse_nonterm(g, CORE_STRING_STATIC("type"));
-    parse_nonterm_t *piece
-        = parse_nonterm(g, CORE_STRING_STATIC("type-piece"));
-    parse_nonterm_t *nest = parse_nonterm(g, CORE_STRING_STATIC("type-nest"));
-    parse_nonterm_t *npc
-        = parse_nonterm(g, CORE_STRING_STATIC("type-nest-piece"));
-
-    parse_add_rule(g, type, PARSE_NT(piece));
-    parse_add_rule(g, type, PARSE_NT(piece), PARSE_NT(type));
-
-    parse_add_rule(g, piece, PARSE_SET(&type_atom));
-    parse_add_rule(g, piece, PARSE_CHAR('['), PARSE_CHAR(']'));
-    parse_add_rule(g, piece, PARSE_CHAR('['), PARSE_NT(nest), PARSE_CHAR(']'));
-    parse_add_rule(g, piece, PARSE_CHAR('('), PARSE_CHAR(')'));
-    parse_add_rule(g, piece, PARSE_CHAR('('), PARSE_NT(nest), PARSE_CHAR(')'));
-
-    parse_add_rule(g, nest, PARSE_NT(npc));
-    parse_add_rule(g, nest, PARSE_NT(npc), PARSE_NT(nest));
-
-    parse_add_rule(g, npc, PARSE_SET(&nest_atom));
-    parse_add_rule(g, npc, PARSE_CHAR('['), PARSE_CHAR(']'));
-    parse_add_rule(g, npc, PARSE_CHAR('['), PARSE_NT(nest), PARSE_CHAR(']'));
-    parse_add_rule(g, npc, PARSE_CHAR('('), PARSE_CHAR(')'));
-    parse_add_rule(g, npc, PARSE_CHAR('('), PARSE_NT(nest), PARSE_CHAR(')'));
 }
 
 parse_grammar_t *
@@ -130,16 +61,6 @@ parse_annot_grammar(void)
     ok = ok && parse_bnf_load(core_string_borrow(LEX_BNF,
                                                  sizeof(LEX_BNF) - 1),
                               CORE_STRING_STATIC("lex-file"), g);
-
-    ok = ok
-      && load_hook(g,
-                   core_string_borrow(INFER_BNF, sizeof(INFER_BNF) - 1),
-                   CORE_STRING_STATIC("infer-expr"),
-                   CORE_STRING_STATIC("infer"));
-
-    if (ok) {
-        add_type_span(g);
-    }
 
     building = nullptr;
 

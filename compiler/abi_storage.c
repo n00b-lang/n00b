@@ -59,6 +59,10 @@ graph_segment(n00bb_abi_storage_rows_t *rows, uint32_t kind,
         *alignment = &rows->writable_alignment;
         return &rows->writable;
     }
+    if (kind == N00B_ABI_STORAGE_TLS) {
+        *alignment = &rows->tls_alignment;
+        return &rows->tls;
+    }
     return nullptr;
 }
 core_list_decl(n00bb_abi_storage_index_patch_t);
@@ -931,7 +935,6 @@ graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
         if (!symbol || symbol->kind != PARSE_SYM_VARIABLE) continue;
         ir_global_t *global = storage_global(symbol, lookup, lookup_context);
         if (!global || global->owner != runtime || global->is_extern
-            || !ir_global_can_read(global, IR_PHASE_RUNTIME)
             || !global->has_static_initializer
             || global->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT)
             continue;
@@ -1225,8 +1228,8 @@ n00bb_abi_storage_rows_build(
             break;
         }
         ir_global_t *global = storage_global(symbol, lookup, lookup_context);
-        if (!global || global->owner != runtime || global->is_extern
-            || !ir_global_can_read(global, IR_PHASE_RUNTIME)) continue;
+        if (!global || global->owner != runtime || global->is_extern)
+            continue;
         ir_storage_duration_t duration = ir_global_storage_duration(global);
         if (duration != IR_STORAGE_DURATION_MODULE
             && duration != IR_STORAGE_DURATION_THREAD) {
@@ -1248,6 +1251,19 @@ n00bb_abi_storage_rows_build(
             break;
         }
         const n00b_abi_type_v1 *type_row = &types->rows[type_index];
+        th_type *value_type = global->type;
+        const n00b_abi_type_v1 *value_row = type_row;
+        if (type_row->kind == N00B_ABI_TYPE_ATOMIC) {
+            const th_arg *wrapped = th_named_arg(th_resolve(global->type), 0);
+            uint32_t wrapped_index = 0;
+            if (wrapped && wrapped->kind == TH_ARG_TYPE
+                && n00bb_abi_type_index_find(index, wrapped->type,
+                                             &wrapped_index)
+                && wrapped_index < types->count) {
+                value_type = wrapped->type;
+                value_row = &types->rows[wrapped_index];
+            }
+        }
         const ir_final_layout_t *layout = ir_layout_final_visible(runtime,
             global->type, ir_module_target(runtime));
         uint32_t alignment = layout ? layout->alignment_bytes
@@ -1261,10 +1277,10 @@ n00bb_abi_storage_rows_build(
                                            : nullptr;
         bool is_string = type_row->kind == N00B_ABI_TYPE_STRING;
         bool is_array = type_row->kind == N00B_ABI_TYPE_ARRAY;
-        bool is_composite = type_row->kind == N00B_ABI_TYPE_RECORD
-            || type_row->kind == N00B_ABI_TYPE_VARIANT
-            || type_row->kind == N00B_ABI_TYPE_TUPLE
-            || (type_row->kind == N00B_ABI_TYPE_OPTION && initializer
+        bool is_composite = value_row->kind == N00B_ABI_TYPE_RECORD
+            || value_row->kind == N00B_ABI_TYPE_VARIANT
+            || value_row->kind == N00B_ABI_TYPE_TUPLE
+            || (value_row->kind == N00B_ABI_TYPE_OPTION && initializer
                 && initializer->kind != IR_GLOBAL_INIT_NIL
                 && initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT);
         size_t graph_root = SIZE_MAX;
@@ -1283,18 +1299,7 @@ n00bb_abi_storage_rows_build(
             valid = false;
             break;
         }
-        bool atomic_option = false;
-        if (type_row->kind == N00B_ABI_TYPE_ATOMIC) {
-            const th_arg *wrapped = th_named_arg(global->type, 0);
-            uint32_t wrapped_index = 0;
-            atomic_option = wrapped && wrapped->kind == TH_ARG_TYPE
-                && n00bb_abi_type_index_find(index, wrapped->type,
-                                             &wrapped_index)
-                && wrapped_index < types->count
-                && types->rows[wrapped_index].kind == N00B_ABI_TYPE_OPTION;
-        }
-        bool zero_option = (type_row->kind == N00B_ABI_TYPE_OPTION
-                            || atomic_option)
+        bool zero_option = value_row->kind == N00B_ABI_TYPE_OPTION
             && initializer && initializer->kind == IR_GLOBAL_INIT_NIL;
         bool uninitialized = !initializer;
         bool address = global_address(initializer);
@@ -1316,7 +1321,7 @@ n00bb_abi_storage_rows_build(
         }
         uint32_t kind = duration == IR_STORAGE_DURATION_THREAD
             ? N00B_ABI_STORAGE_TLS
-            : global->mutability == IR_MUT_CONST
+            : global->mutability == IR_MUT_CONST && !uninitialized
                 ? N00B_ABI_STORAGE_READ_ONLY
                 : N00B_ABI_STORAGE_WRITABLE;
         bool long_string = is_string && initializer
@@ -1330,7 +1335,10 @@ n00bb_abi_storage_rows_build(
             ? &built.tls_alignment : kind == N00B_ABI_STORAGE_READ_ONLY
                 ? &built.read_only_alignment : &built.writable_alignment;
         size_t byte_length = (size_t)(bits / 8 + (bits % 8 != 0));
-        if (phase_graph && (graph_size != byte_length
+        size_t graph_bytes_placed = phase_graph
+            && kind == N00B_ABI_STORAGE_TLS && is_array
+            && graph_size > byte_length ? graph_size : byte_length;
+        if (phase_graph && (graph_size != graph_bytes_placed
             || graph_alignment > alignment
             || graph_places[graph_root].placed)) {
             valid = false;
@@ -1365,7 +1373,7 @@ n00bb_abi_storage_rows_build(
                       (void *)(uintptr_t)rows.len);
         if (phase_graph) {
             core_buffer_append(buffer, (const char *)graph_bytes,
-                byte_length);
+                graph_bytes_placed);
             graph_places[graph_root].placed = true;
             graph_places[graph_root].kind = kind;
             graph_places[graph_root].offset = row.byte_offset;
@@ -1376,7 +1384,7 @@ n00bb_abi_storage_rows_build(
             memset(record, 0, record_bytes);
             core_buffer_append(buffer, (const char *)record, byte_length);
             valid = row.byte_offset <= UINT64_MAX / 8
-                && encode_typed_value(&writer, global->type, type_row,
+                && encode_typed_value(&writer, value_type, value_row,
                     initializer, kind, row.byte_offset * 8, record,
                     byte_length, 0);
             if (valid)
@@ -1447,11 +1455,7 @@ n00bb_abi_storage_rows_build(
             || (graphs->flags(graphs->context, i)
                 & N00B_ABI_BAKED_NODE_FOREIGN)
             ? N00B_ABI_STORAGE_WRITABLE : N00B_ABI_STORAGE_READ_ONLY;
-        if (place->placed) {
-            valid = !((place->reachability & 2)
-                && place->kind == N00B_ABI_STORAGE_READ_ONLY);
-            continue;
-        }
+        if (place->placed) continue;
         const uint8_t *bytes = nullptr;
         size_t size = 0;
         uint32_t alignment = 0;
@@ -1477,7 +1481,7 @@ n00bb_abi_storage_rows_build(
     core_list_push(baked, ((n00b_abi_baked_node_v1){0}));
     for (size_t i = 0; valid && graph_places && i < graphs->node_count; i++) {
         graph_place_t *place = &graph_places[i];
-        if (!place->placed) continue;
+        if (!place->placed || place->kind == N00B_ABI_STORAGE_TLS) continue;
         const uint8_t *bytes = nullptr;
         size_t size = 0;
         uint32_t alignment = 0, type_index = 0;
@@ -1517,6 +1521,7 @@ n00bb_abi_storage_rows_build(
                     .source_kind = place->kind,
                     .byte_offset = offset,
                     .target_kind = N00BB_ABI_RELOC_NATIVE,
+                    .target_offset = slot.addend,
                     .native = slot.native,
                 }));
             continue;
@@ -1559,7 +1564,9 @@ n00bb_abi_storage_rows_build(
             break;
         }
         memset(buffer->data + source_offset, 0, sizeof(uint64_t));
-        core_list_push(relocations,
+        core_list_push(*(source->kind == N00B_ABI_STORAGE_TLS
+                && target->kind == N00B_ABI_STORAGE_TLS
+                ? &tls_fixups : &relocations),
             ((n00bb_abi_storage_relocation_t){
                 .source_kind = source->kind,
                 .byte_offset = source_offset,
@@ -1570,8 +1577,7 @@ n00bb_abi_storage_rows_build(
     for (size_t i = 0; valid && i < ir_global_count(runtime); i++) {
         ir_global_t *global = ir_global_at(runtime, i);
         if (!global) valid = false;
-        else if (!global->is_extern
-                 && ir_global_can_read(global, IR_PHASE_RUNTIME)) {
+        else if (!global->is_extern) {
             if (!matched_globals) valid = false;
             else matched_globals--;
         }

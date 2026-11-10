@@ -2,6 +2,23 @@
 #define N00BB_QUALIFIED_NAMES_H
 
 #include "lib/string.h"
+#include "lib/buffer.h"
+#include "lib/hash.h"
+
+static inline void
+n00bb_dispatch_adapter_name(core_buffer_t *out, core_string_t qualified)
+{
+    core_buffer_printf(out, "__n00bb_dispatch_%016llx",
+        (unsigned long long)core_xxh3_64bits_raw(qualified.data,
+                                                 qualified.u8_bytes));
+}
+
+static inline void
+n00bb_qualify(core_buffer_t *out, core_string_t module, core_string_t name)
+{
+    core_buffer_printf(out, "%.*s.%.*s", (int)module.u8_bytes, module.data,
+                       (int)name.u8_bytes, name.data);
+}
 
 static inline core_string_t
 n00bb_name_leaf(core_string_t qualified)

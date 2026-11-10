@@ -1,3 +1,6 @@
+tests/diagnostics/link/constructor_too_many.n:2:5: warning N00B-N0022: field `n` of `Holder` is never used
+tests/diagnostics/link/constructor_too_many.n:5:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
 tests/diagnostics/link/constructor_too_many.n:9:35: error N00B-T0001: `__init` takes 1 positional argument, but this call passes 2
   tests/diagnostics/link/constructor_too_many.n:5:6: note: `__init` is declared here
   help: remove the extra argument

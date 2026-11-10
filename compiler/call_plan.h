@@ -46,19 +46,13 @@ bool n00bb_plan_call(n00bb_call_plan_t *plan, parse_grammar_t *grammar,
                      parse_sym_entry_t *callee, th_type *signature,
                      parse_tree_t *call_args, size_t offset);
 void n00bb_call_plan_free(n00bb_call_plan_t *plan);
-bool n00bb_call_plan_optional(const n00bb_call_plan_t *plan, size_t index);
 core_string_t n00bb_call_plan_parameter_name(const n00bb_call_plan_t *plan,
                                              size_t index);
-core_string_t n00bb_call_plan_rest_name(const n00bb_call_plan_t *plan);
-th_type *n00bb_call_plan_parameter_type(const n00bb_call_plan_t *plan,
-                                        size_t index);
 size_t n00bb_call_plan_argument_count(const n00bb_call_plan_t *plan);
 parse_tree_t *n00bb_call_plan_argument(const n00bb_call_plan_t *plan,
                                        size_t position, size_t *index);
 parse_tree_t *n00bb_call_plan_parameter_argument(const n00bb_call_plan_t *plan,
                                                  size_t index);
-th_type *n00bb_call_plan_formal_type(const n00bb_call_plan_t *plan,
-                                     size_t index);
 void n00bb_call_plan_report(const n00bb_call_plan_t *plan,
                             const core_translation_unit_t *unit,
                             core_diagnostics_t *diagnostics,

@@ -1,0 +1,4 @@
+var level: int
+if comptime() {
+    level = 5
+}

@@ -1,0 +1,67 @@
+import sys.threads
+
+record Fin {
+    v: int
+}
+
+var g: Buffer = buffer_from_string("hello world this is long")
+var keep: Ref[Fin]? = nil
+var on_main: Atomic[bool] = false
+var finalized: Atomic[uint] = 0
+var appended: Atomic[bool] = false
+var seed: byte = 0
+
+func __finalize(consume self: Ref[Fin]) {
+    if __os_thread_is_main() != 0 {
+        __atomic_store(ref on_main, true)
+    }
+    __atomic_fetch_add(ref finalized, 1)
+}
+
+func appender(argument: Ref[byte]) -> Ref[byte] {
+    var i: int = 0
+    while i < 1000 {
+        g += "z"
+        i += 1
+    }
+    __atomic_store(ref appended, true)
+    return argument
+}
+
+func churn(n: int) {
+    var i: int = 0
+    while i < n {
+        var f: Fin = (v = i)
+        keep = ref f
+        i += 1
+    }
+    require keep != nil and keep.__value.v == n - 1
+}
+
+func sliced() -> bool {
+    let s: string = g
+    require sys.threads.thread_start(ref appender, ref seed)
+    churn(3000000)
+    while !__atomic_load(ref appended) {
+        sys.threads.thread_yield()
+    }
+    return byte_len(s) == 24 and s == "hello world this is long"
+}
+
+require sliced()
+let deadline: u64 = __os_now_ns() + 30_000_000_000
+while __atomic_load(ref finalized) == 0 {
+    require __os_now_ns() < deadline
+    __gc_enter_blocking()
+    __os_thread_yield()
+    __gc_leave_blocking()
+}
+
+func current_len() -> uint {
+    let s: string = g
+    return byte_len(s)
+}
+
+require !__atomic_load(ref on_main)
+require current_len() == 1024
+__fd_write(2, "ok")

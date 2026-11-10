@@ -1,0 +1,44 @@
+object Counter {
+    n: int
+}
+
+record Style {
+    weight: int
+    owner:  Counter
+}
+
+const plain: Style = (weight = 1, owner = (n = 7))
+var current: View[Style] = ref plain
+var kept: Counter? = nil
+var raw: Ref[Style]? = nil
+
+func direct() {
+    current.__value.weight = 2
+}
+
+func deep() {
+    let owner = current.__value.owner
+    owner.n = 9
+}
+
+func bump(c: Counter) {
+    c.n = 1
+}
+
+func through_call() {
+    bump(current.__value.owner)
+}
+
+func keep_owner() {
+    kept = current.__value.owner
+}
+
+func keep_constant() {
+    raw = ref plain
+}
+
+func allowed() -> int {
+    let other: View[Style] = ref plain
+    current = other
+    return current.__value.owner.n
+}

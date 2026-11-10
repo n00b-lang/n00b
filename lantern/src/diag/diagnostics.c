@@ -100,6 +100,25 @@ core_diagnostics_report(core_diagnostics_t *d,
                                      (core_diag_location_t){0});
 }
 
+static bool
+already_reported(const core_diagnostics_t *d,
+                 const core_translation_unit_t *owner,
+                 core_diag_severity_t severity, core_string_t code,
+                 core_string_t message, core_diag_location_t location)
+{
+    for (size_t i = 0; location.has_location && i < d->items.len; i++) {
+        const core_diagnostic_t *seen = &d->items.data[i];
+        if (seen->severity == severity && seen->location.has_location
+            && seen->location.line == location.line
+            && seen->location.column == location.column
+            && core_string_eq(seen->code, code)
+            && core_string_eq(seen->message, message)
+            && (!owner || core_string_eq(seen->path, owner->source.path)))
+            return true;
+    }
+    return false;
+}
+
 bool
 core_diagnostics_report_at(core_diagnostics_t *d,
                            const core_translation_unit_t *unit,
@@ -110,6 +129,9 @@ core_diagnostics_report_at(core_diagnostics_t *d,
     if (!d || !code.data || !message.data) return false;
     d->has_open = false;
     if (d->policy && !d->policy(d->policy_context, &severity, code))
+        return true;
+    if (already_reported(d, unit ? unit : d->unit, severity, code, message,
+                         location))
         return true;
     core_diagnostic_t item = {
         .severity = severity,

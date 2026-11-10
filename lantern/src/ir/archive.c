@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(1)
+#define IR_ARCHIVE_VERSION UINT32_C(2)
 
 enum {
     REF_NONE,
@@ -216,79 +216,6 @@ w_value(writer_t *w, const ir_value_t *value)
     w_u8(w, REF_NONE);
 }
 
-static bool
-reverse_alias_key(core_string_t key)
-{
-    return key.data
-        && core_string_starts_with(key, CORE_STRING_STATIC("ir.aliased_by"));
-}
-
-static bool
-value_live(const ir_value_t *value)
-{
-    if (!value) return false;
-    const ir_func_t *owner = value->owner;
-    switch (value->kind) {
-    case IR_VAL_PARAM:
-        return owner && value->index < owner->n_params
-            && owner->params[value->index] == value;
-    case IR_VAL_LOCAL:
-        return owner && value->local && value->local->index < owner->n_locals
-            && owner->locals[value->local->index] == value->local;
-    case IR_VAL_INSTR: {
-        const ir_instr_t *instr = value->def;
-        const ir_block_t *block = instr ? instr->block : nullptr;
-        const ir_func_t *function = block ? block->owner : nullptr;
-        return function && block->index < function->n_blocks
-            && function->blocks[block->index] == block
-            && instr->index < block->n_instrs
-            && block->instrs[instr->index] == instr;
-    }
-    case IR_VAL_FUNC:
-    case IR_VAL_GLOBAL:
-        return true;
-    }
-    return false;
-}
-
-static bool
-alias_index(core_string_t key, uint32_t *index, bool *escapes)
-{
-    if (!core_string_starts_with(key, CORE_STRING_STATIC("ir.alias")))
-        return false;
-    size_t at = sizeof("ir.alias") - 1;
-    if (at >= key.u8_bytes || key.data[at] < '0' || key.data[at] > '9')
-        return false;
-    uint32_t value = 0;
-    while (at < key.u8_bytes && key.data[at] >= '0' && key.data[at] <= '9')
-        value = value * 10 + (uint32_t)(key.data[at++] - '0');
-    core_string_t rest = core_string_slice(key, at, key.u8_bytes - at);
-    if (rest.u8_bytes
-        && !core_string_eq(rest, CORE_STRING_STATIC("_escapes")))
-        return false;
-    *index = value;
-    *escapes = rest.u8_bytes != 0;
-    return true;
-}
-
-enum {
-    ALIAS_KEY_SIZE = 48,
-};
-
-static core_string_t
-alias_key(char *buffer, bool reverse, bool escapes, unsigned long long index)
-{
-    size_t size = ALIAS_KEY_SIZE;
-    int length = reverse
-        ? escapes ? snprintf(buffer, size, "ir.aliased_by%llu_escapes", index)
-                  : snprintf(buffer, size, "ir.aliased_by%llu", index)
-        : escapes ? snprintf(buffer, size, "ir.alias%llu_escapes", index)
-                  : snprintf(buffer, size, "ir.alias%llu", index);
-    if (length < 0) return (core_string_t){};
-    return core_string_borrow(buffer, (size_t)length < size
-                                          ? (size_t)length : size - 1);
-}
-
 static void
 w_annot(writer_t *w, const ir_annot_t *annot, core_string_t key)
 {
@@ -307,69 +234,9 @@ w_annot(writer_t *w, const ir_annot_t *annot, core_string_t key)
 static void
 w_annots(writer_t *w, const ir_annots_t *annots)
 {
-    uint32_t live = 0;
-    uint32_t *renumber = annots->n
-        ? core_alloc_array(uint32_t, annots->n) : nullptr;
-    for (uint32_t i = 0; renumber && i < annots->n; i++)
-        renumber[i] = UINT32_MAX;
-    uint32_t aliases = 0;
-    for (uint32_t i = 0; i < annots->n; i++) {
-        const ir_annot_t *annot = &annots->a[i];
-        if (core_string_eq(annot->key, CORE_STRING_STATIC("ir.alias_count"))
-            && !annot->i.neg)
-            aliases = (uint32_t)annot->i.mag;
-    }
-    for (uint32_t a = 0; renumber && a < aliases && a < annots->n; a++) {
-        char buffer[ALIAS_KEY_SIZE];
-        core_string_t key = alias_key(buffer, false, false, a);
-        for (uint32_t i = 0; i < annots->n; i++)
-            if (core_string_eq(annots->a[i].key, key)
-                && annots->a[i].kind == IR_ANNOT_VALUE
-                && value_live(annots->a[i].v))
-                renumber[a] = live++;
-    }
-    uint32_t kept = 0;
-    for (uint32_t i = 0; i < annots->n; i++) {
-        core_string_t key = annots->a[i].key;
-        uint32_t index = 0;
-        bool escapes = false;
-        if (reverse_alias_key(key)) continue;
-        if (alias_index(key, &index, &escapes)
-            && (!renumber || index >= annots->n
-                || renumber[index] == UINT32_MAX)) continue;
-        kept++;
-    }
-    w_u32(w, kept);
-    for (uint32_t i = 0; i < annots->n; i++) {
-        const ir_annot_t *annot = &annots->a[i];
-        uint32_t index = 0;
-        bool escapes = false;
-        if (reverse_alias_key(annot->key)) continue;
-        if (alias_index(annot->key, &index, &escapes)) {
-            if (!renumber || index >= annots->n
-                || renumber[index] == UINT32_MAX) continue;
-            char buffer[ALIAS_KEY_SIZE];
-            w_annot(w, annot,
-                    alias_key(buffer, false, escapes, renumber[index]));
-            continue;
-        }
-        if (core_string_eq(annot->key, CORE_STRING_STATIC("ir.alias_count"))) {
-            ir_annot_t count = *annot;
-            count.i = (ir_lit_t){.mag = live};
-            w_annot(w, &count, annot->key);
-            continue;
-        }
-        w_annot(w, annot, annot->key);
-    }
-    core_free(renumber);
-}
-
-static void
-w_producer(writer_t *w, const ir_func_t *producer)
-{
-    w_text(w, producer && producer->owner ? producer->owner->name
-                                          : (core_string_t){});
-    w_text(w, producer ? producer->name : (core_string_t){});
+    w_u32(w, annots->n);
+    for (uint32_t i = 0; i < annots->n; i++)
+        w_annot(w, &annots->a[i], annots->a[i].key);
 }
 
 static void
@@ -378,7 +245,6 @@ w_measure(writer_t *w, ir_shape_measure_t measure)
     w_u8(w, (uint8_t)measure.kind);
     w_u64(w, measure.static_value);
     w_value(w, measure.value);
-    w_producer(w, measure.producer);
 }
 
 static void
@@ -397,8 +263,6 @@ w_shape(writer_t *w, const ir_shape_t *shape)
         w_u8(w, (uint8_t)extent.kind);
         w_u64(w, extent.static_value);
         w_value(w, extent.value);
-        w_producer(w, extent.producer);
-        w_text(w, extent.producer_identifier);
         w_measure(w, stride);
     }
     ir_shape_measure_t count = {0};
@@ -1056,18 +920,6 @@ r_annots(reader_t *r, ir_annots_t *annots)
     }
 }
 
-static ir_func_t *
-r_producer(reader_t *r)
-{
-    core_string_t module_name = r_text(r);
-    core_string_t name = r_text(r);
-    if (!module_name.data || !name.data) return nullptr;
-    ir_module_t *module = r_find_module(r, module_name);
-    ir_func_t *producer = module ? ir_func_find(module, name) : nullptr;
-    if (!producer) r->failed = true;
-    return producer;
-}
-
 static ir_shape_measure_t
 r_measure(reader_t *r)
 {
@@ -1075,7 +927,6 @@ r_measure(reader_t *r)
     measure.kind = (ir_shape_measure_kind_t)r_u8(r);
     measure.static_value = r_u64(r);
     measure.value = r_value(r);
-    measure.producer = r_producer(r);
     return measure;
 }
 
@@ -1096,8 +947,6 @@ r_shape(reader_t *r)
         extent.kind = (ir_shape_extent_kind_t)r_u8(r);
         extent.static_value = r_u64(r);
         extent.value = r_value(r);
-        extent.producer = r_producer(r);
-        extent.producer_identifier = r_text(r);
         ir_shape_measure_t stride = r_measure(r);
         if (!r->failed && (!ir_shape_set_extent(shape, i, extent)
                            || !ir_shape_set_stride(shape, i, stride)))
@@ -1616,81 +1465,6 @@ load_details(reader_t *r)
     }
 }
 
-static uint64_t
-annot_count(ir_annots_t *annots, core_string_t key)
-{
-    ir_annot_t *annotation = ir_annot_get(annots, key);
-    return annotation && annotation->kind == IR_ANNOT_INT
-        && !annotation->i.neg ? annotation->i.mag : 0;
-}
-
-static bool
-restore_reverse_aliases(ir_ctx_t *ctx, ir_value_t *source,
-                        ir_annots_t *annots)
-{
-    uint64_t count = annots
-        ? annot_count(annots, CORE_STRING_STATIC("ir.alias_count")) : 0;
-    for (uint64_t i = 0; i < count; i++) {
-        char buffer[ALIAS_KEY_SIZE];
-        ir_annot_t *target = ir_annot_get(
-            annots, alias_key(buffer, false, false, i));
-        ir_annot_t *escapes = ir_annot_get(
-            annots, alias_key(buffer, false, true, i));
-        ir_annots_t *reverse = target && target->kind == IR_ANNOT_VALUE
-            ? ir_value_annots(target->v) : nullptr;
-        if (!reverse || !escapes || escapes->kind != IR_ANNOT_BOOL)
-            return false;
-        uint64_t index = annot_count(
-            reverse, CORE_STRING_STATIC("ir.aliased_by_count"));
-        if (!ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = ir_strdup(ctx, alias_key(buffer, true, false, index)),
-                .kind = IR_ANNOT_VALUE,
-                .v = source,
-            })) return false;
-        if (!ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = ir_strdup(ctx, alias_key(buffer, true, true, index)),
-                .kind = IR_ANNOT_BOOL,
-                .b = escapes->b,
-            })
-            || !ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = CORE_STRING_STATIC("ir.aliased_by_count"),
-                .kind = IR_ANNOT_INT,
-                .i = {.mag = index + 1},
-            })) return false;
-    }
-    return true;
-}
-
-static void
-load_reverse_aliases(reader_t *r)
-{
-    for (size_t m = 0; !r->failed && m < r->count; m++) {
-        ir_module_t *module = r->modules[m];
-        for (size_t f = 0; !r->failed && f < module->n_funcs; f++) {
-            ir_func_t *function = module->funcs[f];
-            for (uint32_t i = 0; !r->failed && i < function->n_params; i++)
-                r->failed = !restore_reverse_aliases(r->ctx,
-                    function->params[i], &function->params[i]->annots);
-            for (uint32_t i = 0; !r->failed && i < function->n_locals; i++) {
-                ir_local_t *local = function->locals[i];
-                ir_value_t *value = local->value ? local->value
-                                                 : ir_local_value(function,
-                                                                  local);
-                r->failed = !restore_reverse_aliases(r->ctx, value,
-                                                     &local->annots);
-            }
-            for (uint32_t b = 0; !r->failed && b < function->n_blocks; b++)
-                for (uint32_t i = 0; !r->failed
-                         && i < function->blocks[b]->n_instrs; i++) {
-                    ir_instr_t *instr = function->blocks[b]->instrs[i];
-                    if (instr->dest)
-                        r->failed = !restore_reverse_aliases(r->ctx,
-                            instr->dest, &instr->annots);
-                }
-        }
-    }
-}
-
 static bool
 reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
             ir_module_t **out, size_t capacity, size_t *module_count)
@@ -1764,7 +1538,6 @@ ir_archives_load(ir_ctx_t *ctx, const ir_archive_input_t *inputs,
     }
     void (*const stages[])(reader_t *) = {
         load_slots, load_skeletons, load_globals, load_details,
-        load_reverse_aliases,
     };
     for (size_t s = 0; ok && s < sizeof(stages) / sizeof(*stages); s++)
         for (size_t i = 0; ok && i < input_count; i++) {

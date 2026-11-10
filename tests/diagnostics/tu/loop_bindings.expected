@@ -1,0 +1,7 @@
+tests/diagnostics/tu/loop_bindings.n:4:9: error N00B-N0520: `item` is declared outside this loop and cannot be assigned, but the loop would bind it on every iteration
+  tests/diagnostics/tu/loop_bindings.n:2:9: note: `item` is declared here
+  help: use a new name for the loop variable, or declare `item` with `var` so the loop assigns it
+tests/diagnostics/tu/loop_bindings.n:12:9: error N00B-N0521: `item` is a `var` declared outside this loop, so the loop assigns it and it cannot take a type here
+  help: remove the type, or use a new name for the loop variable
+tests/diagnostics/tu/loop_bindings.n:18:5: error N00B-T0537: this pattern has 2 elements, but `Tuple[int, int, u8]` has 3
+  help: give each element a name, or `_` for the ones you do not need

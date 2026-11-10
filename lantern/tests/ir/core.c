@@ -279,7 +279,7 @@ static void test_types(void)
     uint64_t unresolved_id = ir_type_id(m, inferred);
     check("an open type variable gets an identity", unresolved_id != 0);
     check("type identity follows later unification",
-          th_unify_in_place(types, inferred, a)
+          th_fill(inferred, a)
               && ir_type_eq(m, inferred, a)
               && ir_type_id(m, inferred) == ir_type_id(m, a));
 
@@ -289,7 +289,7 @@ static void test_types(void)
     th_type *definition = th_record(types, &field, 1);
     check("a resolved variable can define and retrieve a named type",
           named && named_variable && definition
-              && th_unify_in_place(types, named_variable, named)
+              && th_fill(named_variable, named)
               && ir_type_define(m, named_variable, definition)
               && ir_type_definition(m, named_variable) == definition);
 
@@ -313,7 +313,7 @@ static void test_types(void)
     check("interning does not join independent inference variables",
           ir_type_intern(m, left) != ir_type_intern(m, right));
     check("refining one variable leaves the other open",
-          th_unify_in_place(types, left, a)
+          th_fill(left, a)
               && th_kind_of(th_resolve(right)) == TH_VAR);
     th_type *parts[] = {right, a};
     th_type *pair1 = th_tuple(types, parts, 2);
@@ -339,7 +339,7 @@ static void test_types(void)
               && th_free_vars(types, outcome1, nullptr) == 1);
     th_type *outcome_definition = ir_type_definition(m, outcome1);
     check("outcome definitions survive failure-channel refinement",
-          outcome_definition && th_unify_in_place(types, error1, a)
+          outcome_definition && th_fill(error1, a)
               && ir_type_definition(m, outcome1) == outcome_definition
               && ir_type_definition_owner(m, outcome1) == m);
 
@@ -523,7 +523,7 @@ static void test_machine_classes(void)
     check("an unresolved variable has no machine class",
           ir_machine_of(m, inferred).class == IR_CLASS_OPAQUE);
     check("unifying an inferred type exposes its machine class",
-          th_unify_in_place(types, inferred, ir_type_parse(m, S("i32")))
+          th_fill(inferred, ir_type_parse(m, S("i32")))
               && ir_machine_of(m, inferred).class == IR_CLASS_SINT
               && ir_machine_of(m, inferred).width == 32);
     check("a bound inferred type is recognized by the profile",

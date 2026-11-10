@@ -12,6 +12,7 @@ sys.internal.clock.now_ns: () -> uint
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   effects may_fail may_trap may_block may_collect reinterprets reads_random
   writes buffer.__value[]...
+  reads buffer
   traps bounds
 sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
@@ -23,6 +24,8 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads self.__value.entries
   reads self.__value.index.ctrl
+  reads self.__value.index.hashes
+  reads self.__value.index.slots
   reads self.__value.entries.__value.storage
   reads self.__value.index.ctrl.__value[]
   reads self.__value.index.hashes.__value[]
@@ -41,7 +44,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.__value.index.growth_left
   reads+writes self.__value.index.hashes
   reads+writes self.__value.index.live
-  writes self.__value.index.slots
+  reads+writes self.__value.index.slots
   reads+writes self.__value.index.used
   reads+writes self.__value.entries.__value.leases
   writes self.__value.entries.__value.storage...
@@ -52,14 +55,16 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.__value.index.slots.__value[]
   reads self.__value.entries.__value.leases.__value.count
   reads+writes self.__value.entries.__value.storage.__value[]
+  reads self.__value.entries.__value.storage.__value[]...
   reads key...
+  reads value...
   reads builtin.hashing.secret.__value[]...
   escapes self referent
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
   returns self.__value.entries.__value.storage.__value[].value value
-builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
+builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   effects may_allocate may_collect allocates_direct
   reads self.__value.entries
   reads self.__value.index.used
@@ -70,7 +75,7 @@ builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
 builtin.containers.list.len: (List['T]) -> uint
   effects none
   reads self.__value.count
-builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
+builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   effects may_allocate may_collect allocates_direct
   reads self.__value.count
   reads self.__value.items
@@ -84,6 +89,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.__value.items
   reads spans.__value.items.__value.storage
   reads spans.__value.items.__value.storage.__value[]
+  reads spans.__value.items.__value.storage.__value[].tag...
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
@@ -96,7 +102,7 @@ unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
   reads+writes self.data.__value[]
   writes self.cap
-  writes self.data
+  reads+writes self.data
   writes self.len
   escapes self referent
   traps bounds arithmetic

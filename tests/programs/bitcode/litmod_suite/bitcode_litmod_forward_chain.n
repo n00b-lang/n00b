@@ -12,7 +12,7 @@ quotes litmod make_inner(raw: string) -> int fail: string {
     return 42
 }
 
-when comptime() {
+if comptime() {
     require value() == 42
 }
 

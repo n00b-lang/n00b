@@ -322,6 +322,35 @@ take_list(char **argv, int *i, int argc, const char *flag, writ_str_t *list, siz
 }
 
 static void
+print_extern_type(const writ_n00b_type_t *type)
+{
+    switch (type->kind) {
+    case WRIT_N00B_TYPE_REF:
+        printf("ref[");
+        print_extern_type(type->item);
+        printf("]");
+        return;
+    case WRIT_N00B_TYPE_ARRAY:
+        printf("array[");
+        print_extern_type(type->item);
+        printf("]");
+        return;
+    case WRIT_N00B_TYPE_LIST:
+        printf("%.*s[", (int)type->name.length, type->name.data);
+        print_extern_type(type->item);
+        printf("]");
+        return;
+    case WRIT_N00B_TYPE_OPTION:
+        print_extern_type(type->item);
+        printf("?");
+        return;
+    default:
+        printf("%.*s", (int)type->name.length, type->name.data);
+        return;
+    }
+}
+
+static void
 print_links(const char *label, const writ_str_t *items, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
@@ -379,9 +408,16 @@ gen_n00b(writ_session_t *session, int argc, char **argv)
         print_links("search_path", links.search_paths, links.search_paths_count);
         printf("load %s\n", links.load_dynamic ? "dynamic" : "static");
         for (size_t i = 0; i < externs.count; i++) {
-            printf("extern %.*s %.*s %.*s\n", (int)externs.items[i].name.length, externs.items[i].name.data,
-                   (int)externs.items[i].symbol.length, externs.items[i].symbol.data,
-                   (int)externs.items[i].signature.length, externs.items[i].signature.data);
+            const writ_n00b_extern_t *declared = &externs.items[i];
+            printf("extern %.*s %.*s (", (int)declared->name.length, declared->name.data,
+                   (int)declared->symbol.length, declared->symbol.data);
+            for (size_t p = 0; p < declared->params_count; p++) {
+                printf("%s", p ? ", " : "");
+                print_extern_type(declared->params[p]);
+            }
+            printf(") -> ");
+            print_extern_type(declared->result);
+            printf(" fail: nil\n");
         }
     }
     return status == WRIT_OK ? 0 : 1;

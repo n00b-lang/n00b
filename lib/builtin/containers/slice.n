@@ -1,0 +1,39 @@
+import containers.array
+import panic
+
+record Slice {
+    items:    Array['T]
+    start_ix: int
+    end_ix:   int
+}
+
+func __init(modify self: Slice['T], consume items: Array['T],
+            start_ix: int, end_ix: int) {
+    self.items = items
+    self.start_ix = start_ix
+    self.end_ix = end_ix
+}
+
+func __slice(self: Array['T], start_ix: int, end_ix: int) -> Slice['T] {
+    let available: uint = __array_length(self)
+    if start_ix < 0 or start_ix > end_ix
+        or (cast[uint] end_ix) > available {
+        panic.index_out_of_range(end_ix, available, "an array")
+    }
+    let count: uint = cast[uint](end_ix - start_ix)
+    var copy: Array['T] = new[Array['T]](cast[int] count)
+    containers.array.copy_items(copy, 0, self, cast[uint] start_ix, count)
+    return new[Slice['T]](copy, 0, cast[int] count)
+}
+
+inline func __read(self: Slice['T], index: int) -> 'T {
+    let length: int = self.end_ix - self.start_ix
+    if index < 0 or index >= length {
+        panic.index_out_of_range(index, cast[uint] length, "a slice")
+    }
+    return self.items[self.start_ix + index]
+}
+
+inline func len(self: Slice['T]) -> uint {
+    return cast[uint](self.end_ix - self.start_ix)
+}

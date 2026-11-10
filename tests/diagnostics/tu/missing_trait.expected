@@ -1,0 +1,5 @@
+tests/diagnostics/tu/missing_trait.n:22:9: error N00B-T0021: `Step` does not implement `Equal`, which `same` requires
+  tests/diagnostics/tu/missing_trait.n:10:6: note: `same` is declared here
+  help: implement `Equal` for `Step`, or call a function that does not need it
+tests/diagnostics/tu/missing_trait.n:23:9: error N00B-T0021: values holding a `Step` cannot be compared here: `Step` does not implement `Equal`
+  help: implement `Equal` for `Step`, or call a function that does not need it

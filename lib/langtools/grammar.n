@@ -101,7 +101,7 @@ func raw_token_id(id: Token_Id) -> u128 {
     return cast[u128] id
 }
 
-func __equal(left: Token_Id, right: Token_Id) -> bool {
+func __equal(view left: Token_Id, view right: Token_Id) -> bool {
     return raw_token_id(left) == raw_token_id(right)
 }
 
@@ -158,7 +158,7 @@ func find_rule(g: Grammar, name: string) -> Rule? {
     if at == nil {
         return nil
     }
-    return g.rules[at.get()]
+    return g.rules[at]
 }
 
 func find_class(g: Grammar, name: string) -> Token_Class? {
@@ -166,7 +166,7 @@ func find_class(g: Grammar, name: string) -> Token_Class? {
     if at == nil {
         return nil
     }
-    return g.classes[at.get()]
+    return g.classes[at]
 }
 
 func find_literal(g: Grammar, spelling: string) -> Literal? {
@@ -174,7 +174,7 @@ func find_literal(g: Grammar, spelling: string) -> Literal? {
     if at == nil {
         return nil
     }
-    return g.literals[at.get()]
+    return g.literals[at]
 }
 
 func start_rule(g: Grammar) -> Rule {
@@ -187,10 +187,10 @@ func identifier_class(g: Grammar) -> Token_Class {
 
 func is_hard_keyword(g: Grammar, spelling: string) -> bool {
     let lit: Literal? = find_literal(g, spelling)
-    return lit != nil and lit.get().hard and lit.get().identifier
+    return lit != nil and lit.hard and lit.identifier
 }
 
 func is_soft_keyword(g: Grammar, spelling: string) -> bool {
     let lit: Literal? = find_literal(g, spelling)
-    return lit != nil and is_soft(lit.get())
+    return lit != nil and is_soft(lit)
 }

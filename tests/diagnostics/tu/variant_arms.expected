@@ -1,0 +1,12 @@
+tests/diagnostics/tu/variant_arms.n:1:9: warning N00B-N0023: type `Shape` is never used
+  help: remove it
+tests/diagnostics/tu/variant_arms.n:7:12: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arms.n:12:30: error N00B-T0593: `s` is read as its `circle` arm here, but this branch only knows it holds `square`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arms.n:17:6: warning N00B-N0019: function `else_arm` is never called
+  help: call it or delete it
+tests/diagnostics/tu/variant_arms.n:29:20: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arms.n:42:20: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`

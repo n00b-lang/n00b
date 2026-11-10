@@ -63,16 +63,6 @@ static void drop_dict(void *p)
     core_free(p);
 }
 
-static void clear_dict(void *p)
-{
-    if (!p) return;
-    core_dict_t *dict = p;
-    core_hash_fn hash = dict->hash_fn;
-    core_dict_key_eq_fn equal = dict->key_eq;
-    core_dict_free(dict);
-    core_dict_init(dict, hash, equal);
-}
-
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg)
 {
     ir_cleanup_t *c = ir_alloc(ctx, sizeof(ir_cleanup_t));
@@ -103,12 +93,6 @@ th_ctx *ir_ctx_types(ir_ctx_t *ctx)
     return ctx ? ctx->types : nullptr;
 }
 
-static void free_symtab(void *p)
-{
-    ir_module_t *m = p;
-    parse_symtab_free(m->symtab);
-}
-
 ir_module_t *ir_module_new(ir_ctx_t *ctx, core_string_t name,
                            const ir_profile_t *profile, core_string_t target)
 {
@@ -123,72 +107,19 @@ ir_module_t *ir_module_new(ir_ctx_t *ctx, core_string_t name,
     m->target  = ir_strdup(ctx, target);
     m->profile = profile;
     m->span    = IR_SPAN_UNKNOWN;
-    m->symtab  = parse_symtab_new();
     ir_profile_install_builtins(ctx, profile);
 
-    ir_ctx_on_free(ctx, free_symtab, m);
-
     return m;
-}
-
-void ir_module_set_tree(ir_module_t      *m,
-                        parse_grammar_t    *g,
-                        parse_tree_t *tree)
-{
-    if (!m) {
-        return;
-    }
-
-    if (m->tree && (m->tree != tree || m->tree_grammar != g)) {
-        clear_dict(m->annots.index);
-        m->annots.n = 0;
-        ir_module_invalidate(m, (ir_props_t)~(ir_props_t)0);
-        parse_symtab_free(m->symtab);
-        m->symtab = parse_symtab_new();
-        m->n_types = 0;
-        clear_dict(m->type_index);
-        m->n_ids = 0;
-        clear_dict(m->id_index);
-        m->n_files = 0;
-        clear_dict(m->file_index);
-        m->n_globals = 0;
-        clear_dict(m->global_index);
-        m->n_funcs = 0;
-        clear_dict(m->func_index);
-        m->span = IR_SPAN_UNKNOWN;
-    }
-
-    m->tree_grammar = tree ? g : nullptr;
-    m->tree         = tree;
-
-    if (tree) {
-        ir_module_establish(m, IR_PROP_TREE);
-    }
-    else {
-        ir_module_invalidate(m, IR_PROP_TREE | IR_PROP_SCOPED
-                                    | IR_PROP_SYMBOLS | IR_PROP_CFLOW
-                                    | IR_PROP_TREE_TYPED);
-    }
-}
-
-parse_tree_t *ir_module_tree(ir_module_t *m)
-{
-    return m ? m->tree : nullptr;
-}
-
-parse_grammar_t *ir_module_grammar(ir_module_t *m)
-{
-    return m ? m->tree_grammar : nullptr;
-}
-
-parse_symtab_t *ir_module_symtab(ir_module_t *m)
-{
-    return m ? m->symtab : nullptr;
 }
 
 th_ctx *ir_module_types(ir_module_t *m)
 {
     return m ? ir_ctx_types(m->ctx) : nullptr;
+}
+
+ir_ctx_t *ir_module_ctx(ir_module_t *m)
+{
+    return m ? m->ctx : nullptr;
 }
 
 core_string_t ir_module_name(const ir_module_t *m)
@@ -287,7 +218,6 @@ void ir_module_set_profile(ir_module_t *m, const ir_profile_t *p)
     }
 
     m->profile       = p;
-    m->rules         = nullptr;
     m->scalar_hashes = nullptr;
     m->scalars_ready = false;
     ir_profile_install_builtins(m->ctx, p);
@@ -350,28 +280,6 @@ bool ir_mutability_from_name(core_string_t s, ir_mutability_t *out)
     return false;
 }
 
-bool ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
-                                 ir_execution_phase_t phase)
-{
-    if (!ctx || !function || phase > IR_PHASE_COMPTIME) return false;
-    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.execution_phase"),
-        .kind = IR_ANNOT_INT,
-        .i = {.mag = (ir_uint_t)phase},
-    });
-}
-
-ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function)
-{
-    if (!function) return IR_PHASE_RUNTIME;
-    ir_annot_t *phase = ir_annot_get(
-        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.execution_phase"));
-    if (!phase || phase->kind != IR_ANNOT_INT || phase->i.neg
-        || phase->i.mag > IR_PHASE_COMPTIME)
-        return IR_PHASE_RUNTIME;
-    return (ir_execution_phase_t)phase->i.mag;
-}
-
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
                              bool is_initializer)
 {
@@ -410,74 +318,6 @@ bool ir_func_is_always_inline(const ir_func_t *function)
         (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.always_inline"));
     return inline_attr && inline_attr->kind == IR_ANNOT_BOOL
         && inline_attr->b;
-}
-
-static bool valid_phase_access(ir_phase_access_t access);
-
-bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
-                               ir_phase_access_t available,
-                               ir_phase_access_t mutable_in,
-                               ir_phase_access_t initializable_in)
-{
-    if (!ctx || !value || !valid_phase_access(available)
-        || !valid_phase_access(mutable_in)
-        || !valid_phase_access(initializable_in)) return false;
-    ir_annots_t *annots = ir_value_annots(value);
-    return annots
-        && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.binding_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = available},
-           })
-        && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.binding_mutable_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = mutable_in},
-           })
-        && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.binding_initializer_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = initializable_in},
-           });
-}
-
-static bool value_phase_allows(const ir_value_t *value, core_string_t key,
-                               ir_execution_phase_t phase)
-{
-    if (!value || phase > IR_PHASE_COMPTIME) return false;
-    ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
-    ir_annot_t *available = ir_annot_get(annots, CORE_STRING_STATIC("ir.binding_phases"));
-    ir_annot_t *mutable = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.binding_mutable_phases"));
-    ir_annot_t *initializable = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.binding_initializer_phases"));
-    if (!available && !mutable && !initializable) return true;
-    if (!available || !mutable || !initializable) return false;
-    ir_annot_t *access = ir_annot_get(annots, key);
-    ir_annot_t *facts[] = {available, mutable, initializable};
-    for (size_t i = 0; i < sizeof(facts) / sizeof(facts[0]); i++)
-        if (facts[i]->kind != IR_ANNOT_INT || facts[i]->i.neg
-            || facts[i]->i.mag > IR_PHASE_ACCESS_BOTH) return false;
-    ir_phase_access_t phase_bit = phase == IR_PHASE_COMPTIME
-        ? IR_PHASE_ACCESS_COMPTIME : IR_PHASE_ACCESS_RUNTIME;
-    return ((ir_phase_access_t)access->i.mag & phase_bit) != 0;
-}
-
-bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase)
-{
-    return value_phase_allows(value, CORE_STRING_STATIC("ir.binding_phases"), phase);
-}
-
-bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase)
-{
-    return ir_value_can_read(value, phase)
-        && value_phase_allows(value, CORE_STRING_STATIC("ir.binding_mutable_phases"), phase);
-}
-
-bool ir_value_can_initialize(const ir_value_t *value,
-                             ir_execution_phase_t phase)
-{
-    return value_phase_allows(value, CORE_STRING_STATIC("ir.binding_initializer_phases"), phase);
 }
 
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value)
@@ -526,99 +366,6 @@ ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value)
         || access->i.mag > IR_INDIRECT_ACCESS_READ_WRITE)
         return IR_INDIRECT_ACCESS_UNSPECIFIED;
     return (ir_indirect_access_t)access->i.mag;
-}
-
-bool ir_global_set_comptime_mutability(ir_ctx_t *ctx, ir_global_t *global,
-                                       ir_mutability_t mutability)
-{
-    if (!ctx || !global || mutability > IR_MUT_CONST) return false;
-    return ir_annot_set(ctx, &global->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.comptime_mutability"),
-        .kind = IR_ANNOT_INT,
-        .i = {.mag = (ir_uint_t)mutability},
-    });
-}
-
-ir_mutability_t ir_global_comptime_mutability(const ir_global_t *global)
-{
-    if (!global) return IR_MUT_MUTABLE;
-    ir_annot_t *mutability = ir_annot_get(
-        (ir_annots_t *)&global->annots, CORE_STRING_STATIC("ir.comptime_mutability"));
-    if (!mutability || mutability->kind != IR_ANNOT_INT
-        || mutability->i.neg || mutability->i.mag > IR_MUT_CONST)
-        return global->mutability;
-    return (ir_mutability_t)mutability->i.mag;
-}
-
-static bool valid_phase_access(ir_phase_access_t access)
-{
-    return access <= IR_PHASE_ACCESS_BOTH;
-}
-
-bool ir_global_set_phase_access(ir_ctx_t *ctx, ir_global_t *global,
-                                ir_phase_access_t available,
-                                ir_phase_access_t mutable_in,
-                                ir_phase_access_t initializable_in)
-{
-    if (!ctx || !global || !valid_phase_access(available)
-        || !valid_phase_access(mutable_in)
-        || !valid_phase_access(initializable_in)) return false;
-    return ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.global_available_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = available},
-           })
-        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.global_mutable_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = mutable_in},
-           })
-        && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.global_initializer_phases"),
-               .kind = IR_ANNOT_INT,
-               .i = {.mag = initializable_in},
-           });
-}
-
-static bool global_phase_allows(const ir_global_t *global, core_string_t key,
-                                ir_execution_phase_t phase)
-{
-    if (!global || phase > IR_PHASE_COMPTIME) return false;
-    ir_annots_t *annots = (ir_annots_t *)&global->annots;
-    ir_annot_t *available = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.global_available_phases"));
-    ir_annot_t *mutable = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.global_mutable_phases"));
-    ir_annot_t *initializable = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.global_initializer_phases"));
-    if (!available && !mutable && !initializable) return true;
-    if (!available || !mutable || !initializable) return false;
-    ir_annot_t *access = ir_annot_get(annots, key);
-    ir_annot_t *facts[] = {available, mutable, initializable};
-    for (size_t i = 0; i < sizeof(facts) / sizeof(facts[0]); i++)
-        if (facts[i]->kind != IR_ANNOT_INT || facts[i]->i.neg
-            || facts[i]->i.mag > IR_PHASE_ACCESS_BOTH) return false;
-    ir_phase_access_t phase_bit = phase == IR_PHASE_COMPTIME
-        ? IR_PHASE_ACCESS_COMPTIME : IR_PHASE_ACCESS_RUNTIME;
-    return ((ir_phase_access_t)access->i.mag & phase_bit) != 0;
-}
-
-bool ir_global_can_read(const ir_global_t *global, ir_execution_phase_t phase)
-{
-    return global_phase_allows(global, CORE_STRING_STATIC("ir.global_available_phases"), phase);
-}
-
-bool ir_global_can_write(const ir_global_t *global,
-                         ir_execution_phase_t phase)
-{
-    return ir_global_can_read(global, phase)
-        && global_phase_allows(global, CORE_STRING_STATIC("ir.global_mutable_phases"), phase);
-}
-
-bool ir_global_can_initialize(const ir_global_t *global,
-                              ir_execution_phase_t phase)
-{
-    return global_phase_allows(global, CORE_STRING_STATIC("ir.global_initializer_phases"), phase);
 }
 
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
@@ -711,16 +458,6 @@ core_string_t ir_prop_name(ir_props_t one)
         return CORE_STRING_STATIC("no-critical-edges");
     case IR_PROP_VERIFIED:
         return CORE_STRING_STATIC("verified");
-    case IR_PROP_TREE:
-        return CORE_STRING_STATIC("tree");
-    case IR_PROP_SCOPED:
-        return CORE_STRING_STATIC("scoped");
-    case IR_PROP_SYMBOLS:
-        return CORE_STRING_STATIC("symbols");
-    case IR_PROP_CFLOW:
-        return CORE_STRING_STATIC("control-flow");
-    case IR_PROP_TREE_TYPED:
-        return CORE_STRING_STATIC("tree-typed");
     default:
         return (core_string_t){};
     }
@@ -768,9 +505,7 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t)
 
     m->types = ir_grow(m->ctx, m->types, &m->cap_types, m->n_types + 1,
                        sizeof(ir_typeslot_t));
-    m->types[m->n_types].hash = h;
-    m->types[m->n_types].type = t;
-    m->types[m->n_types].def  = nullptr;
+    m->types[m->n_types] = (ir_typeslot_t){.hash = h, .type = t};
     m->n_types++;
     core_dict_put((core_dict_t *)m->type_index, h, m->n_types);
 
@@ -795,6 +530,64 @@ ir_typeslot_t *ir_type_slot_find(ir_module_t *m, th_type *t)
 ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i)
 {
     return m && i < m->n_types ? &m->types[i] : nullptr;
+}
+
+static bool merge_type_slot(ir_module_t *m, ir_typeslot_t *into,
+                            const ir_typeslot_t *from)
+{
+    if (!into->def) {
+        into->def = from->def;
+    }
+    for (size_t i = 0; i < from->n_descs; i++) {
+        bool present = false;
+
+        for (size_t j = 0; !present && j < into->n_descs; j++) {
+            present = core_string_eq(into->descs[j]->target,
+                                     from->descs[i]->target);
+        }
+        if (present) {
+            continue;
+        }
+        into->descs = ir_grow(m->ctx, into->descs, &into->cap_descs,
+                              into->n_descs + 1, sizeof(ir_descentry_t *));
+        if (!into->descs) {
+            return false;
+        }
+        into->descs[into->n_descs++] = from->descs[i];
+    }
+
+    return true;
+}
+
+bool ir_module_reintern_types(ir_module_t *m)
+{
+    if (!m) {
+        return false;
+    }
+
+    core_dict_t *ix   = index_of(m->ctx, &m->type_index, false);
+    size_t       kept = 0;
+    bool         ok   = true;
+
+    core_dict_free(ix);
+    core_dict_init(ix, core_hash_word, nullptr);
+    for (size_t i = 0; i < m->n_types; i++) {
+        ir_typeslot_t slot  = m->types[i];
+        uint64_t      h     = ir_type_id(m, slot.type);
+        bool          found = false;
+        size_t        at    = (size_t)(uintptr_t)core_dict_get(ix, h, &found);
+
+        if (found) {
+            ok = merge_type_slot(m, &m->types[at - 1], &slot) && ok;
+            continue;
+        }
+        slot.hash       = h;
+        m->types[kept++] = slot;
+        core_dict_put(ix, h, kept);
+    }
+    m->n_types = kept;
+
+    return ok;
 }
 
 th_type *ir_type_at(ir_module_t *m, size_t i)
@@ -979,22 +772,17 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
     th_type *ret = th_func_ret(callable);
     th_type *error = th_func_error(callable);
     if (!ret) return nullptr;
-    if (!error || ir_machine_of(m, error).class == IR_CLASS_VOID)
+    if (!error
+        || (th_is_closed(m->ctx->types, error)
+            && ir_machine_of(m, error).class == IR_CLASS_VOID))
         return ir_type_intern(m, ret);
 
-    th_type *parts[] = {ret, error};
-    th_type *key = th_tuple(m->ctx->types, parts, 2);
-    if (!key) return nullptr;
-    char name[64];
-    int name_length = snprintf(name, sizeof(name),
-                               "__lantern_call_outcome_%016llx",
-                               (unsigned long long)ir_type_id(m, key));
     th_arg arguments[] = {
         {.kind = TH_ARG_TYPE, .type = ret},
         {.kind = TH_ARG_TYPE, .type = error},
     };
     th_type *outcome = th_variant(
-        m->ctx->types, core_string_borrow(name, (size_t)name_length),
+        m->ctx->types, CORE_STRING_STATIC("__lantern_call_outcome_t"),
         arguments, 2);
     th_member arms[] = {{CORE_STRING_STATIC("ok"), ret},
                         {CORE_STRING_STATIC("error"), error}};

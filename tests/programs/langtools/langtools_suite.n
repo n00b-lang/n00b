@@ -30,7 +30,7 @@ func codes(text: string) -> string {
         return "loaded"
     } fail(diags) {
         var out: List[string] = new[List[string]]()
-        for let d in diags {
+        for d in diags {
             out.append(d.code)
         }
         return join(out, " ")
@@ -77,9 +77,9 @@ func diag_checks() {
     names.append("expression")
     names.append("s")
     let trem: string? = langtools.closest_match("trem", names)
-    check(trem != nil and trem.get() == "term", "closest_match transposition")
+    check(trem != nil and trem == "term", "closest_match transposition")
     let expresion: string? = langtools.closest_match("expresion", names)
-    check(expresion != nil and expresion.get() == "expression",
+    check(expresion != nil and expresion == "expression",
           "closest_match deletion")
     check(langtools.closest_match("a", names) == nil,
           "closest_match leaves short names alone")
@@ -123,12 +123,12 @@ func feature_checks() {
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.Grammar = loaded
     check(g.rules.len() == 3, "rule count")
     check(langtools.start_rule(g).name == "stmt", "start directive")
     let stmt: langtools.Rule? = langtools.find_rule(g, "stmt")
-    check(stmt != nil and stmt.get().alts.len() == 2 and
-          stmt.get().defs.len() == 2, "merged definitions")
+    check(stmt != nil and stmt.alts.len() == 2 and
+          stmt.defs.len() == 2, "merged definitions")
     check(langtools.identifier_class(g).name == "NAME", "identifier directive")
     check(langtools.raw_token_id(langtools.identifier_class(g).id) ==
           0x110000, "identifier id")
@@ -136,14 +136,14 @@ func feature_checks() {
     let comment: langtools.Token_Class? = langtools.find_class(g, "COMMENT")
     let newline: langtools.Token_Class? = langtools.find_class(g, "NEWLINE")
     check(number != nil and
-          langtools.raw_token_id(number.get().id) == 0x110001,
+          langtools.raw_token_id(number.id) == 0x110001,
           "first declared class")
     check(comment != nil and
-          comment.get().policy == langtools.Token_Policy.trivia and
-          langtools.raw_token_id(comment.get().id) == 0x110002,
+          comment.policy == langtools.Token_Policy.trivia and
+          langtools.raw_token_id(comment.id) == 0x110002,
           "trivia class")
     check(newline != nil and
-          newline.get().policy == langtools.Token_Policy.elastic,
+          newline.policy == langtools.Token_Policy.elastic,
           "elastic class")
     check(langtools.is_hard_keyword(g, "let"), "hard keyword")
     check(langtools.is_soft_keyword(g, "match"), "soft keyword")
@@ -154,7 +154,7 @@ func feature_checks() {
     let text: string = langtools.format_grammar(g, show_ids = true)
     let again: langtools.Grammar? = load(langtools.format_grammar(g))
     check(again != nil and
-          langtools.format_grammar(again.get(), show_ids = true) == text,
+          langtools.format_grammar(again, show_ids = true) == text,
           "format round trip")
 }
 
@@ -254,8 +254,8 @@ const broken_grammar: string = [-
 func fix_checks() {
     let broken: string = broken_grammar
     var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
-    for let d in diagnostics(broken) {
-        for let f in d.fixes {
+    for d in diagnostics(broken) {
+        for f in d.fixes {
             fixes.append(f)
         }
     }
@@ -268,7 +268,7 @@ func lex_checks() {
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.Grammar = loaded
     let source: string = "let match + é\t ;; x"
     let ctx: langtools.Lex_Context = new[langtools.Lex_Context](g, source)
     let name: langtools.Token_Id? = ctx.classes["NAME"]
@@ -277,22 +277,22 @@ func lex_checks() {
     if name == nil or comment == nil {
         return
     }
-    let hard: langtools.Token = langtools.emit(ctx, 0, 3, class = name.get())
+    let hard: langtools.Token = langtools.emit(ctx, 0, 3, class = name)
     check(hard.id == langtools.literal_token_id("let") and hard.alt_id == nil,
           "hard keyword re-labelled")
-    let soft: langtools.Token = langtools.emit(ctx, 4, 9, class = name.get())
-    check(soft.id == name.get() and soft.alt_id != nil and
-          soft.alt_id.get() == langtools.literal_token_id("match"),
+    let soft: langtools.Token = langtools.emit(ctx, 4, 9, class = name)
+    check(soft.id == name and soft.alt_id != nil and
+          soft.alt_id == langtools.literal_token_id("match"),
           "soft keyword alternate id")
     let plus: langtools.Token = langtools.emit(ctx, 10, 11)
     check(langtools.raw_token_id(plus.id) == 0x2b, "unclassed codepoint")
     let fixed: langtools.Token = langtools.emit(ctx, 12, 15)
     check(fixed.id == langtools.literal_token_id("é\t"), "unclassed hash")
     let trivia: langtools.Token = langtools.emit(ctx, 16, 18,
-                                                 class = comment.get())
+                                                 class = comment)
     check(trivia.flags.trivia and !trivia.flags.elastic, "trivia flag")
-    let plain: langtools.Token = langtools.emit(ctx, 19, 20, class = name.get())
-    check(plain.id == name.get() and plain.alt_id == nil, "plain identifier")
+    let plain: langtools.Token = langtools.emit(ctx, 19, 20, class = name)
+    check(plain.id == name and plain.alt_id == nil, "plain identifier")
 }
 
 func read_text(path: string) -> string? {
@@ -330,9 +330,8 @@ func lantern_counts() -> Dict[string, Tuple[uint, uint]] {
     counts["rust.bnf"] = (216, 547)
     counts["swift.bnf"] = (308, 636)
     counts["typescript.bnf"] = (241, 562)
-    counts["n00b.bnf"] = (320, 664)
+    counts["n00b.bnf"] = (319, 657)
     counts["lex.bnf"] = (5, 7)
-    counts["infer.bnf"] = (22, 49)
     return counts
 }
 
@@ -343,12 +342,12 @@ func convert(path: string, original: string) -> langtools.Grammar? {
             return langtools.load_ebnf(text, source_name = path)!
         } fail(diags) {
             var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
-            for let d in diags {
+            for d in diags {
                 if d.fixes.len() == 0 and d.code != "ebnf/too-many-errors" {
                     check(false, path + ": no fix for " + d.code)
                     return nil
                 }
-                for let f in d.fixes {
+                for f in d.fixes {
                     fixes.append(f)
                 }
             }
@@ -365,24 +364,24 @@ func corpus_check(path: string, expected: Dict[string, Tuple[uint, uint]]) {
         check(false, path + ": cannot read")
         return
     }
-    let loaded: langtools.Grammar? = convert(path, text.get())
+    let loaded: langtools.Grammar? = convert(path, text)
     if loaded == nil {
         return
     }
-    let g: langtools.Grammar = loaded.get()
+    let g: langtools.Grammar = loaded
     var alts: uint = 0
-    for let rule in g.rules {
+    for rule in g.rules {
         alts += rule.alts.len()
     }
     let want: Tuple[uint, uint]? = expected[base_name(path)]
     check(want != nil, path + ": expected counts")
-    check(want == nil or (want.get()[0] == g.rules.len()
-                          and want.get()[1] == alts),
+    check(want == nil or (want[0] == g.rules.len()
+                          and want[1] == alts),
           path + ": counts match Lantern")
     let formatted: string = langtools.format_grammar(g, show_ids = true)
     let again: langtools.Grammar? = load(langtools.format_grammar(g))
     check(again != nil and
-          langtools.format_grammar(again.get(), show_ids = true) == formatted,
+          langtools.format_grammar(again, show_ids = true) == formatted,
           path + ": round trip")
 }
 

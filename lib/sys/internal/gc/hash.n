@@ -30,7 +30,7 @@ func hash_slot_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Hash_Slot]?               = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -56,7 +56,7 @@ func hash_slot_at(slots: Ref[Hash_Slot], index: uint, stride: uint) -> Ref[Hash_
 func tab_slots(tab: Ref[Hash_Tab]) -> Ref[Hash_Slot] {
     let slots: Ref[Hash_Slot]? = tab.__value.slots
     if slots != nil {
-        return slots.get()
+        return slots
     }
     require false
 }
@@ -118,17 +118,17 @@ func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
         let alignment: uint       = hash_slot_align()
         let mapped:    Ref[byte]? = internal.memory.map_zeroed(new_count * stride, alignment)
         if mapped != nil {
-            tab.__value.slots = unsafe_cast[Ref[Hash_Slot]] mapped.get()
+            tab.__value.slots = unsafe_cast[Ref[Hash_Slot]] mapped
             tab.__value.bits = bits
             tab.__value.n = 0
             if old != nil {
-                let old_slots: Ref[Hash_Slot] = old.get()
+                let old_slots: Ref[Hash_Slot] = old
                 var index:     uint           = 0
                 while index < count {
                     let slot:  Ref[Hash_Slot] = hash_slot_at(old_slots, index, stride)
                     let value: Ref[byte]?     = slot.__value.val
                     if value != nil {
-                        tab_insert(tab, slot.__value.key, value.get())
+                        tab_insert(tab, slot.__value.key, value)
                     }
                     index += 1
                 }
@@ -150,7 +150,7 @@ func tab_find(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) -> Ref[Hash_Slot] {
         let slot:   Ref[Hash_Slot] = hash_slot_at(slots, index, stride)
         let stored: Ref[byte]?     = slot.__value.val
         if stored != nil {
-            if slot.__value.key == key and stored.get() == val {
+            if slot.__value.key == key and stored == val {
                 return slot
             }
         } else {
@@ -215,7 +215,7 @@ func tab_free(tab: Ref[Hash_Tab]) {
     let slots: Ref[Hash_Slot]? = tab.__value.slots
     if slots != nil {
         let stride: uint = hash_slot_bytes()
-        internal.memory.unmap(slots.get(), (1 << tab.__value.bits) * stride)
+        internal.memory.unmap(slots, (1 << tab.__value.bits) * stride)
     }
     tab.__value.slots = nil
     tab.__value.bits = 0
@@ -226,7 +226,7 @@ func index_slot_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Index_Slot]?              = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -238,7 +238,7 @@ func index_slot_at(slots: Ref[Index_Slot], index: uint, stride: uint) -> Ref[Ind
 func index_tab_slots(tab: Ref[Index_Tab]) -> Ref[Index_Slot] {
     let slots: Ref[Index_Slot]? = tab.__value.slots
     if slots != nil {
-        return slots.get()
+        return slots
     }
     require false
 }
@@ -301,11 +301,11 @@ func index_tab_reserve(tab: Ref[Index_Tab], more: uint) -> bool {
         let alignment: uint       = internal.abi.alignment_bytes(index_slot_record())
         let mapped:    Ref[byte]? = internal.memory.map_zeroed(new_count * stride, alignment)
         if mapped != nil {
-            tab.__value.slots = unsafe_cast[Ref[Index_Slot]] mapped.get()
+            tab.__value.slots = unsafe_cast[Ref[Index_Slot]] mapped
             tab.__value.bits = bits
             tab.__value.n = 0
             if old != nil {
-                let old_slots: Ref[Index_Slot] = old.get()
+                let old_slots: Ref[Index_Slot] = old
                 var index:     uint            = 0
                 while index < count {
                     let slot: Ref[Index_Slot] = index_slot_at(old_slots, index, stride)
@@ -396,7 +396,7 @@ func index_tab_free(tab: Ref[Index_Tab]) {
     let slots: Ref[Index_Slot]? = tab.__value.slots
     if slots != nil {
         let stride: uint = internal.abi.size_bytes(index_slot_record())
-        internal.memory.unmap(slots.get(), (1 << tab.__value.bits) * stride)
+        internal.memory.unmap(slots, (1 << tab.__value.bits) * stride)
     }
     tab.__value.slots = nil
     tab.__value.bits = 0

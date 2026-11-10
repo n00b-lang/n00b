@@ -6,7 +6,7 @@ func caller() -> int fail: string {
     return always(7)!
 }
 
-when comptime() {
+if comptime() {
     let value = try {
         -> caller()!
     } fail(e) {

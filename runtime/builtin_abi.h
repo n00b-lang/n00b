@@ -3,6 +3,19 @@
 
 #include "n00b-abi-v1.h"
 
+static inline uint64_t
+n00b_abi_storage_key(const uint8_t *module, uint64_t module_bytes,
+                     const uint8_t *name, uint64_t name_bytes)
+{
+    uint64_t key = 0xcbf29ce484222325ull;
+    for (uint64_t i = 0; i < module_bytes; i++)
+        key = (key ^ module[i]) * 0x100000001b3ull;
+    key = (key ^ (uint8_t)'.') * 0x100000001b3ull;
+    for (uint64_t i = 0; i < name_bytes; i++)
+        key = (key ^ name[i]) * 0x100000001b3ull;
+    return key;
+}
+
 const n00b_abi_type_v1 *n00b_builtin_abi_type(uint32_t index);
 const n00b_abi_type_v1 *n00b_builtin_abi_type_for(uint32_t descriptor);
 const n00b_abi_field_v1 *n00b_builtin_abi_field(uint32_t index);

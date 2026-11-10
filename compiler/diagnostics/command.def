@@ -164,8 +164,3 @@ N00B_DIAG(CONFIG_UNREADABLE, "N00B-C0105", ERROR,
     "a configuration file exists but cannot be read",
     "The message names the file and the reason the operating system gave.\n"
     "Fix its permissions, or move it aside.")
-N00B_DIAG(COMPTIME_DISABLED, "N00B-C0106", ERROR,
-    "the program needs the comptime phase, but `--no-comptime` turns it off",
-    "Some constants or literals in the program are computed by running code\n"
-    "at build time. `--no-comptime` skips that run, so the program cannot be\n"
-    "built with it. Build without the flag.")

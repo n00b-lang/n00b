@@ -65,25 +65,6 @@ static bool write_string_arg(core_object_writer_t *writer,
          core_object_writer_bytes(writer, value.data, value.u8_bytes);
 }
 
-static bool save_constraint_scope(core_object_writer_t *writer,
-                                  const th_constraint *constraint) {
-  return core_object_writer_u32(writer, constraint->has_scope) &&
-         (!constraint->has_scope ||
-          (core_object_writer_string(writer, constraint->scope_module) &&
-           core_object_writer_string(writer, constraint->scope_package)));
-}
-
-static bool read_constraint_scope(core_object_reader_t *reader,
-                                  th_constraint *constraint) {
-  uint32_t has_scope;
-  if (!core_object_reader_u32(reader, &has_scope) || has_scope > 1)
-    return false;
-  constraint->has_scope = has_scope;
-  if (!constraint->has_scope) return true;
-  return core_object_reader_string(reader, &constraint->scope_module) &&
-         core_object_reader_string(reader, &constraint->scope_package);
-}
-
 static bool read_string_arg(core_object_reader_t *reader,
                             core_string_t *out) {
   size_t size;
@@ -95,110 +76,6 @@ static bool read_string_arg(core_object_reader_t *reader,
     return false;
   *out = core_string_borrow(copy, size);
   return true;
-}
-
-static bool save_constraint(core_object_writer_t *writer,
-                            const th_constraint *constraint) {
-  if (!core_object_writer_u32(writer, constraint->kind))
-    return false;
-  switch (constraint->kind) {
-  case TH_CON_KIND:
-    return core_object_writer_u32(writer, constraint->type_kind);
-  case TH_CON_UNIFIES:
-  case TH_CON_PROMOTES:
-  case TH_CON_EXCLUDES:
-    return write_type_ref(writer, constraint->target);
-  case TH_CON_ONE_OF:
-    if (!write_count(writer, constraint->one_of.n)) return false;
-    for (size_t i = 0; i < constraint->one_of.n; i++)
-      if (!write_type_ref(writer, constraint->one_of.types[i])) return false;
-    return true;
-  case TH_CON_IMPLEMENTS:
-    return core_object_writer_string(writer, constraint->iface) &&
-           save_constraint_scope(writer, constraint);
-  case TH_CON_HAS_FIELD:
-    return core_object_writer_string(writer, constraint->field.name) &&
-           write_type_ref(writer, constraint->field.type) &&
-           core_object_writer_u32(writer, constraint->field.auto_deref);
-  case TH_CON_HAS_PARAM:
-    return core_object_writer_u64(writer, constraint->param.index) &&
-           write_type_ref(writer, constraint->param.type);
-  case TH_CON_METHOD:
-    return core_object_writer_string(writer, constraint->method.name) &&
-           write_type_ref(writer, constraint->method.result) &&
-           write_type_ref(writer, constraint->method.call) &&
-           save_constraint_scope(writer, constraint) &&
-           core_object_writer_string(writer, constraint->method.in_place);
-  case TH_CON_INTEGER:
-    return core_object_writer_u32(writer, constraint->integer.flags);
-  }
-  return false;
-}
-
-static bool read_constraint(core_object_reader_t *reader,
-                            th_constraint *constraint) {
-  memset(constraint, 0, sizeof(*constraint));
-  uint32_t kind;
-  if (!core_object_reader_u32(reader, &kind) || kind > TH_CON_INTEGER)
-    return false;
-  constraint->kind = (th_con_kind)kind;
-  switch (constraint->kind) {
-  case TH_CON_KIND: {
-    uint32_t type_kind;
-    if (!core_object_reader_u32(reader, &type_kind) || type_kind > TH_TRAIT)
-      return false;
-    constraint->type_kind = (th_kind)type_kind;
-    return true;
-  }
-  case TH_CON_UNIFIES:
-  case TH_CON_PROMOTES:
-  case TH_CON_EXCLUDES:
-    return read_type_ref(reader, &constraint->target);
-  case TH_CON_ONE_OF:
-    if (!read_count(reader, &constraint->one_of.n) ||
-        constraint->one_of.n > SIZE_MAX / sizeof(th_type *))
-      return false;
-    if (constraint->one_of.n > SIZE_MAX / sizeof(th_type *)) return false;
-    constraint->one_of.types = constraint->one_of.n
-        ? core_object_reader_alloc(reader,
-              constraint->one_of.n * sizeof(th_type *), alignof(th_type *))
-        : nullptr;
-    if (constraint->one_of.n && !constraint->one_of.types) return false;
-    for (size_t i = 0; i < constraint->one_of.n; i++)
-      if (!read_type_ref(reader, &constraint->one_of.types[i])) return false;
-    return true;
-  case TH_CON_IMPLEMENTS:
-    return core_object_reader_string(reader, &constraint->iface) &&
-           read_constraint_scope(reader, constraint);
-  case TH_CON_HAS_FIELD:
-    if (!core_object_reader_string(reader, &constraint->field.name) ||
-        !read_type_ref(reader, &constraint->field.type)) return false;
-    uint32_t auto_deref;
-    if (!core_object_reader_u32(reader, &auto_deref) || auto_deref > 1)
-      return false;
-    constraint->field.auto_deref = auto_deref;
-    return true;
-  case TH_CON_HAS_PARAM:
-    return core_object_reader_u64(reader, &constraint->param.index) &&
-           read_type_ref(reader, &constraint->param.type);
-  case TH_CON_METHOD:
-    return core_object_reader_string(reader, &constraint->method.name) &&
-           constraint->method.name.data &&
-           read_type_ref(reader, &constraint->method.result) &&
-           constraint->method.result &&
-           read_type_ref(reader, &constraint->method.call) &&
-           read_constraint_scope(reader, constraint) &&
-           core_object_reader_string(reader, &constraint->method.in_place);
-  case TH_CON_INTEGER: {
-    uint32_t flags = 0;
-    if (!core_object_reader_u32(reader, &flags) || flags > UINT8_MAX)
-      return false;
-    constraint->integer.flags = (uint8_t)flags;
-    constraint->integer.owner = 0;
-    return true;
-  }
-  }
-  return false;
 }
 
 static bool save_type(core_object_writer_t *writer, const void *object,
@@ -303,10 +180,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
     if (!core_object_writer_u64(writer, saved_var_index(type->var.index)) ||
         !core_object_writer_u32(writer, type->var.has_index) ||
         !write_type_ref(writer, type->var.ref) ||
-        !core_object_writer_string(writer, type->var.name) ||
-        !write_count(writer, type->var.cons.len)) return false;
-    for (size_t i = 0; i < type->var.cons.len; i++)
-      if (!save_constraint(writer, &type->var.cons.data[i])) return false;
+        !core_object_writer_string(writer, type->var.name)) return false;
     return true;
   }
   return false;
@@ -520,17 +394,9 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     if (!core_object_reader_u64(reader, &type->var.index) ||
         !core_object_reader_u32(reader, &flag) || flag > 1 ||
         !read_type_ref(reader, &type->var.ref) ||
-        !core_object_reader_string(reader, &type->var.name) ||
-        !read_count(reader, &count) || count > SIZE_MAX / sizeof(th_constraint))
+        !core_object_reader_string(reader, &type->var.name))
       return false;
     type->var.has_index = flag;
-    type->var.cons.data = read_array(reader, count, sizeof(th_constraint),
-                                     alignof(th_constraint));
-    type->var.cons.len = type->var.cons.cap = count;
-    type->var.cons_borrowed = true;
-    if (count && !type->var.cons.data) return false;
-    for (size_t i = 0; i < count; i++)
-      if (!read_constraint(reader, &type->var.cons.data[i])) return false;
     return true;
   }
   return false;
@@ -573,8 +439,17 @@ static bool save_environment(core_object_writer_t *writer, const void *object,
         !write_type_ref(writer, function->scheme) ||
         !write_type_ref(writer, function->error_type) ||
         !write_type_ref(writer, function->contract) ||
-        !core_object_writer_u64(writer, function->required_params))
+        !core_object_writer_u64(writer, function->required_params) ||
+        !write_count(writer, function->requirement_count))
       return false;
+    if (function->requirement_count
+        && !write_type_ref(writer, function->requirements))
+      return false;
+    for (size_t r = 0; r < function->requirement_count; r++)
+      if (!core_object_writer_u32(writer, function->requirement_kinds[r]) ||
+          !core_object_writer_string(writer,
+                                     function->requirement_traits[r]))
+        return false;
   }
   if (!write_count(writer, env->values.len)) return false;
   for (size_t i = 0; i < env->values.len; i++) {
@@ -682,7 +557,26 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !read_type_ref(reader, &function.error_type) ||
         !read_type_ref(reader, &function.contract)) return false;
     uint64_t required;
-    if (!core_object_reader_u64(reader, &required)) return false;
+    size_t requirement_count = 0;
+    if (!core_object_reader_u64(reader, &required) ||
+        !read_count(reader, &requirement_count) ||
+        requirement_count > SIZE_MAX / sizeof(core_string_t) ||
+        (requirement_count &&
+         !read_type_ref(reader, &function.requirements)))
+      return false;
+    function.requirement_count = requirement_count;
+    function.requirement_kinds = requirement_count
+        ? core_alloc_array(th_con_kind, requirement_count) : nullptr;
+    function.requirement_traits = requirement_count
+        ? core_alloc_array(core_string_t, requirement_count) : nullptr;
+    for (size_t r = 0; r < requirement_count; r++) {
+      uint32_t kind;
+      if (!core_object_reader_u32(reader, &kind) ||
+          !core_object_reader_string(reader,
+                                     &function.requirement_traits[r]))
+        return false;
+      function.requirement_kinds[r] = (th_con_kind)kind;
+    }
     function.required_params = (size_t)required;
     function.visibility = (th_env_visibility_t)visibility;
     function.order = i;
@@ -752,6 +646,7 @@ static bool finalize_environment(void *object, void *user_data) {
   env->values = core_list_new(th_env_value_t);
   env->intrinsic_types = core_list_new(th_env_intrinsic_type_t);
   env->metadata = core_list_new(th_env_metadata_record_t);
+  th_env_reset_indexes(env);
   bool ok = true;
   for (size_t i = 0; ok && i < origins.len; i++) {
     th_env_type_origin_t *entry = &origins.data[i];
@@ -769,11 +664,12 @@ static bool finalize_environment(void *object, void *user_data) {
   }
   for (size_t i = 0; ok && i < functions.len; i++) {
     th_env_function_t *entry = &functions.data[i];
-    ok = th_env_register_function_contract(
-        env, entry->qualified_name, entry->root_name, entry->module,
-        entry->package, entry->visibility, entry->contract)
-        && th_env_set_function_required(env, entry->qualified_name,
-                                        entry->required_params);
+    ok = th_env_copy_function(env, entry,
+                              th_env_function_copy_source(entry));
+  }
+  for (size_t i = 0; i < functions.len; i++) {
+    core_free(functions.data[i].requirement_kinds);
+    core_free(functions.data[i].requirement_traits);
   }
   for (size_t i = 0; ok && i < values.len; i++) {
     th_env_value_t *entry = &values.data[i];

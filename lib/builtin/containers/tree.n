@@ -22,7 +22,7 @@ func is_leaf(self: Tree['N, 'L]) -> bool {
     if maybe == nil {
         return false
     }
-    let contents: Tree_Contents['N, 'L] = maybe.get()
+    let contents: Tree_Contents['N, 'L] = maybe
     switch contents {
         case node_value {
             return false
@@ -52,7 +52,7 @@ func node(self: Tree['N, 'L]) -> Ref['N]? {
     if maybe == nil {
         return nil
     }
-    let contents: Tree_Contents['N, 'L] = maybe.get()
+    let contents: Tree_Contents['N, 'L] = maybe
     switch contents {
         case node_value {
             let found: Ref['N]? = contents.node_value
@@ -69,7 +69,7 @@ func leaf(self: Tree['N, 'L]) -> Ref['L]? {
     if maybe == nil {
         return nil
     }
-    let contents: Tree_Contents['N, 'L] = maybe.get()
+    let contents: Tree_Contents['N, 'L] = maybe
     switch contents {
         case node_value {
             return nil
@@ -110,7 +110,7 @@ private func can_attach(self: Tree['N, 'L], child: Tree['N, 'L]) -> bool {
         if next == nil {
             return true
         }
-        current = next.get()
+        current = next
     }
 }
 
@@ -149,7 +149,7 @@ func remove_child(self: Tree['N, 'L], index: int) -> Tree['N, 'L]? {
         at += 1
     }
     _ = containers.list.pop(self.children)
-    let removed: Tree['N, 'L] = found.get()
+    let removed: Tree['N, 'L] = found
     removed.parent = nil
     return removed
 }
@@ -162,18 +162,18 @@ func root(self: Tree['N, 'L]) -> Tree['N, 'L] {
     var current: Tree['N, 'L]  = self
     var next:    Tree['N, 'L]? = current.parent
     while next != nil {
-        current = next.get()
+        current = next
         next = current.parent
     }
     return current
 }
 
 func depth(self: Tree['N, 'L]) -> uint {
-    var result:  uint          = 0
+    result = 0
     var current: Tree['N, 'L]  = self
     var next:    Tree['N, 'L]? = current.parent
     while next != nil {
-        current = next.get()
+        current = next
         result += 1
         next = current.parent
     }

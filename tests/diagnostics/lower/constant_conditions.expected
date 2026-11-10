@@ -1,0 +1,7 @@
+tests/diagnostics/lower/constant_conditions.n:1:6: warning N00B-N0019: function `compared` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constant_conditions.n:4:8: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/lower/constant_conditions.n:7:8: warning N00B-S0059: this condition is always false, so the other branch never runs
+tests/diagnostics/lower/constant_conditions.n:13:6: warning N00B-N0019: function `dead` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constant_conditions.n:15:8: warning N00B-S0059: this condition is always true, so the other branch never runs

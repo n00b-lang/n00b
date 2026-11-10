@@ -10,8 +10,8 @@ func mapped_heap() -> Ref[sys.gc.core.Heap] {
     let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
         let mapped: Ref[byte]? = sys.memory.map_zeroed(
-            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
-        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Heap]] mapped.get() }
+            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Heap]] mapped }
     }
     require false
 }
@@ -20,7 +20,7 @@ func unmap_heap(heap: Ref[sys.gc.core.Heap]) {
     let probe: Ref[sys.gc.core.Heap]? = nil
     let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        sys.memory.unmap(heap, sys.abi.size_bytes(row.get()))
+        sys.memory.unmap(heap, sys.abi.size_bytes(row))
         return
     }
     require false
@@ -29,26 +29,26 @@ func unmap_heap(heap: Ref[sys.gc.core.Heap]) {
 let block_bytes: uint = 32768
 let mapped: Ref[byte]? = sys.memory.map_zeroed(block_bytes, block_bytes)
 if mapped != nil {
-    let base: Ref[byte] = mapped.get()
+    let base: Ref[byte] = mapped
     let heap: Ref[sys.gc.core.Heap] = mapped_heap()
     let heap_type: Ref[sys.abi.Type_Record]? = sys.abi.reference_target(typeof(heap))
     if heap_type != nil {
-        assert heap_type.get().__value.kind == cast[u32](sys.abi.Type_Kind.record_type)
-        let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(heap_type.get().__value.tracing_index)
+        assert heap_type.__value.kind == cast[u32](sys.abi.Type_Kind.record_type)
+        let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(heap_type.__value.tracing_index)
         if trace != nil {
             var found_cache: bool = false
             var ordinal: u32 = 0
-            while ordinal < trace.get().__value.fixed_children.count {
+            while ordinal < trace.__value.fixed_children.count {
                 let index: i64 = sys.abi.range_index(
-                    trace.get().__value.fixed_children, ordinal)
+                    trace.__value.fixed_children, ordinal)
                 assert index > 0
                 let child: Ref[sys.abi.Trace_Child_Record]? = sys.abi.trace_child_at(cast[u32] index)
                 if child != nil {
-                    if child.get().__value.repeat_count == cast[u64](sys.gc.core.los_classes) {
-                        let element: Ref[sys.abi.Type_Record]? = sys.abi.type_at(child.get().__value.child_type_index)
+                    if child.__value.repeat_count == cast[u64](sys.gc.core.los_classes) {
+                        let element: Ref[sys.abi.Type_Record]? = sys.abi.type_at(child.__value.child_type_index)
                         if element != nil {
-                            assert element.get().__value.kind == cast[u32](sys.abi.Type_Kind.option_type)
-                            assert child.get().__value.stride_bits == element.get().__value.size_bits
+                            assert element.__value.kind == cast[u32](sys.abi.Type_Kind.option_type)
+                            assert child.__value.stride_bits == element.__value.size_bits
                             found_cache = true
                         } else {
                             require false
@@ -87,7 +87,7 @@ if mapped != nil {
     assert sys.gc.core.over_max(heap, ~cast[uint](0))
     let linked: Ref[sys.gc.core.Block_Metadata]? = heap.__value.all_blocks
     if linked != nil {
-        assert linked.get() == metadata
+        assert linked == metadata
     } else {
         require false
     }
@@ -124,7 +124,7 @@ if mapped != nil {
     let cursor: Ref[byte]? = bump.cursor
     if cursor != nil {
         let expected: byte = 42
-        cursor.get().__value = 42
+        cursor.__value = 42
         let cell: Ref[byte] = __gc_byte_offset(base, 896)
         assert __gc_byte_diff(cell, base) == 896
         assert __gc_byte_diff(base, cell) == -896

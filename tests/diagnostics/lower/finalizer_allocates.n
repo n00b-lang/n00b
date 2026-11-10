@@ -1,0 +1,23 @@
+record Handle {
+    fd: int
+}
+
+var log: Buffer = buffer_from_string("closed:")
+
+func __finalize(consume self: Ref[Handle]) {
+    log += "x"
+}
+
+record Counted {
+    n: int
+}
+
+var closed: Atomic[uint] = 0
+
+func __finalize(consume self: Ref[Counted]) {
+    __atomic_fetch_add(ref closed, 1)
+}
+
+var h: Handle = (fd = 3)
+var c: Counted = (n = 1)
+require h.fd + c.n == 4

@@ -2,12 +2,14 @@
 #define IR_SUMMARY_INTERNAL_H
 
 #include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/layout.h"
 #include "ir/operands.h"
+#include "ir/pdg_memory.h"
 #include "ir/summary.h"
 #include "ir/text.h"
 #include "ir/typelang.h"
@@ -194,27 +196,22 @@ typedef struct {
 core_list_decl(flow_def_t);
 
 typedef struct {
-    uint32_t index;
-    uint32_t first;
-    uint32_t count;
-    bool     block;
-} flow_step_t;
-core_list_decl(flow_step_t);
-
-typedef struct {
-    core_dict_t              writes;
-    core_dict_t              positions;
-    core_dict_t              pending;
-    core_dict_t              released;
-    core_list_t(flow_def_t)  defs;
-    core_list_t(flow_step_t) steps;
-    uint32_t                *block_steps;
-    uint64_t                *kills;
-    uint64_t                *block_in;
-    uint64_t                *state;
-    uint32_t                 words;
-    bool                     stale;
-    pt_set_t                 items;
+    core_dict_t             writes;
+    core_dict_t             positions;
+    core_dict_t             pending;
+    core_dict_t             released;
+    core_list_t(flow_def_t) defs;
+    core_dict_t             at_instr;
+    core_dict_t             covered;
+    core_dict_t             visited;
+    core_list_t(uint32_t)   walk;
+    core_list_t(uint32_t)   reached;
+    uint64_t                mark;
+    ir_pdg_memory_t        *memory;
+    ir_rd_t                *rd;
+    bool                    sourced;
+    bool                    stale;
+    pt_set_t                items;
 } pt_flow_t;
 
 typedef struct {
@@ -387,7 +384,10 @@ typedef struct {
 typedef struct {
     mapped_key_t key;
     pt_set_t     items;
+    pt_set_t     added;
     pt_memo_t    memo;
+    uint32_t     version;
+    bool         grew;
 } mapped_entry_t;
 
 typedef struct {

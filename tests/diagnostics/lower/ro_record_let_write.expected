@@ -1,3 +1,6 @@
+tests/diagnostics/lower/ro_record_let_write.n:2:5: warning N00B-N0021: field `x` of `Point` is set but never read
+tests/diagnostics/lower/ro_record_let_write.n:5:8: warning N00B-N0023: type `Counter` is never used
+  help: remove it
 tests/diagnostics/lower/ro_record_let_write.n:10:1: error N00B-S0019: `frozen` is a `let`, so its field `x` cannot be assigned
   tests/diagnostics/lower/ro_record_let_write.n:9:5: note: `frozen` is declared here
   help: declare `frozen` with `var` to allow changes

@@ -930,6 +930,19 @@ summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
 }
 
 bool
+ir_summary_call_adds_effects(ir_summaries_t *summaries, const ir_func_t *caller,
+                             const ir_func_t *callee)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    if (!hooks || !hooks->callee_effects || !caller || !callee) return false;
+    ir_summary_t *probe = ir_summary_new(nullptr, caller);
+    hooks->callee_effects(hooks->context, callee, probe);
+    bool adds = probe->flags || probe->effects.len;
+    summary_free(probe);
+    return adds;
+}
+
+bool
 ir_summary_call_writes(ir_summaries_t *summaries, const ir_func_t *f,
                        ir_places_t *places, const ir_instr_t *call,
                        uint32_t place)

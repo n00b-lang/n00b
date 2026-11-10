@@ -64,19 +64,11 @@
              "print the --effects-of report as JSON"), \
     DEV_FLAG("--effects-explain", NO_ALIAS, BOOL, false, \
              "print the --effects-of report as `n00b explain effects` does")
-#define NO_COMPTIME_FLAG \
-    FLAG("--no-comptime", NO_ALIAS, BOOL, false, \
-         "skip the comptime phase; a program that needs build-time values fails")
 #define PROGRAM_FLAGS \
-    NO_COMPTIME_FLAG, \
     LINK_INTERFACE_FLAG, \
     SHOW_FFI_FLAG, \
     FRONT_END_DUMP_FLAGS, \
     LOWERING_DUMP_FLAGS, \
-    DEV_FLAG("--build-time", NO_ALIAS, BOOL, false, \
-             "compile the program that computes consts"), \
-    DEV_FLAG("--literal-stage", NO_ALIAS, BOOL, false, \
-             "with --build-time, compile only the static literal producers"), \
     KEYED_FLAG("--unchecked-wide-narrowing", NO_ALIAS, BOOL, false, \
                "narrow 128-bit integers without the runtime range check", \
                SETS(BUILD_UNCHECKED_WIDE_NARROWING, true)), \
@@ -86,6 +78,9 @@
          "native object to link into an executable"), \
     DEV_FLAG("--native-root", NO_ALIAS, WORD, true, \
              "qualified n00b function used by native code"), \
+    KEYED_FLAG("--comptime-timeout", NO_ALIAS, INT, true, \
+               "seconds a module's comptime may run; 0 for no limit", \
+               SETS(BUILD_COMPTIME_TIMEOUT, true)), \
     KEYED_FLAG("--lto", NO_ALIAS, BOOL, false, \
                "optimize runtime modules and C support together", \
                SETS(BUILD_LTO, true)), \
@@ -227,7 +222,6 @@ static const parse_cmdr_flag_t LIBRARY_FLAGS[] = {
 
 static const parse_cmdr_flag_t LOWERING_FLAGS[] = {
     OUTPUT_FLAG,
-    NO_COMPTIME_FLAG,
     LINK_INTERFACE_FLAG,
     FRONT_END_DUMP_FLAGS,
     LOWERING_DUMP_FLAGS,

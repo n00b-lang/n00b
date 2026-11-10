@@ -24,6 +24,7 @@ struct datalog_tuple {
   int32_t rule;
   datalog_premise_t *premises;
   size_t premise_count;
+  uint32_t born;
   bool recent;
   bool pending;
 };
@@ -69,6 +70,10 @@ struct core_datalog_engine {
   int64_t fact_count;
   bool provenance;
   core_list_t(datalog_premise_t) trail;
+  size_t *last_positive;
+  uint32_t generation;
+  size_t settled_rules;
+  bool settled;
 };
 
 static core_hash_value_t tuple_hash(void *key) {
@@ -441,8 +446,10 @@ bool core_datalog_add_fact(core_datalog_engine_t *engine,
   for (int32_t i = 0; i < arity; i++)
     if (!valid_symbol(arguments[i]) || core_datalog_is_variable(arguments[i]))
       return false;
-  if (!insert_tuple(relation, arguments))
+  datalog_tuple_t *tuple = insert_tuple(relation, arguments);
+  if (!tuple)
     return false;
+  tuple->born = engine->generation + 1;
   engine->fact_count++;
   return true;
 }
@@ -672,6 +679,7 @@ static void derive_head(core_datalog_engine_t *engine,
   if (!tuple)
     return;
   tuple->pending = true;
+  tuple->born = engine->generation;
   if (!engine->provenance)
     return;
   tuple->rule = (int32_t)(rule - engine->rules.data);
@@ -800,10 +808,13 @@ static void evaluate_body(core_datalog_engine_t *engine,
       return;
   }
   size_t candidate_count = candidates ? candidates->len : relation->tuples.len;
+  bool only_recent = !first_iteration && !has_recent &&
+                     body_index == engine->last_positive[rule -
+                                                         engine->rules.data];
   for (size_t i = 0; i < candidate_count; i++) {
     size_t offset = candidates ? candidates->data[i] : i;
     datalog_tuple_t *tuple = relation->tuples.data[offset];
-    if (tuple->pending)
+    if (tuple->pending || (only_recent && !tuple->recent))
       continue;
     size_t mark = bindings->len;
     if (match_literal(tuple->values, &literal, bindings)) {
@@ -822,16 +833,31 @@ static void evaluate_body(core_datalog_engine_t *engine,
 bool core_datalog_run(core_datalog_engine_t *engine) {
   if (!engine || !stratify(engine))
     return false;
+  bool incremental =
+      engine->settled && engine->settled_rules == engine->rules.len;
+  engine->generation++;
   engine->iterations = 0;
-  for (size_t i = 0; i < engine->relations.len; i++)
-    for (size_t t = 0; t < engine->relations.data[i]->tuples.len; t++)
-      engine->relations.data[i]->tuples.data[t]->recent = true;
+  engine->last_positive =
+      core_alloc_array(size_t, engine->rules.len ? engine->rules.len : 1);
+  for (size_t r = 0; r < engine->rules.len; r++) {
+    core_datalog_rule_t *rule = &engine->rules.data[r];
+    engine->last_positive[r] = rule->body_count;
+    for (size_t b = 0; b < rule->body_count; b++)
+      if (core_variant_is(rule->body[b], 1) &&
+          !core_variant_get_1(rule->body[b]).negated)
+        engine->last_positive[r] = b;
+  }
   int32_t max_stratum = 0;
   for (size_t i = 0; i < engine->relations.len; i++)
     if (engine->relations.data[i]->stratum > max_stratum)
       max_stratum = engine->relations.data[i]->stratum;
   for (int32_t stratum = 0; stratum <= max_stratum; stratum++) {
-    bool first_iteration = true;
+    for (size_t i = 0; i < engine->relations.len; i++)
+      for (size_t t = 0; t < engine->relations.data[i]->tuples.len; t++) {
+        datalog_tuple_t *tuple = engine->relations.data[i]->tuples.data[t];
+        tuple->recent = !incremental || tuple->born == engine->generation;
+      }
+    bool first_iteration = !incremental;
     for (;;) {
       engine->iterations++;
       for (size_t r = 0; r < engine->rules.len; r++) {
@@ -865,6 +891,10 @@ bool core_datalog_run(core_datalog_engine_t *engine) {
         break;
     }
   }
+  core_free(engine->last_positive);
+  engine->last_positive = nullptr;
+  engine->settled = true;
+  engine->settled_rules = engine->rules.len;
   engine->fact_count = 0;
   for (size_t r = 0; r < engine->relations.len; r++)
     engine->fact_count += (int64_t)engine->relations.data[r]->tuples.len;

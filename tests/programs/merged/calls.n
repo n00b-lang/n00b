@@ -5,7 +5,7 @@ func take(cache_kb: u32?) -> u32 {
     if cache_kb == nil {
         return 0
     }
-    return cache_kb.get()
+    return cache_kb
 }
 
 func open(path: string, cache_kb: u32? = nil, ratio: f64? = nil) -> u32 {
@@ -61,7 +61,7 @@ require opt_counts[2] != nil
 let opt_points: Array[Point?] = [(x = 5, y = 6), nil]
 let opt_first = opt_points[0]
 require opt_first != nil
-require opt_first.get().y == 6
+require opt_first.y == 6
 
 func branch_narrow(x: u8) -> u8 {
     return x
@@ -184,13 +184,11 @@ require signed() == 31
 require signed(value = 37) == 37
 
 func delayed(value: int) -> int {
-    let result: int
     result = value
     return result
 }
 
 func either(flag: bool) -> int {
-    let result: int
     if flag {
         result = 1
     } else {
@@ -385,7 +383,7 @@ var i: uint = 0
 while i < sys.env.count() {
     let entry: string? = sys.env.at(i)
     require entry != nil
-    require has_equals(entry.get())
+    require has_equals(entry)
     i += 1
 }
 require sys.env.at(sys.env.count()) == nil

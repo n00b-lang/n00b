@@ -1,0 +1,3 @@
+tests/diagnostics/link/generic_mismatched_operands.n:2:12: error N00B-T0021: `add2` uses `+` here with `i32` on the left and `int` on the right, but `+` has no implementation for those two types
+  tests/diagnostics/link/generic_mismatched_operands.n:7:9: note: `add2` is used with `i32` and `int` here
+  help: give both sides of `+` the same type, for example with a cast, or call it with matching types

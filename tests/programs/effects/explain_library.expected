@@ -6,14 +6,14 @@ builtin.containers.dict.compare_key: (Entry['K, 'V], Entry['K, 'V]) -> Compariso
   noreturn        a call to `Comparable.__cmp` (234:16)
   param left      reader
   param right     reader
-  detail          may_collect
+  detail          may_collect allocates_direct reinterprets
 builtin.sort.sort_by: (modify Array['T], Comparator['T]) -> nil
-  reads_globals   builtin.sort.order (85:16) -> a checked callback (21:30)
-  blocks          builtin.sort.order (68:28) -> a checked callback (21:30)
+  reads_globals   builtin.sort.order (85:16) -> a checked callback (21:14)
+  blocks          builtin.sort.order (68:28) -> a checked callback (21:14)
   allocates       here (45:9)
   panics          here (41:9)
-  noreturn        builtin.sort.order (68:28) -> a checked callback (21:30)
+  noreturn        builtin.sort.order (68:28) -> a checked callback (21:14)
   checks          forbids_effect(by, impure)
   param items     writer, lends
   param by        reader
-  detail          may_collect allocates_direct calls_callbacks
+  detail          may_collect allocates_direct calls_callbacks reinterprets

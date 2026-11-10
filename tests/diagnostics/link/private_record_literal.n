@@ -1,0 +1,5 @@
+import shapes
+
+let built: shapes.Secret = shapes.secret(2)
+let forged: shapes.Secret = (hidden = 1, shown = 2)
+require built.shown == forged.shown

@@ -12,7 +12,7 @@ func observe(value: string) {
     require true
 }
 
-when comptime() {
+if comptime() {
     observe("ignored"'outer_handler_dependency)
 }
 

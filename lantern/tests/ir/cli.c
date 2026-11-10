@@ -98,7 +98,7 @@ static void test_every_command_the_plan_names_exists(void)
 {
     static const core_string_t cmds[] = {
         S("parse"),   S("print"), S("verify"), S("analyze"),
-        S("explain"), S("cfg"),   S("dom"),    S("cdg"),
+        S("cfg"),   S("dom"),    S("cdg"),
         S("dfg"),     S("pdg"),   S("regions")};
 
     write_module(DIAMOND);
@@ -188,7 +188,7 @@ static void test_usage_and_dispatch_agree(void)
         done(&r);
         core_free(cname);
     }
-    check("the usage lists every command", listed == 12);
+    check("the usage lists every command", listed == 11);
     done(&h);
 }
 
@@ -257,21 +257,6 @@ static void test_the_status_says_which_kind_of_wrong(void)
     check("asking for help is not an error",
           k.rc == 0 && said(&k, S("usage: ir")));
     done(&k);
-}
-
-static void test_explain_names_the_rule_that_fires(void)
-{
-    write_module(DIAMOND);
-
-    const char *args[] = {"ir", "explain", path};
-    run_t       r      = run(args, 3);
-
-    check("explain reports the ladder", said(&r, S("exact type")));
-    check("and the rung that matched", said(&r, S("MATCH")));
-    check("and what it resolved to", said(&r, S("resolves to ir.add")));
-    check("and it says which instruction it is talking about",
-          said(&r, S("entry#0:x")));
-    done(&r);
 }
 
 static void test_the_graphs(void)
@@ -446,7 +431,6 @@ int main(void)
     test_every_command_the_plan_names_exists();
     test_usage_and_dispatch_agree();
     test_the_status_says_which_kind_of_wrong();
-    test_explain_names_the_rule_that_fires();
     test_the_graphs();
     test_both_profiles();
     test_diagnostics_render_both_ways();

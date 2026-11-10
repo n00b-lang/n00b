@@ -41,7 +41,7 @@ private func env_contains(name: string, needle: string) -> bool {
     if v == nil {
         return false
     }
-    return find_bytes(v.get(), needle) != nil
+    return find_bytes(v, needle) != nil
 }
 
 private func env_equals(name: string, want: string) -> bool {
@@ -49,7 +49,7 @@ private func env_equals(name: string, want: string) -> bool {
     if v == nil {
         return false
     }
-    let got: string = v.get()
+    let got: string = v
     if byte_len(got) != byte_len(want) {
         return false
     }
@@ -58,7 +58,7 @@ private func env_equals(name: string, want: string) -> bool {
 
 private func compute_env_ceiling() -> internal.color.Color_Depth {
     let no_color: string? = env_value("NO_COLOR")
-    if no_color != nil and byte_len(no_color.get()) > 0 {
+    if no_color != nil and byte_len(no_color) > 0 {
         return internal.color.Color_Depth.mono
     }
     if env_value("TERM") == nil or env_equals("TERM", "dumb") {
@@ -107,7 +107,7 @@ private func env_columns() -> u16? {
     if v == nil {
         return nil
     }
-    let s: string = v.get()
+    let s: string = v
     let n: u64 = byte_len(s)
     var w: u32 = 0
     if n == 0 {
@@ -149,7 +149,7 @@ func terminal_width(fd: int) -> u16? {
 func terminal_force_color_depth(depth: internal.color.Color_Depth?) {
     var encoded: u8 = forced_depth_unset
     if depth != nil {
-        encoded = cast[u8] depth.get()
+        encoded = cast[u8] depth
     }
     forced_depth = encoded
     if depth == nil {
@@ -160,7 +160,7 @@ func terminal_force_color_depth(depth: internal.color.Color_Depth?) {
 func terminal_force_width(width: u16?) {
     var encoded: u32 = 0
     if width != nil {
-        encoded = forced_width_set | cast[u32] width.get()
+        encoded = forced_width_set | cast[u32] width
     }
     forced_width = encoded
 }

@@ -6,7 +6,7 @@ import internal.gc.handshake
 import internal.gc.heap
 import internal.gc.mark
 import internal.gc.roots
-import internal.gc.sync
+import internal.locks
 import internal.threads
 import internal.memory
 
@@ -14,7 +14,7 @@ func mutator_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[internal.gc.core.Mutator]?      = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -36,8 +36,10 @@ func create(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Mutator]? 
     let mapped: Ref[byte]?                   = internal.memory.map_zeroed(
         internal.abi.size_bytes(row), internal.abi.alignment_bytes(row))
     if mapped != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = unsafe_cast[Ref[internal.gc.core.Mutator]] mapped.get()
+        let mutator: Ref[internal.gc.core.Mutator] = unsafe_cast[Ref[internal.gc.core.Mutator]] mapped
         mutator.__value.heap = heap
+        internal.locks.condition_init(ref mutator.__value.unblocked,
+                                      collector = true)
         mutator.__value.thread_id = thread_id
         mutator.__value.thread_control = thread_control
         mutator.__value.stack_hi = stack_hi
@@ -45,15 +47,15 @@ func create(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Mutator]? 
             internal.memory.unmap(mutator, internal.abi.size_bytes(row))
             return nil
         }
-        internal.gc.sync.ticket_lock(ref heap.__value.lock)
+        internal.gc.heap.lock(heap)
         let found: Ref[byte]? = internal.gc.hash.tab_lookup(ref heap.__value.threads, thread_id)
         if found != nil {
-            let primary: Ref[internal.gc.core.Mutator]  = internal.gc.core.thread_index_mutator(found.get(), thread_id)
+            let primary: Ref[internal.gc.core.Mutator]  = internal.gc.core.thread_index_mutator(found, thread_id)
             let next:    Ref[internal.gc.core.Mutator]? = primary.__value.thread_next
             if next != nil {
                 mutator.__value.thread_next = next
                 mutator.__value.thread_prev = primary
-                next.get().__value.thread_prev = mutator
+                next.__value.thread_prev = mutator
                 primary.__value.thread_next = mutator
             } else {
                 require false
@@ -83,7 +85,7 @@ func create(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Mutator]? 
         let old: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
         mutator.__value.next = old
         if old != nil {
-            old.get().__value.prev = mutator
+            old.__value.prev = mutator
         }
         heap.__value.mutators = mutator
         heap.__value.nmutators += 1
@@ -101,7 +103,7 @@ func lock_answered(mutator: Ref[internal.gc.core.Mutator]) {
     let heap: Ref[internal.gc.core.Heap] = mutator.__value.heap
     while true {
         internal.gc.handshake.safepoint(mutator)
-        internal.gc.sync.ticket_lock(ref heap.__value.lock)
+        internal.gc.heap.lock(heap)
         if __atomic_load(ref mutator.__value.hs_state) != cast[u32](internal.gc.core.Handshake_State.requested) {
             return
         }
@@ -125,13 +127,13 @@ func destroy(mutator: Ref[internal.gc.core.Mutator]) {
     let previous: Ref[internal.gc.core.Mutator]? = mutator.__value.prev
     let next:     Ref[internal.gc.core.Mutator]? = mutator.__value.next
     if previous != nil {
-        previous.get().__value.next = next
+        previous.__value.next = next
     }
     else {
         heap.__value.mutators = next
     }
     if next != nil {
-        next.get().__value.prev = previous
+        next.__value.prev = previous
     }
     heap.__value.nmutators -= 1
 
@@ -139,20 +141,20 @@ func destroy(mutator: Ref[internal.gc.core.Mutator]) {
     let preceding: Ref[internal.gc.core.Mutator]? = mutator.__value.thread_prev
     if following != nil {
         if preceding != nil {
-            if following.get() == mutator {
+            if following == mutator {
                 internal.gc.hash.tab_delete(ref heap.__value.threads, mutator.__value.thread_id,
                     internal.gc.core.thread_index_value(mutator))
             } else {
                 if mutator.__value.thread_primary {
-                    let successor: Ref[internal.gc.core.Mutator] = following.get()
+                    let successor: Ref[internal.gc.core.Mutator] = following
                     successor.__value.thread_primary = true
                     let slot: Ref[internal.gc.hash.Hash_Slot] = internal.gc.hash.tab_find(
                         ref heap.__value.threads, mutator.__value.thread_id,
                         internal.gc.core.thread_index_value(mutator))
                     slot.__value.val = internal.gc.core.thread_index_value(successor)
                 }
-                preceding.get().__value.thread_next = following
-                following.get().__value.thread_prev = preceding
+                preceding.__value.thread_next = following
+                following.__value.thread_prev = preceding
             }
         } else {
             require false

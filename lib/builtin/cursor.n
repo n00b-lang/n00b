@@ -1,37 +1,37 @@
-import containers.view
+import containers.slice
 import containers.lease
 
 record Cursor {
-    view:  containers.view.View['T]
+    slice: containers.slice.Slice['T]
     index: int
 }
 
-func __init(modify self: Cursor['T], view: containers.view.View['T]) {
-    self.view = view
+func __init(modify self: Cursor['T], slice: containers.slice.Slice['T]) {
+    self.slice = slice
     self.index = 0
 }
 
-func iter(self: containers.view.View['T]) -> Cursor['T] {
+func __iterator(self: containers.slice.Slice['T]) -> Cursor['T] {
     return new[Cursor['T]](self)
 }
 
-func iter(self: Array['T]) -> Cursor['T] {
-    let count: int                              = cast[int]__array_length(self)
-    let view:  containers.view.View['T] =
-        containers.view.__slice(self, 0, count)
-    return new[Cursor['T]](view)
+func __iterator(self: Array['T]) -> Cursor['T] {
+    let count:    int       = cast[int]__array_length(self)
+    var snapshot: Array['T] = self
+    return new[Cursor['T]](
+        new[containers.slice.Slice['T]](snapshot, 0, count))
 }
 
-inline func next(modify self: Cursor['T]) -> 'T? {
-    if self.index >= cast[int]containers.view.len(self.view) {
+inline func __next(modify self: Cursor['T]) -> 'T? {
+    if self.index >= cast[int]containers.slice.len(self.slice) {
         return nil
     }
-    let value: 'T = self.view[self.index]
+    let value: 'T = self.slice[self.index]
     self.index += 1
     return value
 }
 
-func cleanup(consume self: Cursor['T]) {
+func __cleanup(consume self: Cursor['T]) {
 }
 
 record Lease_Cursor {
@@ -47,7 +47,7 @@ func __init(modify self: Lease_Cursor['T],
     self.index = 0
 }
 
-inline func next(modify self: Lease_Cursor['T]) -> 'T? {
+inline func __next(modify self: Lease_Cursor['T]) -> 'T? {
     if self.index >= self.end {
         containers.lease.release(self.lease)
         return nil
@@ -57,6 +57,6 @@ inline func next(modify self: Lease_Cursor['T]) -> 'T? {
     return value
 }
 
-func cleanup(consume self: Lease_Cursor['T]) {
+func __cleanup(consume self: Lease_Cursor['T]) {
     containers.lease.release(self.lease)
 }

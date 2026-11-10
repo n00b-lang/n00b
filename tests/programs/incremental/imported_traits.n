@@ -1,0 +1,16 @@
+import scales
+
+record Box {
+    v: int
+}
+
+func scale(self: Box, by: int = 2) -> int {
+    return self.v * by
+}
+
+func scaled(s: scales.Scales) -> int {
+    return s.scale() + s.scale(by = 10)
+}
+
+let box: Box = (v = 3)
+require scaled(box) == 36

@@ -309,8 +309,8 @@ func __export_kv_open(c_path: uint, c_out_db: uint, failed: uint) -> i64 {
         return -1
     }
     try {
-        let result:  = kvstore.open(path_value)!
-        __export_store(c_out_db, cast[uint]__ffi_table_insert(__handles_Db, result))
+        let returned:  = kvstore.open(path_value)!
+        __export_store(c_out_db, cast[uint]__ffi_table_insert(__handles_Db, returned))
         return 0
     } fail(failure) {
         __export_failed(failed, 1)
@@ -346,11 +346,11 @@ func __export_kv_get(c_db: uint, c_key: uint, c_klen: u64, c_out_val: uint, c_ou
     var key_value: Array[u8] = new[Array[u8]](cast[int]c_klen)
     __export_copy_in(c_key, ref key_value)
     try {
-        let result = kvstore.get(db_value, key_value)!
-        if result == nil {
+        let returned = kvstore.get(db_value, key_value)!
+        if returned == nil {
             return 1
         }
-        var bytes: Array[u8] = result.get()
+        var bytes: Array[u8] = returned
         __export_own_bytes(ref bytes, c_out_val, c_out_len)
         return 0
     } fail(failure) {
@@ -368,8 +368,8 @@ func __export_kv_iter_new(c_db: uint, c_prefix: uint, c_plen: u64, failed: uint)
     var prefix_value: Array[u8] = new[Array[u8]](cast[int]c_plen)
     __export_copy_in(c_prefix, ref prefix_value)
     try {
-        let result:  = kvstore.iter_new(db_value, prefix_value)!
-        return cast[uint]__ffi_table_insert(__handles_Iter, result)
+        let returned:  = kvstore.iter_new(db_value, prefix_value)!
+        return cast[uint]__ffi_table_insert(__handles_Iter, returned)
     } fail(failure) {
         __export_failed(failed, 1)
         return 0
@@ -382,17 +382,17 @@ func __export_kv_iter_next(c_it: uint, failed: uint) -> uint {
         __export_failed(failed, 2)
         return 0
     }
-    let result = kvstore.iter_next(it_value)
-    if result == nil {
+    let returned = kvstore.iter_next(it_value)
+    if returned == nil {
         return 0
     }
-    return __export_keep_kv_entry(2 * 4294967296 + c_it, result.key, result.val)
+    return __export_keep_kv_entry(2 * 4294967296 + c_it, returned.key, returned.val)
 }
 
 func __export_kv_errstr(c_s: i32, failed: uint) -> uint {
     let s_value = c_s
-    let result = kvstore.errstr(s_value)
-    return __export_text(result)
+    let returned = kvstore.errstr(s_value)
+    return __export_text(returned)
 }
 9	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 14	tests/gen_n00b/../bind/kv.writ:13:1	kv_status

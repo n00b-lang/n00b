@@ -2,6 +2,8 @@ coarseness.lookup: (Dict[int, int], int) -> int?
   effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads table.__value.entries
   reads table.__value.index.ctrl
+  reads table.__value.index.hashes
+  reads table.__value.index.slots
   reads table.__value.entries.__value.storage
   reads table.__value.index.ctrl.__value[]
   reads table.__value.index.hashes.__value[]

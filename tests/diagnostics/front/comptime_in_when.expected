@@ -1,0 +1,2 @@
+tests/diagnostics/front/comptime_in_when.n:1:6: error N00B-P0042: `comptime()` is not known while selecting code with `when`
+  help: use `if comptime() { ... }` instead

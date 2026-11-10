@@ -1,4 +1,5 @@
 import bitptr
+import containers.buffer
 import string.core
 import string.style
 
@@ -270,7 +271,7 @@ private func accumulate(modify acc: Array[u64], p: Ref[byte], at: uint,
 }
 
 private func merge_accs(acc: Array[u64], key: uint, start: u64) -> u64 {
-    var result: u64 = start
+    result = start
     var i: uint = 0
     while i < 4 {
         result = unsafe_add(result, fold64(acc[2 * i] ^ key64(key + 16 * i),
@@ -401,6 +402,10 @@ func hash(self: string) -> u128 {
         return len_0()
     }
     return xxh3_128_at(string.core.__text_bytes(ref base), len)
+}
+func hash(self: containers.buffer.Buffer) -> u128 {
+    let text: string = self
+    return hash(text)
 }
 func hash(self: Array[u64]) -> u128 {
     let len: uint = __array_length(self) * 8

@@ -23,6 +23,10 @@
 	    sep("_"),
 	    point("leading"),
 	    exp("eE"),
+	    sign("-"),
+	    sign_not_after("IDENTIFIER", "INT_LIT", "HEX_LIT", "FLOAT_LIT",
+			   "STRING_LIT", "CHAR_LIT", "EMBED", "TYPE_VAR",
+			   "true", "false", "nil", ")", "]", "}", "!"),
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
 @lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), sep("_"),

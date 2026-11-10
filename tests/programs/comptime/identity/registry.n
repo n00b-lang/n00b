@@ -1,0 +1,12 @@
+record Entry {
+    name: string
+    count: int
+}
+
+var entries: List[Entry]?
+
+if comptime() {
+    var built: List[Entry] = new[List[Entry]]()
+    built.append((name = "shared entry with a long enough name", count = 1))
+    entries = built
+}

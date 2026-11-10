@@ -40,11 +40,11 @@ private func utf8_cluster_after(s: string, since: u64) -> u64 {
     let len: u64 = byte_len(s)
     let tail: string = byte_slice(s, cast[int] since, cast[int] len)
     var it: unicode.Break_Iter = unicode.grapheme_iter(tail)
-    let nxt: u32? = unicode.next(it)
+    let nxt: u32? = unicode.__next(it)
     if nxt == nil {
         return len
     }
-    return since + cast[u64] nxt.get()
+    return since + cast[u64] nxt
 }
 
 private func step_unit(s: string, unit: Index_Unit, enc: Str_Encoding,
@@ -117,11 +117,11 @@ private func unit_span(s: string, unit: Index_Unit, n0: u64, n1: u64,
                 out1 = i
                 return k
             }
-            let nxt: u32? = unicode.next(it)
+            let nxt: u32? = unicode.__next(it)
             if nxt == nil {
                 return k
             }
-            i = cast[u64] nxt.get()
+            i = cast[u64] nxt
             k += 1
         }
     }
@@ -207,11 +207,11 @@ func unit_to_byte(s: string, unit: Index_Unit, n: u64) -> u64 {
     var k: u64 = 0
     var at: u64 = 0
     while k < n {
-        let nxt: u32? = unicode.next(it)
+        let nxt: u32? = unicode.__next(it)
         if nxt == nil {
             return len
         }
-        at = cast[u64] nxt.get()
+        at = cast[u64] nxt
         k += 1
     }
     return at
@@ -240,11 +240,11 @@ func byte_to_unit(s: string, unit: Index_Unit, at: u64) -> u64 {
     var it: unicode.Break_Iter = unicode.grapheme_iter(s)
     var k: u64 = 0
     while true {
-        let nxt: u32? = unicode.next(it)
+        let nxt: u32? = unicode.__next(it)
         if nxt == nil {
             return k
         }
-        if cast[u64](nxt.get()) > b {
+        if cast[u64](nxt) > b {
             return k
         }
         k += 1
@@ -347,7 +347,7 @@ func find(self: string, sub: string, start: uint = 0, end: uint? = nil,
     let ustart: u64 = start
     var uend: u64 = 0xffffffffffffffff
     if end != nil {
-        uend = end.get()
+        uend = end
     }
     var bstart: u64
     var bend: u64
@@ -359,7 +359,7 @@ func find(self: string, sub: string, start: uint = 0, end: uint? = nil,
     if hit == nil {
         fail String_Error.not_found
     }
-    let at: u64 = cast[u64] hit.get()
+    let at: u64 = cast[u64] hit
     return ustart + units_between(base, unit, bstart, at)
 }
 
@@ -605,11 +605,11 @@ private func refill_cluster_cache(modify c: Str_Cursor, target: u64) {
         }
         c.cache[c.cache_n] = last
         c.cache_n += 1
-        let nxt: u32? = unicode.next(it)
+        let nxt: u32? = unicode.__next(it)
         if nxt == nil {
             return
         }
-        let at: u64 = sp + cast[u64] nxt.get()
+        let at: u64 = sp + cast[u64] nxt
         if at >= target {
             return
         }
@@ -626,7 +626,10 @@ private func cluster_before(modify c: Str_Cursor, target: u64) -> u64 {
     return c.cache_hi
 }
 
-func next(modify self: Str_Cursor) -> string? {
+func __cleanup(consume self: Str_Cursor) {
+}
+
+func __next(modify self: Str_Cursor) -> string? {
     let len: u64 = byte_len(self.text)
     if self.byte_pos >= len {
         return nil
@@ -790,7 +793,7 @@ private func char_is_space(s: string, at: u64, out adv: u64) -> bool {
     if decoded == nil {
         return false
     }
-    return unicode.has_property(decoded.get(), unicode.Property.white_space)
+    return unicode.has_property(decoded, unicode.Property.white_space)
 }
 
 private func trim_bounds(base: string, modify lo_out: u64,
@@ -879,7 +882,7 @@ func split(self: string, sep: string, on: Split_On = Split_On.separator,
         if on == Split_On.units {
             while true {
                 let at: u64 = byte_pos(c)
-                let piece: string? = next(c)
+                let piece: string? = __next(c)
                 if piece == nil {
                     return out
                 }
@@ -889,11 +892,11 @@ func split(self: string, sep: string, on: Split_On = Split_On.separator,
         }
         var it: unicode.Break_Iter = unicode.word_iter(base)
         while true {
-            let nxt: u32? = unicode.next(it)
+            let nxt: u32? = unicode.__next(it)
             if nxt == nil {
                 return out
             }
-            let upto: u64 = cast[u64] nxt.get()
+            let upto: u64 = cast[u64] nxt
             let piece: string = text_slice(self, base, since, upto,
                                            ignore_style)
             if crop {
@@ -976,11 +979,11 @@ func reverse(self: string) -> string {
         var since: u64 = 0
         var at: u64 = len
         while true {
-            let nxt: u32? = unicode.next(it)
+            let nxt: u32? = unicode.__next(it)
             if nxt == nil {
                 break
             }
-            let upto: u64 = cast[u64] nxt.get()
+            let upto: u64 = cast[u64] nxt
             at -= upto - since
             for j from 0 until upto - since {
                 out[at + j] = byte_at(base, since + j)
@@ -1059,11 +1062,11 @@ private func byte_at_width(s: string, want: i64, out got: i64) -> u64 {
     var since: u64 = 0
     var w: i64 = 0
     while since < len {
-        let nxt: u32? = unicode.next(it)
+        let nxt: u32? = unicode.__next(it)
         if nxt == nil {
             break
         }
-        let upto: u64 = cast[u64] nxt.get()
+        let upto: u64 = cast[u64] nxt
         let cw: i64 = cast[i64] unicode.display_width(
             byte_slice(s, cast[int] since, cast[int] upto))
         if w + cw > want {

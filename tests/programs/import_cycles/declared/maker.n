@@ -8,6 +8,6 @@ func literal_x() -> int {
 }
 
 func constructed_x() -> int {
-    let made: shape.Shape = new[shape.Shape](x = 2)
+    let made: shape.Shape = (x = 2)
     return made.x
 }

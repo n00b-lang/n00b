@@ -17,10 +17,6 @@ N00B_DIAG(TYPE_VARIABLE_OUTSIDE_SIGNATURE, "N00B-T0502", ERROR,
     "function or by a generic record, variant or trait declaration, and is\n"
     "only meaningful inside it. Outside one, use a concrete type:\n"
     "    func first(items: List['T]) -> 'T { return items[0] }")
-N00B_DIAG(ATOMIC_FIELD_UPDATE, "N00B-T0503", ERROR,
-    "a field of an atomic value is assigned on its own",
-    "An atomic value is read and written as a whole, so a single field\n"
-    "cannot be updated in place. Build the new value and assign all of it.")
 N00B_DIAG(ASSIGN_TO_TYPE_PARAMETER, "N00B-T0504", ERROR,
     "a concrete value is assigned to a place whose type is a type parameter",
     "Inside a generic function, a place typed 'T can hold any type the\n"
@@ -53,11 +49,6 @@ N00B_DIAG(CONTAINER_LITERAL_UNTYPED, "N00B-T0510", ERROR,
     "An empty list, dict or set literal says nothing about the type of its\n"
     "items. Give the variable a type:\n"
     "    let names: List[string] = []")
-N00B_DIAG(LITERAL_MODIFIER_PAYLOAD, "N00B-T0511", ERROR,
-    "a literal modifier does not accept the literal it follows",
-    "Each literal modifier handles particular kinds of literal, such as\n"
-    "strings or lists. Use a literal of a kind the modifier accepts, or a\n"
-    "different modifier.")
 N00B_DIAG(LITERAL_MODIFIER_NOT_ON_LITERAL, "N00B-T0512", ERROR,
     "a literal modifier follows something that is not a literal",
     "A literal modifier is written directly after a literal, such as\n"
@@ -68,11 +59,6 @@ N00B_DIAG(TYPE_DECLARATION_FORM, "N00B-T0513", ERROR,
     "Use `record` for a value that is copied on assignment and `object` for\n"
     "a value that is shared:\n"
     "    record Point { x: int; y: int }")
-N00B_DIAG(SWITCH_CASE_SUBJECT_MISMATCH, "N00B-T0514", ERROR,
-    "switch cases name variant arms of a type the subject does not have",
-    "The cases of a switch over a variant must name arms of the subject's\n"
-    "own variant type. Switch on a value of that variant type, or name the\n"
-    "arms of the subject's type.")
 N00B_DIAG(DUPLICATE_DECLARATION, "N00B-N0501", ERROR,
     "a name is declared twice in the same scope",
     "Each name can be declared once per scope. Rename one declaration, or\n"
@@ -89,11 +75,6 @@ N00B_DIAG(SHADOW_LET, "N00B-N0503", WARNING,
     "Reusing the name of an outer `let` binding makes the outer value\n"
     "unreachable for the rest of the block, which is easy to misread. Give\n"
     "the inner binding a different name.")
-N00B_DIAG(OPAQUE_TYPE_FIELD, "N00B-N0505", ERROR,
-    "a field of a type whose fields are hidden is used outside its module",
-    "A module can export a type without its fields. Outside that module the\n"
-    "type's fields cannot be read or written; use the functions the module\n"
-    "exports for it.")
 N00B_DIAG(TYPE_NAME_IS_VALUE, "N00B-N0507", ERROR,
     "a type and a value in the same scope have the same name",
     "Types and values share one set of names in a scope, so a type cannot\n"
@@ -107,12 +88,6 @@ N00B_DIAG(REDUNDANT_PRIVATE, "N00B-N0510", ERROR,
     "a field inside a `private` block is also marked `private`",
     "Every field in a `private` block is already private. Remove the extra\n"
     "`private` on the field.")
-N00B_DIAG(LOOP_NAME_BINDS_WHOLE_ITEM, "N00B-N0511", WARNING,
-    "a single loop name does not match a field of the item, so it binds the whole item",
-    "When a loop names one binding and the items are records, the name is\n"
-    "matched against the item's fields. A name that matches no field binds\n"
-    "the whole item instead; write `let` before it to say so:\n"
-    "    for let entry in entries { ... }")
 N00B_DIAG(TYPECASE_NAME_CLASH, "N00B-N0512", ERROR,
     "a `typecase` arm declares the name it narrows",
     "Inside a `typecase` arm the subject's name already refers to the\n"
@@ -150,12 +125,18 @@ N00B_DIAG(UNION_BY_UNKNOWN_FIELD, "N00B-N0519", ERROR,
     "`union by` names something other than a plain field of the record",
     "`union by tag` selects the union arm using an integer field of the\n"
     "same record declared outside the union. Name such a field.")
-N00B_DIAG(LOOP_ITEM_DOES_NOT_FIT, "N00B-N0520", ERROR,
-    "a loop name is used as a type its items cannot become without loss",
-    "A loop name takes its type from the items it iterates over. It can be\n"
-    "used as a wider type, but not as one that might not hold every item.\n"
-    "Convert it explicitly where you need the narrower type:\n"
-    "    for size in sizes { store(cast[u8](size)) }")
+N00B_DIAG(LOOP_BINDS_OUTER_LET, "N00B-N0520", ERROR,
+    "a `for` loop names an outer `let` as its loop variable",
+    "A name before `in` that is already a `var` outside the loop is assigned\n"
+    "on each iteration; a new name is a fresh binding. An outer `let` can be\n"
+    "bound only once, so the loop cannot use it:\n"
+    "    var item = 0\n"
+    "    for item in values { }")
+N00B_DIAG(LOOP_ASSIGNED_TYPE, "N00B-N0521", ERROR,
+    "a `for` loop variable that assigns an outer `var` has a type",
+    "When the name before `in` is a `var` declared outside the loop, the\n"
+    "loop assigns that variable, which already has its type. Remove the\n"
+    "type, or use a new name.")
 N00B_DIAG(GENERIC_ARITY, "N00B-T0515", ERROR,
     "a generic type is given the wrong number of type arguments",
     "A generic type takes exactly the type arguments its declaration lists:\n"
@@ -169,54 +150,15 @@ N00B_DIAG(OPTION_USED_AS_VALUE, "N00B-T0516", ERROR,
     "    if v != nil {\n"
     "        total = v + 1\n"
     "    }")
-N00B_DIAG(OPTION_COMPARED_WITH_VALUE, "N00B-T0517", ERROR,
-    "an option is compared with something other than nil",
-    "An option can only be compared with `nil`. Check it against nil first,\n"
-    "then compare its value.")
 N00B_DIAG(OPERATOR_OPERANDS_MISMATCH, "N00B-T0518", ERROR,
     "a binary operator is applied to operands of different types",
     "Arithmetic, bitwise and comparison operators need both operands to have\n"
     "the same type. Convert one operand so the types match.")
-N00B_DIAG(OPERATOR_OPERAND_TYPE, "N00B-T0519", ERROR,
-    "an operator is applied to a value of a type it does not support",
-    "Each built-in operator works on particular types: `~` on integers and\n"
-    "flagsets, unary `+` on numbers. Use an operand of a supported type.")
-N00B_DIAG(OPERATOR_RESULT_MISMATCH, "N00B-T0520", ERROR,
-    "an operator's result is used as a different type",
-    "The result of an operator has a fixed type, such as `bool` for a\n"
-    "comparison. It cannot be used where a different type is expected.")
-N00B_DIAG(SHIFT_SIGNED_OPERAND, "N00B-T0521", ERROR,
-    "a value that can be negative is shifted",
-    "The built-in shifts work on unsigned integers and `bits` values.\n"
-    "Convert a signed value to an unsigned type before shifting it.")
-N00B_DIAG(SHIFT_COUNT_RANGE, "N00B-T0522", ERROR,
-    "a shift count is negative or not smaller than the width of the value",
-    "A value with N bits can be shifted by 0 to N-1 places. A larger or\n"
-    "negative count is an error when it is known at compile time.")
-N00B_DIAG(SHIFT_COUNT_SIGNED, "N00B-T0523", ERROR,
-    "a shift count has a signed type",
-    "Shift counts must have an unsigned type. Convert the count first.")
 N00B_DIAG(INTEGER_CONSTANT_RANGE, "N00B-T0524", ERROR,
     "an integer constant does not fit the type it is used as",
     "A constant must lie within the range of the integer type it is given.\n"
     "Use a wider type or a smaller value:\n"
     "    let small: u8 = 255")
-N00B_DIAG(INTEGER_NARROWING, "N00B-T0525", WARNING,
-    "an integer conversion may receive values that do not fit",
-    "The compiler could not prove every value fits the target type. If a\n"
-    "value does not fit when the program runs, it stops with a panic.\n"
-    "Check the value first, or use a wider type.")
-N00B_DIAG(INTEGER_TOO_LARGE, "N00B-T0526", ERROR,
-    "no integer type can hold every value an integer can have",
-    "Integer values are limited to 128 bits. Give the value an explicit\n"
-    "type or keep its range within what an integer type can hold.")
-N00B_DIAG(BITWISE_NEGATIVE, "N00B-T0527", ERROR,
-    "a value used with bitwise operators can be negative",
-    "Bitwise operators work on unsigned integers, so a value used with them\n"
-    "needs an unsigned type and cannot hold negative values.")
-N00B_DIAG(CONSTANT_ZERO_DIVISOR, "N00B-T0528", ERROR,
-    "a division or remainder has a divisor that is always zero",
-    "Dividing by zero is never valid. Use a nonzero divisor.")
 N00B_DIAG(STRING_NOT_BUFFER, "N00B-T0529", ERROR,
     "a string is used where a Buffer is required",
     "A string is immutable and does not convert to a Buffer. Copy it:\n"
@@ -225,74 +167,16 @@ N00B_DIAG(LITERAL_ITEM_TYPE_MISMATCH, "N00B-T0530", ERROR,
     "the items of a list, set or dict literal have different types",
     "All items of a container literal must share one type. Convert the item\n"
     "that differs, or give the container an explicit item type.")
-N00B_DIAG(LITERAL_ITEMS_DO_NOT_FIT, "N00B-T0531", ERROR,
-    "the items of a literal do not fit the type it builds",
-    "A literal built by a literal modifier must have items the modifier can\n"
-    "accept for the type it produces.")
-N00B_DIAG(EMPTY_BRACES_AMBIGUOUS, "N00B-T0532", ERROR,
-    "an empty `{}` could be a set or a dict",
-    "Nothing says whether an empty `{}` is a set or a dict. Give the\n"
-    "variable a type, or write `{:}` for an empty dict.")
-N00B_DIAG(SHAPE_LITERAL_DEFAULT_CONFLICT, "N00B-T0533", ERROR,
-    "a literal's default type conflicts with how it is used",
-    "A literal with no other type information gets a default type, such as\n"
-    "`List` for `[...]`. If it is then used as a different type, give it\n"
-    "that type explicitly.")
-N00B_DIAG(SHAPE_LITERAL_NO_HANDLER, "N00B-T0534", ERROR,
-    "no literal modifier can build the expected type from this literal",
-    "A literal used as a type other than its default is built by a literal\n"
-    "modifier for that type. None is visible here; import one, or build the\n"
-    "value another way.")
-N00B_DIAG(SHAPE_LITERAL_AMBIGUOUS_HANDLER, "N00B-T0535", ERROR,
-    "several literal modifiers can build the expected type from this literal",
-    "More than one visible literal modifier produces the expected type. Name\n"
-    "the one you mean after the literal.")
 N00B_DIAG(LITERAL_MODIFIER_SIGNATURE, "N00B-T0536", ERROR,
     "a literal modifier is declared with the wrong signature",
     "A literal modifier takes the literal as its one typed parameter (a\n"
     "fence may add `site: Literal_Site`), returns the value it builds, and\n"
     "declares `fail: string`.")
-N00B_DIAG(TUPLE_PATTERN, "N00B-T0537", ERROR,
-    "an unpacking pattern does not match the value it unpacks",
-    "A pattern unpacks a positional tuple by position, naming every element:\n"
-    "    var (a, b) = pair\n"
-    "and a field tuple or record by field name, in any order:\n"
-    "    var (x = left, y = top) = point\n"
-    "A bare name in a field pattern unpacks the field of that name, `_`\n"
-    "skips an element, and a single name binds the whole value.")
-N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
-    "a `for` loop iterates over a value that cannot be iterated",
-    "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
-    "such as a list or a range.")
-N00B_DIAG(CALLBACK_NOT_A_CONTRACT, "N00B-T0539", ERROR,
-    "`callback[...]` names a type that is not a callback type",
-    "`callback[T](...)` creates a callback of a type declared with\n"
-    "`callback`, which lists its `call`, `handler` and `setup` roles.")
-N00B_DIAG(CALLBACK_STATE_NOT_WRITABLE, "N00B-T0540", ERROR,
-    "the state given to a callback cannot be written",
-    "A stateful callback updates its state, so the state must be declared\n"
-    "with `var`.")
-N00B_DIAG(CALLBACK_STATE_UNINITIALIZED, "N00B-T0541", ERROR,
-    "the state given to a callback is not initialized",
-    "A callback's state must hold a value before the callback is created.")
-N00B_DIAG(CALLBACK_ARGUMENTS_MISMATCH, "N00B-T0542", ERROR,
-    "the arguments to `callback[...]` do not match its handler and setup",
-    "`callback[T](handler)` takes a handler matching the `handler` role, and\n"
-    "for a stateful callback the state and the remaining `setup` arguments.")
-N00B_DIAG(CALLBACK_TYPE_UNDETERMINED, "N00B-T0543", ERROR,
-    "the arguments to `callback[...]` leave type parameters undetermined",
-    "Every type parameter of a generic callback type must be fixed by the\n"
-    "handler or state, or written explicitly.")
 N00B_DIAG(CALLBACK_ROLES_MISMATCH, "N00B-T0544", ERROR,
     "the roles of a callback declaration do not fit together",
     "A callback has a `call` and a `handler` role. The handler takes the\n"
     "call's parameters, after a `modify` state when there is a `setup`\n"
     "role; `setup` takes references to the handler and the state.")
-N00B_DIAG(CONFLICTING_RETURNS, "N00B-T0545", ERROR,
-    "the return statements of a function produce different types",
-    "Without a declared return type, every `return` in a function must\n"
-    "produce the same type. Declare the return type, or make the returns\n"
-    "agree.")
 N00B_DIAG(FUNCTION_BODY_SIGNATURE_MISMATCH, "N00B-T0546", ERROR,
     "a function body returns or fails with a type its declaration does not allow",
     "The values a function returns, and the failures it raises, must match\n"
@@ -346,9 +230,6 @@ N00B_DIAG(ARRAY_SIZED_AFTER_UNSIZED, "N00B-T0558", ERROR,
     "a sized array dimension follows an unsized one",
     "In an array type, sized dimensions come first and unsized ones last:\n"
     "    Array[int][4][]")
-N00B_DIAG(ARRAY_SIZE_NOT_INTEGER, "N00B-T0559", ERROR,
-    "an array size is not an integer",
-    "Array dimensions are integer constants or integer expressions.")
 N00B_DIAG(ARRAY_TYPE_SYNTAX, "N00B-T0560", ERROR,
     "array dimensions follow something other than `Array[Element]`",
     "An array type names its element type first, then its sizes:\n"
@@ -364,14 +245,6 @@ N00B_DIAG(TYPECASE_SUBJECT, "N00B-T0563", ERROR,
     "a `typecase` subject is not a variable or parameter",
     "`typecase` narrows the type of a variable or parameter inside each arm,\n"
     "so its subject must be one. Store an expression in a variable first.")
-N00B_DIAG(COMPOSITE_FLAGSET_WRITE, "N00B-T0564", WARNING,
-    "a combined flagset member is assigned a boolean",
-    "Assigning to a member that combines several flags sets or clears all\n"
-    "of them at once. Assign the individual flags if that is not intended.")
-N00B_DIAG(FLAGSET_PIPE_UNION, "N00B-T0565", WARNING,
-    "`|` is used for a flagset union",
-    "Flagset unions are written with `+`. `|` is still accepted while code\n"
-    "migrates.")
 N00B_DIAG(UNKNOWN_LAYOUT_POLICY, "N00B-T0566", ERROR,
     "`layout(...)` names a policy that does not exist",
     "Record layout policies are `layout(c)` and `layout(ordered)`.")
@@ -431,6 +304,20 @@ N00B_DIAG(TUPLE_ONE_ELEMENT, "N00B-T0580", ERROR,
     "A value is its own one-tuple, so `(a)` and `a` are the same and\n"
     "`Tuple[T]` is just `T`. Write the element type alone:\n"
     "    var count: int")
+N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
+    "a variable's type cannot be inferred",
+    "A variable declared without a type or an initial value takes its type\n"
+    "from what is later assigned to it. When nothing settles it, give it a\n"
+    "type:\n"
+    "    var count: int")
+N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
+    "the names in a pattern do not match the shape of the value",
+    "Pattern names bind the positions of tuple items in order, or the fields\n"
+    "of a field tuple by name. A single name binds the whole value.")
+N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
+    "a `for` loop iterates over a value that cannot be iterated",
+    "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
+    "such as a list or a range.")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"
@@ -450,12 +337,6 @@ N00B_DIAG(TUPLE_CAST, "N00B-T0585", ERROR,
     "`cast[T]` converts between a field tuple and a record or object whose\n"
     "fields have the same names and compatible types, in either direction.\n"
     "A positional tuple never converts to a record or object.")
-N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
-    "a variable's type cannot be inferred",
-    "A variable declared without a type or an initial value takes its type\n"
-    "from what is later assigned to it. When nothing settles it, give it a\n"
-    "type:\n"
-    "    var count: int")
 N00B_DIAG(REF_ZERO_SIZE, "N00B-T0587", ERROR,
     "a reference to a type that takes no storage",
     "`nil`, and any type built only from `nil`, has a single value and takes\n"
@@ -467,3 +348,44 @@ N00B_DIAG(TRAIT_ARGUMENT_COUNT, "N00B-T0588", ERROR,
     "A trait's type parameters are the type variables its methods use,\n"
     "other than the receiver, in the order they first appear. A constraint\n"
     "such as `'R : Reference['T]` gives one type for each of them.")
+N00B_DIAG(OPTION_OF_OPTION, "N00B-T0589", ERROR,
+    "an option of an option is declared",
+    "Options don't nest: `T?` already holds either a `T` or nil, so `T??`\n"
+    "is not a type. An alias does not change this; if `alias type maybe =\n"
+    "int?`, then `maybe?` is an error too. Write the option once:\n"
+    "    var x: int?")
+N00B_DIAG(UNBOUNDED_METHOD, "N00B-T0590", ERROR,
+    "a method is called on a value whose type isn't known",
+    "When a value's type isn't known yet, a method call on it goes through\n"
+    "a trait. If exactly one trait has the method, that trait is used. If\n"
+    "several traits have it, the call is ambiguous: say which one, either as\n"
+    "the parameter's type or as a bound:\n"
+    "    func put_in(modify values: Appendable, value: 'T)\n"
+    "    func put_in(modify values: 'L, value: 'T) where 'L: Appendable\n"
+    "If no trait has the method, give the value a type that has it.")
+N00B_DIAG(OPERATOR_OPERAND_VIEW, "N00B-T0591", ERROR,
+    "an operator implementation does not take its operands as `view`",
+    "Operators do not change their operands, and generic code relies on\n"
+    "that. An implementation of an operator trait takes each operand as\n"
+    "`view`; only the left side of an assigning operator such as `+=` is\n"
+    "`modify`:\n"
+    "    func __add(view left: Meter, view right: Meter) -> Meter")
+N00B_DIAG(BITWISE_NEGATIVE, "N00B-T0592", ERROR,
+    "a bitwise operator is used on a value that can be negative",
+    "Bitwise operators (`&`, `|`, `^`, `~`, `<<` and `>>`) work only on\n"
+    "unsigned integers, so a value they use cannot be negative. To set\n"
+    "every bit, write `~0` instead of `-1`:\n"
+    "    let mask: u32 = ~0")
+N00B_DIAG(VARIANT_ARM_UNCHECKED, "N00B-T0593", ERROR,
+    "an arm of a variant is read where the value may hold another arm",
+    "A variant holds one of its arms at a time. Read an arm only where a\n"
+    "`case` has shown the value holds it:\n"
+    "    switch shape {\n"
+    "        case circle { return shape.circle }\n"
+    "        else { return 0 }\n"
+    "    }")
+N00B_DIAG(VARIANT_LITERAL_ARMS, "N00B-T0594", ERROR,
+    "a variant literal names more than one arm",
+    "A variant holds one arm at a time, so a literal for it names exactly\n"
+    "one arm and its value:\n"
+    "    let shape: Shape = (circle = 3)")

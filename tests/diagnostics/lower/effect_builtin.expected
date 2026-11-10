@@ -4,6 +4,8 @@ tests/diagnostics/lower/effect_builtin.n:20:1: error N00B-S0073: this check is f
 tests/diagnostics/lower/effect_builtin.n:23:10: error N00B-S0079: `log_line` has a body, so it gets `noreturn` only by not coming back; only a foreign or native function can be declared never to come back
 tests/diagnostics/lower/effect_builtin.n:27:5: error N00B-S0079: `output` is a built-in effect, so `log_line` can't handle it
 tests/diagnostics/lower/effect_builtin.n:30:1: error N00B-S0079: `impure` is a group of built-in effects; declare sources for one of its effects
+tests/diagnostics/lower/effect_builtin.n:45:6: warning N00B-N0019: function `partial` is never called
+  help: call it or delete it
 tests/diagnostics/lower/effect_builtin.n:46:5: error N00B-S0073: this check is false: `partial` can come back without doing `output`
   tests/diagnostics/lower/effect_builtin.n:50:2: note: the implicit `return` at the end of `partial` is reached without it
   help: change the code so the check holds, or change the check

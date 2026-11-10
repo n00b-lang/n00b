@@ -3,7 +3,7 @@ quotes litmod read_number(raw: string) -> int fail: string {
     return 7
 }
 
-when comptime() {
+if comptime() {
     require "seven"'number_scalar == 7
 }
 

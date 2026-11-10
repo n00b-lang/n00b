@@ -23,6 +23,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int
+n00bb_env_command(core_string_t argv0);
 
 static const core_diag_location_t nowhere = {0};
 
@@ -48,7 +50,7 @@ n00bb_finish_command_diagnostics(core_diagnostics_t *diagnostics, int status)
     return status;
 }
 
-void
+static void
 n00bb_print_version(FILE *out)
 {
     fprintf(out, "n00b %s (build %s, rev %s%s, %s)\n", N00BB_VERSION,
@@ -733,11 +735,8 @@ cache_problem(core_string_t cache, int *failure)
 }
 
 static void
-warn_environment(core_diagnostics_t *d, parse_cmdr_result_t *parsed)
+warn_environment(core_diagnostics_t *d)
 {
-    if (n00bb_handoff()->capture_fd >= 0
-        || parse_cmdr_flag_present(parsed, CORE_STRING_STATIC("--build-time")))
-        return;
     warn_contract_dirs(d);
     each_package_path(warn_package_path, d);
     core_string_t cache = n00bb_cache_directory(CORE_STRING_STATIC(""));
@@ -774,7 +773,7 @@ check_build_request(const n00bb_invocation_t *invocation, bool *handled)
         bool output_valid = check_library_output(d, parsed);
         if (!roots_valid || !output_valid) status = 2;
     }
-    if (!status) warn_environment(d, parsed);
+    if (!status) warn_environment(d);
     n00bb_finish_command_diagnostics(d, status);
     *handled = status != 0;
     return status;
@@ -864,7 +863,7 @@ n00bb_cli_preflight(n00bb_invocation_t *invocation, bool *handled)
     return check_build_request(invocation, handled);
 }
 
-bool
+static bool
 n00bb_stderr_color(void)
 {
     core_string_t mode = n00bb_setting_string(
@@ -1012,7 +1011,7 @@ env_path_check(core_string_t argv0)
     core_free(self.data);
 }
 
-int
+static int
 n00bb_env_command(core_string_t argv0)
 {
     const n00bb_toolchain_t *toolchain = n00bb_toolchain();

@@ -123,7 +123,7 @@ func nominal_cast_check() {
 type Wide_Id = u128
 type Flag = bool
 
-func __equal(left: Wide_Id, right: Wide_Id) -> bool {
+func __equal(view left: Wide_Id, view right: Wide_Id) -> bool {
     return cast[u128](left) == cast[u128](right)
 }
 
@@ -171,12 +171,12 @@ func copyout_check() {
 func guard(x: Ref[byte]?) -> uint {
     let next: Ref[byte]? = x
     if next == nil { return 0 }
-    return __abi_ref_address(next.get())
+    return __abi_ref_address(next)
 }
 
 func required(x: Ref[byte]?) -> uint {
     require x != nil
-    return __abi_ref_address(x.get())
+    return __abi_ref_address(x)
 }
 
 func option_guard_flow_check() {
@@ -262,10 +262,10 @@ func option_record_fields_check() {
     assert count != nil
     assert text != nil
     if count != nil {
-        assert count.get() == 4
+        assert count == 4
     }
     if text != nil {
-        assert text.get() == "a longer piece of option text"
+        assert text == "a longer piece of option text"
     }
     let n: E = (code = 1, count = nil, text = nil)
     assert n.count == nil
@@ -286,7 +286,7 @@ func abi_summaries_check() {
             break
         }
         total += 1
-        if found.get().__value.summary_offset != 0 {
+        if found.__value.summary_offset != 0 {
             summarized += 1
         }
         index += 1
@@ -328,7 +328,7 @@ record Tally {
     calls: int
 }
 
-func __add_assign(modify self: Tally, other: int) {
+func __add_assign(modify self: Tally, view other: int) {
     self.count += other
     self.calls += 1
 }
@@ -337,7 +337,7 @@ record Sum_Pair {
     value: int
 }
 
-func __add(self: Sum_Pair, other: int) -> Sum_Pair {
+func __add(view self: Sum_Pair, view other: int) -> Sum_Pair {
     return (value = self.value + other)
 }
 
@@ -377,7 +377,7 @@ func atomic_global_check() {
     __atomic_store(ref atomic_head, ref node)
     let stored = __atomic_load(ref atomic_head)
     require stored != nil
-    require stored.get().__value.value == 7
+    require stored.__value.value == 7
 }
 
 func box_integer(value: int) -> Any {
@@ -772,10 +772,10 @@ func thread_global_pair_check() {
     while index < sys.abi.storage_count() {
         let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
         if row != nil {
-            if row.get().__value.segment_kind == 3 {
+            if row.__value.segment_kind == 3 {
                 let address: Ref[byte]? = sys.abi.storage_address(index)
                 if address != nil {
-                    let actual: uint = __abi_ref_address(address.get())
+                    let actual: uint = __abi_ref_address(address)
                     if actual == __abi_ref_address(ref active) { found_active = true }
                     if actual == __abi_ref_address(ref current) { found_current = true }
                 } else { require false }
@@ -790,7 +790,7 @@ func thread_global_pair_check() {
     assert current == nil
     current = ref marker
     if current != nil {
-        require __abi_ref_address(current.get()) == __abi_ref_address(ref marker)
+        require __abi_ref_address(current) == __abi_ref_address(ref marker)
     } else { require false }
 }
 
@@ -872,7 +872,7 @@ func peek(entry: Entry) -> int {
 
 func guarded(entry: Entry) -> int {
     if entry.value != nil {
-        return entry.value.get()
+        return entry.value
     }
     return 0
 }
@@ -881,7 +881,7 @@ func field_early(entry: Entry) -> int {
     if entry.value == nil or entry.inner.value == nil {
         return 0
     }
-    return entry.value.get() + entry.inner.value.get()
+    return entry.value + entry.inner.value
 }
 
 func local_copy(entry: Entry) -> int {
@@ -890,12 +890,12 @@ func local_copy(entry: Entry) -> int {
         return 0
     }
     let unused = peek(copy)
-    return copy.value.get()
+    return copy.value
 }
 
 func modified(modify entry: Entry) -> int {
     if entry.value != nil {
-        return entry.value.get()
+        return entry.value
     }
     return 0
 }
@@ -907,7 +907,7 @@ func indexed(index: int) -> int {
     if value == nil or inner == nil {
         return 0
     }
-    return value.get() + inner.get()
+    return value + inner
 }
 
 func twice(value: int) -> int {
@@ -928,8 +928,8 @@ func promoted(entry: Entry?, items: Array[int]?) -> int {
     if entry.value == nil or entry.inner.value == nil {
         return 0
     }
-    return twice(entry.value.get()) + entry.inner.value.get() +
-        cast[int](items.len()) + items[1] + 1 + entry.value.get()
+    return twice(entry.value) + entry.inner.value +
+        cast[int](items.len()) + items[1] + 1 + entry.value
 }
 
 func looked_up(counts: Dict[string, int]) -> int {
@@ -959,7 +959,7 @@ func option_field_narrowing_check() {
 func rounded_bytes(index: u32) -> uint {
     let found: Ref[sys.abi.Type_Record]? = sys.abi.type_at(index)
     if found != nil {
-        return cast[uint]((found.get().__value.size_bits + 7) / 8)
+        return cast[uint]((found.__value.size_bits + 7) / 8)
     }
     return 0
 }
@@ -968,7 +968,7 @@ func combined_bytes(first_index: u32, second_index: u32) -> uint {
     let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
     let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
     if first != nil and second != nil {
-        return cast[uint]((first.get().__value.size_bits + second.get().__value.size_bits) / 8)
+        return cast[uint]((first.__value.size_bits + second.__value.size_bits) / 8)
     }
     return 0
 }
@@ -979,7 +979,7 @@ func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
     if first == nil or second == nil {
         return 0
     } else {
-        return cast[uint]((first.get().__value.size_bits + second.get().__value.size_bits) / 8)
+        return cast[uint]((first.__value.size_bits + second.__value.size_bits) / 8)
     }
 }
 
@@ -991,7 +991,7 @@ func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
     } elif second == nil {
         return 0
     } else {
-        return cast[uint](first.get().__value.size_bits / 8)
+        return cast[uint](first.__value.size_bits / 8)
     }
 }
 
@@ -1066,7 +1066,7 @@ func count_up(start: int?) -> int {
 
 func explicit(v: int?) -> int {
     if v != nil {
-        return v.get() + v
+        return v + v
     }
     return v.get_or_else(7)
 }
@@ -1556,8 +1556,8 @@ func native_frame_scan_check() {
     let mutator = sys.gc.alloc.mutator_for_native()
     assert mutator != nil
     if mutator != nil {
-        assert mutator.get().__value.heap.__value.last_stack_words > 0
-        assert mutator.get().__value.heap.__value.last_frame_slots > 0
+        assert mutator.__value.heap.__value.last_stack_words > 0
+        assert mutator.__value.heap.__value.last_frame_slots > 0
     }
 }
 
@@ -1600,7 +1600,7 @@ func gc_trace_record_check() {
     var cursor: Ref[Stress_Node]? = stress_head
     var expected: int = 127
     while cursor != nil {
-        let node: Ref[Stress_Node] = cursor.get()
+        let node: Ref[Stress_Node] = cursor
         require node.__value.value == expected
         expected = expected - 1
         cursor = node.__value.next
@@ -1707,9 +1707,9 @@ func bake_foreign_check() {
     require unsafe_cast[uint](item_at(2).label) == unsafe_cast[uint] root.other
     require __abi_baked_address(unsafe_cast[uint] root.other)
     let label: string? = foreign_text(item_at(1).label)
-    require label != nil and label.get() == "odd"
+    require label != nil and label == "odd"
     let text: string? = foreign_text(root.text)
-    require text != nil and text.get() == "word"
+    require text != nil and text == "word"
 }
 
 trait Checker {
@@ -1880,19 +1880,15 @@ func tuples_check() {
     var (a, b) = (1, 2)
     (a, b) = (b, a)
     require a == 2 and b == 1
-    let (x = px, y) = field
-    require px == 3 and y == 4
     var (first, (_, last)) = (1, (2, "end"))
     require first == 1 and last == "end"
-    (x = first, y = a) = field
-    require first == 3 and a == 4
     (a) = 9
     require a == 9
     var total = 0
     for (i, (j, _)) in [(1, (2, 3)), (4, (5, 6))] {
         total = total + i + j
     }
-    for (key = k, value = v) in {"k": 5} {
+    for k, v in {"k": 5} {
         total = total + v
     }
     require total == 17
@@ -1912,10 +1908,10 @@ func ascii_check() {
     require is_ascii_digit('7') and !is_ascii_digit('a')
     require is_ascii_letter('Q') and !is_ascii_letter('_')
     let eleven: u32? = hex_digit_value('b')
-    require eleven != nil and eleven.get() == 11
+    require eleven != nil and eleven == 11
     require hex_digit_value('g') == nil
     let forty_two: u64? = decimal_value("042")
-    require forty_two != nil and forty_two.get() == 42
+    require forty_two != nil and forty_two == 42
     require decimal_value("") == nil and decimal_value("4a") == nil
     require decimal_value("18446744073709551615") != nil
     require decimal_value("18446744073709551616") == nil
@@ -1956,13 +1952,13 @@ func loop_field_index_check() {
     names.append("a")
     names.append("bb")
     var total: uint = 0
-    for let group in indexed_groups(1) {
+    for group in indexed_groups(1) {
         let name: string = names[group.index]
-        for let site in group.sites {
+        for site in group.sites {
             total += site + byte_len(name)
         }
     }
-    for let group in indexed_groups(0) {
+    for group in indexed_groups(0) {
         total += group.sites[0] + byte_len(names[group.index])
     }
     let order: Array[uint] = [1, 0, 1]
@@ -2002,15 +1998,15 @@ func hash_container_order_check() {
         seen += 1
     }
     require seen == numbers.len()
-    var members: Set[int] = new[Set[int]]()
+    var members: Dict[int, nil] = new[Dict[int, nil]]()
     round = 0
     while round < 5000 {
-        _ = members.add(round % 50)
+        _ = members.add(round % 50, nil)
         _ = members.remove((round * 3) % 50)
         round += 1
     }
     var counted: uint = 0
-    for member in members {
+    for member in members.keys() {
         require members.contains(member)
         counted += 1
     }
@@ -2077,6 +2073,40 @@ func index_field_write_check() {
     require items[0].inner.k == 7 and items[1].inner.k == 0
 }
 
+record Declared_Order {
+    n: uint
+    m: uint
+}
+
+func literal_field_order_check() {
+    var items: List[Declared_Order] = [(n = 1, m = 2), (n = 3, m = 4)]
+    require items[0].n == 1 and items[0].m == 2
+    require items[1].n == 3 and items[1].m == 4
+    items[0].n = 5
+    require items[0].n == 5 and items[0].m == 2
+    let by_name: Dict[string, Declared_Order] = {"a": (n = 6, m = 7)}
+    for k, v in by_name {
+        require v.n == 6 and v.m == 7
+    }
+    let by_key: Dict[Declared_Order, uint] = {(n = 8, m = 9): 10}
+    for k, v in by_key {
+        require k.n == 8 and k.m == 9 and v == 10
+    }
+}
+
+func loop_assigns_outer_var_check() {
+    var last = 0
+    for last in [3, 4, 5] {
+    }
+    require last == 5
+    var seen = 0
+    var total = 0
+    for seen in [1, 2] {
+        total += seen
+    }
+    require seen == 2 and total == 3
+}
+
 record Stored_Pair {
     count: uint
     name:  string
@@ -2092,8 +2122,8 @@ func index_tuple_write_check() {
     let k = by_name["k"]
     let j = by_name["j"]
     require k != nil and j != nil
-    require k.get().count == 5 and k.get().name == "y"
-    require j.get().count == 4 and j.get().name == "x"
+    require k.count == 5 and k.name == "y"
+    require j.count == 4 and j.name == "x"
     require items[0].count == 6 and items[0].name == "z"
 }
 
@@ -2116,14 +2146,14 @@ func index_field_tuple_write_check() {
     items[0].maybe = (count = 7, name = "q")
     require items[0].plain.count == 300 and items[0].plain.name == "p"
     let maybe = items[0].maybe
-    require maybe != nil and maybe.get().count == 7
-    require maybe.get().name == "q"
+    require maybe != nil and maybe.count == 7
+    require maybe.name == "q"
     let count: uint = 9
     let name: string = "r"
     items[0].maybe = (name = name, count = count)
     let exact = items[0].maybe
-    require exact != nil and exact.get().count == 9
-    require exact.get().name == "r"
+    require exact != nil and exact.count == 9
+    require exact.name == "r"
 }
 
 func index_write_check() {
@@ -2202,6 +2232,8 @@ func start() -> nil {
     tuples_check()
     index_write_check()
     index_field_write_check()
+    literal_field_order_check()
+    loop_assigns_outer_var_check()
     index_tuple_write_check()
     index_field_tuple_write_check()
     primitive_operator_method_check()

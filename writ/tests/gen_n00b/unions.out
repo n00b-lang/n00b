@@ -205,13 +205,13 @@ enum Value_Kind {
 
 
 func value_kind(value: Value) -> i32 {
-    let result = __value_kind(ref value)
-    return result
+    let returned = __value_kind(ref value)
+    return returned
 }
 
 func cell_flag(cell: Cell, raw: uint) -> u8 {
-    let result = __cell_flag(ref cell.storage, raw)
-    return result
+    let returned = __cell_flag(ref cell.storage, raw)
+    return returned
 }
 7	tests/gen_n00b/unions.writ:6:1	Raw
 40	tests/gen_n00b/unions.writ:8:1	Value

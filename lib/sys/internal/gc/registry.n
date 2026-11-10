@@ -1,52 +1,26 @@
 import internal.abi
 import internal.gc.core
 import internal.gc.hash
-import internal.gc.sync
+import internal.locks
 
-const reg_writer:      u32  = 1 << 31
 const los_min_level:   u32  = 12
 const los_scaled_from: u32  = 20
 const los_level_bits:  uint = 6
 
 func registry_read_lock(heap: Ref[internal.gc.core.Heap]) {
-    while true {
-        let seq:   u32 = internal.gc.sync.event_enter(ref heap.__value.reg_changed)
-        let state: u32 = __atomic_load(ref heap.__value.reg_rw)
-        if (state & reg_writer) == 0 {
-            if __atomic_compare_exchange(ref heap.__value.reg_rw, state, state + 1) {
-                internal.gc.sync.event_leave(ref heap.__value.reg_changed)
-                return
-            }
-            internal.gc.sync.event_leave(ref heap.__value.reg_changed)
-        } else {
-            internal.gc.sync.event_sleep(ref heap.__value.reg_changed, seq)
-            internal.gc.sync.event_leave(ref heap.__value.reg_changed)
-        }
-    }
+    internal.locks.rw_read_lock(ref heap.__value.registry)
 }
 
 func registry_read_unlock(heap: Ref[internal.gc.core.Heap]) {
-    if __atomic_fetch_sub(ref heap.__value.reg_rw, 1) == (reg_writer | 1) {
-        internal.gc.sync.event_signal(ref heap.__value.reg_changed)
-    }
+    internal.locks.rw_unlock(ref heap.__value.registry)
 }
 
 func write_lock(heap: Ref[internal.gc.core.Heap]) {
-    __atomic_fetch_or(ref heap.__value.reg_rw, reg_writer)
-    while true {
-        let seq: u32 = internal.gc.sync.event_enter(ref heap.__value.reg_changed)
-        if __atomic_load(ref heap.__value.reg_rw) == reg_writer {
-            internal.gc.sync.event_leave(ref heap.__value.reg_changed)
-            return
-        }
-        internal.gc.sync.event_sleep(ref heap.__value.reg_changed, seq)
-        internal.gc.sync.event_leave(ref heap.__value.reg_changed)
-    }
+    internal.locks.rw_write_lock(ref heap.__value.registry)
 }
 
 func write_unlock(heap: Ref[internal.gc.core.Heap]) {
-    __atomic_fetch_and(ref heap.__value.reg_rw, ~reg_writer)
-    internal.gc.sync.event_signal(ref heap.__value.reg_changed)
+    internal.locks.rw_unlock(ref heap.__value.registry)
 }
 
 func widen_bounds(heap: Ref[internal.gc.core.Heap], start: uint, end: uint) {
@@ -200,7 +174,7 @@ func los_find(heap: Ref[internal.gc.core.Heap], address: uint) -> Ref[internal.g
             let candidate: Ref[byte]?                     = slot.__value.val
             if candidate != nil {
                 if slot.__value.key == key {
-                    let obj: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] candidate.get()
+                    let obj: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] candidate
                     let start: uint = __abi_ref_address(obj)
                     if address >= start and address - start < obj.__value.bytes {
                         return obj
@@ -263,12 +237,12 @@ func find_object(heap: Ref[internal.gc.core.Heap], address: uint)
     let key:       uint       = address / internal.gc.core.block_bytes
     let candidate: Ref[byte]? = internal.gc.hash.tab_lookup(ref heap.__value.blocks, key)
     if candidate != nil {
-        return find_block_object(candidate.get(), address)
+        return find_block_object(candidate, address)
     }
 
     let large: Ref[internal.gc.core.Los_Obj]? = los_find(heap, address)
     if large != nil {
-        let obj: Ref[internal.gc.core.Los_Obj] = large.get()
+        let obj: Ref[internal.gc.core.Los_Obj] = large
         if obj.__value.hdr.type_index != 0 {
             return ref obj.__value.hdr
         }

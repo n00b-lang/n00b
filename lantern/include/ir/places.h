@@ -17,6 +17,11 @@ typedef struct {
     const ir_value_t *root;
     th_type          *type;
     bool              exposed;
+    bool              nested;
+    bool              element;
+    uint32_t          parent;
+    uint32_t          depth;
+    core_string_t     step;
 } ir_place_t;
 
 typedef enum : uint8_t {
@@ -43,6 +48,9 @@ bool               ir_places_of(ir_places_t *places, const ir_value_t *address,
                                 const uint32_t **ids, uint32_t *count);
 bool               ir_places_may_alias(const ir_places_t *places, uint32_t a,
                                        uint32_t b);
+uint32_t           ir_place_root_of(const ir_places_t *places, uint32_t place);
+bool               ir_places_within(const ir_places_t *places, uint32_t outer,
+                                    uint32_t inner);
 uint32_t           ir_places_access_count(const ir_places_t *places);
 const ir_access_t *ir_places_access_at(const ir_places_t *places,
                                        uint32_t index);

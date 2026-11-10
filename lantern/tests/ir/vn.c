@@ -59,14 +59,14 @@ static void test_repeated_values_share_a_number(void)
 }
 
 static uint32_t
-links_of(ir_memssa_t *memssa, ir_func_t *f, const char *load)
+links_of(ir_pdg_memory_t *memssa, ir_func_t *f, const char *load)
 {
     ir_value_t *value = ir_value_find(f, core_string_from_cstr(load));
-    uint32_t access = value ? ir_memssa_access_of(memssa, value->def,
+    uint32_t access = value ? ir_pdg_memory_access_of(memssa, value->def,
                                                   IR_ACCESS_LOAD)
                             : UINT32_MAX;
     return access == UINT32_MAX ? UINT32_MAX
-        : ir_memssa_element_link_count(memssa, access);
+        : ir_pdg_memory_element_link_count(memssa, access);
 }
 
 static void test_array_ssa_links_element_reads(void)
@@ -106,9 +106,9 @@ static void test_array_ssa_links_element_reads(void)
     if (!m) return;
     ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED);
     ir_func_t *f = ir_func_at(m, 0);
-    ir_memssa_t *memssa = ir_func_memssa(f);
+    ir_pdg_memory_t *memssa = ir_pdg_memory(ir_func_pdg(f));
     ir_value_numbers_t *numbers = ir_func_value_numbers(f);
-    check("memory SSA with element links verifies", ir_memssa_verify(memssa));
+    check("memory SSA with element links verifies", ir_pdg_memory_verify(memssa));
     check("a store to another constant index does not reach a read",
           links_of(memssa, f, "past_other") == 1);
     check("so the read still sees its own store",
@@ -123,8 +123,8 @@ static void test_array_ssa_links_element_reads(void)
     check("a join reaches both arms' stores through an element phi",
           links_of(memssa, f, "joined") == 2);
     bool element_phi = false;
-    for (uint32_t i = 0; i < ir_memssa_def_count(memssa); i++)
-        element_phi = element_phi || ir_memssa_def(memssa, i)->kind
+    for (uint32_t i = 0; i < ir_pdg_memory_def_count(memssa); i++)
+        element_phi = element_phi || ir_pdg_memory_def(memssa, i)->kind
             == IR_MEMDEF_ELEMENT_PHI;
     check("the join has a per-element phi", element_phi);
     ir_ctx_free(ctx);
@@ -152,7 +152,7 @@ clobbers_of(ir_func_t *f, const ir_value_t *loaded)
     for (uint32_t a = 0; loaded && a < ir_places_access_count(places); a++)
         if (ir_places_access_at(places, a)->instr == loaded->def
             && ir_places_access_at(places, a)->kind == IR_ACCESS_LOAD)
-            ir_memssa_visit_clobbers(ir_func_memssa(f), a, count_clobber,
+            ir_pdg_memory_visit_clobbers(ir_pdg_memory(ir_func_pdg(f)), a, count_clobber,
                                      &count);
     return count;
 }
@@ -206,9 +206,137 @@ static void test_call_clobbers_come_from_callee_summaries(void)
     ir_ctx_free(ctx);
 }
 
+static void test_global_reads_follow_their_stores(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, MOD(
+        "  global @g: i32\n"
+        "  func @f() -> i32 {\n"
+        "    block entry:\n"
+        "      %before: i32 = copy @g\n"
+        "      %again: i32 = copy @g\n"
+        "      %one: i32 = const 1\n"
+        "      global.store @g, %one\n"
+        "      %after: i32 = copy @g\n"
+        "      %sum: i32 = add trap %before, %again\n"
+        "      %total: i32 = add trap %sum, %after\n"
+        "      return %total\n"
+        "  }\n"), 0, PROFILES, 1, d);
+    check("the global module parses", m != nullptr);
+    if (!m) return;
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
+    ir_func_t *f = ir_func_find(m, S("f"));
+    ir_value_numbers_t *numbers = ir_func_value_numbers(f);
+#define SAME(a, b) ir_value_numbers_same(numbers, ir_value_find(f, S(a)), \
+                                         ir_value_find(f, S(b)))
+    check("two reads of a global with no store between are one value",
+          SAME("before", "again"));
+    check("a read after a store to the global is a new value",
+          !SAME("before", "after"));
+#undef SAME
+    ir_ctx_free(ctx);
+}
+
+static bool
+observed(ir_func_t *f, ir_instr_t *store)
+{
+    ir_places_t *places = ir_func_places(f);
+    uint32_t first = 0;
+    uint32_t count = ir_places_accesses_of(places, store, &first);
+    for (uint32_t a = first; a < first + count; a++) {
+        const ir_access_t *access = ir_places_access_at(places, a);
+        if (access->kind == IR_ACCESS_STORE && access->count == 1)
+            return ir_pdg_memory_store_observed(ir_pdg_memory(ir_func_pdg(f)),
+                store, ir_places_access_places(places, access)[0]);
+    }
+    return true;
+}
+
+static void test_a_global_store_is_observed_until_overwritten(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, MOD(
+        "  global @g: i32\n"
+        "  func @touch() -> void {\n"
+        "    block entry:\n"
+        "      return\n"
+        "  }\n"
+        "  func @f() -> void {\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      global.store @g, %one\n"
+        "      %two: i32 = const 2\n"
+        "      global.store @g, %two\n"
+        "      %call: void = call @touch\n"
+        "      %three: i32 = const 3\n"
+        "      global.store @g, %three\n"
+        "      return\n"
+        "  }\n"), 0, PROFILES, 1, d);
+    check("the store module parses", m != nullptr);
+    if (!m) return;
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
+    ir_func_t *f = ir_func_find(m, S("f"));
+    ir_instr_t *stores[3] = {0};
+    uint32_t found = 0;
+    for (uint32_t i = 0; f && i < f->blocks[0]->n_instrs; i++)
+        if (f->blocks[0]->instrs[i]->op == IR_OP_GLOBAL_STORE && found < 3)
+            stores[found++] = f->blocks[0]->instrs[i];
+    check("the three stores are found", found == 3);
+    if (found != 3) {
+        ir_ctx_free(ctx);
+        return;
+    }
+    check("a store overwritten before any call or exit is not observed",
+          !observed(f, stores[0]));
+    check("a store that reaches a call is observed", observed(f, stores[1]));
+    check("a store that reaches the return is observed",
+          observed(f, stores[2]));
+    ir_ctx_free(ctx);
+}
+
+static void test_fields_are_separate_places(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, MOD(
+        "  func @f(%a: i32, %b: i32) -> i32 {\n"
+        "    local $p: (x: i32, y: i32)\n"
+        "    block entry:\n"
+        "      %base: ref[(x: i32, y: i32)] = address.of $p\n"
+        "      %px: ref[i32] = field %base, \"x\"\n"
+        "      %py: ref[i32] = field %base, \"y\"\n"
+        "      store %px, %a\n"
+        "      store %py, %b\n"
+        "      %got: i32 = load %px\n"
+        "      %other: i32 = load %py\n"
+        "      %sum: i32 = add trap %got, %other\n"
+        "      return %sum\n"
+        "  }\n"), 0, PROFILES, 1, d);
+    check("the field module parses", m != nullptr);
+    if (!m) return;
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED);
+    ir_func_t *f = ir_func_at(m, 0);
+    ir_reinterpretations_open(ctx);
+    ir_reinterpretations_note_function(ctx, f);
+    ir_reinterpretations_seal(ctx);
+    ir_value_numbers_t *numbers = ir_func_value_numbers(f);
+#define SAME(a, b) ir_value_numbers_same(numbers, ir_value_find(f, S(a)), \
+                                         ir_value_find(f, S(b)))
+    check("a store to another field does not hide a field's own store",
+          SAME("got", "a"));
+    check("and each field reads its own value", SAME("other", "b"));
+#undef SAME
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_repeated_values_share_a_number();
+    test_fields_are_separate_places();
+    test_a_global_store_is_observed_until_overwritten();
+    test_global_reads_follow_their_stores();
     test_array_ssa_links_element_reads();
     test_call_clobbers_come_from_callee_summaries();
     return report("IR value numbers");

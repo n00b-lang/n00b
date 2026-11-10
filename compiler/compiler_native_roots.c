@@ -12,30 +12,15 @@ core_list_decl(native_root_index_t);
 typedef struct {
     n00bb_runtime_native_root_t root;
     core_string_t               name;
-    bool                        hosted;
 } registered_root_t;
 
 static registered_root_t *registered;
 static size_t             registered_count;
 static size_t             registered_capacity;
-static core_list_t(native_root_index_t) unhosted;
 static core_string_t     *runtime_names;
-static bool               hosted_hidden;
 static bool               indexed;
 static core_dict_t        by_name;
 static core_dict_t        by_module;
-
-void
-n00bb_native_root_hide_hosted(bool hidden)
-{
-    hosted_hidden = hidden;
-}
-
-bool
-n00bb_native_root_hosted_hidden(void)
-{
-    return hosted_hidden;
-}
 
 static size_t
 module_length(core_string_t name)
@@ -70,7 +55,6 @@ ensure_index(void)
     if (indexed) return true;
     core_dict_init_string(&by_name);
     core_dict_init_string(&by_module);
-    unhosted = core_list_new(native_root_index_t);
     runtime_names = core_alloc_array(core_string_t,
         n00bb_runtime_native_root_count ? n00bb_runtime_native_root_count : 1);
     for (size_t i = 0; i < n00bb_runtime_native_root_count; i++) {
@@ -94,14 +78,6 @@ root_name(const n00bb_runtime_native_root_t *root)
                                                  : (core_string_t){};
 }
 
-static bool
-visible(size_t index)
-{
-    return index < n00bb_runtime_native_root_count
-        || !hosted_hidden
-        || !registered[index - n00bb_runtime_native_root_count].hosted;
-}
-
 static const n00bb_runtime_native_root_t *
 root_at(size_t index)
 {
@@ -114,38 +90,24 @@ size_t
 n00bb_native_root_registered_count(void)
 {
     ensure_index();
-    return hosted_hidden ? unhosted.len : registered_count;
+    return registered_count;
 }
 
 const n00bb_runtime_native_root_t *
 n00bb_native_root_registered_at(size_t index)
 {
     ensure_index();
-    if (hosted_hidden)
-        return index < unhosted.len ? &registered[unhosted.data[index]].root
-                                    : nullptr;
     return index < registered_count ? &registered[index].root : nullptr;
 }
 
-static bool
-register_root(core_string_t qualified_name, core_string_t c_alias,
-              bool hosted)
+bool
+n00bb_native_root_register(core_string_t qualified_name,
+                           core_string_t c_alias)
 {
     if (!qualified_name.data || !c_alias.data || !ensure_index()) return false;
     bool found = false;
-    uintptr_t existing = (uintptr_t)core_dict_get(&by_name, &qualified_name,
-                                                  &found);
-    if (found) {
-        size_t index = existing - 1;
-        if (index < n00bb_runtime_native_root_count) return true;
-        registered_root_t *root =
-            &registered[index - n00bb_runtime_native_root_count];
-        if (root->hosted && !hosted) {
-            root->hosted = false;
-            core_list_push(unhosted, index - n00bb_runtime_native_root_count);
-        }
-        return true;
-    }
+    (void)core_dict_get(&by_name, &qualified_name, &found);
+    if (found) return true;
     if (registered_count == registered_capacity) {
         size_t capacity = registered_capacity ? 2 * registered_capacity : 16;
         registered_root_t *grown = core_realloc(registered,
@@ -166,25 +128,9 @@ register_root(core_string_t qualified_name, core_string_t c_alias,
     registered[registered_count] = (registered_root_t){
         .root = {.qualified_name = native_name, .c_alias = alias},
         .name = name,
-        .hosted = hosted,
     };
-    if (!hosted) core_list_push(unhosted, registered_count);
     index_root(n00bb_runtime_native_root_count + registered_count++, name);
     return true;
-}
-
-bool
-n00bb_native_root_register(core_string_t qualified_name,
-                           core_string_t c_alias)
-{
-    return register_root(qualified_name, c_alias, false);
-}
-
-bool
-n00bb_native_root_register_hosted(core_string_t qualified_name,
-                                  core_string_t c_alias)
-{
-    return register_root(qualified_name, c_alias, true);
 }
 
 const n00bb_runtime_native_root_t *
@@ -195,10 +141,8 @@ n00bb_native_root_in_module(core_string_t module, size_t *cursor)
     bool found = false;
     core_list_t(native_root_index_t) *bucket = core_dict_get(&by_module,
         &module, &found);
-    while (found && *cursor < bucket->len) {
-        size_t index = bucket->data[(*cursor)++];
-        if (visible(index)) return root_at(index);
-    }
+    if (found && *cursor < bucket->len)
+        return root_at(bucket->data[(*cursor)++]);
     return nullptr;
 }
 
@@ -214,7 +158,7 @@ n00bb_native_root_named(core_string_t module, core_string_t function)
     bool found = false;
     uintptr_t index = (uintptr_t)core_dict_get(&by_name, &key, &found);
     core_buffer_release(&name);
-    return found && visible(index - 1) ? root_at(index - 1) : nullptr;
+    return found ? root_at(index - 1) : nullptr;
 }
 
 core_string_t

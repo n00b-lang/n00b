@@ -5,7 +5,7 @@ func check_type_only_probe() {
     let target: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
         typeof(probe))
     if target != nil {
-        assert sys.abi.size_bytes(target.get()) == 1
+        assert sys.abi.size_bytes(target) == 1
     } else { require false }
 }
 

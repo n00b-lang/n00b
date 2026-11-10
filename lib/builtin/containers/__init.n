@@ -1,7 +1,7 @@
 import containers.list
 import containers.dict
-import containers.set
 import containers.tree
+import containers.slice
 import containers.view
 import containers.traits
 import containers.lease
@@ -20,7 +20,7 @@ package containers.list {
     export containers.list.remove
     export containers.list.clear
     export containers.list.to_array
-    export containers.list.iter
+    export containers.list.__iterator
 }
 
 package containers.dict {
@@ -36,23 +36,13 @@ package containers.dict {
     export containers.dict.replace
     export containers.dict.remove
     export containers.dict.clear
-    export containers.dict.iter
+    export containers.dict.__iterator
     export containers.dict.keys
     export containers.dict.values
-}
-
-package containers.set {
-    export containers.set.Set
-    export containers.set.set
-    export containers.set.len
-    export containers.set.contains
-    export containers.set.add
-    export containers.set.remove
-    export containers.set.clear
-    export containers.set.iter
-    export containers.set.is_subset
-    export containers.set.is_superset
-    export containers.set.is_disjoint
+    export containers.dict.set
+    export containers.dict.is_subset
+    export containers.dict.is_superset
+    export containers.dict.is_disjoint
 }
 
 package containers.tree {
@@ -72,9 +62,17 @@ package containers.tree {
     export containers.tree.depth
 }
 
+package containers.slice {
+    export containers.slice.Slice
+    export containers.slice.len
+}
+
 package containers.view {
     export containers.view.View
     export containers.view.len
+    export containers.view.view
+    export containers.view.__ref_address
+    export containers.view.__equal
 }
 
 package containers.lease {
@@ -91,9 +89,6 @@ package containers.lease {
 package containers.traits {
     export containers.traits.Has_Length
     export containers.traits.Appendable
-    export containers.traits.ListLike
-    export containers.traits.Associative
-    export containers.traits.SetLike
     export containers.traits.TreeLike
     export containers.traits.Copy
 }

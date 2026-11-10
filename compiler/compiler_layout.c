@@ -21,7 +21,7 @@
 #include "ir/layout.h"
 #include "th/environment.h"
 
-bool
+static bool
 publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t i = 0; i < analysis->units.len; i++) {
@@ -221,8 +221,8 @@ record_field_has_c_scalar_representation(ir_module_t *module, th_type *type)
         return layout && layout->intrinsic_bits == sizeof(void *) * 8
             && layout->alignment_bytes == _Alignof(void *);
     }
-    th_type *option_element = nullptr;
-    if (n00bb_option_type_element(type, &option_element)
+    th_type *option_element = th_option_item(type);
+    if (option_element
         && th_kind_of(th_resolve(option_element)) == TH_INDIRECTION) {
         const ir_final_layout_t *layout = ir_layout_final(module, type,
             ir_module_target(module));
@@ -470,7 +470,7 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     return valid;
 }
 
-bool
+static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
@@ -594,10 +594,16 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         analysis->target.triple) != nullptr;
             }
         }
+        core_list_t(uint32_t) pending = core_list_new(uint32_t);
+        size_t seen = 0;
         bool progress;
         do {
             progress = false;
-            for (size_t i = 0; valid && i < ir_type_count(module); i++) {
+            for (; seen < ir_type_count(module); seen++)
+                core_list_push(pending, (uint32_t)seen);
+            size_t kept = 0;
+            for (size_t p = 0; valid && p < pending.len; p++) {
+                uint32_t i = pending.data[p];
                 th_type *registered = ir_type_at(module, i);
                 if (!registered
                     || th_kind_of(th_resolve(registered)) != TH_NAMED)
@@ -607,6 +613,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 if (!type) { valid = false; break; }
                 if (ir_layout_final(module, type, analysis->target.triple))
                     continue;
+                pending.data[kept++] = i;
                 th_type *definition = ir_type_definition(module, type);
                 if (n00bb_object_type(ir_module_types(module), type)
                     && th_is_closed(ir_module_types(module), type)) {
@@ -647,7 +654,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 bool ready = (!count || members != nullptr)
                     && (!variant || !count || arms != nullptr);
                 parse_scope_t *member_scope = record_scope_for_type(
-                    analysis->grammar, &analysis->units, type, nullptr);
+                    analysis, type, nullptr);
                 for (size_t j = 0; ready && j < count; j++) {
                     const th_member *member = th_record_member(definition,
                                                                 j);
@@ -712,7 +719,10 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 core_free(arms);
                 core_free(members);
             }
+            pending.len = kept;
+            progress = progress || seen < ir_type_count(module);
         } while (valid && progress);
+        core_list_free(pending);
     }
     return valid;
 }
@@ -786,16 +796,23 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
         th_type *failed_type = nullptr;
         if (!n00bb_abi_publish_interned_direct_layouts(module,
                 &analysis->target, &failed_type)) return false;
+        core_list_t(uint32_t) pending = core_list_new(uint32_t);
+        size_t seen = 0;
         bool progress;
         do {
             progress = false;
-            for (size_t i = 0; i < ir_type_count(module); i++) {
+            for (; seen < ir_type_count(module); seen++)
+                core_list_push(pending, (uint32_t)seen);
+            size_t kept = 0;
+            for (size_t p = 0; p < pending.len; p++) {
+                uint32_t i = pending.data[p];
                 th_type *type = ir_type_at(module, i);
                 bool variant = false;
                 if (!th_named_info(type, nullptr, &variant, nullptr)
                     || !variant
                     || ir_layout_final(module, type,
                                        analysis->target.triple)) continue;
+                pending.data[kept++] = i;
                 th_type *definition = ir_type_definition(module, type);
                 if (!definition || th_kind_of(definition) != TH_RECORD)
                     continue;
@@ -803,7 +820,10 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 if (!count || count >= UINT32_MAX) continue;
                 n00bb_abi_variant_arm_t *arms = core_alloc_array(
                     n00bb_abi_variant_arm_t, count);
-                if (!arms) return false;
+                if (!arms) {
+                    core_list_free(pending);
+                    return false;
+                }
                 bool ready = true;
                 for (size_t j = 0; ready && j < count; j++) {
                     const th_member *member = th_record_member(
@@ -827,12 +847,18 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                     bool published = n00bb_abi_publish_variant_layout(
                         module, type, &analysis->target, arms, count);
                     core_free(arms);
-                    if (!published) return false;
+                    if (!published) {
+                        core_list_free(pending);
+                        return false;
+                    }
                     progress = true;
                 }
                 else core_free(arms);
             }
+            pending.len = kept;
+            progress = progress || seen < ir_type_count(module);
         } while (progress);
+        core_list_free(pending);
     }
     return true;
 }

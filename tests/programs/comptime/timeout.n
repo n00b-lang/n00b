@@ -1,0 +1,8 @@
+var n: int = 0
+if comptime() {
+    while true {
+        n = n + 1
+    }
+}
+func start() {
+}

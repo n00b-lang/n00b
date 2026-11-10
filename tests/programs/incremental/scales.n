@@ -1,0 +1,3 @@
+trait Scales {
+    func scale(self: 'S, by: int = 2) -> int
+}

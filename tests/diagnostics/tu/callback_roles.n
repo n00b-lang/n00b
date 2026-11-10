@@ -1,0 +1,13 @@
+callback Step {
+    call(value: int) -> int
+}
+
+func twice(value: int) -> int {
+    return value * 2
+}
+
+let step: Step = callback[Step](ref twice)
+require step.call(2) == 4
+require step(2) == 4
+let n: int = 3
+require n(1) == 2

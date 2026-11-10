@@ -7,6 +7,7 @@
 #include "signature_typevars.h"
 #include "compiler_tu.h"
 #include "driver.h"
+#include "qualified_names.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
 #include "flagset_value.h"
@@ -47,8 +48,7 @@ append_array_shape_metadata(core_buffer_t *buffer, const ir_shape_t *shape)
     append_u32_le(buffer, 1);
     for (uint32_t i = 0; i < rank; i++) {
         ir_shape_extent_t extent = {0};
-        if (!ir_shape_extent(shape, i, &extent)
-            || extent.kind == IR_SHAPE_EXTENT_COMPTIME) return false;
+        if (!ir_shape_extent(shape, i, &extent)) return false;
         append_u32_le(buffer, (uint32_t)extent.kind);
         append_u64_le(buffer, extent.static_value);
     }
@@ -134,11 +134,7 @@ register_array_shape_for_symbol(parse_grammar_t *grammar,
         || (!is_type && symbol->kind != PARSE_SYM_VARIABLE))
         return true;
     core_buffer_t qualified = {0};
-    if (is_type) append_module_type_name(unit, symbol->name, &qualified);
-    else core_buffer_printf(&qualified, "%.*s.%.*s",
-        (int)unit->module.identifier.u8_bytes,
-        unit->module.identifier.data, (int)symbol->name.u8_bytes,
-        symbol->name.data);
+    n00bb_qualify(&qualified, unit->module.identifier, symbol->name);
     bool ok = true;
     if (shape) {
         core_buffer_t metadata = {0};
@@ -360,18 +356,15 @@ register_callable_parameter_metadata(parse_grammar_t *grammar,
     return ok;
 }
 
-static bool
-register_typevar_order(th_ctx *types, th_env *environment,
-                       parse_sym_entry_t *symbol, th_type *contract,
-                       th_env_metadata_owner_t owner_kind,
-                       core_string_t qualified_name, core_string_t key)
+static uint32_t
+typevar_order(th_ctx *types, parse_sym_entry_t *symbol, th_type *contract,
+              core_buffer_t *metadata)
 {
     n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
         N00BB_SIGNATURE_TYPEVARS_KEY);
-    if (!variables || !variables->len) return true;
+    if (!variables || !variables->len) return 0;
     th_type **free_vars = nullptr;
     size_t free_count = th_free_vars(types, contract, &free_vars);
-    core_buffer_t metadata = {0};
     uint32_t count = 0;
     core_buffer_t entries = {0};
     for (size_t i = 0; i < variables->len; i++) {
@@ -388,12 +381,49 @@ register_typevar_order(th_ctx *types, th_env *environment,
         core_buffer_append(&entries, name.data, name.u8_bytes);
         count++;
     }
-    append_u32_le(&metadata, count);
+    append_u32_le(metadata, count);
     if (entries.byte_len)
-        core_buffer_append(&metadata, entries.data, entries.byte_len);
+        core_buffer_append(metadata, entries.data, entries.byte_len);
+    core_buffer_release(&entries);
+    return count;
+}
+
+static bool
+register_typevar_order(th_ctx *types, th_env *environment,
+                       parse_sym_entry_t *symbol, th_type *contract,
+                       th_env_metadata_owner_t owner_kind,
+                       core_string_t qualified_name, core_string_t key)
+{
+    core_buffer_t metadata = {0};
+    uint32_t count = typevar_order(types, symbol, contract, &metadata);
     bool ok = !count || th_env_register_metadata(environment, owner_kind,
         qualified_name, key, 1, metadata.data, metadata.byte_len);
-    core_buffer_release(&entries);
+    core_buffer_release(&metadata);
+    return ok;
+}
+
+static bool
+register_declared_bounds(th_env *environment, parse_sym_entry_t *symbol,
+                         core_string_t qualified)
+{
+    core_list_t(th_trait_requirement) bounds = n00bb_declared_bounds(symbol);
+    bool ok = !bounds.len || th_env_set_function_requirements(environment,
+        qualified, bounds.data, bounds.len);
+    core_list_free(bounds);
+    return ok;
+}
+
+bool
+n00bb_replace_function_typevars(th_ctx *types, th_env *environment,
+                                parse_sym_entry_t *symbol, th_type *contract,
+                                core_string_t qualified_name)
+{
+    core_buffer_t metadata = {0};
+    uint32_t count = typevar_order(types, symbol, contract, &metadata);
+    bool ok = !count || th_env_replace_metadata(environment,
+        TH_ENV_METADATA_FUNCTION, qualified_name,
+        CORE_STRING_STATIC("n00b.function-typevars"), 1, metadata.data,
+        metadata.byte_len);
     core_buffer_release(&metadata);
     return ok;
 }
@@ -447,7 +477,6 @@ register_context_callable_parameter_metadata(
     core_buffer_release(&metadata);
     return ok;
 }
-
 
 static bool
 register_type_member_metadata(parse_grammar_t *grammar,
@@ -535,34 +564,13 @@ register_enum_values_metadata(parse_grammar_t *grammar,
     core_buffer_t data = {0};
     core_buffer_append(&data, "N0EV", 4);
     bool ok = append_u32_le(&data, (uint32_t)count);
-    n00bb_enum_value_t previous = {0};
-    n00bb_enum_range_t range = {0};
-    bool have_previous = false;
     for (size_t index = items.len; ok && index > 0; index--) {
         parse_sym_entry_t *item = items.data[index - 1];
-        n00bb_enum_value_t value = {0};
-        if (item->has_comptime_value && item->comptime_value)
-            value = *(n00bb_enum_value_t *)item->comptime_value;
-        else if (have_previous) {
-            if (previous.negative) {
-                value.magnitude = previous.magnitude - 1;
-                value.negative = value.magnitude != 0;
-            }
-            else if (previous.magnitude == ~(ir_uint_t)0) {
-                ok = false;
-                break;
-            }
-            else value.magnitude = previous.magnitude + 1;
-        }
-        n00bb_enum_value_t *stored = core_arena_alloc(
-            &state->semantic_values, sizeof(*stored));
-        if (!stored) {
+        if (!item->has_comptime_value || !item->comptime_value) {
             ok = false;
             break;
         }
-        *stored = value;
-        item->comptime_value = stored;
-        item->has_comptime_value = true;
+        n00bb_enum_value_t value = *(n00bb_enum_value_t *)item->comptime_value;
         size_t name_size = item->name.u8_bytes;
         ok = name_size <= UINT32_MAX && append_u32_le(&data,
             (uint32_t)name_size);
@@ -573,12 +581,7 @@ register_enum_values_metadata(parse_grammar_t *grammar,
             char negative = value.negative;
             core_buffer_append(&data, &negative, 1);
         }
-        previous = value;
-        have_previous = true;
-        n00bb_enum_range_include(&range, value);
     }
-    if (ok) ok = n00bb_bind_enum_range(state->types, &state->semantic_values,
-                                 type_symbol, range);
     if (ok)
         ok = th_env_register_metadata(environment, TH_ENV_METADATA_TYPE,
             qualified_name, CORE_STRING_STATIC("n00b.enum-values"), 1, data.data,
@@ -697,12 +700,13 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     CORE_STRING_STATIC("n00b.callback"), 1, qualified.data,
                     qualified.byte_len);
             core_buffer_release(&qualified);
+            if (!ok && n00bb_unit_failed(unit)) ok = true;
         }
     }
     core_list_free(type_module_scopes);
     if (!ok)
-        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
-            (core_diag_location_t){}, "exporting the module interface",
+        n00bb_tu_internal_error_unless_reported(unit, nullptr,
+            "exporting the module interface",
             "could not export the named type declarations");
 
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
@@ -716,9 +720,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             if (trait_symbol && scope != trait_symbol->member_scope)
                 continue;
             core_buffer_t qualified = {0};
-            core_buffer_printf(&qualified, "%.*s.%.*s",
-                (int)module_text.u8_bytes, module_text.data,
-                (int)scope->name.u8_bytes, scope->name.data);
+            n00bb_qualify(&qualified, module_text, scope->name);
             ok = trait_symbol && trait_symbol->type && qualified.data
                 && th_kind_of(th_resolve(trait_symbol->type)) == TH_TRAIT
                 && th_env_register_trait_contracts(environment,
@@ -733,8 +735,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     (int)method->name.u8_bytes, method->name.data);
                 ok = register_callable_parameter_metadata(grammar,
                     environment, method->decl_node,
-                    method->callable_contract ? method->callable_contract
-                                              : method->type,
+                    n00bb_symbol_signature(method),
                     TH_ENV_METADATA_TRAIT, core_buffer_string(&qualified),
                     core_buffer_string(&key));
                 core_buffer_release(&key);
@@ -747,11 +748,8 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type) continue;
-            th_type *role_contract = symbol->callable_contract
-                ? symbol->callable_contract
-                : th_env_signature_contract(state->types, symbol->type,
-                    symbol->error_type ? symbol->error_type
-                                       : th_name(state->types, CORE_STRING_STATIC("nil")));
+            th_type *role_contract = n00bb_symbol_contract(state->types,
+                                                           symbol);
             if (callback_contract)
                 core_list_push(callback_roles, ((th_member){
                     .name = symbol->name,
@@ -759,9 +757,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 }));
             if (callback_contract && ok) {
                 core_buffer_t owner = {0}, key = {0};
-                core_buffer_printf(&owner, "%.*s.%.*s",
-                (int)module_text.u8_bytes, module_text.data,
-                    (int)scope->name.u8_bytes, scope->name.data);
+                n00bb_qualify(&owner, module_text, scope->name);
                 core_buffer_printf(&key, "n00b.callback-params.%.*s",
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 ok = owner.data && key.data
@@ -797,9 +793,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             core_buffer_release(&qualified);
             parse_sym_entry_t *callback_symbol = parse_tree_sym(scope->node);
             core_buffer_t type_name = {0};
-            core_buffer_printf(&type_name, "%.*s.%.*s",
-                (int)module_text.u8_bytes, module_text.data,
-                (int)scope->name.u8_bytes, scope->name.data);
+            n00bb_qualify(&type_name, module_text, scope->name);
             ok = ok && callback_symbol && type_name.data
                 && register_typevar_order(state->types, environment,
                     callback_symbol, role_record, TH_ENV_METADATA_TYPE,
@@ -824,6 +818,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
         }
         core_list_free(callback_roles);
         core_list_free(methods);
+        if (!ok && n00bb_unit_failed(unit)) ok = true;
     }
     if (!ok && !core_diagnostics_failed(
             core_translation_unit_diagnostics(unit)))
@@ -837,9 +832,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             if (context_symbol(grammar, symbol) && symbol->type
                 && symbol->decl_node) {
                 core_buffer_t qualified = {0};
-                core_buffer_printf(&qualified, "%.*s.%.*s",
-                (int)module_text.u8_bytes, module_text.data,
-                    (int)symbol->name.u8_bytes, symbol->name.data);
+                n00bb_qualify(&qualified, module_text, symbol->name);
                 ok = th_env_register_value(environment, core_buffer_string(&qualified),
                     symbol->name, module_text, package_text,
                     symbol_visibility(symbol), symbol->type);
@@ -877,9 +870,8 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                         (int)symbol->name.u8_bytes, symbol->name.data,
                         (int)context_hooks[h].suffix.u8_bytes,
                         context_hooks[h].suffix.data);
-                    core_buffer_printf(&hook_qualified, "%.*s.%.*s",
-                        (int)module_text.u8_bytes, module_text.data,
-                        (int)hook_name.byte_len, hook_name.data);
+                    n00bb_qualify(&hook_qualified, module_text,
+                                  core_buffer_string(&hook_name));
                     ok = contract && th_env_register_function_contract(
                         environment, core_buffer_string(&hook_qualified),
                         core_buffer_string(&hook_name),
@@ -936,9 +928,8 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     bool named = context_default_name(symbol, p,
                                                       &helper_name);
                     if (named)
-                        core_buffer_printf(&helper_qualified, "%.*s.%.*s",
-                            (int)module_text.u8_bytes, module_text.data,
-                            (int)helper_name.byte_len, helper_name.data);
+                        n00bb_qualify(&helper_qualified, module_text,
+                                      core_buffer_string(&helper_name));
                     ok = named && helper_contract
                         && th_env_register_function_contract(environment,
                             core_buffer_string(&helper_qualified),
@@ -1024,18 +1015,17 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             if (symbol->kind == PARSE_SYM_VARIABLE && symbol->type
                 && symbol_binding_node(symbol)) {
                 core_buffer_t qualified = {0};
-                core_buffer_printf(&qualified, "%.*s.%.*s",
-                (int)module_text.u8_bytes, module_text.data,
-                    (int)symbol->name.u8_bytes, symbol->name.data);
+                n00bb_qualify(&qualified, module_text, symbol->name);
                 ok = th_env_register_value(environment, core_buffer_string(&qualified),
                     symbol->name, module_text, package_text,
                     symbol_visibility(symbol), symbol->type);
                 if (ok) {
                     uint8_t metadata[12] = {0};
+                    __int128 untyped = 0;
                     metadata[0] = (uint8_t)symbol->mutability;
-                    metadata[1] = (uint8_t)symbol->phases;
-                    metadata[2] = (uint8_t)symbol->mutable_phases;
-                    metadata[3] = (uint8_t)symbol->initializer_phases;
+                    metadata[1] = n00bb_untyped_integer_const(grammar, symbol,
+                                                              &untyped)
+                        ? 1 : 0;
                     metadata[4] = (uint8_t)symbol->storage_duration;
                     metadata[5] = symbol->is_thread_local ? 1 : 0;
                     metadata[7] = global_has_explicit_initializer(grammar,
@@ -1044,6 +1034,20 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                         symbol->has_comptime_value && symbol->comptime_value
                         && static_value_portable(symbol->comptime_value)
                         ? symbol->comptime_value : nullptr;
+                    n00bb_static_value_t trivial = {0};
+                    parse_tree_t *initializer = !static_value
+                            && symbol->mutability == PARSE_SYM_CONST
+                            && nt_is(grammar, symbol->decl_node,
+                                     CORE_STRING_STATIC("sym-decl"))
+                        ? child_nt(grammar, symbol->decl_node,
+                                   CORE_STRING_STATIC("expression"))
+                        : nullptr;
+                    if (initializer && n00bb_trivial_static_value(grammar,
+                            state, initializer, &trivial)
+                        && static_value_portable(&trivial)
+                        && static_value_matches_type(&trivial, symbol->type,
+                                                     state, 0))
+                        static_value = &trivial;
                     metadata[10] = static_value ? 1 : 0;
                     metadata[11] = static_value
                         ? (uint8_t)static_value->kind : 0;
@@ -1058,31 +1062,15 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                         CORE_STRING_STATIC("n00b.global"), 1, payload.data, payload.byte_len);
                     core_buffer_release(&payload);
                 }
-                int64_t untyped = 0;
-                if (ok && n00bb_untyped_integer_const(grammar, symbol,
-                        &untyped, &untyped)) {
-                    uint8_t encoded[9];
-                    for (int i = 0; i < 8; i++)
-                        encoded[i] = (uint8_t)((uint64_t)untyped >> (8 * i));
-                    encoded[8] = n00bb_untyped_integer_const_unsigned(grammar,
-                        symbol) ? 1 : 0;
-                    ok = th_env_register_metadata(environment,
-                        TH_ENV_METADATA_VALUE, core_buffer_string(&qualified),
-                        CORE_STRING_STATIC("n00b.untyped-integer"), 1,
-                        encoded, sizeof(encoded));
-                }
                 core_buffer_release(&qualified);
+                if (!ok && n00bb_unit_failed(unit)) ok = true;
                 continue;
             }
             if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type) continue;
             core_buffer_t qualified = {0};
             ok = append_environment_symbol_name(grammar, unit, symbol,
                                                    &qualified);
-            th_type *contract = symbol->callable_contract
-                ? symbol->callable_contract
-                : th_env_signature_contract(state->types, symbol->type,
-                    symbol->error_type ? symbol->error_type
-                                       : th_name(state->types, CORE_STRING_STATIC("nil")));
+            th_type *contract = n00bb_symbol_contract(state->types, symbol);
             core_string_t export_failure =
                 CORE_STRING_STATIC("function contract");
             ok = ok && th_env_register_function_contract(environment,
@@ -1103,6 +1091,11 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     symbol, contract, TH_ENV_METADATA_FUNCTION,
                     core_buffer_string(&qualified), CORE_STRING_STATIC("n00b.function-typevars"));
             }
+            if (ok) {
+                export_failure = CORE_STRING_STATIC("declared bounds");
+                ok = register_declared_bounds(environment, symbol,
+                    core_buffer_string(&qualified));
+            }
             core_buffer_release(&qualified);
             if (!ok && !core_diagnostics_failed(
                     core_translation_unit_diagnostics(unit))) {
@@ -1114,11 +1107,13 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     (int)export_failure.u8_bytes, export_failure.data,
                     (int)symbol->name.u8_bytes, symbol->name.data);
             }
+            if (!ok && n00bb_unit_failed(unit)) ok = true;
         }
     }
     core_list_free(module_level_scopes);
     if (ok) {
-        ok = register_unit_array_shape_metadata(grammar, unit, environment);
+        ok = register_unit_array_shape_metadata(grammar, unit, environment)
+            || n00bb_unit_failed(unit);
         if (!ok && !core_diagnostics_failed(
                 core_translation_unit_diagnostics(unit)))
             n00bb_internal_error(core_translation_unit_diagnostics(unit),
@@ -1221,13 +1216,9 @@ register_package_context_callable(th_env *environment,
                                   core_string_t external_name)
 {
     core_buffer_t source_qualified = {0}, external_qualified = {0};
-    core_buffer_printf(&source_qualified, "%.*s.%.*s",
-        (int)source_unit->module.identifier.u8_bytes,
-        source_unit->module.identifier.data,
-        (int)source_name.u8_bytes, source_name.data);
-    core_buffer_printf(&external_qualified, "%.*s.%.*s",
-        (int)package->name.u8_bytes, package->name.data,
-        (int)external_name.u8_bytes, external_name.data);
+    n00bb_qualify(&source_qualified, source_unit->module.identifier,
+                  source_name);
+    n00bb_qualify(&external_qualified, package->name, external_name);
     th_type *contract = environment_function_contract(
         environment, core_buffer_string(&source_qualified));
     bool ok = contract && th_env_register_function_contract(environment,
@@ -1391,11 +1382,8 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
         }
     }
     else if (ok && source->kind == PARSE_SYM_FUNCTION) {
-        th_type *contract = source->callable_contract
-            ? source->callable_contract
-            : th_env_signature_contract(source_state->types, source->type,
-                source->error_type ? source->error_type
-                                   : th_name(source_state->types, CORE_STRING_STATIC("nil")));
+        th_type *contract = n00bb_symbol_contract(source_state->types,
+                                                  source);
         ok = contract && th_env_register_function_contract(environment,
             core_buffer_string(&external), binding->name, package->name,
             interface_package_id(interface_unit), TH_ENV_PUBLIC, contract);
@@ -1670,15 +1658,6 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
     return true;
 }
 
-
-void
-package_diagnostic(core_translation_unit_t *unit, parse_tree_t *node,
-                   core_string_t code, core_string_t message)
-{
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, code, message, link_source_location(node));
-}
-
 static void
 package_error(core_translation_unit_t *unit, parse_tree_t *node,
               n00bb_diag_t id, n00bb_text_t text, n00bb_args_t args)
@@ -1806,7 +1785,6 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
     return true;
 }
 
-
 static n00bb_package_declaration_t *
 declared_package(n00bb_link_analysis_t *analysis, core_string_t name,
                  core_translation_unit_t **unit_out)
@@ -1907,9 +1885,6 @@ copy_export_binding_facts(parse_sym_entry_t *binding,
     binding->mutability = origin->mutability;
     binding->adt_kind = origin->adt_kind;
     binding->member_scope = origin->member_scope;
-    binding->phases = origin->phases;
-    binding->mutable_phases = origin->mutable_phases;
-    binding->initializer_phases = origin->initializer_phases;
     binding->storage_duration = origin->storage_duration;
 }
 

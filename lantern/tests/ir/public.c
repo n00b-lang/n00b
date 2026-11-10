@@ -111,7 +111,7 @@ int main(void)
     check("closed type IDs remain cached", closed_id
           && ir_type_id(m, closed_type) == closed_id);
     check("open type IDs refine after unification", open_id
-          && th_unify_in_place(types, open_type, closed_type)
+          && th_fill(open_type, closed_type)
           && ir_type_id(m, open_type) == closed_id);
 
     core_free(text.data);

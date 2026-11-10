@@ -1,3 +1,5 @@
+tests/diagnostics/link/parameter_calls.n:9:24: warning N00B-S0063: parameter `rest` is never used
+  help: if a signature requires it, name it `_rest`
 tests/diagnostics/link/parameter_calls.n:13:35: error N00B-T0001: `scale` takes 1 positional argument, but this call passes 2
   tests/diagnostics/link/parameter_calls.n:1:6: note: `scale` is declared here
   help: keyword parameters are only passed by name:
@@ -9,6 +11,17 @@ tests/diagnostics/link/parameter_calls.n:14:21: error N00B-T0009: `height` is pa
 tests/diagnostics/link/parameter_calls.n:15:30: error N00B-T0020: `rest` is the varargs parameter of `total`, so it cannot be passed by name
   help: pass its items as extra positional arguments, after the positional ones
   tests/diagnostics/link/parameter_calls.n:9:6: note: `total` is declared here
+tests/diagnostics/link/parameter_calls.n:16:5: warning N00B-N0024: `keyword_first` is never used
+  help: remove it
+tests/diagnostics/link/parameter_calls.n:17:5: warning N00B-N0024: `all_named` is never used
+  help: remove it
+tests/diagnostics/link/parameter_calls.n:18:5: warning N00B-N0024: `extra_items` is never used
+  help: remove it
+tests/diagnostics/link/parameter_calls.n:19:5: warning N00B-N0024: `keyword_first_items` is never used
+  help: remove it
 tests/diagnostics/link/parameter_calls.n:20:28: error N00B-T0005: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
+  help: pass each item as its own argument
+  tests/diagnostics/link/parameter_calls.n:9:6: note: `total` is declared here
+tests/diagnostics/link/parameter_calls.n:22:31: error N00B-T0005: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
   help: pass each item as its own argument
   tests/diagnostics/link/parameter_calls.n:9:6: note: `total` is declared here

@@ -17,18 +17,7 @@ test_shape_metadata(void)
         ? ir_global_add(module, S("matrix"), array_type) : nullptr;
     ir_func_t *function = module
         ? ir_func_add(module, S("bounds"), ir_type_parse(module,
-            S("(i64, i64) -> nil")), IR_LINK_INTERNAL) : nullptr;
-    ir_func_t *product_function = module
-        ? ir_func_add(module, S("shape_product"), ir_type_parse(module,
-            S("() -> u64")), IR_LINK_INTERNAL) : nullptr;
-    bool comptime_function = function
-        && ir_func_set_execution_phase(ctx, function, IR_PHASE_COMPTIME);
-    bool comptime_product = product_function
-        && ir_func_set_execution_phase(ctx, product_function,
-                                       IR_PHASE_COMPTIME);
-    ir_value_t *comptime_bound = function
-        ? ir_param_add(function, S("comptime_bound"), ir_type_parse(module,
-            S("i64"))) : nullptr;
+            S("(i64) -> nil")), IR_LINK_INTERNAL) : nullptr;
     ir_value_t *runtime_bound = function
         ? ir_param_add(function, S("runtime_bound"), ir_type_parse(module,
             S("i64"))) : nullptr;
@@ -36,21 +25,19 @@ test_shape_metadata(void)
     uint64_t type_id_before = module && global
         ? ir_type_id(module, global->type) : 0;
     bool built = module && i32 && array_type && global && function
-        && product_function && comptime_function && comptime_product
-        && comptime_bound && runtime_bound && shape
+        && runtime_bound && shape
         && ir_shape_set_extent(shape, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression,
-            .value = comptime_bound,
-            .producer = function,
+            .kind = IR_SHAPE_EXTENT_STATIC,
+            .static_value = 5,
         })
         && ir_shape_set_extent(shape, 1, (ir_shape_extent_t){
             .kind = IR_SHAPE_EXTENT_RUNTIME,
+            .expression = &source_expression,
             .value = runtime_bound,
         })
         && ir_shape_set_element_count(shape, (ir_shape_measure_t){
-            .kind = IR_SHAPE_MEASURE_COMPTIME,
-            .producer = product_function,
+            .kind = IR_SHAPE_MEASURE_RUNTIME,
+            .value = runtime_bound,
         })
         && ir_shape_set_stride(shape, 0, (ir_shape_measure_t){
             .kind = IR_SHAPE_MEASURE_RUNTIME,
@@ -66,16 +53,15 @@ test_shape_metadata(void)
     bool retained = built && global_address
         && ir_value_shape(global_address) == shape
         && ir_shape_extent(shape, 0, &first)
-        && first.kind == IR_SHAPE_EXTENT_COMPTIME
-        && first.expression == &source_expression
-        && first.value == comptime_bound
-        && first.producer == function
+        && first.kind == IR_SHAPE_EXTENT_STATIC
+        && first.static_value == 5
         && ir_shape_extent(shape, 1, &second)
         && second.kind == IR_SHAPE_EXTENT_RUNTIME
+        && second.expression == &source_expression
         && second.value == runtime_bound
         && ir_shape_element_count(shape, &count)
-        && count.kind == IR_SHAPE_MEASURE_COMPTIME
-        && count.producer == product_function
+        && count.kind == IR_SHAPE_MEASURE_RUNTIME
+        && count.value == runtime_bound
         && ir_shape_stride(shape, 0, &stride)
         && stride.kind == IR_SHAPE_MEASURE_RUNTIME
         && stride.value == runtime_bound
@@ -184,72 +170,6 @@ test_shape_metadata(void)
     check("shape suffix is independent and rejects an empty projection",
           projection_independent);
 
-    ir_shape_t *deferred = ir_shape_new(ctx, i32, 2);
-    bool deferred_built = deferred
-        && ir_shape_set_extent(deferred, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_STATIC, .static_value = 3})
-        && ir_shape_set_extent(deferred, 1, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression,
-            .value = comptime_bound})
-        && ir_shape_set_storage(deferred, 2, true)
-        && ir_shape_set_element_count(deferred, (ir_shape_measure_t){
-            .kind = IR_SHAPE_MEASURE_COMPTIME,
-            .producer = product_function});
-    bool folded = deferred_built
-        && ir_shape_fold_comptime_extent(deferred, 1, 4)
-        && ir_shape_extent(deferred, 1, &second)
-        && second.kind == IR_SHAPE_EXTENT_STATIC
-        && second.static_value == 4
-        && second.value == comptime_bound
-        && ir_shape_element_count(deferred, &count)
-        && count.kind == IR_SHAPE_MEASURE_STATIC
-        && count.static_value == 12
-        && ir_shape_stride(deferred, 0, &stride)
-        && stride.kind == IR_SHAPE_MEASURE_STATIC
-        && stride.static_value == 4
-        && ir_shape_stride(deferred, 1, &stride)
-        && stride.static_value == 1;
-    check("comptime extents fold into static rectangular shape measures",
-          folded);
-
-    ir_shape_t *two_deferred = ir_shape_new(ctx, i32, 2);
-    bool two_deferred_built = two_deferred
-        && ir_shape_set_extent(two_deferred, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression})
-        && ir_shape_set_extent(two_deferred, 1, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression})
-        && ir_shape_set_storage(two_deferred, 2, true)
-        && ir_shape_set_element_count(two_deferred, (ir_shape_measure_t){
-            .kind = IR_SHAPE_MEASURE_COMPTIME,
-            .producer = product_function});
-    bool staged_fold = two_deferred_built
-        && ir_shape_fold_comptime_extent(two_deferred, 0, 3)
-        && ir_shape_element_count(two_deferred, &count)
-        && count.kind == IR_SHAPE_MEASURE_COMPTIME
-        && ir_shape_fold_comptime_extent(two_deferred, 1, 4)
-        && ir_shape_element_count(two_deferred, &count)
-        && count.kind == IR_SHAPE_MEASURE_STATIC
-        && count.static_value == 12;
-    check("shape count waits for every deferred rectangular dimension",
-          staged_fold);
-
-    ir_shape_t *overflow = ir_shape_new(ctx, i32, 2);
-    bool overflow_built = overflow
-        && ir_shape_set_extent(overflow, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_STATIC, .static_value = 2})
-        && ir_shape_set_extent(overflow, 1, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .expression = &source_expression})
-        && ir_shape_set_storage(overflow, 2, true);
-    check("overflowing folded dimensions leave shape unchanged",
-          overflow_built
-          && !ir_shape_fold_comptime_extent(overflow, 1, UINT64_MAX)
-          && ir_shape_extent(overflow, 1, &second)
-          && second.kind == IR_SHAPE_EXTENT_COMPTIME);
-
     ir_shape_t *ragged = ir_shape_new(ctx, i32, 2);
     bool ragged_built = ragged
         && ir_shape_set_extent(ragged, 0, (ir_shape_extent_t){
@@ -284,9 +204,6 @@ test_invalid_shape_metadata(void)
                                         &ir_profile_bce, S("test"));
     th_type *i32 = module ? ir_type_parse(module, S("i32")) : nullptr;
     ir_shape_t *shape = ir_shape_new(ctx, i32, 1);
-    ir_func_t *runtime_producer = module
-        ? ir_func_add(module, S("runtime_producer"),
-            ir_type_parse(module, S("() -> nil")), IR_LINK_INTERNAL) : nullptr;
     ir_value_t *value = nullptr;
     ir_shape_t *zero_rank = ir_shape_new(ctx, i32, 0);
     bool zero_extent_valid = shape
@@ -294,22 +211,16 @@ test_invalid_shape_metadata(void)
             .kind = IR_SHAPE_EXTENT_STATIC,
             .static_value = 0,
         });
-    bool rejected = shape && runtime_producer && zero_rank == nullptr
+    int expression = 0;
+    bool rejected = shape && zero_rank == nullptr
         && zero_extent_valid
         && !ir_shape_set_extent(shape, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-        })
-        && !ir_shape_set_extent(shape, 0, (ir_shape_extent_t){
-            .kind = IR_SHAPE_EXTENT_COMPTIME,
-            .producer = runtime_producer,
+            .kind = IR_SHAPE_EXTENT_STATIC,
+            .expression = &expression,
         })
         && !ir_shape_set_storage(shape, 2, true)
         && !ir_shape_set_element_count(shape, (ir_shape_measure_t){
             .kind = IR_SHAPE_MEASURE_RUNTIME,
-        })
-        && !ir_shape_set_element_count(shape, (ir_shape_measure_t){
-            .kind = IR_SHAPE_MEASURE_COMPTIME,
-            .producer = runtime_producer,
         })
         && !ir_value_set_shape(value, shape);
     check("shape API rejects invalid rank, extent, measure, and attachment",

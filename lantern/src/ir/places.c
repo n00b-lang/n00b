@@ -18,18 +18,97 @@ typedef struct {
 } place_span_t;
 core_list_decl(place_span_t);
 
+enum { PLACE_DEPTH_LIMIT = 8 };
+
+typedef struct place_path_t place_path_t;
+struct place_path_t {
+    const place_path_t *rest;
+    core_string_t       step;
+    th_type            *type;
+    uint32_t            depth;
+    bool                element;
+};
+typedef place_path_t *place_path_ptr_t;
+core_list_decl(place_path_ptr_t);
+
+typedef struct {
+    const ir_value_t   *value;
+    const place_path_t *path;
+} place_pending_t;
+core_list_decl(place_pending_t);
+
 struct ir_places_t {
     ir_module_t                      *module;
     core_list_t(ir_place_t)           places;
     core_list_t(uint32_t)             ids;
     core_list_t(ir_access_t)          accesses;
     core_list_t(place_span_t)         spans;
+    core_list_t(place_path_ptr_t)     paths;
+    core_dict_t                       path_index;
     core_dict_t                       resolved;
     core_dict_t                       by_instr;
     core_dict_t                       overlaps;
     core_dict_t                       exposed;
-    bool                              escape_facts;
 };
+
+static uint64_t
+path_word(const place_path_t *path)
+{
+    uint64_t word = path->step.u8_bytes
+        ? core_xxh3_64bits_raw(path->step.data, path->step.u8_bytes) : 0;
+    word ^= (uint64_t)(uintptr_t)path->rest * 0x9e3779b97f4a7c15ull;
+    return word ^ (path->element ? 0xc2b2ae3d27d4eb4full : 0);
+}
+
+static core_hash_value_t
+path_hash(void *key)
+{
+    return core_hash_word((void *)(uintptr_t)path_word(key));
+}
+
+static bool
+path_eq(const void *a, const void *b)
+{
+    const place_path_t *x = a;
+    const place_path_t *y = b;
+    return x->rest == y->rest && x->element == y->element
+        && core_string_eq(x->step, y->step);
+}
+
+static const place_path_t *
+intern_path(ir_places_t *places, const place_path_t *rest, core_string_t step,
+            bool element, th_type *type)
+{
+    place_path_t probe = {.rest = rest, .step = step, .element = element,
+                          .type = type,
+                          .depth = rest ? rest->depth + 1 : 1};
+    bool found = false;
+    place_path_t *known = core_dict_get(&places->path_index, &probe, &found);
+    if (found) return known;
+    place_path_t *path = core_alloc(place_path_t);
+    *path = probe;
+    core_list_push(places->paths, path);
+    core_dict_put(&places->path_index, path, path);
+    return path;
+}
+
+static const place_path_t *
+prepend_step(ir_places_t *places, const place_path_t *path,
+             core_string_t step, bool element, th_type *type)
+{
+    if (!path || path->depth + 1 < PLACE_DEPTH_LIMIT)
+        return intern_path(places, path, step, element, type);
+    const place_path_t *steps[PLACE_DEPTH_LIMIT];
+    uint32_t count = 0;
+    for (const place_path_t *at = path;
+         at && count + 1 < PLACE_DEPTH_LIMIT; at = at->rest)
+        steps[count++] = at;
+    const place_path_t *built = nullptr;
+    for (uint32_t i = count; i-- > 0;)
+        built = intern_path(places, built, steps[i]->step, steps[i]->element,
+                            steps[i]->type);
+    return intern_path(places, built, step, element, type);
+}
 
 typedef th_type *place_type_ptr_t;
 core_list_decl(place_type_ptr_t);
@@ -67,10 +146,6 @@ static bool
 proven_local(const ir_value_t *value)
 {
     bool flag = false;
-    if (value->kind == IR_VAL_LOCAL)
-        return annotated_flag(ir_value_annots((ir_value_t *)value),
-                              CORE_STRING_STATIC("ir.lifetime_escapes"), &flag)
-            && !flag;
     return value->kind == IR_VAL_INSTR && value->def
         && value->def->op == IR_OP_ALLOC
         && annotated_flag(&value->def->annots,
@@ -433,7 +508,7 @@ intern_place(ir_places_t *places, ir_place_t place)
         ? ir_global_identity(place.root->global) : nullptr;
     for (size_t i = 0; i < places->places.len; i++) {
         const ir_place_t *have = &places->places.data[i];
-        if (have->kind != place.kind) continue;
+        if (have->kind != place.kind || have->nested) continue;
         bool same_global = global && have->root && have->root->global
             && ir_global_identity(have->root->global) == global;
         if (place.kind == IR_PLACE_HEAP
@@ -448,6 +523,36 @@ intern_place(ir_places_t *places, ir_place_t place)
 }
 
 static uint32_t
+child_place(ir_places_t *places, uint32_t parent, const place_path_t *step)
+{
+    for (size_t i = 0; i < places->places.len; i++) {
+        const ir_place_t *have = &places->places.data[i];
+        if (have->nested && have->parent == parent
+            && have->element == step->element
+            && core_string_eq(have->step, step->step))
+            return (uint32_t)i;
+    }
+    ir_place_t place = places->places.data[parent];
+    place.nested  = true;
+    place.parent  = parent;
+    place.depth   = places->places.data[parent].depth + 1;
+    place.element = step->element;
+    place.step    = step->step;
+    place.type    = step->type;
+    core_list_push(places->places, place);
+    return (uint32_t)(places->places.len - 1);
+}
+
+static uint32_t
+descend(ir_places_t *places, uint32_t root, const place_path_t *path)
+{
+    uint32_t at = root;
+    for (const place_path_t *step = path; step; step = step->rest)
+        at = child_place(places, at, step);
+    return at;
+}
+
+static uint32_t
 heap_place(ir_places_t *places, const ir_value_t *value)
 {
     return intern_place(places, (ir_place_t){
@@ -458,7 +563,7 @@ static uint32_t
 object_place(ir_places_t *places, const ir_value_t *value)
 {
     bool exposed = core_dict_contains(&places->exposed, (void *)value);
-    if (!exposed || (places->escape_facts && proven_local(value)))
+    if (!exposed || proven_local(value))
         return intern_place(places, (ir_place_t){
             .kind = IR_PLACE_LOCAL, .root = value,
             .type = storage_type(value), .exposed = exposed});
@@ -495,39 +600,6 @@ storage_place(ir_places_t *places, const ir_value_t *value)
     }
 }
 
-static bool
-alias_edges(const ir_value_t *value, core_list_t(place_value_ptr_t) *pending)
-{
-    ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
-    ir_annot_t  *count  = annots
-        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
-        : nullptr;
-    bool complete = false;
-    if (!count || count->kind != IR_ANNOT_INT || count->i.neg
-        || count->i.mag == 0 || count->i.mag > UINT32_MAX
-        || !annotated_flag(annots,
-                           CORE_STRING_STATIC("ir.alias_analysis_complete"),
-                           &complete)
-        || !complete) return false;
-    for (uint64_t i = 0; i < count->i.mag; i++) {
-        char key[48];
-        int  length = snprintf(key, sizeof(key), "ir.alias%llu",
-                               (unsigned long long)i);
-        ir_annot_t *edge = length > 0
-            ? ir_annot_get(annots, core_string_borrow(key, (size_t)length))
-            : nullptr;
-        if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v) return false;
-    }
-    for (uint64_t i = 0; i < count->i.mag; i++) {
-        char key[48];
-        int  length = snprintf(key, sizeof(key), "ir.alias%llu",
-                               (unsigned long long)i);
-        core_list_push(*pending, ir_annot_get(annots,
-            core_string_borrow(key, (size_t)length))->v);
-    }
-    return true;
-}
-
 static void
 add_id(core_list_t(uint32_t) *ids, uint32_t id)
 {
@@ -554,68 +626,130 @@ local_storage_root(const ir_value_t *value)
     return ir_instr_allocates_storage(value->def);
 }
 
+typedef const place_path_t *place_path_cptr_t;
+core_list_decl(place_path_cptr_t);
+
+static bool
+first_visit(core_dict_t *seen, const ir_value_t *value,
+            const place_path_t *path)
+{
+    bool found = false;
+    core_list_t(place_path_cptr_t) *paths = core_dict_get(seen, (void *)value,
+                                                          &found);
+    if (!found) {
+        paths = core_alloc(core_list_t(place_path_cptr_t));
+        *paths = core_list_new(place_path_cptr_t);
+        core_dict_put(seen, (void *)value, paths);
+    }
+    for (size_t i = 0; i < paths->len; i++)
+        if (paths->data[i] == path) return false;
+    core_list_push(*paths, path);
+    return true;
+}
+
+static void
+push_operand(core_list_t(place_pending_t) *pending, const ir_instr_t *in,
+             uint32_t operand, const place_path_t *path)
+{
+    if (operand >= in->n_operands) return;
+    ir_value_t *value = ir_operand_value(&in->operands[operand]);
+    if (value)
+        core_list_push(*pending, ((place_pending_t){.value = value,
+                                                    .path = path}));
+}
+
+static const place_path_t *
+through_conversion(ir_places_t *places, const ir_instr_t *in,
+                   const place_path_t *path)
+{
+    ir_value_t *source = in->n_operands ? ir_operand_value(&in->operands[0])
+                                        : nullptr;
+    return source && in->dest
+            && same_type(places->module, storage_type(source),
+                         storage_type(in->dest))
+        ? path : nullptr;
+}
+
 static void
 resolve_into(ir_places_t *places, const ir_value_t *address,
              core_list_t(uint32_t) *ids)
 {
-    core_list_t(place_value_ptr_t) pending = core_list_new(place_value_ptr_t);
+    core_list_t(place_pending_t) pending = core_list_new(place_pending_t);
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
-    core_list_push(pending, address);
+    core_list_push(pending, ((place_pending_t){.value = address}));
     while (pending.len) {
-        const ir_value_t *value = pending.data[--pending.len];
-        if (!value || !core_dict_add(&seen, (void *)value, (void *)value))
-            continue;
+        place_pending_t item = pending.data[--pending.len];
+        const ir_value_t *value = item.value;
+        const place_path_t *path = item.path;
+        if (!value || !first_visit(&seen, value, path)) continue;
         if (value->kind != IR_VAL_INSTR || !value->def) {
-            add_id(ids, storage_place(places, value));
+            add_id(ids, descend(places, storage_place(places, value), path));
             continue;
         }
         const ir_instr_t *in = value->def;
         if (local_storage_root(value)) {
-            add_id(ids, object_place(places, value));
+            add_id(ids, descend(places, object_place(places, value), path));
             continue;
         }
         switch (in->op) {
         case IR_OP_ADDRESS_OF:
             if (in->n_operands == 1 && ir_operand_value(&in->operands[0]))
-                add_id(ids, storage_place(places,
-                    ir_operand_value(&in->operands[0])));
+                add_id(ids, descend(places, storage_place(places,
+                    ir_operand_value(&in->operands[0])), path));
             else
                 add_id(ids, unknown_place(places));
+            break;
+        case IR_OP_FIELD:
+            if (in->n_operands >= 2 && in->operands[1].kind == IR_OPD_NAME)
+                push_operand(&pending, in, 0, prepend_step(places, path,
+                    in->operands[1].name, false, storage_type(in->dest)));
+            else
+                push_operand(&pending, in, 0, nullptr);
+            break;
+        case IR_OP_INDEX:
+        case IR_OP_OFFSET:
+            push_operand(&pending, in, 0, prepend_step(places, path,
+                (core_string_t){0}, true, storage_type(in->dest)));
             break;
         case IR_OP_COPY:
         case IR_OP_CONSUME:
         case IR_OP_RETAIN_REF:
+            push_operand(&pending, in, 0, path);
+            break;
         case IR_OP_CAST:
         case IR_OP_BITCAST:
         case IR_OP_BOX_RAW:
         case IR_OP_BOX_FROM_RAW:
         case IR_OP_NOMINAL_CAST:
         case IR_OP_TYPE_NARROW:
-        case IR_OP_FIELD:
-        case IR_OP_INDEX:
-        case IR_OP_OFFSET:
         case IR_OP_OPTION_SOME:
         case IR_OP_OPTION_GET:
-            follow(&pending, in, 0);
+            push_operand(&pending, in, 0,
+                         through_conversion(places, in, path));
             break;
         case IR_OP_OPTION_GET_OR_ELSE:
-            follow(&pending, in, 0);
-            follow(&pending, in, 1);
+            push_operand(&pending, in, 0,
+                         through_conversion(places, in, path));
+            push_operand(&pending, in, 1, path);
             break;
         case IR_OP_SELECT:
-            follow(&pending, in, 1);
-            follow(&pending, in, 2);
+            push_operand(&pending, in, 1, path);
+            push_operand(&pending, in, 2, path);
             break;
         case IR_OP_PHI:
             for (uint32_t i = 0; i < in->n_operands; i++)
-                follow(&pending, in, i);
+                push_operand(&pending, in, i, path);
             break;
         default:
-            if (!alias_edges(value, &pending))
-                add_id(ids, heap_place(places, value));
+            add_id(ids, descend(places, heap_place(places, value), path));
             break;
         }
+    }
+    core_dict_foreach(&seen, item) {
+        core_list_t(place_path_cptr_t) *paths = item->value;
+        core_list_free(*paths);
+        core_free(paths);
     }
     core_dict_free(&seen);
     core_list_free(pending);
@@ -647,8 +781,9 @@ ir_places_of(ir_places_t *places, const ir_value_t *address,
 }
 
 static bool
-whole_object(const ir_value_t *address)
+whole_object(const ir_value_t *address, uint32_t *steps)
 {
+    *steps = 0;
     for (uint32_t depth = 0; address && depth < 64; depth++) {
         if (address->kind != IR_VAL_INSTR || !address->def) return true;
         const ir_instr_t *in = address->def;
@@ -658,6 +793,12 @@ whole_object(const ir_value_t *address)
         case IR_OP_ALLOC:
         case IR_OP_ALLOC_USING:
             return true;
+        case IR_OP_FIELD:
+            if (in->n_operands < 2 || in->operands[1].kind != IR_OPD_NAME)
+                return false;
+            (*steps)++;
+            address = ir_operand_value(&in->operands[0]);
+            break;
         case IR_OP_COPY:
         case IR_OP_CONSUME:
         case IR_OP_RETAIN_REF:
@@ -687,9 +828,13 @@ record_access(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
         from = (size_t)(ids - places->ids.data);
     else
         count = 1;
+    uint32_t steps = 0;
+    bool whole = in->op == IR_OP_STORE && whole_object(address, &steps);
+    for (uint32_t i = 0; whole && from != SIZE_MAX && i < count; i++)
+        whole = places->places.data[places->ids.data[from + i]].depth
+            == steps;
     ir_access_t access = {.instr = in, .kind = kind,
-                          .whole = in->op == IR_OP_GLOBAL_STORE
-                              || (in->op == IR_OP_STORE && whole_object(address)),
+                          .whole = in->op == IR_OP_GLOBAL_STORE || whole,
                           .first = (uint32_t)places->ids.len, .count = count};
     if (from == SIZE_MAX) {
         uint32_t unknown = unknown_place(places);
@@ -788,7 +933,7 @@ expose_roots(core_dict_t *locals, const ir_value_t *address)
                 core_dict_put(locals, (void *)storage, (void *)storage);
             continue;
         }
-        if (!derives_address(in->op)) continue;
+        if (!derives_address(in->op) || in->op == IR_OP_CONSUME) continue;
         for (uint32_t o = 0; o < in->n_operands; o++)
             follow(&pending, in, o);
     }
@@ -850,12 +995,12 @@ ir_places_build(ir_func_t *f)
     places->ids      = core_list_new(uint32_t);
     places->accesses = core_list_new(ir_access_t);
     places->spans    = core_list_new(place_span_t);
+    places->paths    = core_list_new(place_path_ptr_t);
+    core_dict_init(&places->path_index, path_hash, path_eq);
     core_dict_init(&places->resolved, nullptr, nullptr);
     core_dict_init(&places->by_instr, nullptr, nullptr);
     core_dict_init(&places->overlaps, nullptr, nullptr);
     core_dict_init(&places->exposed, nullptr, nullptr);
-    annotated_flag(&f->annots, CORE_STRING_STATIC("ir.summary_escapes"),
-                   &places->escape_facts);
     collect_exposure(f, &places->exposed);
     collect_accesses(places, f);
     return places;
@@ -869,6 +1014,10 @@ ir_places_free(ir_places_t *places)
     core_list_free(places->ids);
     core_list_free(places->accesses);
     core_list_free(places->spans);
+    for (size_t i = 0; i < places->paths.len; i++)
+        core_free(places->paths.data[i]);
+    core_list_free(places->paths);
+    core_dict_free(&places->path_index);
     core_dict_free(&places->resolved);
     core_dict_free(&places->by_instr);
     core_dict_free(&places->overlaps);
@@ -932,8 +1081,84 @@ ir_places_access_private(const ir_places_t *places, const ir_access_t *access)
     return place && place->kind == IR_PLACE_LOCAL && !place->exposed;
 }
 
+uint32_t
+ir_place_root_of(const ir_places_t *places, uint32_t place)
+{
+    while (place < places->places.len && places->places.data[place].nested)
+        place = places->places.data[place].parent;
+    return place;
+}
+
+bool
+ir_places_within(const ir_places_t *places, uint32_t outer, uint32_t inner)
+{
+    while (inner < places->places.len) {
+        if (inner == outer) return true;
+        if (!places->places.data[inner].nested) return false;
+        inner = places->places.data[inner].parent;
+    }
+    return false;
+}
+
+static bool
+reinterpreted(ir_module_t *module, th_type *type)
+{
+    ir_reinterpretations_t *registry = module->ctx->reinterpretations;
+    if (!registry || !registry->sealed || registry->unseen) return true;
+    type = type ? th_resolve(type) : nullptr;
+    if (open_type(type)) return true;
+    const type_reach_t *reach = type_reach(registry, module, type);
+    return reach->universal || reach->components.len;
+}
+
+static bool
+paths_overlap(const ir_places_t *places, uint32_t a, uint32_t b)
+{
+    uint32_t steps_a[PLACE_DEPTH_LIMIT + 1];
+    uint32_t steps_b[PLACE_DEPTH_LIMIT + 1];
+    uint32_t count_a = 0, count_b = 0;
+    for (uint32_t at = a; places->places.data[at].nested
+         && count_a <= PLACE_DEPTH_LIMIT; at = places->places.data[at].parent)
+        steps_a[count_a++] = at;
+    for (uint32_t at = b; places->places.data[at].nested
+         && count_b <= PLACE_DEPTH_LIMIT; at = places->places.data[at].parent)
+        steps_b[count_b++] = at;
+    while (count_a && count_b) {
+        const ir_place_t *x = &places->places.data[steps_a[--count_a]];
+        const ir_place_t *y = &places->places.data[steps_b[--count_b]];
+        if (x->element || y->element) continue;
+        if (core_string_eq(x->step, y->step)) continue;
+        const ir_place_t *holder = &places->places.data[x->parent];
+        return reinterpreted(places->module, holder->type);
+    }
+    return true;
+}
+
+static bool roots_may_alias(const ir_places_t *places, uint32_t a,
+                            uint32_t b);
+
 bool
 ir_places_may_alias(const ir_places_t *places, uint32_t a, uint32_t b)
+{
+    const ir_place_t *x = ir_place_at(places, a);
+    const ir_place_t *y = ir_place_at(places, b);
+    if (!x || !y) return true;
+    if (a == b) return true;
+    if (!x->nested && !y->nested) return roots_may_alias(places, a, b);
+    uint32_t root_a = ir_place_root_of(places, a);
+    uint32_t root_b = ir_place_root_of(places, b);
+    if (root_a != root_b) {
+        if (!roots_may_alias(places, root_a, root_b)) return false;
+        const ir_place_t *ra = &places->places.data[root_a];
+        const ir_place_t *rb = &places->places.data[root_b];
+        if (!same_type(places->module, ra->type, rb->type))
+            return registered_overlap(places->module, x->type, y->type);
+    }
+    return paths_overlap(places, a, b);
+}
+
+static bool
+roots_may_alias(const ir_places_t *places, uint32_t a, uint32_t b)
 {
     const ir_place_t *x = ir_place_at(places, a);
     const ir_place_t *y = ir_place_at(places, b);

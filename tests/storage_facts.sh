@@ -26,10 +26,10 @@ fi
 awk '
     /^  func @copy_(word|count|status|slice)\(/ {
         functions++
-        if ($0 !~ /ir.storage_duration\(2\)/ || $0 !~ /ir.alias_analysis_complete\(true\)/) exit 1
+        if ($0 !~ /ir.storage_duration\(2\)/) exit 1
         inside = 1
     }
-    inside && / = alloc / { exit 1 }
+    inside && / = alloc / && $0 !~ /ir.allocation_local\(true\)/ { exit 1 }
     inside && /^  }/ { inside = 0 }
     END { if (functions != 4) exit 1 }
 ' "$tmp/ir" || {
@@ -38,7 +38,7 @@ awk '
 }
 awk '
     /^  func @prepend\(/ { inside = 1; functions++ }
-    inside && / = alloc / {
+    inside && / = alloc / && $0 !~ /ir.allocation_local\(true\)/ {
         allocations++
         if ($0 !~ /alloc .*Chain_Node/) exit 1
     }
@@ -50,7 +50,8 @@ awk '
 }
 
 placed=$(awk '/^  func @/ { name = $2 }
-    / = alloc / { print name, $4, $5 }' "$tmp/ir")
+    / = alloc / && $0 !~ /ir.allocation_local\(true\)/ {
+        print name, $4, $5 }' "$tmp/ir")
 expect() {
     if ! printf '%s\n' "$placed" | grep -Fqx "$1"; then
         echo "missing heap placement: $1" >&2

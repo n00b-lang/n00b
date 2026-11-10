@@ -1,0 +1,21 @@
+tests/diagnostics/link/unused_items.n:3:5: warning N00B-N0021: field `b` of `Used` is set but never read
+tests/diagnostics/link/unused_items.n:4:5: warning N00B-N0021: field `c` of `Used` is set but never read
+tests/diagnostics/link/unused_items.n:6:8: warning N00B-N0023: type `Orphan` is never used
+  help: remove it
+tests/diagnostics/link/unused_items.n:11:5: warning N00B-N0021: field `spare` of `Box` is set but never read
+tests/diagnostics/link/unused_items.n:12:5: warning N00B-N0020: field `unset` of `Box` is read but never set
+tests/diagnostics/link/unused_items.n:13:5: warning N00B-N0022: field `extra` of `Box` is never used
+tests/diagnostics/link/unused_items.n:15:6: warning N00B-N0023: type `Color` is never used
+  help: remove it
+tests/diagnostics/link/unused_items.n:19:5: warning N00B-N0025: `never_read` is set but never read
+  help: remove it
+tests/diagnostics/link/unused_items.n:20:5: warning N00B-N0024: `never_used` is never used
+  help: remove it
+tests/diagnostics/link/unused_items.n:25:8: warning N00B-N0023: type `Only_Dead` is never used
+  help: remove it
+tests/diagnostics/link/unused_items.n:28:5: warning N00B-N0024: `dead_only` is never used
+  help: remove it
+tests/diagnostics/link/unused_items.n:29:6: warning N00B-N0019: function `dead` is never called
+  help: call it or delete it
+tests/diagnostics/link/unused_items.n:32:6: warning N00B-N0019: function `helper_of_dead` is never called
+  help: call it or delete it

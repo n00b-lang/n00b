@@ -1,13 +1,56 @@
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/rule.h"
 #include "ir/typelang.h"
+
+struct ir_parsed_scalars_t {
+    const ir_profile_t  *profile;
+    uint64_t            *hashes;
+    th_type            **types;
+    ir_parsed_scalars_t *next;
+};
+
+static pthread_mutex_t parsed_scalars_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static ir_machine_t opaque(void)
 {
     return (ir_machine_t){.class = IR_CLASS_OPAQUE, .width = 0};
+}
+
+static ir_parsed_scalars_t *parsed_scalars(ir_ctx_t *ctx,
+                                           const ir_profile_t *p)
+{
+    pthread_mutex_lock(&parsed_scalars_lock);
+    ir_parsed_scalars_t *parsed = ctx->parsed_scalars;
+
+    while (parsed && parsed->profile != p) {
+        parsed = parsed->next;
+    }
+    if (!parsed) {
+        size_t n = p->n_scalars ? p->n_scalars : 1;
+
+        parsed          = ir_alloc(ctx, sizeof(ir_parsed_scalars_t));
+        parsed->profile = p;
+        parsed->hashes  = ir_alloc(ctx, n * sizeof(uint64_t));
+        parsed->types   = ir_alloc(ctx, n * sizeof(th_type *));
+        for (size_t i = 0; i < p->n_scalars; i++) {
+            core_string_t err = {};
+            th_type      *t   = ir_typelang_parse(ctx->types,
+                                                  p->scalars[i].type_text,
+                                                  &err);
+
+            core_free(err.data);
+            parsed->hashes[i] = t ? th_hash(ctx->types, t) : 0;
+            parsed->types[i]  = t;
+        }
+        parsed->next        = ctx->parsed_scalars;
+        ctx->parsed_scalars = parsed;
+    }
+    pthread_mutex_unlock(&parsed_scalars_lock);
+
+    return parsed;
 }
 
 static void ready_scalars(ir_module_t *m)
@@ -16,21 +59,16 @@ static void ready_scalars(ir_module_t *m)
         return;
     }
 
-    const ir_profile_t *p = m->profile;
+    const ir_profile_t  *p      = m->profile;
+    ir_parsed_scalars_t *parsed = parsed_scalars(m->ctx, p);
+    size_t               n      = p->n_scalars ? p->n_scalars : 1;
 
-    size_t n = p->n_scalars ? p->n_scalars : 1;
-
-    m->scalar_hashes = ir_alloc(m->ctx, n * sizeof(uint64_t));
+    m->scalar_hashes = parsed->hashes;
     m->scalar_types  = ir_alloc(m->ctx, n * sizeof(th_type *));
 
     for (size_t i = 0; i < p->n_scalars; i++) {
-        core_string_t err = {};
-        th_type      *t   = ir_typelang_parse(m->ctx->types,
-                                              p->scalars[i].type_text, &err);
-
-        core_free(err.data);
-        m->scalar_hashes[i] = t ? th_hash(m->ctx->types, t) : 0;
-        m->scalar_types[i]  = t ? ir_type_intern(m, t) : nullptr;
+        m->scalar_types[i] = parsed->types[i]
+            ? ir_type_intern(m, parsed->types[i]) : nullptr;
     }
     m->scalars_ready = true;
 }
@@ -284,120 +322,6 @@ const ir_profile_t ir_profile_bce = {
     .scalars   = bce_scalars,
 };
 
-static ir_rule_result_t synth_concat(ir_module_t *m, ir_instr_t *in,
-                                     ir_diags_t *d, void *state)
-{
-    (void)d;
-    (void)state;
-
-    if (in->n_operands != 2) {
-        return (ir_rule_result_t){.verdict = IR_RULE_DECLINE};
-    }
-
-    return (ir_rule_result_t){
-        .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types,
-                                             CORE_STRING_STATIC("str"))),
-    };
-}
-
-static ir_rule_result_t synth_seq_len(ir_module_t *m, ir_instr_t *in,
-                                      ir_diags_t *d, void *state)
-{
-    (void)in;
-    (void)d;
-    (void)state;
-
-    return (ir_rule_result_t){
-        .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types,
-                                             CORE_STRING_STATIC("word"))),
-    };
-}
-
-static ir_rule_result_t synth_list_index(ir_module_t *m, ir_instr_t *in,
-                                         ir_diags_t *d, void *state)
-{
-    (void)d;
-    (void)state;
-
-    th_type *k = ir_instr_key_type(in);
-    const th_arg *a = th_named_arg(k, 0);
-
-    if (!a || a->kind != TH_ARG_TYPE) {
-        return (ir_rule_result_t){.verdict = IR_RULE_DECLINE};
-    }
-
-    return (ir_rule_result_t){
-        .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, a->type),
-    };
-}
-
-static ir_rule_result_t synth_ext_concat(ir_module_t *m, ir_instr_t *in,
-                                         ir_diags_t *d, void *state)
-{
-    (void)d;
-    (void)state;
-
-    if (in->n_operands != 2) {
-        return (ir_rule_result_t){.verdict = IR_RULE_DECLINE};
-    }
-
-    return (ir_rule_result_t){
-        .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types,
-                                             CORE_STRING_STATIC("str"))),
-    };
-}
-
-static ir_rule_result_t synth_ext_trace(ir_module_t *m, ir_instr_t *in,
-                                        ir_diags_t *d, void *state)
-{
-    (void)m;
-    (void)in;
-    (void)d;
-    (void)state;
-
-    return (ir_rule_result_t){.verdict = IR_RULE_ACCEPT};
-}
-
-static const ir_rule_t synth_rules[] = {
-    {
-        .name      = CORE_STRING_STATIC("synth.concat.op"),
-        .op        = (ir_op_t)(IR_OP_COUNT + 0),
-        .match     = IR_MATCH_DEFAULT,
-        .type_rule = synth_ext_concat,
-    },
-    {
-        .name      = CORE_STRING_STATIC("synth.trace.op"),
-        .op        = (ir_op_t)(IR_OP_COUNT + 1),
-        .match     = IR_MATCH_DEFAULT,
-        .type_rule = synth_ext_trace,
-    },
-    {
-        .name      = CORE_STRING_STATIC("synth.concat"),
-        .op        = IR_OP_ADD,
-        .match     = IR_MATCH_EXACT,
-        .type_text = CORE_STRING_STATIC("str"),
-        .type_rule = synth_concat,
-    },
-    {
-        .name      = CORE_STRING_STATIC("synth.list.index"),
-        .op        = IR_OP_INDEX,
-        .match     = IR_MATCH_CONSTRUCTOR,
-        .type_text = CORE_STRING_STATIC("list"),
-        .type_rule = synth_list_index,
-    },
-    {
-        .name      = CORE_STRING_STATIC("synth.seq.len"),
-        .op        = IR_OP_CLZ,
-        .match     = IR_MATCH_KIND,
-        .kind      = TH_SEQUENCE,
-        .type_rule = synth_seq_len,
-    },
-};
-
 static const ir_opinfo_t synth_ext_ops[] = {
     {CORE_STRING_STATIC("synth.concat"), 2, 2, IR_RES_ANNOTATED,
      CORE_STRING_STATIC("vv"), 0, IR_OPF_HASRESULT, {0, -1, -1, -1, false}},
@@ -419,8 +343,6 @@ const ir_profile_t ir_profile_synth = {
     .name      = CORE_STRING_STATIC("synth"),
     .n_scalars = sizeof(synth_scalars) / sizeof(synth_scalars[0]),
     .scalars   = synth_scalars,
-    .n_rules   = sizeof(synth_rules) / sizeof(synth_rules[0]),
-    .rules     = synth_rules,
     .n_ext_ops = sizeof(synth_ext_ops) / sizeof(synth_ext_ops[0]),
     .ext_ops   = synth_ext_ops,
 };

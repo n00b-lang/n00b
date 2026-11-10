@@ -1,7 +1,7 @@
 import containers.array
 import containers.traits
 import containers.lease
-import containers.view
+import containers.slice
 import cursor
 import panic
 
@@ -52,7 +52,7 @@ func __write(self: List['T], index: int, value: 'T) {
 }
 
 func __slice(self: List['T], start_ix: int,
-                    end_ix: int) -> containers.view.View['T] {
+                    end_ix: int) -> containers.slice.Slice['T] {
     check_range(self, start_ix, end_ix)
     let length: int       = end_ix - start_ix
     var items:  Array['T] = new[Array['T]](length)
@@ -61,7 +61,7 @@ func __slice(self: List['T], start_ix: int,
         items[at] = self.items[start_ix + at]
         at += 1
     }
-    return containers.view.__slice(items, 0, length)
+    return new[containers.slice.Slice['T]](items, 0, length)
 }
 
 func __write_slice(self: List['T], start_ix: int?,
@@ -69,11 +69,11 @@ func __write_slice(self: List['T], start_ix: int?,
                           values: List['T]) {
     var start: int = 0
     if start_ix != nil {
-        start = start_ix.get()
+        start = start_ix
     }
     var end: int = cast[int]self.count
     if end_ix != nil {
-        end = end_ix.get()
+        end = end_ix
         if end < 0 {
             end += cast[int]self.count
         }
@@ -243,7 +243,7 @@ func to_array(consume self: List['T]) -> Array['T] {
     return __array_prefix(items.__value, self.count)
 }
 
-func __add(self: List['T], other: List['T]) -> List['T] {
+func __add(view self: List['T], view other: List['T]) -> List['T] {
     let size:  uint      = self.count + other.count
     var items: Array['T] = new[Array['T]](cast[int]size)
     var at:    uint      = 0
@@ -260,7 +260,7 @@ func __add(self: List['T], other: List['T]) -> List['T] {
     return new[List['T]](items = items)
 }
 
-func iter(self: List['T]) -> cursor.Lease_Cursor['T] {
+func __iterator(self: List['T]) -> cursor.Lease_Cursor['T] {
     return new[cursor.Lease_Cursor['T]](ref self.items, self.count)
 }
 

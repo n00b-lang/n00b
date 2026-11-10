@@ -13,7 +13,7 @@ func stop(heap: Ref[internal.gc.core.Heap]) {
     let timeout_ns: u64                      = cast[u64](heap.__value.cfg.world_timeout_ms) * 1000000
     var current:    Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         if mutator.__value.thread_primary and mutator.__value.thread_id != owner {
             require internal.threads.thread_suspend(mutator.__value.thread_control,
                                               ref mutator.__value.captured,
@@ -31,7 +31,7 @@ func start(heap: Ref[internal.gc.core.Heap]) {
     internal.threads.thread_fence()
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         if mutator.__value.thread_primary and mutator.__value.thread_id != owner {
             require mutator.__value.ctx_valid
             require internal.threads.thread_resume(mutator.__value.thread_control,

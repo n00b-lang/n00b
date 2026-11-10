@@ -5,7 +5,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/liveness.h"
-#include "ir/memssa.h"
+#include "ir/pdg_memory.h"
 #include "ir/operands.h"
 #include "ir/places.h"
 #include "ir/walk.h"
@@ -55,7 +55,7 @@ static bool analyze_func(ir_visit_t *vi)
     a->scope  = ir_analysis_scope_begin();
     a->scoped = true;
     a->dom    = ir_func_doms(f);
-    a->rd    = f->n_locals ? ir_rd_of(f, a->dom) : nullptr;
+    a->rd     = ir_pdg_rd(ir_func_pdg(f));
 
     return true;
 }
@@ -102,7 +102,7 @@ static bool analyze_operand(ir_visit_t *vi)
             CORE_STRING_STATIC("ir.copyout_read"));
         bool returned = vi->instr->op == IR_OP_RETURN
             || (copyout && copyout->kind == IR_ANNOT_BOOL && copyout->b);
-        if (!l->synthetic) {
+        if (!l->synthetic || (returned && l->source_name.u8_bytes)) {
             core_string_t name = ir_local_label(l);
             ir_diag_t *dg = say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr,
                 vi->block, vi->func, returned
@@ -164,153 +164,6 @@ bool ir_analyze(ir_module_t *m, ir_diags_t *d)
     return !ir_diags_failed(d);
 }
 
-static bool observes_global(ir_places_t *places, const ir_instr_t *in,
-                            uint32_t place, bool *killed)
-{
-    if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE
-        || in->op == IR_OP_RETURN || in->op == IR_OP_FAIL
-        || in->op == IR_OP_TRAP || in->op == IR_OP_UNREACHABLE) {
-        return true;
-    }
-
-    uint32_t first = 0;
-    uint32_t n     = ir_places_accesses_of(places, in, &first);
-
-    for (uint32_t a = first; a < first + n; a++) {
-        const ir_access_t *access = ir_places_access_at(places, a);
-        const uint32_t    *ids    = ir_places_access_places(places, access);
-
-        for (uint32_t p = 0; p < access->count; p++) {
-            if (!ir_places_may_alias(places, ids[p], place)) {
-                continue;
-            }
-            if (access->kind == IR_ACCESS_LOAD || !access->whole
-                || access->count != 1 || ids[p] != place) {
-                return true;
-            }
-            *killed = true;
-        }
-    }
-
-    return false;
-}
-
-static bool path_observes(ir_places_t *places, const ir_block_t *block,
-                          uint32_t from, uint32_t place, bool *killed)
-{
-    for (uint32_t i = from; i < block->n_instrs && !*killed; i++) {
-        if (observes_global(places, block->instrs[i], place, killed)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool global_store_dead(ir_func_t *f, ir_places_t *places,
-                              const ir_instr_t *store, uint32_t place)
-{
-    bool         *seen  = core_alloc_array(bool, f->n_blocks);
-    ir_block_t  **work  = core_alloc_array(ir_block_t *, f->n_blocks + 1);
-    uint32_t      depth = 0;
-    bool          dead  = true;
-    bool          killed = false;
-
-    if (path_observes(places, store->block, store->index + 1, place,
-                      &killed)) {
-        dead = false;
-    }
-    else if (!killed) {
-        work[depth++] = store->block;
-    }
-
-    while (dead && depth) {
-        ir_instr_t *terminator = ir_block_terminator(work[--depth]);
-        uint32_t    successors = terminator ? ir_succ_count(terminator) : 0;
-
-        if (!successors) {
-            dead = false;
-        }
-        for (uint32_t s = 0; dead && s < successors; s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-
-            if (!next || seen[next->index]) {
-                continue;
-            }
-            seen[next->index] = true;
-            killed = false;
-            if (path_observes(places, next, 0, place, &killed)) {
-                dead = false;
-            }
-            else if (!killed) {
-                work[depth++] = next;
-            }
-        }
-    }
-
-    core_free(seen);
-    core_free(work);
-
-    return dead;
-}
-
-static bool reads_directly(const ir_block_t *block, uint32_t from,
-                           const ir_value_t *root)
-{
-    for (uint32_t i = from; i < block->n_instrs; i++) {
-        const ir_instr_t *in = block->instrs[i];
-
-        for (uint32_t o = 0; o < in->n_operands; o++) {
-            if (ir_operand_value(&in->operands[o]) == root) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-static bool direct_read_follows(ir_func_t *f, const ir_instr_t *store,
-                                const ir_value_t *root)
-{
-    if (!root) {
-        return true;
-    }
-    ir_liveness_t known = ir_live_after(ir_func_liveness(f), root, store);
-    if (known != IR_LIVENESS_UNKNOWN) {
-        return known == IR_LIVENESS_LIVE;
-    }
-    if (reads_directly(store->block, store->index + 1, root)) {
-        return true;
-    }
-
-    bool        *seen  = core_alloc_array(bool, f->n_blocks);
-    ir_block_t **work  = core_alloc_array(ir_block_t *, f->n_blocks + 1);
-    uint32_t     depth = 0;
-    bool         found = false;
-
-    work[depth++] = store->block;
-    while (!found && depth) {
-        ir_instr_t *terminator = ir_block_terminator(work[--depth]);
-
-        for (uint32_t s = 0; !found && terminator
-                             && s < ir_succ_count(terminator); s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-
-            if (!next || seen[next->index]) {
-                continue;
-            }
-            seen[next->index] = true;
-            found             = reads_directly(next, 0, root);
-            work[depth++]     = next;
-        }
-    }
-    core_free(seen);
-    core_free(work);
-
-    return found;
-}
-
 static bool mark_read_store(void *context, const ir_memdef_t *def)
 {
     core_dict_t *read = context;
@@ -330,7 +183,7 @@ void ir_dead_stores(ir_func_t *f, ir_dead_store_fn report, void *context)
 
     size_t       scope  = ir_analysis_scope_begin();
     ir_places_t *places = ir_func_places(f);
-    ir_memssa_t *memssa = ir_func_memssa(f);
+    ir_pdg_memory_t *memssa = ir_pdg_memory(ir_func_pdg(f));
     core_dict_t  read;
 
     core_dict_init(&read, nullptr, nullptr);
@@ -338,7 +191,7 @@ void ir_dead_stores(ir_func_t *f, ir_dead_store_fn report, void *context)
     for (uint32_t a = 0; places && memssa
                          && a < ir_places_access_count(places); a++) {
         if (ir_places_access_at(places, a)->kind == IR_ACCESS_LOAD) {
-            ir_memssa_visit_clobbers(memssa, a, mark_read_store, &read);
+            ir_pdg_memory_visit_clobbers(memssa, a, mark_read_store, &read);
         }
     }
 
@@ -370,12 +223,11 @@ void ir_dead_stores(ir_func_t *f, ir_dead_store_fn report, void *context)
                 }
 
                 bool local  = place->kind == IR_PLACE_LOCAL
-                    && !place->exposed
-                    && !direct_read_follows(f, in, place->root);
+                    && !place->exposed;
                 bool global = (place->kind == IR_PLACE_GLOBAL
                                || place->kind == IR_PLACE_THREAD)
                     && access->whole
-                    && global_store_dead(f, places, in, ids[0]);
+                    && !ir_pdg_memory_store_observed(memssa, in, ids[0]);
 
                 if (!local && !global) {
                     continue;

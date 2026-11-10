@@ -2,15 +2,22 @@ tests/diagnostics/tu/declarations.n:1:6: error N00B-T0553: `__finalize` cannot f
 tests/diagnostics/tu/declarations.n:1:6: error N00B-T0554: `__finalize` returns `int`, but it must return no value
 tests/diagnostics/tu/declarations.n:1:17: error N00B-T0552: the receiver of `__finalize` must be declared `consume`
   help: write `func __finalize(consume self: Ref[T])`
+tests/diagnostics/tu/declarations.n:4:6: warning N00B-N0019: function `f_1` is never called
+  help: call it or delete it
+tests/diagnostics/tu/declarations.n:8:6: error N00B-N0017: function `f_1` is defined more than once
+  tests/diagnostics/tu/declarations.n:4:6: note: `f_1` is first defined here
+  help: remove one definition, rename it, or give it different parameter types
+tests/diagnostics/tu/declarations.n:12:5: warning N00B-N0024: `x` is never used
+  help: remove it
 tests/diagnostics/tu/declarations.n:13:5: error N00B-N0501: `x` is already declared in this scope
   tests/diagnostics/tu/declarations.n:12:5: note: `x` is first declared here
   help: rename one of them, or assign to the existing `x` instead of declaring it again
+tests/diagnostics/tu/declarations.n:17:8: warning N00B-S0059: this condition is always true, so the other branch never runs
 tests/diagnostics/tu/declarations.n:19:13: error N00B-N0502: `x` cannot be declared here because the outer `x` is already used earlier in this block
   tests/diagnostics/tu/declarations.n:16:9: note: the outer `x` is declared here
   tests/diagnostics/tu/declarations.n:18:17: note: the outer `x` is used here
   help: give the inner binding a different name
-tests/diagnostics/tu/declarations.n:26:14: error N00B-T0522: shift count 9 is outside 0..7 for `u8`
-  note: a value of type `u8` has 8 bits, so it can shift by at most 7
+tests/diagnostics/tu/declarations.n:26:14: error N00B-S0057: the shift amount is always invalid: 9
 tests/diagnostics/tu/declarations.n:27:29: error N00B-T0578: field `x` appears more than once in this tuple type
   tests/diagnostics/tu/declarations.n:27:21: note: `x` is first named here
 tests/diagnostics/tu/declarations.n:28:18: error N00B-T0579: `List` does not take named type arguments
@@ -22,6 +29,8 @@ tests/diagnostics/tu/declarations.n:32:22: error N00B-T0582: the compiler cannot
 tests/diagnostics/tu/declarations.n:33:22: error N00B-T0583: this tuple has 2 elements, so index 2 is out of range
 tests/diagnostics/tu/declarations.n:35:1: error N00B-T0581: cannot assign to an element of a tuple; tuples are immutable
   help: build a new tuple and assign that instead
+tests/diagnostics/tu/declarations.n:36:5: warning N00B-N0024: `trailing` is never used
+  help: remove it
 tests/diagnostics/tu/declarations.n:36:17: warning N00B-P0034: this trailing comma ends the statement, but it reads as though the list continues on the next line
   help: remove the comma
 tests/diagnostics/tu/declarations.n:37:1: error N00B-S0019: this assigns into a literal value, which nothing can read afterward

@@ -1,4 +1,0 @@
-var count: int = 3
-const doubled: int = count * 2
-
-require doubled == 6

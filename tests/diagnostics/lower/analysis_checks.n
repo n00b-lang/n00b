@@ -87,7 +87,7 @@ func poke(c: Counter_5) {
 
 poke(FIXED)
 func f_6(x: int?) -> int {
-    return x.get()
+    return x
 }
 require f_6(3) == 3
 record Entry {
@@ -102,7 +102,7 @@ func run(entry: Entry, other: Ref[Entry]) -> int {
     var copy: Entry = entry
     if copy.value != nil {
         copy.value = nil
-        return copy.value.get()
+        return copy.value
     }
     return 1
 }

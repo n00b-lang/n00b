@@ -237,7 +237,7 @@ private func emit_array(fd: i32, items: Array['E]) -> i32 {
 private func emit_default(fd: i32, self: 'T) -> i32 {
     let found: Ref[abi.Type_Record]? = __abi_type_for(typeof(self))
     require found != nil
-    let row: Ref[abi.Type_Record] = found.get()
+    let row: Ref[abi.Type_Record] = found
     let width_bits: u32 = row.__value.semantic_width_bits
     let primitive: bool = row.__value.kind == cast[u32] abi.Type_Kind.primitive_type
     if primitive and width_bits != 0 and width_bits <= 128 {

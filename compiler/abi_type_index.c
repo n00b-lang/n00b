@@ -10,6 +10,7 @@
 #include "signature_typevars.h"
 #include "abi_decl_index.h"
 #include "cached_body.h"
+#include "qualified_names.h"
 
 typedef struct {
     uint64_t id;
@@ -75,36 +76,6 @@ add_initializer_types(n00bb_abi_type_index_t *index,
 }
 
 static bool
-add_constraint(n00bb_abi_type_index_t *index, th_constraint constraint)
-{
-    switch (constraint.kind) {
-    case TH_CON_UNIFIES:
-    case TH_CON_PROMOTES:
-    case TH_CON_EXCLUDES:
-        return add_optional(index, constraint.target);
-    case TH_CON_ONE_OF:
-        for (size_t i = 0; i < constraint.one_of.n; i++)
-            if (!add_optional(index, constraint.one_of.types[i])) return false;
-        return true;
-    case TH_CON_HAS_FIELD:
-        return add_optional(index, constraint.field.type);
-    case TH_CON_HAS_PARAM:
-        return add_optional(index, constraint.param.type);
-    case TH_CON_METHOD:
-        return add_optional(index, constraint.method.result)
-            && (!constraint.method.call
-                || (th_kind_of(th_resolve(constraint.method.call))
-                        == TH_FUNCTION
-                    && add_children(index, th_resolve(constraint.method.call))));
-    case TH_CON_IMPLEMENTS:
-    case TH_CON_KIND:
-    case TH_CON_INTEGER:
-        return true;
-    }
-    return false;
-}
-
-static bool
 add_reference_to_closed_child(n00bb_abi_type_index_t *index, th_type *child)
 {
     if (!child || !th_is_closed(ir_module_types(index->module), child))
@@ -164,11 +135,6 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
             if (!add_optional(index, th_sum_arm(type, i))) return false;
         return true;
     case TH_VAR:
-        for (size_t i = 0; i < th_var_constraint_count(type); i++) {
-            th_constraint constraint;
-            if (!th_var_constraint_at(type, i, &constraint)
-                || !add_constraint(index, constraint)) return false;
-        }
         return true;
     case TH_TRAIT:
         for (size_t i = 0; i < th_trait_len(type); i++) {
@@ -341,6 +307,69 @@ add_string_backing(n00bb_abi_type_index_t *index)
         || add_type(index, th_name(types, CORE_STRING_STATIC("u8")), nullptr);
 }
 
+static th_type *
+dispatched_trait(th_ctx *types, core_string_t name, bool *builtin)
+{
+    const th_env *environment = th_ctx_environment(types);
+    th_type *leaf = nullptr;
+    bool leaf_builtin = false;
+    size_t leaves = 0;
+    for (size_t i = 0; environment && name.data
+         && i < th_env_declaration_count(environment); i++) {
+        th_env_declaration_view_t declaration;
+        if (!th_env_declaration_at(environment, i, &declaration)) break;
+        if (declaration.kind != TH_ENV_DECLARATION_TRAIT
+            || !declaration.qualified_name.data || !declaration.contract
+            || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
+            continue;
+        bool from_builtins = core_string_eq(declaration.module,
+                                            CORE_STRING_STATIC("builtins"));
+        if (core_string_eq(declaration.qualified_name, name)) {
+            *builtin = from_builtins;
+            return declaration.contract;
+        }
+        if (core_string_eq(n00bb_name_leaf(declaration.qualified_name),
+                           name)) {
+            leaf = declaration.contract;
+            leaf_builtin = from_builtins;
+            leaves++;
+        }
+    }
+    *builtin = leaves == 1 && leaf_builtin;
+    return leaves == 1 ? leaf : nullptr;
+}
+
+static bool
+add_dispatched_traits(n00bb_abi_type_index_t *index, ir_module_t *module)
+{
+    th_ctx *types = ir_module_types(module);
+    core_dict_t seen;
+    core_dict_init_string(&seen);
+    bool valid = true;
+    for (size_t f = 0; valid && f < ir_func_count(module); f++) {
+        ir_func_t *function = ir_func_at(module, f);
+        if (!function || !th_is_closed(types, function->type)) continue;
+        for (uint32_t b = 0; valid && b < function->n_blocks; b++)
+            for (uint32_t i = 0; valid && i < function->blocks[b]->n_instrs;
+                 i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                if (in->op != IR_OP_TRAIT_METHOD || !in->n_operands
+                    || in->operands[0].kind != IR_OPD_NAME
+                    || core_dict_contains(&seen, &in->operands[0].name))
+                    continue;
+                core_dict_put(&seen, &in->operands[0].name, 1);
+                bool builtin = false;
+                th_type *trait = dispatched_trait(types,
+                    in->operands[0].name, &builtin);
+                valid = !trait || (builtin
+                    ? add_type(index, trait, nullptr)
+                    : n00bb_abi_type_index_add_imported_trait(index, trait));
+            }
+    }
+    core_dict_free(&seen);
+    return valid;
+}
+
 bool
 n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
                                           ir_module_t *module)
@@ -368,6 +397,7 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
             global->static_initializer, 0)) return false;
     }
     return collect_call_specializations(index, module, nullptr, 0)
+        && add_dispatched_traits(index, module)
         && add_string_backing(index);
 }
 
@@ -466,7 +496,7 @@ match_call_type(th_ctx *types, th_type *pattern, th_type *actual,
         return true;
     }
     if (kind == TH_FUNCTION) {
-        if (th_func_nparams(pattern) != th_func_nparams(actual)
+        if (th_func_nparams(pattern) < th_func_nparams(actual)
             || !match_call_type(types, th_func_ret(pattern),
                 th_func_ret(actual), bindings, depth + 1)) return false;
         th_type *left_error = th_func_error(pattern);
@@ -474,7 +504,7 @@ match_call_type(th_ctx *types, th_type *pattern, th_type *actual,
         if (!!left_error != !!right_error
             || (left_error && !match_call_type(types, left_error,
                 right_error, bindings, depth + 1))) return false;
-        for (size_t i = 0; i < th_func_nparams(pattern); i++) {
+        for (size_t i = 0; i < th_func_nparams(actual); i++) {
             const th_param *a = th_func_param(pattern, i);
             const th_param *b = th_func_param(actual, i);
             if (!a || !b || !match_call_type(types, a->type, b->type,
@@ -622,55 +652,6 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
     return valid;
 }
 
-static th_type *
-declaration_type(n00bb_abi_type_index_t *index,
-                 const parse_sym_entry_t *symbol, th_type *type)
-{
-    if (!type) return nullptr;
-    for (parse_scope_t *scope = symbol->scope; scope; scope = scope->parent) {
-        if (!core_string_eq(scope->scope_tag,
-                            CORE_STRING_STATIC("function"))) continue;
-        parse_sym_entry_t *function = scope->node
-            ? parse_tree_sym(scope->node) : nullptr;
-        n00bb_body_typevar_map_t *map = function
-            ? parse_sym_binding(function, N00BB_BODY_TYPEVAR_MAP_KEY)
-            : nullptr;
-        if (!map || !map->count) return type;
-        th_type **free_vars = nullptr;
-        size_t free_count = th_free_vars(ir_module_types(index->module), type,
-                                        &free_vars);
-        bool needs_rebase = false;
-        for (size_t i = 0; i < free_count && !needs_rebase; i++)
-            for (size_t j = 0; j < map->count; j++)
-                if (free_vars[i] == th_resolve(map->body[j])) {
-                    needs_rebase = true;
-                    break;
-                }
-        if (!needs_rebase) return type;
-        if (map->count > SIZE_MAX / 2) return nullptr;
-        const th_type **from = core_alloc_array(const th_type *,
-                                               2 * map->count);
-        th_type **to = core_alloc_array(th_type *, 2 * map->count);
-        if (!from || !to) {
-            core_free(from);
-            core_free(to);
-            return nullptr;
-        }
-        for (size_t i = 0; i < map->count; i++) {
-            from[2 * i] = map->body[i];
-            from[2 * i + 1] = th_resolve(map->body[i]);
-            to[2 * i] = map->declaration[i];
-            to[2 * i + 1] = map->declaration[i];
-        }
-        th_type *result = th_type_clone_replacing(
-            ir_module_types(index->module), type, from, to, 2 * map->count);
-        core_free(from);
-        core_free(to);
-        return result;
-    }
-    return type;
-}
-
 th_type *
 n00bb_abi_type_index_symbol_type(n00bb_abi_type_index_t *index,
                                   const parse_sym_entry_t *symbol)
@@ -696,7 +677,7 @@ n00bb_abi_type_index_collect_symbols(n00bb_abi_type_index_t *index,
             bool include = true;
             if (select && !select(context, symbol, &include)) return false;
             if (!include) continue;
-            th_type *type = declaration_type(index, symbol, symbol->type);
+            th_type *type = symbol->type;
             if (!type || !add_type(index, type, nullptr)) return false;
             core_dict_put(&index->symbol_types, (void *)symbol, type);
         }

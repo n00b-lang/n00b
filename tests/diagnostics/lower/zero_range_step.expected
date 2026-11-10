@@ -1,0 +1,2 @@
+tests/diagnostics/lower/zero_range_step.n:3:28: error N00B-S0042: this range steps by 0, so the loop would never finish
+  help: step by a nonzero amount, or leave out `step` to count by 1

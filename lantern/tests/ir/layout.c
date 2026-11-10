@@ -2,8 +2,6 @@
 #include <stdlib.h>
 
 #include "ir/layout.h"
-#include "ir/trait.h"
-#include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/typelang.h"
 #include "ir/verify.h"
@@ -13,345 +11,28 @@
 
 static bool produced[IR_DIAG_COUNT];
 
-static void test_trait_vtable_dispatch_call(void) {
+static void test_record_initializers_and_rest_bindings(void) {
     ir_ctx_t *ctx = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ctx);
-    ir_module_t *module = ir_module_new(ctx, S("trait_dispatch"),
+    ir_module_t *module = ir_module_new(ctx, S("records"),
                                         &ir_profile_bce, (core_string_t){});
-    th_type *object = ir_trait_value_type(types);
-    th_type *data = th_record_lookup(object, S(IR_TRAIT_VALUE_DATA_FIELD));
     th_type *integer = th_name(types, S("int"));
-    th_type *string = th_name(types, S("string"));
-    th_param lowered_params[] = {
-        {.mode = TH_IN, .type = data},
-        {.mode = TH_IN, .type = integer},
-    };
-    th_param lowered_rest = {.mode = TH_IN, .type = integer};
-    th_kwparam lowered_keywords[] = {
-        {.name = S("format"), .mode = TH_IN, .type = string},
-    };
-    th_type *lowered_signature =
-        th_func(types, string, lowered_params, 2, &lowered_rest,
-                lowered_keywords, 1);
-    const core_string_t methods[] = {S("render")};
-    th_type *signatures[] = {lowered_signature};
-    th_type *vtable_type =
-        ir_trait_vtable_type(types, methods, signatures, 1);
-    th_param caller_params[] = {
-        {.mode = TH_IN, .type = object},
-        {.mode = TH_IN, .type = integer},
-    };
-    th_param caller_rest = {.mode = TH_IN, .type = integer};
-    th_kwparam caller_keywords[] = {
-        {.name = S("format"), .mode = TH_IN, .type = string},
-    };
-    ir_func_t *function = ir_func_add(
-        module, S("invoke"), th_func(types, string, caller_params, 2, &caller_rest,
-                                     caller_keywords, 1), IR_LINK_INTERNAL);
-    ir_value_t *value = ir_param_add(function, S("value"), object);
-    ir_value_t *argument = ir_param_add(function, S("argument"), integer);
-    ir_value_t *format = ir_kwparam_add(function, S("format"), string);
-    ir_value_t *extras = ir_restparam_add(function, S("extras"), integer);
-    bool rejects_duplicate_rest_binding = extras &&
-        !ir_restparam_add(function, S("other_extras"), integer);
-    ir_block_t *block = ir_block_add(function, S("entry"));
-    ir_value_t *args[] = {argument};
-    ir_trait_named_arg_t named[] = {{.name = S("format"), .value = format}};
-    ir_value_t *result = ir_trait_method_call_with_rest(
-        types, block, S("result"), value, vtable_type, S("render"), args, 1,
-        extras, named, 1);
-    ir_instr_t *call = result ? result->def : nullptr;
-    th_param bad_params[] = {
-        {.mode = TH_IN, .type = object},
-        {.mode = TH_IN, .type = integer},
-    };
-    th_param bad_rest = {.mode = TH_IN, .type = string};
-    ir_func_t *bad_function = ir_func_add(
-        module, S("bad_rest_call"),
-        th_func(types, string, bad_params, 2, &bad_rest, nullptr, 0),
+    th_param rest = {.mode = TH_IN, .type = integer};
+    ir_func_t *function = ir_func_add(module, S("collect"),
+        th_func(types, th_name(types, S("void")), nullptr, 0, &rest,
+                nullptr, 0),
         IR_LINK_INTERNAL);
-    ir_value_t *bad_value = ir_param_add(bad_function, S("value"), object);
-    ir_value_t *bad_argument = ir_param_add(bad_function, S("argument"), integer);
-    ir_value_t *bad_extras = ir_restparam_add(bad_function, S("extras"), string);
-    ir_block_t *bad_block = ir_block_add(bad_function, S("entry"));
-    ir_value_t *bad_args[] = {bad_argument};
-    bool rejects_wrong_rest_type = bad_block &&
-        !ir_trait_method_call_with_rest(
-            types, bad_block, S("bad_result"), bad_value, vtable_type,
-            S("render"), bad_args, 1, bad_extras, named, 1);
-    ir_rules_t *rules = ir_rules_from_profile(ctx, &ir_profile_bce);
-    ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
-    bool typed = vtable_type && result && call &&
-        th_kind_of(vtable_type) == TH_RECORD &&
-        ir_type_eq(module, result->type, string) &&
-        call->n_operands == 5 &&
-        call->operands[0].value->def->op == IR_OP_LOAD &&
-        call->operands[1].value->def->op == IR_OP_EXTRACT &&
-        call->operands[2].value == argument &&
-        call->operands[3].kind == IR_OPD_SPREAD &&
-        call->operands[3].value == extras &&
-        call->operands[4].kind == IR_OPD_NAMED_ARG &&
-        core_string_eq(call->operands[4].named.name, S("format")) &&
-        call->operands[4].named.value == format;
-    bool accepted = typed && rules && ir_rules_add_defaults(rules);
-    for (uint32_t i = 0; accepted && i < block->n_instrs; i++)
-        accepted = ir_rule_apply(module, rules, block->instrs[i], diagnostics)
-                       .verdict == IR_RULE_ACCEPT;
-    ir_instr_t *early_spread = accepted
-        ? ir_instr_add(block, IR_OP_CALL) : nullptr;
-    bool early_spread_built = early_spread &&
-        ir_instr_set_dest(early_spread, S("early_spread_result"), string) &&
-        ir_instr_operand_value(early_spread, call->operands[0].value) &&
-        ir_instr_operand_value(early_spread, call->operands[1].value) &&
-        ir_instr_operand_spread(early_spread, extras) &&
-        ir_instr_operand_value(early_spread, argument);
-    bool early_spread_rejected = early_spread_built &&
-        ir_rule_apply(module, rules, early_spread, diagnostics).verdict ==
-            IR_RULE_REJECT;
-    ir_instr_t *late_positional = accepted
-        ? ir_instr_add(block, IR_OP_CALL) : nullptr;
-    bool late_positional_built = late_positional &&
-        ir_instr_set_dest(late_positional, S("late_positional_result"), string) &&
-        ir_instr_operand_value(late_positional, call->operands[0].value) &&
-        ir_instr_operand_value(late_positional, call->operands[1].value) &&
-        ir_instr_operand_value(late_positional, argument) &&
-        ir_instr_operand_spread(late_positional, extras) &&
-        ir_instr_operand_value(late_positional, argument);
-    bool late_positional_rejected = late_positional_built &&
-        ir_rule_apply(module, rules, late_positional, diagnostics).verdict ==
-            IR_RULE_REJECT;
-    check("trait vtable slots lower to typed indirect method calls",
-          accepted);
-    check("a rest spread follows all fixed positional arguments",
-          early_spread_rejected);
-    check("positional arguments cannot follow a rest spread",
-          late_positional_rejected);
-    check("trait method calls reject a rest argument with the wrong type",
-          rejects_wrong_rest_type);
+    ir_value_t *extras = ir_restparam_add(function, S("extras"), integer);
+    ir_instr_add(ir_block_add(function, S("entry")), IR_OP_RETURN);
     check("a function binds its rest slot to only one IR value",
-          rejects_duplicate_rest_binding);
-    check("trait vtable rejects incompatible erased receiver signatures",
-          !ir_trait_vtable_type(types, methods,
-              (th_type *[]){th_func(types, string,
-                  (th_param[]){{.mode = TH_IN, .type = integer}}, 1,
-                  nullptr, nullptr, 0)}, 1));
-    check("trait methods cannot collide with the vtable type-info field",
-          !ir_trait_vtable_type(types,
-              (const core_string_t[]){S(IR_TRAIT_VTABLE_TYPE_INFO_FIELD)},
-              signatures, 1));
-    ir_ctx_free(ctx);
-}
-
-static void test_trait_receiver_adapters(void) {
-    ir_ctx_t *ctx = ir_ctx_new();
-    th_ctx *types = ir_ctx_types(ctx);
-    ir_module_t *module = ir_module_new(ctx, S("trait_adapters"),
-                                        &ir_profile_bce, (core_string_t){});
-    th_type *object = ir_trait_value_type(types);
-    th_type *data = th_record_lookup(object, S(IR_TRAIT_VALUE_DATA_FIELD));
-    th_type *meter = th_name(types, S("Meter"));
-    th_type *integer = th_name(types, S("int"));
-    th_type *string = th_name(types, S("string"));
-    th_param implementation_params[] = {
-        {.mode = TH_IN, .type = meter},
-        {.mode = TH_IN, .type = integer},
-    };
-    ir_func_t *implementation = ir_func_add(module, S("meter_render"),
-        th_func(types, th_name(types, S("void")), implementation_params, 2,
-                nullptr, nullptr, 0),
-        IR_LINK_EXTERNAL);
-    ir_instr_add(ir_block_add(implementation, S("entry")), IR_OP_RETURN);
-    th_param slot_params[] = {
-        {.mode = TH_IN, .type = data},
-        {.mode = TH_IN, .type = integer},
-    };
-    th_type *slot_signature =
-        th_func(types, th_name(types, S("void")), slot_params, 2,
-                nullptr, nullptr, 0);
-    ir_func_t *adapter = ir_trait_receiver_adapter_add(
-        module, S("meter_render_adapter"), implementation, slot_signature);
-    ir_block_t *entry = adapter ? ir_block_entry(adapter) : nullptr;
-    ir_instr_t *call = entry && entry->n_instrs > 2
-        ? entry->instrs[2] : nullptr;
-    bool by_value = entry && entry->n_instrs == 4 &&
-        entry->instrs[0]->op == IR_OP_BITCAST &&
-        entry->instrs[1]->op == IR_OP_LOAD && call->op == IR_OP_CALL &&
-        call->operands[0].value->kind == IR_VAL_FUNC &&
-        call->operands[1].value == entry->instrs[1]->dest &&
-        call->operands[2].value == adapter->params[1];
-
-    th_param mutable_receiver = {.mode = TH_INOUT, .type = meter};
-    ir_func_t *mutator = ir_func_add(module, S("meter_update"),
-        th_func(types, th_name(types, S("void")), &mutable_receiver, 1,
-                nullptr, nullptr, 0), IR_LINK_EXTERNAL);
-    ir_value_t *mutator_self = ir_param_add(mutator, S("self"), meter);
-    ir_instr_t *mutator_return =
-        ir_instr_add(ir_block_add(mutator, S("entry")), IR_OP_RETURN);
-    if (mutator_return && mutator_self)
-        ir_instr_operand_value(mutator_return, mutator_self);
-    th_param mutable_slot = {.mode = TH_IN, .type = data};
-    ir_func_t *mutable_adapter = ir_trait_receiver_adapter_add(
-        module, S("meter_update_adapter"), mutator,
-        th_func(types, th_name(types, S("void")), &mutable_slot, 1,
-                nullptr, nullptr, 0));
-    ir_block_t *mutable_entry = mutable_adapter
-        ? ir_block_entry(mutable_adapter) : nullptr;
-    ir_instr_t *mutable_call = mutable_entry && mutable_entry->n_instrs > 2
-        ? mutable_entry->instrs[2] : nullptr;
-    bool mutable_receiver_is_storage = mutable_entry &&
-        mutable_entry->n_instrs == 6 &&
-        mutable_entry->instrs[0]->op == IR_OP_BITCAST &&
-        mutable_entry->instrs[1]->op == IR_OP_LOAD &&
-        mutable_call->op == IR_OP_CALL &&
-        mutable_call->operands[1].value == mutable_entry->instrs[1]->dest &&
-        mutable_entry->instrs[3]->op == IR_OP_CALL_OUTPUT &&
-        mutable_entry->instrs[4]->op == IR_OP_STORE &&
-        mutable_entry->instrs[5]->op == IR_OP_RETURN;
-
-    th_kwparam implementation_keyword = {
-        .name = S("format"), .mode = TH_IN, .type = string,
-    };
-    ir_func_t *keyword_impl = ir_func_add(module, S("meter_format"),
-        th_func(types, th_name(types, S("void")), &mutable_receiver, 1,
-                nullptr, &implementation_keyword, 1), IR_LINK_EXTERNAL);
-    ir_value_t *keyword_self = ir_param_add(keyword_impl, S("self"), meter);
-    ir_kwparam_add(keyword_impl, S("format"), string);
-    ir_instr_t *keyword_return =
-        ir_instr_add(ir_block_add(keyword_impl, S("entry")), IR_OP_RETURN);
-    if (keyword_return && keyword_self)
-        ir_instr_operand_value(keyword_return, keyword_self);
-    th_kwparam slot_keyword = {
-        .name = S("format"), .mode = TH_IN, .type = string,
-    };
-    ir_func_t *keyword_adapter = ir_trait_receiver_adapter_add(
-        module, S("meter_format_adapter"), keyword_impl,
-        th_func(types, th_name(types, S("void")), &mutable_slot, 1,
-                nullptr, &slot_keyword, 1));
-    ir_block_t *keyword_entry = keyword_adapter
-        ? ir_block_entry(keyword_adapter) : nullptr;
-    ir_instr_t *keyword_call = keyword_entry && keyword_entry->n_instrs > 2
-        ? keyword_entry->instrs[2] : nullptr;
-    bool keyword_forwarded = keyword_adapter && keyword_entry &&
-        keyword_adapter->n_params == 2 &&
-        keyword_adapter->params[1]->is_keyword && keyword_call &&
-        keyword_call->operands[2].kind == IR_OPD_NAMED_ARG &&
-        core_string_eq(keyword_call->operands[2].named.name, S("format")) &&
-        keyword_call->operands[2].named.value == keyword_adapter->params[1];
-
-    th_param variadic_receiver = {.mode = TH_IN, .type = meter};
-    th_param implementation_rest = {.mode = TH_IN, .type = integer};
-    ir_func_t *variadic_impl = ir_func_add(module, S("meter_sum"),
-        th_func(types, th_name(types, S("void")), &variadic_receiver, 1,
-                &implementation_rest, nullptr, 0), IR_LINK_EXTERNAL);
-    ir_param_add(variadic_impl, S("self"), meter);
-    ir_restparam_add(variadic_impl, S("extras"), integer);
-    ir_instr_add(ir_block_add(variadic_impl, S("entry")), IR_OP_RETURN);
-    th_param erased_receiver = {.mode = TH_IN, .type = data};
-    th_param slot_rest = {.mode = TH_IN, .type = integer};
-    ir_func_t *variadic_adapter = ir_trait_receiver_adapter_add(
-        module, S("meter_sum_adapter"), variadic_impl,
-        th_func(types, th_name(types, S("void")), &erased_receiver, 1,
-                &slot_rest, nullptr, 0));
-    ir_block_t *variadic_entry = variadic_adapter
-        ? ir_block_entry(variadic_adapter) : nullptr;
-    ir_instr_t *variadic_call = variadic_entry && variadic_entry->n_instrs > 2
-        ? variadic_entry->instrs[2] : nullptr;
-    bool rest_forwarded = variadic_adapter && variadic_entry &&
-        variadic_adapter->n_params == 2 &&
-        variadic_adapter->params[1]->is_rest && variadic_call &&
-        variadic_call->operands[2].kind == IR_OPD_SPREAD &&
-        variadic_call->operands[2].value == variadic_adapter->params[1];
-
-    ir_rules_t *rules = ir_rules_from_profile(ctx, &ir_profile_bce);
-    ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
-    bool valid = rules && keyword_entry && variadic_entry &&
-                 ir_rules_add_defaults(rules);
-    for (uint32_t i = 0; valid && i < entry->n_instrs; i++)
-        valid = ir_rule_apply(module, rules, entry->instrs[i], diagnostics)
-                    .verdict == IR_RULE_ACCEPT;
-    for (uint32_t i = 0; valid && i < mutable_entry->n_instrs; i++)
-        valid = ir_rule_apply(module, rules, mutable_entry->instrs[i],
-                              diagnostics).verdict == IR_RULE_ACCEPT;
-    for (uint32_t i = 0; valid && i < keyword_entry->n_instrs; i++)
-        valid = ir_rule_apply(module, rules, keyword_entry->instrs[i],
-                              diagnostics).verdict == IR_RULE_ACCEPT;
-    for (uint32_t i = 0; valid && i < variadic_entry->n_instrs; i++)
-        valid = ir_rule_apply(module, rules, variadic_entry->instrs[i],
-                              diagnostics).verdict == IR_RULE_ACCEPT;
-    ir_instr_t *duplicate_keyword_call = valid
-        ? ir_instr_add(keyword_entry, IR_OP_CALL) : nullptr;
-    bool duplicate_call_built = duplicate_keyword_call &&
-        ir_instr_set_dest(duplicate_keyword_call, S("duplicate_result"), string) &&
-        ir_instr_operand_value(duplicate_keyword_call,
-                               keyword_call->operands[0].value) &&
-        ir_instr_operand_value(duplicate_keyword_call,
-                               keyword_call->operands[1].value) &&
-        ir_instr_operand_named(duplicate_keyword_call, S("format"),
-                               keyword_adapter->params[1]) &&
-        ir_instr_operand_named(duplicate_keyword_call, S("format"),
-                               keyword_adapter->params[1]);
-    bool duplicate_keyword_rejected = duplicate_call_built &&
-        ir_rule_apply(module, rules, duplicate_keyword_call, diagnostics).verdict ==
-            IR_RULE_REJECT;
-
-    check("trait adapters load by-value receivers from erased storage",
-          by_value && valid);
-    check("trait adapters pass out/inout receivers as typed storage",
-          mutable_receiver_is_storage && valid);
-    check("trait adapters bind and forward named keyword parameters",
-          keyword_forwarded && valid);
-    check("trait adapters bind and spread variadic rest parameters",
-          rest_forwarded && valid);
-    check("call validation rejects duplicate keyword arguments",
-          duplicate_keyword_rejected);
-    check("trait adapters reject incompatible keyword contracts",
-          !ir_trait_receiver_adapter_add(module, S("bad_keyword_adapter"),
-              keyword_impl,
-              th_func(types, th_name(types, S("void")), &mutable_slot, 1,
-                  nullptr,
-                  (th_kwparam[]){{.name = S("format"), .mode = TH_IN,
-                                  .type = integer}}, 1)));
-    check("trait adapters reject mismatched non-receiver arguments",
-          !ir_trait_receiver_adapter_add(module, S("bad_adapter"), implementation,
-              th_func(types, string,
-                  (th_param[]){{.mode = TH_IN, .type = data},
-                               {.mode = TH_IN, .type = string}},
-                  2, nullptr, nullptr, 0)));
-
-    ir_global_t *vtable = ir_trait_vtable_global_add(
-        module, S("meter_vtable"), 17,
-        (const core_string_t[]){S("render"), S("update")},
-        (ir_func_t *const[]){adapter, mutable_adapter}, 2);
-    const th_member *type_info = vtable
-        ? th_record_member(vtable->type, 0) : nullptr;
-    const th_member *render_slot = vtable
-        ? th_record_member(vtable->type, 1) : nullptr;
-    const th_member *update_slot = vtable
-        ? th_record_member(vtable->type, 2) : nullptr;
-    bool assembled = vtable && vtable->has_static_initializer &&
-        vtable->is_static && vtable->mutability == IR_MUT_CONST &&
-        vtable->static_initializer->kind == IR_GLOBAL_INIT_RECORD &&
-        vtable->static_initializer->aggregate.count == 3 && type_info && render_slot &&
-        update_slot &&
-        core_string_eq(type_info->name, S(IR_TRAIT_VTABLE_TYPE_INFO_FIELD)) &&
-        core_string_eq(render_slot->name, S("render")) &&
-        core_string_eq(update_slot->name, S("update")) &&
-        vtable->static_initializer->aggregate.items[0].kind
-            == IR_GLOBAL_INIT_INT &&
-        ir_lit_signed(vtable->static_initializer->aggregate.items[0].integer)
-            == 17 &&
-        vtable->static_initializer->aggregate.items[1].kind
-            == IR_GLOBAL_INIT_SYMBOL &&
-        vtable->static_initializer->aggregate.items[1].symbol->owner
-            == adapter &&
-        vtable->static_initializer->aggregate.items[2].kind
-            == IR_GLOBAL_INIT_SYMBOL &&
-        vtable->static_initializer->aggregate.items[2].symbol->owner
-            == mutable_adapter;
-    check("trait vtable globals assemble type info and ordered adapter slots",
-          assembled);
+          extras && !ir_restparam_add(function, S("other_extras"), integer));
+    ir_global_t *pair = ir_global_add(module, S("pair_record"),
+        th_record(types, (th_member[]){{.name = S("left"), .type = integer},
+                                       {.name = S("right"), .type = integer}},
+                  2));
     check("record initializer rejects a member-count mismatch",
-          !ir_global_set_record_initializer(module, vtable,
+          pair &&
+          !ir_global_set_record_initializer(module, pair,
               (ir_global_init_value_t[]){{.kind = IR_GLOBAL_INIT_INT,
                                           .integer = ir_lit_of(0)}}, 1));
     ir_global_t *small = ir_global_add(module, S("small_record"),
@@ -391,7 +72,7 @@ static void test_trait_receiver_adapters(void) {
         : nullptr;
     core_string_t printed_again = round_trip ? ir_module_print(round_trip)
                                              : (core_string_t){};
-    check("static trait vtable globals round-trip with forward function refs",
+    check("record globals round-trip through the printer and parser",
           printed.data && round_trip && printed_again.data &&
           core_string_eq(printed, printed_again));
     core_string_t printed_shown = printed.data ? printed : S("");
@@ -399,59 +80,16 @@ static void test_trait_receiver_adapters(void) {
         ir_render_t render = {0};
         core_string_t message = ir_diags_render_text(parse_diagnostics, &render);
         core_string_t message_shown = message.data ? message : S("(none)\n");
-        fprintf(stderr, "vtable reparse diagnostics:\n%.*s\n%.*s",
+        fprintf(stderr, "record reparse diagnostics:\n%.*s\n%.*s",
                 (int)message_shown.u8_bytes, message_shown.data,
                 (int)printed_shown.u8_bytes, printed_shown.data);
         core_free(message.data);
     } else if (!printed_again.data || !core_string_eq(printed, printed_again)) {
         core_string_t again_shown = printed_again.data ? printed_again : S("");
-        fprintf(stderr, "vtable text changed:\n%.*s----\n%.*s",
+        fprintf(stderr, "record text changed:\n%.*s----\n%.*s",
                 (int)printed_shown.u8_bytes, printed_shown.data,
                 (int)again_shown.u8_bytes, again_shown.data);
     }
-    ir_ctx_free(ctx);
-}
-
-static void test_trait_value_abi_keeps_data_and_vtable_indirect(void) {
-    ir_ctx_t *ctx = ir_ctx_new();
-    th_ctx *types = ir_ctx_types(ctx);
-    th_type *object = ir_trait_value_type(types);
-    th_type *data = th_record_lookup(object, S(IR_TRAIT_VALUE_DATA_FIELD));
-    th_type *vtable = th_record_lookup(object, S(IR_TRAIT_VALUE_VTABLE_FIELD));
-    core_string_t name = {};
-    bool is_variant = false;
-    bool ok = object && th_kind_of(object) == TH_RECORD &&
-              th_record_len(object) == 2 && data && vtable &&
-              th_kind_of(data) == TH_INDIRECTION &&
-              th_kind_of(vtable) == TH_INDIRECTION &&
-              th_named_info(th_ind_referent(data), &name,
-                            &is_variant, nullptr) &&
-              core_string_eq(name, S(TH_ERASED)) && !is_variant;
-    check("trait values lower to data and vtable pointers", ok);
-    check("trait value pointers share an opaque target-independent type",
-          ok && th_hash(types, data) == th_hash(types, vtable));
-
-    ir_module_t *module = ir_module_new(ctx, S("trait_object"), &ir_profile_bce,
-                                        (core_string_t){});
-    th_param params[] = {{.mode = TH_IN, .type = data},
-                         {.mode = TH_IN, .type = vtable}};
-    th_type *signature = th_func(types, object, params, 2, nullptr, nullptr, 0);
-    ir_func_t *function = ir_func_add(module, S("pack"), signature,
-                                      IR_LINK_INTERNAL);
-    ir_value_t *data_param = ir_param_add(function, S("data"), data);
-    ir_value_t *vtable_param = ir_param_add(function, S("vtable"), vtable);
-    ir_block_t *block = ir_block_add(function, S("entry"));
-    ir_value_t *packed = ir_trait_value_make(types, block, S("value"),
-                                             data_param, vtable_param);
-    ir_value_t *extracted_data =
-        ir_trait_value_data(block, S("raw"), packed);
-    ir_value_t *extracted_vtable =
-        ir_trait_value_vtable(block, S("dispatch"), packed);
-    check("trait object IR can pack and recover both runtime components",
-          packed && extracted_data && extracted_vtable &&
-              th_hash(types, extracted_data->type) == th_hash(types, data) &&
-              th_hash(types, extracted_vtable->type) == th_hash(types, vtable));
-
     ir_ctx_free(ctx);
 }
 
@@ -1161,57 +799,6 @@ static void test_the_pass_declares_what_the_spec_says(void)
     close_env(e);
 }
 
-static void test_comptime_is_symbolic_until_laid_out(void)
-{
-    const core_string_t types[] = {S("i32")};
-    env        *e       = open_env(S("x86_64"));
-    ir_func_t  *f       = touching(e, types, 1);
-    ir_instr_t *sz      = ir_block_entry(f)->instrs[0];
-    ir_rules_t *rs      = ir_module_rules(e->m);
-
-    ir_rule_apply(e->m, rs, sz, e->d);
-    check("sizeof has no value before the layout pass runs",
-          ir_annot_get(&sz->annots, S("ir.const")) == nullptr);
-
-    ir_layout_run(e->m, e->d);
-    ir_module_invalidate(e->m, IR_PROP_TYPED);
-    ir_rule_apply(e->m, rs, sz, e->d);
-
-    ir_annot_t *k = ir_annot_get(&sz->annots, S("ir.const"));
-
-    check("and takes one once the type is laid out",
-          k && k->kind == IR_ANNOT_INT && k->i.mag == 4);
-
-    ir_instr_t *al = ir_instr_add(ir_block_entry(f), IR_OP_ALIGNOF);
-
-    ir_instr_operand_type(al, ty(e, S("i32")));
-    ir_rule_apply(e->m, rs, al, e->d);
-
-    ir_annot_t *a = ir_annot_get(&al->annots, S("ir.const"));
-
-    check("alignof resolves the same way", a && a->i.mag == 4);
-
-    ir_instr_t *of = ir_instr_add(ir_block_entry(f), IR_OP_OFFSETOF);
-
-    ir_instr_operand_type(of, ty(e, S("(x: i32, y: u64)")));
-    ir_instr_operand_name(of, S("y"));
-    ir_layout_run(e->m, e->d);
-    ir_rule_apply(e->m, rs, of, e->d);
-
-    ir_annot_t *o = ir_annot_get(&of->annots, S("ir.const"));
-
-    check("and so does offsetof, in bits", o && o->i.mag == 64);
-
-    ir_instr_t *sp = ir_instr_add(ir_block_entry(f), IR_OP_SIZEOF);
-
-    ir_instr_operand_type(sp, ty(e, S("ptr[i32]")));
-    ir_layout_run(e->m, e->d);
-    ir_rule_apply(e->m, rs, sp, e->d);
-    check("a type whose size stays symbolic gets no value",
-          ir_annot_get(&sp->annots, S("ir.const")) == nullptr);
-    close_env(e);
-}
-
 static void test_a_module_with_no_target(void)
 {
     const ir_profile_t *const profiles[] = {&ir_profile_bce};
@@ -1385,7 +972,6 @@ static void test_all_authored_layout_state_round_trips(void)
         th_type *i32 = ir_type_parse(again, S("i32"));
         ir_descriptor_t *wasm = ir_layout_of(again, i32, S("wasm32"));
         ir_descriptor_t *targetless = ir_layout_of_targetless(again, i32);
-
 
         check("indirection representation survives the round trip",
               ptr && ptr->indirect.authored && ptr->indirect.fat
@@ -1587,12 +1173,9 @@ static void test_recursive_global_static_initializer(void)
     ir_ctx_free(ctx);
 }
 
-
 int main(void)
 {
-    test_trait_vtable_dispatch_call();
-    test_trait_receiver_adapters();
-    test_trait_value_abi_keeps_data_and_vtable_indirect();
+    test_record_initializers_and_rest_bindings();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
     test_imported_final_layout_uses_definition_owner();
@@ -1609,7 +1192,6 @@ int main(void)
     test_overlapping_members_are_caught();
     test_bitcast_sizes_agree();
     test_the_pass_declares_what_the_spec_says();
-    test_comptime_is_symbolic_until_laid_out();
     test_a_module_with_no_target();
     test_a_member_may_be_named_for_a_layout_keyword();
     test_variant_and_indirection_are_recorded();

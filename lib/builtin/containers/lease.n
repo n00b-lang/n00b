@@ -63,6 +63,19 @@ func writable(self: Leasable['T]) -> Ref[Array['T]] {
     return ref self.storage
 }
 
+func peek(self: Leasable['T]) -> Ref[Array['T]] {
+    return ref self.storage
+}
+
+func hold(self: Leasable['T]) -> Ref[Array['T]] {
+    __atomic_fetch_add(ref self.leases.count, 1)
+    return ref self.storage
+}
+
+func drop(self: Leasable['T]) {
+    __atomic_fetch_sub(ref self.leases.count, 1)
+}
+
 func replace_storage(self: Leasable['T], consume storage: Array['T]) {
     if leased(self) {
         self.leases = new[Lease_Count]()

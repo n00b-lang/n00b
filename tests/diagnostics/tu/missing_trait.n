@@ -1,0 +1,23 @@
+callback Step {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func bump(value: int) -> int {
+    return value + 1
+}
+
+func same(a: 'T, b: 'T) -> bool where 'T : Equal {
+    return a == b
+}
+
+func pick(n: int) -> Step? {
+    if n > 0 {
+        return callback[Step](ref bump)
+    }
+    return nil
+}
+
+let step: Step = callback[Step](ref bump)
+require same(step, step)
+require pick(1) == pick(2)

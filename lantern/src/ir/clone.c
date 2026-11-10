@@ -108,9 +108,7 @@ static bool clone_annots(clone_t *c, ir_annots_t *destination,
     for (uint32_t i = 0; i < source->n; i++) {
         ir_annot_t annotation = source->a[i];
         if (core_string_starts_with(annotation.key,
-                                    CORE_STRING_STATIC("ir.alias"))
-            || core_string_starts_with(annotation.key,
-                                       CORE_STRING_STATIC("ir.lifetime")))
+                                    CORE_STRING_STATIC("ir.lifetime")))
             continue;
         if (c->failure) *c->failure = annotation.key;
         if (core_string_eq(annotation.key,

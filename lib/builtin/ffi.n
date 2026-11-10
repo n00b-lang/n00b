@@ -12,9 +12,11 @@ trait Fixup {
 }
 
 record Ffi_Table {
-    slots: List['T?]
-    free: List[int]
-    owners: List[uint]
+    slots: Array['T?]
+    owners: Array[uint]
+    next_free: Array[uint]
+    count: uint
+    free_head: uint
 }
 
 record Ffi_Hold {
@@ -26,7 +28,8 @@ record Ffi_Hold {
     thread_id: uint
 }
 
-var ffi_holds: List[Ffi_Hold] = new[List[Ffi_Hold]]()
+var ffi_holds: Array[Ffi_Hold] = new[Array[Ffi_Hold]](0)
+var ffi_hold_count: uint = 0
 var ffi_hold_groups: u64 = 0
 var ffi_fixed: List[uint] = new[List[uint]]()
 thread var ffi_unwind_top: uint = 0
@@ -118,42 +121,64 @@ func __ffi_panic_hook() {
     }
 }
 
-func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
-    let reused = table.free.pop()
-    if reused != nil {
-        let index = reused.get()
-        table.slots[index] = value
-        table.owners[index] = __os_thread_id()
-        return cast[u64](index + 1)
+func ffi_table_grow(modify table: Ffi_Table['T]) {
+    let capacity: uint = table.count * 2 + 8
+    var slots: Array['T?] = new[Array['T?]](cast[int]capacity)
+    var owners: Array[uint] = new[Array[uint]](cast[int]capacity)
+    var next_free: Array[uint] = new[Array[uint]](cast[int]capacity)
+    var position: uint = 0
+    while position < table.count {
+        slots[position] = table.slots[position]
+        owners[position] = table.owners[position]
+        next_free[position] = table.next_free[position]
+        position += 1
     }
-    table.slots.append(value)
-    table.owners.append(__os_thread_id())
-    return cast[u64]table.slots.len()
+    table.slots = slots
+    table.owners = owners
+    table.next_free = next_free
+}
+
+func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
+    var index: uint = table.count
+    if table.free_head != 0 {
+        index = table.free_head - 1
+        table.free_head = table.next_free[index]
+    } else {
+        if table.count == __array_length(table.slots) {
+            ffi_table_grow(table)
+        }
+        table.count += 1
+    }
+    table.slots[index] = value
+    table.owners[index] = __os_thread_id()
+    return cast[u64](index + 1)
 }
 
 func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
-    let index = cast[int](handle) - 1
-    if handle == 0 or index >= cast[int]table.owners.len() {
+    if handle == 0 or handle > cast[u64]table.count {
         return 0
     }
-    return table.owners[index]
+    return table.owners[cast[uint](handle - 1)]
 }
 
 func __ffi_table_get(table: Ffi_Table['T], handle: u64) -> 'T? {
-    let index = cast[int](handle) - 1
-    if handle == 0 or index >= cast[int]table.slots.len() {
+    if handle == 0 or handle > cast[u64]table.count {
         return nil
     }
-    return table.slots[index]
+    return table.slots[cast[uint](handle - 1)]
 }
 
 func __ffi_table_free(modify table: Ffi_Table['T], handle: u64) {
-    let index = cast[int](handle) - 1
-    if handle == 0 or index >= cast[int](table.slots.len()) or table.slots[index] == nil {
+    if handle == 0 or handle > cast[u64]table.count {
+        return
+    }
+    let index = cast[uint](handle - 1)
+    if table.slots[index] == nil {
         return
     }
     table.slots[index] = nil
-    table.free.append(index)
+    table.next_free[index] = table.free_head
+    table.free_head = index + 1
 }
 
 func __ffi_hold_group() -> u64 {
@@ -165,20 +190,37 @@ func __ffi_hold(group: u64, token: u64, release: Ref[(u64) -> nil], event: strin
                 consume keys: Array[u64], thread_id: uint) {
     let hold: Ffi_Hold = (group = group, token = token, release = release, event = event,
                           keys = keys, thread_id = thread_id)
-    ffi_holds.append(hold)
+    if ffi_hold_count == __array_length(ffi_holds) {
+        var grown: Array[Ffi_Hold] = new[Array[Ffi_Hold]](cast[int](ffi_hold_count * 2 + 8))
+        var position: uint = 0
+        while position < ffi_hold_count {
+            grown[position] = ffi_holds[position]
+            position += 1
+        }
+        ffi_holds = grown
+    }
+    ffi_holds[ffi_hold_count] = hold
+    ffi_hold_count += 1
 }
 
 func ffi_drop_group(group: u64) {
-    var kept: List[Ffi_Hold] = new[List[Ffi_Hold]]()
-    var position = 0
-    while position < cast[int]ffi_holds.len() {
+    var kept: uint = 0
+    var position: uint = 0
+    while position < ffi_hold_count {
         let hold = ffi_holds[position]
         if hold.group != group {
-            kept.append(hold)
+            ffi_holds[kept] = hold
+            kept += 1
         }
         position += 1
     }
-    ffi_holds = kept
+    ffi_hold_count = kept
+    __array_clear(ref ffi_holds, kept)
+}
+
+func ffi_key_matches(expected: Array[u64], key: u64) -> bool {
+    let length = __array_length(expected)
+    return length == 0 or (length == 1 and expected[0] == key)
 }
 
 func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
@@ -195,14 +237,23 @@ func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
     return true
 }
 
-func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
-    var position = 0
-    while position < cast[int]ffi_holds.len() {
+func ffi_release_holds(event: string, keys: Array[u64]?, key: u64, thread_id: uint) {
+    var position: uint = 0
+    while position < ffi_hold_count {
         let hold = ffi_holds[position]
-        if hold.event == event and (hold.thread_id == 0 or hold.thread_id == thread_id) and ffi_keys_match(hold.keys, keys) {
+        var matched = false
+        if hold.event == event and (hold.thread_id == 0 or hold.thread_id == thread_id) {
+            if keys != nil {
+                let all: Array[u64] = keys
+                matched = ffi_keys_match(hold.keys, all)
+            } else {
+                matched = ffi_key_matches(hold.keys, key)
+            }
+        }
+        if matched {
             ffi_drop_group(hold.group)
             if hold.release != nil {
-                let release: Ref[(u64) -> nil] = hold.release.get()
+                let release: Ref[(u64) -> nil] = hold.release
                 release.call(hold.token)
             }
             position = 0
@@ -210,4 +261,12 @@ func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
             position += 1
         }
     }
+}
+
+func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
+    ffi_release_holds(event, keys, 0, thread_id)
+}
+
+func __ffi_event_key(event: string, key: u64, thread_id: uint) {
+    ffi_release_holds(event, nil, key, thread_id)
 }

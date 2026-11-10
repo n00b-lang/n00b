@@ -10,9 +10,9 @@
          | <cond>
          | <tdecl>
 
-<decl> @declares($1,$2,"var") ::= "v" <name> <type> ";"
+<decl> @declares($1,"var") ::= "v" <name> <type> ";"
 
-<tdecl> @type($2,"int") @declares($1,"var") ::= "t" <name> <type> ";"
+<tdecl> @declares($1,"var") ::= "t" <name> <type> ";"
 
 <block> @scope("block") ::= "{" <items> "}"
 

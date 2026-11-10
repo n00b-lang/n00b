@@ -1,5 +1,0 @@
-when comptime() {
-    require true
-}
-
-require 1 == 1

@@ -30,6 +30,20 @@ ir_operand_referenced_value(const ir_operand_t *operand)
     }
 }
 
+ir_value_t *
+ir_call_callee(const ir_instr_t *call)
+{
+    return call && call->op == IR_OP_CALL && call->n_operands
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+}
+
+ir_func_t *
+ir_call_function(const ir_instr_t *call)
+{
+    ir_value_t *callee = ir_call_callee(call);
+    return callee && callee->kind == IR_VAL_FUNC ? callee->owner : nullptr;
+}
+
 uint32_t
 ir_call_argument_count(const ir_instr_t *call)
 {
@@ -126,18 +140,6 @@ ir_block_belongs_to(const ir_func_t *f, const ir_block_t *block)
 {
     return block && block->owner == f && block->index < f->n_blocks
         && f->blocks[block->index] == block;
-}
-
-bool
-ir_value_has_uses(const ir_func_t *f, const ir_value_t *value)
-{
-    for (uint32_t b = 0; b < f->n_blocks; b++)
-        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
-            const ir_instr_t *in = f->blocks[b]->instrs[i];
-            for (uint32_t o = 0; o < in->n_operands; o++)
-                if (ir_value_operand(in, o) == value) return true;
-        }
-    return false;
 }
 
 void

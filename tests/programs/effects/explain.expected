@@ -1,24 +1,24 @@
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads_globals   builtin.hashing.secret.__value[]...
-  allocates       builtin.containers.dict.insert_entry (138:27) -> builtin.containers.dict.prepare (118:5) -> builtin.containers.dict.compact (82:13) -> builtin.containers.lease.__write (66:17) -> builtin.containers.lease.writable (82:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
+  allocates       builtin.containers.dict.insert_entry (138:27) -> builtin.containers.dict.prepare (118:5) -> builtin.containers.dict.compact (82:13) -> builtin.containers.lease.__write (66:17) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (140:33)
-  noreturn        builtin.containers.dict.key_hash (138:58) -> builtin.containers.dict.__n00bb_dispatch_1 (34:12) -> builtin.containers.set.hash (34:12) -> builtin.cursor.next (71:5) -> builtin.containers.view.__read (29:21) -> builtin.panic.index_out_of_range (24:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
+  noreturn        builtin.containers.dict.key_hash (138:58) -> builtin.containers.dict.hash (34:12) -> builtin.cursor.__next (365:5) -> builtin.containers.slice.__read (29:21) -> builtin.panic.index_out_of_range (32:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
   param self      writer, lends
   param key       reader, lends
-  param value     untouched, lends
+  param value     reader, lends
   detail          may_collect allocates_direct reinterprets
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads_globals   builtin.hashing.secret.__value[]...
-  allocates       builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.__n00bb_dispatch_1 (34:12) -> builtin.containers.set.hash (34:12) -> builtin.containers.set.iter (71:5) -> builtin.containers.dict.insertion_keys (38:24) -> builtin.containers.dict.key_view (307:12) -> here (286:28)
+  allocates       builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.containers.dict.insertion_keys (365:18) -> builtin.containers.dict.key_slice (307:12) -> here (286:28)
   panics          here (109:34)
-  noreturn        builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.__n00bb_dispatch_1 (34:12) -> builtin.containers.set.hash (34:12) -> builtin.cursor.next (71:5) -> builtin.containers.view.__read (29:21) -> builtin.panic.index_out_of_range (24:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
+  noreturn        builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.cursor.__next (365:5) -> builtin.containers.slice.__read (29:21) -> builtin.panic.index_out_of_range (32:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
   param self      reader
   param key       reader
   detail          may_collect allocates_direct reinterprets
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   no effects      
   param self      reader
-builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
+builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   allocates       builtin.containers.lease.__ref_create (189:37) -> here (35:28)
   param self      reader, lends
   detail          may_collect allocates_direct
@@ -30,7 +30,7 @@ builtin.containers.list.append: (List['T], 'T, bool) -> nil
   param front     untouched
   detail          may_collect allocates_direct
 builtin.containers.list.pop: (List['T], bool) -> 'T?
-  allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (82:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
+  allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (183:23)
   param self      writer, lends
   param front     untouched
@@ -38,7 +38,7 @@ builtin.containers.list.pop: (List['T], bool) -> 'T?
 builtin.containers.list.len: (List['T]) -> uint
   no effects      
   param self      reader
-builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
+builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   allocates       builtin.containers.lease.__ref_create (264:41) -> here (35:28)
   param self      reader, lends
   detail          may_collect allocates_direct
@@ -51,7 +51,7 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   detail          may_io may_collect allocates_direct reinterprets
 sys.internal.env.args: () -> List[string]
   env             sys.internal.env.n00b_os_arg_count (34:24)
-  allocates       builtin.containers.list.append (37:13) -> builtin.containers.list.ensure_capacity (150:5) -> here (138:28)
+  allocates       here (33:29)
   panics          here (34:5)
   detail          may_collect allocates_direct reinterprets
 sys.internal.env.exit: (int) -> nil
@@ -63,17 +63,17 @@ sys.internal.clock.now_ns: () -> uint
   clock           sys.internal.clock.n00b_os_now_ns (2:12)
   detail          may_collect
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
-  random          sys.internal.random.n00b_os_random_bytes (6:23)
-  blocks          sys.internal.random.n00b_os_random_bytes (6:23)
-  panics          here (6:64)
+  random          sys.internal.random.n00b_os_random_bytes (6:18)
+  blocks          sys.internal.random.n00b_os_random_bytes (6:18)
+  panics          here (6:59)
   param buffer    writer, lends
   detail          may_collect reinterprets
 sys.internal.random.fill: (modify 'T) -> nil fail: int
-  random          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:23)
-  blocks          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:23)
+  random          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:18)
+  blocks          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:18)
   allocates       here (14:28)
   panics          here (14:28)
-  param value     untouched, lends
+  param value     untouched
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
   output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (276:9) -> builtin.string.core.n00bb_runtime_write_bytes (263:26)

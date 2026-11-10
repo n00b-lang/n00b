@@ -1278,6 +1278,63 @@ static void test_templates_and_regex(void) {
   parse_grammar_free(g);
 }
 
+static const core_string_t SIGNED_NOT_AFTER[] = {
+    S("IDENTIFIER"), S("INTEGER"), S(")"), {0},
+};
+
+static const scan_lex_number_form_t SIGNED_NUMBERS[] = {
+    {.digits = S("0123456789"), .sign = S("-"),
+     .sign_not_after = SIGNED_NOT_AFTER, .tok_int = S("INTEGER")},
+    {.prefix = S("0x"), .digits = S("0123456789abcdef"),
+     .tok_int = S("INTEGER")},
+    {},
+};
+
+static const scan_lex_spec_t SIGNED = {
+    .name = S("signed-numbers"),
+    .number_forms = SIGNED_NUMBERS,
+    .tok_ident = S("IDENTIFIER"),
+};
+
+static void test_number_sign_context(void) {
+  static const core_string_t T[] = {
+      S("IDENTIFIER"), S("INTEGER"), {0},
+  };
+
+  parse_grammar_t *g = mk(&SIGNED, T);
+  parse_token_stream_t *ts = scan_tokenize_owned(g, S("= -12"));
+  parse_token_info_t *tok = nullptr;
+
+  scan_stream_foreach(ts, each) {
+    tok = each;
+  }
+  check("a signed number keeps its sign in the token",
+        tok && core_string_eq(core_option_get(parse_token_value(tok)),
+                              S("-12")));
+  scan_token_stream_free(ts);
+
+  kinds(g, "a sign after an operator starts a number", "= -12",
+        "= INTEGER");
+  kinds(g, "a sign at the start of input starts a number", "-3",
+        "INTEGER");
+  kinds(g, "a sign after a separator starts a number", "(1, -2)",
+        "( INTEGER , INTEGER )");
+  kinds(g, "a sign after a name is subtraction", "a -1",
+        "IDENTIFIER - INTEGER");
+  kinds(g, "a sign after a paren is subtraction", "(a)-1",
+        "( IDENTIFIER ) - INTEGER");
+  kinds(g, "a sign after a number is subtraction", "2 -1",
+        "INTEGER - INTEGER");
+  kinds(g, "a double minus negates a signed number", "a - -1",
+        "IDENTIFIER - INTEGER");
+  kinds(g, "a spaced sign stays an operator", "= - 1",
+        "= - INTEGER");
+  kinds(g, "a sign carries into a prefixed number", "= -0x1f",
+        "= INTEGER");
+
+  parse_grammar_free(g);
+}
+
 static void test_sigils_and_heredocs(void) {
   static const core_string_t T[] = {
       S("IDENTIFIER"), S("INTEGER"), S("HEREDOC"), S("CVAR"),
@@ -2288,6 +2345,29 @@ static void test_an_unknown_option_is_named(void) {
   check("an unknown regex predecessor token is rejected",
         core_string_find(err, S("TYPO")) >= 0 &&
             core_string_find(err, S("not_after")) >= 0);
+
+  if (ts) {
+    scan_token_stream_free(ts);
+    scan_scanner_free(sc);
+    core_buffer_free(buf);
+  }
+
+  parse_grammar_free(g);
+
+  g = parse_grammar_new();
+  text = S("@lex-number(digits(\"0123456789\"), sign(\"-\"), "
+           "sign_not_after(\"TYPO\"), int(\"INT\"))\n"
+           "<file> ::= %INT\n");
+  parse_grammar_set_error_recovery(g, false);
+  parse_bnf_declare_terminals(g, text);
+  load_test_grammar(text, CORE_STRING_STATIC("file"), g);
+
+  ts = scan_tokenize(g, S("-1"), &buf, &sc);
+  err = scan_lex_build_error();
+
+  check("an unknown number sign predecessor token is rejected",
+        core_string_find(err, S("TYPO")) >= 0 &&
+            core_string_find(err, S("sign_not_after")) >= 0);
 
   if (ts) {
     scan_token_stream_free(ts);
@@ -4484,6 +4564,7 @@ int main(void) {
   test_long_numeric_trie_paths_resume_linearly();
   test_an_unknown_option_is_named();
   test_lex_declarations_have_no_fixed_limit();
+  test_number_sign_context();
   test_zero_minimum_hash_fences();
   test_symmetric_fences_preserve_source_spans();
   test_fence_padding_requires_both_boundaries();

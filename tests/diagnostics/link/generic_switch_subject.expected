@@ -1,0 +1,3 @@
+tests/diagnostics/link/generic_switch_subject.n:3:14: error N00B-T0021: `kind` uses `==` here with `string` on the left and `u8` on the right, but `==` has no implementation for those two types
+  tests/diagnostics/link/generic_switch_subject.n:9:9: note: `kind` is used with `string` and `u8` here
+  help: give both sides of `==` the same type, for example with a cast, or call it with matching types

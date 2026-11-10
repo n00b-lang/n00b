@@ -2,6 +2,8 @@
 #define N00BB_CACHED_BODY_H
 
 #include "ir/ir.h"
+#include "ir/operands.h"
+#include "qualified_names.h"
 
 static inline core_string_t
 n00bb_native_symbol(ir_func_t *function)
@@ -25,11 +27,16 @@ n00bb_cached_body(ir_func_t *function)
 static inline ir_func_t *
 n00bb_direct_call_target(const ir_instr_t *instruction)
 {
-    const ir_value_t *callee = instruction->op == IR_OP_CALL
-        && instruction->n_operands
-        ? ir_operand_value(&instruction->operands[0]) : nullptr;
-    return callee && callee->kind == IR_VAL_FUNC && callee->owner
-        ? n00bb_cached_body(callee->owner) : nullptr;
+    return n00bb_cached_body(ir_call_function(instruction));
+}
+
+static inline ir_func_t *
+n00bb_open_call(const ir_instr_t *call, core_string_t root)
+{
+    ir_func_t *target = call && call->n_operands == 2
+        ? ir_call_function(call) : nullptr;
+    return target && n00bb_names_function(root, target->name) ? target
+                                                              : nullptr;
 }
 
 #endif

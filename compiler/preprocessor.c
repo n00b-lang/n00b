@@ -1102,6 +1102,9 @@ integer_literal_text(pp_context_t *ctx, parse_tree_t *node,
 static bool
 parse_negated_integer_literal(core_string_t text, __int128 *out)
 {
+    if (text.u8_bytes && text.data[0] == '-')
+        return parse_integer(core_string_borrow(text.data + 1,
+                                                text.u8_bytes - 1), out);
     core_buffer_t *signed_text = core_buffer_empty();
     core_buffer_putc(signed_text, '-');
     core_buffer_append(signed_text, text.data, text.u8_bytes);
@@ -1262,7 +1265,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     core_string_t name = callee && core_tree_is_leaf(callee)
         ? leaf_text(ctx, callee) : (core_string_t){0};
     size_t argument_count = builtin_argument_count(ctx, call);
-    bool needs_string = core_string_eq(name, CORE_STRING_STATIC("preproc_env"))
+    bool needs_string =core_string_eq(name, CORE_STRING_STATIC("preproc_env"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_defines"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_value"))
@@ -1311,7 +1314,6 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
             kind = PP_STRING;
         else if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))
                  || core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))
-                 || core_string_eq(name, CORE_STRING_STATIC("comptime"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))
                  || core_string_eq(name, CORE_STRING_STATIC("preproc_defines")))
             kind = PP_BOOL;
@@ -1382,17 +1384,6 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))) {
         *out = (pp_value_t){.kind = PP_BOOL,
             .as.boolean = !ctx->options || !ctx->options->release_mode};
-        return true;
-    }
-    if (core_string_eq(name, CORE_STRING_STATIC("comptime"))) {
-        if (ctx->options && ctx->options->build_time_use
-            && !ctx->options->build_time_use(
-                ctx->options->selected_body_context, ctx->unit, call)) {
-            pp_internal(ctx, call, "could not record a `comptime()` use");
-            return false;
-        }
-        *out = (pp_value_t){.kind = PP_BOOL,
-            .as.boolean = ctx->options && ctx->options->build_time};
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_utc_year"))) PP_INT(ctx->utc_time.tm_year + 1900);
@@ -1906,7 +1897,7 @@ n00bb_preprocessor_builtin_name(core_string_t name)
     static const core_string_t names[] = {
         S("target_os"), S("target_os_major"), S("target_os_minor"),
         S("target_os_patch"), S("target_arch"), S("target_alu"),
-        S("target_is_little_endian"), S("debug_enabled"), S("comptime"),
+        S("target_is_little_endian"), S("debug_enabled"),
         S("preproc_utc_year"), S("preproc_utc_month"), S("preproc_utc_day"),
         S("preproc_utc_hour"), S("preproc_utc_minute"),
         S("preproc_utc_second"), S("n00b_major"), S("n00b_minor"),
@@ -2025,11 +2016,22 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                  && parse_tree_leaf_is(operator,
                                        CORE_STRING_STATIC("("))) {
             core_buffer_t *callee = core_buffer_empty();
-            bool valid = core_tree_num_children(node)
-                && collect_name_chain(ctx, core_tree_child(node, 0), callee)
-                && n00bb_preprocessor_builtin_name(core_string_borrow(callee->data,
-                                                       callee->byte_len));
+            bool named = core_tree_num_children(node)
+                && collect_name_chain(ctx, core_tree_child(node, 0), callee);
+            core_string_t callee_name = core_string_borrow(callee->data,
+                                                           callee->byte_len);
+            bool comptime = named
+                && core_string_eq(callee_name, CORE_STRING_STATIC("comptime"));
+            bool valid = named && n00bb_preprocessor_builtin_name(callee_name);
             core_buffer_free(callee);
+            if (comptime) {
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_IN_WHEN,
+                         N00B_TEXT_COMPTIME_IS_NOT_A_WHEN_VALUE,
+                         N00BB_NO_ARGS);
+                n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+                                  N00B_TEXT_USE_IF_COMPTIME, N00BB_NO_ARGS);
+                return false;
+            }
             if (!valid) {
                 core_string_t text = node_text(ctx, node);
                 pp_error(ctx, node, N00B_DIAG_COMPTIME_UNKNOWN_FUNCTION,
@@ -2540,20 +2542,6 @@ preprocess_prepare(parse_visit_t *visit)
         || is_name(ctx->grammar, node, "try-body");
     frame->binding_mark = ctx->bindings.len;
 
-    if (is_name(ctx->grammar, node, "func-def") && !frame->current_body
-        && !(ctx->options && ctx->options->build_time)
-        && core_tree_num_children(node) > 1
-        && core_string_eq(leaf_text(ctx, core_tree_child(node, 1)),
-                          CORE_STRING_STATIC("comptime_start"))) {
-        if (ctx->options->build_time_use
-            && !ctx->options->build_time_use(
-                ctx->options->selected_body_context, ctx->unit, node)) {
-            pp_internal(ctx, node, "could not record a `comptime_start()` use");
-            return PARSE_VISIT_ERROR;
-        }
-        visit->remove = true;
-        return PARSE_VISIT_CONTINUE;
-    }
     if (is_name(ctx->grammar, node, "func-def")
         && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
     if (is_name(ctx->grammar, node, "litmod-alias-stmt")

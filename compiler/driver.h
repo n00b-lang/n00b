@@ -34,6 +34,8 @@ core_module_resolve_status_t n00bb_locate_operand(
 bool n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
                               const core_translation_unit_t *left,
                               const core_translation_unit_t *right);
+bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
+                                      core_string_t identifier);
 void n00bb_source_file_mark_interface(core_source_file_t *source,
                                       uint64_t source_hash);
 bool n00bb_source_file_is_interface(const core_source_file_t *source);
@@ -51,8 +53,6 @@ void n00bb_resolver_note_search(n00bb_resolver_t *resolver,
 bool n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
                                      core_string_t operand,
                                      core_string_t *unsupported_scheme);
-bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
-                                      core_string_t identifier);
 bool n00bb_resolver_package_manifests(n00bb_resolver_t *resolver,
                                       core_string_t package_id,
                                       core_module_discovery_emit_fn emit,

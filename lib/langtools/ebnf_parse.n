@@ -82,7 +82,7 @@ private func unexpected(p: Ebnf_Parser, expected: string) {
 private func rule_slot(p: Ebnf_Parser, name: string) -> uint {
     let found: uint? = p.g.rule_index[name]
     if found != nil {
-        return found.get()
+        return found
     }
     let at: uint = p.g.rules.len()
     p.g.rules.append(new[grammar.Rule](name))
@@ -94,7 +94,7 @@ private func class_slot(p: Ebnf_Parser, name: string, span: diag.Span)
     -> uint {
     let found: uint? = p.g.class_index[name]
     if found != nil {
-        return found.get()
+        return found
     }
     let at: uint = p.g.classes.len()
     p.g.classes.append(new[grammar.Token_Class](name, span))
@@ -108,9 +108,9 @@ private func literal_slot(p: Ebnf_Parser, text: string, hard: bool,
     let found: uint? = p.g.literal_index[text]
     if found != nil {
         if hard {
-            p.g.literals[found.get()].hard = true
+            p.g.literals[found].hard = true
         }
-        return found.get()
+        return found
     }
     let at: uint = p.g.literals.len()
     p.g.literals.append(new[grammar.Literal](text, hard, span))
@@ -186,7 +186,7 @@ private func item(p: Ebnf_Parser) -> grammar.Item? {
     var quant: grammar.Quant = grammar.Quant.one
     let q: grammar.Quant? = quantifier(p.tok.kind)
     if q != nil {
-        quant = q.get()
+        quant = q
         span = ebnf_scan.join_spans(start, p.tok.span)
         advance(p)
         while quantifier(p.tok.kind) != nil {
@@ -196,7 +196,7 @@ private func item(p: Ebnf_Parser) -> grammar.Item? {
     if atom == nil {
         return nil
     }
-    return (atom = atom.get(), quant = quant, span = span)
+    return (atom = atom, quant = quant, span = span)
 }
 
 private func starts_item(kind: ebnf_scan.Tok_Kind) -> bool {
@@ -219,7 +219,7 @@ private func sequence(p: Ebnf_Parser) -> List[grammar.Item] {
         }
         let one: grammar.Item? = item(p)
         if one != nil {
-            items.append(one.get())
+            items.append(one)
         }
     }
     return items
@@ -244,9 +244,9 @@ private func alternatives(p: Ebnf_Parser, after: string) -> List[grammar.Alt] {
         }
         elif pipe != nil {
             var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/empty-alternative",
-                "nothing follows this `|`", pipe.get())
+                "nothing follows this `|`", pipe)
             d.help = "to make something optional, write it as `( ... )?`"
-            d.fixes.append(delete_fix(pipe.get()))
+            d.fixes.append(delete_fix(pipe))
             report(p, d)
         }
         else {
@@ -302,7 +302,7 @@ private func rule(p: Ebnf_Parser) {
     }
     advance(p)
     let alts: List[grammar.Alt] = alternatives(p, "`::=`")
-    for let alt in alts {
+    for alt in alts {
         p.g.rules[slot].alts.append(alt)
     }
     finish_line(p)
@@ -363,7 +363,7 @@ private func directive(p: Ebnf_Parser) {
         }
         let first: Use? = p.start_use
         if first != nil {
-            duplicate_directive(p, word, here, first.get().span)
+            duplicate_directive(p, word, here, first.span)
         }
         else {
             p.start_use = (index = 0, span = p.tok.span)
@@ -379,7 +379,7 @@ private func directive(p: Ebnf_Parser) {
         }
         let first: Use? = p.identifier_use
         if first != nil {
-            duplicate_directive(p, word, here, first.get().span)
+            duplicate_directive(p, word, here, first.span)
         }
         else {
             p.identifier_use = use
@@ -399,7 +399,7 @@ private func directive(p: Ebnf_Parser) {
                 skip_line(p)
                 return
             }
-            declare(p, use.get(), policy)
+            declare(p, use, policy)
             if at_line_end(p) {
                 break
             }
@@ -410,7 +410,7 @@ private func directive(p: Ebnf_Parser) {
                 var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/unexpected-token",
                     "expected `,` between token classes", p.tok.span)
                 d.fixes.append(ebnf_scan.fix("add `,`",
-                    ebnf_scan.end_point(use.get().span), ","))
+                    ebnf_scan.end_point(use.span), ","))
                 report(p, d)
             }
             else {
@@ -421,11 +421,14 @@ private func directive(p: Ebnf_Parser) {
     else {
         var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/unknown-directive",
             "unknown directive `" + word + ":`", here)
-        var names: List[string] = new[List[string]](items = directive_names)
+        var names: List[string] = new[List[string]]()
+        for name in directive_names {
+            names.append(name)
+        }
         let guess: string? = diag.closest_match(word, names)
         if guess != nil {
-            d.fixes.append(ebnf_scan.fix("did you mean `" + guess.get() + ":`?",
-                here, guess.get() + ":"))
+            d.fixes.append(ebnf_scan.fix("did you mean `" + guess + ":`?",
+                here, guess + ":"))
         }
         else {
             d.help = "directives are `start:`, `identifier:`, `tokens:`, " +
@@ -462,13 +465,13 @@ private func group_unknown(uses: List[Use], unknown: List[bool])
     -> List[Unknown_Name] {
     var groups: List[Unknown_Name] = new[List[Unknown_Name]]()
     var group_of: Dict[uint, uint] = new[Dict[uint, uint]]()
-    for let use in uses {
+    for use in uses {
         if !unknown[use.index] {
             continue
         }
         let at: uint? = group_of[use.index]
         if at != nil {
-            groups[at.get()].sites.append(use.span)
+            groups[at].sites.append(use.span)
             continue
         }
         var sites: List[diag.Span] = new[List[diag.Span]]()
@@ -482,23 +485,23 @@ private func group_unknown(uses: List[Use], unknown: List[bool])
 private func resolve_rules(p: Ebnf_Parser) {
     var unknown: List[bool] = new[List[bool]]()
     var defined: List[string] = new[List[string]]()
-    for let rule in p.g.rules {
+    for rule in p.g.rules {
         unknown.append(rule.defs.len() == 0)
         if rule.defs.len() > 0 {
             defined.append(rule.name)
         }
     }
     let groups: List[Unknown_Name] = group_unknown(p.rule_uses, unknown)
-    for let group in groups {
+    for group in groups {
         let name: string = p.g.rules[group.index].name
         var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/undefined-rule",
             "`<" + name + ">` is never defined", group.sites[0])
         let guess: string? = diag.closest_match(name, defined)
         if guess != nil {
-            for let site in group.sites {
+            for site in group.sites {
                 d.fixes.append(ebnf_scan.fix(
-                    "did you mean `<" + guess.get() + ">`?", site,
-                    "<" + guess.get() + ">"))
+                    "did you mean `<" + guess + ">`?", site,
+                    "<" + guess + ">"))
             }
         }
         report(p, d)
@@ -506,26 +509,26 @@ private func resolve_rules(p: Ebnf_Parser) {
     let start_use: Use? = p.start_use
     let first_rule: uint? = p.first_rule
     if start_use != nil {
-        let use: Use = start_use.get()
+        let use: Use = start_use
         let at: uint? = p.g.rule_index[p.start_name]
-        if at == nil or unknown[at.get()] {
+        if at == nil or unknown[at] {
             var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/undefined-start",
                 "the start rule `<" + p.start_name + ">` is never defined",
                 use.span)
             let guess: string? = diag.closest_match(p.start_name, defined)
             if guess != nil {
                 d.fixes.append(ebnf_scan.fix(
-                    "did you mean `<" + guess.get() + ">`?", use.span,
-                    "<" + guess.get() + ">"))
+                    "did you mean `<" + guess + ">`?", use.span,
+                    "<" + guess + ">"))
             }
             report(p, d)
         }
         else {
-            p.g.start = at.get()
+            p.g.start = at
         }
     }
     elif first_rule != nil {
-        p.g.start = first_rule.get()
+        p.g.start = first_rule
     }
     else {
         report(p, new[diag.Diagnostic]("ebnf/no-rules", "the grammar defines no rules",
@@ -537,7 +540,7 @@ private func resolve_classes(p: Ebnf_Parser) {
     let identifier_use: Use? = p.identifier_use
     var identifier: uint = 0
     if identifier_use != nil {
-        identifier = identifier_use.get().index
+        identifier = identifier_use.index
     }
     else {
         identifier = class_slot(p, "IDENTIFIER", new[diag.Span]())
@@ -552,7 +555,7 @@ private func resolve_classes(p: Ebnf_Parser) {
             p.g.classes[ident].decl)
         if identifier_use != nil {
             d.related.append((message = "made the identifier class here",
-                              span = identifier_use.get().span))
+                              span = identifier_use.span))
         }
         report(p, d)
     }
@@ -575,16 +578,16 @@ private func resolve_classes(p: Ebnf_Parser) {
         }
     }
     let undeclared: List[Unknown_Name] = group_unknown(p.class_uses, unknown)
-    for let group in undeclared {
+    for group in undeclared {
         let name: string = p.g.classes[group.index].name
         var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/undeclared-token-class",
             "`%" + name + "` is not a declared token class", group.sites[0])
         let guess: string? = diag.closest_match(name, known)
         if guess != nil {
-            for let site in group.sites {
+            for site in group.sites {
                 d.fixes.append(ebnf_scan.fix(
-                    "did you mean `%" + guess.get() + "`?", site,
-                    "%" + guess.get()))
+                    "did you mean `%" + guess + "`?", site,
+                    "%" + guess))
             }
         }
         else {
@@ -594,7 +597,7 @@ private func resolve_classes(p: Ebnf_Parser) {
         report(p, d)
     }
     let misused: List[Unknown_Name] = group_unknown(p.class_uses, trivia)
-    for let group in misused {
+    for group in misused {
         let trivia_class: grammar.Token_Class = p.g.classes[group.index]
         var d: diag.Diagnostic = new[diag.Diagnostic]("ebnf/trivia-in-rule",
             "`%" + trivia_class.name +
@@ -607,7 +610,7 @@ private func resolve_classes(p: Ebnf_Parser) {
 
     let limit: u128 = grammar.identifier_token_id + 1 +
         cast[u128] p.decl_order.len()
-    for let lit in p.g.literals {
+    for lit in p.g.literals {
         let raw: u128 = grammar.raw_token_id(lit.id)
         if raw >= grammar.identifier_token_id and raw < limit {
             panic("the hash of " + lit.text + " collides with a class id")
@@ -631,7 +634,7 @@ func load_ebnf(text: string, source_name: string = "<string>")
         }
         var sorted: List[diag.Diagnostic] = diag.sorted_by_position(diags)
         if last != nil {
-            sorted.append(last.get())
+            sorted.append(last)
         }
         fail sorted
     }

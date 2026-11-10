@@ -202,6 +202,9 @@ bool         ir_summary_call_callees(ir_summaries_t *summaries,
                                      void *context);
 bool         ir_summary_call_pure(ir_summaries_t *summaries,
                                   const ir_instr_t *call);
+bool         ir_summary_call_adds_effects(ir_summaries_t *summaries,
+                                          const ir_func_t *caller,
+                                          const ir_func_t *callee);
 bool         ir_summary_call_writes(ir_summaries_t *summaries,
                                     const ir_func_t *f, ir_places_t *places,
                                     const ir_instr_t *call, uint32_t place);
@@ -356,6 +359,16 @@ uint8_t ir_summary_effect(const ir_summary_t *summary,
 uint8_t ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                                 const ir_splace_t *place, uint8_t entry,
                                 const ir_instr_t *in);
+
+typedef struct ir_summary_state_query_t ir_summary_state_query_t;
+
+ir_summary_state_query_t *ir_summary_state_query(ir_summaries_t *summaries,
+                                                 ir_func_t *f,
+                                                 const ir_splace_t *place,
+                                                 uint8_t entry);
+uint8_t ir_summary_state_query_at(ir_summary_state_query_t *query,
+                                  const ir_instr_t *in);
+void    ir_summary_state_query_free(ir_summary_state_query_t *query);
 
 typedef enum {
     IR_PT_FRESH_NONE,

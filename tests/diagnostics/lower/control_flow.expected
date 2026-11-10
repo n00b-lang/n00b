@@ -10,9 +10,19 @@ tests/diagnostics/lower/control_flow.n:20:9: error N00B-S0002: `a` is a `let` de
   help: declare `a` with `var`, or declare it inside the loop
 tests/diagnostics/lower/control_flow.n:26:18: error N00B-T1000: `n` is `int`, but an operand of `and` must be `bool`
   help: write the comparison you mean, such as `n != 0`
+tests/diagnostics/lower/control_flow.n:29:8: warning N00B-N0023: type `Point_4` is never used
+  help: remove it
+tests/diagnostics/lower/control_flow.n:33:8: warning N00B-N0023: type `Counter_4` is never used
+  help: remove it
+tests/diagnostics/lower/control_flow.n:37:6: warning N00B-N0019: function `reset` is never called
+  help: call it or delete it
 tests/diagnostics/lower/control_flow.n:42:11: error N00B-S0016: `c` is an `in` parameter, so it cannot be passed to `modify` parameter `c` of `reset`
   tests/diagnostics/lower/control_flow.n:41:11: note: `c` is declared here
   help: declare `c` as `modify c`, or copy it into a `var` and pass that
+tests/diagnostics/lower/control_flow.n:44:8: warning N00B-N0023: type `Point_5` is never used
+  help: remove it
+tests/diagnostics/lower/control_flow.n:48:8: warning N00B-N0023: type `Counter_5` is never used
+  help: remove it
 tests/diagnostics/lower/control_flow.n:53:5: error N00B-S0019: `p` is an `in` parameter, so its field `x` cannot be assigned
   tests/diagnostics/lower/control_flow.n:52:16: note: `p` is declared here
   help: declare it as `modify p` to let the function change the caller's value

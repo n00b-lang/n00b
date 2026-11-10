@@ -22,7 +22,7 @@ func span_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Frame_Span]?              = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -83,18 +83,18 @@ func build() -> bool {
     if memory == nil {
         return false
     }
-    let base: Ref[byte] = memory.get()
+    let base: Ref[byte] = memory
     var used:  uint = 0
     var index: u32  = 0
     while cast[uint](index) < count {
         let row: Ref[internal.abi.Native_Frame_Record]? = internal.abi.native_frame(index)
         if row != nil {
-            let function: Ref[byte]? = row.get().__value.function
+            let function: Ref[byte]? = row.__value.function
             if function != nil {
-                let start: uint            = __abi_ref_address(function.get())
+                let start: uint            = __abi_ref_address(function)
                 let span:  Ref[Frame_Span] = span_at(base, used)
                 span.__value.start = start
-                span.__value.end = start + cast[uint](row.get().__value.code_bytes)
+                span.__value.end = start + cast[uint](row.__value.code_bytes)
                 span.__value.row = row
                 used += 1
             }
@@ -137,7 +137,7 @@ func frame_for(return_address: uint) -> Ref[internal.abi.Native_Frame_Record]? {
     if table == nil {
         return nil
     }
-    let base:   Ref[byte] = table.get()
+    let base:   Ref[byte] = table
     let target: uint      = return_address - 1
     var low:    uint = 0
     var high:   uint = span_count

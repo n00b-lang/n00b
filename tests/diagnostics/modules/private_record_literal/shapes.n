@@ -1,0 +1,8 @@
+record Secret {
+    private hidden: int
+    shown: int
+}
+
+func secret(shown: int) -> Secret {
+    return (hidden = 0, shown = shown)
+}

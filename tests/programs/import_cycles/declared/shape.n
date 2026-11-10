@@ -4,10 +4,6 @@ record Shape {
     x: int
 }
 
-func __init(modify self: Shape, x: int) {
-    self.x = x
-}
-
 func shape_total() -> int {
     return maker.literal_x() + maker.constructed_x()
 }

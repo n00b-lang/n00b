@@ -13,7 +13,7 @@ func run(rounds: int, size: int) -> int {
         for item in items {
             let found = table[item]
             if found != nil {
-                total += found.get()
+                total += found
             }
         }
         round += 1

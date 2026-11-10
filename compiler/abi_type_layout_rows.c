@@ -396,6 +396,22 @@ append_union_arms(trace_source_t *source, uint32_t type_index,
     return true;
 }
 
+static void
+sort_trace_children(uint32_t *indexes, uint32_t count,
+                    const core_list_t(n00b_abi_trace_child_v1) *children)
+{
+    for (uint32_t i = 1; i < count; i++) {
+        uint32_t index = indexes[i];
+        uint64_t offset = children->data[index].byte_offset;
+        uint32_t j = i;
+        while (j && children->data[indexes[j - 1]].byte_offset > offset) {
+            indexes[j] = indexes[j - 1];
+            j--;
+        }
+        indexes[j] = index;
+    }
+}
+
 static bool
 append_traces(trace_source_t *source,
               const core_list_t(n00b_abi_layout_v1) *layouts,
@@ -489,6 +505,10 @@ append_traces(trace_source_t *source,
                 core_list_push(*arms, arm);
             }
         }
+        if (!variant && trace->fixed_children.count > 1)
+            sort_trace_children(indexes->data + trace->fixed_children.first
+                                    - stream_base,
+                                trace->fixed_children.count, children);
         if (variant) {
             uint32_t first = (uint32_t)(arms->len
                 - source->members[type_index].count);

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <llvm-c/BitReader.h>
+#include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
 
@@ -65,6 +66,55 @@ index_operand(LLVMValueRef value)
     return LLVMConstIntGetZExtValue(LLVMGetAggregateElement(
         LLVMGetInitializer(table),
         (unsigned)LLVMConstIntGetZExtValue(slot)));
+}
+
+static bool
+x86_object_has_cmpxchg16b(uint64_t target_features)
+{
+    LLVMContextRef context = LLVMContextCreate();
+    LLVMModuleRef module = LLVMModuleCreateWithNameInContext("cas16",
+                                                             context);
+    LLVMSetTarget(module, "x86_64-pc-linux-gnu");
+    LLVMTypeRef wide = LLVMIntTypeInContext(context, 128);
+    LLVMTypeRef parameters[] = {
+        LLVMPointerTypeInContext(context, 0), wide, wide,
+    };
+    LLVMValueRef function = LLVMAddFunction(module, "swap",
+        LLVMFunctionType(LLVMInt1TypeInContext(context), parameters, 3,
+                         false));
+    LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+    LLVMPositionBuilderAtEnd(builder,
+        LLVMAppendBasicBlockInContext(context, function, "entry"));
+    LLVMValueRef exchange = LLVMBuildAtomicCmpXchg(builder,
+        LLVMGetParam(function, 0), LLVMGetParam(function, 1),
+        LLVMGetParam(function, 2), LLVMAtomicOrderingSequentiallyConsistent,
+        LLVMAtomicOrderingSequentiallyConsistent, false);
+    LLVMBuildRet(builder, LLVMBuildExtractValue(builder, exchange, 1, ""));
+    LLVMDisposeBuilder(builder);
+    LLVMMemoryBufferRef bitcode = LLVMWriteBitcodeToMemoryBuffer(module);
+    LLVMDisposeModule(module);
+    LLVMContextDispose(context);
+    const n00bb_llvm_bitcode_input_t input = {
+        .data = LLVMGetBufferStart(bitcode),
+        .length = LLVMGetBufferSize(bitcode),
+    };
+    core_diagnostics_t *diagnostics = core_diagnostics_new();
+    core_buffer_t object = {0};
+    bool emitted = n00bb_llvm_backend_link_bitcode(&input, 1, false, false,
+        target_features, false, &object, diagnostics);
+    assert(emitted && core_diagnostics_count(diagnostics) == 0);
+    static const uint8_t locked_cmpxchg16b[] = {0xf0, 0x48, 0x0f, 0xc7};
+    const uint8_t *bytes = (const uint8_t *)object.data;
+    bool found = false;
+    for (size_t i = 0; !found && i + 4 <= object.byte_len; i++) {
+        found = true;
+        for (size_t j = 0; found && j < 4; j++)
+            found = bytes[i + j] == locked_cmpxchg16b[j];
+    }
+    core_buffer_release(&object);
+    core_diagnostics_free(diagnostics);
+    LLVMDisposeMemoryBuffer(bitcode);
+    return found;
 }
 
 int
@@ -711,7 +761,7 @@ main(void)
     }
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-        runtime, true, false, diagnostics);
+        runtime, true, false, 0, diagnostics);
     assert(backend);
     ir_summaries_t *runtime_summaries = module_summaries(runtime);
     n00bb_llvm_backend_bind_summaries(backend, runtime_summaries);
@@ -764,22 +814,8 @@ main(void)
         const char *function_names[] = {
             "probe.read_static", "probe.read_dynamic",
         };
-        LLVMValueRef flag = LLVMGetNamedGlobal(parsed, flag_names[i]);
-        LLVMValueRef reader = LLVMGetNamedFunction(parsed,
-                                                   function_names[i]);
-        assert(flag && reader
-            && LLVMConstIntGetZExtValue(LLVMGetInitializer(flag))
-                == (i == 0));
-        bool guarded = false;
-        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(reader);
-             bb; bb = LLVMGetNextBasicBlock(bb))
-            for (LLVMValueRef instruction = LLVMGetFirstInstruction(bb);
-                 instruction;
-                 instruction = LLVMGetNextInstruction(instruction))
-                if (LLVMGetInstructionOpcode(instruction) == LLVMLoad
-                    && LLVMGetOperand(instruction, 0) == flag)
-                    guarded = true;
-        assert(guarded == (i == 1));
+        assert(!LLVMGetNamedGlobal(parsed, flag_names[i]));
+        assert(LLVMGetNamedFunction(parsed, function_names[i]));
     }
     LLVMValueRef lowered = LLVMGetNamedFunction(parsed, "probe.entry");
     assert(lowered);
@@ -1161,7 +1197,7 @@ main(void)
         && ir_instr_add(native_entry, IR_OP_RETURN)
         && ir_instr_add(native_mutator_entry, IR_OP_RETURN));
     backend = n00bb_llvm_backend_prepare(native_runtime,
-        true, true, diagnostics);
+        true, true, 0, diagnostics);
     ir_summaries_t *native_summaries = module_summaries(native_runtime);
     n00bb_llvm_backend_bind_summaries(backend, native_summaries);
     ir_func_t *native_roots[] = {native_function, native_mutator};
@@ -1195,5 +1231,7 @@ main(void)
 
     core_diagnostics_free(diagnostics);
     ir_ctx_free(context);
+    assert(x86_object_has_cmpxchg16b(CORE_TARGET_FEATURE_NATIVE_ATOMIC128));
+    assert(!x86_object_has_cmpxchg16b(0));
     return 0;
 }

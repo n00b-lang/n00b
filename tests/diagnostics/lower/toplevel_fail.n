@@ -6,3 +6,22 @@ func f(n: int) -> int fail: string {
 }
 let x = f(-1)!
 require x == 1
+
+var b: Buffer = buffer_from_string("start")
+b.set_index(0, 65)!
+
+func poke() -> uint {
+    b.set_index(1, 65)!
+    return byte_len(b)
+}
+
+func poke_string() -> uint fail: string {
+    b.set_index(2, 65)!
+    return byte_len(b)
+}
+
+func touch() {
+    b += "!"
+}
+
+touch()!

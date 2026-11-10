@@ -2,6 +2,6 @@ import sys.memory
 
 let mapped: Ref[byte]? = sys.memory.map_zeroed(64, 0)
 if mapped != nil {
-    let word: Ref[u64] = cast[Ref[u64]] mapped.get()
+    let word: Ref[u64] = cast[Ref[u64]] mapped
     assert word == word
 }

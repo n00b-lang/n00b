@@ -6,11 +6,11 @@ func total(text: string) -> uint {
         try {
             return nested_items.reports(text)!
         } fail(failures) {
-            for let report in failures {
+            for report in failures {
                 if report.fixes.len() == 0 {
                     return 0
                 }
-                for let fix in report.fixes {
+                for fix in report.fixes {
                     sum += fix.at
                 }
             }

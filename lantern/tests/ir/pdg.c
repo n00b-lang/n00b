@@ -1,15 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "ir/analyses.h"
 #include "ir/analyze.h"
 #include "ir/pass.h"
 #include "ir/pdg.h"
 #include "ir/text.h"
 #include "ir/doms.h"
-#include "ir/option_proof.h"
 #include "ir/summary.h"
 #include "ir/verify.h"
 #include "lib/buffer.h"
+#include "th/typehash.h"
 #include "harness.h"
 
 #define S(x) CORE_STRING_STATIC(x)
@@ -126,7 +127,7 @@ static core_string_t data_sketch(ir_pdg_t *g)
         for (uint32_t k = 0; k < ir_pdg_in_count(g, in); k++) {
             const ir_dep_edge_t *e = ir_pdg_in_at(g, in, k);
 
-            if (e->kind != IR_DEP_DATA) {
+            if (e->kind != IR_DEP_DATA || !e->from) {
                 continue;
             }
             tag(&b, e->from);
@@ -212,7 +213,7 @@ static void test_all_seven_edge_kinds(void)
         "    block end:\n      return\n"
         "  }\n"));
     ir_func_t *f    = func_of(r);
-    ir_pdg_t  *g    = ir_pdg_of(f);
+    ir_pdg_t  *g    = ir_func_pdg(f);
     bool          saw[7] = {0};
     core_buffer_t b      = {0};
 
@@ -277,7 +278,7 @@ static void test_a_loop_inside_a_loop(void)
                         "    block done:\n      return\n"
                         "  }\n"));
     ir_func_t *f = func_of(r);
-    ir_pdg_t     *g = ir_pdg_of(f);
+    ir_pdg_t     *g = ir_func_pdg(f);
     core_buffer_t b = {0};
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
@@ -319,7 +320,7 @@ static void test_keyed_by_identity_not_by_name(void)
                         "      return %res\n"
                         "  }\n"));
     ir_func_t   *f  = func_of(r);
-    ir_pdg_t    *g  = ir_pdg_of(f);
+    ir_pdg_t    *g  = ir_func_pdg(f);
     ir_block_t  *e  = f->blocks[0];
     ir_instr_t  *dx = e->instrs[0];
     ir_instr_t  *ad = e->instrs[1];
@@ -359,7 +360,7 @@ static void test_reaching_definitions_are_the_data_edges(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    core_string_t s = data_sketch(ir_pdg_of(func_of(r)));
+    core_string_t s = data_sketch(ir_func_pdg(func_of(r)));
 
     same(S("the killed definition does not reach the use"), s,
          S("entry#1:x => entry#2:res\n"
@@ -381,7 +382,7 @@ static void test_reaching_definitions_are_the_data_edges(void)
                  "      %res: i32 = copy $x\n"
                  "      return %res\n"
                  "  }\n"));
-    s = data_sketch(ir_pdg_of(func_of(r)));
+    s = data_sketch(ir_func_pdg(func_of(r)));
     same(S("both the entry definition and the loop-carried one reach"), s,
          S("entry#0:x ~> out#0:res\n"
            "body#0:x ~> out#0:res\n"
@@ -404,7 +405,7 @@ static void test_under_ssa_def_use_is_immediate(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    ir_pdg_t *before = ir_pdg_of(func_of(r));
+    ir_pdg_t *before = ir_func_pdg(func_of(r));
 
     check("with a local live across a join the graph is not exact",
           !ir_pdg_is_exact(before));
@@ -415,7 +416,7 @@ static void test_under_ssa_def_use_is_immediate(void)
     check("the module is in SSA form",
           ir_verify(r->m, r->d) & IR_PROP_SSA);
 
-    ir_pdg_t  *g = ir_pdg_of(func_of(r));
+    ir_pdg_t  *g = ir_func_pdg(func_of(r));
     ir_func_t *f = func_of(r);
     bool       every_edge_is_a_definition = true;
     uint32_t   data = 0;
@@ -476,7 +477,7 @@ static void test_a_definition_reaching_through_two_joins(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    core_string_t s = data_sketch(ir_pdg_of(func_of(r)));
+    core_string_t s = data_sketch(ir_func_pdg(func_of(r)));
 
     same(S("a definition reaches through a join inside a loop"), s,
          S("entry#0:x ~> out#0:res\n"
@@ -500,7 +501,7 @@ static void test_the_two_directions_are_the_same_edges(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    ir_pdg_t *g    = ir_pdg_of(func_of(r));
+    ir_pdg_t *g    = ir_func_pdg(func_of(r));
     uint32_t  out  = 0;
     uint32_t  in   = 0;
     bool      both = true;
@@ -519,6 +520,18 @@ static void test_the_two_directions_are_the_same_edges(void)
             both = both && ir_pdg_in_at(g, n, k)->to == n;
         }
     }
+
+    ir_func_t *f = func_of(r);
+
+    for (uint32_t p = 0; f && p < f->n_params; p++) {
+        out += ir_pdg_param_out_count(g, f->params[p]);
+
+        for (uint32_t k = 0; k < ir_pdg_param_out_count(g, f->params[p]); k++) {
+            both = both
+                && ir_pdg_param_out_at(g, f->params[p], k)->param
+                       == f->params[p];
+        }
+    }
     check("every edge is once in an out list and once in an in list",
           out == ir_pdg_edge_count(g) && in == ir_pdg_edge_count(g));
     check("and each list holds the edges that end at its own node", both);
@@ -528,8 +541,12 @@ static void test_the_two_directions_are_the_same_edges(void)
     for (uint32_t i = 0; i < ir_pdg_edge_count(g); i++) {
         const ir_dep_edge_t *e = ir_pdg_edge_at(g, i);
 
-        for (uint32_t k = 0; k < ir_pdg_out_count(g, e->from); k++) {
-            seen += ir_pdg_out_at(g, e->from, k) == e;
+        uint32_t count = e->from ? ir_pdg_out_count(g, e->from)
+                                 : ir_pdg_param_out_count(g, e->param);
+
+        for (uint32_t k = 0; k < count; k++) {
+            seen += (e->from ? ir_pdg_out_at(g, e->from, k)
+                             : ir_pdg_param_out_at(g, e->param, k)) == e;
         }
     }
     check("and the two views hold the same edges, not copies",
@@ -560,7 +577,7 @@ static void test_the_cdg_is_over_blocks(void)
         done(r);
         return;
     }
-    ir_pdg_t     *g = ir_pdg_of(f);
+    ir_pdg_t     *g = ir_func_pdg(f);
     core_string_t s = cdg_sketch(g, f);
 
     same(S("control dependence is recorded per block"), s,
@@ -709,21 +726,6 @@ static void test_where_the_other_three_live(void)
     done(r);
 }
 
-static void test_an_unproven_option_is_reported(void)
-{
-    run_t *r = load(MOD("  func @f(%o: Option[i32]) -> i32 {\n"
-                        "    block entry:\n"
-                        "      %v: i32 = option.get %o\n"
-                        "      return %v\n"
-                        "  }\n"));
-
-    ir_check_option_proofs(r->m, r->d);
-    check("E040 an option read with no nil test before it is reported",
-          counted(r, IR_DIAG_UNPROVEN_OPTION) == 1
-              && told(r, S("may be nil here")));
-    done(r);
-}
-
 static void test_unbounded_recursion_is_reported(void)
 {
     run_t *r = load(MOD("  func @f(%a: i32) -> i32 {\n"
@@ -783,6 +785,454 @@ static void test_every_analysis_diagnostic_has_a_place(void)
     done(r);
 }
 
+static ir_func_t *named(run_t *r, core_string_t name)
+{
+    for (size_t i = 0; r->m && i < ir_func_count(r->m); i++) {
+        ir_func_t *f = ir_func_at(r->m, i);
+
+        if (core_string_eq(f->name, name)) {
+            return f;
+        }
+    }
+
+    return nullptr;
+}
+
+static ir_group_pdg_t *group_of(run_t *r, const ir_pdg_hooks_t *hooks)
+{
+    ir_func_t *functions[8] = {0};
+    size_t     n            = 0;
+
+    for (size_t i = 0; r->m && i < ir_func_count(r->m) && n < 8; i++) {
+        functions[n++] = ir_func_at(r->m, i);
+    }
+
+    return ir_group_pdg_of(functions, n, hooks);
+}
+
+static ir_instr_t *first_op(ir_func_t *f, ir_op_t op)
+{
+    for (uint32_t b = 0; f && b < f->n_blocks; b++) {
+        for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
+            if (f->blocks[b]->instrs[k]->op == op) {
+                return f->blocks[b]->instrs[k];
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+static core_string_t memory_sketch(ir_pdg_t *g)
+{
+    core_buffer_t b = {0};
+
+    for (uint32_t i = 0; i < ir_pdg_edge_count(g); i++) {
+        const ir_dep_edge_t *e = ir_pdg_edge_at(g, i);
+
+        if (e->kind != IR_DEP_MEMORY) {
+            continue;
+        }
+        tag(&b, e->from);
+        core_buffer_append_string(&b, e->certainty == IR_DEP_EXACT
+                                          ? S(" => ")
+                                          : S(" ~> "));
+        tag(&b, e->to);
+        core_buffer_puts(&b, "\n");
+    }
+
+    return sketch_result(&b);
+}
+
+static void test_a_store_reaches_its_load(void)
+{
+    run_t *r = load(MOD("  func @f(%v: i32, %w: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %p: ref[i32] = alloca i32\n"
+                        "      store %p, %v\n"
+                        "      store %p, %w\n"
+                        "      %r: i32 = load %p\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_pdg_t *g = ir_func_pdg(func_of(r));
+
+    same(S("a whole store hides the one before it; the load sees one, exactly"),
+         memory_sketch(g), S("entry#2:store => entry#3:r\n"));
+    done(r);
+}
+
+static void test_binding_a_type_invalidates_the_analyses(void)
+{
+    run_t *r = load(MOD("  func @f(%v: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = copy %v\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_func_t *f      = func_of(r);
+    th_type   *i32    = f ? f->params[0]->type : nullptr;
+    th_type   *open   = th_var(ir_ctx_types(r->ctx));
+
+    if (f) {
+        f->params[0]->type = open;
+    }
+
+    uint64_t unbound = f ? ir_func_shape(f) : 0;
+
+    check("the cached graph is built while the type is open",
+          f && ir_func_pdg(f) != nullptr);
+    check("an unchanged function keeps its shape",
+          f && ir_func_shape(f) == unbound);
+    check("binding the open type in place changes the function's shape",
+          f && th_var_bind(open, i32) && ir_func_shape(f) != unbound);
+    done(r);
+}
+
+static void test_stores_on_two_paths_both_reach(void)
+{
+    run_t *r = load(MOD("  func @f(%c: bool, %v: i32, %w: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %p: ref[i32] = alloca i32\n"
+                        "      branch %c, left, right\n"
+                        "    block left:\n"
+                        "      store %p, %v\n"
+                        "      jump join\n"
+                        "    block right:\n"
+                        "      store %p, %w\n"
+                        "      jump join\n"
+                        "    block join:\n"
+                        "      %r: i32 = load %p\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_pdg_t *g = ir_func_pdg(func_of(r));
+
+    same(S("a load after a join hears both stores, as may-edges"),
+         memory_sketch(g),
+         S("left#0:store ~> join#0:r\nright#0:store ~> join#0:r\n"));
+    done(r);
+}
+
+static void test_elements_are_told_apart(void)
+{
+    run_t *r = load(MOD("  func @f(%a: ref[array[i32]], %v: i32, %w: i32,"
+                        " %k: u64) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %zero: u64 = const 0\n"
+                        "      %one: u64 = const 1\n"
+                        "      %first: ref[i32] = index %a, %zero\n"
+                        "      %second: ref[i32] = index %a, %one\n"
+                        "      %some: ref[i32] = index %a, %k\n"
+                        "      store %first, %v\n"
+                        "      store %second, %w\n"
+                        "      %x: i32 = load %first\n"
+                        "      %y: i32 = load %some\n"
+                        "      %s: i32 = add wrap %x, %y\n"
+                        "      return %s\n"
+                        "  }\n"));
+    ir_pdg_t *g = ir_func_pdg(func_of(r));
+
+    same(S("a load of element 0 hears only the store to element 0; an "
+           "unknown element hears both"),
+         memory_sketch(g),
+         S("entry#5:store => entry#7:x\n"
+           "entry#5:store ~> entry#8:y\n"
+           "entry#6:store ~> entry#8:y\n"));
+    done(r);
+}
+
+static void test_a_call_reads_and_writes_exposed_memory(void)
+{
+    run_t *r = load(MOD("  func @g() -> void {\n"
+                        "    block entry:\n"
+                        "      return\n"
+                        "  }\n"
+                        "  func @f(%p: ref[i32], %v: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      store %p, %v\n"
+                        "      %u: void = call @g\n"
+                        "      %r: i32 = load %p\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_pdg_t *g = ir_func_pdg(named(r, S("f")));
+
+    same(S("a call may read a store to exposed memory, and may write what a "
+           "later load reads"),
+         memory_sketch(g),
+         S("entry#0:store ~> entry#1:u\n"
+           "entry#0:store ~> entry#2:r\n"
+           "entry#1:u ~> entry#2:r\n"));
+    done(r);
+}
+
+#define COMPTIME_MODULE                                                       \
+    MOD("  global @n00b_comptime: bool\n"                                      \
+        "  func @main(%v: i32) -> i32 {\n"                                     \
+        "    block entry:\n"                                                  \
+        "      %c: bool = load @n00b_comptime\n"                               \
+        "      return %v\n"                                                   \
+        "  }\n")
+
+static void test_comptime_runs_the_root_again(void)
+{
+    run_t          *r     = load(COMPTIME_MODULE);
+    ir_func_t      *main_ = named(r, S("main"));
+    ir_pdg_hooks_t  hooks = {.comptime_root = main_};
+    ir_group_pdg_t *group = group_of(r, &hooks);
+    ir_instr_t     *start = main_ ? main_->blocks[0]->instrs[0] : nullptr;
+    ir_instr_t     *exit_ = first_op(main_, IR_OP_RETURN);
+    bool            again = false;
+
+    for (uint32_t i = 0; i < ir_group_pdg_in_count(group, start); i++) {
+        const ir_dep_edge_t *e = ir_group_pdg_in_at(group, start, i);
+
+        again = again || (e->kind == IR_DEP_CONTROL && e->from == exit_);
+    }
+    check("the root's exit leads back to its entrance", again);
+    check("comptime() is a read of $comptime",
+          ir_pdg_reads_comptime(first_op(main_, IR_OP_LOAD))
+              && !ir_pdg_reads_comptime(exit_));
+    ir_group_pdg_free(group);
+    done(r);
+}
+
+static void test_a_call_names_a_function_defined_later(void)
+{
+    run_t *r = load(MOD("  func @f(%a: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @g, %a\n"
+                        "      return %r\n"
+                        "  }\n"
+                        "  func @g(%x: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %x\n"
+                        "  }\n"));
+    ir_instr_t *call   = first_op(named(r, S("f")), IR_OP_CALL);
+    ir_value_t *callee = call ? ir_operand_value(&call->operands[0]) : nullptr;
+
+    check("a callee defined later is resolved, not dropped",
+          callee && callee->kind == IR_VAL_FUNC
+              && callee->owner == named(r, S("g")) && call->n_operands == 2);
+    done(r);
+
+    run_t *bad = load(MOD("  func @f(%a: i32) -> i32 {\n"
+                          "    block entry:\n"
+                          "      %r: i32 = call @nowhere, %a\n"
+                          "      return %r\n"
+                          "  }\n"));
+
+    check("a callee that never appears is an error",
+          !bad->m && told(bad, S("unknown value")));
+    done(bad);
+}
+
+static void test_a_parameter_feeds_its_uses(void)
+{
+    run_t *r = load(MOD("  func @f(%a: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %b: i32 = copy %a\n"
+                        "      return %b\n"
+                        "  }\n"));
+    ir_func_t  *f    = func_of(r);
+    ir_pdg_t   *g    = f ? ir_func_pdg(f) : nullptr;
+    ir_value_t *a    = f ? f->params[0] : nullptr;
+    ir_instr_t *copy = first_op(f, IR_OP_COPY);
+
+    check("a parameter is a node with an edge to its use",
+          g && ir_pdg_param_out_count(g, a) == 1);
+
+    const ir_dep_edge_t *e = ir_pdg_param_out_at(g, a, 0);
+
+    check("the edge leaves the parameter and reaches the use",
+          e && !e->from && e->param == a && e->to == copy
+              && e->kind == IR_DEP_DATA && e->certainty == IR_DEP_EXACT);
+    check("and the use sees it among its incoming edges",
+          ir_pdg_in_count(g, copy) == 1 && ir_pdg_in_at(g, copy, 0) == e);
+    done(r);
+}
+
+static void test_arguments_flow_into_parameters(void)
+{
+    run_t *r = load(MOD("  func @g(%x: i32, y: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %x\n"
+                        "  }\n"
+                        "  func @f(%a: i32, %b: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @g, %a, y = %b\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_func_t      *g     = named(r, S("g"));
+    ir_func_t      *f     = named(r, S("f"));
+    ir_group_pdg_t *group = group_of(r, nullptr);
+    ir_instr_t     *call  = first_op(f, IR_OP_CALL);
+
+    check("each parameter has one argument edge",
+          g && ir_group_pdg_param_in_count(group, g->params[0]) == 1
+              && ir_group_pdg_param_in_count(group, g->params[1]) == 1);
+
+    const ir_dep_edge_t *x = ir_group_pdg_param_in_at(group, g->params[0], 0);
+    const ir_dep_edge_t *y = ir_group_pdg_param_in_at(group, g->params[1], 0);
+
+    check("it comes from the call, exactly",
+          x && y && x->from == call && y->from == call && !x->to
+              && x->kind == IR_DEP_ARGUMENT && x->certainty == IR_DEP_EXACT);
+    check("a keyword argument reaches its keyword parameter",
+          y && y->param == g->params[1] && g->params[1]->is_keyword);
+    check("the call has its two argument edges going out",
+          ir_group_pdg_out_count(group, call) == 2);
+    ir_group_pdg_free(group);
+    done(r);
+}
+
+static void test_returns_and_fails_reach_the_call(void)
+{
+    run_t *r = load(MOD("  func @g(%c: bool, %v: i32) -> i32 fail: i32 {\n"
+                        "    block entry:\n"
+                        "      branch %c, ok, bad\n"
+                        "    block ok:\n"
+                        "      return %v\n"
+                        "    block bad:\n"
+                        "      fail %v\n"
+                        "  }\n"
+                        "  func @f(%c: bool, %v: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @g, %c, %v\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_func_t      *g     = named(r, S("g"));
+    ir_func_t      *f     = named(r, S("f"));
+    ir_group_pdg_t *group = group_of(r, nullptr);
+    ir_instr_t     *call  = first_op(f, IR_OP_CALL);
+    ir_instr_t     *ret   = first_op(g, IR_OP_RETURN);
+    ir_instr_t     *fail  = first_op(g, IR_OP_FAIL);
+    bool            saw_return = false, saw_failure = false;
+
+    for (uint32_t i = 0; i < ir_group_pdg_in_count(group, call); i++) {
+        const ir_dep_edge_t *e = ir_group_pdg_in_at(group, call, i);
+
+        saw_return  = saw_return || (e->kind == IR_DEP_RETURN && e->from == ret);
+        saw_failure = saw_failure
+                   || (e->kind == IR_DEP_FAILURE && e->from == fail);
+    }
+    check("the call hears from the callee's return and its fail",
+          ir_group_pdg_in_count(group, call) == 2 && saw_return
+              && saw_failure);
+    check("and the return's edge goes out to the call",
+          ir_group_pdg_out_count(group, ret) == 1
+              && ir_group_pdg_out_at(group, ret, 0)->to == call);
+    ir_group_pdg_free(group);
+    done(r);
+}
+
+static void test_recursion_forms_components_callees_first(void)
+{
+    run_t *r = load(MOD("  func @a(%n: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @b, %n\n"
+                        "      return %r\n"
+                        "  }\n"
+                        "  func @b(%n: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @a, %n\n"
+                        "      return %r\n"
+                        "  }\n"
+                        "  func @c(%n: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @a, %n\n"
+                        "      return %r\n"
+                        "  }\n"
+                        "  func @d(%n: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @d, %n\n"
+                        "      return %r\n"
+                        "  }\n"
+                        "  func @e(%n: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %n\n"
+                        "  }\n"));
+    ir_group_pdg_t *group = group_of(r, nullptr);
+    uint32_t        a     = ir_group_pdg_component_of(group, named(r, S("a")));
+    uint32_t        b     = ir_group_pdg_component_of(group, named(r, S("b")));
+    uint32_t        c     = ir_group_pdg_component_of(group, named(r, S("c")));
+    uint32_t        d     = ir_group_pdg_component_of(group, named(r, S("d")));
+    uint32_t        e     = ir_group_pdg_component_of(group, named(r, S("e")));
+
+    check("mutually recursive functions are one component",
+          a == b && ir_group_pdg_component_size(group, a) == 2
+              && ir_group_pdg_component_recursive(group, a));
+    check("a caller of the pair is its own component, after it",
+          c != a && c > a && !ir_group_pdg_component_recursive(group, c));
+    check("a function calling itself is a recursive component of one",
+          ir_group_pdg_component_size(group, d) == 1
+              && ir_group_pdg_component_recursive(group, d));
+    check("a leaf is not recursive",
+          !ir_group_pdg_component_recursive(group, e));
+    check("there are four components", ir_group_pdg_component_count(group) == 4);
+    ir_group_pdg_free(group);
+    done(r);
+}
+
+static void test_calls_leaving_the_group_get_no_edges(void)
+{
+    run_t *r = load(MOD("  func @g(%x: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %x\n"
+                        "  }\n"
+                        "  func @f(%a: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @g, %a\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_func_t      *f     = named(r, S("f"));
+    ir_group_pdg_t *group = ir_group_pdg_of(&f, 1, nullptr);
+
+    check("a callee outside the group is like an import: no edges",
+          group && ir_group_pdg_edge_count(group) == 0
+              && ir_group_pdg_component_count(group) == 1);
+    ir_group_pdg_free(group);
+    done(r);
+}
+
+static bool both_targets(void *context, const ir_instr_t *call,
+                         ir_pdg_target_fn add, void *sink)
+{
+    run_t *r = context;
+
+    (void)call;
+    add(sink, named(r, S("g1")));
+    add(sink, named(r, S("g2")));
+
+    return true;
+}
+
+static void test_hooks_choose_the_targets(void)
+{
+    run_t *r = load(MOD("  func @g1(%x: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %x\n"
+                        "  }\n"
+                        "  func @g2(%x: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      return %x\n"
+                        "  }\n"
+                        "  func @f(%a: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @g1, %a\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_pdg_hooks_t  hooks = {.context = r, .call_targets = both_targets};
+    ir_group_pdg_t *group = group_of(r, &hooks);
+    ir_func_t      *g1    = named(r, S("g1"));
+    ir_func_t      *g2    = named(r, S("g2"));
+
+    check("each target the hook names gets the argument",
+          ir_group_pdg_param_in_count(group, g1->params[0]) == 1
+              && ir_group_pdg_param_in_count(group, g2->params[0]) == 1);
+    check("and with two targets, the edges are may-edges",
+          ir_group_pdg_param_in_at(group, g1->params[0], 0)->certainty
+              == IR_DEP_MAY);
+    ir_group_pdg_free(group);
+    done(r);
+}
 
 int main(void)
 {
@@ -799,9 +1249,21 @@ int main(void)
     test_use_before_definition_is_reported();
     test_unused_assignment_is_reported();
     test_where_the_other_three_live();
-    test_an_unproven_option_is_reported();
     test_unbounded_recursion_is_reported();
     test_every_analysis_diagnostic_has_a_place();
+    test_a_call_names_a_function_defined_later();
+    test_a_parameter_feeds_its_uses();
+    test_arguments_flow_into_parameters();
+    test_returns_and_fails_reach_the_call();
+    test_recursion_forms_components_callees_first();
+    test_calls_leaving_the_group_get_no_edges();
+    test_hooks_choose_the_targets();
+    test_a_store_reaches_its_load();
+    test_binding_a_type_invalidates_the_analyses();
+    test_stores_on_two_paths_both_reach();
+    test_elements_are_told_apart();
+    test_a_call_reads_and_writes_exposed_memory();
+    test_comptime_runs_the_root_again();
 
     dump_produced_codes("produced-codes-pdg.txt", produced);
 

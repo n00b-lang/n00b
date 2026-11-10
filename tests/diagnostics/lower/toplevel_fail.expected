@@ -1,2 +1,11 @@
 tests/diagnostics/lower/toplevel_fail.n:7:9: error N00B-S0027: this call can fail with `string`, but it is top-level code, which has no caller to pass the failure to
   help: handle the failure with `try`, or move this code into a function that declares a failure type
+tests/diagnostics/lower/toplevel_fail.n:11:1: error N00B-S0027: this call can fail with `Buffer_Error`, but it is top-level code, which has no caller to pass the failure to
+  help: handle the failure with `try`, or move this code into a function that declares a failure type
+tests/diagnostics/lower/toplevel_fail.n:14:5: error N00B-T1007: this call can fail with `Buffer_Error`, but `poke` declares no failure type
+  help: handle the failure with `try`, or convert it to the failure type of the enclosing function
+tests/diagnostics/lower/toplevel_fail.n:19:5: error N00B-T1007: this call can fail with `Buffer_Error`, but `poke_string` fails with `string`
+  help: handle the failure with `try`, or convert it to the failure type of the enclosing function
+tests/diagnostics/lower/toplevel_fail.n:27:1: error N00B-S0026: `touch` cannot fail, so this `!` has nothing to propagate
+  tests/diagnostics/lower/toplevel_fail.n:23:6: note: `touch` is declared here
+  help: remove the `!`

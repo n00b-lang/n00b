@@ -1,0 +1,11 @@
+tests/diagnostics/tu/bitwise_negative.n:3:13: error N00B-T0592: this value can be -8, but bitwise operators work only on unsigned integers
+  help: use a value that is never negative; to set every bit, write `~0`
+tests/diagnostics/tu/bitwise_negative.n:8:13: error N00B-T0592: this value can be -1, but bitwise operators work only on unsigned integers
+  help: use a value that is never negative; to set every bit, write `~0`
+tests/diagnostics/tu/bitwise_negative.n:12:6: warning N00B-N0019: function `fine` is never called
+  help: call it or delete it
+tests/diagnostics/tu/bitwise_negative.n:14:9: warning N00B-S0006: the value assigned to `low` here is never read
+tests/diagnostics/tu/bitwise_negative.n:15:9: warning N00B-S0006: the value assigned to `shifted` here is never read
+tests/diagnostics/tu/bitwise_negative.n:20:12: error N00B-T0018: `i32` does not implement `Bit_And` for these arguments
+  note: 7 implementations of `Bit_And` were considered
+  help: bitwise operators work only on unsigned integers; convert the value with `cast[u32](...)`

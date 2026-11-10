@@ -62,6 +62,7 @@ LANTERN_LIB := $(BUILD)/lantern/libir.a
 WRIT_LIB := $(BUILD)/writ/libwrit.a
 RUNTIME_LIB := $(BUILD)/libn00b-abi-runtime.a
 RUNTIME_BITCODE := $(BUILD)/libn00b-abi-runtime.bc
+COMPTIME_RUNTIME := $(BUILD)/n00b-comptime.o
 N00B := $(BUILD)/n00b
 
 include lantern/lantern.mk
@@ -74,7 +75,7 @@ include tests/tests.mk
 .PHONY: all clean compdb FORCE
 FORCE:
 
-all: $(N00B) $(RUNTIME_BITCODE) $(CROSS_RUNTIMES) compdb
+all: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES) compdb
 
 compdb: $(BUILD)/compile_commands.json
 
@@ -85,7 +86,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: install uninstall regen-unicode
-install: $(N00B) $(RUNTIME_BITCODE) $(CROSS_RUNTIMES)
+install: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES)
 	@tools/install.sh --build $(BUILD) $(if $(PREFIX),--prefix $(PREFIX)) $(INSTALL_FLAGS)
 
 uninstall:

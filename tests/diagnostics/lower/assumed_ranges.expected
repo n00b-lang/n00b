@@ -1,4 +1,11 @@
-tests/diagnostics/lower/assumed_ranges.n:18:12: warning N00B-T0525: integer values 0..18446744073709551615 may not fit in `i32`
-  note: the program stops with a panic when a value does not fit
-tests/diagnostics/lower/assumed_ranges.n:23:12: error N00B-T0524: integer value 18446744073709551615 does not fit in `int`
-  help: use a wider integer type, or a value inside the range of `int`
+tests/diagnostics/lower/assumed_ranges.n:1:6: warning N00B-N0019: function `parameter_to_signed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:5:6: warning N00B-N0019: function `parameter_to_unsigned` is never called
+  help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:9:6: warning N00B-N0019: function `count_to_signed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:17:6: warning N00B-N0019: function `parameter_to_narrow` is never called
+  help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:21:6: warning N00B-N0019: function `proven_to_signed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:23:12: error N00B-S0053: this operation always overflows: 18446744073709551615

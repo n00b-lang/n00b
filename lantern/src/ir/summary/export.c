@@ -15,12 +15,9 @@ static void name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
 static bool
 constant_read(const ir_spath_t *path)
 {
-    const ir_global_t *global = path->global
-        ? ir_global_identity((ir_global_t *)path->global) : nullptr;
-    return global && named_root(path->root) && !path->depth
+    return path->global && named_root(path->root) && !path->depth
         && !(path->flags & (IR_SPATH_WRITE | IR_SPATH_DEEP))
-        && global->mutability != IR_MUT_MUTABLE
-        && global->has_static_initializer;
+        && constant_global(path->global);
 }
 
 static void
@@ -286,23 +283,33 @@ record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
     note_context(pt, in);
     record_global_values(pt, summary, in);
     switch (in->op) {
+    case IR_OP_INDEX:
+        if (indexes_handle(pt, base))
+            record_operand(pt, summary, in, 0, IR_SPATH_READ);
+        break;
     case IR_OP_LOAD:
         if (whole_load(pt, in))
             record_operand(pt, summary, in, 0, IR_SPATH_READ);
         break;
     case IR_OP_EXTRACT:
         if (base && base->kind == IR_VAL_INSTR && base->def
-            && base->def->op == IR_OP_LOAD && base->def->n_operands
+            && (base->def->op == IR_OP_LOAD
+                || base->def->op == IR_OP_SEQUENCE_GET)
+            && base->def->n_operands
             && !whole_load(pt, base->def) && in->n_operands > 1
             && in->operands[1].kind == IR_OPD_NAME) {
             note_context(pt, base->def);
-            pt_address(pt, referenced(base->def, 0), &first);
+            bool memory = true;
+            if (base->def->op == IR_OP_LOAD)
+                pt_address(pt, referenced(base->def, 0), &first);
+            else memory = pt_elements(pt, referenced(base->def, 0), &first);
             address_step(pt, &first, in->operands[1].name, &second);
-            record_set(pt, summary, &second, IR_SPATH_READ, nullptr);
+            if (memory)
+                record_set(pt, summary, &second, IR_SPATH_READ, nullptr);
         }
         break;
     case IR_OP_SEQUENCE_GET:
-        if (pt_elements(pt, base, &first))
+        if (whole_load(pt, in) && pt_elements(pt, base, &first))
             record_set(pt, summary, &first, IR_SPATH_READ, nullptr);
         break;
     case IR_OP_CALL:

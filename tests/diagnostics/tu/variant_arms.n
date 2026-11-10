@@ -1,0 +1,46 @@
+variant Shape {
+    circle: int
+    square: string
+}
+
+func unguarded(s: Shape) -> int {
+    return s.circle
+}
+
+func wrong_arm(s: Shape) -> int {
+    switch s {
+        case square { return s.circle }
+        else { return 0 }
+    }
+}
+
+func else_arm(s: Shape) -> string {
+    switch s {
+        case circle { return "c" }
+        else { return s.square }
+    }
+}
+
+func reassigned() -> int {
+    var s: Shape = (circle = 1)
+    switch s {
+        case circle {
+            s = (square = "x")
+            return s.circle
+        }
+        else { return 0 }
+    }
+}
+
+func reassigned_on_one_path(other: Shape, flip: bool) -> int {
+    var s: Shape = (circle = 1)
+    switch s {
+        case circle {
+            if flip {
+                s = other
+            }
+            return s.circle
+        }
+        else { return 0 }
+    }
+}

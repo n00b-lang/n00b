@@ -35,7 +35,7 @@ private func quoted(spelling: string) -> string {
         }
         if escape != nil {
             pieces.append(byte_slice(spelling, run, i))
-            pieces.append(escape.get())
+            pieces.append(escape)
             run = i + 1
         }
     }
@@ -71,7 +71,7 @@ private func atom_text(g: grammar.Grammar, atom: grammar.Atom) -> string {
 
 private func alt_text(g: grammar.Grammar, alt: grammar.Alt) -> string {
     var items: List[string] = new[List[string]]()
-    for let item in alt.items {
+    for item in alt.items {
         items.append(atom_text(g, item.atom) + quant_suffix(item.quant))
     }
     return join(items, " ")
@@ -80,7 +80,7 @@ private func alt_text(g: grammar.Grammar, alt: grammar.Alt) -> string {
 private func alts_text(g: grammar.Grammar, alts: List[grammar.Alt],
                        separator: string) -> string {
     var pieces: List[string] = new[List[string]]()
-    for let alt in alts {
+    for alt in alts {
         pieces.append(alt_text(g, alt))
     }
     return join(pieces, separator)
@@ -97,7 +97,7 @@ private func policy_word(policy: grammar.Token_Policy) -> string {
 private func declared_in_id_order(g: grammar.Grammar) -> List[grammar.Token_Class] {
     var slots: Array[uint] = new[Array[uint]](g.classes.len() - 1)
     var index: uint = 0
-    for let class in g.classes {
+    for class in g.classes {
         let raw: u128 = grammar.raw_token_id(class.id)
         if raw > grammar.identifier_token_id {
             slots[cast[uint](raw - grammar.identifier_token_id - 1)] = index
@@ -120,7 +120,7 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
     let declared: List[grammar.Token_Class] = declared_in_id_order(g)
     var run: List[string] = new[List[string]]()
     var run_policy: grammar.Token_Policy = grammar.Token_Policy.normal
-    for let class in declared {
+    for class in declared {
         if run.len() > 0 and class.policy != run_policy {
             out.append(policy_word(run_policy) + ": " + join(run, ", ") + "\n")
             run = new[List[string]]()
@@ -135,13 +135,13 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
     if show_ids {
         out.append("\n# %" + ident.name + " = " +
                    hex(grammar.raw_token_id(ident.id)) + "\n")
-        for let class in declared {
+        for class in declared {
             out.append("# %" + class.name + " = " +
                        hex(grammar.raw_token_id(class.id)) + "\n")
         }
         var spellings: Array[string] = new[Array[string]](g.literals.len())
         var at: uint = 0
-        for let lit in g.literals {
+        for lit in g.literals {
             spellings[at] = lit.text
             at += 1
         }
@@ -151,7 +151,7 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
             if found == nil {
                 continue
             }
-            let lit: grammar.Literal = found.get()
+            let lit: grammar.Literal = found
             var kind: string = ""
             if grammar.is_soft(lit) {
                 kind = " (soft keyword)"
@@ -164,7 +164,7 @@ func format_grammar(g: grammar.Grammar, show_ids: bool = false) -> string {
         }
     }
     var first_defs: List[uint] = new[List[uint]]()
-    for let rule in g.rules {
+    for rule in g.rules {
         first_defs.append(rule.defs[0].start_byte)
     }
     for index in diag.stable_order(first_defs) {

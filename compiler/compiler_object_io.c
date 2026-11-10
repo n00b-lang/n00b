@@ -78,7 +78,7 @@ n00bb_archive_path(core_string_t archive_name)
     return (core_string_t){};
 }
 
-bool
+static bool
 n00bb_read_exact(int fd, void *data, size_t length)
 {
     size_t offset = 0;

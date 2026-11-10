@@ -58,7 +58,6 @@ holds_nothing(ir_op_t op)
     case IR_OP_TYPE_OF:
     case IR_OP_TYPE_INDEX:
     case IR_OP_TRAIT_METHOD:
-    case IR_OP_PHASE_RESULT:
     case IR_OP_PARAM_PRESENT:
     case IR_OP_ARMTAG:
         return true;
@@ -342,7 +341,7 @@ static ir_pdg_t *
 pt_pdg(pt_t *pt)
 {
     if (!pt->value_flow) return nullptr;
-    if (!pt->pdg) pt->pdg = ir_func_pdg((ir_func_t *)pt->f);
+    if (!pt->pdg) pt->pdg = ir_func_control((ir_func_t *)pt->f);
     return pt->pdg;
 }
 
@@ -659,7 +658,8 @@ note_load_uses(pt_t *pt)
             for (uint32_t o = 0; o < in->n_operands; o++) {
                 const ir_value_t *used = referenced(in, o);
                 if (!used || used->kind != IR_VAL_INSTR || !used->def
-                    || used->def->op != IR_OP_LOAD) continue;
+                    || (used->def->op != IR_OP_LOAD
+                        && used->def->op != IR_OP_SEQUENCE_GET)) continue;
                 bool extracted = in->op == IR_OP_EXTRACT && o == 0
                     && in->n_operands > 1
                     && in->operands[1].kind == IR_OPD_NAME;

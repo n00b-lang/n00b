@@ -28,7 +28,7 @@ func check(ok: bool, probe: string, code: string) {
 
 func report(probe: string, failed: string?) {
     if failed != nil {
-        check(false, probe, failed.get())
+        check(false, probe, failed)
     }
 }
 
@@ -63,7 +63,7 @@ func opt_is(o: u32?, v: u32) -> bool {
     if o == nil {
         return false
     }
-    return o.get() == v
+    return o == v
 }
 
 func repr_of(s: string) -> string {
@@ -123,7 +123,7 @@ func c_length(bytes: Array[u8]) -> uint {
 
 func cstring_of(s: string) -> Array[u8] {
     let empty: Array[u8] = []
-    let result = try {
+    result = try {
         -> to_cstring(s)!
     } fail(e) {
         -> empty
@@ -535,19 +535,19 @@ func rich_body_text_offset() -> u64? {
     if row == nil {
         return nil
     }
-    let body: Ref[sys.abi.Type_Record]? = sys.abi.first_component(row.get())
+    let body: Ref[sys.abi.Type_Record]? = sys.abi.first_component(row)
     if body == nil {
         return nil
     }
-    let fields: sys.abi.Range = body.get().__value.fields_or_arms
+    let fields: sys.abi.Range = body.__value.fields_or_arms
     var i: u32 = 0
     while i < fields.count {
         let index: i64 = sys.abi.range_index(fields, i)
         if index >= 0 {
             let field: Ref[sys.abi.Field_Record]? =
                 sys.abi.field_at(cast[u32] index)
-            if field != nil and field.get().__value.declaration_ordinal == 0 {
-                return field.get().__value.logical_bit_offset
+            if field != nil and field.__value.declaration_ordinal == 0 {
+                return field.__value.logical_bit_offset
             }
         }
         i += 1
@@ -559,7 +559,7 @@ let text_offset: u64? = rich_body_text_offset()
 
 func string_rich_literal_main() {
     require text_offset != nil
-    require text_offset.get() == 0
+    require text_offset == 0
     check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
     local_literals()
     dispatch()
@@ -1000,13 +1000,13 @@ func unicode_encoding_probe() -> string? {
 
     let cpn: string? = unicode.query.char_name('A')
 
-    if cpn == nil or !name_is(cpn.get(), "LATIN CAPITAL LETTER A") {
+    if cpn == nil or !name_is(cpn, "LATIN CAPITAL LETTER A") {
         return "36"
     }
 
     let rev: char? = unicode.query.char_from_name("LATIN SMALL LETTER Z")
 
-    if rev == nil or rev.get() != 'z' {
+    if rev == nil or rev != 'z' {
         return "37"
     }
 
@@ -1016,7 +1016,7 @@ func unicode_encoding_probe() -> string? {
 
     let sc: unicode.Script? = unicode.query.script_by_name("Greek")
 
-    if sc == nil or unicode.query.script(cast[char] 0x0391) != sc.get() {
+    if sc == nil or unicode.query.script(cast[char] 0x0391) != sc {
         return "39"
     }
 
@@ -1052,7 +1052,7 @@ func unicode_encoding_probe() -> string? {
     var wb_count: u32 = 0
     var wb_first: u32 = 0
 
-    while unicode.next(wit) != nil {
+    while unicode.__next(wit) != nil {
         if wb_count == 0 {
             wb_first = wit.byte_pos
         }
@@ -1067,7 +1067,7 @@ func unicode_encoding_probe() -> string? {
     var nit: unicode.Break_Iter = unicode.word_iter("3.14")
     var nb: u32 = 0
 
-    while unicode.next(nit) != nil {
+    while unicode.__next(nit) != nil {
         nb += 1
     }
 
@@ -1078,7 +1078,7 @@ func unicode_encoding_probe() -> string? {
     var ait: unicode.Break_Iter = unicode.word_iter("can't")
     var ab: u32 = 0
 
-    while unicode.next(ait) != nil {
+    while unicode.__next(ait) != nil {
         ab += 1
     }
 
@@ -1091,7 +1091,7 @@ func unicode_encoding_probe() -> string? {
     var sb_count: u32 = 0
     var sb_first: u32 = 0
 
-    while unicode.next(sit) != nil {
+    while unicode.__next(sit) != nil {
         if sb_count == 0 {
             sb_first = sit.byte_pos
         }
@@ -1106,7 +1106,7 @@ func unicode_encoding_probe() -> string? {
     var lw: unicode.Break_Iter = unicode.sentence_iter("etc. and more.")
     var lc: u32 = 0
 
-    while unicode.next(lw) != nil {
+    while unicode.__next(lw) != nil {
         lc += 1
     }
 
@@ -1118,7 +1118,7 @@ func unicode_encoding_probe() -> string? {
         unicode.sentence_iter("See Dr. Smith now.")
     var uc: u32 = 0
 
-    while unicode.next(abbr) != nil {
+    while unicode.__next(abbr) != nil {
         uc += 1
     }
 
@@ -1247,7 +1247,7 @@ func unicode_encoding_probe() -> string? {
 
     if !name_is(unicode.query.block_name(spua_b),
                 "Supplementary Private Use Area-B") or
-       spua_b_id == nil or spua_b_id.get() != spua_b {
+       spua_b_id == nil or spua_b_id != spua_b {
         return "902"
     }
 
@@ -1314,7 +1314,7 @@ func color_probe_main() {
     check(text.color_for_depth(some, text.Color_Depth.mono) == nil, "color_probe", "10")
     let kept: text.Color? = text.color_for_depth(some,
                                                  text.Color_Depth.truecolor)
-    check(kept != nil and kept.get() == 0x123456, "color_probe", "11")
+    check(kept != nil and kept == 0x123456, "color_probe", "11")
     check(text.color_for_depth(nil, text.Color_Depth.truecolor) == nil, "color_probe", "12")
 }
 
@@ -1493,7 +1493,7 @@ func yes(v: bool?) -> bool {
     if v == nil {
         return false
     }
-    return v.get()
+    return v
 }
 
 func styled(bold: bool?, italic: bool?) -> text.Text_Style {
@@ -1509,11 +1509,11 @@ func run_list(s: string) -> List[text.Style_Run] {
     var c: text.Cascade = new[text.Cascade](s)
     var runs: List[text.Style_Run] = new[List[text.Style_Run]]()
     while runs.len() < max_runs {
-        let run: text.Style_Run? = text.next(c)
+        let run: text.Style_Run? = text.__next(c)
         if run == nil {
             break
         }
-        runs.append(run.get())
+        runs.append(run)
     }
     return runs
 }
@@ -1763,7 +1763,7 @@ func same_opt(a: string?, b: string) -> bool {
     if a == nil {
         return false
     }
-    return text.eq(a.get(), b)
+    return text.eq(a, b)
 }
 
 func index_of(s: string, n: i64, unit: text.Index_Unit) -> string? {
@@ -1848,7 +1848,7 @@ func check_crlf_clusters() {
     check(text.unit_count(s, text.Index_Unit.cluster) == 3, "text_string_probe", "6")
     let mid: string? = index_of(s, 1, text.Index_Unit.cluster)
     check(mid != nil and
-          text.unit_count(mid.get_or_else(""), text.Index_Unit.byte) == 2,
+          text.unit_count(mid, text.Index_Unit.byte) == 2,
           "text_string_probe", "7")
 }
 
@@ -1880,9 +1880,9 @@ func check_combining_cluster() {
 func check_find() {
     let s: string = "a世zz"
     let rune_hit: uint? = find_of(s, "z", text.Index_Unit.char)
-    check(rune_hit != nil and rune_hit.get_or_else(0) == 2, "text_string_probe", "16")
+    check(rune_hit != nil and rune_hit == 2, "text_string_probe", "16")
     let byte_hit: uint? = find_of(s, "z", text.Index_Unit.byte)
-    check(byte_hit != nil and byte_hit.get_or_else(0) == 4, "text_string_probe", "17")
+    check(byte_hit != nil and byte_hit == 4, "text_string_probe", "17")
     check(find_of(s, "q", text.Index_Unit.char) == nil, "text_string_probe", "18")
 }
 
@@ -1910,7 +1910,7 @@ func check_cursor() {
     let s: string = "a世z"
     var c: text.Str_Cursor = text.cursor(s, unit = text.Index_Unit.char)
     var n: u64 = 0
-    while text.next(c) != nil {
+    while text.__next(c) != nil {
         n += 1
     }
     check(n == 3 and text.at_end(c), "text_string_probe", "23")
@@ -1932,7 +1932,7 @@ func check_cluster_cursor() {
     var fwd: text.Str_Cursor = text.cursor(s, unit = text.Index_Unit.cluster)
     var ends: Array[u64] = new[Array[u64]](8)
     var n: u64 = 0
-    while text.next(fwd) != nil and n < 8 {
+    while text.__next(fwd) != nil and n < 8 {
         ends[n] = text.byte_pos(fwd)
         n += 1
     }
@@ -1978,7 +1978,7 @@ func check_deep_cluster_cursor() {
     var fwd: text.Str_Cursor = text.cursor(s, unit = text.Index_Unit.cluster)
     var ends: Array[u64] = new[Array[u64]](64)
     var n: u64 = 0
-    while text.next(fwd) != nil and n < 64 {
+    while text.__next(fwd) != nil and n < 64 {
         ends[n] = text.byte_pos(fwd)
         n += 1
     }
@@ -1995,14 +1995,14 @@ func check_deep_cluster_cursor() {
     var mix: text.Str_Cursor = text.cursor(s, unit = text.Index_Unit.cluster)
     var j: u64 = 0
     while j < 20 {
-        _ = text.next(mix)
+        _ = text.__next(mix)
         j += 1
     }
     var m: u64 = 20
     while m > 0 {
         check(text.byte_pos(mix) == ends[m - 1], "text_string_probe", "47")
         _ = text.prev(mix)
-        _ = text.next(mix)
+        _ = text.__next(mix)
         _ = text.prev(mix)
         m -= 1
     }
@@ -2062,14 +2062,14 @@ func is_state(v: bool?, want: bool) -> bool {
     if v == nil {
         return false
     }
-    return v.get() == want
+    return v == want
 }
 
 func is_color(v: text.Color?, want: text.Color) -> bool {
     if v == nil {
         return false
     }
-    return v.get() == want
+    return v == want
 }
 
 func tag_sets_bold(tag: string) -> bool {
@@ -2198,14 +2198,14 @@ func tag_is_b(r: text.Style_Record) -> bool {
     if r.style_tag == nil {
         return false
     }
-    let tag: string = r.style_tag.get()
+    let tag: string = r.style_tag
     return byte_len(tag) == 1 and byte_at(tag, 0) == cast[u8] 'b'
 }
 
 func collect() {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    sys.gc.collect.collect(mutator.get().__value.heap)
+    sys.gc.collect.collect(mutator.__value.heap)
 }
 
 func rich_literal_probe_main() {
@@ -2296,7 +2296,7 @@ func abs_of(d: text.Layout_Dim?) -> i64 {
     if d == nil {
         return -1
     }
-    let v: text.Layout_Dim = d.get()
+    let v: text.Layout_Dim = d
     switch v {
         case abs {
             return v.abs
@@ -2311,7 +2311,7 @@ func is_pct(d: text.Layout_Dim?) -> bool {
     if d == nil {
         return false
     }
-    let v: text.Layout_Dim = d.get()
+    let v: text.Layout_Dim = d
     switch v {
         case pct {
             return true
@@ -2322,12 +2322,12 @@ func is_pct(d: text.Layout_Dim?) -> bool {
     }
 }
 
-func theme_is(p: text.Box_Props, want: Ref[text.Border_Theme]) -> bool {
-    let have: Ref[text.Border_Theme]? = p.border_theme
+func theme_is(p: text.Box_Props, want: View[text.Border_Theme]) -> bool {
+    let have: View[text.Border_Theme]? = p.border_theme
     if have == nil {
         return false
     }
-    return have.get() == want
+    return have == want
 }
 
 func zero_props() -> text.Box_Props {
@@ -2373,7 +2373,7 @@ func table_checks() {
     let head_opt: text.Text_Style? = std.header_props.text_style
     var head_ok: bool = false
     if head_opt != nil {
-        let head: text.Text_Style = head_opt.get()
+        let head: text.Text_Style = head_opt
         head_ok = head.bold.get_or_else(false) and
             head.text_case == text.Text_Case.upper and
             head.fg_palette_ix != nil
@@ -2531,8 +2531,8 @@ func table_checks() {
     let r_max: text.Layout_Dim? = rspec.max
     var dims_ok: bool = false
     if p_min != nil and r_max != nil {
-        let pct_val: text.Layout_Dim = p_min.get()
-        let abs_val: text.Layout_Dim = r_max.get()
+        let pct_val: text.Layout_Dim = p_min
+        let abs_val: text.Layout_Dim = r_max
         dims_ok = text.resolve(pct_val, 100) == 25 and
             text.resolve(abs_val, 100) == 12
     }
@@ -2610,7 +2610,7 @@ var override_theme: text.Theme = (
     ],
     styles = nil, roles = nil)
 
-func same_name(t: Ref[text.Theme], want: string) -> bool {
+func same_name(t: View[text.Theme], want: string) -> bool {
     return t.__value.name == want
 }
 
@@ -2626,12 +2626,12 @@ func slot(ix: text.Palette_Ix) -> i8 {
     return cast[i8] ix
 }
 
-func pal(t: Ref[text.Theme], ix: text.Palette_Ix) -> text.Color {
+func pal(t: View[text.Theme], ix: text.Palette_Ix) -> text.Color {
     let c: text.Color? = text.palette(t.__value, ix)
     if c == nil {
         return -1
     }
-    return c.get()
+    return c
 }
 
 func style_of(bold: bool?, italic: bool?, dim: bool?,
@@ -2648,7 +2648,7 @@ func builtin_checks() {
     check(text.theme_builtin_count() == 18, "theme_probe", "1")
     var i: uint = 0
     while i < text.theme_builtin_count() {
-        let t: Ref[text.Theme] = text.theme_builtin(i)
+        let t: View[text.Theme] = text.theme_builtin(i)
         check(byte_len(t.__value.name) != 0 and byte_len(t.__value.description) != 0, "theme_probe", "2")
         check(text.theme_lookup(t.__value.name) != nil, "theme_probe", "3")
         var s: i8 = 0
@@ -2663,9 +2663,9 @@ func builtin_checks() {
 
 func theme_probe_main() {
     builtin_checks()
-    let dark: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    let dark: View[text.Theme]? = text.theme_lookup("n00b-dark")
     check(dark != nil, "theme_probe", "6")
-    let d: Ref[text.Theme] = dark.get_or_else(text.theme_builtin(0))
+    let d: View[text.Theme] = dark.get_or_else(text.theme_builtin(0))
     check(pal(d, text.Palette_Ix.background) == 0x1a1b26 and
           pal(d, text.Palette_Ix.error_tone) == 0xf7768e and
           pal(d, text.Palette_Ix.text_primary) == 0xc0caf5, "theme_probe", "7")
@@ -2680,12 +2680,12 @@ func theme_probe_main() {
     override_theme.description = "registered override"
     override_theme.palette[cast[uint] text.Palette_Ix.background] = 0x010203
     text.install(ref override_theme)
-    let after: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    let after: View[text.Theme]? = text.theme_lookup("n00b-dark")
     check(after != nil and
-          pal(after.get(), text.Palette_Ix.background) == 0x010203, "theme_probe", "13")
+          pal(after, text.Palette_Ix.background) == 0x010203, "theme_probe", "13")
     check(pal(d, text.Palette_Ix.background) == 0x1a1b26, "theme_probe", "14")
 
-    let cur: Ref[text.Theme] = text.theme_current()
+    let cur: View[text.Theme] = text.theme_current()
     check(is_yes(text.style_for_tag(cur.__value,"b").bold), "theme_probe", "15")
     let err: text.Text_Style = text.style_for_tag(cur.__value,"@error")
     check(is_yes(err.bold) and err.fg_palette_ix != nil and
@@ -2751,7 +2751,7 @@ func theme_probe_main() {
 func objects_allocated() -> u64 {
     let mutator = sys.gc.alloc.mutator_for_native()
     require mutator != nil
-    return mutator.get().__value.objects_allocated
+    return mutator.__value.objects_allocated
 }
 
 func joined(a: string, b: string) -> string {

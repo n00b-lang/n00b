@@ -14,11 +14,29 @@ typedef struct {
     uint64_t      byte;
 } n00bb_literal_origin_t;
 
+typedef enum {
+    N00BB_NATIVE_TYPE_NAMED,
+    N00BB_NATIVE_TYPE_REF,
+    N00BB_NATIVE_TYPE_ARRAY,
+    N00BB_NATIVE_TYPE_LIST,
+    N00BB_NATIVE_TYPE_OPTION,
+} n00bb_native_type_kind_t;
+
+typedef struct n00bb_native_type_t n00bb_native_type_t;
+
+struct n00bb_native_type_t {
+    n00bb_native_type_kind_t kind;
+    core_string_t            name;
+    n00bb_native_type_t     *item;
+};
+
 typedef struct {
-    core_string_t name;
-    core_string_t symbol;
-    core_string_t signature;
-    bool          pure;
+    core_string_t         name;
+    core_string_t         symbol;
+    n00bb_native_type_t **params;
+    size_t                param_count;
+    n00bb_native_type_t  *result;
+    bool                  pure;
 } n00bb_native_declaration_t;
 
 typedef struct {

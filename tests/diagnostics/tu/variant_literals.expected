@@ -1,0 +1,8 @@
+tests/diagnostics/tu/variant_literals.n:1:9: warning N00B-N0023: type `Shape` is never used
+  help: remove it
+tests/diagnostics/tu/variant_literals.n:6:6: warning N00B-N0019: function `one_arm` is never called
+  help: call it or delete it
+tests/diagnostics/tu/variant_literals.n:11:12: error N00B-T0594: a `Shape` holds one arm at a time, but this literal names `circle` and `square`
+  help: keep only the arm this value should hold
+tests/diagnostics/tu/variant_literals.n:15:20: error N00B-T0594: a `Shape` holds one arm at a time, but this literal names `circle` and `square`
+  help: keep only the arm this value should hold

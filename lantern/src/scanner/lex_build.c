@@ -1302,6 +1302,7 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
     scan_lex_number_form_t form = {0};
     core_list_t(scan_lex_suffix_t) suffixes
         = core_list_new(scan_lex_suffix_t);
+    core_list_t(core_string_t) sign_not_after = core_list_new(core_string_t);
 
     for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
         const scan_lex_opt_t *o = &a->lex_opts.data[i];
@@ -1333,6 +1334,11 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
         }
         else if (named(o, "sign")) {
             form.sign = arg(o, 0);
+        }
+        else if (named(o, "sign_not_after")) {
+            for (size_t j = 0; j < core_list_len(o->args); j++) {
+                core_list_push(sign_not_after, o->args.data[j]);
+            }
         }
         else if (named(o, "exp")) {
             form.exponent = arg(o, 0);
@@ -1442,9 +1448,11 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
     if (!b->err.data) {
         string_map_put_new(&b->number_prefixes, form.prefix, 1);
         form.suffixes = own_suffix_rules(b, &suffixes);
+        form.sign_not_after = own_string_array(b, &sign_not_after);
         core_list_push(b->number_forms, form);
     }
     core_list_free(suffixes);
+    core_list_free(sign_not_after);
 }
 
 static bool
@@ -2666,6 +2674,27 @@ validate_sigil_contexts(lex_build_t *b, parse_grammar_t *g)
 }
 
 static void
+validate_number_contexts(lex_build_t *b, parse_grammar_t *g)
+{
+    for (size_t i = 0; !b->err.data && i < core_list_len(b->number_forms);
+         i++) {
+        const scan_lex_number_form_t *form = &b->number_forms.data[i];
+
+        for (const core_string_t *name = form->sign_not_after;
+             name && name->data; name++) {
+            if (parse_terminal_id(g, *name)) {
+                continue;
+            }
+
+            set_errf(b,
+                     "@lex-number: sign_not_after() names unknown token '%.*s'",
+                     (int)name->u8_bytes, name->data);
+            return;
+        }
+    }
+}
+
+static void
 validate_regex_contexts(lex_build_t *b, parse_grammar_t *g)
 {
     for (size_t i = 0; !b->err.data && i < core_list_len(b->regexes); i++) {
@@ -3008,6 +3037,7 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
     }
 
     validate_sigil_contexts(b, g);
+    validate_number_contexts(b, g);
     validate_regex_contexts(b, g);
 
     size_t active_operators = 0;

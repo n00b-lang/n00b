@@ -3,21 +3,40 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   reads path.data.__value...
   traps explicit bounds unwrap arithmetic
   returns fresh
-  output result data[(may_input) (new in sys.internal.fs.read_file:76:27) path.data.__value... path[]] control[path.data path.selector]
-  output failure data[(may_input) path.data.__value... path[]] control[path.data path.selector]
-  output (new in sys.internal.fs.read_file:76:27).__len data[(may_input) path.data.__value... path[]] control[path.data path.selector]
-  output (new in sys.internal.fs.read_file:76:27)[]... data[(may_input) path.data.__value... path[]] control[path.data path.selector]
+  output result data[(may_input) (new in sys.internal.fs.read_file:76:27) path.data path.data.__value... path.selector path[]] control[path.data path.selector]
+  output failure data[(may_input) path.data path.data.__value... path.selector path[]] control[path.data path.selector]
+  output (new in sys.internal.fs.read_file:76:27).__len data[(may_input) path.data path.data.__value... path.selector path[]] control[]
+  output (new in sys.internal.fs.read_file:76:27)[]... data[(may_input) path.data path.data.__value... path.selector path[]] control[]
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
   traps explicit bounds unwrap arithmetic
   returns fresh
   output result data[(new in sys.internal.env.args:33:29)] control[]
+  output (new in builtin.containers.array.__copy:7:27)[]... data[(reads_env)] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
+  output (new in builtin.containers.array.__copy:7:27)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
+  output (new in builtin.containers.list.__init:13:57)[]... data[(reads_env)] control[]
+  output (new in builtin.containers.list.__init:13:57)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
+  output (new in builtin.containers.list.__init:13:57)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
+  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
+  output (new in builtin.containers.list.__init:15:18).storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.list.__init:13:57) (new in builtin.containers.list.ensure_capacity:138:28) (new in sys.internal.env.args:33:29)] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[]... data[(reads_env)] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
+  output (new in builtin.containers.list.ensure_capacity:138:28)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
+  output (new in builtin.string.core.long_bytes:189:12)[]... data[(reads_env)] control[]
+  output (new in sys.internal.env.args:33:29).items data[(new in builtin.containers.list.__init:15:18)] control[]
+  output (new in sys.internal.env.args:33:29)[]... data[(reads_env)] control[]
+  output (new in sys.internal.env.args:33:29)[].data data[(new in builtin.string.core.long_bytes:189:12)] control[]
+  output (new in sys.internal.env.args:33:29)[].data... data[(new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)...] control[]
+  output (new in sys.internal.env.c_string:14:28)[] data[(reads_env)] control[]
+  output (new in sys.internal.env.c_string:14:9) data[(new in sys.internal.env.c_string:14:28)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
   output result data[(reads_clock)] control[]
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   effects may_fail may_trap may_block may_collect reinterprets reads_random
   writes buffer.__value[]...
+  reads buffer
   traps bounds
   output result data[] control[]
   output result 1 data[buffer] control[(reads_random) buffer buffer.__value.__len]
@@ -27,9 +46,8 @@ sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
   traps bounds arithmetic
   output result data[] control[]
-  output result 1 data[(new in sys.internal.random.__n00bb_dispatch_0:22:13) (reads_random) value] control[value]
+  output result 1 data[(reads_random)] control[]
   output failure data[(reads_random)] control[]
-  output (new in sys.internal.random.__n00bb_dispatch_0:22:13)... data[(reads_random)] control[]
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
@@ -38,6 +56,8 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
   reads self.__value.entries
   reads self.__value.index.ctrl
+  reads self.__value.index.hashes
+  reads self.__value.index.slots
   reads self.__value.entries.__value.storage
   reads self.__value.index.ctrl.__value[]
   reads self.__value.index.hashes.__value[]
@@ -57,7 +77,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.__value.index.growth_left
   reads+writes self.__value.index.hashes
   reads+writes self.__value.index.live
-  writes self.__value.index.slots
+  reads+writes self.__value.index.slots
   reads+writes self.__value.index.used
   reads+writes self.__value.entries.__value.leases
   writes self.__value.entries.__value.storage...
@@ -68,7 +88,9 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.__value.index.slots.__value[]
   reads self.__value.entries.__value.leases.__value.count
   reads+writes self.__value.entries.__value.storage.__value[]
+  reads self.__value.entries.__value.storage.__value[]...
   reads key...
+  reads value...
   reads builtin.hashing.secret.__value[]...
   escapes self referent
   escapes key address
@@ -86,7 +108,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output (new in builtin.containers.dict.ensure_entries:50:9)[]... data[self.__value.entries] control[]
   output (new in builtin.containers.hash_index.reserve:181:35)[] data[key key.__value... self.__value.index.hashes.__value[]] control[]
   output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.__value.index.dead.__value[]] control[]
-  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
+  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
   output self.__value.entries.__value.storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.dict.ensure_entries:50:9) self.__value.entries.__value.storage] control[]
   output self.__value.entries.__value.storage... data[self.__value.entries] control[]
   output self.__value.entries.__value.storage.__value.__len data[self.__value.entries.__value.storage.__value.__len] control[]
@@ -103,7 +125,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output self.__value.index.slots data[(new in builtin.containers.hash_index.rebuild:156:26)] control[]
   output self.__value.index.slots.__value[] data[self.__value.index.used] control[self.__value.index.dead.__value.__len self.__value.index.dead.__value[]]
   output self.__value.index.used data[self.__value.index.used] control[self.__value.index.dead.__value.__len self.__value.index.dead.__value[]]
-builtin.containers.dict.iter: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
+builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   effects may_allocate may_collect allocates_direct
   reads self.__value.entries
   reads self.__value.index.used
@@ -118,7 +140,7 @@ builtin.containers.list.len: (List['T]) -> uint
   effects none
   reads self.__value.count
   output result data[self.__value.count] control[]
-builtin.containers.list.iter: (List['T]) -> Lease_Cursor['T]
+builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   effects may_allocate may_collect allocates_direct
   reads self.__value.count
   reads self.__value.items
@@ -135,6 +157,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.__value.items
   reads spans.__value.items.__value.storage
   reads spans.__value.items.__value.storage.__value[]
+  reads spans.__value.items.__value.storage.__value[].tag...
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
@@ -145,7 +168,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   output (new in builtin.containers.list.__init:13:57)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
   output (new in builtin.containers.list.__init:13:57)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
   output (new in builtin.containers.list.__init:13:57)[].style_tag data[spans.__value.items.__value.storage.__value[].tag] control[]
-  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:68:23) (new in builtin.containers.lease.writable:61:23)] control[]
+  output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
   output (new in builtin.containers.list.__init:15:18).storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.list.__init:13:57) (new in builtin.containers.list.ensure_capacity:138:28)] control[]
   output (new in builtin.containers.list.ensure_capacity:138:28)[].end_ix data[spans.__value.items.__value.storage.__value[].end] control[]
   output (new in builtin.containers.list.ensure_capacity:138:28)[].start_ix data[spans.__value.items.__value.storage.__value[].start] control[]
@@ -163,7 +186,7 @@ unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
   reads+writes self.data.__value[]
   writes self.cap
-  writes self.data
+  reads+writes self.data
   writes self.len
   escapes self referent
   traps bounds arithmetic

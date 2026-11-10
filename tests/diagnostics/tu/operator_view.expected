@@ -1,0 +1,4 @@
+tests/diagnostics/tu/operator_view.n:5:12: error N00B-T0591: `left` must be declared `view`: `__add` implements an operator, and operators do not change their operands
+  help: write `view left`
+tests/diagnostics/tu/operator_view.n:10:39: error N00B-T0591: `other` must be declared `view`: `__add_assign` implements an operator, and operators do not change their operands
+  help: write `view other`

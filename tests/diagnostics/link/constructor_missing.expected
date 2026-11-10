@@ -1,2 +1,5 @@
+tests/diagnostics/link/constructor_missing.n:2:5: warning N00B-N0022: field `n` of `Holder` is never used
+tests/diagnostics/link/constructor_missing.n:5:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
 tests/diagnostics/link/constructor_missing.n:9:19: error N00B-T0002: `__init` takes 1 argument, but this call passes 0
   tests/diagnostics/link/constructor_missing.n:5:6: note: `__init` is declared here

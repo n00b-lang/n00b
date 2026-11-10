@@ -2,7 +2,6 @@
 #include <stdio.h>
 
 #include "private/ir/internal.h"
-#include "ir/rule.h"
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
@@ -195,6 +194,11 @@ static bool parsed_func(ir_visit_t *vi)
               "parsed.entry", "the entry block of %.*s has a predecessor",
               SARG(f->name));
     }
+    if (!ir_func_uses_consistent(f)) {
+        broke(v, IR_DIAG_VERIFY_PARSED, nullptr, ir_block_entry(f),
+              "parsed.uses", "the use index of %.*s misses an operand",
+              SARG(f->name));
+    }
 
     v->arms = ir_alloc(v->m->ctx, (f->n_blocks + 1) * sizeof(uint32_t));
 
@@ -295,11 +299,6 @@ static bool parsed_instr(ir_visit_t *vi)
 
     check_annots(v, &in->annots, in, b);
     check_origins(v, in->origin, in, b);
-    if (in->op == IR_OP_PHASE_RESULT
-        && !ir_instr_phase_result(in).u8_bytes) {
-        broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phase-result-id",
-              "phase.result requires a nonempty ir.phase_result identifier");
-    }
 
     if (ir_op_is_terminator(in->op)) {
         v->terms++;
@@ -547,123 +546,8 @@ static bool typed_allocation_storage(ir_visit_t *vi)
     return false;
 }
 
-typedef ir_value_t *verify_value_ptr_t;
 typedef ir_instr_t *verify_instr_ptr_t;
-core_list_decl(verify_value_ptr_t);
 core_list_decl(verify_instr_ptr_t);
-
-typedef struct {
-    core_list_t(verify_value_ptr_t) pending;
-    core_list_t(verify_value_ptr_t) targets;
-    core_list_t(verify_value_ptr_t) containers;
-    th_ctx *types;
-    bool external_writable;
-    bool writable_projection;
-    bool contents;
-    bool complete;
-} store_target_set_t;
-
-static bool store_target_add(core_list_t(verify_value_ptr_t) *items,
-                             ir_value_t *value)
-{
-    return core_option_is_set(core_list_find(*items, value))
-        || core_list_try_push(*items, value);
-}
-
-static bool store_target_enqueue(store_target_set_t *set, ir_value_t *value)
-{
-    return value && store_target_add(&set->pending, value);
-}
-
-static bool store_target_carries_reference(const store_target_set_t *set,
-                                           th_type *type)
-{
-    if (!type) return false;
-    type = th_resolve(type);
-    if (th_kind_of(type) == TH_INDIRECTION) return true;
-    th_type *definition = set->types && th_kind_of(type) == TH_NAMED
-        ? th_type_definition(set->types, type) : nullptr;
-    if (definition && th_kind_of(th_resolve(definition)) == TH_INDIRECTION)
-        return true;
-    th_type *item = th_option_item(type);
-    return item && store_target_carries_reference(set, item);
-}
-
-static bool store_target_enqueue_indirect(store_target_set_t *set,
-                                          ir_value_t *value)
-{
-    return value && value->type
-        && store_target_carries_reference(set, value->type)
-        && store_target_enqueue(set, value);
-}
-
-static bool store_target_finish(store_target_set_t *set, ir_value_t *value)
-{
-    return value && store_target_add(&set->targets, value);
-}
-
-static bool store_target_reference_is_writable(const ir_value_t *value);
-
-static bool store_target_annotation_edges(store_target_set_t *set,
-                                          ir_value_t *value)
-{
-    ir_annots_t *annots = ir_value_annots(value);
-    ir_annot_t *count = ir_annot_get(annots,
-                                     CORE_STRING_STATIC("ir.alias_count"));
-    if (!count || count->kind != IR_ANNOT_INT || count->i.neg
-        || count->i.mag > UINT32_MAX
-        || count->i.mag > ir_annot_count(annots)) return false;
-    ir_annot_t *resolved = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.alias_analysis_complete"));
-    ir_annot_t *unresolved = ir_annot_get(
-        annots, CORE_STRING_STATIC("ir.alias_unresolved"));
-    if (!resolved || resolved->kind != IR_ANNOT_BOOL
-        || !unresolved || unresolved->kind != IR_ANNOT_BOOL
-        || (resolved->b && unresolved->b)
-        || (!resolved->b && !unresolved->b)
-        || (!resolved->b
-            && !store_target_reference_is_writable(value)
-            && !set->writable_projection)) return false;
-
-    for (uint64_t i = 0; i < count->i.mag; i++) {
-        char key[48];
-        int length = snprintf(key, sizeof(key), "ir.alias%llu",
-                              (unsigned long long)i);
-        ir_annot_t *edge = length > 0
-            ? ir_annot_get(annots, core_string_borrow(key, (size_t)length))
-            : nullptr;
-        if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v
-            || !store_target_enqueue(set, edge->v)) return false;
-    }
-    if (!resolved->b) set->external_writable = true;
-    return true;
-}
-
-static bool store_target_reference_is_writable(const ir_value_t *value)
-{
-    ir_indirect_access_t access = ir_value_indirect_access(value);
-    return access == IR_INDIRECT_ACCESS_WRITE
-        || access == IR_INDIRECT_ACCESS_READ_WRITE;
-}
-
-static bool store_target_root_has_no_known_aliases(
-    const ir_value_t *value)
-{
-    ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
-    ir_annot_t *count = annots
-        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
-        : nullptr;
-    ir_annot_t *complete = annots
-        ? ir_annot_get(annots,
-                       CORE_STRING_STATIC("ir.alias_analysis_complete"))
-        : nullptr;
-    return value
-        && (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL
-            || value->kind == IR_VAL_LOCAL)
-        && count && count->kind == IR_ANNOT_INT && !count->i.neg
-        && !count->i.mag
-        && complete && complete->kind == IR_ANNOT_BOOL;
-}
 
 bool ir_value_addresses_sequence_contents(const ir_value_t *address)
 {
@@ -679,205 +563,16 @@ bool ir_value_addresses_sequence_contents(const ir_value_t *address)
     return referent && th_kind_of(th_resolve(referent)) == TH_SEQUENCE;
 }
 
-static bool store_target_collect(store_target_set_t *set,
-                                 ir_value_t *address,
-                                 bool preserve_parameters,
-                                 bool through_contents)
-{
-    memset(set, 0, sizeof(*set));
-    set->types = address && address->owner && address->owner->owner
-        ? ir_module_types(address->owner->owner) : nullptr;
-    set->complete = store_target_enqueue(set, address);
-    for (size_t cursor = 0; set->complete && cursor < set->pending.len;
-         cursor++) {
-        ir_value_t *value = set->pending.data[cursor];
-        if (ir_value_has_external_writable_storage(value)) {
-            set->external_writable = true;
-            continue;
-        }
-        if (value->kind != IR_VAL_INSTR || !value->def) {
-            if (store_target_carries_reference(set, value->type)) {
-                if (preserve_parameters && value->kind == IR_VAL_PARAM) {
-                    set->complete = store_target_finish(set, value);
-                    continue;
-                }
-                ir_annot_t *aliases = ir_annot_get(
-                    ir_value_annots(value),
-                    CORE_STRING_STATIC("ir.alias_count"));
-                if (aliases && store_target_root_has_no_known_aliases(
-                        value) && (store_target_reference_is_writable(value)
-                                  || set->writable_projection))
-                    set->external_writable = true;
-                else if (aliases)
-                    set->complete = store_target_annotation_edges(set, value);
-                else if (store_target_reference_is_writable(value)
-                         || set->writable_projection)
-                    set->external_writable = true;
-                else
-                    set->complete = false;
-                continue;
-            }
-            set->complete = store_target_finish(set, value);
-            continue;
-        }
-
-        ir_instr_t *definition = value->def;
-        if (!through_contents && ir_value_addresses_sequence_contents(value)) {
-            set->contents = true;
-            set->complete = store_target_add(&set->containers,
-                ir_operand_value(&definition->operands[0]));
-            continue;
-        }
-        switch (definition->op) {
-        case IR_OP_ALLOC:
-        case IR_OP_ALLOC_USING:
-        case IR_OP_ALLOCA:
-            set->complete = store_target_finish(set, value);
-            break;
-        case IR_OP_ADDRESS_OF:
-            set->complete = definition->n_operands == 1
-                && store_target_finish(set,
-                    ir_operand_value(&definition->operands[0]));
-            break;
-        case IR_OP_COPY:
-        case IR_OP_CAST:
-        case IR_OP_BITCAST:
-        case IR_OP_BOX_RAW:
-        case IR_OP_BOX_FROM_RAW:
-        case IR_OP_NOMINAL_CAST:
-        case IR_OP_FIELD:
-        case IR_OP_INDEX:
-        case IR_OP_OFFSET:
-        case IR_OP_OPTION_SOME:
-            set->complete = definition->n_operands > 0
-                && store_target_enqueue_indirect(set,
-                    ir_operand_value(&definition->operands[0]));
-            break;
-        case IR_OP_OPTION_GET:
-            set->writable_projection |= store_target_reference_is_writable(value);
-            set->complete = definition->n_operands == 1
-                && store_target_enqueue(set,
-                    ir_operand_value(&definition->operands[0]));
-            break;
-        case IR_OP_OPTION_GET_OR_ELSE:
-            set->writable_projection |= store_target_reference_is_writable(value);
-            set->complete = definition->n_operands == 2
-                && store_target_enqueue(set,
-                    ir_operand_value(&definition->operands[0]))
-                && store_target_enqueue_indirect(set,
-                    ir_operand_value(&definition->operands[1]));
-            break;
-        case IR_OP_SELECT:
-            set->complete = definition->n_operands == 3
-                && store_target_enqueue_indirect(set,
-                    ir_operand_value(&definition->operands[1]))
-                && store_target_enqueue_indirect(set,
-                    ir_operand_value(&definition->operands[2]));
-            break;
-        case IR_OP_PHI:
-            if (!definition->n_operands) set->complete = false;
-            for (uint32_t i = 0; set->complete
-                 && i < definition->n_operands; i++)
-                set->complete = store_target_enqueue_indirect(set,
-                    ir_operand_value(&definition->operands[i]));
-            break;
-        default:
-            if (store_target_carries_reference(set, value->type)) {
-                ir_annot_t *aliases = ir_annot_get(
-                    ir_value_annots(value),
-                    CORE_STRING_STATIC("ir.alias_count"));
-                if (aliases)
-                    set->complete = store_target_annotation_edges(set, value);
-                else if (store_target_reference_is_writable(value)
-                         || set->writable_projection)
-                    set->external_writable = true;
-                else
-                    set->complete = false;
-            }
-            else
-                set->complete = store_target_finish(set, value);
-            break;
-        }
-    }
-    return set->complete;
-}
-
-static void store_target_set_free(store_target_set_t *set)
-{
-    core_list_free(set->pending);
-    core_list_free(set->targets);
-    core_list_free(set->containers);
-}
-
-bool ir_value_visit_store_targets(const ir_value_t *address,
-                                  ir_store_target_visitor_fn visitor,
-                                  void *context)
-{
-    th_type *type = address && address->type
-        ? th_resolve(address->type) : nullptr;
-    if (!type || th_kind_of(type) != TH_INDIRECTION || !visitor)
-        return false;
-    store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, false,
-                                         true);
-    for (size_t i = 0; complete && i < set.targets.len; i++)
-        complete = visitor(context, set.targets.data[i]);
-    store_target_set_free(&set);
-    return complete;
-}
-
-bool ir_value_visit_store_origins(const ir_value_t *address,
-                                  ir_store_target_visitor_fn visitor,
-                                  void *context)
-{
-    th_type *type = address && address->type
-        ? th_resolve(address->type) : nullptr;
-    if (!address || !visitor
-        || (address->kind != IR_VAL_GLOBAL
-            && (!type || th_kind_of(type) != TH_INDIRECTION)))
-        return false;
-    store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, true,
-                                         true);
-    for (size_t i = 0; complete && i < set.targets.len; i++)
-        complete = visitor(context, set.targets.data[i]);
-    store_target_set_free(&set);
-    return complete;
-}
-
-static bool store_targets_include(const ir_value_t *address,
-                                  const ir_value_t *target)
-{
-    store_target_set_t set;
-    bool complete = store_target_collect(&set, (ir_value_t *)address, false,
-                                         false);
-    bool found = false;
-    for (size_t i = 0; complete && i < set.targets.len; i++)
-        found |= set.targets.data[i] == target;
-    store_target_set_free(&set);
-    return complete && found;
-}
-
-static bool initialization_binding_can_write(const ir_value_t *binding,
-                                              ir_execution_phase_t phase)
+static bool binding_mutable(const ir_value_t *binding)
 {
     if (binding->kind == IR_VAL_GLOBAL && binding->global)
-        return ir_global_can_write(binding->global, phase);
-    return ir_value_can_write(binding, phase);
-}
-
-static bool initialization_binding_can_initialize(
-    const ir_value_t *binding, ir_execution_phase_t phase)
-{
-    if (binding->kind == IR_VAL_GLOBAL && binding->global)
-        return ir_global_can_initialize(binding->global, phase);
-    return ir_value_can_initialize(binding, phase);
+        return binding->global->mutability == IR_MUT_MUTABLE;
+    return !binding->local || binding->local->mutability == IR_MUT_MUTABLE;
 }
 
 static bool initialization_event(const ir_instr_t *instruction,
                                  const ir_value_t *binding,
-                                 ir_func_t *function,
-                                 ir_execution_phase_t phase)
+                                 ir_func_t *function)
 {
     if (!binding || !ir_instr_is_binding_initialization(instruction))
         return false;
@@ -885,10 +580,7 @@ static bool initialization_event(const ir_instr_t *instruction,
         && instruction->dest_kind == IR_DEST_LOCAL
         && instruction->dest_local
         && ir_local_value(function, instruction->dest_local) == binding;
-    if (instruction->op == IR_OP_STORE && instruction->n_operands)
-        matches = store_targets_include(
-            ir_operand_value(&instruction->operands[0]), binding);
-    else if (instruction->op == IR_OP_GLOBAL_STORE && instruction->n_operands
+    if (instruction->op == IR_OP_GLOBAL_STORE && instruction->n_operands
              && binding->kind == IR_VAL_GLOBAL && binding->global) {
         ir_value_t *target = ir_operand_value(&instruction->operands[0]);
         ir_global_t *global = target && target->kind == IR_VAL_GLOBAL
@@ -898,8 +590,7 @@ static bool initialization_event(const ir_instr_t *instruction,
             : nullptr;
         matches = global == binding->global;
     }
-    return matches && !initialization_binding_can_write(binding, phase)
-        && initialization_binding_can_initialize(binding, phase);
+    return matches && !binding_mutable(binding);
 }
 
 static ptrdiff_t init_event_index(ir_instr_t *instruction,
@@ -996,10 +687,8 @@ static void verify_binding_initialization_events(
     ir_value_t *binding)
 {
     uint32_t block_count = function->n_blocks;
-    ir_execution_phase_t phase = ir_func_execution_phase(function);
     core_string_t name = ir_value_display_name(binding);
-    if (initialization_binding_can_write(binding, phase)
-        || !initialization_binding_can_initialize(binding, phase)) return;
+    if (binding_mutable(binding)) return;
 
     ir_block_t *reentry_header = nullptr;
     if (!binding_reentry_header(v, function, graph, entry, binding,
@@ -1011,7 +700,7 @@ static void verify_binding_initialization_events(
         for (uint32_t i = 0; ir_block_reachable(graph, block)
              && i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
-            if (!initialization_event(instruction, binding, function, phase))
+            if (!initialization_event(instruction, binding, function))
                 continue;
             if (!core_list_try_push(events, instruction)) {
                 broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
@@ -1164,14 +853,6 @@ static bool typed_instr(ir_visit_t *vi)
 {
     V *v = vi->user;
 
-    if (vi->instr->op == IR_OP_PHASE_RESULT
-        && ir_func_execution_phase(vi->func) != IR_PHASE_RUNTIME
-        && ir_func_execution_phase(vi->func) != IR_PHASE_COMPTIME) {
-        broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
-              "phase.result-consumer-phase",
-              "phase.result values require a compile-time or runtime consumer");
-    }
-
     if (ir_module_op_info(v->m, vi->instr->op)) {
         return true;
     }
@@ -1197,152 +878,20 @@ static bool typed_operand(ir_visit_t *vi)
               "operand %u has no type", vi->index);
     }
 
-    if (val && val->kind == IR_VAL_GLOBAL) {
-        if (!(vi->instr->op == IR_OP_GLOBAL_STORE && vi->index == 0)) {
-            ir_global_t *global = val->global
-                ? val->global : ir_global_find(v->m, val->name);
-            ir_execution_phase_t phase = ir_func_execution_phase(vi->func);
-            if (global && !ir_global_can_read(global, phase)) {
-                broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
-                      "phase.global-read",
-                      "global %.*s is unavailable during %s execution",
-                      SARG(global->name),
-                      phase == IR_PHASE_COMPTIME
-                          ? "compile-time" : "runtime");
-            }
-        }
-    }
-    else if (val && !(vi->instr->op == IR_OP_ADDRESS_OF
-                      && vi->index == 0)
-             && !((vi->instr->op == IR_OP_STORE
-                   || vi->instr->op == IR_OP_SEQUENCE_SET)
-                  && vi->index == 0
-                  && val->kind == IR_VAL_INSTR && val->def
-                  && (val->def->op == IR_OP_ADDRESS_OF
-                      || val->def->op == IR_OP_ALLOC))) {
-        ir_execution_phase_t phase = ir_func_execution_phase(vi->func);
-        if (!ir_value_can_read(val, phase)) {
-            broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
-                  "phase.binding-read",
-                  "binding %.*s is unavailable during %s execution",
-                  SARG(val->name.data ? val->name
-                                      : CORE_STRING_STATIC("(unnamed)")),
-                  phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
-        }
-    }
-
     return true;
 }
 
 static bool check_binding_write(V *v, ir_instr_t *in, ir_block_t *block,
                                 ir_value_t *binding)
 {
-    if (!binding) return true;
-    ir_execution_phase_t phase = ir_func_execution_phase(in->block->owner);
-    bool allowed = ir_value_can_write(binding, phase)
-        || (ir_instr_is_binding_initialization(in)
-            && ir_value_can_initialize(binding, phase));
-    if (allowed) return true;
+    if (!binding || binding_mutable(binding)
+        || ir_instr_is_binding_initialization(in)) return true;
     broke_at(v, IR_DIAG_VERIFY_PHASE, in, block,
-             ir_instr_is_binding_initialization(in)
-                 ? CORE_STRING_STATIC("phase.binding-initialize")
-                 : CORE_STRING_STATIC("phase.binding-write"),
-          "binding %.*s cannot be %s during %s execution",
-          SARG(binding->name.data ? binding->name
-                                  : CORE_STRING_STATIC("(unnamed)")),
-          ir_instr_is_binding_initialization(in)
-              ? "initialized" : "written",
-          phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
+             CORE_STRING_STATIC("binding.write"),
+             "binding %.*s cannot be written",
+             SARG(binding->name.data ? binding->name
+                                     : CORE_STRING_STATIC("(unnamed)")));
     return false;
-}
-
-static ir_mutability_t contents_owner_mutability(const ir_value_t *owner,
-                                                 ir_execution_phase_t phase)
-{
-    if (owner->kind == IR_VAL_GLOBAL && owner->global)
-        return phase == IR_PHASE_COMPTIME
-            ? ir_global_comptime_mutability(owner->global)
-            : owner->global->mutability;
-    return owner->local ? owner->local->mutability : IR_MUT_MUTABLE;
-}
-
-static void check_contents_write(V *v, ir_instr_t *in, ir_block_t *block,
-                                 const store_target_set_t *targets)
-{
-    ir_execution_phase_t phase = ir_func_execution_phase(in->block->owner);
-    for (size_t i = 0; i < targets->containers.len; i++) {
-        store_target_set_t owners;
-        bool complete = store_target_collect(&owners,
-            targets->containers.data[i], false, true);
-        for (size_t j = 0; complete && j < owners.targets.len; j++) {
-            ir_value_t *owner = owners.targets.data[j];
-            if (contents_owner_mutability(owner, phase) != IR_MUT_CONST)
-                continue;
-            broke(v, IR_DIAG_VERIFY_PHASE, in, block,
-                  "phase.constant-contents-write",
-                  "cannot write into constant '%.*s'; %s",
-                  SARG(owner->global ? owner->global->name
-                       : owner->name.data ? owner->name
-                                          : CORE_STRING_STATIC("(unnamed)")),
-                  phase == IR_PHASE_COMPTIME
-                      ? "it is not writable during compile-time evaluation"
-                      : "its contents are fixed when the program is built");
-        }
-        store_target_set_free(&owners);
-    }
-}
-
-static void check_store_target_write(V *v, ir_instr_t *in,
-                                     ir_block_t *block,
-                                     ir_value_t *address)
-{
-    store_target_set_t targets;
-    bool complete = store_target_collect(&targets, address, false, false);
-    bool pointer_address = address && address->type
-        && th_kind_of(address->type) == TH_INDIRECTION;
-    if (!complete || (pointer_address && !targets.targets.len
-                      && !targets.external_writable && !targets.contents)) {
-        broke(v, IR_DIAG_VERIFY_PHASE, in, block,
-              "phase.store-alias-incomplete",
-              "cannot verify a store through an incomplete alias target set");
-        store_target_set_free(&targets);
-        return;
-    }
-    check_contents_write(v, in, block, &targets);
-    if (!targets.targets.len) {
-        if (!targets.external_writable && !targets.contents)
-            check_binding_write(v, in, block, address);
-        store_target_set_free(&targets);
-        return;
-    }
-
-    for (size_t i = 0; i < targets.targets.len; i++) {
-        ir_value_t *target = targets.targets.data[i];
-        if (target->kind == IR_VAL_GLOBAL) {
-            ir_global_t *global = target->global
-                ? target->global : ir_global_find(v->m, target->name);
-            ir_func_t *function = in->block->owner;
-            ir_execution_phase_t phase = ir_func_execution_phase(function);
-            if (!global || (!ir_global_can_write(global, phase)
-                && !((ir_instr_is_binding_initialization(in)
-                      || ir_func_is_initializer(function))
-                     && ir_global_can_initialize(global, phase)))) {
-                broke(v, IR_DIAG_VERIFY_PHASE, in, block,
-                      "phase.binding-write",
-                      "global %.*s cannot be written through its address during %s execution",
-                      SARG(global ? global->name
-                           : target->name.data
-                               ? target->name
-                               : CORE_STRING_STATIC("(unnamed)")),
-                      phase == IR_PHASE_COMPTIME
-                          ? "compile-time" : "runtime");
-            }
-        }
-        else {
-            check_binding_write(v, in, block, target);
-        }
-    }
-    store_target_set_free(&targets);
 }
 
 static bool typed_instr_end(ir_visit_t *vi)
@@ -1360,23 +909,6 @@ static bool typed_instr_end(ir_visit_t *vi)
         && in->dest_local)
         check_binding_write(v, in, vi->block,
                            ir_local_value(vi->func, in->dest_local));
-    else if ((in->op == IR_OP_STORE || in->op == IR_OP_SEQUENCE_SET)
-             && in->n_operands) {
-        check_store_target_write(v, in, vi->block,
-                                 ir_operand_value(&in->operands[0]));
-    }
-
-    ir_verdict_t verdict = ir_rule_apply(v->m, ir_module_rules(v->m), in,
-                                         v->d).verdict;
-
-    if (verdict == IR_RULE_DECLINE) {
-        broke(v, IR_DIAG_VERIFY_TYPED, in, vi->block, "typed.rule",
-              "no typing rule resolves for %.*s with these operand types",
-              SARG(ir_module_op_spelling(v->m, in->op)));
-    }
-    else if (verdict != IR_RULE_ACCEPT) {
-        mark_bad(v, in, vi->block);
-    }
 
     return true;
 }
@@ -1405,25 +937,6 @@ static bool lifetime_instr(ir_visit_t *vi)
         broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
               "lifetime.unknown-direct",
               "cannot prove that %.*s has no reachable use after this %s",
-              SARG(value->name.data ? value->name
-                                    : CORE_STRING_STATIC("the value")),
-              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
-        return true;
-    }
-
-    ir_liveness_t aliases = ir_value_alias_liveness_after(value, in);
-    if (aliases == IR_LIVENESS_LIVE) {
-        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
-              "lifetime.no-live-alias",
-              "an alias of %.*s has a reachable use after this %s",
-              SARG(value->name.data ? value->name
-                                    : CORE_STRING_STATIC("the value")),
-              in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
-    }
-    else if (aliases == IR_LIVENESS_UNKNOWN) {
-        broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
-              "lifetime.unknown-alias",
-              "cannot prove that %.*s has no live aliases at this %s",
               SARG(value->name.data ? value->name
                                     : CORE_STRING_STATIC("the value")),
               in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");

@@ -2,7 +2,8 @@
 #include "cached_body.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
-#include "ir/memssa.h"
+#include "ir/pdg.h"
+#include "ir/pdg_memory.h"
 #include "ir/sites.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -52,7 +53,7 @@ typedef struct {
     function_facts_t     *facts;
     core_dict_t           values;
     ir_doms_t            *doms;
-    ir_memssa_t          *memssa;
+    ir_pdg_memory_t      *memssa;
     core_list_t(write_t)  writes;
     bool                  reporting;
     bool                  changed;
@@ -196,8 +197,8 @@ reaching_stores(function_state_t *fs, const ir_instr_t *load)
     reaching_t reaching = {.stores = core_list_new(instr_ptr_t),
                            .known = true};
     if (!fs->memssa
-        || !ir_memssa_visit_clobbers(fs->memssa,
-               ir_memssa_access_of(fs->memssa, load, IR_ACCESS_LOAD),
+        || !ir_pdg_memory_visit_clobbers(fs->memssa,
+               ir_pdg_memory_access_of(fs->memssa, load, IR_ACCESS_LOAD),
                collect_store, &reaching))
         reaching.known = false;
     return reaching;
@@ -636,7 +637,9 @@ analyze_function(marks_state_t *state, ir_func_t *function, bool reporting)
     function_state_t fs = {
         .state = state, .function = function,
         .facts = facts_of(state, function),
-        .doms = ir_func_doms(function), .memssa = ir_func_memssa(function),
+        .doms = ir_func_doms(function),
+        .memssa = ir_func_pdg(function)
+            ? ir_pdg_memory(ir_func_pdg(function)) : nullptr,
         .writes = core_list_new(write_t),
     };
     core_dict_init(&fs.values, nullptr, nullptr);

@@ -6,7 +6,7 @@ import internal.gc.los
 import internal.gc.mark
 import internal.gc.registry
 import internal.gc.roots
-import internal.gc.sync
+import internal.locks
 import internal.threads
 import internal.memory
 
@@ -52,10 +52,10 @@ func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
     let mapped: Ref[byte]? = internal.memory.map_zeroed(
         next_cap * element_bytes, alignment)
     if mapped != nil {
-        let base: Ref[byte] = mapped.get()
+        let base: Ref[byte] = mapped
         if used != 0 {
             if old != nil {
-                __gc_memcpy(base, old.get(), used * element_bytes)
+                __gc_memcpy(base, old, used * element_bytes)
             } else {
                 require false
             }
@@ -65,7 +65,7 @@ func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
         cap.__value = next_cap
         __gc_signal_fence()
         if old != nil {
-            internal.memory.unmap(old.get(), old_cap * element_bytes)
+            internal.memory.unmap(old, old_cap * element_bytes)
         }
         return true
     }
@@ -76,7 +76,7 @@ func heap_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[internal.gc.core.Heap]?         = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -91,14 +91,18 @@ func config_default(out config: internal.gc.core.Config) {
               on_pause = nil, on_cycle = nil, telemetry_user = nil)
 }
 
+func lock(heap: Ref[internal.gc.core.Heap]) {
+    internal.locks.mutex_lock(ref heap.__value.lock)
+}
+
 func unlock(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.sync.ticket_unlock(ref heap.__value.lock)
+    internal.locks.mutex_unlock(ref heap.__value.lock)
     internal.gc.finalize.notify(heap)
 }
 
 func get_stats(heap: Ref[internal.gc.core.Heap]) -> internal.gc.core.Stats {
     var stats: internal.gc.core.Stats
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    lock(heap)
     stats.collections = heap.__value.collections
     stats.objects_allocated = heap.__value.retired_objects
     stats.bytes_allocated = heap.__value.retired_bytes
@@ -106,7 +110,7 @@ func get_stats(heap: Ref[internal.gc.core.Heap]) -> internal.gc.core.Stats {
     stats.locked_refills = heap.__value.retired_locked_refills
     var current: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
     while current != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        let mutator: Ref[internal.gc.core.Mutator] = current
         stats.objects_allocated += mutator.__value.objects_allocated
         stats.bytes_allocated += mutator.__value.bytes_allocated
         stats.refills += mutator.__value.refills
@@ -143,10 +147,11 @@ func get_stats(heap: Ref[internal.gc.core.Heap]) -> internal.gc.core.Stats {
     stats.hs_blocking = heap.__value.hs_blocking
     stats.hs_fallbacks = heap.__value.hs_fallbacks
     stats.hs_alloc_waits = __atomic_load(ref heap.__value.hs_alloc_waits)
-    internal.gc.sync.ticket_lock(ref heap.__value.fin)
-    stats.finalizers_pending = heap.__value.finq_n + heap.__value.running_n
-    stats.finalizers_run = heap.__value.finalizers_run
-    internal.gc.sync.ticket_unlock(ref heap.__value.fin)
+    internal.locks.mutex_lock(ref heap.__value.fin)
+    stats.finalizers_pending = __atomic_load(ref heap.__value.finq_n) +
+        heap.__value.running_n
+    stats.finalizers_run = __atomic_load(ref heap.__value.finalizers_run)
+    internal.locks.mutex_unlock(ref heap.__value.fin)
     stats.phase = cast[i32](__atomic_load(ref heap.__value.phase))
     unlock(heap)
     return stats
@@ -161,10 +166,10 @@ func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]
     let mapped: Ref[byte]?                   = internal.memory.map_zeroed(
         internal.abi.size_bytes(row), internal.abi.alignment_bytes(row))
     if mapped != nil {
-        let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] mapped.get()
+        let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] mapped
 
         if config != nil {
-            heap.__value.cfg = config.get().__value
+            heap.__value.cfg = config.__value
         } else {
             config_default(heap.__value.cfg)
         }
@@ -185,6 +190,23 @@ func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]
             heap.__value.cfg.world_timeout_ms = default_world_timeout_ms
         }
 
+        internal.locks.mutex_init(ref heap.__value.lock, collector = true)
+        internal.locks.mutex_init(ref heap.__value.fin, collector = true)
+        internal.locks.mutex_init(ref heap.__value.pool, collector = true)
+        internal.locks.rw_lock_init(ref heap.__value.registry,
+                                    collector = true)
+        internal.locks.condition_init(ref heap.__value.fin_progress,
+                                      collector = true)
+        internal.locks.condition_init(ref heap.__value.fin_wake,
+                                      collector = true)
+        internal.locks.condition_init(ref heap.__value.mark_progress,
+                                      collector = true)
+        internal.locks.condition_init(ref heap.__value.work_progress,
+                                      collector = true)
+        internal.locks.condition_init(ref heap.__value.cycle_ended,
+                                      collector = true)
+        internal.locks.condition_init(ref heap.__value.hs_answered,
+                                      collector = true)
         heap.__value.target_bytes = heap.__value.cfg.initial_heap_bytes
         heap.__value.alloc_budget = heap.__value.cfg.initial_heap_bytes
         heap.__value.epoch = 1
@@ -201,7 +223,7 @@ func destroy(heap: Ref[internal.gc.core.Heap]) {
     __atomic_fetch_add(ref heap.__value.fin_live, 1)
     __atomic_store(ref heap.__value.shutdown, true)
     while __atomic_load(ref heap.__value.nworkers) != 0 {
-        internal.gc.sync.event_signal(ref heap.__value.work_progress)
+        internal.gc.core.signal(ref heap.__value.work_progress)
         internal.threads.thread_yield()
     }
     internal.gc.finalize.close_thread(heap)
@@ -216,11 +238,11 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
     if mutator_row != nil {
         var attached: Ref[internal.gc.core.Mutator]? = heap.__value.mutators
         while attached != nil {
-            let mutator: Ref[internal.gc.core.Mutator] = attached.get()
+            let mutator: Ref[internal.gc.core.Mutator] = attached
             attached = mutator.__value.next
             internal.gc.roots.free(mutator)
             internal.gc.roots.free_tls(mutator)
-            internal.memory.unmap(mutator, internal.abi.size_bytes(mutator_row.get()))
+            internal.memory.unmap(mutator, internal.abi.size_bytes(mutator_row))
         }
         heap.__value.mutators = nil
         heap.__value.nmutators = 0
@@ -229,7 +251,7 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
     }
     var candidate: Ref[internal.gc.core.Block_Metadata]? = heap.__value.all_blocks
     while candidate != nil {
-        let block: Ref[internal.gc.core.Block_Metadata]  = candidate.get()
+        let block: Ref[internal.gc.core.Block_Metadata]  = candidate
         let next:  Ref[internal.gc.core.Block_Metadata]? = block.__value.all_next
         internal.memory.unmap(block, internal.gc.core.block_bytes)
         candidate = next
@@ -242,7 +264,7 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
         let probe: Ref[internal.gc.core.Final_Entry]?  = nil
         let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
         if row != nil {
-            internal.memory.unmap(final_queue.get(), heap.__value.finq_cap * internal.abi.size_bytes(row.get()))
+            internal.memory.unmap(final_queue, heap.__value.finq_cap * internal.abi.size_bytes(row))
         } else {
             require false
         }
@@ -252,8 +274,8 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
         let probe: Ref[byte]?                    = nil
         let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
         if row != nil {
-            internal.memory.unmap(queued.get(), heap.__value.barrier_queue_capacity
-                * internal.abi.size_bytes(row.get()))
+            internal.memory.unmap(queued, heap.__value.barrier_queue_capacity
+                * internal.abi.size_bytes(row))
         } else {
             require false
         }
@@ -264,8 +286,8 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
         let probe:       Ref[Ref[byte]?]?              = nil
         let pointer_row: Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
         if pointer_row != nil {
-            let stride: uint = internal.abi.size_bytes(pointer_row.get())
-            internal.memory.unmap(global_storage.get(), heap.__value.cap_globals * stride)
+            let stride: uint = internal.abi.size_bytes(pointer_row)
+            internal.memory.unmap(global_storage, heap.__value.cap_globals * stride)
         } else {
             require false
         }

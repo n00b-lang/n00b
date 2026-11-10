@@ -1175,6 +1175,23 @@ compatible_trace_arms(const n00bb_abi_object_view_t *a_view,
     return true;
 }
 
+static bool type_is_import_reference(const n00b_abi_type_v1 *type);
+
+static bool
+deferred_unary_trace(const abi_link_key_t *key)
+{
+    const n00b_abi_type_v1 *type = key->row;
+    if (type->tracing_index || type->components.count != 1
+        || (type->kind != N00B_ABI_TYPE_WRAPPER
+            && type->kind != N00B_ABI_TYPE_ATOMIC)
+        || !valid_index_range(key->view, type->components)) return false;
+    const uint8_t *slot = n00bb_abi_object_row(key->view,
+        N00B_ABI_TABLE_U32_STREAM, type->components.first);
+    const n00b_abi_type_v1 *child = slot ? n00bb_abi_object_row(key->view,
+        N00B_ABI_TABLE_TYPE, core_le_load_u32(slot)) : nullptr;
+    return child && !child->tracing_index && type_is_import_reference(child);
+}
+
 static bool
 compatible_type_trace(const abi_link_key_t *first,
                       const abi_link_key_t *candidate)
@@ -1182,6 +1199,7 @@ compatible_type_trace(const abi_link_key_t *first,
     const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
     if (!a_type->tracing_index || !b_type->tracing_index)
         return a_type->tracing_index == b_type->tracing_index
+            || deferred_unary_trace(first) || deferred_unary_trace(candidate)
             || !a_type->layout_index || !b_type->layout_index
             || (a_type->kind == N00B_ABI_TYPE_OPTION
                 && b_type->kind == N00B_ABI_TYPE_OPTION);
@@ -1592,19 +1610,6 @@ compatible_type_constraints(const abi_link_key_t *first,
 }
 
 static bool
-declared_constraint_matches_inferred(const abi_link_key_t *context,
-                                     const n00b_abi_constraint_v1 *declared,
-                                     const n00b_abi_constraint_v1 *inferred)
-{
-    if (!declared || !inferred || declared->flags
-        || (inferred->flags & ~N00B_ABI_CONSTRAINT_FLAG_HAS_SCOPE)
-        || (declared->kind != N00B_ABI_CONSTRAINT_IMPLEMENTS
-            && declared->kind != N00B_ABI_CONSTRAINT_EXCLUDES)) return false;
-    return compatible_constraint_rows_scope(context, declared,
-                                            context, inferred, false);
-}
-
-static bool
 declared_function_constraints_valid(
     const n00bb_abi_selected_objects_t *selected)
 {
@@ -1616,9 +1621,6 @@ declared_function_constraints_valid(
             n00bb_abi_object_table(view, N00B_ABI_TABLE_TYPE);
         if (!functions) continue;
         if (!types) return false;
-        abi_link_key_t context = {
-            .selected = selected, .view = view, .input_index = input,
-        };
         for (uint32_t i = 1; i < functions->record_count; i++) {
             const n00b_abi_function_v1 *function = n00bb_abi_object_row(
                 view, N00B_ABI_TABLE_FUNCTION, i);
@@ -1651,15 +1653,7 @@ declared_function_constraints_valid(
                         || scope->source_location_index
                             != symbol->declaration_location_index)
                         continue;
-                    if (!valid_index_range(view, type->constraints))
-                        return false;
-                    for (uint32_t n = 0; n < type->constraints.count; n++) {
-                        const n00b_abi_constraint_v1 *inferred =
-                            indexed_range_row(view, type->constraints, n,
-                                N00B_ABI_TABLE_CONSTRAINT);
-                        if (declared_constraint_matches_inferred(
-                                &context, declared, inferred)) found = true;
-                    }
+                    found = true;
                 }
                 if (!found) return false;
             }
@@ -2584,7 +2578,7 @@ summary_word(const n00bb_abi_object_view_t *view, uint32_t offset,
     return true;
 }
 
-bool
+static bool
 n00bb_abi_summary_extent(const n00bb_abi_object_view_t *view,
                          uint32_t offset, uint32_t *names, uint32_t *bytes)
 {
@@ -4433,7 +4427,9 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                                     || next->fields_or_arms.count)
                                 && (!old->components.count
                                     || next->components.count))
-                            || (old->kind == N00B_ABI_TYPE_OPTION
+                            || ((old->kind == N00B_ABI_TYPE_OPTION
+                                 || old->kind == N00B_ABI_TYPE_ATOMIC
+                                 || old->kind == N00B_ABI_TYPE_WRAPPER)
                                 && !old->tracing_index
                                 && next->tracing_index)
                             || (old->kind == N00B_ABI_TYPE_VARIABLE

@@ -1,2 +1,5 @@
-tests/diagnostics/tu/loop_item_does_not_fit.n:6:9: error N00B-N0520: `n` is used as `u8`, but its items are `int`, which may not fit
-  help: convert `n` explicitly where `u8` is needed
+tests/diagnostics/tu/loop_item_does_not_fit.n:1:6: warning N00B-N0019: function `take` is never called
+  help: call it or delete it
+tests/diagnostics/tu/loop_item_does_not_fit.n:5:6: warning N00B-N0019: function `scan` is never called
+  help: call it or delete it
+tests/diagnostics/tu/loop_item_does_not_fit.n:5:11: note N00B-S0064: parameter `values` could be `view`: `scan` never writes anything reachable from it

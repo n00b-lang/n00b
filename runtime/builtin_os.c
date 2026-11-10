@@ -794,13 +794,30 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
 typedef struct {
     n00b_os_thread_entry entry;
     void *argument;
+    void *seed;
 } os_thread_packet_t;
 
 static void (*_Atomic thread_start_hook)(void);
+static void *(*_Atomic thread_spawn_hook)(void);
+static void (*_Atomic thread_seed_hook)(void *seed);
 
 void n00b_os_set_thread_start_hook(void (*hook)(void))
 {
     atomic_store(&thread_start_hook, hook);
+}
+
+void n00b_os_set_thread_seed_hooks(void *(*spawn)(void),
+                                   void (*seed)(void *seed))
+{
+    atomic_store(&thread_spawn_hook, spawn);
+    atomic_store(&thread_seed_hook, seed);
+}
+
+static void (*_Atomic thread_exit_hook)(void);
+
+void n00b_os_set_thread_exit_hook(void (*hook)(void))
+{
+    atomic_store(&thread_exit_hook, hook);
 }
 
 static void *os_thread_begin(void *raw)
@@ -810,7 +827,12 @@ static void *os_thread_begin(void *raw)
     n00bb_runtime_install_failure_handlers();
     void (*hook)(void) = atomic_load(&thread_start_hook);
     if (hook) hook();
-    return packet.entry(packet.argument);
+    void (*seed)(void *) = atomic_load(&thread_seed_hook);
+    if (seed) seed(packet.seed);
+    void *result = packet.entry(packet.argument);
+    void (*exit_hook)(void) = atomic_load(&thread_exit_hook);
+    if (exit_hook) exit_hook();
+    return result;
 }
 
 #if defined(_WIN32)
@@ -854,7 +876,9 @@ int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument)
 {
     os_thread_packet_t *packet = entry ? malloc(sizeof(*packet)) : NULL;
     if (!packet) return -1;
-    *packet = (os_thread_packet_t){.entry = entry, .argument = argument};
+    void *(*spawn)(void) = atomic_load(&thread_spawn_hook);
+    *packet = (os_thread_packet_t){.entry = entry, .argument = argument,
+                                   .seed = spawn ? spawn() : NULL};
     if (!os_thread_start_raw(packet)) return 0;
     free(packet);
     return -1;
@@ -890,8 +914,11 @@ int64_t n00b_os_close(int64_t fd)
     return os_close_raw(fd);
 }
 
+extern void (*n00b_comptime_exit)(int64_t code);
+
 void n00b_os_exit(int64_t code)
 {
+    if (n00b_comptime_exit) n00b_comptime_exit(code);
     os_exit_raw(code);
 }
 

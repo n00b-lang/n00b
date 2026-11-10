@@ -1,0 +1,6 @@
+import limits
+
+let small: i8 = limits.LOW
+let product: int = limits.LOW * limits.BIG
+require small == -5
+require product == -1500
