@@ -599,7 +599,7 @@ func audit_mark(n: int) -> int {
 }
 
 effect Audit {
-    from audit_mark
+    from: audit_mark
 }
 
 func audited_step(n: int) -> int {

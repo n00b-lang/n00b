@@ -14,24 +14,15 @@ tests/diagnostics/lower/effect_bounds.n:40:6: warning N00B-N0019: function `good
   help: call it or delete it
 tests/diagnostics/lower/effect_bounds.n:45:6: warning N00B-N0019: function `bad` is never called
   help: call it or delete it
-tests/diagnostics/lower/effect_bounds.n:47:12: error N00B-S0077: `pick_both` requires `by` never to do `impure`, but this callback may do it
-  tests/diagnostics/lower/effect_bounds.n:33:5: note: `noisy` calls `builtin.io.debug.raw_debug`
-  lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
-  lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
-  lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
+tests/diagnostics/lower/effect_bounds.n:47:12: error N00B-S0077: the callback passed as `by` to `pick_both` must never have effect `impure`, but:
+  tests/diagnostics/lower/effect_bounds.n:33:5: note: `noisy` calls `builtin.io.debug.raw_debug`, which may have effect `impure`
   help: pass a function that meets the check, or forward a parameter that has the same check
 tests/diagnostics/lower/effect_bounds.n:51:5: warning N00B-N0020: field `id` of `Key` is read but never set
-tests/diagnostics/lower/effect_bounds.n:54:1: error N00B-S0078: `hash` implements `Hash.hash`, which must never do `impure`, but it may
-  tests/diagnostics/lower/effect_bounds.n:55:5: note: `hash` calls `builtin.io.debug.raw_debug`
-  lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
-  lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
-  lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
-  lib/builtin/hashing.n:8:5: note: `Hash` checks this here
-tests/diagnostics/lower/effect_bounds.n:63:1: error N00B-S0078: `__add` implements `Add.__add`, which must never do `impure`, but it may
-  tests/diagnostics/lower/effect_bounds.n:64:5: note: `__add` calls `builtin.io.debug.raw_debug`
-  lib/builtin/io/debug.n:6:5: note: `raw_debug` calls `builtin.string.core.__fd_write`
-  lib/builtin/string/core.n:276:9: note: `__fd_write` calls `builtin.string.core.write_all`
-  lib/builtin/string/core.n:263:26: note: `write_all` calls `builtin.string.core.n00bb_runtime_write_bytes`
+tests/diagnostics/lower/effect_bounds.n:54:1: error N00B-S0078: `hash` implements `Hash.hash`, which must never have effect `impure`, but:
+  tests/diagnostics/lower/effect_bounds.n:55:5: note: `hash` calls `builtin.io.debug.raw_debug`, which may have effect `impure`
+  lib/builtin/hashing.n:8:5: note: `Hash.hash` forbids `impure` here
+tests/diagnostics/lower/effect_bounds.n:63:1: error N00B-S0078: `__add` implements `Add.__add`, which must never have effect `impure`, but:
+  tests/diagnostics/lower/effect_bounds.n:64:5: note: `__add` calls `builtin.io.debug.raw_debug`, which may have effect `impure`
 tests/diagnostics/lower/effect_bounds.n:68:6: warning N00B-N0019: function `lookup` is never called
   help: call it or delete it
 tests/diagnostics/lower/effect_bounds.n:68:13: note N00B-S0064: parameter `table` could be `view`: `lookup` never writes anything reachable from it

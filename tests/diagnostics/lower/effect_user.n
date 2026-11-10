@@ -7,20 +7,20 @@ func flush() {
 }
 
 effect Audited {
-    from note
-    handled by flush
+    from: note
+    handled_by: flush
 }
 
 effect output {
-    from note
+    from: note
 }
 
 effect missing.Thing {
-    from note
+    from: note
 }
 
 effect Counted {
-    from 3
+    from: 3
 }
 
 func handle(n: int) -> int {
@@ -83,4 +83,49 @@ func steps() -> int {
     let quiet: Step = callback[Step](ref plain)
     let loud: Step = callback[Step](ref noted)
     return run_step(quiet, 1) + run_step(loud, 2)
+}
+
+func stamp(_entry: string) {
+}
+
+func close_out() {
+    stamp("end")
+}
+
+effect Stamped {
+    from: stamp
+    handled_by: close_out
+    scope: caller
+}
+
+func stamps() {
+    stamp("x")
+}
+
+func via_stamps() {
+    stamps()
+}
+
+func closes() {
+    close_out()
+}
+
+has_effect(stamps, Stamped) and forbids_effect(via_stamps, Stamped)
+forbids_effect(closes, Stamped)
+has_effect(via_stamps, Stamped)
+
+effect Twice {
+    from: stamp
+    scope: caller
+    scope: thread
+}
+
+effect Odd {
+    from: stamp
+    scope: everywhere
+}
+
+effect allocates {
+    from: stamp
+    scope: package
 }

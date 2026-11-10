@@ -1081,8 +1081,10 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     core_source_file_t source = {0};
     const core_module_spec_t *module = core_work_job_module(job);
     bool interface_allowed = !context->cache
-        || (module && n00bb_cache_has_module(context->cache,
-                                             module->identifier));
+        || (module && (n00bb_cache_has_module(context->cache,
+                                              module->identifier)
+                       || n00bb_cache_library_module(context->cache,
+                                                     module->identifier)));
     bool logical_import = !root_input && module && operand.data
         && interface_allowed
         && (core_string_eq(operand, module->identifier) || context->cache);
@@ -4206,9 +4208,30 @@ locate_cached_module(void *context, core_string_t module, core_string_t *path)
     return found;
 }
 
+static void
+library_module_list(const th_env *const *interfaces, size_t count,
+                    core_buffer_t *out)
+{
+    for (size_t e = 0; e < count; e++)
+        for (size_t i = 0; i < th_env_metadata_count(interfaces[e]); i++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(interfaces[e], i, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || !metadata.owner_name.u8_bytes
+                || (!core_string_eq(metadata.key,
+                        CORE_STRING_STATIC("n00b.package-interface"))
+                    && !core_string_eq(metadata.key,
+                        CORE_STRING_STATIC("n00b.module-interface"))))
+                continue;
+            if (out->byte_len) core_buffer_putc(out, ',');
+            core_buffer_append_string(out, metadata.owner_name);
+        }
+}
+
 static n00bb_cache_t *
 open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
-                  ir_ctx_t *ir_context)
+                  ir_ctx_t *ir_context, const th_env *const *interfaces,
+                  size_t interface_count)
 {
     core_target_desc_t target;
     core_string_t input = parse_cmdr_arg_str(args, 0);
@@ -4221,8 +4244,12 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
     n00bb_cache_t *cache = nullptr;
     if (located) {
         core_string_t root = core_source_file_path(&source);
+        core_buffer_t libraries = {0};
+        library_module_list(interfaces, interface_count, &libraries);
         cache = n00bb_cache_open(root, args, target.triple, ir_context,
-                                 locate_cached_module, resolver);
+                                 locate_cached_module, resolver,
+                                 core_buffer_string(&libraries));
+        core_buffer_release(&libraries);
         core_source_file_release(&source);
         core_module_spec_release(&module);
     }
@@ -4792,6 +4819,16 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                 N00BB_ARGS(ARG_TEXT(path), ARG_TEXT(reason)));
             options_valid = false;
         }
+        else if (build_command
+                 && !interface_has_library_ir(linked_interfaces[i])) {
+            n00bb_report(cli_diagnostics, nullptr,
+                N00B_DIAG_INTERFACE_HAS_NO_CODE, (core_diag_location_t){},
+                N00B_TEXT_INTERFACE_HAS_NO_CODE,
+                N00BB_ARGS(ARG_TEXT(path)));
+            n00bb_report_help(cli_diagnostics,
+                N00B_TEXT_BUILD_FROM_LIBRARY_SOURCES, N00BB_NO_ARGS);
+            options_valid = false;
+        }
     }
     bool show_tokens = lex_command || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-tokens"));
@@ -4855,8 +4892,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
     n00bb_cache_t *cache = (build_command || check_command) && scheduled
-        && options_valid && input_count == 1 && !interface_count
-        ? open_object_cache(resolver, args, ir_context) : nullptr;
+        && options_valid && input_count == 1
+        ? open_object_cache(resolver, args, ir_context, linked_interfaces,
+                            (size_t)interface_count)
+        : nullptr;
     size_t linked_count = (size_t)interface_count
         + n00bb_cache_interface_count(cache);
     if (linked_count > (size_t)interface_count) {
@@ -4988,6 +5027,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             CORE_STRING_STATIC("--effects-json"));
         link_analysis->effects_explain = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--effects-explain"));
+        link_analysis->effects_query = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-query"));
+        link_analysis->effects_in = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-in"));
+        link_analysis->effects_not_in = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-not-in"));
+        link_analysis->effects_why = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--effects-why"));
     }
     if (located && (lower_command || build_command || compile_command
                     || library_command || normalize_fmt))
@@ -5041,7 +5088,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     }
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
-        located = interface_environment
+        core_translation_unit_t *library_root = link
+            ? core_link_unit_root(link, 0) : nullptr;
+        located = interface_environment && library_root
+            && n00bb_emit_abi_artifacts(link, link_analysis,
+                   !preprocessor_options.release_mode, false)
+            && n00bb_register_library_abi(link, link_analysis)
+            && register_library_ir(link_analysis,
+                                   library_root->module.identifier)
             && th_env_freeze(interface_environment);
         if (!located)
             n00bb_internal_error(cli_diagnostics, nullptr,
@@ -5054,9 +5108,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         core_object_archive_error_t archive_error =
             CORE_OBJECT_ARCHIVE_OK;
         th_env *interface_environment = link_analysis
-            ? link_analysis->interface_environment : nullptr;
+            ? library_interface_environment(link_analysis) : nullptr;
         bool saved = interface_environment
             && th_env_save(interface_environment, path, 0, &archive_error);
+        th_env_free(interface_environment);
         if (!saved) {
             core_string_t reason =
                 core_object_archive_error_string(archive_error);
@@ -5208,10 +5263,11 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             abi_emitted = located = n00bb_write_compile_abi_artifact(
                 link, args, cli_diagnostics);
     }
-    if (located && library_command && !emit_interface
+    if (located && library_command
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
-        located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, false);
+        if (!emit_interface)
+            located = n00bb_emit_abi_artifacts(link, link_analysis,
+                !preprocessor_options.release_mode, false);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);

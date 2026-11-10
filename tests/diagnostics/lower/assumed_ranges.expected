@@ -4,6 +4,7 @@ tests/diagnostics/lower/assumed_ranges.n:5:6: warning N00B-N0019: function `para
   help: call it or delete it
 tests/diagnostics/lower/assumed_ranges.n:9:6: warning N00B-N0019: function `count_to_signed` is never called
   help: call it or delete it
+tests/diagnostics/lower/assumed_ranges.n:9:22: note N00B-S0064: parameter `xs` could be `view`: `count_to_signed` never writes anything reachable from it
 tests/diagnostics/lower/assumed_ranges.n:17:6: warning N00B-N0019: function `parameter_to_narrow` is never called
   help: call it or delete it
 tests/diagnostics/lower/assumed_ranges.n:21:6: warning N00B-N0019: function `proven_to_signed` is never called

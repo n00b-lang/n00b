@@ -391,7 +391,7 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     static const n00bb_setting_id_t settings[] = {
         N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE,
         N00BB_KEY_BUILD_UNCHECKED_WIDE_NARROWING, N00BB_KEY_BUILD_PANIC_TRAP,
-        N00BB_KEY_BUILD_LTO,
+        N00BB_KEY_BUILD_LTO, N00BB_KEY_BUILD_ATOMIC128,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
@@ -665,6 +665,7 @@ struct n00bb_cache_t {
     void *locate_context;
     core_buffer_t refreeze;
     core_buffer_t unstored;
+    core_buffer_t libraries;
 };
 
 static uint64_t
@@ -1007,6 +1008,64 @@ entry_excluded(const cache_entry_t *entry, core_string_t excluded)
 }
 
 static bool
+library_module_name(const n00bb_cache_t *cache, core_string_t name)
+{
+    core_string_t list = core_buffer_string(&cache->libraries);
+    size_t at = 0;
+    while (name.data && list.data && at < list.u8_bytes) {
+        core_string_t rest = core_string_slice(list, at, list.u8_bytes - at);
+        int64_t comma = core_string_find_byte(rest, ',');
+        core_string_t item = core_string_slice(rest, 0,
+            comma >= 0 ? (size_t)comma : rest.u8_bytes);
+        if (item.u8_bytes && core_string_starts_with(name, item)
+            && (name.u8_bytes == item.u8_bytes
+                || name.data[item.u8_bytes] == '.'))
+            return true;
+        at = comma >= 0 ? at + (size_t)comma + 1 : list.u8_bytes;
+    }
+    return false;
+}
+
+bool
+n00bb_cache_library_module(const n00bb_cache_t *cache, core_string_t module)
+{
+    return cache && library_module_name(cache, module);
+}
+
+static bool
+entry_uses_library(const n00bb_cache_t *cache, const cache_entry_t *entry)
+{
+    for (size_t m = 0; m < entry->members.len; m++)
+        if (library_module_name(cache, entry->members.data[m].name))
+            return true;
+    for (size_t i = 0; i < entry->imports.len; i++)
+        if (library_module_name(cache, entry->imports.data[i].name))
+            return true;
+    return false;
+}
+
+static bool
+scc_members_library(const n00bb_cache_t *cache, const cache_scc_t *scc)
+{
+    for (size_t m = 0; m < scc->members.len; m++)
+        if (library_module_name(cache,
+                scc->members.data[m]->module.identifier))
+            return true;
+    return false;
+}
+
+static bool
+scc_uses_library(const n00bb_cache_t *cache,
+                 const core_list_t(cache_scc_t) *sccs, const cache_scc_t *scc)
+{
+    if (scc_members_library(cache, scc)) return true;
+    for (size_t i = 0; i < scc->imports.len; i++)
+        if (scc_members_library(cache, &sccs->data[scc->imports.data[i]]))
+            return true;
+    return false;
+}
+
+static bool
 entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
 {
     if (entry->state == ENTRY_VALID) return true;
@@ -1269,7 +1328,7 @@ n00bb_cache_t *
 n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                  core_string_t triple,
                  ir_ctx_t *ir_context, n00bb_cache_locate_fn locate,
-                 void *locate_context)
+                 void *locate_context, core_string_t libraries)
 {
     if (!root_path.data || !root_path.u8_bytes || root_path.data[0] == '<'
         || !triple.data
@@ -1310,13 +1369,15 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
     cache->strict = n00bb_handoff()->cache_strict;
+    core_buffer_append_string(&cache->libraries, libraries);
     read_module_keys(cache);
     read_entries(cache);
     core_string_t excluded = n00bb_handoff()->cache_exclude;
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         entry->fresh = entry_fresh(cache, entry);
-        entry->excluded = entry_excluded(entry, excluded);
+        entry->excluded = entry_excluded(entry, excluded)
+            || entry_uses_library(cache, entry);
     }
     for (size_t e = 0; e < cache->entries.len; e++)
         (void)entry_validate(cache, &cache->entries.data[e]);
@@ -1386,6 +1447,7 @@ n00bb_cache_free(n00bb_cache_t *cache)
     core_buffer_release(&cache->flags);
     core_buffer_release(&cache->refreeze);
     core_buffer_release(&cache->unstored);
+    core_buffer_release(&cache->libraries);
     core_free(cache->directory.data);
     core_free(cache->shared.data);
     core_free(cache->stdlib_root.data);
@@ -2606,9 +2668,16 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     const core_list_t(cache_scc_t) *sccs = &cache->sccs;
     size_t generic = scc_of_module_name(sccs,
         ir_module_name(item->generic->owner));
-    if (generic == SIZE_MAX) return false;
+    if (generic == SIZE_MAX
+        || scc_uses_library(cache, sccs, &sccs->data[generic]))
+        return false;
     core_list_t(size_t) owners = core_list_new(size_t);
     collect_type_owners(sccs, item->signature, &owners, 0);
+    for (size_t i = 0; i < owners.len; i++)
+        if (scc_uses_library(cache, sccs, &sccs->data[owners.data[i]])) {
+            core_list_free(owners);
+            return false;
+        }
     if (owners.len)
         qsort(owners.data, owners.len, sizeof(*owners.data), compare_indices);
     uint64_t generic_ir = 0;
@@ -2776,7 +2845,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
     for (size_t s = 0; ok && s < sccs->len; s++) {
         cache_scc_t *scc = &sccs->data[s];
-        bool unstored = false;
+        bool unstored = scc_uses_library(cache, sccs, scc);
         for (size_t m = 0; !unstored && m < scc->members.len; m++)
             unstored = name_listed(core_buffer_string(&cache->unstored),
                                    scc->members.data[m]->module.identifier);

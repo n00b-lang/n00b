@@ -1,1 +1,2 @@
 tests/diagnostics/lower/effect_names.n:8:1: error N00B-S0075: `Audited` could be `left.Audited` or `right.Audited`; write the one you mean
+tests/diagnostics/lower/effect_names.n:13:5: error N00B-S0079: only the module that declares `right.Audited` can give it a scope

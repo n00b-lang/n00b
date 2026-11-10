@@ -153,6 +153,7 @@ typedef struct {
     const n00bb_user_effect_t *user;
     core_dict_t                known;
     bool                       callees_must;
+    const ir_func_t           *current;
 } must_t;
 
 static bool must_body(must_t *must, ir_func_t *function);
@@ -169,6 +170,8 @@ must_callee(void *context, const ir_func_t *target,
         return;
     }
     bool does = user && n00bb_function_listed(&user->sources, body) ? true
+        : user && !n00bb_effect_crosses(user, must->current,
+                                        body ? body : target) ? false
         : body && body->n_blocks ? must_body(must, body)
         : n00bb_is_callback_bound(target)
         ? (user && n00bb_bound_names(target, N00BB_QUERY_HAS_EFFECT,
@@ -209,10 +212,13 @@ must_body(must_t *must, ir_func_t *function)
     if (found) return known == MUST_DOES;
     core_dict_put(&must->known, function, (void *)(uintptr_t)MUST_NOT);
     ir_path_exits_t exits;
+    const ir_func_t *outer = must->current;
+    must->current = function;
     bool does = ir_paths_flow(function, IR_PATH_UNPASSED, must_step, must,
                               &exits)
         && !(exits.returned & IR_PATH_UNPASSED)
         && !(exits.failed & IR_PATH_UNPASSED);
+    must->current = outer;
     core_dict_put(&must->known, function,
                   (void *)(uintptr_t)(does ? MUST_DOES : MUST_NOT));
     return does;
@@ -237,7 +243,8 @@ n00bb_must_skip(ir_summaries_t *summaries, ir_func_t *function, uint64_t bits,
     if (!function || !function->n_blocks
         || (user && n00bb_function_listed(&user->sources, function)))
         return nullptr;
-    must_t must = {.summaries = summaries, .bits = bits, .user = user};
+    must_t must = {.summaries = summaries, .bits = bits, .user = user,
+                   .current = function};
     core_dict_init(&must.known, nullptr, nullptr);
     const ir_instr_t *exit = nullptr;
     for (uint32_t b = 0; !exit && b < function->n_blocks; b++) {
@@ -250,6 +257,22 @@ n00bb_must_skip(ir_summaries_t *summaries, ir_func_t *function, uint64_t bits,
     }
     core_dict_free(&must.known);
     return exit;
+}
+
+bool
+n00bb_effect_scope_named(core_string_t word, n00bb_effect_scope_t *out)
+{
+    const core_string_t words[] = {
+        [N00BB_EFFECT_SCOPE_THREAD] = CORE_STRING_STATIC("thread"),
+        [N00BB_EFFECT_SCOPE_PACKAGE] = CORE_STRING_STATIC("package"),
+        [N00BB_EFFECT_SCOPE_CALLER] = CORE_STRING_STATIC("caller"),
+    };
+    for (size_t i = 0; i < sizeof(words) / sizeof(*words); i++)
+        if (core_string_eq(word, words[i])) {
+            *out = (n00bb_effect_scope_t)i;
+            return true;
+        }
+    return false;
 }
 
 bool

@@ -1,0 +1,16 @@
+import alpha
+import sorter
+import sys.env
+
+func larger(a: int, b: int) -> int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func start() {
+    alpha.note("x")
+    alpha.flush()
+    sys.env.exit(sorter.pick(callback[sorter.Pick](ref larger), 3, 9))
+}

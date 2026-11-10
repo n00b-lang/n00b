@@ -55,7 +55,7 @@ done
 for layout in tests/diagnostics/*/*.layout.expected; do
     [ -f "$layout" ] || continue
     stem=${layout%.expected}
-    N00B_DIAGNOSTICS= NO_COLOR=1 "$compiler" check \
+    N00B_DIAGNOSTICS= N00B_DIAGNOSTIC_CODES=false NO_COLOR=1 "$compiler" check \
         "${stem%.layout}.n" >/dev/null 2>"$tmp/raw/$(key "$stem")" &
 done
 for package in tests/diagnostics/packages/*/; do

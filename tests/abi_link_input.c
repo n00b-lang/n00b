@@ -52,8 +52,10 @@ host_triple(void)
 static bool
 host_target(core_target_desc_t *target)
 {
-    return core_target_profile(host_triple(),
-                               CORE_TARGET_FEATURE_NATIVE_ATOMIC128, target);
+    core_string_t triple = host_triple();
+    bool wide = core_string_starts_with(triple, S("x86_64"));
+    return core_target_profile(triple,
+        wide ? CORE_TARGET_FEATURE_NATIVE_ATOMIC128 : 0, target);
 }
 
 static size_t

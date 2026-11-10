@@ -89,13 +89,16 @@ int main(void)
         core_string_t triple;
         core_target_object_format_t object_format;
         core_target_call_abi_t call_abi;
+        bool baseline_atomic128;
     } profiles[] = {
         {CORE_STRING_STATIC("x86_64-linux"), CORE_TARGET_OBJECT_ELF,
-         CORE_TARGET_CALL_SYSV_AMD64},
+         CORE_TARGET_CALL_SYSV_AMD64, false},
         {CORE_STRING_STATIC("arm64-macos"), CORE_TARGET_OBJECT_MACH_O,
-         CORE_TARGET_CALL_DARWIN_AARCH64},
+         CORE_TARGET_CALL_DARWIN_AARCH64, true},
+        {CORE_STRING_STATIC("arm64-linux"), CORE_TARGET_OBJECT_ELF,
+         CORE_TARGET_CALL_AAPCS64, true},
         {CORE_STRING_STATIC("x86_64-windows"), CORE_TARGET_OBJECT_COFF,
-         CORE_TARGET_CALL_WINDOWS_X64},
+         CORE_TARGET_CALL_WINDOWS_X64, false},
     };
     for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
         core_target_desc_t profile = {0};
@@ -118,8 +121,9 @@ int main(void)
         const core_target_scalar_t *f64 =
             core_target_float_storage(&profile, 64);
         check("profile f64 storage", f64 && f64->alignment_bytes == 8);
-        check("baseline excludes 128-bit atomics",
-              !core_target_atomic_for_bits(&profile, 128));
+        check("baseline 128-bit atomics only on arm64",
+              !core_target_atomic_for_bits(&profile, 128)
+                  == !profiles[i].baseline_atomic128);
         check("profile accepts native atomic guarantee",
               core_target_profile(profiles[i].triple,
                   CORE_TARGET_FEATURE_NATIVE_ATOMIC128, &profile)

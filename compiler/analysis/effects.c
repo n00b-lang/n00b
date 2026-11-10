@@ -1163,9 +1163,33 @@ witness_chain(n00bb_link_analysis_t *analysis, const ir_summary_t *summary,
     return depth;
 }
 
+static bool
+unknown_witness(const ir_switness_t *witness)
+{
+    return !witness->callee
+        && core_string_eq(witness->name, CORE_STRING_STATIC("?"));
+}
+
+static bool
+callback_witness(const ir_switness_t *witness)
+{
+    return !witness->callee && !witness->module.u8_bytes
+        && witness->name.u8_bytes && !unknown_witness(witness);
+}
+
 void
 witness_text(const ir_switness_t *witness, core_buffer_t *out)
 {
+    if (unknown_witness(witness)) {
+        core_buffer_puts(out, "an unknown call");
+        return;
+    }
+    if (callback_witness(witness)) {
+        core_buffer_puts(out, "callback `");
+        core_buffer_append_string(out, witness->name);
+        core_buffer_putc(out, '`');
+        return;
+    }
     ir_annot_t *bound = n00bb_callback_bound(witness->callee);
     if (!bound || bound->kind != IR_ANNOT_STR) {
         ir_switness_callee_text(witness, out);
@@ -1246,23 +1270,92 @@ explain_named_chain(core_buffer_t *out, n00bb_link_analysis_t *analysis,
 }
 
 bool
-named_chain_notes(n00bb_link_analysis_t *analysis,
-                  core_diagnostics_t *diagnostics, ir_func_t *subject,
-                  core_string_t effect)
+n00bb_effect_crosses(const n00bb_user_effect_t *user, const ir_func_t *caller,
+                     const ir_func_t *callee)
+{
+    if (!user || user->scope == N00BB_EFFECT_SCOPE_THREAD) return true;
+    if (user->scope == N00BB_EFFECT_SCOPE_CALLER || !user->analysis
+        || !caller || !callee) return false;
+    core_translation_unit_t *from = unit_for_module(user->analysis,
+                                                    caller->owner);
+    core_translation_unit_t *to = unit_for_module(user->analysis,
+                                                  callee->owner);
+    return from && to
+        && core_string_eq(n00bb_package_id(from), n00bb_package_id(to));
+}
+
+static bool
+leaves_package(n00bb_link_analysis_t *analysis, const ir_func_t *subject,
+               core_string_t module)
+{
+    core_translation_unit_t *home = unit_for_module(analysis, subject->owner);
+    core_translation_unit_t *there = module.u8_bytes
+        ? n00bb_unit_named(analysis, module) : nullptr;
+    return !home || !there
+        || !core_string_eq(n00bb_package_id(home), n00bb_package_id(there));
+}
+
+typedef struct {
+    core_translation_unit_t *unit;
+    core_diag_location_t     at;
+    core_string_t            text;
+} chain_step_t;
+core_list_decl(chain_step_t);
+
+static void
+chain_steps_release(core_list_t(chain_step_t) *steps)
+{
+    for (size_t i = 0; i < steps->len; i++)
+        core_free(steps->data[i].text.data);
+    core_list_free(*steps);
+}
+
+static bool
+named_chain_steps(n00bb_link_analysis_t *analysis, ir_func_t *subject,
+                  core_string_t effect, core_list_t(chain_step_t) *out)
 {
     named_step_t steps[WITNESS_DEPTH];
     uint32_t depth = named_chain(analysis, subject, effect, steps);
     for (uint32_t d = 0; d < depth; d++) {
         core_buffer_t target = {0};
         function_name_text(&target, steps[d].target);
-        n00bb_report_secondary(diagnostics,
-            unit_for_module(analysis, steps[d].caller->owner),
-            n00bb_span_location(steps[d].call->span), N00B_TEXT_QUERY_CALLS,
-            N00BB_ARGS(ARG_TEXT(n00bb_function_root(steps[d].caller->name)),
-                       ARG_TEXT(core_buffer_string(&target))));
+        bool last = d + 1 == depth || leaves_package(analysis, subject,
+            ir_module_name(steps[d].target->owner));
+        core_list_push(*out, ((chain_step_t){
+            .unit = unit_for_module(analysis, steps[d].caller->owner),
+            .at = n00bb_span_location(steps[d].call->span),
+            .text = n00bb_text(
+                last ? N00B_TEXT_QUERY_CALLS_MAY_HAVE : N00B_TEXT_QUERY_CALLS,
+                N00BB_ARGS(
+                    ARG_TEXT(n00bb_function_root(steps[d].caller->name)),
+                    ARG_TEXT(core_buffer_string(&target)),
+                    ARG_TEXT(effect))),
+        }));
         core_buffer_release(&target);
+        if (last) break;
     }
     return depth != 0;
+}
+
+static void
+report_chain_steps(core_diagnostics_t *diagnostics,
+                   core_list_t(chain_step_t) *steps)
+{
+    for (size_t i = 0; i < steps->len; i++)
+        core_diag_secondary(diagnostics, steps->data[i].unit,
+                            steps->data[i].at, steps->data[i].text);
+}
+
+bool
+named_chain_notes(n00bb_link_analysis_t *analysis,
+                  core_diagnostics_t *diagnostics, ir_func_t *subject,
+                  core_string_t effect)
+{
+    core_list_t(chain_step_t) steps = core_list_new(chain_step_t);
+    bool found = named_chain_steps(analysis, subject, effect, &steps);
+    report_chain_steps(diagnostics, &steps);
+    chain_steps_release(&steps);
+    return found;
 }
 
 static void
@@ -1522,6 +1615,15 @@ explain_function(n00bb_link_analysis_t *analysis, ir_func_t *function)
         }
         explain_line(&out, effect->name, &detail);
     }
+    for (size_t e = 0; e < analysis->user_effects.len; e++) {
+        n00bb_user_effect_t *user = &analysis->user_effects.data[e];
+        if (!user->bits || (bits & user->bits)
+            || !n00bb_function_listed(&user->sources, function)) continue;
+        any = true;
+        core_buffer_t detail = {0};
+        core_buffer_puts(&detail, "a source");
+        explain_line(&out, user->qualified, &detail);
+    }
     if (flags & IR_SUMMARY_CALLS_UNKNOWN) {
         any = true;
         core_buffer_t detail = {0};
@@ -1607,16 +1709,17 @@ unit_for_module(n00bb_link_analysis_t *analysis, const ir_module_t *module)
     return nullptr;
 }
 
-void
-explain_chain_notes(n00bb_link_analysis_t *analysis,
-                    core_diagnostics_t *diagnostics, ir_func_t *subject,
-                    uint32_t flag)
+static void
+witness_chain_steps(n00bb_link_analysis_t *analysis, ir_func_t *subject,
+                    uint32_t flag, core_string_t effect,
+                    core_list_t(chain_step_t) *out)
 {
     for (size_t e = 0; flag != IR_SWITNESS_UNKNOWN
          && e < analysis->user_effects.len; e++)
         if ((analysis->user_effects.data[e].bits & flag)
-            && named_chain_notes(analysis, diagnostics, subject,
-                                 analysis->user_effects.data[e].qualified))
+            && named_chain_steps(analysis, subject,
+                                 analysis->user_effects.data[e].qualified,
+                                 out))
             return;
     ir_summary_t *summary = ir_summary_of(analysis->summaries, subject);
     const ir_switness_t *chain[WITNESS_DEPTH];
@@ -1632,18 +1735,43 @@ explain_chain_notes(n00bb_link_analysis_t *analysis,
         };
         core_string_t name = n00bb_function_root(caller->name);
         core_buffer_t callee = {0};
-        witness_text(chain[d], &callee);
-        n00bb_text_t text = flag == IR_SWITNESS_UNKNOWN && d + 1 == depth
-            ? N00B_TEXT_QUERY_MAY_DO_ANYTHING
-            : callee.byte_len ? N00B_TEXT_QUERY_CALLS
-            : N00B_TEXT_QUERY_DOES_HERE;
-        n00bb_report_secondary(diagnostics, unit, at, text,
-            N00BB_ARGS(ARG_TEXT(name),
-                       ARG_TEXT(core_buffer_string(&callee))));
+        bool callback = callback_witness(chain[d]);
+        if (callback) core_buffer_append_string(&callee, chain[d]->name);
+        else witness_text(chain[d], &callee);
+        bool anything = (flag == IR_SWITNESS_UNKNOWN && d + 1 == depth)
+            || unknown_witness(chain[d]);
+        bool last = d + 1 == depth
+            || (chain[d]->callee
+                && leaves_package(analysis, subject,
+                                  ir_module_name(chain[d]->callee->owner)));
+        n00bb_text_t text = callback ? N00B_TEXT_QUERY_CALLS_CALLBACK
+            : anything ? N00B_TEXT_QUERY_MAY_DO_ANYTHING
+            : !callee.byte_len ? N00B_TEXT_QUERY_DOES_HERE
+            : last ? N00B_TEXT_QUERY_CALLS_MAY_HAVE
+            : N00B_TEXT_QUERY_CALLS;
+        n00bb_args_t args = callee.byte_len
+            ? N00BB_ARGS(ARG_TEXT(name),
+                         ARG_TEXT(core_buffer_string(&callee)),
+                         ARG_TEXT(effect))
+            : N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(effect));
+        core_list_push(*out, ((chain_step_t){
+            .unit = unit, .at = at, .text = n00bb_text(text, args)}));
         core_buffer_release(&callee);
+        if (last) break;
         caller = chain[d]->callee ? n00bb_cached_body(chain[d]->callee)
                                   : nullptr;
     }
+}
+
+void
+explain_chain_notes(n00bb_link_analysis_t *analysis,
+                    core_diagnostics_t *diagnostics, ir_func_t *subject,
+                    uint32_t flag, core_string_t effect)
+{
+    core_list_t(chain_step_t) steps = core_list_new(chain_step_t);
+    witness_chain_steps(analysis, subject, flag, effect, &steps);
+    report_chain_steps(diagnostics, &steps);
+    chain_steps_release(&steps);
 }
 
 uint32_t
@@ -1695,4 +1823,600 @@ dump_effects_of(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
         dump_text(&json);
     }
     return found;
+}
+
+typedef enum {
+    QUERY_LEAF,
+    QUERY_AND,
+    QUERY_OR,
+    QUERY_NOT,
+} query_kind_t;
+
+typedef struct query_node_t {
+    query_kind_t               kind;
+    n00bb_query_t              query;
+    core_string_t              name;
+    const n00bb_user_effect_t *user;
+    struct query_node_t       *left;
+    struct query_node_t       *right;
+} query_node_t;
+
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    core_diagnostics_t    *diagnostics;
+    core_string_t          text;
+    size_t                 at;
+    bool                   failed;
+} query_parser_t;
+
+static void
+query_free(query_node_t *node)
+{
+    if (!node) return;
+    query_free(node->left);
+    query_free(node->right);
+    core_free(node->name.data);
+    core_free(node);
+}
+
+static query_node_t *
+query_node(query_kind_t kind, query_node_t *left, query_node_t *right)
+{
+    query_node_t *node = core_alloc(query_node_t);
+    if (!node) {
+        query_free(left);
+        query_free(right);
+        return nullptr;
+    }
+    *node = (query_node_t){.kind = kind, .left = left, .right = right};
+    return node;
+}
+
+static bool
+query_word_byte(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_' || c == '.';
+}
+
+static core_string_t
+query_peek(const query_parser_t *parser)
+{
+    core_string_t text = parser->text;
+    size_t at = parser->at;
+    while (at < text.u8_bytes && (text.data[at] == ' '
+                                  || text.data[at] == '\t'
+                                  || text.data[at] == '\n'))
+        at++;
+    if (at >= text.u8_bytes) return (core_string_t){0};
+    char c = text.data[at];
+    size_t end = at + 1;
+    if (query_word_byte(c))
+        while (end < text.u8_bytes && query_word_byte(text.data[end])) end++;
+    else if ((c == '&' || c == '|') && end < text.u8_bytes
+             && text.data[end] == c)
+        end++;
+    return core_string_slice(text, at, end - at);
+}
+
+static void
+query_advance(query_parser_t *parser, core_string_t token)
+{
+    parser->at = (size_t)(token.data - parser->text.data) + token.u8_bytes;
+}
+
+static bool
+query_is(core_string_t token, core_string_t word)
+{
+    return token.data && core_string_eq(token, word);
+}
+
+static bool
+query_keyword(core_string_t token)
+{
+    return query_is(token, CORE_STRING_STATIC("and"))
+        || query_is(token, CORE_STRING_STATIC("or"))
+        || query_is(token, CORE_STRING_STATIC("not"));
+}
+
+static void
+query_report(query_parser_t *parser, n00bb_text_t text, n00bb_args_t args)
+{
+    if (parser->failed) return;
+    parser->failed = true;
+    n00bb_report(parser->diagnostics, nullptr, N00B_DIAG_EFFECTS_QUERY_INVALID,
+                 (core_diag_location_t){}, text, args);
+}
+
+static void
+query_expected(query_parser_t *parser, n00bb_text_t expected,
+               core_string_t found)
+{
+    if (!found.data) {
+        query_report(parser, N00B_TEXT_QUERY_EXPECTED,
+                     N00BB_ARGS(ARG_PHRASE_ID(expected),
+                                ARG_PHRASE(QUERY_THE_END)));
+        return;
+    }
+    core_buffer_t quoted = {0};
+    core_buffer_putc(&quoted, '`');
+    core_buffer_append_string(&quoted, found);
+    core_buffer_putc(&quoted, '`');
+    query_report(parser, N00B_TEXT_QUERY_EXPECTED,
+                 N00BB_ARGS(ARG_PHRASE_ID(expected),
+                            ARG_TEXT(core_buffer_string(&quoted))));
+    core_buffer_release(&quoted);
+}
+
+static bool
+query_resolve_effect(query_parser_t *parser, core_string_t word,
+                     query_node_t *node)
+{
+    n00bb_link_analysis_t *analysis = parser->analysis;
+    const n00bb_effect_name_t *builtin = n00bb_effect_named(word);
+    if (builtin) {
+        if (builtin->group && node->query == N00BB_QUERY_HAS_EFFECT) {
+            query_report(parser, N00B_TEXT_HAS_EFFECT_TAKES_ONE,
+                         N00BB_ARGS(ARG_TEXT(word)));
+            return false;
+        }
+        node->name = core_string_dup(word);
+        node->user = user_effect(analysis, word);
+        return true;
+    }
+    const n00bb_user_effect_t *found = user_effect(analysis, word);
+    const n00bb_user_effect_t *other = nullptr;
+    for (size_t e = 0; !found && e < analysis->user_effects.len; e++) {
+        const n00bb_user_effect_t *effect = &analysis->user_effects.data[e];
+        core_string_t qualified = effect->qualified;
+        size_t prefix = qualified.u8_bytes > word.u8_bytes
+            ? qualified.u8_bytes - word.u8_bytes : 0;
+        if (effect->bits || !prefix || qualified.data[prefix - 1] != '.'
+            || !core_string_eq(core_string_slice(qualified, prefix,
+                                                 word.u8_bytes), word))
+            continue;
+        if (other) continue;
+        for (size_t f = e + 1; !other
+             && f < analysis->user_effects.len; f++) {
+            const n00bb_user_effect_t *next = &analysis->user_effects.data[f];
+            size_t at = next->qualified.u8_bytes > word.u8_bytes
+                ? next->qualified.u8_bytes - word.u8_bytes : 0;
+            if (!next->bits && at && next->qualified.data[at - 1] == '.'
+                && core_string_eq(core_string_slice(next->qualified, at,
+                                                    word.u8_bytes), word))
+                other = next;
+        }
+        if (other) {
+            query_report(parser, N00B_TEXT_NAMED_IN_TWO_MODULES,
+                N00BB_ARGS(ARG_TEXT(word), ARG_TEXT(effect->qualified),
+                           ARG_TEXT(other->qualified)));
+            return false;
+        }
+        found = effect;
+    }
+    int64_t dot = core_string_rfind_byte(word, '.');
+    for (size_t e = 0; !found && dot > 0 && e < analysis->user_effects.len;
+         e++) {
+        const n00bb_user_effect_t *effect = &analysis->user_effects.data[e];
+        core_string_t package = core_string_slice(word, 0, (size_t)dot);
+        core_string_t leaf = core_string_slice(word, (size_t)dot + 1,
+            word.u8_bytes - (size_t)dot - 1);
+        int64_t split = core_string_rfind_byte(effect->qualified, '.');
+        if (effect->bits || split <= 0
+            || !core_string_eq(core_string_slice(effect->qualified,
+                                   (size_t)split + 1,
+                                   effect->qualified.u8_bytes
+                                       - (size_t)split - 1), leaf))
+            continue;
+        core_translation_unit_t *owner = n00bb_unit_named(analysis,
+            core_string_slice(effect->qualified, 0, (size_t)split));
+        if (owner && core_string_eq(n00bb_package_namespace(owner), package))
+            found = effect;
+    }
+    if (!found) {
+        query_report(parser, N00B_TEXT_NOT_AN_EFFECT,
+                     N00BB_ARGS(ARG_TEXT(word)));
+        return false;
+    }
+    node->name = core_string_dup(found->qualified);
+    node->user = found;
+    return true;
+}
+
+static query_node_t *query_or(query_parser_t *parser);
+
+static query_node_t *
+query_question(query_parser_t *parser)
+{
+    core_string_t word = query_peek(parser);
+    if (!word.data || !query_word_byte(word.data[0]) || query_keyword(word)) {
+        query_expected(parser, N00B_TEXT_QUERY_A_QUESTION, word);
+        return nullptr;
+    }
+    n00bb_query_t query = n00bb_query_named(word);
+    if (query != N00BB_QUERY_MAY_EFFECT && query != N00BB_QUERY_FORBIDS_EFFECT
+        && query != N00BB_QUERY_HAS_EFFECT) {
+        query_report(parser, N00B_TEXT_QUERY_NOT_A_QUESTION,
+                     N00BB_ARGS(ARG_TEXT(word)));
+        return nullptr;
+    }
+    query_advance(parser, word);
+    core_string_t open = query_peek(parser);
+    bool parenthesized = query_is(open, CORE_STRING_STATIC("("));
+    if (parenthesized) query_advance(parser, open);
+    core_string_t name = query_peek(parser);
+    if (!name.data || !query_word_byte(name.data[0]) || query_keyword(name)) {
+        query_expected(parser, N00B_TEXT_QUERY_AN_EFFECT, name);
+        return nullptr;
+    }
+    query_advance(parser, name);
+    if (parenthesized) {
+        core_string_t close = query_peek(parser);
+        if (!query_is(close, CORE_STRING_STATIC(")"))) {
+            query_expected(parser, N00B_TEXT_QUERY_CLOSING_PAREN, close);
+            return nullptr;
+        }
+        query_advance(parser, close);
+    }
+    query_node_t *node = query_node(QUERY_LEAF, nullptr, nullptr);
+    if (!node) return nullptr;
+    node->query = query;
+    if (!query_resolve_effect(parser, name, node)) {
+        query_free(node);
+        return nullptr;
+    }
+    return node;
+}
+
+static query_node_t *
+query_unary(query_parser_t *parser)
+{
+    core_string_t token = query_peek(parser);
+    if (query_is(token, CORE_STRING_STATIC("not"))
+        || query_is(token, CORE_STRING_STATIC("!"))) {
+        query_advance(parser, token);
+        query_node_t *operand = query_unary(parser);
+        return operand ? query_node(QUERY_NOT, operand, nullptr) : nullptr;
+    }
+    if (!query_is(token, CORE_STRING_STATIC("(")))
+        return query_question(parser);
+    query_advance(parser, token);
+    query_node_t *inner = query_or(parser);
+    if (!inner) return nullptr;
+    core_string_t close = query_peek(parser);
+    if (!query_is(close, CORE_STRING_STATIC(")"))) {
+        query_expected(parser, N00B_TEXT_QUERY_CLOSING_PAREN, close);
+        query_free(inner);
+        return nullptr;
+    }
+    query_advance(parser, close);
+    return inner;
+}
+
+static query_node_t *
+query_and(query_parser_t *parser)
+{
+    query_node_t *left = query_unary(parser);
+    while (left) {
+        core_string_t token = query_peek(parser);
+        if (!query_is(token, CORE_STRING_STATIC("and"))
+            && !query_is(token, CORE_STRING_STATIC("&&")))
+            break;
+        query_advance(parser, token);
+        query_node_t *right = query_unary(parser);
+        if (!right) {
+            query_free(left);
+            return nullptr;
+        }
+        left = query_node(QUERY_AND, left, right);
+    }
+    return left;
+}
+
+static query_node_t *
+query_or(query_parser_t *parser)
+{
+    query_node_t *left = query_and(parser);
+    while (left) {
+        core_string_t token = query_peek(parser);
+        if (!query_is(token, CORE_STRING_STATIC("or"))
+            && !query_is(token, CORE_STRING_STATIC("||")))
+            break;
+        query_advance(parser, token);
+        query_node_t *right = query_and(parser);
+        if (!right) {
+            query_free(left);
+            return nullptr;
+        }
+        left = query_node(QUERY_OR, left, right);
+    }
+    return left;
+}
+
+static query_node_t *
+query_parse(n00bb_link_analysis_t *analysis, core_diagnostics_t *diagnostics,
+            core_string_t text)
+{
+    query_parser_t parser = {
+        .analysis = analysis, .diagnostics = diagnostics, .text = text,
+    };
+    query_node_t *tree = query_or(&parser);
+    core_string_t rest = query_peek(&parser);
+    if (tree && rest.data) {
+        query_expected(&parser, N00B_TEXT_QUERY_THE_END, rest);
+        query_free(tree);
+        return nullptr;
+    }
+    return tree;
+}
+
+static bool
+query_value(n00bb_link_analysis_t *analysis, const query_node_t *node,
+            ir_func_t *function)
+{
+    switch (node->kind) {
+    case QUERY_LEAF:
+        return n00bb_query_answer(analysis->summaries, function, node->query,
+                                  node->name, node->user);
+    case QUERY_AND:
+        return query_value(analysis, node->left, function)
+            && query_value(analysis, node->right, function);
+    case QUERY_OR:
+        return query_value(analysis, node->left, function)
+            || query_value(analysis, node->right, function);
+    case QUERY_NOT:
+        return !query_value(analysis, node->left, function);
+    }
+    return false;
+}
+
+static core_string_t
+display_path(const core_translation_unit_t *unit)
+{
+    core_string_t path = core_source_file_path(&unit->source);
+    core_string_t here = core_os_current_directory();
+    size_t length = here.u8_bytes;
+    bool inside = length && path.u8_bytes > length + 1
+        && core_string_starts_with(path, here) && path.data[length] == '/';
+    core_free(here.data);
+    return inside ? core_string_slice(path, length + 1,
+                                      path.u8_bytes - length - 1)
+                  : path;
+}
+
+static void
+append_location(core_buffer_t *out, const core_translation_unit_t *unit,
+                uint32_t line, uint32_t column)
+{
+    core_buffer_append_string(out, display_path(unit));
+    if (line) core_buffer_printf(out, ":%u:%u", line, column);
+}
+
+static void
+query_why(n00bb_link_analysis_t *analysis, const query_node_t *node,
+          ir_func_t *function, bool positive, core_buffer_t *out)
+{
+    if (node->kind == QUERY_NOT) {
+        query_why(analysis, node->left, function, !positive, out);
+        return;
+    }
+    if (node->kind != QUERY_LEAF) {
+        query_why(analysis, node->left, function, positive, out);
+        query_why(analysis, node->right, function, positive, out);
+        return;
+    }
+    bool asks_may = node->query == N00BB_QUERY_FORBIDS_EFFECT
+        ? !positive : positive;
+    if (!asks_may || !n00bb_query_answer(analysis->summaries, function,
+                                         N00BB_QUERY_MAY_EFFECT, node->name,
+                                         node->user))
+        return;
+    core_list_t(chain_step_t) steps = core_list_new(chain_step_t);
+    if (n00bb_effect_named(node->name))
+        witness_chain_steps(analysis, function,
+            bound_witness_flag(ir_summary_of(analysis->summaries, function),
+                               node->name),
+            node->name, &steps);
+    else (void)named_chain_steps(analysis, function, node->name, &steps);
+    if (!steps.len && node->user
+        && n00bb_function_listed(&node->user->sources, function)) {
+        core_string_t text = n00bb_text(N00B_TEXT_QUERY_IS_SOURCE,
+            N00BB_ARGS(ARG_TEXT(n00bb_function_root(function->name)),
+                       ARG_TEXT(node->name)));
+        core_buffer_puts(out, "    ");
+        core_buffer_append_string(out, text);
+        core_buffer_putc(out, '\n');
+        core_free(text.data);
+    }
+    for (size_t i = 0; i < steps.len; i++) {
+        core_buffer_puts(out, "    ");
+        if (steps.data[i].unit && steps.data[i].at.has_location) {
+            append_location(out, steps.data[i].unit, steps.data[i].at.line,
+                            steps.data[i].at.column);
+            core_buffer_puts(out, "  ");
+        }
+        core_buffer_append_string(out, steps.data[i].text);
+        core_buffer_putc(out, '\n');
+    }
+    chain_steps_release(&steps);
+}
+
+typedef struct {
+    ir_func_t               *function;
+    core_translation_unit_t *unit;
+    core_string_t            qualified;
+} query_candidate_t;
+core_list_decl(query_candidate_t);
+
+static bool
+query_covers(core_string_t thing, core_string_t name)
+{
+    return thing.u8_bytes && core_string_starts_with(thing, name)
+        && (thing.u8_bytes == name.u8_bytes
+            || thing.data[name.u8_bytes] == '.');
+}
+
+static bool
+candidate_covered(const query_candidate_t *candidate, core_string_t name)
+{
+    if (core_string_eq(name, CORE_STRING_STATIC("all"))) return true;
+    return query_covers(candidate->qualified, name)
+        || query_covers(n00bb_package_namespace(candidate->unit), name);
+}
+
+static bool
+candidate_listed(const query_candidate_t *candidate, core_string_t list)
+{
+    for (core_string_t rest = list; rest.data;) {
+        core_string_t name = next_effects_of_name(&rest);
+        if (name.u8_bytes && candidate_covered(candidate, name)) return true;
+    }
+    return false;
+}
+
+static int
+compare_candidates(const void *left, const void *right)
+{
+    const query_candidate_t *a = left;
+    const query_candidate_t *b = right;
+    int order = core_string_cmp(core_source_file_path(&a->unit->source),
+                                core_source_file_path(&b->unit->source));
+    if (order) return order;
+    if (a->function->span.start_line != b->function->span.start_line)
+        return a->function->span.start_line < b->function->span.start_line
+            ? -1 : 1;
+    return core_string_cmp(a->qualified, b->qualified);
+}
+
+static core_list_t(query_candidate_t)
+query_candidates(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(query_candidate_t) found = core_list_new(query_candidate_t);
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        parse_scope_t *scope = state ? module_scope(state) : nullptr;
+        for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope
+                                               : nullptr;
+             symbol; symbol = symbol->next_in_scope) {
+            if (symbol->kind != PARSE_SYM_FUNCTION) continue;
+            ir_func_t *function = n00bb_cached_body(
+                link_ir_function_for_symbol(analysis,
+                                            canonical_symbol(symbol)));
+            if (!function || !function->n_blocks
+                || !core_string_eq(ir_module_name(function->owner),
+                                   unit->module.identifier))
+                continue;
+            bool seen = false;
+            for (size_t i = 0; !seen && i < found.len; i++)
+                seen = found.data[i].function == function;
+            if (seen) continue;
+            core_buffer_t name = {0};
+            function_name_text(&name, function);
+            core_list_push(found, ((query_candidate_t){
+                .function = function, .unit = unit,
+                .qualified = core_string_dup(core_buffer_string(&name)),
+            }));
+            core_buffer_release(&name);
+        }
+    }
+    if (found.len)
+        qsort(found.data, found.len, sizeof(*found.data), compare_candidates);
+    return found;
+}
+
+static bool
+query_scope_known(n00bb_link_analysis_t *analysis, core_diagnostics_t *d,
+                  const core_list_t(query_candidate_t) *candidates,
+                  core_string_t list)
+{
+    bool known = true;
+    for (core_string_t rest = list; rest.data;) {
+        core_string_t name = next_effects_of_name(&rest);
+        if (!name.u8_bytes) continue;
+        bool covered = false;
+        for (size_t i = 0; !covered && i < candidates->len; i++)
+            covered = candidate_covered(&candidates->data[i], name);
+        if (covered) continue;
+        n00bb_report(d, nullptr, N00B_DIAG_EFFECTS_SCOPE_UNKNOWN,
+                     (core_diag_location_t){}, N00B_TEXT_SCOPE_NAMES_NOTHING,
+                     N00BB_ARGS(ARG_TEXT(name)));
+        known = false;
+    }
+    (void)analysis;
+    return known;
+}
+
+static bool
+candidate_in_scope(n00bb_link_analysis_t *analysis,
+                   const query_candidate_t *candidate,
+                   const core_translation_unit_t *root)
+{
+    if (analysis->effects_in.data)
+        return candidate_listed(candidate, analysis->effects_in);
+    n00bb_tu_state_t *state = tu_state(candidate->unit);
+    core_string_t package = n00bb_package_id(candidate->unit);
+    return state && !state->interface_module && !toolchain_package(package)
+        && core_string_eq(package, n00bb_package_id(root));
+}
+
+bool
+dump_effects_query(n00bb_link_analysis_t *analysis,
+                   core_translation_unit_t *unit)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    query_node_t *query = query_parse(analysis, diagnostics,
+                                      analysis->effects_query);
+    if (!query) return false;
+    core_list_t(query_candidate_t) candidates = query_candidates(analysis);
+    bool ok = query_scope_known(analysis, diagnostics, &candidates,
+                                analysis->effects_in)
+        && query_scope_known(analysis, diagnostics, &candidates,
+                             analysis->effects_not_in);
+    core_buffer_t out = {0};
+    size_t matched = 0;
+    for (size_t i = 0; ok && i < candidates.len; i++) {
+        query_candidate_t *candidate = &candidates.data[i];
+        if (!candidate_in_scope(analysis, candidate, unit)
+            || (analysis->effects_not_in.data
+                && candidate_listed(candidate, analysis->effects_not_in))
+            || !query_value(analysis, query, candidate->function))
+            continue;
+        if (analysis->effects_json) {
+            core_buffer_printf(&out, "%s", matched ? ",\n {" : "[{");
+            core_buffer_puts(&out, "\"function\":");
+            core_buffer_append_quoted(&out, candidate->qualified);
+            core_buffer_puts(&out, ",\"path\":");
+            core_buffer_append_quoted(&out, display_path(candidate->unit));
+            core_buffer_printf(&out, ",\"line\":%u,\"column\":%u}",
+                               candidate->function->span.start_line,
+                               candidate->function->span.start_col);
+        }
+        else {
+            append_location(&out, candidate->unit,
+                            candidate->function->span.start_line,
+                            candidate->function->span.start_col);
+            core_buffer_puts(&out, "  ");
+            core_buffer_append_string(&out, candidate->qualified);
+            core_buffer_putc(&out, '\n');
+            if (analysis->effects_why)
+                query_why(analysis, query, candidate->function, true, &out);
+        }
+        matched++;
+    }
+    if (ok && analysis->effects_json && matched)
+        core_buffer_puts(&out, "]\n");
+    else if (ok && matched) {
+        core_string_t summary = n00bb_text(N00B_TEXT_FUNCTIONS_MATCH,
+            N00BB_ARGS(ARG_NUMBER(matched)));
+        core_buffer_append_string(&out, summary);
+        core_buffer_putc(&out, '\n');
+        core_free(summary.data);
+    }
+    dump_text(&out);
+    for (size_t i = 0; i < candidates.len; i++)
+        core_free(candidates.data[i].qualified.data);
+    core_list_free(candidates);
+    query_free(query);
+    return ok;
 }

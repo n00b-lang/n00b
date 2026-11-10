@@ -7,8 +7,12 @@
 #include "abi_record_layout.h"
 #include "llvm_backend.h"
 #include "specialize.h"
+#include "ir/archive.h"
 #include "ir/pdg.h"
 #include "lib/dict.h"
+
+#define N00BB_LIBRARY_IR_KEY "n00b.library-ir"
+#define N00BB_LIBRARY_ABI_KEY "n00b.library-abi"
 #include "lib/link_unit.h"
 #include "lib/list.h"
 #include "lib/target.h"
@@ -159,6 +163,19 @@ core_list_t(parse_scope_ptr_t) link_declaration_scopes(
 bool bind_link_references_to_nodes(parse_grammar_t *grammar,
                                    core_link_unit_t *link);
 bool register_package_module_metadata(n00bb_link_analysis_t *analysis);
+bool register_library_ir(n00bb_link_analysis_t *analysis, core_string_t owner);
+bool interface_has_library_ir(const th_env *environment);
+bool library_unit(core_translation_unit_t *unit);
+bool toolchain_package(core_string_t package);
+th_env *library_interface_environment(n00bb_link_analysis_t *analysis);
+const uint8_t *library_abi_object(const n00bb_link_analysis_t *analysis,
+                                  core_string_t module, size_t *size);
+bool load_library_ir(n00bb_link_analysis_t *analysis,
+                     ir_module_lookup_fn lookup);
+ir_module_t *library_ir_module(const n00bb_link_analysis_t *analysis,
+                               core_string_t name);
+ir_module_t *interface_body_module(const n00bb_link_analysis_t *analysis,
+                                   core_string_t name);
 bool register_package_interfaces(n00bb_link_analysis_t *analysis,
     th_env *environment);
 ir_func_t *link_ir_function_for_symbol(n00bb_link_analysis_t *analysis,
@@ -341,11 +358,17 @@ typedef struct n00bb_link_analysis_t {
     core_string_t effects_of;
     bool effects_json;
     bool effects_explain;
+    core_string_t effects_query;
+    core_string_t effects_in;
+    core_string_t effects_not_in;
+    bool effects_why;
     th_env *environment;
     th_env *export_environment;
     th_env *interface_environment;
     const th_env *const *linked_interfaces;
     size_t linked_interface_count;
+    ir_module_t **library_ir;
+    size_t library_ir_count;
     const core_string_t *native_roots;
     size_t native_root_count;
     bool may_link_further;

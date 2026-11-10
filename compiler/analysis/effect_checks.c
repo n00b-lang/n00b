@@ -83,8 +83,7 @@ cached_ir_module(n00bb_link_analysis_t *analysis,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state) return nullptr;
     ir_module_t *cached = state->interface_module && analysis
-            && analysis->cache
-        ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+        ? interface_body_module(analysis, unit->module.identifier)
         : nullptr;
     return cached ? cached : state->ir_module;
 }
@@ -303,6 +302,7 @@ clause_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     return nt_is(grammar, node, CORE_STRING_STATIC("effect-source"))
         || nt_is(grammar, node, CORE_STRING_STATIC("effect-handler"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("effect-scope"))
         || nt_is(grammar, node, CORE_STRING_STATIC("mark-clearer"))
         || nt_is(grammar, node, CORE_STRING_STATIC("mark-rejecter"));
 }
@@ -663,6 +663,10 @@ collect_effect_entries(n00bb_link_analysis_t *analysis,
         core_string_t fields[3];
         if (!entry.u8_bytes) break;
         if (!tab_fields(entry, fields, 3)) continue;
+        if (core_string_eq(fields[0], CORE_STRING_STATIC("scope"))) {
+            (void)n00bb_effect_scope_named(fields[2], &effect->scope);
+            continue;
+        }
         bool native = core_string_eq(fields[1], CORE_STRING_STATIC("*"));
         ir_func_t *function = native ? nullptr
             : module_function(analysis, fields[1], fields[2]);
@@ -728,6 +732,7 @@ collect_user_effect(void *context, core_translation_unit_t *unit,
             .bits = builtin ? builtin->bits : 0,
             .sources = core_list_new(n00bb_effect_clause_t),
             .handlers = core_list_new(n00bb_effect_clause_t),
+            .analysis = analysis,
         }));
         effect = &analysis->user_effects.data[analysis->user_effects.len - 1];
     }
@@ -744,13 +749,89 @@ collect_user_effects(n00bb_link_analysis_t *analysis)
                   effect_declaration_key, collect_user_effect, analysis);
 }
 
+static bool
+declared_builtin_source(n00bb_link_analysis_t *analysis, ir_func_t *subject,
+                        core_string_t effect)
+{
+    const n00bb_effect_name_t *builtin = n00bb_effect_named(effect);
+    for (size_t e = 0; builtin && subject && e < analysis->user_effects.len;
+         e++) {
+        n00bb_user_effect_t *user = &analysis->user_effects.data[e];
+        if ((user->bits & builtin->bits)
+            && n00bb_function_listed(&user->sources, subject))
+            return true;
+    }
+    return false;
+}
+
 bool
 answer_query(n00bb_link_analysis_t *analysis, ir_func_t *subject,
              n00bb_query_t query, core_string_t effect)
 {
+    if (n00bb_query_about_effect(query)
+        && declared_builtin_source(analysis, subject, effect))
+        return query != N00BB_QUERY_FORBIDS_EFFECT;
     return n00bb_query_answer(analysis->summaries, subject, query, effect,
         n00bb_query_about_effect(query) ? user_effect(analysis, effect)
                                         : nullptr);
+}
+
+static bool
+receiver_named(const parse_sym_entry_t *symbol, core_string_t type)
+{
+    th_type *signature = symbol->type ? th_resolve(symbol->type) : nullptr;
+    const th_param *first = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_param(signature, 0) : nullptr;
+    th_type *receiver = first && first->type ? th_resolve(first->type)
+                                             : nullptr;
+    for (int depth = 0; receiver && depth < 4; depth++) {
+        core_string_t name = {0};
+        if (th_named_info(receiver, &name, nullptr, nullptr))
+            return core_string_eq(name, type)
+                || core_string_eq(n00bb_name_leaf(name), type)
+                || (core_string_ends_with(name, type)
+                    && name.u8_bytes > type.u8_bytes
+                    && name.data[name.u8_bytes - type.u8_bytes - 1] == '.');
+        th_type *referent = th_ind_referent(receiver);
+        receiver = referent ? th_resolve(referent) : nullptr;
+    }
+    return false;
+}
+
+static parse_sym_entry_t *
+method_symbol(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
+              parse_tree_t *expression)
+{
+    core_string_t text = source_text_of(unit, expression);
+    int64_t dot = core_string_rfind_byte(text, '.');
+    if (dot <= 0 || (size_t)dot + 1 >= text.u8_bytes) return nullptr;
+    core_string_t type = core_string_slice(text, 0, (size_t)dot);
+    core_string_t member = core_string_slice(text, (size_t)dot + 1,
+                                             text.u8_bytes - (size_t)dot - 1);
+    ir_func_t *found = nullptr;
+    parse_sym_entry_t *chosen = nullptr;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        parse_scope_t *scope = state ? module_scope(state) : nullptr;
+        for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope
+                                               : nullptr;
+             symbol; symbol = symbol->next_in_scope) {
+            if (symbol->kind != PARSE_SYM_FUNCTION
+                || !core_string_eq(symbol->name, member)
+                || !receiver_named(symbol, type))
+                continue;
+            parse_sym_entry_t *canonical = canonical_symbol(symbol);
+            ir_func_t *candidate = link_ir_function_for_symbol(analysis,
+                                                               canonical);
+            ir_func_t *body = candidate ? n00bb_cached_body(candidate)
+                                        : nullptr;
+            if (!body) continue;
+            if (found && found != body) return nullptr;
+            found = body;
+            chosen = canonical;
+        }
+    }
+    return chosen;
 }
 
 static parse_sym_entry_t *
@@ -760,8 +841,12 @@ effect_query_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_sym_entry_t *symbol = parts->function
         ? attached_symbol(grammar, unit, parts->function)
         : enclosing_function_symbol(grammar, node);
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        ? canonical_symbol(symbol) : nullptr;
+    if (symbol && symbol->kind == PARSE_SYM_FUNCTION)
+        return canonical_symbol(symbol);
+    n00bb_tu_state_t *state = tu_state(unit);
+    return !symbol && parts->function && state && state->link_analysis
+        ? method_symbol(state->link_analysis, unit, parts->function)
+        : nullptr;
 }
 
 static ir_func_t *
@@ -774,6 +859,16 @@ effect_query_subject(n00bb_link_analysis_t *analysis, parse_grammar_t *grammar,
     ir_func_t *function = symbol && analysis
         ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
     return function ? n00bb_cached_body(function) : nullptr;
+}
+
+static bool
+ir_param_named(const ir_func_t *function, core_string_t name)
+{
+    for (uint32_t p = 0; function && p < function->n_params; p++)
+        if (function->params[p]
+            && core_string_eq(function->params[p]->name, name))
+            return true;
+    return false;
 }
 
 static int64_t
@@ -961,7 +1056,8 @@ check_effect_query(ir_lower_context_t *context, parse_grammar_t *grammar,
     }
     else if (parameter_index(effect_query_symbol(grammar, lower->unit, node,
                                                  parts),
-                             parts->name) < 0) {
+                             parts->name) < 0
+             && !ir_param_named(subject, parts->name)) {
         lower_report(context, N00B_DIAG_EFFECT_QUESTION, span,
             N00B_TEXT_NO_PARAMETER_NAMED,
             N00BB_ARGS(ARG_TEXT(n00bb_function_root(subject->name)),
@@ -1154,6 +1250,37 @@ add_clause_entry(ir_func_t *stub, core_string_t kind, const ir_func_t *function,
 }
 
 static bool
+record_effect_scope(ir_lower_context_t *context, ir_func_t *stub,
+                    parse_tree_t *clause, core_string_t name, bool builtin,
+                    bool elsewhere, bool *scoped)
+{
+    parse_tree_t *value = core_tree_num_children(clause) > 2
+        ? core_tree_child(clause, 2) : nullptr;
+    core_string_t word = value ? first_token_text(value) : (core_string_t){0};
+    n00bb_effect_scope_t scope;
+    n00bb_text_t problem = builtin ? N00B_TEXT_SCOPE_OF_BUILT_IN
+        : elsewhere ? N00B_TEXT_SCOPE_OUTSIDE_DECLARATION
+        : *scoped ? N00B_TEXT_SCOPE_GIVEN_TWICE
+        : !n00bb_effect_scope_named(word, &scope) ? N00B_TEXT_NOT_A_SCOPE
+        : N00B_TEXT_COUNT;
+    if (problem != N00B_TEXT_COUNT) {
+        lower_report(context, N00B_DIAG_EFFECT_DECLARATION,
+            lower_span_for_tree(context, problem == N00B_TEXT_NOT_A_SCOPE
+                                         && value ? value : clause),
+            problem, N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(word)));
+        return true;
+    }
+    *scoped = true;
+    if (!stub) return true;
+    core_buffer_t entry = {0};
+    core_buffer_puts(&entry, "scope\t-\t");
+    core_buffer_append_string(&entry, word);
+    bool added = ir_func_add_effect(stub, core_buffer_string(&entry));
+    core_buffer_release(&entry);
+    return added;
+}
+
+static bool
 record_effect_clause(ir_lower_context_t *context, ir_func_t *stub,
                      parse_sym_entry_t *symbol, bool handled)
 {
@@ -1246,8 +1373,19 @@ n00bb_lower_effect_declaration(ir_lower_context_t *context,
     core_string_t writing = n00bb_package_id(lower->unit);
     core_list_t(parse_tree_ptr_t) clauses = effect_clauses(grammar,
                                                            visit->node);
+    bool scoped = false;
     for (size_t c = 0; c < clauses.len; c++) {
         parse_tree_t *clause = clauses.data[c];
+        if (nt_is(grammar, clause, CORE_STRING_STATIC("effect-scope"))) {
+            if (!record_effect_scope(context, stub, clause, name,
+                                     builtin != nullptr,
+                                     owner && owner != lower->unit,
+                                     &scoped)) {
+                core_list_free(clauses);
+                return false;
+            }
+            continue;
+        }
         parse_tree_t *expression = child_nt(grammar, clause,
                                             CORE_STRING_STATIC("expression"));
         parse_tree_t *site = expression ? expression : clause;
@@ -2156,7 +2294,7 @@ explain_query(check_eval_t *eval, parse_tree_t *node, bool value)
         return;
     }
     explain_chain_notes(eval->analysis, eval->diagnostics, subject,
-                        bound_witness_flag(summary, parts.name));
+                        bound_witness_flag(summary, parts.name), parts.name);
 }
 
 static void
@@ -2285,7 +2423,7 @@ explain_bound(n00bb_link_analysis_t *analysis, core_diagnostics_t *diagnostics,
     }
     explain_chain_notes(analysis, diagnostics, function,
         bound_witness_flag(ir_summary_of(analysis->summaries, function),
-                           bound->effect));
+                           bound->effect), bound->effect);
 }
 
 static bool
@@ -2440,10 +2578,17 @@ report_implementation(n00bb_link_analysis_t *analysis,
                    ARG_TEXT(bound->trait), ARG_TEXT(bound->method),
                    ARG_TEXT(bound->rule.effect)));
     explain_bound(analysis, diagnostics, violation->function, &bound->rule);
-    if (ir_span_known(bound->span))
+    if (ir_span_known(bound->span) && bound->expression.u8_bytes)
         n00bb_report_secondary(diagnostics, bound->unit,
             n00bb_span_location(bound->span), N00B_TEXT_TRAIT_CHECKS_HERE,
             N00BB_ARGS(ARG_TEXT(bound->trait)));
+    else if (ir_span_known(bound->span))
+        n00bb_report_secondary(diagnostics, bound->unit,
+            n00bb_span_location(bound->span),
+            bound->rule.query == N00BB_QUERY_HAS_EFFECT
+                ? N00B_TEXT_TRAIT_REQUIRES_HERE : N00B_TEXT_TRAIT_FORBIDS_HERE,
+            N00BB_ARGS(ARG_TEXT(bound->trait), ARG_TEXT(bound->method),
+                       ARG_TEXT(bound->rule.effect)));
 }
 
 static void
@@ -2719,7 +2864,7 @@ value_name(const ir_value_t *value)
         value = def && def->op == IR_OP_COPY && def->n_operands
             ? ir_operand_value(&def->operands[0]) : nullptr;
     }
-    return CORE_STRING_STATIC("this argument");
+    return (core_string_t){0};
 }
 
 static bool
@@ -2768,18 +2913,34 @@ report_mark_violation(void *context, const n00bb_mark_violation_t *violation)
             && violation->callee->params[violation->param]
         ? violation->callee->params[violation->param]->name
         : CORE_STRING_STATIC("?");
-    n00bb_report(diagnostics, unit, N00B_DIAG_MARK_REJECTED,
-        n00bb_span_location(violation->call->span),
-        N00B_TEXT_MAY_CARRY_REJECTED,
-        N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(core_buffer_string(&marks)),
-                   ARG_TEXT(param), ARG_TEXT(core_buffer_string(&callee))));
+    if (value.u8_bytes)
+        n00bb_report(diagnostics, unit, N00B_DIAG_MARK_REJECTED,
+            n00bb_span_location(violation->call->span),
+            N00B_TEXT_MAY_CARRY_REJECTED,
+            N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(core_buffer_string(&marks)),
+                       ARG_TEXT(param),
+                       ARG_TEXT(core_buffer_string(&callee))));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_MARK_REJECTED,
+            n00bb_span_location(violation->call->span),
+            N00B_TEXT_ARGUMENT_MAY_CARRY_REJECTED,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&marks)), ARG_TEXT(param),
+                       ARG_TEXT(core_buffer_string(&callee))));
     check->violations++;
     core_buffer_t text = {0};
-    if (call_target_text(&text, violation->origin))
-        n00bb_report_secondary(diagnostics, nullptr,
-            n00bb_span_location(violation->origin->span),
-            N00B_TEXT_MARK_COMES_FROM,
-            N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(core_buffer_string(&text))));
+    if (call_target_text(&text, violation->origin)) {
+        if (value.u8_bytes)
+            n00bb_report_secondary(diagnostics, nullptr,
+                n00bb_span_location(violation->origin->span),
+                N00B_TEXT_MARK_COMES_FROM,
+                N00BB_ARGS(ARG_TEXT(value),
+                           ARG_TEXT(core_buffer_string(&text))));
+        else
+            n00bb_report_secondary(diagnostics, nullptr,
+                n00bb_span_location(violation->origin->span),
+                N00B_TEXT_ARGUMENT_COMES_FROM,
+                N00BB_ARGS(ARG_TEXT(core_buffer_string(&text))));
+    }
     if (violation->carrier && !violation->by_type)
         n00bb_report_secondary(diagnostics, nullptr,
             n00bb_span_location(violation->caller->span),

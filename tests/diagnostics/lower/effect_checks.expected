@@ -1,11 +1,10 @@
-tests/diagnostics/lower/effect_checks.n:9:5: error N00B-S0073: this check is false: `render` may do `clock`
+tests/diagnostics/lower/effect_checks.n:9:5: error N00B-S0073: this check is false: `render` may have effect `clock`
   tests/diagnostics/lower/effect_checks.n:10:8: note: `render` calls `effect_checks.stamp`
-  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`
-  lib/sys/internal/clock.n:2:12: note: `now_ns` calls `sys.internal.clock.n00b_os_now_ns`
+  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`, which may have effect `clock`
   help: change the code so the check holds, or change the check
 tests/diagnostics/lower/effect_checks.n:30:6: warning N00B-N0019: function `maybe_leave` is never called
   help: call it or delete it
-tests/diagnostics/lower/effect_checks.n:31:5: error N00B-S0073: this check is false: `maybe_leave` can come back to its caller
+tests/diagnostics/lower/effect_checks.n:31:5: error N00B-S0073: this check is false: `maybe_leave` can return to its caller
   help: change the code so the check holds, or change the check
 tests/diagnostics/lower/effect_checks.n:37:6: warning N00B-N0019: function `steady` is never called
   help: call it or delete it
@@ -21,10 +20,14 @@ tests/diagnostics/lower/effect_checks.n:53:5: error N00B-S0074: this check mixes
 tests/diagnostics/lower/effect_checks.n:58:5: error N00B-S0075: `teleport` is not an effect
 tests/diagnostics/lower/effect_checks.n:59:5: error N00B-S0075: `has_effect` takes a single effect, but `impure` is a group
 tests/diagnostics/lower/effect_checks.n:60:5: error N00B-S0075: `unknowns` has no parameter `z`
-tests/diagnostics/lower/effect_checks.n:67:1: error N00B-S0073: this check is false: `render` may do `clock`
+tests/diagnostics/lower/effect_checks.n:67:1: error N00B-S0073: this check is false: `render` may have effect `clock`
   tests/diagnostics/lower/effect_checks.n:10:8: note: `render` calls `effect_checks.stamp`
-  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`
-  lib/sys/internal/clock.n:2:12: note: `now_ns` calls `sys.internal.clock.n00b_os_now_ns`
+  tests/diagnostics/lower/effect_checks.n:5:12: note: `stamp` calls `sys.internal.clock.now_ns`, which may have effect `clock`
   help: change the code so the check holds, or change the check
 tests/diagnostics/lower/effect_checks.n:68:1: error N00B-S0075: `may_effect(output)` asks about the enclosing function, but there is none here
   help: name the function first: `may_effect(f, output)`
+tests/diagnostics/lower/effect_checks.n:71:1: error N00B-S0073: this check is false: `append` may write `self`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_checks.n:72:16: error N00B-S0075: the first argument of `forbids_effect` must name a function
+tests/diagnostics/lower/effect_checks.n:81:6: warning N00B-N0019: function `sum_items` is never called
+  help: call it or delete it

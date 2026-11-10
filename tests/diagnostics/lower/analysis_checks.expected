@@ -36,3 +36,6 @@ tests/diagnostics/lower/analysis_checks.n:97:6: warning N00B-N0019: function `cl
 tests/diagnostics/lower/analysis_checks.n:105:16: error N00B-S0009: `copy.value` may be nil here
   tests/diagnostics/lower/analysis_checks.n:104:9: note: `copy.value` is assigned here, after the test
   help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between
+tests/diagnostics/lower/analysis_checks.n:117:1: error N00B-S0015: this `assert` condition has a side effect: it calls `loud`; `loud` may produce output
+  tests/diagnostics/lower/analysis_checks.n:117:8: note: the side effect starts here
+  help: `assert` conditions do not run in release builds; compute the value before the `assert`

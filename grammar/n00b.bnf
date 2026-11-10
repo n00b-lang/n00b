@@ -885,15 +885,17 @@
 
 <effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
 <effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
-<effect-clause> ::= <effect-source> | <effect-handler>
-<effect-source> ::= %"from" <expression>
-<effect-handler> ::= %"handled" %"by" <expression>
+<effect-clause> ::= <effect-source> | <effect-handler> | <effect-scope>
+<effect-source> ::= %"from" %":" <expression>
+<effect-handler> ::= %"handled_by" %":" <expression>
+<effect-scope> ::= %"scope" %":" <effect-scope-value>
+<effect-scope-value> ::= %IDENTIFIER | %"package"
 
 <mark-decl> ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
 <mark-clause-list> @hardline ::= <mark-clause> (<eos>+ <mark-clause>)*
 <mark-clause> ::= <effect-source> | <mark-clearer> | <mark-rejecter>
-<mark-clearer> ::= %"cleared" %"by" <effect-query-name> %"(" %IDENTIFIER %")"
-<mark-rejecter> ::= %"rejected" %"by" <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-clearer> ::= %"cleared_by" %":" <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-rejecter> ::= %"rejected_by" %":" <effect-query-name> %"(" %IDENTIFIER %")"
 <mark-annotation> ::= <mark-carries> | <mark-rejects>
 <mark-carries> ::= %"carries" <effect-query-name>
 <mark-rejects> ::= %"rejects" <effect-query-name>

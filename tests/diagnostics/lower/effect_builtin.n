@@ -2,7 +2,7 @@ func log_line(_text: string) {
 }
 
 effect output {
-    from log_line
+    from: log_line
 }
 
 func uses() {
@@ -20,19 +20,19 @@ may_effect(maybe, output) and !has_effect(maybe, output)
 forbids_effect(uses, impure)
 
 effect noreturn {
-    from log_line
+    from: log_line
 }
 
 effect output {
-    handled by log_line
+    handled_by: log_line
 }
 
 effect impure {
-    from log_line
+    from: log_line
 }
 
 effect noreturn {
-    from __os_stack_address
+    from: __os_stack_address
 }
 
 func stops() -> int {
@@ -48,3 +48,6 @@ func partial(n: int) {
         log_line("x")
     }
 }
+
+may_effect(log_line, output) and has_effect(log_line, output)
+forbids_effect(log_line, impure)

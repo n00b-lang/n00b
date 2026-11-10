@@ -506,11 +506,12 @@ check_sink(function_state_t *fs, ir_instr_t *call, ir_func_t *callee,
         ? callee_facts->rejects[param] : 0;
     uint64_t rejected = declared | inferred;
     if (!rejected) return;
+    uint64_t passed_on = rejected & ~argument_taint.marks;
     for (uint32_t p = 0; p < fs->function->n_params && p < MARK_PARAMS; p++) {
         if (!(argument_taint.params >> p & 1)
-            || (fs->facts->rejects[p] | rejected) == fs->facts->rejects[p])
+            || (fs->facts->rejects[p] | passed_on) == fs->facts->rejects[p])
             continue;
-        fs->facts->rejects[p] |= rejected;
+        fs->facts->rejects[p] |= passed_on;
         if (!fs->facts->sinks[p]) fs->facts->sinks[p] = call;
         fs->state->changed = true;
     }

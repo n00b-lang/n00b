@@ -882,8 +882,8 @@ attach_cached_initializers(n00bb_link_analysis_t *analysis,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state->interface_module) return true;
-    ir_module_t *cached = n00bb_cache_module(analysis->cache,
-                                             unit->module.identifier);
+    ir_module_t *cached = interface_body_module(analysis,
+                                                unit->module.identifier);
     ir_module_t *module = unit_module(state);
     core_string_t name = CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME);
     ir_func_t *function = cached && module ? ir_func_find(module, name)

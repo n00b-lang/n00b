@@ -958,6 +958,10 @@ put_header(core_buffer_t *out, const render_state_t *state,
     }
     style(out, state, severity_style(item->severity));
     core_buffer_append_string(out, severity_name(state, item->severity));
+    if (state->options.codes && item->code.u8_bytes) {
+        core_buffer_puts(out, " ");
+        core_buffer_append_string(out, item->code);
+    }
     style(out, state, STYLE_RESET);
     style(out, state, STYLE_BOLD);
     core_buffer_puts(out, ": ");
@@ -1048,7 +1052,7 @@ render_terse(core_buffer_t *out, render_state_t *state,
         core_buffer_puts(out, ": ");
     }
     core_buffer_append_string(out, severity_name(state, item->severity));
-    if (item->code.u8_bytes) {
+    if (state->options.codes && item->code.u8_bytes) {
         core_buffer_puts(out, " ");
         core_buffer_append_string(out, item->code);
     }
@@ -1180,6 +1184,8 @@ core_diagnostics_render(const core_diagnostics_t *d, core_diag_render_t options)
         const core_diagnostic_t *item = &d->items.data[order[i]];
         if (d->filter && !d->filter(d->filter_context, item)) continue;
         if (item->severity == CORE_DIAG_INFO && !options.hints) continue;
+        if (options.errors_only && item->severity != CORE_DIAG_ERROR
+            && item->severity != CORE_DIAG_INTERNAL) continue;
         if (!first && !options.terse) core_buffer_puts(out, "\n");
         first = false;
         render_item(out, &state, item);

@@ -42,7 +42,10 @@ n00bb_cache_t *n00bb_cache_open(core_string_t root_path,
                                 parse_cmdr_result_t *args,
                                 core_string_t triple, ir_ctx_t *ir_context,
                                 n00bb_cache_locate_fn locate,
-                                void *locate_context);
+                                void *locate_context,
+                                core_string_t libraries);
+bool n00bb_cache_library_module(const n00bb_cache_t *cache,
+                                core_string_t module);
 bool n00bb_cache_module_source(const n00bb_cache_t *cache,
                                core_string_t module, core_string_t *path,
                                uint64_t *source_hash);

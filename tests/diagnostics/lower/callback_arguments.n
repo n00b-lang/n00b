@@ -1,0 +1,39 @@
+callback Step {
+    call (n: int) -> int
+    handler (n: int) -> int
+}
+
+func run(view step: Step, n: int) -> int {
+    return step.call(n)
+}
+
+func relay(view step: Step, n: int) -> int {
+    return run(step, n)
+}
+
+func add1(n: int) -> int {
+    return n + 1
+}
+
+func shout(n: int) -> int {
+    raw_debug("x\n")
+    return n
+}
+
+func quiet() -> int {
+    forbids_effect(output)
+    return relay(callback[Step](ref add1), 1)
+}
+
+func loud() -> int {
+    forbids_effect(output)
+    return relay(callback[Step](ref shout), 1)
+}
+
+forbids_effect(run, output)
+
+func main() {
+    _ = quiet()
+    _ = loud()
+}
+main()

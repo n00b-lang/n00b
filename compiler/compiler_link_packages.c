@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "compiler_cache.h"
 #include "compiler_link.h"
 #include "diagnostics.h"
 #include "signature_typevars.h"
@@ -1439,6 +1440,213 @@ append_litmod_entry(n00bb_link_analysis_t *analysis,
     core_buffer_release(&qualified);
     (*count)++;
     return appended;
+}
+
+static bool
+toolchain_unit(core_translation_unit_t *unit)
+{
+    return toolchain_package(n00bb_package_id(unit));
+}
+
+bool
+toolchain_package(core_string_t package)
+{
+    core_string_t root = n00bb_toolchain()->stdlib;
+    return root.u8_bytes && package.u8_bytes >= root.u8_bytes
+        && core_string_starts_with(package, root)
+        && (package.u8_bytes == root.u8_bytes
+            || package.data[root.u8_bytes] == '/');
+}
+
+bool
+register_library_ir(n00bb_link_analysis_t *analysis, core_string_t owner)
+{
+    th_env *environment = analysis ? analysis->interface_environment : nullptr;
+    if (!environment || !owner.u8_bytes) return false;
+    ir_module_t **modules = core_alloc_array(ir_module_t *,
+        analysis->units.len + 1);
+    size_t count = 0;
+    for (size_t u = 0; modules && u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (state && !state->interface_module && state->ir_module
+            && !toolchain_unit(unit))
+            modules[count++] = state->ir_module;
+    }
+    core_buffer_t archive = {0};
+    core_buffer_t references = {0};
+    bool ok = modules && (!count || (ir_modules_save_references(modules,
+                                         count, &archive, &references)
+        && th_env_register_metadata(environment,
+               TH_ENV_METADATA_ENVIRONMENT, owner,
+               CORE_STRING_STATIC(N00BB_LIBRARY_IR_KEY), 1, archive.data,
+               archive.byte_len)));
+    core_buffer_release(&archive);
+    core_buffer_release(&references);
+    core_free(modules);
+    return ok;
+}
+
+bool
+library_unit(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    return state && !state->interface_module && !toolchain_unit(unit);
+}
+
+static bool
+dotted_prefix(core_string_t name, core_string_t prefix)
+{
+    return core_string_starts_with(name, prefix)
+        && (name.u8_bytes == prefix.u8_bytes
+            || name.data[prefix.u8_bytes] == '.');
+}
+
+static bool
+toolchain_name(void *context, core_string_t name)
+{
+    const n00bb_link_analysis_t *analysis = context;
+    for (size_t u = 0; name.data && u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        if (!toolchain_unit(unit)) continue;
+        core_string_t module = unit->module.identifier;
+        if (dotted_prefix(name, module) || dotted_prefix(module, name))
+            return true;
+        n00bb_tu_state_t *state = tu_state(unit);
+        for (size_t p = 0; state && p < state->package_declarations.len; p++)
+            if (dotted_prefix(name, state->package_declarations.data[p].name))
+                return true;
+    }
+    return false;
+}
+
+static bool
+library_module(void *context, core_string_t module)
+{
+    return module.data && !toolchain_name(context, module);
+}
+
+static bool
+library_metadata(void *context, th_env_metadata_owner_t kind,
+                 core_string_t owner)
+{
+    (void)kind;
+    int64_t colon = owner.data ? core_string_rfind_byte(owner, ':') : -1;
+    if (colon >= 0)
+        owner = core_string_slice(owner, (size_t)colon + 1,
+                                  owner.u8_bytes - (size_t)colon - 1);
+    return library_module(context, owner);
+}
+
+static bool
+library_intrinsic(void *context, core_string_t trait,
+                  const th_type *receiver)
+{
+    (void)trait;
+    core_string_t name = {0};
+    return !receiver || !th_named_info((th_type *)receiver, &name, nullptr,
+                                       nullptr)
+        || library_module(context, name);
+}
+
+th_env *
+library_interface_environment(n00bb_link_analysis_t *analysis)
+{
+    th_env_filter_t filter = {
+        .module = library_module, .metadata = library_metadata,
+        .intrinsic = library_intrinsic, .context = analysis,
+    };
+    return analysis && analysis->interface_environment
+        ? th_env_subset(analysis->interface_environment, &filter) : nullptr;
+}
+
+const uint8_t *
+library_abi_object(const n00bb_link_analysis_t *analysis, core_string_t module,
+                   size_t *size)
+{
+    for (size_t e = 0; analysis && e < analysis->linked_interface_count;
+         e++) {
+        const th_env *environment = analysis->linked_interfaces[e];
+        for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, i, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || !core_string_eq(metadata.owner_name, module)
+                || !core_string_eq(metadata.key,
+                       CORE_STRING_STATIC(N00BB_LIBRARY_ABI_KEY))
+                || metadata.version != 1) continue;
+            *size = metadata.size;
+            return metadata.data;
+        }
+    }
+    return nullptr;
+}
+
+static const uint8_t *
+library_ir_archive(const th_env *environment, size_t *size)
+{
+    for (size_t i = 0; environment && i < th_env_metadata_count(environment);
+         i++) {
+        th_env_metadata_view_t metadata = {0};
+        if (!th_env_metadata_at(environment, i, &metadata)
+            || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+            || !core_string_eq(metadata.key,
+                               CORE_STRING_STATIC(N00BB_LIBRARY_IR_KEY))
+            || metadata.version != 1) continue;
+        *size = metadata.size;
+        return metadata.data;
+    }
+    return nullptr;
+}
+
+bool
+interface_has_library_ir(const th_env *environment)
+{
+    size_t size = 0;
+    return library_ir_archive(environment, &size) != nullptr;
+}
+
+bool
+load_library_ir(n00bb_link_analysis_t *analysis, ir_module_lookup_fn lookup)
+{
+    if (!analysis || analysis->library_ir) return true;
+    size_t capacity = analysis->units.len + 1;
+    ir_module_t **modules = core_alloc_array(ir_module_t *, capacity);
+    if (!modules) return false;
+    const ir_profile_t *profiles[] = {n00bb_type_profile()};
+    size_t total = 0;
+    bool ok = true;
+    for (size_t e = 0; ok && e < analysis->linked_interface_count; e++) {
+        size_t size = 0;
+        const uint8_t *data = library_ir_archive(
+            analysis->linked_interfaces[e], &size);
+        size_t loaded = 0;
+        if (data) ok = ir_modules_load(analysis->ir_context, data, size,
+            profiles, 1, lookup, analysis, modules + total,
+            capacity - total, &loaded);
+        total += loaded;
+    }
+    analysis->library_ir = modules;
+    analysis->library_ir_count = total;
+    return ok;
+}
+
+ir_module_t *
+library_ir_module(const n00bb_link_analysis_t *analysis, core_string_t name)
+{
+    for (size_t i = 0; analysis && i < analysis->library_ir_count; i++)
+        if (core_string_eq(ir_module_name(analysis->library_ir[i]), name))
+            return analysis->library_ir[i];
+    return nullptr;
+}
+
+ir_module_t *
+interface_body_module(const n00bb_link_analysis_t *analysis,
+                      core_string_t name)
+{
+    ir_module_t *cached = analysis ? n00bb_cache_module(analysis->cache, name)
+                                   : nullptr;
+    return cached ? cached : library_ir_module(analysis, name);
 }
 
 bool

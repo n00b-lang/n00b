@@ -22,8 +22,10 @@ n00bb_output_target_profile(core_target_desc_t *target)
         if (!core_target_host(&host)) return false;
         selected = host.triple;
     }
+    bool wide = n00bb_setting_bool(N00BB_KEY_BUILD_ATOMIC128)
+        && core_string_starts_with(selected, CORE_STRING_STATIC("x86_64"));
     return core_target_profile(selected,
-                               CORE_TARGET_FEATURE_NATIVE_ATOMIC128, target);
+        wide ? CORE_TARGET_FEATURE_NATIVE_ATOMIC128 : 0, target);
 }
 
 bool

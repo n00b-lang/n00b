@@ -3698,6 +3698,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
 void
 n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
 {
+    if (analysis) core_free(analysis->library_ir);
     if (!analysis) return;
     if (analysis->dead_code_sites_ready)
         core_dict_free(&analysis->dead_code_sites);

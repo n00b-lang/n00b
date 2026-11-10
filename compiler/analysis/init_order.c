@@ -320,7 +320,7 @@ initializers_known(n00bb_link_analysis_t *analysis,
                    core_translation_unit_t *unit)
 {
     return !tu_state(unit)->interface_module
-        || n00bb_cache_module(analysis->cache, unit->module.identifier);
+        || interface_body_module(analysis, unit->module.identifier);
 }
 
 static const ir_global_t *

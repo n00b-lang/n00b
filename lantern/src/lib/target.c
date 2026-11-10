@@ -15,6 +15,10 @@ static const core_target_atomic_t initial_atomic_storage[] = {
     {128, 16, CORE_TARGET_FEATURE_NATIVE_ATOMIC128},
 };
 
+static const core_target_atomic_t arm64_atomic_storage[] = {
+    {8, 1, 0}, {16, 2, 0}, {32, 4, 0}, {64, 8, 0}, {128, 16, 0},
+};
+
 bool core_target_profile(core_string_t triple, uint64_t enabled_features,
                          core_target_desc_t *out)
 {
@@ -48,11 +52,13 @@ bool core_target_profile(core_string_t triple, uint64_t enabled_features,
         profile.triple = CORE_STRING_STATIC("arm64-macos");
         profile.object_format = CORE_TARGET_OBJECT_MACH_O;
         profile.call_abi = CORE_TARGET_CALL_DARWIN_AARCH64;
+        profile.atomic_storage = arm64_atomic_storage;
     }
     else if (core_string_eq(triple, CORE_STRING_STATIC("arm64-linux"))) {
         profile.triple = CORE_STRING_STATIC("arm64-linux");
         profile.object_format = CORE_TARGET_OBJECT_ELF;
         profile.call_abi = CORE_TARGET_CALL_AAPCS64;
+        profile.atomic_storage = arm64_atomic_storage;
     }
     else if (core_string_eq(triple, CORE_STRING_STATIC("x86_64-windows"))) {
         profile.triple = CORE_STRING_STATIC("x86_64-windows");

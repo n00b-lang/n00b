@@ -353,8 +353,9 @@ n00bb_summary_inherits_effect(void *context, const ir_func_t *caller,
 {
     n00bb_bound_t bound;
     if (n00bb_bound_parse(effect, &bound)) return false;
-    if (!effect_function(context, callee)) return true;
     n00bb_user_effect_t *user = user_effect(context, effect);
+    if (user && !n00bb_effect_crosses(user, caller, callee)) return false;
+    if (!effect_function(context, callee)) return true;
     return !user || !clause_applies(context, &user->handlers, caller, callee);
 }
 

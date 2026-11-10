@@ -4281,8 +4281,49 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
 static LLVMValueRef copy_boxed_array(lower_state_t *state,
                                      LLVMValueRef value, bool in_frame);
 
+static LLVMValueRef copy_present_sequence(lower_state_t *state,
+                                          LLVMValueRef value, th_type *type);
+
 static LLVMValueRef
 copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
+{
+    ir_module_t *owner = state->function->owner;
+    th_type *sequence = th_resolve(type);
+    if (!value || !sequence || th_kind_of(sequence) != TH_SEQUENCE)
+        return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef array_type = value_type(owner, type, context);
+    if (!array_type || LLVMTypeOf(value) != array_type) return nullptr;
+    if (array_type == box_llvm_type(context))
+        return copy_boxed_array(state, value, false);
+    LLVMValueRef descriptor = LLVMBuildExtractValue(state->builder, value,
+        1, "array.copy.present.descriptor");
+    LLVMValueRef absent = LLVMBuildIsNull(state->builder, descriptor,
+        "array.copy.absent");
+    LLVMValueRef function = LLVMGetBasicBlockParent(
+        LLVMGetInsertBlock(state->builder));
+    LLVMBasicBlockRef before = LLVMGetInsertBlock(state->builder);
+    LLVMBasicBlockRef copy = LLVMAppendBasicBlockInContext(context,
+        function, "array.copy.present");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context,
+        function, "array.copy.done");
+    LLVMBuildCondBr(state->builder, absent, done, copy);
+    LLVMPositionBuilderAtEnd(state->builder, copy);
+    LLVMValueRef copied = copy_present_sequence(state, value, type);
+    if (!copied) return nullptr;
+    LLVMBasicBlockRef copied_exit = LLVMGetInsertBlock(state->builder);
+    LLVMBuildBr(state->builder, done);
+    LLVMPositionBuilderAtEnd(state->builder, done);
+    LLVMValueRef result = LLVMBuildPhi(state->builder, array_type,
+                                       "array.copy.result");
+    LLVMValueRef incoming[] = {value, copied};
+    LLVMBasicBlockRef blocks[] = {before, copied_exit};
+    LLVMAddIncoming(result, incoming, blocks, 2);
+    return result;
+}
+
+static LLVMValueRef
+copy_present_sequence(lower_state_t *state, LLVMValueRef value, th_type *type)
 {
     ir_module_t *owner = state->function->owner;
     th_type *sequence = th_resolve(type);
@@ -4455,7 +4496,8 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
         rank++;
     }
     const ir_final_layout_t *layout = element
-        ? ir_layout_final(module, element, ir_module_target(module)) : nullptr;
+        ? ir_layout_final_visible(module, element, ir_module_target(module))
+        : nullptr;
     uint64_t stride_bits = 0;
     uint64_t packed_width = packed_array_width(module, element);
     if (!rank || !layout || !layout->alignment_bytes
@@ -9411,15 +9453,22 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 function, "array.row.done");
             LLVMBuildCondBr(state->builder, rectangular, flat, ragged);
             LLVMPositionBuilderAtEnd(state->builder, flat);
-            if (!copy_rectangular_row(state, address, value, storage))
+            if (!copy_rectangular_row(state, address, value, storage)) {
+                state->failure_detail =
+                    FAILURE_DETAIL("could not copy a rectangular array row");
                 return false;
+            }
             LLVMBuildBr(state->builder, row_done);
             LLVMPositionBuilderAtEnd(state->builder, ragged);
         }
         if (th_kind_of(th_resolve(storage)) == TH_SEQUENCE
             && !n00bb_sequence_transfers_storage(operands[1].value)) {
             value = copy_sequence_value(state, value, storage);
-            if (!value) break;
+            if (!value) {
+                state->failure_detail =
+                    FAILURE_DETAIL("could not copy the stored array value");
+                break;
+            }
         }
         bool atomic_bool = instruction->n_mods
             && is_atomic_bool(state->function->owner, storage);
@@ -9432,13 +9481,21 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         if (!direct_stack_address(state->function, operands[0].value)) {
             value = escape_boxes(state, value);
-            if (!value) break;
+            if (!value) {
+                state->failure_detail =
+                    FAILURE_DETAIL("could not move boxed values to the heap");
+                break;
+            }
         }
         if (!direct_stack_address(state->function, operands[0].value)
             && !direct_global_address(operands[0].value)
             && !ir_storage_origin_unmanaged(state->storage_origin,
                                              operands[0].value)
-            && !store_gc_barrier(state, value, storage)) return false;
+            && !store_gc_barrier(state, value, storage)) {
+            state->failure_detail =
+                FAILURE_DETAIL("could not emit the store's GC barrier");
+            return false;
+        }
         LLVMTypeRef record_bits = instruction->n_mods
             ? atomic_record_bits(state, storage, LLVMTypeOf(value)) : nullptr;
         if (record_bits) {
@@ -10697,6 +10754,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             state->builder, callback, 1, "callback.type.index");
         LLVMBasicBlockRef direct_done = nullptr;
         LLVMValueRef direct_result = nullptr;
+        uint32_t site_type_index = 0;
+        bool site_typed = runtime_type_index(state, operands[0].value->type,
+                                             &site_type_index);
         for (size_t i = 0; !stateful && state->callback_bindings
              && i < state->callback_bindings->len; i++) {
             const callback_binding_t *binding =
@@ -10709,6 +10769,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (!function_index || !concrete
                 || !runtime_type_index(state, binding->callback_type,
                                        &type_index)
+                || (site_typed && type_index != site_type_index)
                 || concrete == signature
                 || LLVMCountParamTypes(concrete) != count - 1)
                 continue;

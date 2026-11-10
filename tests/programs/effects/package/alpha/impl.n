@@ -6,6 +6,24 @@ func flush() {
 }
 
 effect Audited {
-    from note
-    handled by flush
+    from: note
+    handled_by: flush
 }
+
+func trace(_entry: string) {
+}
+
+func traced() {
+    trace("step")
+}
+
+func run() {
+    traced()
+}
+
+effect Traced {
+    from: trace
+    scope: package
+}
+
+has_effect(run, Traced)

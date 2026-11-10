@@ -98,7 +98,7 @@ qualified_function_name(core_string_t module, core_string_t function)
 
 static bool
 n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
-                             const n00bb_cache_t *cache,
+                             const n00bb_link_analysis_t *analysis,
                              core_translation_unit_t *const *units,
                              size_t unit_count,
                              n00bb_llvm_global_binding_t **out,
@@ -115,8 +115,8 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             || ir_global_count(state->ir_module) > SIZE_MAX - capacity)
             return false;
         capacity += ir_global_count(state->ir_module);
-        ir_module_t *cached = state->interface_module && cache
-            ? n00bb_cache_module(cache, units[i]->module.identifier)
+        ir_module_t *cached = state->interface_module
+            ? interface_body_module(analysis, units[i]->module.identifier)
             : nullptr;
         if (cached) capacity += ir_global_count(cached);
     }
@@ -149,8 +149,8 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
         for (size_t u = 0; valid && !matched && u < 2 * unit_count; u++) {
             n00bb_tu_state_t *unit_state = tu_state(units[u % unit_count]);
             ir_module_t *runtime = u < unit_count ? unit_state->ir_module
-                : unit_state->interface_module && cache
-                    ? n00bb_cache_module(cache,
+                : unit_state->interface_module
+                    ? interface_body_module(analysis,
                         units[u % unit_count]->module.identifier)
                     : nullptr;
             if (!runtime) continue;
@@ -1986,7 +1986,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
             if (ok) {
                 read_stage = "matching global bindings";
-                ok = n00bb_linked_global_bindings(&view, analysis->cache,
+                ok = n00bb_linked_global_bindings(&view, analysis,
                     order.data, count, &global_bindings,
                     &global_binding_count, diagnostics);
             }
@@ -2146,14 +2146,20 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .bitcode = lto ? &lto_modules[i] : nullptr,
         };
         n00bb_cache_module_object_t cached = {0};
-        if (tu_state(order.data[i])->interface_module
-            && n00bb_cache_module_object(analysis->cache,
+        bool interface = tu_state(order.data[i])->interface_module;
+        if (interface && n00bb_cache_module_object(analysis->cache,
                 ir_module_name(item->module), &cached)) {
             item->cached = cached.object;
             item->cached_bytes = cached.object_bytes;
             item->ok = true;
+            module_emitter_publish(&emitter);
+            continue;
         }
-        else ok = begin_module_object(&emission, item,
+        ir_module_t *library = interface
+            ? library_ir_module(analysis, ir_module_name(item->module))
+            : nullptr;
+        if (library) item->module = library;
+        ok = begin_module_object(&emission, item,
             core_translation_unit_diagnostics(order.data[i]),
             order.data[i] == core_link_unit_root(link, 0)
                 ? &root_entry : nullptr);
@@ -2630,6 +2636,11 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         bool from_cache = state->interface_module
             && n00bb_cache_module_object(analysis->cache,
                 ir_module_name(state->ir_module), &cached);
+        if (!from_cache && state->interface_module) {
+            cached.abi = library_abi_object(analysis,
+                unit->module.identifier, &cached.abi_bytes);
+            from_cache = cached.abi && cached.abi_bytes;
+        }
         if (from_cache) {
             artifact->object = core_alloc_array(uint8_t, cached.abi_bytes);
             if (artifact->object)
@@ -2659,6 +2670,32 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
     }
     abi_sources_close(&sources);
     return valid;
+}
+
+bool
+n00bb_register_library_abi(core_link_unit_t *link,
+                           n00bb_link_analysis_t *analysis)
+{
+    th_env *environment = analysis ? analysis->interface_environment
+                                   : nullptr;
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    bool ok = environment != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        if (!library_unit(unit)) continue;
+        core_link_artifact_view_t view = {0};
+        const n00bb_abi_artifact_t *artifact =
+            core_link_unit_require_artifact(link, unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+            ? view.payload : nullptr;
+        ok = artifact && artifact->object && artifact->object_bytes
+            && th_env_register_metadata(environment,
+                   TH_ENV_METADATA_ENVIRONMENT, unit->module.identifier,
+                   CORE_STRING_STATIC(N00BB_LIBRARY_ABI_KEY), 1,
+                   artifact->object, artifact->object_bytes);
+    }
+    return ok;
 }
 
 static bool

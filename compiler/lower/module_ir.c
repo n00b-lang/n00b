@@ -1132,7 +1132,7 @@ bind_cached_global_identities(ir_ctx_t *ir_context,
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         ir_module_t *cached = state && state->interface_module
-            ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+            ? interface_body_module(analysis, unit->module.identifier)
             : nullptr;
         for (size_t g = 0; cached && g < ir_global_count(cached); g++) {
             ir_global_t *global = ir_global_at(cached, g);
@@ -1430,7 +1430,7 @@ cached_function_body(n00bb_link_analysis_t *analysis,
                      bool overloaded, core_string_t declaration_key)
 {
     ir_module_t *cached = analysis
-        ? n00bb_cache_module(analysis->cache, unit->module.identifier)
+        ? interface_body_module(analysis, unit->module.identifier)
         : nullptr;
     if (!cached || !semantic_name.data) return nullptr;
     core_string_t local = {};
@@ -1470,6 +1470,14 @@ n00bb_source_unit_module(void *context, core_string_t name)
             return state->ir_module;
     }
     return nullptr;
+}
+
+static ir_module_t *
+program_or_cached_module(void *context, core_string_t name)
+{
+    n00bb_link_analysis_t *analysis = context;
+    ir_module_t *module = n00bb_source_unit_module(context, name);
+    return module ? module : n00bb_cache_module(analysis->cache, name);
 }
 
 ir_module_t *
@@ -1603,6 +1611,10 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 return ir_initialization_error(
                     units->len ? units->data[0] : nullptr,
                     "could not load the IR of cached SCCs");
+            if (!load_library_ir(analysis, program_or_cached_module))
+                return ir_initialization_error(
+                    units->len ? units->data[0] : nullptr,
+                    "could not load the IR a library interface carries");
             if (!bind_cached_global_identities(ir_context, analysis))
                 return ir_initialization_error(
                     units->len ? units->data[0] : nullptr,
@@ -1662,6 +1674,17 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     n00bb_export_origin_t *origin = parse_sym_binding(symbol,
                         CORE_STRING_STATIC("n00bb.export-origin"));
                     if (origin) semantic_name = origin->declaration;
+                    size_t module_size = origin ? origin->module.u8_bytes : 0;
+                    if (origin && state->ir_module
+                        && core_string_eq(origin->module,
+                                          ir_module_name(state->ir_module))
+                        && semantic_name.u8_bytes > module_size + 1
+                        && core_string_starts_with(semantic_name,
+                                                   origin->module)
+                        && semantic_name.data[module_size] == '.')
+                        semantic_name = core_string_slice(semantic_name,
+                            module_size + 1,
+                            semantic_name.u8_bytes - module_size - 1);
                 }
                 if (!state->interface_module && overloaded
                     && declaration_key.data) {

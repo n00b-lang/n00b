@@ -66,3 +66,23 @@ may_effect(render, clock)
 has_effect(leave, output)
 forbids_effect(render, clock)
 may_effect(output)
+forbids_effect(Dict.get, impure)
+!may_write(Dict.get, self)
+!may_write(List.append, self)
+forbids_effect(Dict.nope, impure)
+
+func first_item(view items: List[int]) -> int {
+    return items[0]
+}
+
+forbids_effect(first_item, noreturn)
+may_effect(first_item, panics)
+
+func sum_items(view items: List[int]) -> int {
+    !may_write(items)
+    var sum: int = 0
+    for x in items {
+        sum += x
+    }
+    return sum
+}

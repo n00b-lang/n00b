@@ -488,6 +488,7 @@ add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
           ir_func_t *callee, core_string_t name)
 {
     summary->flags |= flags;
+    if (!summary->deferring) summary->own_flags |= flags;
     for (uint32_t b = 0; flags && b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
         if (!(flags & flag)) continue;
@@ -617,6 +618,9 @@ adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
     uint32_t before = summary->flags;
     summary->flags  = hooks->adjust(hooks->context, summary->function,
                                     summary->flags);
+    if (summary->callback_params)
+        summary->own_flags = hooks->adjust(hooks->context, summary->function,
+                                           summary->own_flags);
     const ir_func_t *f     = summary->function;
     uint32_t         added = summary->flags & ~before;
     for (uint32_t b = 0; f && added && b < IR_SEFFECT_FLAG_BITS; b++)

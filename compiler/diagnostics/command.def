@@ -125,6 +125,19 @@ N00B_DIAG(EFFECTS_OF_UNKNOWN_FUNCTION, "N00B-C0035", ERROR,
     "and the function, for example `sys.fs.read_file`. The function has to\n"
     "be in the program, either in one of its modules or in a module it\n"
     "imports.")
+N00B_DIAG(EFFECTS_QUERY_INVALID, "N00B-C0036", ERROR,
+    "an `n00b effects` query can't be read",
+    "A query combines effect questions with `and`, `or`, `not` and\n"
+    "parentheses. The questions are `may_effect`, `forbids_effect` and\n"
+    "`has_effect`, each naming one effect, written `may_effect(impure)` or\n"
+    "`may_effect impure`. Each question is asked of every function in\n"
+    "scope.")
+N00B_DIAG(EFFECTS_SCOPE_UNKNOWN, "N00B-C0037", ERROR,
+    "`--in` or `--not-in` names nothing in the program",
+    "`--in` and `--not-in` take a package, a module or a function, by its\n"
+    "qualified name. A name covers everything under it: `alpha` covers\n"
+    "`alpha.impl` and `alpha.impl.flush`. `--in all` covers the whole\n"
+    "program.")
 N00B_DIAG(PROCESS_START_FAILED, "N00B-C0040", ERROR,
     "`n00b run` cannot start the compiler or the built program",
     "The message names the program and the reason the operating system\n"

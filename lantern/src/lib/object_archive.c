@@ -8,6 +8,7 @@
 #include "lib/buffer.h"
 #include "lib/byteorder.h"
 #include "lib/list.h"
+#include "lib/os.h"
 
 #define CORE_OBJECT_ARCHIVE_MAGIC UINT64_C(0x434f424a41524348)
 #define CORE_OBJECT_ARCHIVE_VERSION 1
@@ -393,10 +394,24 @@ bool core_object_archive_save(core_string_t path, size_t capacity,
     return fail(error, CORE_OBJECT_ARCHIVE_OUT_OF_SPACE);
   }
 
+  core_buffer_t stem = {0};
+  core_buffer_append_string(&stem, path);
+  core_buffer_puts(&stem, ".partial-");
+  core_string_t partial = {0};
+  int reserved = core_os_make_unique_file(core_buffer_string(&stem),
+                                          &partial);
+  core_buffer_release(&stem);
+  if (reserved < 0) {
+    release_objects(&objects);
+    return fail(error, CORE_OBJECT_ARCHIVE_IO_ERROR);
+  }
+  close(reserved);
+  (void)core_os_remove_file(partial);
   core_persist_arena_error_t arena_error;
   core_persist_arena_t *arena = nullptr;
-  if (!core_persist_arena_create(path, capacity, abi_tag, &arena,
+  if (!core_persist_arena_create(partial, capacity, abi_tag, &arena,
                                  &arena_error)) {
+    core_free(partial.data);
     release_objects(&objects);
     return fail(error, map_arena_error(arena_error));
   }
@@ -444,12 +459,11 @@ bool core_object_archive_save(core_string_t path, size_t capacity,
   }
   core_persist_arena_close(arena, nullptr);
   release_objects(&objects);
-  if (!ok) {
-    char *cpath = core_string_to_cstr(path);
-    unlink(cpath);
-    core_free(cpath);
-    return fail(error, map_arena_error(arena_error));
-  }
+  bool placed = ok && core_os_rename_replace(partial, path);
+  if (!placed) (void)core_os_remove_file(partial);
+  core_free(partial.data);
+  if (!ok) return fail(error, map_arena_error(arena_error));
+  if (!placed) return fail(error, CORE_OBJECT_ARCHIVE_IO_ERROR);
   set_error(error, CORE_OBJECT_ARCHIVE_OK);
   return true;
 }

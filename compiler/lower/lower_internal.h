@@ -1675,7 +1675,7 @@ named_chain_notes(n00bb_link_analysis_t *analysis,
 void
 explain_chain_notes(n00bb_link_analysis_t *analysis,
                     core_diagnostics_t *diagnostics, ir_func_t *subject,
-                    uint32_t flag);
+                    uint32_t flag, core_string_t effect);
 
 uint32_t
 bound_witness_flag(const ir_summary_t *summary, core_string_t effect_name);
@@ -1740,6 +1740,10 @@ enum { WITNESS_DEPTH = 16 };
 
 bool
 dump_effects_of(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit);
+
+bool
+dump_effects_query(n00bb_link_analysis_t *analysis,
+                   core_translation_unit_t *unit);
 
 void
 dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit);

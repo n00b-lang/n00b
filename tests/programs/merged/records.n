@@ -797,6 +797,16 @@ func lease_list_cursor() -> int {
     return total
 }
 
+func lease_rows_append() -> int {
+    var rows: List[Array[int]] = new[List[Array[int]]]()
+    var first: Array[int] = [1, 2]
+    rows.append(first)
+    for row in rows {
+        rows.append(row)
+    }
+    return rows.len() + rows[1][1]
+}
+
 func lease_dict_writes() -> int {
     var table: Dict[int, int] = {1: 10, 2: 20, 3: 30}
     var total: int = 0
@@ -906,5 +916,6 @@ require lease_store() == 23
 require lease_list_append() == 6
 require lease_list_break()
 require lease_list_cursor() == 9
+require lease_rows_append() == 4
 require lease_dict_writes() == 60
 __fd_write(2, "ok")

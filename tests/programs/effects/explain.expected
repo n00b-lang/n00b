@@ -2,7 +2,6 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads_globals   builtin.hashing.secret.__value[]...
   allocates       builtin.containers.dict.insert_entry (138:27) -> builtin.containers.dict.prepare (118:5) -> builtin.containers.dict.compact (82:13) -> builtin.containers.lease.__write (66:17) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (140:33)
-  noreturn        builtin.containers.dict.key_hash (138:58) -> builtin.containers.dict.hash (34:12) -> builtin.cursor.__next (365:5) -> builtin.containers.slice.__read (29:21) -> builtin.panic.index_out_of_range (32:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
   param self      writer, lends
   param key       reader, lends
   param value     reader, lends
@@ -11,7 +10,6 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads_globals   builtin.hashing.secret.__value[]...
   allocates       builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.containers.dict.insertion_keys (365:18) -> builtin.containers.dict.key_slice (307:12) -> here (286:28)
   panics          here (109:34)
-  noreturn        builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.cursor.__next (365:5) -> builtin.containers.slice.__read (29:21) -> builtin.panic.index_out_of_range (32:9) -> builtin.panic.n00bb_runtime_report_failure (11:5)
   param self      reader
   param key       reader
   detail          may_collect allocates_direct reinterprets
@@ -83,6 +81,5 @@ builtin.io.debug.raw_debug: (string) -> nil
   detail          may_io may_collect reinterprets
 builtin.panic.panic: (string) -> nil
   panics          builtin.panic.n00bb_runtime_report_failure (7:5)
-  noreturn        always: builtin.panic.n00bb_runtime_report_failure (7:5)
   param message   untouched
   detail          may_collect

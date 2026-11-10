@@ -340,6 +340,125 @@ call_unobserved(const ir_instr_t *call)
     return false;
 }
 
+enum {
+    CALLBACK_PARAM_LIMIT = 32,
+    CALLBACK_DEPTH_LIMIT = 4,
+    INHERITED_FLAGS = IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
+        | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
+        | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
+        | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
+        | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
+        | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE,
+};
+
+static const ir_value_t *
+copied_value(const ir_value_t *value)
+{
+    for (int depth = 0; value && value->kind == IR_VAL_INSTR && value->def
+         && depth < 8; depth++) {
+        const ir_instr_t *def = value->def;
+        if ((def->op != IR_OP_COPY && def->op != IR_OP_RETAIN_REF)
+            || def->n_operands != 1 || def->operands[0].kind != IR_OPD_VALUE)
+            break;
+        value = def->operands[0].value;
+    }
+    return value;
+}
+
+static int32_t
+callback_param(const ir_value_t *value)
+{
+    value = copied_value(value);
+    return value && value->kind == IR_VAL_PARAM
+        && value->index < CALLBACK_PARAM_LIMIT ? (int32_t)value->index : -1;
+}
+
+static ir_func_t *
+created_handler(const ir_value_t *value)
+{
+    value = copied_value(value);
+    const ir_instr_t *create = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    if (!create || create->op != IR_OP_CALLBACK_CREATE || !create->n_operands
+        || create->operands[0].kind != IR_OPD_VALUE) return nullptr;
+    const ir_value_t *handler = copied_value(create->operands[0].value);
+    return handler && handler->kind == IR_VAL_FUNC && handler->owner
+        && handler->owner->n_blocks ? handler->owner : nullptr;
+}
+
+static void compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
+                           const ir_instr_t *call, ir_func_t *target,
+                           uint32_t observes, int depth);
+static bool panic_only(const ir_summary_t *summary);
+
+static bool
+substitute_callbacks(ir_summaries_t *summaries, ir_summary_t *summary,
+                     const ir_instr_t *call, const ir_summary_t *callee,
+                     ir_func_t *target, uint32_t observes, int depth)
+{
+    if (!callee->callback_params || depth >= CALLBACK_DEPTH_LIMIT)
+        return false;
+    ir_func_t *handlers[CALLBACK_PARAM_LIMIT] = {0};
+    uint32_t forwarded = 0;
+    for (uint32_t p = 0; p < CALLBACK_PARAM_LIMIT; p++) {
+        if (!(callee->callback_params >> p & 1)) continue;
+        const ir_value_t *argument = p + 1 < call->n_operands
+            && call->operands[p + 1].kind == IR_OPD_VALUE
+            ? call->operands[p + 1].value : nullptr;
+        handlers[p] = created_handler(argument);
+        int32_t param = handlers[p] ? -1 : callback_param(argument);
+        if (!handlers[p] && param < 0) return false;
+        if (param >= 0) forwarded |= 1u << param;
+    }
+    if (forwarded) {
+        bool deferring = summary->deferring;
+        summary->deferring = true;
+        summary->callback_params |= forwarded;
+        uint32_t flags = callee->flags & ~callee->own_flags
+            & (INHERITED_FLAGS | observes);
+        if (flags)
+            add_flags(summary, flags, call, target, (core_string_t){0});
+        summary->traps |= callee->traps;
+        summary->deferring = deferring;
+    }
+    for (uint32_t p = 0; p < CALLBACK_PARAM_LIMIT; p++)
+        if (handlers[p])
+            compose_target(summaries, summary, call, handlers[p], observes,
+                           depth + 1);
+    return true;
+}
+
+static void
+compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
+               const ir_instr_t *call, ir_func_t *target, uint32_t observes,
+               int depth)
+{
+    ir_summary_t *callee = target_summary(summaries, target);
+    bool substituted = substitute_callbacks(summaries, summary, call, callee,
+                                            target, observes, depth);
+    uint32_t callee_flags = substituted ? callee->own_flags : callee->flags;
+    uint8_t callee_traps = substituted ? callee->own_traps : callee->traps;
+    summary->traps |= callee_traps;
+    if (!summary->deferring) summary->own_traps |= callee_traps;
+    uint32_t flags = callee_flags & (INHERITED_FLAGS | observes);
+    if ((callee->flags & IR_SUMMARY_DIVERGES) && !panic_only(callee))
+        flags |= IR_SUMMARY_MAY_DIVERGE;
+    if (flags) add_flags(summary, flags, call, target, (core_string_t){0});
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    for (size_t e = 0; e < callee->effects.len; e++)
+        if (!hooks || !hooks->inherits_effect
+            || hooks->inherits_effect(hooks->context, summary->function,
+                                      target, callee->effects.data[e]))
+            (void)ir_summary_add_effect(summary, callee->effects.data[e]);
+    if (hooks && hooks->callee_effects) {
+        uint32_t before = summary->flags;
+        hooks->callee_effects(hooks->context, target, summary);
+        uint32_t added = summary->flags & ~before;
+        if (added)
+            add_flags(summary, added, call, target, (core_string_t){0});
+    }
+}
+
 static void
 compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
              const ir_instr_t *call)
@@ -347,47 +466,37 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
     uint32_t observes = call_unobserved(call) ? 0 : IR_SUMMARY_OBSERVES;
+    int32_t param = call->op == IR_OP_CALLBACK_INVOKE && call->n_operands
+        && call->operands[0].kind == IR_OPD_VALUE
+        ? callback_param(call->operands[0].value) : -1;
+    bool deferred = targets.unknown && param >= 0;
+    bool deferring = summary->deferring;
+    if (deferred) {
+        summary->deferring = true;
+        summary->callback_params |= 1u << param;
+    }
     if (call->op == IR_OP_CALLBACK_INVOKE)
         add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call, nullptr,
                   (core_string_t){0});
     if (targets.unknown) {
+        const ir_func_t *f = summary->function;
+        core_string_t name = deferred && f
+            && (uint32_t)param < f->n_params && f->params[param]
+            ? f->params[param]->name : CORE_STRING_STATIC("?");
         add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                       | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
                       | IR_SUMMARY_MAY_DIVERGE | observes,
-                  call, nullptr, CORE_STRING_STATIC("?"));
+                  call, nullptr, name);
         summary->traps |= IR_STRAP_ALL;
+        if (!summary->deferring) summary->own_traps |= IR_STRAP_ALL;
+        summary->deferring = deferring;
         core_list_free(targets.targets);
         return;
     }
-    for (size_t t = 0; t < targets.targets.len; t++) {
-        ir_summary_t *callee = target_summary(summaries,
-                                              targets.targets.data[t]);
-        summary->traps |= callee->traps;
-        uint32_t flags = callee->flags
-            & (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-               | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
-               | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-               | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
-               | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
-               | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
-               | observes);
-        if (callee->flags & IR_SUMMARY_DIVERGES)
-            flags |= IR_SUMMARY_MAY_DIVERGE;
-        if (flags)
-            add_flags(summary, flags, call, targets.targets.data[t],
-                      (core_string_t){0});
-        const ir_summary_hooks_t *hooks = summaries->hooks;
-        for (size_t e = 0; e < callee->effects.len; e++)
-            if (!hooks || !hooks->inherits_effect
-                || hooks->inherits_effect(hooks->context, summary->function,
-                                          targets.targets.data[t],
-                                          callee->effects.data[e]))
-                (void)ir_summary_add_effect(summary, callee->effects.data[e]);
-        if (hooks && hooks->callee_effects)
-            hooks->callee_effects(hooks->context, targets.targets.data[t],
-                                  summary);
-    }
+    for (size_t t = 0; t < targets.targets.len; t++)
+        compose_target(summaries, summary, call, targets.targets.data[t],
+                       observes, 0);
     core_list_free(targets.targets);
 }
 
@@ -478,6 +587,44 @@ exit_site(ir_summaries_t *summaries, const ir_func_t *f, uint32_t flag,
 }
 
 static bool
+panic_only(const ir_summary_t *summary)
+{
+    return (summary->flags & IR_SUMMARY_DIVERGES)
+        && (summary->flags & IR_SUMMARY_MAY_TRAP)
+        && !(summary->flags & IR_SUMMARY_MAY_DIVERGE);
+}
+
+static bool
+diverges_by_panic(ir_summaries_t *summaries, const ir_func_t *f)
+{
+    bool panics = false;
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->op == IR_OP_TRAP) {
+                panics = true;
+                continue;
+            }
+            if (in->op == IR_OP_UNREACHABLE) return false;
+            if (!is_call(in)) continue;
+            call_targets_t targets;
+            resolve_targets(summaries, in, &targets);
+            bool real = targets.unknown;
+            for (size_t t = 0; !real && t < targets.targets.len; t++) {
+                ir_summary_t *callee = target_summary(summaries,
+                                                      targets.targets.data[t]);
+                if (!(callee->flags & (IR_SUMMARY_DIVERGES
+                                       | IR_SUMMARY_MAY_DIVERGE))) continue;
+                if (panic_only(callee)) panics = true;
+                else real = true;
+            }
+            core_list_free(targets.targets);
+            if (real) return false;
+        }
+    return panics;
+}
+
+static bool
 reaches_exit(ir_block_t *block, const bool *exits)
 {
     ir_instr_t *term = ir_block_terminator(block);
@@ -538,6 +685,10 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                    ir_func_t *f, const uint32_t *settled)
 {
     summary->flags = 0;
+    summary->own_flags = 0;
+    summary->own_traps = 0;
+    summary->callback_params = 0;
+    summary->deferring = false;
     for (uint32_t e = 0;; e++) {
         core_string_t effect = ir_func_effect_at(f, e);
         if (!effect.u8_bytes) break;
@@ -562,6 +713,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_MAY_TRAP, site->instr, nullptr,
                   (core_string_t){0});
         summary->traps |= kind;
+        summary->own_traps |= kind;
         core_list_push(summary->trap_sites, ((ir_strap_site_t){
             .kind   = kind,
             .line   = site->instr->span.start_line,
@@ -589,25 +741,40 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
              | *settled;
     for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
-        if (!(ends & flag) || (summary->flags & flag)) continue;
+        if (!(ends & flag) || (summary->own_flags & flag)) continue;
         ir_func_t        *callee = nullptr;
         const ir_instr_t *site   = exit_site(summaries, f, flag, &callee);
         if (!site && flag == IR_SUMMARY_NO_RETURN)
             site = exit_site(summaries, f, IR_SUMMARY_MAY_FAIL, &callee);
         if (site) add_flags(summary, flag, site, callee, (core_string_t){0});
-        else summary->flags |= flag;
+        else {
+            summary->flags |= flag;
+            summary->own_flags |= flag;
+        }
     }
-    if (!(summary->flags & IR_SUMMARY_MAY_DIVERGE)) {
+    if (!(summary->own_flags & IR_SUMMARY_MAY_DIVERGE)) {
         ir_func_t        *callee = nullptr;
-        const ir_instr_t *site   = summary->flags & IR_SUMMARY_DIVERGES
+        bool panics = (summary->own_flags & IR_SUMMARY_DIVERGES)
+            && diverges_by_panic(summaries, f);
+        const ir_instr_t *site   = summary->own_flags & IR_SUMMARY_DIVERGES
+                && !panics
             ? exit_site(summaries, f, IR_SUMMARY_DIVERGES, &callee)
             : nullptr;
         if (!site) site = endless_loop(f);
         if (site)
             add_flags(summary, IR_SUMMARY_MAY_DIVERGE, site, callee,
                       (core_string_t){0});
-        else if (summary->flags & IR_SUMMARY_DIVERGES)
+        else if ((summary->own_flags & IR_SUMMARY_DIVERGES) && !panics) {
             summary->flags |= IR_SUMMARY_MAY_DIVERGE;
+            summary->own_flags |= IR_SUMMARY_MAY_DIVERGE;
+        }
+        if (panics && !(summary->own_flags & IR_SUMMARY_MAY_TRAP)) {
+            ir_func_t        *trapper = nullptr;
+            const ir_instr_t *at = exit_site(summaries, f,
+                                             IR_SUMMARY_DIVERGES, &trapper);
+            add_flags(summary, IR_SUMMARY_MAY_TRAP, at, trapper,
+                      (core_string_t){0});
+        }
     }
     adjust_flags(summaries, summary);
 }

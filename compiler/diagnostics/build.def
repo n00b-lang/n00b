@@ -65,6 +65,12 @@ N00B_DIAG(COMPTIME_IMPORT_CHANGE_DROPPED, "N00B-B0114", WARNING,
     "Changes another module's comptime makes to it are seen for the rest of\n"
     "that run but are not kept in the program. Changes made from\n"
     "`comptime_start` in the root module are kept.")
+N00B_DIAG(INTERFACE_HAS_NO_CODE, "N00B-B0115", ERROR,
+    "a program cannot be built from a library interface",
+    "A semantic interface from `n00b library --emit-interface` describes a\n"
+    "library's types, functions and effects, but holds none of its code, so\n"
+    "`check` can use it and `build` cannot. Build the program from the\n"
+    "library's sources by adding their directory with `--path`.")
 N00B_DIAG(RUNTIME_LIBRARY_MISSING, "N00B-B0106", ERROR,
     "the n00b runtime library is missing from the toolchain",
     "Every executable links against the runtime library that ships with the\n"

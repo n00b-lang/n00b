@@ -76,7 +76,9 @@ typedef struct {
 typedef struct {
     bool color;
     bool terse;
+    bool codes;
     bool hints;
+    bool errors_only;
     bool sorted;
     core_diag_source_fn source;
     void *source_context;

@@ -790,6 +790,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         if (analysis->effects_of.data
             && !dump_effects_of(analysis, units.data[0]))
             ok = false;
+        if (analysis->effects_query.data
+            && !dump_effects_query(analysis, units.data[0]))
+            ok = false;
         for (size_t i = 0; analysis->dump_ranges && i < units.len; i++)
             dump_unit_ranges(units.data[i]);
         for (size_t f = 0; dump_control_flow

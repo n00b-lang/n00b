@@ -3,7 +3,7 @@ func read_env(key: string) -> string {
 }
 
 mark Secret {
-    from read_env
+    from: read_env
 }
 
 func log(text: string rejects Secret) -> int {

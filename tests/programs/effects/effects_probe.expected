@@ -21,7 +21,7 @@ builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
+  effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads self.__value.entries
   reads self.__value.index.ctrl
   reads self.__value.index.hashes
@@ -37,7 +37,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   traps explicit bounds unwrap arithmetic
   returns self.__value.entries.__value.storage.__value[].value
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
+  effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads self.__value.entries
   reads+writes self.__value.index.ctrl
   reads+writes self.__value.index.dead
@@ -84,7 +84,7 @@ builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   reads self.__value.items.__value.leases.__value.count
   escapes self referent
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
-  effects may_trap may_allocate may_collect allocates_direct reinterprets may_diverge
+  effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads spans.__value.count
   reads spans.__value.items
   reads spans.__value.items.__value.storage

@@ -179,7 +179,12 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
     pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
     add_root(resolver, n00bb_toolchain()->stdlib, false);
-    add_root(resolver, cwd, true);
+    core_string_t real_cwd = core_os_real_path(cwd);
+    if (!resolver->roots.len
+        || !path_within(real_cwd.data ? real_cwd : cwd,
+                        resolver->roots.data[0].path))
+        add_root(resolver, cwd, true);
+    core_free(real_cwd.data);
     add_environment_roots(resolver, cwd, diagnostics);
     core_snapshot_root_t *roots = core_alloc_array(core_snapshot_root_t,
                                                    resolver->roots.len);

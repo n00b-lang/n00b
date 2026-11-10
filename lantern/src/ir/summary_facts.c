@@ -315,8 +315,19 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
                   const ir_summary_t *summary, uint32_t mask)
 {
     uint32_t flags = ir_summary_flags(summary) & mask;
+    static const uint32_t first[] = {
+        IR_SUMMARY_MAY_OUTPUT, IR_SUMMARY_MAY_INPUT, IR_SUMMARY_MAY_IO,
+    };
+    uint32_t early = 0;
+    for (size_t f = 0; f < sizeof(first) / sizeof(*first); f++) {
+        early |= first[f];
+        for (uint32_t bit = 0; bit < IR_SEFFECT_FLAG_BITS; bit++)
+            if ((flags & first[f]) == (1u << bit))
+                fact(facts, REL_FLAG, symbol,
+                     constant(facts, ir_summary_flag_name(bit)), 0);
+    }
     for (uint32_t bit = 0; bit < IR_SEFFECT_FLAG_BITS; bit++)
-        if (flags & (1u << bit))
+        if ((flags & (1u << bit)) && !(early & (1u << bit)))
             fact(facts, REL_FLAG, symbol,
                  constant(facts, ir_summary_flag_name(bit)), 0);
     if ((flags & IR_SUMMARY_MAY_TRAP)
@@ -468,9 +479,10 @@ add_callee(void *context, const ir_func_t *target, const ir_summary_t *summary)
     ir_summary_facts_t *facts = visit->facts;
     core_datalog_symbol_t callee = function_symbol(facts, target, summary);
     fact(facts, REL_CALL_TARGET, visit->site, callee, 0);
-    if (target
-        && ir_summary_call_adds_effects(facts->summaries, visit->caller,
-                                        target))
+    if ((summary && ir_summary_effect_count(summary))
+        || (target
+            && ir_summary_call_adds_effects(facts->summaries, visit->caller,
+                                            target)))
         fact(facts, REL_DECLARED_EFFECT, visit->site, 0, 0);
     for (uint32_t i = 0; summary && i < ir_summary_path_count(summary); i++) {
         const ir_spath_t *path = ir_summary_path_at(summary, i);

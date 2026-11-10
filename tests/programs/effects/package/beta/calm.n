@@ -5,5 +5,5 @@ func quiet() {
 }
 
 effect alpha.Audited {
-    handled by quiet
+    handled_by: quiet
 }

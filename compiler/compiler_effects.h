@@ -47,12 +47,24 @@ typedef struct {
 } n00bb_effect_clause_t;
 core_list_decl(n00bb_effect_clause_t);
 
+typedef enum {
+    N00BB_EFFECT_SCOPE_THREAD,
+    N00BB_EFFECT_SCOPE_PACKAGE,
+    N00BB_EFFECT_SCOPE_CALLER,
+} n00bb_effect_scope_t;
+
 typedef struct {
     core_string_t                      qualified;
     uint64_t                           bits;
     core_list_t(n00bb_effect_clause_t) sources;
     core_list_t(n00bb_effect_clause_t) handlers;
+    n00bb_effect_scope_t               scope;
+    struct n00bb_link_analysis_t      *analysis;
 } n00bb_user_effect_t;
+
+bool n00bb_effect_scope_named(core_string_t word, n00bb_effect_scope_t *out);
+bool n00bb_effect_crosses(const n00bb_user_effect_t *user,
+                          const ir_func_t *caller, const ir_func_t *callee);
 
 n00bb_query_t n00bb_query_named(core_string_t word);
 core_string_t n00bb_query_word(n00bb_query_t query);

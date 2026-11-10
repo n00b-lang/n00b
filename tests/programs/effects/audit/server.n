@@ -5,7 +5,7 @@ func stamp() {
 }
 
 effect audit_log.Audited {
-    from stamp
+    from: stamp
 }
 
 func handle(n: int) -> int {

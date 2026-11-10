@@ -54,6 +54,10 @@ typedef struct {
 struct ir_summary_t {
     const ir_func_t           *function;
     uint32_t                   flags;
+    uint32_t                   own_flags;
+    uint8_t                    own_traps;
+    uint32_t                   callback_params;
+    bool                       deferring;
     bool                       results_known;
     bool                       returns_external;
     uint8_t                    pointer_result;

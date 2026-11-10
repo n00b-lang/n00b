@@ -6,6 +6,6 @@ func flush() {
 }
 
 effect Audited {
-    from note
-    handled by flush
+    from: note
+    handled_by: flush
 }

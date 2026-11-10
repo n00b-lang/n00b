@@ -21,9 +21,9 @@ func open(path: string) -> int {
 }
 
 mark Untrusted {
-    from read_env
-    cleared by check(path)
-    rejected by open(path)
+    from: read_env
+    cleared_by: check(path)
+    rejected_by: open(path)
 }
 
 func questions() -> int {

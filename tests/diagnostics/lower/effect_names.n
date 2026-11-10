@@ -8,3 +8,7 @@ func g() {
 may_effect(g, Audited)
 may_effect(g, left.Audited)
 !may_effect(g, right.Audited)
+
+effect right.Audited {
+    scope: caller
+}

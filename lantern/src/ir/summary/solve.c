@@ -214,7 +214,11 @@ join_rounds(ir_summary_t *next, const ir_summary_t *previous)
     uint32_t shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
     next->flags = ((next->flags | previous->flags) & ~shrinking)
                 | (next->flags & previous->flags & shrinking);
+    next->own_flags = ((next->own_flags | previous->own_flags) & ~shrinking)
+                    | (next->own_flags & previous->own_flags & shrinking);
     next->traps |= previous->traps;
+    next->own_traps |= previous->own_traps;
+    next->callback_params |= previous->callback_params;
     next->returns_external |= previous->returns_external;
     merge_effects(next, previous);
     join_flows(&next->flows[IR_SFLOW_RESULTS],
@@ -278,6 +282,8 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             prune_flows(&next->flows[IR_SFLOW_STORES]);
             bool differs = cyclic
                 && (next->flags != summary->flags
+                    || next->own_flags != summary->own_flags
+                    || next->callback_params != summary->callback_params
                     || next->traps != summary->traps
                     || !same_effects(next, summary)
                     || !same_paths(next, summary));
@@ -329,6 +335,9 @@ direct_callees(ir_summaries_t *summaries, ir_func_t *f,
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = f->blocks[b]->instrs[i];
+            ir_func_t *handler = in->op == IR_OP_CALLBACK_CREATE && in->dest
+                ? created_handler(in->dest) : nullptr;
+            if (handler) core_list_push(*out, handler);
             if (!is_call(in)) continue;
             call_targets_t targets;
             resolve_targets(summaries, in, &targets);

@@ -999,9 +999,9 @@ solve_liveness(n00bb_link_analysis_t *analysis, liveness_t *liveness,
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         index_bodies(liveness, unit_module(state));
-        if (state && state->interface_module && analysis->cache)
-            index_bodies(liveness, n00bb_cache_module(analysis->cache,
-                                                      unit->module.identifier));
+        if (state && state->interface_module)
+            index_bodies(liveness, interface_body_module(analysis,
+                                                         unit->module.identifier));
     }
     for (size_t i = 0; i < items->len; i++) {
         unused_item_t *item = &items->data[i];

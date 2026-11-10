@@ -8,5 +8,15 @@ func h() {
     alpha.flush()
 }
 
+func runs() {
+    alpha.run()
+}
+
+func traces() {
+    alpha.trace("x")
+}
+
 has_effect(g, alpha.Audited)
 forbids_effect(h, alpha.Audited)
+forbids_effect(runs, alpha.Traced)
+has_effect(traces, alpha.Traced)
