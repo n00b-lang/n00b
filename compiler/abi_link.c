@@ -172,6 +172,12 @@ n00bb_abi_object_index_names(n00bb_abi_object_view_t *view)
     core_dict_init_string(&view->symbol_names);
     core_dict_init_string(&view->function_roots);
     view->names_indexed = true;
+    const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+        N00B_ABI_TABLE_MODULE, 1);
+    n00bb_abi_string_view_t module_name = {0};
+    if (module && n00bb_abi_object_string(view, &module->full_path,
+                                          &module_name))
+        view->module_name = module_name;
     const n00bb_abi_directory_entry_t *symbols =
         n00bb_abi_object_table(view, N00B_ABI_TABLE_SYMBOL);
     for (uint32_t row = 1; symbols && row < symbols->record_count; row++) {
@@ -196,6 +202,16 @@ n00bb_abi_object_index_names(n00bb_abi_object_view_t *view)
         index_name(&view->function_roots,
                    n00bb_function_root(borrowed_name(name)), row);
     }
+    return true;
+}
+
+bool
+n00bb_abi_object_module_name(n00bb_abi_object_view_t *view,
+                             n00bb_abi_string_view_t *out)
+{
+    if (!n00bb_abi_object_index_names(view) || !view->module_name.bytes)
+        return false;
+    *out = view->module_name;
     return true;
 }
 

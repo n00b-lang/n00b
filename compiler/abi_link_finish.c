@@ -278,8 +278,8 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
         const n00b_abi_module_v1 *module = n00bb_abi_object_row(provider,
             N00B_ABI_TABLE_MODULE, 1);
         n00bb_abi_string_view_t module_name;
-        if (!module || !n00bb_abi_object_string(provider, &module->full_path,
-                &module_name)) return -1;
+        if (!module || !n00bb_abi_object_module_name(
+                &selected->views[provider_input], &module_name)) return -1;
         uint32_t provider_package;
         if (!n00bb_abi_index_plan_map(plan, provider_input,
                 N00B_ABI_TABLE_PACKAGE, module->package_index,

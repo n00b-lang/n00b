@@ -113,11 +113,12 @@ function_index_for_method(th_ctx *ctx,
     n00bb_dispatch_adapter_name(&adapter_name, method->qualified_name);
     for (size_t input = 0; input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
-        const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
-            N00B_ABI_TABLE_MODULE, 1);
         n00bb_abi_string_view_t module_name;
-        if (!module || !n00bb_abi_object_string(view, &module->full_path,
-                                                 &module_name)) return false;
+        if (!n00bb_abi_object_module_name(&selected->views[input],
+                                          &module_name)) {
+            core_buffer_release(&adapter_name);
+            return false;
+        }
         if (!same_string(module_name, method->module)) continue;
         const n00bb_abi_directory_entry_t *functions = n00bb_abi_object_table(
             view, N00B_ABI_TABLE_FUNCTION);

@@ -28,6 +28,7 @@ typedef struct {
     bool relocations_valid;
     core_dict_t symbol_names;
     core_dict_t function_roots;
+    n00bb_abi_string_view_t module_name;
     bool names_indexed;
 } n00bb_abi_object_view_t;
 
@@ -56,6 +57,8 @@ bool n00bb_abi_object_open(const core_target_desc_t *target,
                            n00bb_abi_object_view_t *out);
 void n00bb_abi_object_close(n00bb_abi_object_view_t *view);
 bool n00bb_abi_object_index_names(n00bb_abi_object_view_t *view);
+bool n00bb_abi_object_module_name(n00bb_abi_object_view_t *view,
+                                  n00bb_abi_string_view_t *out);
 const n00bb_abi_rows_t *n00bb_abi_symbols_named(
     const n00bb_abi_object_view_t *view, n00bb_abi_string_view_t name);
 const n00bb_abi_rows_t *n00bb_abi_functions_rooted(
