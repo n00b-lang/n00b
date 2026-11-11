@@ -23,6 +23,7 @@
 #include "lib/string.h"
 #include "diagnostics.h"
 #include "driver.h"
+#include "ir/summary.h"
 #include "writ/gen.h"
 
 typedef struct {
@@ -471,6 +472,31 @@ keep_type(const writ_n00b_type_t *type)
     return kept;
 }
 
+static uint32_t
+native_effects(writ_effects_t declared)
+{
+    uint32_t unknown = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_BLOCK
+        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_IO
+        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES;
+    if (!(declared & WRIT_EFFECTS_DECLARED) || (declared & WRIT_EFFECTS_OTHER))
+        return unknown;
+    static const struct {
+        writ_effects_t declared;
+        uint32_t       flags;
+    } effects[] = {
+        {WRIT_EFFECTS_ALLOC, IR_SUMMARY_MAY_ALLOCATE},
+        {WRIT_EFFECTS_BLOCKING, IR_SUMMARY_MAY_BLOCK},
+        {WRIT_EFFECTS_NORETURN, IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES},
+        {WRIT_EFFECTS_INPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_INPUT},
+        {WRIT_EFFECTS_OUTPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_OUTPUT},
+        {WRIT_EFFECTS_CALLBACKS, IR_SUMMARY_CALLS_CALLBACKS},
+    };
+    uint32_t flags = 0;
+    for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)
+        if (declared & effects[i].declared) flags |= effects[i].flags;
+    return flags;
+}
+
 static bool
 keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *natives)
 {
@@ -495,6 +521,7 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
             .param_count = declared->params_count,
             .result      = keep_type(declared->result),
             .pure        = declared->pure,
+            .effects     = native_effects(declared->effects),
         };
     }
     natives->count = externs->count;

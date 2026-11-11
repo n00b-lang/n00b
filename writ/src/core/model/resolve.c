@@ -1038,6 +1038,45 @@ typedef struct {
     bool thread;
 } fn_facts_t;
 
+static writ_effects_t
+effect_named(const writ_model_t *model, writ_sym_t name)
+{
+    static const struct {
+        const char    *text;
+        writ_effects_t bits;
+    } names[] = {
+        {"none", 0},
+        {"alloc", WRIT_EFFECTS_ALLOC},
+        {"blocking", WRIT_EFFECTS_BLOCKING},
+        {"noreturn", WRIT_EFFECTS_NORETURN},
+        {"input", WRIT_EFFECTS_INPUT},
+        {"output", WRIT_EFFECTS_OUTPUT},
+        {"io", WRIT_EFFECTS_INPUT | WRIT_EFFECTS_OUTPUT},
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (writ_is_text(model, name, names[i].text)) {
+            return names[i].bits;
+        }
+    }
+    return WRIT_EFFECTS_OTHER;
+}
+
+static void
+apply_effects(writ_model_t *model, writ_fn_rec_t *fn, uint32_t id)
+{
+    fn->effects |= WRIT_EFFECTS_DECLARED;
+    const writ_node_t *node = node_at(model, id);
+    for (uint32_t i = 0; i < node->child_count; i++) {
+        const writ_node_t *entry = node_at(model, child(model, id, i));
+        if (entry->kind == WRIT_N_EFFECT_OF) {
+            fn->effects |= WRIT_EFFECTS_CALLBACKS;
+        }
+        else if (entry->kind == WRIT_N_EFFECT_NAME) {
+            fn->effects |= effect_named(model, entry->name);
+        }
+    }
+}
+
 static void
 apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
 {
@@ -1046,6 +1085,9 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
     switch (node->kind) {
     case WRIT_N_PURE:
         fn->pure = true;
+        return;
+    case WRIT_N_EFFECTS:
+        apply_effects(model, fn, id);
         return;
     case WRIT_N_SIZING: {
         if (stated && !stated->sizing) {
@@ -1203,6 +1245,7 @@ is_clause(writ_node_kind_t kind)
 {
     switch (kind) {
     case WRIT_N_PURE:
+    case WRIT_N_EFFECTS:
     case WRIT_N_SIZING:
     case WRIT_N_ERROR:
     case WRIT_N_OUTCOME:

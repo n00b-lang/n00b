@@ -369,9 +369,9 @@ n00bb_axiom_note_pure_native(core_string_t symbol)
 }
 
 void
-n00bb_axiom_note_foreign_native(core_string_t symbol)
+n00bb_axiom_note_foreign_native(core_string_t symbol, uint32_t effects)
 {
-    note_generated_native(symbol, NATIVE_FOREIGN);
+    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2));
 }
 
 bool
@@ -381,7 +381,10 @@ n00bb_axiom_pure_native(const ir_func_t *function)
 }
 
 bool
-n00bb_axiom_foreign_native(const ir_func_t *function)
+n00bb_axiom_foreign_native(const ir_func_t *function, uint32_t *effects)
 {
-    return generated_native(function) == NATIVE_FOREIGN;
+    uintptr_t kind = generated_native(function);
+    if ((kind & 3) != NATIVE_FOREIGN) return false;
+    *effects = (uint32_t)(kind >> 2);
+    return true;
 }

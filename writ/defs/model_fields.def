@@ -134,6 +134,7 @@ WRIT_FIELD(fn, uint32_t, expands_node)
 WRIT_FIELD(fn, writ_thread_kind_t, thread)
 WRIT_FIELD(fn, writ_span_t, declared_at)
 WRIT_FIELD(fn, uint32_t, keywords_slot)
+WRIT_FIELD(fn, writ_effects_t, effects)
 WRIT_END(fn)
 
 WRIT_VIEW(union_arm)

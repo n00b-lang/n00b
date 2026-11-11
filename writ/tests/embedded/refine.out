@@ -259,6 +259,7 @@
     {
       "contract_name": "alloc_func",
       "declared_at": "6:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -398,6 +399,7 @@
     {
       "contract_name": "free_func",
       "declared_at": "7:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -480,6 +482,7 @@
     {
       "contract_name": "zlibVersion",
       "declared_at": "63:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -531,6 +534,7 @@
     {
       "contract_name": "deflate",
       "declared_at": "64:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -670,6 +674,7 @@
     {
       "contract_name": "deflateEnd",
       "declared_at": "65:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -766,6 +771,7 @@
     {
       "contract_name": "inflate",
       "declared_at": "66:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -919,6 +925,7 @@
     {
       "contract_name": "inflateEnd",
       "declared_at": "67:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1015,6 +1022,7 @@
     {
       "contract_name": "compress2",
       "declared_at": "68:1",
+      "effects": 3,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1227,6 +1235,7 @@
     {
       "contract_name": "compressBound",
       "declared_at": "69:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1308,6 +1317,7 @@
     {
       "contract_name": "uncompress",
       "declared_at": "70:1",
+      "effects": 3,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1491,6 +1501,7 @@
     {
       "contract_name": "adler32",
       "declared_at": "71:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1630,6 +1641,7 @@
     {
       "contract_name": "crc32",
       "declared_at": "72:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1769,6 +1781,7 @@
     {
       "contract_name": "deflateInit_",
       "declared_at": "73:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -1952,6 +1965,7 @@
     {
       "contract_name": "inflateInit_",
       "declared_at": "74:1",
+      "effects": 0,
       "expands_node": null,
       "expands_symbol": "",
       "format_slot": null,
@@ -2106,6 +2120,7 @@
     {
       "contract_name": "deflateInit",
       "declared_at": "75:1",
+      "effects": 0,
       "expands_node": "expands deflateInit_(strm, level, ZLIB_VERSION, sizeof(z_stream))",
       "expands_symbol": "deflateInit_",
       "format_slot": null,
@@ -2231,6 +2246,7 @@
     {
       "contract_name": "inflateInit",
       "declared_at": "77:1",
+      "effects": 0,
       "expands_node": "expands inflateInit_(strm, ZLIB_VERSION, sizeof(z_stream))",
       "expands_symbol": "inflateInit_",
       "format_slot": null,

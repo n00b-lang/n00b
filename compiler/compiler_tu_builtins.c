@@ -95,16 +95,14 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                      native->writes);
         return summary;
     }
-    bool foreign = n00bb_axiom_foreign_native(function);
+    uint32_t effects = 0;
+    bool     foreign = n00bb_axiom_foreign_native(function, &effects);
     if (!foreign && !n00bb_axiom_pure_native(function)) return nullptr;
     ir_summary_t *summary = ir_summary_new(summaries, function);
     if (foreign) {
-        ir_summary_set_flags(summary, IR_SUMMARY_MAY_FAIL
-            | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_BLOCK
-            | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_CALLS_CALLBACKS
-            | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-            | IR_SUMMARY_OBSERVES);
-        ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
+        ir_summary_set_flags(summary, effects);
+        if (effects & IR_SUMMARY_MAY_TRAP)
+            ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
     }
     for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
         ir_summary_add_path(summary, &(ir_spath_t){
@@ -344,7 +342,8 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
             return false;
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
-        else n00bb_axiom_note_foreign_native(natives.items[i].symbol);
+        else n00bb_axiom_note_foreign_native(natives.items[i].symbol,
+                                             natives.items[i].effects);
     }
     return true;
 }

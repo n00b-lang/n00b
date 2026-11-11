@@ -39,6 +39,7 @@ refine compress2 {
     source: *[u8; sourceLen]
     sizing needs compressBound(sourceLen)
     error ret != Z_OK via ret
+    effects alloc
 }
 
 refine uncompress {
@@ -46,6 +47,7 @@ refine uncompress {
     destLen: inout *c_ulong
     source: *[u8; sourceLen]
     error ret != Z_OK via ret
+    effects alloc
 }
 
 refine deflateInit_ {

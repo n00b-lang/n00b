@@ -69,6 +69,7 @@ typedef struct {
     size_t                         params_count;
     const writ_n00b_type_t        *result;
     bool                           pure;
+    writ_effects_t                 effects;
     writ_span_t                    declared_at;
 } writ_n00b_extern_t;
 

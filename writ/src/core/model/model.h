@@ -210,6 +210,7 @@ typedef struct {
     bool                has_result;
     writ_type_id        result;
     bool                pure;
+    writ_effects_t      effects;
     writ_sizing_kind_t  sizing;
     uint32_t            sizing_expr;
     uint32_t            sizing_slot;

@@ -37,6 +37,7 @@ typedef struct {
     size_t                param_count;
     n00bb_native_type_t  *result;
     bool                  pure;
+    uint32_t              effects;
 } n00bb_native_declaration_t;
 
 typedef struct {

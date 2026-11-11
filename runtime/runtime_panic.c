@@ -938,9 +938,10 @@ function_at(uintptr_t address)
 static bool
 is_main(const code_entry_t *entry)
 {
-    return entry && entry->length == 4 && entry->name[0] == 'm'
-        && entry->name[1] == 'a' && entry->name[2] == 'i'
-        && entry->name[3] == 'n';
+    if (!entry) return false;
+    text_t name = {(const uint8_t *)entry->name, entry->length};
+    return text_equal(name, TEXT("main"))
+        || text_equal(name, TEXT("__n00bb_main"));
 }
 
 static text_t

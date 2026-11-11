@@ -1578,7 +1578,7 @@ run_comptime(core_link_unit_t *link, program_link_t *program,
         core_string_t temp = core_os_temp_root();
         core_buffer_t stem = {0};
         core_buffer_append_string(&stem, temp);
-        core_buffer_puts(&stem, "/n00bb-comptime-program-");
+        core_buffer_puts(&stem, "/n00bb-comptime-program.");
         core_free(temp.data);
         int fd = core_os_make_unique_file(core_buffer_string(&stem), &made);
         core_buffer_release(&stem);
@@ -1769,21 +1769,62 @@ keep_runtime_objects(core_list_t(n00bb_cache_module_object_t) *kept,
     core_list_free(*runtime);
 }
 
+static core_list_t(core_translation_unit_ptr_t)
+units_to_reemit(const n00bb_link_analysis_t *analysis,
+                core_translation_unit_t *const *order, size_t count,
+                const core_list_t(core_translation_unit_ptr_t) *baked,
+                const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions)
+{
+    core_list_t(core_translation_unit_ptr_t) units =
+        core_list_new(core_translation_unit_ptr_t);
+    core_dict_t listed;
+    core_dict_init(&listed, nullptr, nullptr);
+    for (size_t i = 0; i < baked->len; i++) {
+        core_list_push(units, baked->data[i]);
+        core_dict_put(&listed, baked->data[i], baked->data[i]);
+    }
+    core_dict_t runtime;
+    core_dict_init(&runtime, nullptr, nullptr);
+    for (size_t i = 0; i < runtime_functions->len; i++)
+        core_dict_put(&runtime, runtime_functions->data[i],
+                      runtime_functions->data[i]);
+    core_dict_t stale;
+    core_dict_init(&stale, nullptr, nullptr);
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
+        if (function->n_blocks && !core_dict_contains(&runtime, function))
+            core_dict_put(&stale, function->owner, function->owner);
+    }
+    for (size_t i = 0; i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order[i]);
+        if (state->interface_module || core_dict_contains(&listed, order[i])
+            || !core_dict_contains(&stale, state->ir_module)) continue;
+        core_list_push(units, order[i]);
+    }
+    core_dict_free(&stale);
+    core_dict_free(&runtime);
+    core_dict_free(&listed);
+    return units;
+}
+
 static bool
 emit_runtime_objects(core_link_unit_t *link,
                      const module_emission_t *emission,
                      program_link_t *program,
                      core_translation_unit_t *const *order, size_t count,
-                     const core_list_t(core_translation_unit_ptr_t) *units,
+                     const core_list_t(core_translation_unit_ptr_t) *baked,
                      const module_entry_t *root_entry,
                      core_diagnostics_t *diagnostics)
 {
     if (!use_cached_runtime_objects(emission, program, order, count))
         return false;
-    n00bb_comptime_prune(emission->analysis, units->data, units->len);
+    n00bb_comptime_prune(emission->analysis, baked->data, baked->len);
     core_list_t(n00bb_ir_func_ptr_t) runtime_functions = {0};
     if (!n00bb_runtime_functions(emission->analysis, &runtime_functions))
         return false;
+    core_list_t(core_translation_unit_ptr_t) reemitted = units_to_reemit(
+        emission->analysis, order, count, baked, &runtime_functions);
+    const core_list_t(core_translation_unit_ptr_t) *units = &reemitted;
     core_list_t(n00bb_cache_module_object_t) runtime_kept =
         core_list_new(n00bb_cache_module_object_t);
     module_emission_t runtime = *emission;
@@ -1864,6 +1905,7 @@ emit_runtime_objects(core_link_unit_t *link,
     if (runtime.native_frames) n00bb_native_frames_free(runtime.native_frames);
     keep_runtime_objects(emission->kept, &runtime_kept);
     core_list_free(runtime_functions);
+    core_list_free(reemitted);
     core_free(fresh);
     if (!ok && !core_diagnostics_failed(diagnostics))
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},

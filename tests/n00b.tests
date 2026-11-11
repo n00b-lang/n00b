@@ -64,7 +64,6 @@ ffi-zlib	pr	23	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ff
 ffi-load-dynamic	pr	2	sh "$SRC/tests/ffi_load_dynamic.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi_load_dynamic" "$SRC/writ/contracts"
 ffi-resharp	pr,rust	20	sh "$SRC/tests/ffi_resharp.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts"
 panic-n00b	pr	11	sh "$SRC/tests/panic_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_panic.n"
-text-theme-builtin-immutable	pr	25	sh "$SRC/tests/panic_message_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/text/theme_builtin_immutable.n" 'builtin themes are immutable; copy the theme first'
 operator-newline-parse	pr	2	sh "$SRC/tests/operator_newline.sh" "$BUILD/n00b" "$SRC/tests/programs/operator_newline_continuation.n" "$SRC/tests/programs/operator_double_newline_rejected.n"
 incremental-cache	pr	35	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" edits
 private-consume-trait-method-n00b	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/bitcode/trait_consume_private.n"

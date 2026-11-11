@@ -19,7 +19,11 @@ fail() {
 }
 
 check() {
-    N00B_DIAGNOSTICS=terse "$compiler" check "$@" >"$tmp/out" 2>&1
+    status=0
+    N00B_DIAGNOSTICS=terse "$compiler" check "$@" >"$tmp/out" 2>"$tmp/err" \
+        || status=$?
+    cat "$tmp/err" >>"$tmp/out"
+    return "$status"
 }
 
 check server.n || fail "the first check failed"

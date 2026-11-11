@@ -34,6 +34,7 @@ fn bind_text(
 ) -> c_int
 fn stmt_byte(stmt: Stmt, index: c_int) -> c_int
 fn stmt_release(stmt: consume ?Stmt)
+  effects none
 
 binding {
     policy bind_text.dtor use TEXT_STATIC
@@ -79,6 +80,7 @@ fn db_flags(db: Db, sized: *Sized) -> u32
 fn db_depth(db: Db, plain: *Plain) -> c_int
   pack keywords plain
 fn db_close(db: consume ?Db)
+  effects none
 
 binding {
     keywords Limits as record
@@ -95,9 +97,11 @@ handle Iter = *iter_state release iter_close
 
 fn source_open(seed: c_int) -> own ?Source release source_close
 fn source_close(db: consume ?Source)
+  effects none
 fn iter_new(db: Source) -> own ?Iter with db
 fn iter_next(iter: Iter) -> c_int
 fn iter_close(iter: consume ?Iter)
+  effects none
 -]'ffi
 
 const hooks = [-

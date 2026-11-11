@@ -4612,8 +4612,14 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
                       n00bb_source_unit_module, analysis, &seeds);
     bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
-                                 diagnostics)
-        && (check_only || n00bb_rewrite_box_operations(analysis))
+                                 diagnostics);
+    if (ok && !check_only
+        && !(n00bb_recompute_summaries(analysis)
+             && check_post_specialization(analysis))) {
+        core_list_free(seeds);
+        return false;
+    }
+    ok = ok && (check_only || n00bb_rewrite_box_operations(analysis))
         && (check_only
             || specialize_emitted(analysis, nullptr, 0, &failure,
                                   diagnostics));
@@ -5231,7 +5237,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     else if (located && emit_program)
         located = report_boxed_operators(link_analysis);
     if (located && specializing) warn_dead_type_arms(link_analysis);
-    if (located && !emit_program)
+    if (located && !emit_program && link_analysis)
         located = (!specializing || n00bb_recompute_summaries(link_analysis))
             && check_post_specialization(link_analysis);
     if (located && emit_program && specialize
@@ -5239,7 +5245,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             CORE_STRING_STATIC("--report-specialization-gaps")))
         (void)report_specialization_gaps(link_analysis);
     if (located && emit_program && !specialize)
-        located = n00bb_rewrite_box_operations(link_analysis)
+        located = check_post_specialization(link_analysis)
+            && n00bb_rewrite_box_operations(link_analysis)
             && publish_declared_aggregate_layouts(link_analysis)
             && publish_interned_variant_layouts(link_analysis);
     if (located && emit_program && n00bb_setting_bool(
@@ -5248,7 +5255,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && emit_program) {
         optimize_range_checks(link_analysis);
         located = n00bb_recompute_summaries(link_analysis)
-            && check_post_specialization(link_analysis);
+            && !link_analysis->effect_checks_failed;
     }
     if (located && emit_program && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--verify-analyses")))
