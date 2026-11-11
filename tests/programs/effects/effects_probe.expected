@@ -21,7 +21,7 @@ builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets
+  effects may_trap may_allocate may_collect allocates_direct reinterprets finalizes_params
   reads self.__value.entries
   reads self.__value.index.ctrl
   reads self.__value.index.hashes
@@ -37,7 +37,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   traps explicit bounds unwrap arithmetic
   returns self.__value.entries.__value.storage.__value[].value
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
-  effects may_trap may_allocate may_collect allocates_direct reinterprets
+  effects may_trap may_allocate may_collect allocates_direct reinterprets finalizes_params
   reads self.__value.entries
   reads+writes self.__value.index.ctrl
   reads+writes self.__value.index.dead

@@ -5,14 +5,14 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   param self      writer, lends
   param key       reader, lends
   param value     reader, lends
-  detail          may_collect allocates_direct reinterprets
+  detail          may_collect allocates_direct reinterprets finalizes_params
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads_globals   builtin.hashing.secret.__value[]...
   allocates       builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.containers.dict.insertion_keys (365:18) -> builtin.containers.dict.key_slice (307:12) -> here (286:28)
   panics          here (109:34)
   param self      reader
   param key       reader
-  detail          may_collect allocates_direct reinterprets
+  detail          may_collect allocates_direct reinterprets finalizes_params
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   no effects      
   param self      reader
@@ -26,13 +26,13 @@ builtin.containers.list.append: (List['T], 'T, bool) -> nil
   param self      writer, lends
   param value     untouched, lends
   param front     untouched
-  detail          may_collect allocates_direct
+  detail          may_collect allocates_direct finalizes_params
 builtin.containers.list.pop: (List['T], bool) -> 'T?
   allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (183:23)
   param self      writer, lends
   param front     untouched
-  detail          may_collect allocates_direct
+  detail          may_collect allocates_direct finalizes_params
 builtin.containers.list.len: (List['T]) -> uint
   no effects      
   param self      reader

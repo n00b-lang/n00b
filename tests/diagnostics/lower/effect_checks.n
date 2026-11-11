@@ -86,3 +86,45 @@ func sum_items(view items: List[int]) -> int {
     }
     return sum
 }
+
+const loud = [-
+library loud
+
+opaque loud_state
+handle Loud = *loud_state release loud_free
+
+fn loud_open() -> own ?Loud release loud_free
+fn loud_free(r: consume ?Loud)
+  effects output
+-]'ffi
+
+record Noisy {
+    id: int
+}
+
+func __finalize(consume self: Ref[Noisy]) {
+    __fd_write(2, "finalized\n")
+}
+
+func copy_twice(view item: 'T) -> 'T {
+    var first: 'T = item
+    var second: 'T = first
+    return second
+}
+
+func noisy_copy(n: Noisy) -> Noisy {
+    return copy_twice(n)
+}
+
+let sample: Noisy = (id = 1)
+require noisy_copy(sample).id == 1
+require quiet_copy(2) == 2
+
+func quiet_copy(n: int) -> int {
+    return copy_twice(n)
+}
+
+may_effect(noisy_copy, output)
+!may_effect(quiet_copy, output)
+!may_effect(copy_twice, output)
+!may_effect(Dict.get, output)

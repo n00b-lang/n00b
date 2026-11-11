@@ -1702,6 +1702,14 @@ bool
 n00bb_summary_call_targets(void *context, const ir_instr_t *call,
                            ir_summary_target_fn add, void *sink);
 
+uint32_t
+n00bb_summary_call_flags(void *context, const ir_instr_t *call);
+
+bool
+n00bb_summary_call_finalizers(void *context, const ir_instr_t *call,
+                              const ir_func_t *target,
+                              ir_summary_target_fn add, void *sink);
+
 ir_summary_t *
 n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
                     const ir_func_t *function);

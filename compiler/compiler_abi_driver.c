@@ -1319,14 +1319,53 @@ report_link_warnings(core_diagnostics_t *diagnostics, core_string_t text)
     }
 }
 
+enum { LINKER_COMMAND_LIMIT = 16384 };
+
+static core_string_t
+linker_response_file(char *const *arguments)
+{
+    size_t length = 0;
+    for (size_t i = 0; arguments[i]; i++)
+        for (const char *c = arguments[i]; ; c++) {
+            length++;
+            if (!*c) break;
+        }
+    if (length <= LINKER_COMMAND_LIMIT) return (core_string_t){0};
+    core_buffer_t text = {0};
+    for (size_t i = 1; arguments[i]; i++) {
+        core_buffer_putc(&text, '"');
+        for (const char *c = arguments[i]; *c; c++) {
+            if (*c == '"' || *c == '\\') core_buffer_putc(&text, '\\');
+            core_buffer_putc(&text, *c);
+        }
+        core_buffer_puts(&text, "\"\n");
+    }
+    core_string_t path = n00bb_write_temporary_object(text.data,
+                                                      text.byte_len);
+    core_buffer_release(&text);
+    return path;
+}
+
 static bool
 run_linker(const link_report_t *report, core_diagnostics_t *diagnostics)
 {
     core_buffer_t output = {0};
     core_buffer_t errors = {0};
     core_process_status_t status = {0};
-    int launched = core_process_capture(report->arguments, nullptr, 0,
-                                        &output, &errors, &status);
+    core_string_t response = linker_response_file(report->arguments);
+    core_buffer_t file_argument = {0};
+    char *short_arguments[3] = {report->arguments[0], nullptr, nullptr};
+    if (response.data) {
+        core_buffer_putc(&file_argument, '@');
+        core_buffer_append_string(&file_argument, response);
+        short_arguments[1] = file_argument.data;
+    }
+    int launched = core_process_capture(
+        response.data ? short_arguments : report->arguments, nullptr, 0,
+        &output, &errors, &status);
+    if (response.data) core_os_remove_file(response);
+    core_free(response.data);
+    core_buffer_release(&file_argument);
     if (launched) {
         core_buffer_release(&output);
         core_buffer_release(&errors);

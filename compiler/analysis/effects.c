@@ -480,6 +480,147 @@ n00bb_summary_call_targets(void *context, const ir_instr_t *call,
     return true;
 }
 
+enum { FINALIZED_TYPE_LIMIT = 64 };
+
+typedef struct {
+    th_ctx   *types;
+    th_type  *found[FINALIZED_TYPE_LIMIT];
+    size_t    count;
+} finalized_types_t;
+
+static bool
+note_finalized_type(void *context, th_type *variable, th_type *value)
+{
+    (void)variable;
+    finalized_types_t *pending = context;
+    th_type *type = value ? th_resolve(value) : nullptr;
+    if (!type || !th_is_closed(pending->types, type)) return true;
+    for (size_t i = 0; i < pending->count; i++)
+        if (th_hash(pending->types, pending->found[i])
+            == th_hash(pending->types, type)) return true;
+    if (pending->count < FINALIZED_TYPE_LIMIT)
+        pending->found[pending->count++] = type;
+    return true;
+}
+
+static th_type *
+finalized_receiver(const ir_func_t *finalizer)
+{
+    const th_param *self = th_func_param(finalizer->type, 0);
+    th_type *type = self && self->type ? th_resolve(self->type) : nullptr;
+    return type && th_kind_of(type) == TH_INDIRECTION
+        ? th_resolve(th_ind_referent(type)) : type;
+}
+
+static const core_list_t(n00bb_ir_func_ptr_t) *
+finalizer_implementations(n00bb_link_analysis_t *analysis)
+{
+    static const char key = 0;
+    if (!analysis->trait_targets_ready) {
+        core_dict_init(&analysis->trait_targets, nullptr, nullptr);
+        analysis->trait_targets_ready = true;
+    }
+    bool found = false;
+    core_list_t(n00bb_ir_func_ptr_t) *targets = core_dict_get(
+        &analysis->trait_targets, (void *)&key, &found);
+    if (!found) {
+        targets = implementations(analysis, CORE_STRING_STATIC("Finalize"),
+                                  CORE_STRING_STATIC("__finalize"));
+        core_dict_put(&analysis->trait_targets, (void *)&key, targets);
+    }
+    return targets;
+}
+
+static bool
+bind_from_operands(th_ctx *types, const ir_instr_t *call,
+                   const ir_func_t *target, finalized_types_t *pending)
+{
+    size_t params = th_func_nparams(target->type);
+    for (size_t p = 0; p < params && p + 1 < call->n_operands; p++) {
+        const th_param *formal = th_func_param(target->type, p);
+        const ir_value_t *actual = call->operands[p + 1].kind == IR_OPD_VALUE
+            ? call->operands[p + 1].value : nullptr;
+        th_type *type = actual && actual->type ? th_resolve(actual->type)
+                                               : nullptr;
+        th_type *expected = formal && formal->type ? th_resolve(formal->type)
+                                                   : nullptr;
+        if (type && expected && th_kind_of(type) == TH_INDIRECTION
+            && th_kind_of(expected) != TH_INDIRECTION)
+            type = th_resolve(th_ind_referent(type));
+        if (!actual) continue;
+        if (!expected || !type || !th_is_closed(types, type)
+            || !th_match_each(expected, type, note_finalized_type, pending))
+            return false;
+    }
+    th_type *result = th_func_ret(target->type);
+    th_type *returned = call->dest && call->dest->type
+        ? th_resolve(call->dest->type) : nullptr;
+    if (result && returned && th_is_closed(types, returned))
+        (void)th_match_each(result, returned, note_finalized_type, pending);
+    return true;
+}
+
+bool
+n00bb_summary_call_finalizers(void *context, const ir_instr_t *call,
+                              const ir_func_t *target,
+                              ir_summary_target_fn add, void *sink)
+{
+    n00bb_link_analysis_t *analysis = context;
+    ir_module_t *module = call->block && call->block->owner
+        ? call->block->owner->owner : nullptr;
+    th_ctx *types = module ? ir_module_types(module) : nullptr;
+    th_type *signature = ir_instr_call_signature(call);
+    if (!types || !target || th_is_closed(types, target->type)) return false;
+    finalized_types_t pending = {.types = types};
+    if (signature && th_is_closed(types, signature)) {
+        if (!th_match_each(target->type, signature, note_finalized_type,
+                           &pending))
+            return false;
+    }
+    else if (!bind_from_operands(types, call, target, &pending))
+        return false;
+    const core_list_t(n00bb_ir_func_ptr_t) *finalizers =
+        finalizer_implementations(analysis);
+    for (size_t t = 0; t < pending.count; t++) {
+        th_type *type = pending.found[t];
+        for (size_t f = 0; finalizers && f < finalizers->len; f++) {
+            ir_func_t *finalizer = finalizers->data[f];
+            th_type *receiver = finalized_receiver(finalizer);
+            if (!receiver || th_kind_of(receiver) == TH_VAR
+                || !th_matches(receiver, type)) continue;
+            add(sink, finalizer);
+            if (!th_is_closed(types, receiver))
+                (void)th_match_each(receiver, type, note_finalized_type,
+                                    &pending);
+        }
+        for (size_t a = 0; th_kind_of(type) == TH_NAMED
+             && a < th_named_nargs(type); a++) {
+            const th_arg *argument = th_named_arg(type, a);
+            if (argument && argument->kind == TH_ARG_TYPE)
+                (void)note_finalized_type(&pending, nullptr, argument->type);
+        }
+        th_type *definition = th_kind_of(type) == TH_NAMED
+            ? ir_type_definition(module, type) : type;
+        definition = definition ? th_resolve(definition) : nullptr;
+        for (size_t m = 0; definition && th_kind_of(definition) == TH_RECORD
+             && m < th_record_len(definition); m++)
+            (void)note_finalized_type(&pending, nullptr,
+                                      th_record_member(definition, m)->type);
+    }
+    return true;
+}
+
+uint32_t
+n00bb_summary_call_flags(void *context, const ir_instr_t *call)
+{
+    (void)context;
+    core_string_t trait = {0}, method = {0};
+    return n00bb_direct_call_target(call)
+            && n00bb_open_hook(call, &trait, &method)
+            && core_string_eq(trait, CORE_STRING_STATIC("Finalize"))
+        ? IR_SUMMARY_FINALIZES_PARAMS : 0;
+}
+
 ir_summary_t *
 n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
                     const ir_func_t *function)

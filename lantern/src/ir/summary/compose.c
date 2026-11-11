@@ -348,7 +348,8 @@ enum {
         | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
         | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
         | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
-        | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE,
+        | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
+        | IR_SUMMARY_FINALIZES_PARAMS,
 };
 
 static const ir_value_t *
@@ -390,6 +391,33 @@ static void compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
                            const ir_instr_t *call, ir_func_t *target,
                            uint32_t observes, int depth);
 static bool panic_only(const ir_summary_t *summary);
+
+static void
+add_finalizer(void *sink, ir_func_t *finalizer)
+{
+    core_list_t(summary_func_ptr_t) *finalizers = sink;
+    core_list_push(*finalizers, finalizer);
+}
+
+static bool
+substitute_finalizers(ir_summaries_t *summaries, ir_summary_t *summary,
+                      const ir_instr_t *call, const ir_summary_t *callee,
+                      ir_func_t *target, uint32_t observes, int depth)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (!(callee->flags & IR_SUMMARY_FINALIZES_PARAMS) || !hooks
+        || !hooks->call_finalizers || depth >= CALLBACK_DEPTH_LIMIT)
+        return false;
+    core_list_t(summary_func_ptr_t) finalizers =
+        core_list_new(summary_func_ptr_t);
+    bool bound = hooks->call_finalizers(hooks->context, call, target,
+                                        add_finalizer, &finalizers);
+    for (size_t i = 0; bound && i < finalizers.len; i++)
+        compose_target(summaries, summary, call, finalizers.data[i],
+                       observes, depth + 1);
+    core_list_free(finalizers);
+    return bound;
+}
 
 static bool
 substitute_callbacks(ir_summaries_t *summaries, ir_summary_t *summary,
@@ -443,6 +471,9 @@ compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
     uint32_t flags = callee_flags & (INHERITED_FLAGS | observes);
     if ((callee->flags & IR_SUMMARY_DIVERGES) && !panic_only(callee))
         flags |= IR_SUMMARY_MAY_DIVERGE;
+    if (substitute_finalizers(summaries, summary, call, callee, target,
+                              observes, depth))
+        flags &= ~(uint32_t)IR_SUMMARY_FINALIZES_PARAMS;
     if (flags) add_flags(summary, flags, call, target, (core_string_t){0});
     const ir_summary_hooks_t *hooks = summaries->hooks;
     for (size_t e = 0; e < callee->effects.len; e++)
@@ -478,6 +509,18 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
     if (call->op == IR_OP_CALLBACK_INVOKE)
         add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call, nullptr,
                   (core_string_t){0});
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    uint32_t extra = hooks && hooks->call_flags
+        ? hooks->call_flags(hooks->context, call) : 0;
+    if (extra)
+        add_flags(summary, extra, call,
+                  targets.targets.len ? targets.targets.data[0] : nullptr,
+                  (core_string_t){0});
+    if (extra & IR_SUMMARY_FINALIZES_PARAMS) {
+        summary->deferring = deferring;
+        core_list_free(targets.targets);
+        return;
+    }
     if (targets.unknown) {
         const ir_func_t *f = summary->function;
         core_string_t name = deferred && f

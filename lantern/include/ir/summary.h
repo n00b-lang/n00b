@@ -111,6 +111,10 @@ typedef struct {
                             const ir_func_t *callee, core_string_t effect);
     void (*callee_effects)(void *context, const ir_func_t *callee,
                            ir_summary_t *caller);
+    uint32_t (*call_flags)(void *context, const ir_instr_t *call);
+    bool (*call_finalizers)(void *context, const ir_instr_t *call,
+                            const ir_func_t *target, ir_summary_target_fn add,
+                            void *sink);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 

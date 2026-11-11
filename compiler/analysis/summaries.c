@@ -384,6 +384,8 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
+        .call_flags = n00bb_summary_call_flags,
+        .call_finalizers = n00bb_summary_call_finalizers,
         .axiom = n00bb_summary_axiom,
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,
