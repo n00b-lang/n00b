@@ -126,6 +126,7 @@ struct ir_reinterpretations_t {
     bool                          sealed;
     bool                          unseen;
     bool                          previous_unseen;
+    bool                          changed;
 };
 
 typedef struct {
@@ -319,7 +320,14 @@ ir_reinterpretations_seal(ir_ctx_t *ctx)
     for (size_t i = 0; same && i < registry->components.len; i++)
         same = registry->components.data[i]
             == registry->previous_components.data[i];
+    registry->changed = !same;
     if (!same) clear_answers(registry);
+}
+
+bool
+ir_reinterpretations_changed(ir_ctx_t *ctx)
+{
+    return !ctx || reinterpretations(ctx)->changed;
 }
 
 static uint32_t

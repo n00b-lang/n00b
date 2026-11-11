@@ -353,6 +353,12 @@ ir_func_shape(const ir_func_t *f)
     return fingerprint(f, false);
 }
 
+uint64_t
+ir_func_identity(const ir_func_t *f)
+{
+    return fingerprint(f, true);
+}
+
 void
 ir_func_release_analyses(ir_func_t *f)
 {

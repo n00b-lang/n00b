@@ -122,6 +122,10 @@ typedef struct {
 ir_summaries_t *ir_summaries_compute(ir_func_t *const *functions,
                                      size_t count,
                                      const ir_summary_hooks_t *hooks);
+ir_summaries_t *ir_summaries_recompute(ir_func_t *const *functions,
+                                       size_t count,
+                                       const ir_summary_hooks_t *hooks,
+                                       ir_summaries_t *previous);
 ir_summaries_t *ir_escapes_compute(ir_func_t *const *functions, size_t count,
                                    const ir_summary_hooks_t *hooks);
 void            ir_summaries_free(ir_summaries_t *summaries);

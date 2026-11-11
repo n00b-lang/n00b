@@ -51,6 +51,12 @@ typedef struct {
     const ir_func_t         *function;
 } flow_table_t;
 
+typedef struct {
+    const ir_func_t *function;
+    uint64_t         content;
+} summary_dep_t;
+core_list_decl(summary_dep_t);
+
 struct ir_summary_t {
     const ir_func_t           *function;
     uint32_t                   flags;
@@ -69,15 +75,25 @@ struct ir_summary_t {
     core_list_t(ir_sfield_t)   fields;
     core_list_t(core_string_t) effects;
     core_list_t(ir_spath_t)    paths;
+    core_list_t(summary_dep_t) deps;
+    uint64_t                   identity;
+    uint64_t                   content;
+    bool                       hashed;
+    bool                       pinned;
 };
 
 struct ir_summaries_t {
     const ir_summary_hooks_t *hooks;
+    ir_summary_hooks_t        hook_values;
     core_list_t(summary_ptr_t) owned;
     core_dict_t               by_function;
     core_dict_t               type_memos;
     core_dict_t               engines;
     bool                      escapes_only;
+    bool                      reusable;
+    ir_summaries_t           *previous;
+    ir_summary_t             *recording;
+    core_dict_t               adopted;
 };
 
 typedef ir_spath_list_t path_list_t;

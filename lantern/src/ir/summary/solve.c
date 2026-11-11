@@ -20,6 +20,10 @@ core_list_decl(frame_t);
 
 static void direct_callees(ir_summaries_t *summaries, ir_func_t *f,
                            core_list_t(summary_func_ptr_t) *out);
+static bool witness_from_calls(ir_summaries_t *summaries,
+                               ir_func_t *const *members, size_t count,
+                               const bool *done, uint32_t key, ir_func_t *f,
+                               ir_summary_t *summary);
 
 static void
 summarize_fields(ir_summaries_t *summaries, ir_summary_t *summary,
@@ -141,6 +145,18 @@ witness_through(ir_summaries_t *summaries, ir_func_t *const *members,
 {
     ir_func_t    *f       = members[at];
     ir_summary_t *summary = ir_summary_of(summaries, f);
+    summaries->recording = summary;
+    bool found_witness = witness_from_calls(summaries, members, count, done,
+                                            key, f, summary);
+    summaries->recording = nullptr;
+    return found_witness;
+}
+
+static bool
+witness_from_calls(ir_summaries_t *summaries, ir_func_t *const *members,
+                   size_t count, const bool *done, uint32_t key,
+                   ir_func_t *f, ir_summary_t *summary)
+{
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
@@ -228,10 +244,106 @@ join_rounds(ir_summary_t *next, const ir_summary_t *previous)
 }
 
 
+
+static uint64_t
+summary_content(ir_summary_t *summary)
+{
+    if (summary->hashed) return summary->content;
+    core_buffer_t out = {0};
+    (void)ir_summary_encode(summary, &out);
+    uint64_t scalars[] = {
+        summary->own_flags, summary->own_traps, summary->callback_params,
+        summary->pointer_result, summary->deferring,
+    };
+    core_buffer_append(&out, (const char *)scalars, sizeof(scalars));
+    for (size_t i = 0; i < summary->fields.len; i++) {
+        const ir_sfield_t *field = &summary->fields.data[i];
+        uint64_t record = (uint64_t)(uintptr_t)field->record;
+        core_buffer_append(&out, (const char *)&record, sizeof(record));
+        core_buffer_append_string(&out, field->name);
+        core_buffer_append(&out, (const char *)&field->flags,
+                           sizeof(field->flags));
+    }
+    summary->content = core_xxh3_64bits_raw(out.data ? out.data : "",
+                                            out.byte_len) | 1;
+    summary->hashed  = true;
+    core_buffer_release(&out);
+    return summary->content;
+}
+
+static void
+stamp_component(ir_summaries_t *summaries, ir_func_t *const *members,
+                size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        ir_summary_t *summary = ir_summary_of(summaries, members[i]);
+        summary->identity = ir_func_identity(members[i]);
+        for (size_t d = 0; d < summary->deps.len; d++) {
+            summary_dep_t *dep = &summary->deps.data[d];
+            dep->content = member_index(members, count, dep->function) < count
+                ? 0
+                : summary_content(target_summary(summaries,
+                                                 (ir_func_t *)dep->function));
+        }
+    }
+}
+
+static bool
+depends_on(const ir_summary_t *summary, const ir_func_t *function)
+{
+    for (size_t d = 0; d < summary->deps.len; d++)
+        if (summary->deps.data[d].function == function) return true;
+    return false;
+}
+
+static bool
+reusable_member(ir_summaries_t *summaries, ir_func_t *const *members,
+                size_t count, size_t at)
+{
+    ir_summary_t *old = ir_summary_of(summaries->previous, members[at]);
+    if (!old || old->pinned || !old->identity
+        || core_dict_contains(&summaries->previous->adopted, old)
+        || old->identity != ir_func_identity(members[at]))
+        return false;
+    for (size_t d = 0; d < old->deps.len; d++) {
+        const summary_dep_t *dep = &old->deps.data[d];
+        if (member_index(members, count, dep->function) < count) continue;
+        if (summary_content(target_summary(summaries,
+                (ir_func_t *)dep->function)) != dep->content)
+            return false;
+    }
+    core_list_t(summary_func_ptr_t) callees =
+        core_list_new(summary_func_ptr_t);
+    direct_callees(summaries, members[at], &callees);
+    bool covered = true;
+    for (size_t c = 0; covered && c < callees.len; c++)
+        covered = member_index(members, count, callees.data[c]) < count
+            || depends_on(old, callees.data[c]);
+    core_list_free(callees);
+    return covered;
+}
+
+static bool
+adopt_component(ir_summaries_t *summaries, ir_func_t *const *members,
+                size_t count)
+{
+    if (!summaries->reusable || !summaries->previous) return false;
+    for (size_t i = 0; i < count; i++)
+        if (!reusable_member(summaries, members, count, i)) return false;
+    for (size_t i = 0; i < count; i++) {
+        ir_summary_t *old = ir_summary_of(summaries->previous, members[i]);
+        core_dict_put(&summaries->previous->adopted, old, old);
+        core_list_push(summaries->owned, old);
+        core_dict_put(&summaries->by_function, members[i], old);
+    }
+    return true;
+}
+
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
 {
+    if (adopt_component(summaries, members, count)) return;
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
@@ -267,6 +379,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
             ir_summary_t *next    = ir_summary_new(nullptr, members[i]);
             size_t scope = ir_analysis_scope_begin();
+            summaries->recording = next;
             if (summaries->escapes_only)
                 summarize_divergence(summaries, next, members[i]);
             else summarize_function(summaries, next, members[i],
@@ -276,6 +389,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             if (hooks && hooks->bookkeeping)
                 ir_summary_paths_as_reads(next, hooks->bookkeeping(
                     hooks->context, members[i], next));
+            summaries->recording = nullptr;
             ir_analysis_scope_end(scope);
             if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
@@ -326,6 +440,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         ir_analysis_scope_end(scope);
     }
     if (!summaries->escapes_only) ground_witnesses(summaries, members, count);
+    stamp_component(summaries, members, count);
 }
 
 static void
@@ -459,18 +574,42 @@ collect_reinterpretations(ir_summaries_t *summaries,
     ir_reinterpretations_seal(ctx);
 }
 
+static bool
+same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
+{
+    return a->context == b->context && a->call_targets == b->call_targets
+        && a->axiom == b->axiom && a->adjust == b->adjust
+        && a->entries == b->entries
+        && a->global_reachable == b->global_reachable
+        && a->bookkeeping == b->bookkeeping
+        && a->inherits_effect == b->inherits_effect
+        && a->callee_effects == b->callee_effects
+        && a->call_flags == b->call_flags
+        && a->call_finalizers == b->call_finalizers
+        && a->owned_field == b->owned_field
+        && a->defer_trap_proofs == b->defer_trap_proofs;
+}
+
 static ir_summaries_t *
 compute_summaries(ir_func_t *const *functions, size_t count,
-                  const ir_summary_hooks_t *hooks, bool escapes_only)
+                  const ir_summary_hooks_t *hooks, bool escapes_only,
+                  ir_summaries_t *previous)
 {
     ir_summaries_t *summaries = core_alloc(ir_summaries_t);
     summaries->hooks = hooks;
+    if (hooks) summaries->hook_values = *hooks;
     summaries->escapes_only = escapes_only;
     summaries->owned = core_list_new(summary_ptr_t);
     core_dict_init(&summaries->by_function, nullptr, nullptr);
     core_dict_init(&summaries->type_memos, nullptr, nullptr);
     core_dict_init(&summaries->engines, nullptr, nullptr);
+    core_dict_init(&summaries->adopted, nullptr, nullptr);
     collect_reinterpretations(summaries, functions, count);
+    summaries->previous = previous;
+    summaries->reusable = previous && hooks && count && !escapes_only
+        && !previous->escapes_only
+        && same_hooks(&previous->hook_values, hooks)
+        && !ir_reinterpretations_changed(functions[0]->owner->ctx);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
     core_dict_init(&t.index, nullptr, nullptr);
@@ -487,6 +626,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     core_dict_free(&t.lowlink);
     core_dict_free(&t.on_stack);
     core_list_free(t.stack);
+    summaries->previous = nullptr;
     return summaries;
 }
 
@@ -494,14 +634,22 @@ ir_summaries_t *
 ir_summaries_compute(ir_func_t *const *functions, size_t count,
                      const ir_summary_hooks_t *hooks)
 {
-    return compute_summaries(functions, count, hooks, false);
+    return compute_summaries(functions, count, hooks, false, nullptr);
+}
+
+ir_summaries_t *
+ir_summaries_recompute(ir_func_t *const *functions, size_t count,
+                       const ir_summary_hooks_t *hooks,
+                       ir_summaries_t *previous)
+{
+    return compute_summaries(functions, count, hooks, false, previous);
 }
 
 ir_summaries_t *
 ir_escapes_compute(ir_func_t *const *functions, size_t count,
                    const ir_summary_hooks_t *hooks)
 {
-    return compute_summaries(functions, count, hooks, true);
+    return compute_summaries(functions, count, hooks, true, nullptr);
 }
 
 void
@@ -510,8 +658,10 @@ ir_summaries_free(ir_summaries_t *summaries)
     if (!summaries) return;
     if (ir_analysis_summaries() == summaries) ir_analysis_bind_summaries(nullptr);
     for (size_t i = 0; i < summaries->owned.len; i++)
-        summary_free(summaries->owned.data[i]);
+        if (!core_dict_contains(&summaries->adopted, summaries->owned.data[i]))
+            summary_free(summaries->owned.data[i]);
     core_list_free(summaries->owned);
+    core_dict_free(&summaries->adopted);
     core_dict_free(&summaries->by_function);
     type_memos_free(&summaries->type_memos);
     core_dict_foreach(&summaries->engines, entry) {

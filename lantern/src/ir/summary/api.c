@@ -68,6 +68,7 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->heaps       = core_list_new(ir_sheap_t);
     summary->effects     = core_list_new(core_string_t);
     summary->paths       = core_list_new(ir_spath_t);
+    summary->deps        = core_list_new(summary_dep_t);
     flow_table_init(&summary->flows[IR_SFLOW_RESULTS], function);
     flow_table_init(&summary->flows[IR_SFLOW_STORES], function);
     if (summaries) core_list_push(summaries->owned, summary);
@@ -87,7 +88,18 @@ summary_free(ir_summary_t *summary)
     core_list_free(summary->heaps);
     core_list_free(summary->trap_sites);
     core_list_free(summary->fields);
+    core_list_free(summary->deps);
     core_free(summary);
+}
+
+static void
+record_dependency(ir_summaries_t *summaries, const ir_func_t *target)
+{
+    ir_summary_t *recording = summaries->recording;
+    if (!recording || target == recording->function) return;
+    for (size_t i = 0; i < recording->deps.len; i++)
+        if (recording->deps.data[i].function == target) return;
+    core_list_push(recording->deps, ((summary_dep_t){.function = target}));
 }
 
 void
@@ -636,6 +648,7 @@ adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
 static ir_summary_t *
 target_summary(ir_summaries_t *summaries, ir_func_t *target)
 {
+    record_dependency(summaries, target);
     ir_summary_t *summary = ir_summary_of(summaries, target);
     if (summary) return summary;
     const ir_summary_hooks_t *hooks = summaries->hooks;
@@ -791,6 +804,7 @@ const ir_summary_t *
 ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
 {
     const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    if (summaries && summaries->recording) summaries->recording->pinned = true;
     return hooks && hooks->entries
         ? hooks->entries(hooks->context, summaries, flag) : nullptr;
 }
