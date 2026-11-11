@@ -344,6 +344,7 @@ typedef struct n00bb_link_analysis_t {
     bool nominal_symbols_ready;
     ir_summary_hooks_t summary_hooks;
     ir_summaries_t *summaries;
+    ir_summaries_t *proven;
     ir_summaries_t *escapes;
     ir_group_pdg_t *program;
     struct n00bb_rule_facts_t *rule_facts;

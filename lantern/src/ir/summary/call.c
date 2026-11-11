@@ -678,12 +678,22 @@ same_bits(const flow_bits_t *a, const flow_bits_t *b)
     return true;
 }
 
+static bool
+same_dest_sources(const flow_dest_t *a, const flow_dest_t *b, bool values)
+{
+    return same_bits(&a->data, &b->data)
+        && same_bits(&a->control, &b->control)
+        && (!values || (same_bits(&a->alias, &b->alias)
+                        && same_bits(&a->copy, &b->copy)));
+}
+
 static const uint32_t *
-flow_groups_of(pt_t *pt, const ir_summary_t *callee, ir_sflow_table_t table)
+dest_groups(core_dict_t *cache, const ir_summary_t *callee,
+            ir_sflow_table_t table, bool values)
 {
     const void *key   = (const char *)callee + table;
     bool        found = false;
-    uint32_t   *groups = core_dict_get(&pt->flow_groups, (void *)key, &found);
+    uint32_t   *groups = core_dict_get(cache, (void *)key, &found);
     if (found) return groups;
     const flow_table_t *flows = &callee->flows[table];
     groups = core_alloc_array(uint32_t, flows->dests.len + 1);
@@ -691,16 +701,20 @@ flow_groups_of(pt_t *pt, const ir_summary_t *callee, ir_sflow_table_t table)
         groups[d] = (uint32_t)d;
         for (size_t e = 0; e < d; e++)
             if (groups[e] == e
-                && same_bits(&flows->dests.data[d].data,
-                             &flows->dests.data[e].data)
-                && same_bits(&flows->dests.data[d].control,
-                             &flows->dests.data[e].control)) {
+                && same_dest_sources(&flows->dests.data[d],
+                                     &flows->dests.data[e], values)) {
                 groups[d] = (uint32_t)e;
                 break;
             }
     }
-    core_dict_put(&pt->flow_groups, (void *)key, groups);
+    core_dict_put(cache, (void *)key, groups);
     return groups;
+}
+
+static const uint32_t *
+flow_groups_of(pt_t *pt, const ir_summary_t *callee, ir_sflow_table_t table)
+{
+    return dest_groups(&pt->flow_groups, callee, table, false);
 }
 
 static core_hash_value_t
@@ -924,14 +938,24 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     bool                sole    = !summary && sole_callee(pt, call)
         && strong_writer(pt, call);
     bool                settled = true;
+    const uint32_t     *shared  = dest_groups(&pt->value_groups, callee,
+                                              IR_SFLOW_STORES, true);
+    size_t             *paired  = core_alloc_array(size_t,
+                                                   flows->dests.len + 1);
     core_list_t(store_pair_t) pairs = core_list_new(store_pair_t);
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
         store_pair_t pair = {.must = sole
                                  && must_dest(callee, flows->dests.data[d].to)};
-        flowed_items(pt, &mapped, groups, d, &pair.from);
+        size_t source = shared[d] == d ? SIZE_MAX : paired[shared[d]];
+        if (shared[d] == d) flowed_items(pt, &mapped, groups, d, &pair.from);
+        for (size_t i = 0; source < pairs.len
+                           && i < pairs.data[source].from.len; i++)
+            core_list_push(pair.from, pairs.data[source].from.data[i]);
+        paired[d] = pairs.len;
         if (!pair.from.len && !pair.must) {
+            paired[d] = SIZE_MAX;
             core_list_free(pair.from);
             continue;
         }
@@ -940,6 +964,7 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
         settled = settled && (!pair.must || pair.to.len);
         core_list_push(pairs, pair);
     }
+    core_free(paired);
     for (size_t p = 0; p < pairs.len; p++) {
         store_pair_t *pair = &pairs.data[p];
         if (summary) record_stores(pt, summary, &pair->to, &pair->from);

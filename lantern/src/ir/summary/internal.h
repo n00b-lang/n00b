@@ -54,6 +54,7 @@ typedef struct {
 typedef struct {
     const ir_func_t *function;
     uint64_t         content;
+    uint64_t         points_to;
 } summary_dep_t;
 core_list_decl(summary_dep_t);
 
@@ -81,6 +82,9 @@ struct ir_summary_t {
     bool                       hashed;
     bool                       pinned;
     bool                       reads_registry;
+    bool                       proof_free;
+    bool                       bookkept;
+    bool                       explained;
 };
 
 struct ir_summaries_t {
@@ -93,6 +97,7 @@ struct ir_summaries_t {
     bool                      escapes_only;
     bool                      reusable;
     bool                      registry_changed;
+    bool                      proofs_changed;
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;
@@ -310,6 +315,7 @@ struct pt_t {
     core_dict_t            escaped;
     bool                   escaped_built;
     core_dict_t            flow_groups;
+    core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;
     core_dict_t            call_index;

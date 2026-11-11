@@ -443,12 +443,18 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     push_effects_of_roots(analysis, &roots);
     bind_summary_hooks(analysis, !prove_traps);
     ir_summaries_t *previous = analysis->summaries;
+    ir_summaries_t *source   = prove_traps && analysis->proven
+        ? analysis->proven : previous;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
     analysis->summaries = ir_summaries_recompute(roots.data, roots.len,
                                                  &analysis->summary_hooks,
-                                                 previous);
+                                                 source);
     ir_summaries_free(previous);
+    if (source == analysis->proven) {
+        ir_summaries_free(analysis->proven);
+        analysis->proven = nullptr;
+    }
     ir_analysis_bind_summaries(analysis->summaries);
     core_list_free(roots);
     return analysis->summaries != nullptr;

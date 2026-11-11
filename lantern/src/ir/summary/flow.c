@@ -228,6 +228,27 @@ join_flows(flow_table_t *into, const flow_table_t *from)
     }
 }
 
+static void
+copy_bits(flow_bits_t *into, const flow_bits_t *from)
+{
+    for (size_t w = 0; w < from->len; w++) core_list_push(*into, from->data[w]);
+}
+
+static void
+copy_flows(flow_table_t *into, const flow_table_t *from)
+{
+    for (size_t s = 0; s < from->sources.len; s++)
+        (void)flow_source(into, from->sources.data[s]);
+    for (size_t d = 0; d < from->dests.len; d++) {
+        const flow_dest_t *source = &from->dests.data[d];
+        flow_dest_t       *dest   = flow_dest(into, source->to);
+        copy_bits(&dest->data, &source->data);
+        copy_bits(&dest->control, &source->control);
+        copy_bits(&dest->alias, &source->alias);
+        copy_bits(&dest->copy, &source->copy);
+    }
+}
+
 static bool
 place_covers(const ir_spath_t *a, const ir_spath_t *b)
 {

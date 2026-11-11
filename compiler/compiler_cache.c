@@ -1849,7 +1849,8 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
     ir_summary_hooks_t proven = analysis->summary_hooks;
     proven.defer_trap_proofs = false;
     ir_summaries_t *summaries = ok && roots.len
-        ? ir_summaries_compute(roots.data, roots.len, &proven)
+        ? ir_summaries_recompute(roots.data, roots.len, &proven,
+                                 analysis->summaries)
         : nullptr;
     ok = ok && (summaries || !roots.len);
     cache->summary_identities.len = 0;
@@ -1874,7 +1875,8 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         core_buffer_release(&input);
         core_list_free(functions);
     }
-    ir_summaries_free(summaries);
+    ir_summaries_free(analysis->proven);
+    analysis->proven = summaries;
     core_list_free(roots);
     sccs_release(&sccs);
     return ok;

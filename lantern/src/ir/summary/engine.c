@@ -47,6 +47,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->escaped, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
+    core_dict_init(&pt->value_groups, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
     pt->reach     = ir_reach_new(f);
     pt->aliased   = core_list_new(uint32_t);
@@ -235,6 +236,8 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->widened_sets);
     core_dict_foreach(&pt->flow_groups, entry) core_free(entry->value);
     core_dict_free(&pt->flow_groups);
+    core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
+    core_dict_free(&pt->value_groups);
     core_list_free(pt->described);
     core_list_free(pt->seen);
     core_list_free(pt->reading);
@@ -710,6 +713,7 @@ explain_unknown(ir_summary_t *summary, const ir_switness_t *witness)
     if (!exports_unknown(summary)
         || ir_summary_witness_for(summary, IR_SWITNESS_UNKNOWN)) return;
     core_list_push(summary->witnesses, *witness);
+    summary->explained = true;
 }
 
 static void

@@ -211,6 +211,38 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     return true;
 }
 
+static uint64_t
+points_to_content(const ir_summary_t *summary)
+{
+    th_ctx *types = summary->function && summary->function->owner
+        ? ir_module_types(summary->function->owner) : nullptr;
+    core_buffer_t out = {0};
+    put_u32(&out, summary->flags
+        & (IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN | IR_SUMMARY_MAY_FAIL
+           | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS));
+    put_paths(&out, nullptr, types, &summary->paths);
+    put_u8(&out, (uint8_t)(summary->results_known
+                           | summary->returns_external << 1));
+    put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_RESULTS]);
+    put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_STORES]);
+    put_u32(&out, (uint32_t)summary->heaps.len);
+    for (size_t i = 0; i < summary->heaps.len; i++) {
+        const ir_sheap_t *heap = &summary->heaps.data[i];
+        put_u32(&out, heap->origin);
+        put_text(&out, nullptr, types && heap->type
+            ? ir_types_text(types, heap->type) : (core_string_t){0});
+        put_u8(&out, heap->elements);
+        put_text(&out, nullptr, heap->module);
+        put_text(&out, nullptr, heap->name);
+        put_u32(&out, heap->line);
+        put_u32(&out, heap->column);
+    }
+    uint64_t hash = core_xxh3_64bits_raw(out.data ? out.data : "",
+                                         out.byte_len) | 1;
+    core_buffer_release(&out);
+    return hash;
+}
+
 bool
 ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
 {

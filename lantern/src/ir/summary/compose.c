@@ -743,10 +743,18 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_REINTERPRETS, reinterpret, nullptr,
                   (core_string_t){0});
     ir_sites_t  *sites  = ir_func_sites(f);
-    ir_abcd_t *prove_ranges = (!summaries->hooks
-                                 || !summaries->hooks->defer_trap_proofs)
-        && (ir_module_props(f->owner) & IR_PROP_SSA)
+    ir_abcd_t *ranges = ir_module_props(f->owner) & IR_PROP_SSA
         ? ir_func_abcd(f) : nullptr;
+    ir_abcd_t *prove_ranges = !summaries->hooks
+            || !summaries->hooks->defer_trap_proofs
+        ? ranges : nullptr;
+    summary->proof_free = true;
+    for (uint32_t s = 0; ranges && sites && s < ir_sites_count(sites); s++) {
+        const ir_site_t *site = ir_site_at(sites, s);
+        if (site->kind == IR_SITE_TRAP
+            && ir_abcd_trap_proven(ranges, site->instr))
+            summary->proof_free = false;
+    }
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
         if (site->kind != IR_SITE_TRAP

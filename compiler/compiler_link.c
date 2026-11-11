@@ -3707,6 +3707,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->failed_regions);
     core_list_free(analysis->dead_regions);
     ir_summaries_free(analysis->summaries);
+    ir_summaries_free(analysis->proven);
     ir_summaries_free(analysis->escapes);
     ir_group_pdg_free(analysis->program);
     core_list_free(analysis->assert_sites);
