@@ -289,8 +289,16 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
             || wanted->bytes[module_name.length] != '.') continue;
         const n00bb_abi_directory_entry_t *symbols =
             n00bb_abi_object_table(provider, N00B_ABI_TABLE_SYMBOL);
-        if (!symbols) return -1;
-        for (uint32_t j = 1; j < symbols->record_count; j++) {
+        if (!symbols
+            || !n00bb_abi_object_index_names(&selected->views[provider_input]))
+            return -1;
+        const n00bb_abi_rows_t *named = n00bb_abi_symbols_named(provider,
+            (n00bb_abi_string_view_t){
+                .bytes  = wanted->bytes + module_name.length + 1,
+                .length = wanted->length - module_name.length - 1,
+            });
+        for (size_t r = 0; named && r < named->len; r++) {
+            uint32_t j = named->data[r];
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(provider,
                 N00B_ABI_TABLE_SYMBOL, j);
             if (!symbol || symbol->kind != request->symbol_kind

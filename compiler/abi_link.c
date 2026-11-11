@@ -8,6 +8,7 @@
 
 #include "abi_ref_schema.h"
 #include "abi_string.h"
+#include "qualified_names.h"
 #include "specialize.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -118,13 +119,107 @@ n00bb_abi_object_open(const core_target_desc_t *target,
     return true;
 }
 
+static void
+release_name_index(core_dict_t *index)
+{
+    core_dict_foreach(index, entry) {
+        n00bb_abi_rows_t *rows = entry->value;
+        core_list_free(*rows);
+        core_free(rows);
+        core_free(entry->key);
+    }
+    core_dict_free(index);
+}
+
 void
 n00bb_abi_object_close(n00bb_abi_object_view_t *view)
 {
     if (!view) return;
     core_free(view->directory);
     core_free(view->relocations);
+    if (view->names_indexed) {
+        release_name_index(&view->symbol_names);
+        release_name_index(&view->function_roots);
+    }
     *view = (n00bb_abi_object_view_t){0};
+}
+
+static void
+index_name(core_dict_t *index, core_string_t name, uint32_t row)
+{
+    bool              found = false;
+    n00bb_abi_rows_t *rows  = core_dict_get(index, &name, &found);
+    if (!rows) {
+        core_string_t *key = core_alloc(core_string_t);
+        *key = name;
+        rows = core_alloc(n00bb_abi_rows_t);
+        *rows = core_list_new(uint32_t);
+        core_dict_put(index, key, rows);
+    }
+    core_list_push(*rows, row);
+}
+
+static core_string_t
+borrowed_name(n00bb_abi_string_view_t name)
+{
+    return core_string_borrow((const char *)name.bytes, name.length);
+}
+
+bool
+n00bb_abi_object_index_names(n00bb_abi_object_view_t *view)
+{
+    if (!view || view->names_indexed) return view != nullptr;
+    core_dict_init_string(&view->symbol_names);
+    core_dict_init_string(&view->function_roots);
+    view->names_indexed = true;
+    const n00bb_abi_directory_entry_t *symbols =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_SYMBOL);
+    for (uint32_t row = 1; symbols && row < symbols->record_count; row++) {
+        const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SYMBOL, row);
+        n00bb_abi_string_view_t name;
+        if (!symbol) continue;
+        if (!n00bb_abi_object_string(view, &symbol->name, &name))
+            return false;
+        index_name(&view->symbol_names, borrowed_name(name), row);
+    }
+    const n00bb_abi_directory_entry_t *functions =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_FUNCTION);
+    for (uint32_t row = 1; functions && row < functions->record_count;
+         row++) {
+        const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_FUNCTION, row);
+        n00bb_abi_string_view_t name;
+        if (!function || !function->symbol_index) continue;
+        if (!n00bb_abi_object_string(view, &function->name, &name))
+            return false;
+        index_name(&view->function_roots,
+                   n00bb_function_root(borrowed_name(name)), row);
+    }
+    return true;
+}
+
+static const n00bb_abi_rows_t *
+rows_named(const core_dict_t *index, core_string_t name)
+{
+    bool found = false;
+    return core_dict_get((core_dict_t *)index, &name, &found);
+}
+
+const n00bb_abi_rows_t *
+n00bb_abi_symbols_named(const n00bb_abi_object_view_t *view,
+                        n00bb_abi_string_view_t name)
+{
+    return view && view->names_indexed
+        ? rows_named(&view->symbol_names, borrowed_name(name)) : nullptr;
+}
+
+const n00bb_abi_rows_t *
+n00bb_abi_functions_rooted(const n00bb_abi_object_view_t *view,
+                           core_string_t root)
+{
+    return view && view->names_indexed && root.data
+        ? rows_named(&view->function_roots, root) : nullptr;
 }
 
 typedef struct {

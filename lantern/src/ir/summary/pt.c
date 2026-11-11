@@ -298,9 +298,8 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
         set_add(pt, into, from->data[0]);
         return;
     }
-    bool    *dropped = core_alloc_array(bool, into->len);
+    bool    *dropped = nullptr;
     pt_set_t added   = (pt_set_t){0};
-    for (size_t i = 0; i < into->len; i++) dropped[i] = false;
     size_t same = 0;
     for (size_t f = 0; f < from->len; f++) {
         const pt_item_t *item = &from->data[f];
@@ -310,6 +309,10 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
             && item_covers(&into->data[same], item)) continue;
         size_t low = 0, high = 0;
         if (set_lookup(into, item, &low, &high)) continue;
+        if (!dropped) {
+            dropped = core_alloc_array(bool, into->len);
+            for (size_t i = 0; i < into->len; i++) dropped[i] = false;
+        }
         for (size_t i = low; i < high; i++)
             if (!dropped[i] && item_covers(item, &into->data[i]))
                 dropped[i] = true;
@@ -333,7 +336,7 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
         *into = merged;
     }
     core_list_free(added);
-    core_free(dropped);
+    if (dropped) core_free(dropped);
 }
 
 static void
@@ -717,11 +720,11 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
             const pt_alias_t *entry = &pt->sites.data[site].aliases.data[a];
             const pt_item_t   alias = entry->item;
             const ir_spath_t *at    = &alias.loc.path;
-            if (!same_path_root(at, read) || !alias_visible(pt, entry))
-                continue;
+            if (!same_path_root(at, read)) continue;
             int32_t under = path_within(read, at);
             int32_t over  = path_within(at, read);
-            if (under < 0 && over < 0) continue;
+            if ((under < 0 && over < 0) || !alias_visible(pt, entry))
+                continue;
             pt_item_t target = item_at(site_loc(site));
             loc_extend(pt, &target.loc, alias.steps, alias.depth, alias.deep);
             bool loose = loc_deep(&alias.loc);

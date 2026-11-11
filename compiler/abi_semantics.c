@@ -72,6 +72,33 @@ same_function_root(n00bb_abi_string_view_t encoded, core_string_t source)
         (const char *)encoded.bytes, encoded.length));
 }
 
+static void
+add_rows(n00bb_abi_rows_t *into, const n00bb_abi_rows_t *rows)
+{
+    for (size_t i = 0; rows && i < rows->len; i++)
+        core_list_push(*into, rows->data[i]);
+}
+
+static int
+row_order(const void *left, const void *right)
+{
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return a < b ? -1 : a > b;
+}
+
+static void
+sort_rows(n00bb_abi_rows_t *rows)
+{
+    if (rows->len < 2) return;
+    qsort(rows->data, rows->len, sizeof(*rows->data), row_order);
+    size_t kept = 1;
+    for (size_t i = 1; i < rows->len; i++)
+        if (rows->data[i] != rows->data[kept - 1])
+            rows->data[kept++] = rows->data[i];
+    rows->len = kept;
+}
+
 static bool
 function_index_for_method(th_ctx *ctx,
                           const n00bb_abi_selected_objects_t *selected,
@@ -94,13 +121,31 @@ function_index_for_method(th_ctx *ctx,
         if (!same_string(module_name, method->module)) continue;
         const n00bb_abi_directory_entry_t *functions = n00bb_abi_object_table(
             view, N00B_ABI_TABLE_FUNCTION);
-        if (!functions) return false;
-        for (uint32_t local = 1; local < functions->record_count; local++) {
+        if (!functions
+            || !n00bb_abi_object_index_names(&selected->views[input])) {
+            core_buffer_release(&adapter_name);
+            return false;
+        }
+        core_string_t leaf = n00bb_name_leaf(method->qualified_name);
+        core_string_t qualified_leaf =
+            leaf.data != method->qualified_name.data
+                ? n00bb_function_root(leaf) : (core_string_t){};
+        n00bb_abi_rows_t candidates = core_list_new(uint32_t);
+        add_rows(&candidates, n00bb_abi_functions_rooted(view,
+            n00bb_function_root(core_buffer_string(&adapter_name))));
+        add_rows(&candidates, n00bb_abi_functions_rooted(view,
+                                                         method->root_name));
+        add_rows(&candidates, n00bb_abi_functions_rooted(view,
+                                                         qualified_leaf));
+        sort_rows(&candidates);
+        for (size_t c = 0; c < candidates.len; c++) {
+            uint32_t local = candidates.data[c];
             const n00b_abi_function_v1 *function = n00bb_abi_object_row(
                 view, N00B_ABI_TABLE_FUNCTION, local);
             if (!function || !function->symbol_index) continue;
             n00bb_abi_string_view_t name;
             if (!n00bb_abi_object_string(view, &function->name, &name)) {
+                core_list_free(candidates);
                 core_buffer_release(&adapter_name);
                 return false;
             }
@@ -109,16 +154,13 @@ function_index_for_method(th_ctx *ctx,
                 uint32_t mapped;
                 if (!n00bb_abi_index_plan_map(plan, input,
                         N00B_ABI_TABLE_FUNCTION, local, &mapped) || !mapped) {
+                    core_list_free(candidates);
                     core_buffer_release(&adapter_name);
                     return false;
                 }
                 adapter = mapped;
                 continue;
             }
-            core_string_t leaf = n00bb_name_leaf(method->qualified_name);
-            core_string_t qualified_leaf =
-                leaf.data != method->qualified_name.data
-                    ? n00bb_function_root(leaf) : (core_string_t){};
             bool named = same_function_root(name, method->root_name)
                 || same_function_root(name, qualified_leaf);
             if (!named) continue;
@@ -131,11 +173,13 @@ function_index_for_method(th_ctx *ctx,
             uint32_t mapped;
             if (found || !n00bb_abi_index_plan_map(plan, input,
                     N00B_ABI_TABLE_FUNCTION, local, &mapped) || !mapped) {
+                core_list_free(candidates);
                 core_buffer_release(&adapter_name);
                 return false;
             }
             found = mapped;
         }
+        core_list_free(candidates);
     }
     core_buffer_release(&adapter_name);
     const th_param *receiver = method->contract
