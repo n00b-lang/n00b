@@ -114,7 +114,6 @@ static void undo(matcher_t *m)
 {
     for (size_t i = m->bound.len; i > 0; i--) {
         m->bound.data[i - 1]->var.ref = nullptr;
-        m->bound.data[i - 1]->revision++;
     }
     m->bound.len = 0;
 }

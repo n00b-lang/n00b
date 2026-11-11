@@ -331,10 +331,53 @@ static void test_fields_are_separate_places(void)
     ir_ctx_free(ctx);
 }
 
+static bool registry_changes(ir_ctx_t *ctx, ir_func_t *first, ir_func_t *second)
+{
+    ir_reinterpretations_open(ctx);
+    ir_reinterpretations_note_function(ctx, first);
+    if (second) ir_reinterpretations_note_function(ctx, second);
+    ir_reinterpretations_seal(ctx);
+    return ir_reinterpretations_changed(ctx);
+}
+
+static void test_reinterpretations_compare_by_content(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, MOD(
+        "  func @f(%p: ref[(x: i32, y: i32)]) -> ref[(a: i64)] {\n"
+        "    block entry:\n"
+        "      %q: ref[(a: i64)] = bitcast %p\n"
+        "      return %q\n"
+        "  }\n"
+        "  func @g(%p: ref[(m: u8)]) -> ref[(n: u16)] {\n"
+        "    block entry:\n"
+        "      %q: ref[(n: u16)] = bitcast %p\n"
+        "      return %q\n"
+        "  }\n"), 0, PROFILES, 1, d);
+    check("the cast module parses", m != nullptr);
+    if (!m) return;
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED);
+    ir_func_t *f = ir_func_at(m, 0);
+    ir_func_t *g = ir_func_at(m, 1);
+    check("a pointer cast between records is a reinterpretation",
+          ir_reinterpretation_site(f) != nullptr
+              && ir_reinterpretation_site(g) != nullptr);
+    check("the first registry is a change", registry_changes(ctx, f, g));
+    check("the same casts seen in another order are not a change",
+          !registry_changes(ctx, g, f));
+    check("losing a cast is a change", registry_changes(ctx, f, nullptr));
+    check("and seeing the smaller registry again is not",
+          !registry_changes(ctx, f, nullptr));
+    check("gaining the cast back is a change", registry_changes(ctx, g, f));
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_repeated_values_share_a_number();
     test_fields_are_separate_places();
+    test_reinterpretations_compare_by_content();
     test_a_global_store_is_observed_until_overwritten();
     test_global_reads_follow_their_stores();
     test_array_ssa_links_element_reads();

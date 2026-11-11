@@ -100,7 +100,6 @@ mix_type(uint64_t h, th_type *type, core_dict_t *seen, uint32_t depth)
     h = mix(h, (uint64_t)(uintptr_t)type);
     if (!type || depth > 64 || !core_dict_add(seen, type, type)) return h;
     if (th_kind_of(type) == TH_VAR) {
-        h = mix(h, th_var_revision(type));
         th_type *resolved = th_resolve(type);
         return resolved == type ? h
                                 : mix_type(h, resolved, seen, depth + 1);

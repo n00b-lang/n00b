@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "private/ir/internal.h"
 #include "ir/places.h"
@@ -47,7 +48,6 @@ struct ir_places_t {
     core_dict_t                       path_index;
     core_dict_t                       resolved;
     core_dict_t                       by_instr;
-    core_dict_t                       overlaps;
     core_dict_t                       exposed;
 };
 
@@ -113,13 +113,18 @@ prepend_step(ir_places_t *places, const place_path_t *path,
 typedef th_type *place_type_ptr_t;
 core_list_decl(place_type_ptr_t);
 
+typedef struct {
+    uint64_t type;
+    uint64_t component;
+} registry_fact_t;
+core_list_decl(registry_fact_t);
+
 struct ir_reinterpretations_t {
     core_list_t(place_type_ptr_t) members;
     core_list_t(uint32_t)         components;
     core_list_t(place_type_ptr_t) universal;
-    core_list_t(place_type_ptr_t) previous_members;
-    core_list_t(uint32_t)         previous_components;
-    core_list_t(place_type_ptr_t) previous_universal;
+    core_list_t(registry_fact_t)  facts;
+    core_list_t(registry_fact_t)  previous_facts;
     core_dict_t                   answers;
     core_dict_t                   reach;
     core_dict_t                   hashes;
@@ -225,6 +230,11 @@ clear_answers(ir_reinterpretations_t *registry)
     }
     core_dict_free(&registry->answers);
     core_dict_init(&registry->answers, nullptr, nullptr);
+}
+
+static void
+clear_reach(ir_reinterpretations_t *registry)
+{
     core_dict_foreach(&registry->reach, item) {
         type_reach_t *reach = item->value;
         core_list_free(reach->components);
@@ -239,15 +249,15 @@ free_reinterpretations(void *pointer)
 {
     ir_reinterpretations_t *registry = pointer;
     clear_answers(registry);
+    clear_reach(registry);
     core_dict_free(&registry->answers);
     core_dict_free(&registry->reach);
     core_dict_free(&registry->hashes);
     core_list_free(registry->members);
     core_list_free(registry->components);
     core_list_free(registry->universal);
-    core_list_free(registry->previous_members);
-    core_list_free(registry->previous_components);
-    core_list_free(registry->previous_universal);
+    core_list_free(registry->facts);
+    core_list_free(registry->previous_facts);
     core_free(registry);
 }
 
@@ -259,9 +269,8 @@ reinterpretations(ir_ctx_t *ctx)
         registry->members             = core_list_new(place_type_ptr_t);
         registry->components          = core_list_new(uint32_t);
         registry->universal           = core_list_new(place_type_ptr_t);
-        registry->previous_members    = core_list_new(place_type_ptr_t);
-        registry->previous_components = core_list_new(uint32_t);
-        registry->previous_universal  = core_list_new(place_type_ptr_t);
+        registry->facts               = core_list_new(registry_fact_t);
+        registry->previous_facts      = core_list_new(registry_fact_t);
         core_dict_init(&registry->answers, nullptr, nullptr);
         core_dict_init(&registry->reach, nullptr, nullptr);
         core_dict_init(&registry->hashes, nullptr, nullptr);
@@ -275,31 +284,11 @@ void
 ir_reinterpretations_open(ir_ctx_t *ctx)
 {
     ir_reinterpretations_t *registry = reinterpretations(ctx);
-    core_list_t(place_type_ptr_t) members    = registry->previous_members;
-    core_list_t(uint32_t)         components = registry->previous_components;
-    core_list_t(place_type_ptr_t) universal  = registry->previous_universal;
-    registry->previous_members    = registry->members;
-    registry->previous_components = registry->components;
-    registry->previous_universal  = registry->universal;
-    registry->previous_unseen     = registry->unseen;
-    registry->members             = members;
-    registry->components          = components;
-    registry->universal           = universal;
-    registry->members.len         = 0;
-    registry->components.len      = 0;
-    registry->universal.len       = 0;
-    registry->sealed              = false;
-    registry->unseen              = false;
-}
-
-static bool
-same_types(const core_list_t(place_type_ptr_t) *a,
-           const core_list_t(place_type_ptr_t) *b)
-{
-    if (a->len != b->len) return false;
-    for (size_t i = 0; i < a->len; i++)
-        if (a->data[i] != b->data[i]) return false;
-    return true;
+    registry->members.len    = 0;
+    registry->components.len = 0;
+    registry->universal.len  = 0;
+    registry->sealed         = false;
+    registry->unseen         = false;
 }
 
 void
@@ -308,20 +297,80 @@ ir_reinterpretations_note_unseen(ir_ctx_t *ctx)
     reinterpretations(ctx)->unseen = true;
 }
 
+static uint64_t
+type_identity(ir_reinterpretations_t *registry, ir_ctx_t *ctx, th_type *type)
+{
+    uintptr_t known = (uintptr_t)core_dict_get(&registry->hashes, type,
+                                               nullptr);
+    if (known) return known;
+    uint64_t hash = th_hash(ctx->types, type) | 1;
+    core_dict_put(&registry->hashes, type, (void *)(uintptr_t)hash);
+    return hash;
+}
+
+static int
+fact_order(const void *left, const void *right)
+{
+    const registry_fact_t *a = left;
+    const registry_fact_t *b = right;
+    if (a->type != b->type) return a->type < b->type ? -1 : 1;
+    if (a->component != b->component)
+        return a->component < b->component ? -1 : 1;
+    return 0;
+}
+
+static void
+collect_facts(ir_ctx_t *ctx, ir_reinterpretations_t *registry)
+{
+    registry->facts.len = 0;
+    for (size_t i = 0; i < registry->members.len; i++) {
+        registry_fact_t fact = {
+            .type = type_identity(registry, ctx, registry->members.data[i])};
+        core_list_push(registry->facts, fact);
+    }
+    for (size_t i = 0; i < registry->members.len; i++) {
+        uint64_t least = registry->facts.data[i].type;
+        for (size_t j = 0; j < registry->members.len; j++)
+            if (registry->components.data[j] == registry->components.data[i]
+                && registry->facts.data[j].type < least)
+                least = registry->facts.data[j].type;
+        registry->facts.data[i].component = least;
+    }
+    for (size_t i = 0; i < registry->universal.len; i++) {
+        registry_fact_t fact = {
+            .type = type_identity(registry, ctx, registry->universal.data[i])};
+        core_list_push(registry->facts, fact);
+    }
+    if (!registry->facts.len) return;
+    qsort(registry->facts.data, registry->facts.len, sizeof(registry_fact_t),
+          fact_order);
+    size_t kept = 1;
+    for (size_t i = 1; i < registry->facts.len; i++)
+        if (fact_order(&registry->facts.data[i],
+                       &registry->facts.data[kept - 1]))
+            registry->facts.data[kept++] = registry->facts.data[i];
+    registry->facts.len = kept;
+}
+
 void
 ir_reinterpretations_seal(ir_ctx_t *ctx)
 {
     ir_reinterpretations_t *registry = reinterpretations(ctx);
     registry->sealed = true;
+    collect_facts(ctx, registry);
     bool same = registry->unseen == registry->previous_unseen
-        && same_types(&registry->members, &registry->previous_members)
-        && same_types(&registry->universal, &registry->previous_universal)
-        && registry->components.len == registry->previous_components.len;
-    for (size_t i = 0; same && i < registry->components.len; i++)
-        same = registry->components.data[i]
-            == registry->previous_components.data[i];
+        && registry->facts.len == registry->previous_facts.len;
+    for (size_t i = 0; same && i < registry->facts.len; i++)
+        same = !fact_order(&registry->facts.data[i],
+                           &registry->previous_facts.data[i]);
     registry->changed = !same;
-    if (!same) clear_answers(registry);
+    clear_reach(registry);
+    if (same) return;
+    clear_answers(registry);
+    core_list_t(registry_fact_t) facts = registry->previous_facts;
+    registry->previous_facts  = registry->facts;
+    registry->facts           = facts;
+    registry->previous_unseen = registry->unseen;
 }
 
 bool
@@ -416,23 +465,11 @@ ir_reinterpretation_site(const ir_func_t *f)
     return f ? reinterprets(nullptr, f) : nullptr;
 }
 
-static uint64_t
-type_identity(ir_reinterpretations_t *registry, ir_module_t *module,
-              th_type *type)
-{
-    uintptr_t known = (uintptr_t)core_dict_get(&registry->hashes, type,
-                                               nullptr);
-    if (known) return known;
-    uint64_t hash = th_hash(module->ctx->types, type) | 1;
-    core_dict_put(&registry->hashes, type, (void *)(uintptr_t)hash);
-    return hash;
-}
-
 static const type_reach_t *
 type_reach(ir_reinterpretations_t *registry, ir_module_t *module,
            th_type *type)
 {
-    void *key = (void *)(uintptr_t)type_identity(registry, module, type);
+    void *key = (void *)(uintptr_t)type_identity(registry, module->ctx, type);
     type_reach_t *reach = core_dict_get(&registry->reach, key, nullptr);
     if (reach) return reach;
     reach = core_alloc(type_reach_t);
@@ -485,8 +522,8 @@ registered_overlap(ir_module_t *module, th_type *a, th_type *b)
     b = b ? th_resolve(b) : nullptr;
     if (open_type(a) || open_type(b)) return true;
     if (a == b) return true;
-    uint64_t left  = type_identity(registry, module, a);
-    uint64_t right = type_identity(registry, module, b);
+    uint64_t left  = type_identity(registry, module->ctx, a);
+    uint64_t right = type_identity(registry, module->ctx, b);
     if (left == right) return true;
     if (left > right) {
         uint64_t swap = left;
@@ -1016,7 +1053,6 @@ ir_places_build(ir_func_t *f)
     core_dict_init(&places->path_index, path_hash, path_eq);
     core_dict_init(&places->resolved, nullptr, nullptr);
     core_dict_init(&places->by_instr, nullptr, nullptr);
-    core_dict_init(&places->overlaps, nullptr, nullptr);
     core_dict_init(&places->exposed, nullptr, nullptr);
     collect_exposure(f, &places->exposed);
     collect_accesses(places, f);
@@ -1037,7 +1073,6 @@ ir_places_free(ir_places_t *places)
     core_dict_free(&places->path_index);
     core_dict_free(&places->resolved);
     core_dict_free(&places->by_instr);
-    core_dict_free(&places->overlaps);
     core_dict_free(&places->exposed);
     core_free(places);
 }
@@ -1203,13 +1238,5 @@ roots_may_alias(const ir_places_t *places, uint32_t a, uint32_t b)
     if (x_site && y_site) return false;
     if ((x_site || y_site) && (x_site ? y : x)->kind != IR_PLACE_HEAP)
         return false;
-    uint64_t     lo       = a < b ? a : b;
-    uint64_t     hi       = a < b ? b : a;
-    void        *key      = (void *)(uintptr_t)(((hi << 32) | lo) + 1);
-    core_dict_t *overlaps = (core_dict_t *)&places->overlaps;
-    uintptr_t    known    = (uintptr_t)core_dict_get(overlaps, key, nullptr);
-    if (known) return known == 2;
-    bool overlap = registered_overlap(places->module, x->type, y->type);
-    core_dict_put(overlaps, key, (void *)(uintptr_t)(overlap ? 2 : 1));
-    return overlap;
+    return registered_overlap(places->module, x->type, y->type);
 }

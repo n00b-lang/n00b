@@ -21,18 +21,12 @@ th_type *th_var_ref(const th_type *var)
     return var && var->kind == TH_VAR ? var->var.ref : nullptr;
 }
 
-uint64_t th_var_revision(const th_type *var)
-{
-    return var && var->kind == TH_VAR ? var->revision : 0;
-}
-
 bool th_var_bind(th_type *var, th_type *to)
 {
     if (!var || !to || var->kind != TH_VAR || var->var.ref || var == to) {
         return false;
     }
     var->var.ref = to;
-    var->revision++;
 
     return true;
 }
@@ -43,7 +37,6 @@ bool th_var_rebind(th_type *var, th_type *to)
         return false;
     }
     var->var.ref = to;
-    var->revision++;
 
     return true;
 }
