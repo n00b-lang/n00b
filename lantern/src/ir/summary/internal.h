@@ -80,6 +80,7 @@ struct ir_summary_t {
     uint64_t                   content;
     bool                       hashed;
     bool                       pinned;
+    bool                       reads_registry;
 };
 
 struct ir_summaries_t {
@@ -91,6 +92,7 @@ struct ir_summaries_t {
     core_dict_t               engines;
     bool                      escapes_only;
     bool                      reusable;
+    bool                      registry_changed;
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;

@@ -467,9 +467,18 @@ computed_overlap(ir_reinterpretations_t *registry, ir_module_t *module,
     return false;
 }
 
+static uint64_t registry_queries;
+
+uint64_t
+ir_reinterpretation_queries(void)
+{
+    return registry_queries;
+}
+
 static bool
 registered_overlap(ir_module_t *module, th_type *a, th_type *b)
 {
+    registry_queries++;
     ir_reinterpretations_t *registry = module->ctx->reinterpretations;
     if (!registry || !registry->sealed || registry->unseen) return true;
     a = a ? th_resolve(a) : nullptr;
@@ -1111,6 +1120,7 @@ ir_places_within(const ir_places_t *places, uint32_t outer, uint32_t inner)
 static bool
 reinterpreted(ir_module_t *module, th_type *type)
 {
+    registry_queries++;
     ir_reinterpretations_t *registry = module->ctx->reinterpretations;
     if (!registry || !registry->sealed || registry->unseen) return true;
     type = type ? th_resolve(type) : nullptr;

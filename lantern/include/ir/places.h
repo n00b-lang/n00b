@@ -70,6 +70,7 @@ const ir_instr_t  *ir_reinterpretation_site(const ir_func_t *f);
 void               ir_reinterpretations_note_unseen(ir_ctx_t *ctx);
 void               ir_reinterpretations_seal(ir_ctx_t *ctx);
 bool               ir_reinterpretations_changed(ir_ctx_t *ctx);
+uint64_t           ir_reinterpretation_queries(void);
 bool               ir_places_types_overlap(ir_module_t *module, th_type *a,
                                            th_type *b);
 #endif

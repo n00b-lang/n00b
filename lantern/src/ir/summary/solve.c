@@ -302,6 +302,7 @@ reusable_member(ir_summaries_t *summaries, ir_func_t *const *members,
 {
     ir_summary_t *old = ir_summary_of(summaries->previous, members[at]);
     if (!old || old->pinned || !old->identity
+        || (summaries->registry_changed && old->reads_registry)
         || core_dict_contains(&summaries->previous->adopted, old)
         || old->identity != ir_func_identity(members[at]))
         return false;
@@ -344,6 +345,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
 {
     if (adopt_component(summaries, members, count)) return;
+    uint64_t queries = ir_reinterpretation_queries();
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
@@ -440,6 +442,9 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         ir_analysis_scope_end(scope);
     }
     if (!summaries->escapes_only) ground_witnesses(summaries, members, count);
+    bool reads_registry = ir_reinterpretation_queries() != queries;
+    for (size_t i = 0; reads_registry && i < count; i++)
+        ir_summary_of(summaries, members[i])->reads_registry = true;
     stamp_component(summaries, members, count);
 }
 
@@ -608,8 +613,9 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->previous = previous;
     summaries->reusable = previous && hooks && count && !escapes_only
         && !previous->escapes_only
-        && same_hooks(&previous->hook_values, hooks)
-        && !ir_reinterpretations_changed(functions[0]->owner->ctx);
+        && same_hooks(&previous->hook_values, hooks);
+    summaries->registry_changed = !count
+        || ir_reinterpretations_changed(functions[0]->owner->ctx);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
     core_dict_init(&t.index, nullptr, nullptr);
