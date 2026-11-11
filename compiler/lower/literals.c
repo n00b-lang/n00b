@@ -1257,11 +1257,11 @@ hoistable_literal(ir_lower_context_t *context, parse_visit_t *visit,
         || producing_constants(context)
         || th_kind_of(th_resolve(th_func_ret(site->signature))) == TH_VAR)
         return false;
-    for (size_t i = 0; i < lower->tries.len; i++)
-        if (lower->tries.data[i].active) return false;
     th_type **variables = nullptr;
-    if (th_free_vars(state->types, context->function->type, &variables))
-        return false;
+    size_t    count     = th_free_vars(state->types, context->function->type,
+                                       &variables);
+    for (size_t i = 0; i < count; i++)
+        if (th_var_name(variables[i]).data) return false;
     static const core_string_t fixed[] = {
         CORE_STRING_STATIC("quotes"), CORE_STRING_STATIC("int"),
         CORE_STRING_STATIC("hex"), CORE_STRING_STATIC("float"),
