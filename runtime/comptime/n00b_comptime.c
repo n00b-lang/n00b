@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 enum {
     COMPTIME_NO_TARGET = 70,
     COMPTIME_TARGET_NOT_REACHED = 71,
@@ -1042,7 +1046,8 @@ n00b_comptime_freeze(uint64_t module)
     }
     n00b_comptime_exit = nullptr;
     output = output_path
-        ? open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0600) : -1;
+        ? open(output_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600)
+        : -1;
     bool ok = output >= 0 && row && freeze_program(snapshot, row);
     if (output >= 0) close(output);
     _exit(ok ? 0 : COMPTIME_OUTPUT_FAILED);
@@ -1083,7 +1088,7 @@ exited(int64_t code)
 {
     exiting = true;
     if (entry && !code) n00b_comptime_freeze(target);
-    output = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    output = open(output_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
     bool ok = output >= 0 && put("N00BCTEX", 8) && put(&code, sizeof(code));
     if (output >= 0) close(output);
     _exit(ok ? 0 : COMPTIME_OUTPUT_FAILED);
