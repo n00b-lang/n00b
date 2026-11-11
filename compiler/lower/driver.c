@@ -554,6 +554,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
 
     exclude_failed_functions(analysis, &units, marks);
     if (ok) ok = build_escape_facts(analysis)
+        && check_lease_storage(analysis)
         && report_bookkeeping_writes(analysis)
         && mark_external_call_returns(analysis)
         && mark_diverging_calls(analysis);

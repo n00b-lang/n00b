@@ -284,6 +284,14 @@ N00B_DIAG(BOOKKEEPING_WRITE, "N00B-S0071", ERROR,
     "value, so `__ref_create` and `__finalize` may only update private\n"
     "bookkeeping fields of their own type. Make the field private, or move\n"
     "the change out of the hook.")
+N00B_DIAG(LEASE_STORAGE, "N00B-S0088", ERROR,
+    "a lease's array is shared outside its owner",
+    "The analysis treats the array in a `Leasable` or `Lease` as owned by\n"
+    "it: it is only replaced with an array nothing else holds, it is lent\n"
+    "out by `ref`, and it is never kept, returned or compared as a value.\n"
+    "Code in the standard library that touches that array has to keep\n"
+    "those rules, or the analysis of every program using lists would be\n"
+    "wrong.")
 N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
     "an array parameter is kept beyond the call",
     "An array passed as an ordinary parameter is only lent for the call.\n"

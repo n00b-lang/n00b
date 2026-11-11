@@ -1844,6 +1844,12 @@ runtime_reaches(n00bb_runtime_init_analysis_t *runtime,
 bool
 report_bookkeeping_writes(n00bb_link_analysis_t *analysis);
 
+bool
+lease_storage_record(th_type *record);
+
+bool
+check_lease_storage(n00bb_link_analysis_t *analysis);
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs);
 

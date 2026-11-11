@@ -63,7 +63,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns self.__value.entries.__value.storage.__value[].value value
+  returns self.__value.entries.__value.storage.__value[].value
 builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   effects may_allocate may_collect allocates_direct
   reads self.__value.entries

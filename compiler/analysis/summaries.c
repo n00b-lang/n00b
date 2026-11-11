@@ -378,6 +378,14 @@ n00bb_summary_callee_effects(void *context, const ir_func_t *callee,
     }
 }
 
+static bool
+n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
+{
+    (void)context;
+    return core_string_eq(field, CORE_STRING_STATIC("storage"))
+        && lease_storage_record(record);
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
@@ -386,6 +394,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .call_targets = n00bb_summary_call_targets,
         .call_flags = n00bb_summary_call_flags,
         .call_finalizers = n00bb_summary_call_finalizers,
+        .owned_field = n00bb_summary_owned_field,
         .axiom = n00bb_summary_axiom,
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,

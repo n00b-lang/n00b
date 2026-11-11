@@ -56,6 +56,22 @@ resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
     resolve_into(pt, next, into, seen);
 }
 
+static uint32_t
+foreign_deref(const pt_t *pt, const pt_loc_t *loc)
+{
+    const ir_spath_t *path = &loc->path;
+    uint32_t          slot = first_deref(path->steps, path->depth);
+    while (slot < path->depth) {
+        pt_loc_t owner    = *loc;
+        owner.path.depth  = slot;
+        owner.path.flags &= (uint8_t)~(IR_SPATH_DEEP | SPATH_INLINE);
+        if (!owned_slot(pt, &owner)) break;
+        slot += 1 + first_deref(path->steps + slot + 1,
+                                path->depth - slot - 1);
+    }
+    return slot;
+}
+
 static void
 resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
 {
@@ -67,7 +83,7 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     const ir_spath_t *path    = &loc.path;
     bool              deep    = loc_deep(&loc);
     bool              through = deep && !(path->flags & SPATH_INLINE);
-    uint32_t          slot    = first_deref(path->steps, path->depth);
+    uint32_t          slot    = foreign_deref(pt, &loc);
     if (slot == path->depth) {
         set_add(pt, into, item_at(loc));
         if (!through) return;

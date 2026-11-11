@@ -773,11 +773,14 @@ pt_load(pt_t *pt, const pt_set_t *addresses, pt_set_t *into)
     for (size_t i = 0; i < addresses->len; i++) {
         const pt_item_t *address = &addresses->data[i];
         if (!is_address(address)) continue;
-        if (address->loc.site != PT_EXTERNAL) {
-            content_at(pt, &address->loc, into);
+        pt_loc_t at = location_of(pt, address);
+        if (address->kind != PT_CONTENTS && at.site != PT_EXTERNAL
+            && owned_slot(pt, &at))
+            set_add(pt, into, contents_item(at));
+        if (at.site != PT_EXTERNAL) {
+            content_at(pt, &at, into);
             continue;
         }
-        pt_loc_t at = location_of(pt, address);
         set_add(pt, into, contents_item(at));
         external_written(pt, &at, into);
         external_aliased(pt, &at, into);
@@ -904,6 +907,46 @@ pt_publish(pt_t *pt, const pt_set_t *values, const pt_loc_t *at)
     }
 }
 
+static void pt_store(pt_t *pt, const pt_set_t *addresses,
+                     const pt_set_t *values, bool must);
+
+static const pt_set_t *
+owned_values(pt_t *pt, const pt_loc_t *at, const pt_set_t *values,
+             pt_set_t *kept)
+{
+    pt_set_t copies = (pt_set_t){0};
+    for (size_t v = 0; v < values->len; v++) {
+        const pt_item_t *value = &values->data[v];
+        bool copy = value->flow == PT_SAME && value->loc.site != PT_EXTERNAL
+            && !value->depth && !value->deep;
+        set_add(pt, copy ? &copies : kept, *value);
+    }
+    pt_loc_t pointee = location_of(pt, &(pt_item_t){.kind = PT_CONTENTS,
+                                                    .loc  = *at});
+    pt_set_t copied  = (pt_set_t){0};
+    pt_load(pt, &copies, &copied);
+    for (size_t c = 0; c < copied.len; c++) {
+        pt_item_t value = copied.data[c];
+        pt_loc_t  to    = pointee;
+        if (to.site == PT_EXTERNAL) {
+            loc_extend(pt, &to, value.steps, value.depth, value.deep);
+            value.steps = nullptr;
+            value.depth = 0;
+            value.deep  = false;
+        }
+        pt_set_t target = (pt_set_t){0};
+        pt_set_t stored = (pt_set_t){0};
+        set_add(pt, &target, item_at(to));
+        set_add(pt, &stored, value);
+        pt_store(pt, &target, &stored, false);
+        core_list_free(target);
+        core_list_free(stored);
+    }
+    core_list_free(copied);
+    core_list_free(copies);
+    return kept;
+}
+
 static void
 pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
          bool must)
@@ -912,19 +955,24 @@ pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
     for (size_t i = 0; i < addresses->len; i++) {
         pt_loc_t at = location_of(pt, &addresses->data[i]);
         if (!is_address(&addresses->data[i])) continue;
+        pt_set_t        kept   = (pt_set_t){0};
+        const pt_set_t *stored = owned_slot(pt, &at)
+            ? owned_values(pt, &at, values, &kept) : values;
         if (at.site == PT_EXTERNAL) {
-            pt_publish(pt, values, &at);
-            note_external_write(pt, &at, values);
-            continue;
+            pt_publish(pt, stored, &at);
+            note_external_write(pt, &at, stored);
         }
-        note_target(pt, pt->at, at.site, &at, weak);
-        for (size_t v = 0; v < values->len; v++) {
-            pt_item_t item = item_under(at.path.steps, at.path.depth,
-                                        loc_deep(&at), values->data[v]);
-            pt_add(pt, &pt->sites.data[at.site].contents,
-                   contents_key(at.site), item);
-            note_write(pt, at.site, &at, weak, item);
+        else {
+            note_target(pt, pt->at, at.site, &at, weak);
+            for (size_t v = 0; v < stored->len; v++) {
+                pt_item_t item = item_under(at.path.steps, at.path.depth,
+                                            loc_deep(&at), stored->data[v]);
+                pt_add(pt, &pt->sites.data[at.site].contents,
+                       contents_key(at.site), item);
+                note_write(pt, at.site, &at, weak, item);
+            }
         }
+        core_list_free(kept);
     }
 }
 
