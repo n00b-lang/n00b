@@ -1134,6 +1134,26 @@ decode_interfaces(n00bb_cache_t *cache)
     return ok;
 }
 
+static bool
+next_key_line(const uint8_t *bytes, size_t length, size_t *at, uint64_t *key,
+              uint64_t *compiler)
+{
+    while (*at < length) {
+        size_t start = *at;
+        size_t end   = start;
+        while (end < length && bytes[end] != '\n') end++;
+        *at = end + 1;
+        bool paired = end - start == 33 && bytes[start + 16] == ' ';
+        if (!paired && end - start != 16) continue;
+        *key = core_string_strtoull(
+            core_string_borrow((const char *)bytes + start, 16), 16);
+        *compiler = paired ? core_string_strtoull(
+            core_string_borrow((const char *)bytes + start + 17, 16), 16) : 0;
+        return true;
+    }
+    return false;
+}
+
 static void
 read_module_keys_in(n00bb_cache_t *cache, core_string_t root)
 {
@@ -1166,12 +1186,13 @@ read_module_keys_in(n00bb_cache_t *cache, core_string_t root)
             entry_name.u8_bytes - suffix.byte_len);
         bool readable = read_file(core_buffer_string(&file), &bytes,
                                   &byte_count);
-        for (size_t at = 0; readable && at + 16 <= byte_count; at += 17) {
-            core_string_t text = core_string_borrow((const char *)bytes + at,
-                                                    16);
-            uint64_t key = core_string_strtoull(text, 16);
-            core_string_t name = key ? core_string_dup(module)
-                                     : (core_string_t){0};
+        size_t   at       = 0;
+        uint64_t key      = 0;
+        uint64_t compiler = 0;
+        while (readable && next_key_line(bytes, byte_count, &at, &key,
+                                         &compiler)) {
+            core_string_t name = key && compiler == cache->compiler
+                ? core_string_dup(module) : (core_string_t){0};
             if (name.data)
                 core_list_push(cache->module_keys,
                                ((cache_link_t){name, key}));
@@ -2472,21 +2493,32 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                            (int)root.u8_bytes, root.data,
                            (int)module.u8_bytes, module.data,
                            (int)phase.u8_bytes, phase.data);
-        core_buffer_printf(&key, "%016llx\n", (unsigned long long)scc->key);
+        core_buffer_printf(&key, "%016llx %016llx\n",
+                           (unsigned long long)scc->key,
+                           (unsigned long long)cache->compiler);
         uint8_t *previous = nullptr;
         size_t previous_bytes = 0;
         size_t kept = 1;
-        if (read_file(core_buffer_string(&index), &previous, &previous_bytes))
-            for (size_t at = 0; kept < cache_module_candidates
-                 && at + 16 <= previous_bytes; at += 17) {
-                core_string_t text = core_string_borrow(
-                    (const char *)previous + at, 16);
-                uint64_t older = core_string_strtoull(text, 16);
-                if (!older || older == scc->key) continue;
-                core_buffer_printf(&key, "%016llx\n",
-                                   (unsigned long long)older);
+        size_t at = 0;
+        uint64_t older = 0;
+        uint64_t compiler = 0;
+        bool readable = read_file(core_buffer_string(&index), &previous,
+                                  &previous_bytes);
+        while (readable && next_key_line(previous, previous_bytes, &at,
+                                         &older, &compiler)) {
+            if (!older || older == scc->key) continue;
+            if (compiler && kept < cache_module_candidates) {
+                core_buffer_printf(&key, "%016llx %016llx\n",
+                                   (unsigned long long)older,
+                                   (unsigned long long)compiler);
                 kept++;
+                continue;
             }
+            core_buffer_t stale = {0};
+            object_path_in(root, older, &stale);
+            core_os_remove_file(core_buffer_string(&stale));
+            core_buffer_release(&stale);
+        }
         core_free(previous);
         ok = core_os_write_file_atomic(core_buffer_string(&index), key.data,
                                key.byte_len);
