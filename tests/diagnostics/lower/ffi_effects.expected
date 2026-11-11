@@ -1,0 +1,2 @@
+tests/diagnostics/lower/ffi_effects.n:5:1: error N00B-S0078: `__finalize` implements `Finalize.__finalize`, which must never have effect `allocates`, but:
+  tests/diagnostics/lower/ffi_effects.n:5:1: note: `__finalize` calls the foreign function `res_free`, whose contract doesn't say what it does, so it may do anything; give it an `effects` clause, such as `effects none`

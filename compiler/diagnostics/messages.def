@@ -754,6 +754,7 @@ N00B_TEXT(QUERY_CALLS_MAY_HAVE, "`{0}` calls `{1}`, which may have effect `{2}`"
 N00B_TEXT(QUERY_DOES_HERE, "`{0}` has effect `{1}` here")
 N00B_TEXT(QUERY_CALLS_CALLBACK, "`{0}` calls its callback parameter `{1}`, which has no check")
 N00B_TEXT(QUERY_MAY_DO_ANYTHING, "`{0}` calls something the compiler can't see, so it may do anything")
+N00B_TEXT(QUERY_CALLS_UNDECLARED_FOREIGN, "`{0}` calls the foreign function `{1}`, whose contract doesn't say what it does, so it may do anything; give it an `effects` clause, such as `effects none`")
 N00B_TEXT(CHANGE_THE_CODE_OR_CHECK, "change the code so the check holds, or change the check")
 N00B_TEXT(CHECK_MIXES_VALUES, "this check mixes effect questions with values known only when the program runs")
 N00B_TEXT(PUT_RUN_TIME_PART_APART, "put the run-time part in a statement of its own")

@@ -317,6 +317,15 @@ static void note_declared(core_translation_unit_t *const *units, size_t count,
 {
     core_translation_unit_t *home = unit_of_module(units, count,
                                                    function->owner);
+    n00bb_link_analysis_t   *analysis = tu_state(unit)->link_analysis;
+    for (size_t u = 0; !home && analysis && function->owner
+         && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (state && state->ir_module
+            && core_string_eq(ir_module_name(state->ir_module),
+                              ir_module_name(function->owner)))
+            home = analysis->units.data[u];
+    }
     core_string_t            name = function_name(function);
     parse_scope_t           *scope =
         home && core_string_starts_with(function->name,
@@ -1022,6 +1031,24 @@ static bool report_field(th_ctx *types, core_translation_unit_t *unit,
     return true;
 }
 
+static bool report_unchecked_call(th_ctx *types,
+                                  core_translation_unit_t *const *units,
+                                  size_t count, core_translation_unit_t *unit,
+                                  const ty_failure_t *failure)
+{
+    const ir_instr_t *at = failure->why.at;
+    for (uint32_t i = 0; at && i < at->n_operands; i++) {
+        const ir_value_t *value = ir_operand_value(&at->operands[i]);
+        if (!value || !value->def || value->def->op != IR_OP_CALL) continue;
+        if (report_unpropagated(types, units, count, unit, value, value->type)
+            || (failure->actual
+                && report_unpropagated(types, units, count, unit, value,
+                                       failure->actual)))
+            return true;
+    }
+    return false;
+}
+
 static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
                            core_translation_unit_t *const *units,
                            size_t count, core_translation_unit_t *unit,
@@ -1039,7 +1066,8 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         report_case_mismatch(types, unit, test);
         return;
     }
-    if (report_fixed_parameter(types, unit, failure)
+    if (report_unchecked_call(types, units, count, unit, failure)
+        || report_fixed_parameter(types, unit, failure)
         || report_condition(types, unit, failure)
         || report_nil(types, unit, failure)
         || report_required_trait(types, units, count, unit, failure)
@@ -5675,6 +5703,45 @@ static bool downstream_failure(ty_solver_t *solver, core_dict_t *tainted,
 }
 
 typedef struct {
+    bool inspected;
+    bool escapes;
+} outcome_uses_t;
+
+static bool outcome_inspection(ir_instr_t *in, uint32_t operand, void *state)
+{
+    (void)operand;
+    outcome_uses_t *uses = state;
+    uses->inspected = true;
+    uses->escapes = in->op != IR_OP_VARIANT_TAG
+        && in->op != IR_OP_VARIANT_PAYLOAD;
+    return !uses->escapes;
+}
+
+static bool check_unpropagated_outcomes(
+    th_ctx *types, core_translation_unit_t *const *units, size_t count,
+    const core_list_t(ty_outcome_call_t) *calls, core_dict_t *tainted)
+{
+    bool ok = true;
+    for (size_t i = 0; i < calls->len; i++) {
+        ir_instr_t              *call    = calls->data[i];
+        core_translation_unit_t *unit    = unit_of(units, count, call);
+        outcome_uses_t           uses    = {0};
+        if (!unit || !call->dest || !call->block || !call->block->owner)
+            continue;
+        ir_value_visit_uses(call->block->owner, call->dest,
+                            outcome_inspection, &uses);
+        if ((uses.inspected && !uses.escapes)
+            || !report_unpropagated(types, units, count, unit, call->dest,
+                                    call->dest->type))
+            continue;
+        ok = false;
+        for (bool changed = taint(tainted, call->dest); changed;)
+            changed = spread_taint(tainted, call->block->owner);
+    }
+    return ok;
+}
+
+typedef struct {
     ir_func_t *function;
     uint64_t   statement;
 } statement_cut_t;
@@ -6007,6 +6074,9 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     core_dict_init(&reported, nullptr, nullptr);
     core_dict_init(&tainted, nullptr, nullptr);
     taint_failures(solver, &functions, &tainted);
+    ok = check_unpropagated_outcomes(types, units, count,
+                                     &coverage.outcome_calls, &tainted)
+        && ok;
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
         const ty_failure_t      *failure = ty_failure_at(solver, i);
         core_translation_unit_t *unit    = unit_of(units, count,

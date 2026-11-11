@@ -1723,7 +1723,11 @@ witness_chain_steps(n00bb_link_analysis_t *analysis, ir_func_t *subject,
             return;
     ir_summary_t *summary = ir_summary_of(analysis->summaries, subject);
     const ir_switness_t *chain[WITNESS_DEPTH];
+    bool unknown = flag == IR_SWITNESS_UNKNOWN;
     uint32_t depth = witness_chain(analysis, summary, flag, chain);
+    if (!depth && unknown)
+        depth = witness_chain(analysis, summary, IR_SUMMARY_CALLS_UNKNOWN,
+                              chain);
     ir_func_t *caller = subject;
     for (uint32_t d = 0; d < depth && caller; d++) {
         core_translation_unit_t *unit = unit_for_module(analysis,
@@ -1736,15 +1740,24 @@ witness_chain_steps(n00bb_link_analysis_t *analysis, ir_func_t *subject,
         core_string_t name = n00bb_function_root(caller->name);
         core_buffer_t callee = {0};
         bool callback = callback_witness(chain[d]);
+        uint32_t declared = 0;
+        bool foreign = chain[d]->callee
+            && n00bb_axiom_foreign_native(chain[d]->callee, &declared);
+        core_string_t root = foreign
+            ? n00bb_axiom_foreign_name(chain[d]->callee) : (core_string_t){0};
+        if (foreign && core_string_starts_with(root, CORE_STRING_STATIC("__")))
+            root = core_string_slice(root, 2, root.u8_bytes - 2);
         if (callback) core_buffer_append_string(&callee, chain[d]->name);
+        else if (foreign) core_buffer_append_string(&callee, root);
         else witness_text(chain[d], &callee);
-        bool anything = (flag == IR_SWITNESS_UNKNOWN && d + 1 == depth)
+        bool anything = (unknown && d + 1 == depth)
             || unknown_witness(chain[d]);
         bool last = d + 1 == depth
             || (chain[d]->callee
                 && leaves_package(analysis, subject,
                                   ir_module_name(chain[d]->callee->owner)));
         n00bb_text_t text = callback ? N00B_TEXT_QUERY_CALLS_CALLBACK
+            : anything && foreign ? N00B_TEXT_QUERY_CALLS_UNDECLARED_FOREIGN
             : anything ? N00B_TEXT_QUERY_MAY_DO_ANYTHING
             : !callee.byte_len ? N00B_TEXT_QUERY_DOES_HERE
             : last ? N00B_TEXT_QUERY_CALLS_MAY_HAVE

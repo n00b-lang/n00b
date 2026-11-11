@@ -33,3 +33,9 @@ tests/diagnostics/lower/control_flow.n:67:13: error N00B-S0017: `x` is passed to
   help: pass a separate variable to each output parameter
 tests/diagnostics/lower/control_flow.n:73:11: error N00B-T1000: `i` is `int`, but a `while` condition must be `bool`
   help: write the comparison you mean, such as `i != 0`
+tests/diagnostics/lower/control_flow.n:80:16: error N00B-S0025: `g` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/control_flow.n:7:6: note: `g` is declared here
+  help: write `g(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/control_flow.n:81:5: error N00B-S0025: `g` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/control_flow.n:7:6: note: `g` is declared here
+  help: write `g(...)!` to pass the failure to the caller, or handle it with `try`

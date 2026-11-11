@@ -331,20 +331,31 @@ enum { NATIVE_PURE = 1, NATIVE_FOREIGN = 2 };
 
 static pthread_rwlock_t generated_lock = PTHREAD_RWLOCK_INITIALIZER;
 static core_dict_t      generated_natives;
+static core_dict_t      foreign_names;
 static bool             generated_ready;
 
 static void
-note_generated_native(core_string_t symbol, uintptr_t kind)
+note_generated_native(core_string_t symbol, uintptr_t kind,
+                      core_string_t name)
 {
     if (!symbol.data) return;
     pthread_rwlock_wrlock(&generated_lock);
     if (!generated_ready) {
         core_dict_init_string(&generated_natives);
+        core_dict_init_string(&foreign_names);
         generated_ready = true;
     }
     if (!core_dict_contains(&generated_natives, &symbol))
         core_dict_put(&generated_natives, core_dict_string_key_copy(symbol),
                       (void *)kind);
+    if (name.u8_bytes && !core_dict_contains(&foreign_names, &symbol)) {
+        core_string_t *kept = core_alloc_array(core_string_t, 1);
+        if (kept) {
+            *kept = core_string_dup(name);
+            core_dict_put(&foreign_names, core_dict_string_key_copy(symbol),
+                          kept);
+        }
+    }
     pthread_rwlock_unlock(&generated_lock);
 }
 
@@ -365,13 +376,27 @@ generated_native(const ir_func_t *function)
 void
 n00bb_axiom_note_pure_native(core_string_t symbol)
 {
-    note_generated_native(symbol, NATIVE_PURE);
+    note_generated_native(symbol, NATIVE_PURE, (core_string_t){0});
 }
 
 void
-n00bb_axiom_note_foreign_native(core_string_t symbol, uint32_t effects)
+n00bb_axiom_note_foreign_native(core_string_t symbol, core_string_t name,
+                                uint32_t effects)
 {
-    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2));
+    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2),
+                          name);
+}
+
+core_string_t
+n00bb_axiom_foreign_name(const ir_func_t *function)
+{
+    if (!function) return (core_string_t){0};
+    pthread_rwlock_rdlock(&generated_lock);
+    const core_string_t *name = generated_ready
+        ? core_dict_get(&foreign_names, (void *)&function->name, nullptr)
+        : nullptr;
+    pthread_rwlock_unlock(&generated_lock);
+    return name ? *name : function->name;
 }
 
 bool

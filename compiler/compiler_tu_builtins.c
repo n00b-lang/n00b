@@ -343,6 +343,7 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
         else n00bb_axiom_note_foreign_native(natives.items[i].symbol,
+                                             natives.items[i].name,
                                              natives.items[i].effects);
     }
     return true;

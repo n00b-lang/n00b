@@ -371,8 +371,11 @@ item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
             return named(g, writ_cstr("string"));
         }
         return optional_result(item) ? option_of(g, buffer_tree(g)) : buffer_tree(g);
-    case WRIT_SHAPE_TEXT:
-        return repr.length && !is_text_repr(repr) ? buffer_tree(g) : named(g, writ_cstr("string"));
+    case WRIT_SHAPE_TEXT: {
+        const writ_n00b_type_t *text = repr.length && !is_text_repr(repr) ? buffer_tree(g)
+                                                                          : named(g, writ_cstr("string"));
+        return optional_result(item) ? option_of(g, text) : text;
+    }
     case WRIT_SHAPE_ARRAY:
         return array_of(g, named(g, scalar_type(g, element)));
     case WRIT_SHAPE_REST_PACK:
@@ -1968,7 +1971,7 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     if (contract_has_event(g, release_call)) {
         emit_event_key(emit, release_call, key);
     }
-    writ_emit_line(emit, "let released = __%.*s(%.*s)", S(writ_c_plan_name(&g->c, release)), S(raw));
+    writ_emit_line(emit, "_ = __%.*s(%.*s)", S(writ_c_plan_name(&g->c, release)), S(raw));
     writ_emit_close(emit, nullptr);
     writ_emit_close(emit, nullptr);
 }
@@ -2413,13 +2416,18 @@ emit_values(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_
 }
 
 static void
-emit_text_check(const wrapper_t *w, writ_emit_t *emit, writ_str_t name, bool bytes)
+emit_text_check(const wrapper_t *w, writ_emit_t *emit, writ_str_t name, bool bytes, bool nullable)
 {
-    writ_emit_line(emit, "var %.*s_text: string = \"\"", S(name));
+    writ_str_t copy = writ_str_format(w->g->session, nullable ? "%.*s_copy" : "%.*s_text", S(name));
+    if (nullable) {
+        writ_emit_line(emit, "var %.*s_text: string? = nil", S(name));
+        writ_emit_open(emit, "if %.*s != 0", S(name));
+    }
+    writ_emit_line(emit, "var %.*s: string = \"\"", S(copy));
     if (bytes) {
-        writ_emit_open(emit, "if !__ffi_take_text(ref %.*s, ref %.*s_text)", S(name), S(name));
+        writ_emit_open(emit, "if !__ffi_take_text(ref %.*s, ref %.*s)", S(name), S(copy));
     } else {
-        writ_emit_open(emit, "if !__ffi_copy_cstr(%.*s, ref %.*s_text)", S(name), S(name));
+        writ_emit_open(emit, "if !__ffi_copy_cstr(%.*s, ref %.*s)", S(name), S(copy));
     }
     if (can_fail(w)) {
         emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_CONTRACT_VIOLATION),
@@ -2428,6 +2436,10 @@ emit_text_check(const wrapper_t *w, writ_emit_t *emit, writ_str_t name, bool byt
         writ_emit_line(emit, "panic(\"%.*s returned invalid UTF-8 text\")", S(w->plan->fn->contract_name));
     }
     writ_emit_close(emit, nullptr);
+    if (nullable) {
+        writ_emit_line(emit, "%.*s_text = %.*s", S(name), S(copy));
+        writ_emit_close(emit, nullptr);
+    }
 }
 
 static void
@@ -2486,7 +2498,8 @@ emit_text_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_p
             || !writ_str_eq(p->name, w->plan->items[p->item].name)) {
             continue;
         }
-        emit_text_check(w, emit, local_name(w, p->item), bytes);
+        emit_text_check(w, emit, local_name(w, p->item), bytes,
+                        !bytes && optional_result(&w->plan->items[p->item]));
     }
 }
 
@@ -3181,7 +3194,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
             emit_values(&w, emit, &params, outs, out_count, true);
         }
     } else if (!can_fail(&w) && out_count == 1 && plan->items[outs[0]].shape == WRIT_SHAPE_TEXT) {
-        emit_text_check(&w, emit, writ_cstr("returned"), false);
+        emit_text_check(&w, emit, writ_cstr("returned"), false, optional_result(&plan->items[outs[0]]));
         writ_emit_line(emit, "return returned_text");
     } else if (!can_fail(&w) && out_count == 1 && is_handle(&plan->items[outs[0]])) {
         writ_emit_line(emit, "return %.*s", S(construct_handle(&w, outs[0], writ_cstr("returned"))));
@@ -3642,6 +3655,11 @@ emit_export_outputs(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w, cons
             writ_emit_line(emit, "return cast[uint]__ffi_table_insert(__handles_%.*s, returned)", S(item->type->name));
             return;
         } else if (item->shape == WRIT_SHAPE_TEXT) {
+            if (optional_result(item)) {
+                writ_emit_open(emit, "if returned == nil");
+                writ_emit_line(emit, "return 0");
+                writ_emit_close(emit, nullptr);
+            }
             writ_emit_line(emit, "return __export_text(returned)");
             return;
         } else if (lifted_record(g, record_target(item))) {

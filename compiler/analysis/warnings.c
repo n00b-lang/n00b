@@ -1421,11 +1421,20 @@ n00bb_name_location(core_translation_unit_t *unit, ir_span_t span,
 {
     core_string_t source = unit ? core_source_file_contents(&unit->source)
                                 : (core_string_t){0};
+    char *loaded = nullptr;
+    size_t loaded_size = 0;
+    if (!source.u8_bytes && unit
+        && core_os_read_file(core_source_file_path(&unit->source), &loaded,
+                             &loaded_size))
+        source = core_string_borrow(loaded, loaded_size);
+    core_diag_location_t found = {0};
     if (!source.data || !name.u8_bytes || !ir_span_known(span)
-        || span.end_byte > source.u8_bytes || span.start_byte > span.end_byte)
-        return (core_diag_location_t){0};
+        || span.end_byte > source.u8_bytes || span.start_byte > span.end_byte) {
+        core_free(loaded);
+        return found;
+    }
     for (size_t at = span.start_byte;
-         at + name.u8_bytes <= span.end_byte; at++) {
+         !found.has_location && at + name.u8_bytes <= span.end_byte; at++) {
         if (!core_string_eq(core_string_slice(source, at, name.u8_bytes),
                             name)) continue;
         bool starts = at == 0 || !identifier_byte((uint8_t)source.data[at - 1]);
@@ -1433,9 +1442,10 @@ n00bb_name_location(core_translation_unit_t *unit, ir_span_t span,
         bool ends = after >= source.u8_bytes
             || !identifier_byte((uint8_t)source.data[after]);
         if (starts && ends)
-            return core_diag_location_span(source, at, after);
+            found = core_diag_location_span(source, at, after);
     }
-    return (core_diag_location_t){0};
+    core_free(loaded);
+    return found;
 }
 
 bool

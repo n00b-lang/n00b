@@ -76,3 +76,9 @@ func f_8(n: int) -> int {
     return i
 }
 require f_8(3) == 0
+func f_9() -> int {
+    let held = g(1)
+    g(2)
+    return 0
+}
+require f_9() == 0
