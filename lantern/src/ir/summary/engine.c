@@ -35,6 +35,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->mapped, mapped_hash, mapped_eq);
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->contents_memo, content_hash, content_eq);
+    core_dict_init(&pt->aliased_memo, aliased_hash, aliased_eq);
     core_dict_init(&pt->widened_sets, widened_hash, widened_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
@@ -218,6 +219,14 @@ pt_free(pt_t *pt)
         core_free(content);
     }
     core_dict_free(&pt->contents_memo);
+    core_dict_foreach(&pt->aliased_memo, entry) {
+        aliased_memo_t *aliased = entry->value;
+        core_list_free(aliased->items);
+        core_list_free(aliased->visible);
+        memo_free(&aliased->memo);
+        core_free(aliased);
+    }
+    core_dict_free(&pt->aliased_memo);
     core_dict_foreach(&pt->widened_sets, entry) {
         pt_set_t *set = entry->value;
         core_list_free(*set);

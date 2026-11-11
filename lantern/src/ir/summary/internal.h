@@ -289,6 +289,7 @@ struct pt_t {
     core_dict_t            mapped;
     core_dict_t            stored;
     core_dict_t            contents_memo;
+    core_dict_t            aliased_memo;
     core_dict_t            widened_sets;
     uint64_t               cuts;
     uint64_t               delta_since;
@@ -381,6 +382,18 @@ typedef struct {
     core_list_t(pt_logged_t) log;
     pt_memo_t                memo;
 } content_memo_t;
+
+typedef struct {
+    pt_loc_t loc;
+    uint64_t signature;
+} aliased_key_t;
+
+typedef struct {
+    aliased_key_t         key;
+    core_list_t(uint64_t) visible;
+    pt_set_t              items;
+    pt_memo_t             memo;
+} aliased_memo_t;
 
 typedef struct {
     pt_loc_t  loc;

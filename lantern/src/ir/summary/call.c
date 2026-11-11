@@ -159,6 +159,21 @@ content_eq(const void *a, const void *b)
     return x->at == y->at && resolved_eq(&x->loc, &y->loc);
 }
 
+static core_hash_value_t
+aliased_hash(void *key)
+{
+    const aliased_key_t *aliased = key;
+    return resolved_hash((void *)&aliased->loc) * 31
+        + (core_hash_value_t)aliased->signature;
+}
+
+static bool
+aliased_eq(const void *a, const void *b)
+{
+    const aliased_key_t *x = a, *y = b;
+    return x->signature == y->signature && resolved_eq(&x->loc, &y->loc);
+}
+
 static bool
 depends_changed(pt_t *pt, const core_list_t(uint64_t) *depends,
                 uint64_t generation)

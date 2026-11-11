@@ -709,53 +709,74 @@ note_external_write(pt_t *pt, const pt_loc_t *at, const pt_set_t *values)
 }
 
 static void
-aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
-           const pt_loc_t *loc, pt_set_t *into)
+visible_aliases(pt_t *pt, const uint32_t *sites, size_t count,
+                const pt_loc_t *loc, core_list_t(uint64_t) *visible)
 {
-    const ir_spath_t         *read   = &loc->path;
-    core_list_t(pt_set_ptr_t) merged = core_list_new(pt_set_ptr_t);
+    const ir_spath_t *read = &loc->path;
     for (size_t e = 0; e < count; e++) {
         uint32_t site = sites[e];
         for (size_t a = 0; a < pt->sites.data[site].aliases.len; a++) {
             const pt_alias_t *entry = &pt->sites.data[site].aliases.data[a];
-            const pt_item_t   alias = entry->item;
-            const ir_spath_t *at    = &alias.loc.path;
-            if (!same_path_root(at, read)) continue;
-            int32_t under = path_within(read, at);
-            int32_t over  = path_within(at, read);
-            if ((under < 0 && over < 0) || !alias_visible(pt, entry))
-                continue;
-            pt_item_t target = item_at(site_loc(site));
-            loc_extend(pt, &target.loc, alias.steps, alias.depth, alias.deep);
-            bool loose = loc_deep(&alias.loc);
-            if (under >= 0) {
-                if (!loc_deep(loc)
-                    && crosses(pt, &alias.loc, (uint32_t)under, at->depth))
-                    continue;
-                set_add(pt, into, item_under(at->steps + under,
-                                         at->depth - (uint32_t)under, loose,
-                                         target));
-                if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
-                    target.loc.path.flags |= IR_SPATH_DEEP;
-                    content_below(pt, &target.loc, into, &merged);
-                }
-                continue;
-            }
-            const core_string_t *rest  = read->steps + over;
-            uint32_t             remaining = read->depth - (uint32_t)over;
-            if (!loose && remaining && !step_eq(rest[0], value_step)) {
-                set_add(pt, into, item_under(nullptr, 0, true, target));
-                continue;
-            }
-            if (!loose) extend_through(pt, &target.loc, rest, remaining, false);
-            else {
-                set_add(pt, into, item_under(nullptr, 0, true, target));
-                target.loc.path.flags |= IR_SPATH_DEEP;
-            }
-            content_at(pt, &target.loc, into);
+            const ir_spath_t *at    = &entry->item.loc.path;
+            if (same_path_root(at, read)
+                && (path_within(read, at) >= 0 || path_within(at, read) >= 0)
+                && alias_visible(pt, entry))
+                core_list_push(*visible, (uint64_t)site << 32 | a);
         }
     }
+}
+
+static void
+aliased_from(pt_t *pt, const core_list_t(uint64_t) *visible,
+             const pt_loc_t *loc, pt_set_t *into)
+{
+    const ir_spath_t         *read   = &loc->path;
+    core_list_t(pt_set_ptr_t) merged = core_list_new(pt_set_ptr_t);
+    for (size_t v = 0; v < visible->len; v++) {
+        uint32_t          site  = (uint32_t)(visible->data[v] >> 32);
+        const pt_alias_t *entry = &pt->sites.data[site].aliases
+                                       .data[(uint32_t)visible->data[v]];
+        const pt_item_t   alias = entry->item;
+        const ir_spath_t *at    = &alias.loc.path;
+        int32_t           under = path_within(read, at);
+        int32_t           over  = path_within(at, read);
+        pt_item_t         target = item_at(site_loc(site));
+        loc_extend(pt, &target.loc, alias.steps, alias.depth, alias.deep);
+        bool loose = loc_deep(&alias.loc);
+        if (under >= 0) {
+            if (!loc_deep(loc)
+                && crosses(pt, &alias.loc, (uint32_t)under, at->depth))
+                continue;
+            set_add(pt, into, item_under(at->steps + under,
+                                     at->depth - (uint32_t)under, loose,
+                                     target));
+            if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
+                target.loc.path.flags |= IR_SPATH_DEEP;
+                content_below(pt, &target.loc, into, &merged);
+            }
+            continue;
+        }
+        const core_string_t *rest      = read->steps + over;
+        uint32_t             remaining = read->depth - (uint32_t)over;
+        if (!loose && remaining && !step_eq(rest[0], value_step)) {
+            set_add(pt, into, item_under(nullptr, 0, true, target));
+            continue;
+        }
+        if (!loose) extend_through(pt, &target.loc, rest, remaining, false);
+        else {
+            set_add(pt, into, item_under(nullptr, 0, true, target));
+            target.loc.path.flags |= IR_SPATH_DEEP;
+        }
+        content_at(pt, &target.loc, into);
+    }
     core_list_free(merged);
+}
+
+static bool
+same_visible(const core_list_t(uint64_t) *a, const core_list_t(uint64_t) *b)
+{
+    return a->len == b->len
+        && (!a->len || !memcmp(a->data, b->data, a->len * sizeof(*a->data)));
 }
 
 static void
@@ -767,7 +788,41 @@ external_aliased(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     bool                   found = false;
     core_list_t(uint32_t) *sites = core_dict_get(&pt->alias_roots,
                                                  (void *)root, &found);
-    if (sites) aliased_at(pt, sites->data, sites->len, loc, into);
+    if (!sites) return;
+    core_list_t(uint64_t) visible = core_list_new(uint64_t);
+    visible_aliases(pt, sites->data, sites->len, loc, &visible);
+    aliased_key_t   probe = {
+        *loc, core_xxh3_64bits_raw(visible.data ? (const void *)visible.data
+                                                : "",
+                                   visible.len * sizeof(*visible.data))};
+    aliased_memo_t *entry = !visible.len || pt->reading.len
+            || pt->delta_since
+        ? nullptr : core_dict_get(&pt->aliased_memo, &probe, &found);
+    if (visible.len && !pt->reading.len && !pt->delta_since && !entry) {
+        entry  = core_alloc(aliased_memo_t);
+        *entry = (aliased_memo_t){.key = probe, .visible = visible};
+        core_dict_put(&pt->aliased_memo, &entry->key, entry);
+        visible = core_list_new(uint64_t);
+    }
+    else if (entry && !same_visible(&entry->visible, &visible)) entry = nullptr;
+    if (!entry) {
+        aliased_from(pt, &visible, loc, into);
+        core_list_free(visible);
+        return;
+    }
+    core_list_free(visible);
+    if (memo_stale(pt, &entry->memo)) {
+        pt_memo_frame_t frame;
+        entry->items.len = 0;
+        memo_begin(pt, &entry->memo, &frame);
+        for (size_t v = 0; v < entry->visible.len; v++)
+            pt_depend(pt, aliases_key((uint32_t)(entry->visible.data[v]
+                                                 >> 32)));
+        aliased_from(pt, &entry->visible, loc, &entry->items);
+        memo_end(pt, &entry->memo, &frame);
+    }
+    memo_use(pt, &entry->memo);
+    set_merge(pt, into, &entry->items);
 }
 
 static void
