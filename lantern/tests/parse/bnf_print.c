@@ -196,36 +196,23 @@ main(void)
              S("top"),
              S("<top> @nospace($1) ::= <n> <n>"));
 
-    one_line(S("<top> @declares($1, $2, \"var\") ::= <n> <n>\n"
+    one_line(S("<top> @declares($1, \"var\") ::= <n> <n>\n"
                "<n> ::= __LOWER\n"),
              S("top"),
-             S("<top> @declares($1, $2, \"var\") ::= <n> <n>"));
+             S("<top> @declares($1, \"var\") ::= <n> <n>"));
 
     one_line(S("<top> @scope(\"module\", $1) ::= <n>\n<n> ::= __LOWER\n"),
              S("top"),
              S("<top> @scope(\"module\", $1) ::= <n>"));
 
-    one_line(S("<top> @literal(\"int\", $n) ::= <n>\n<n> ::= __LOWER\n"),
+    one_line(S("<top> @varref($n) ::= <n>\n<n> ::= __LOWER\n"),
              S("top"),
-             S("<top> @literal(\"int\", $n) ::= <n>"));
+             S("<top> @varref($n) ::= <n>"));
 
-    one_line(S("<top> @infer($0 unify $1) ::= <n> <n>\n<n> ::= __LOWER\n"),
-             S("top"),
-             S("<top> @infer($0 unify $1) ::= <n> <n>"));
-
-    one_line(S("<top> @infer(\"$0 unify $1\") ::= <n> <n>\n"
-               "<n> ::= __LOWER\n"),
-             S("top"),
-             S("<top> @infer(\"$0 unify $1\") ::= <n> <n>"));
 
     one_line(S("<top> @disambig(pred(a, 2), 5) ::= <n>\n<n> ::= __LOWER\n"),
              S("top"),
              S("<top> @disambig(pred(a, 2), 5) ::= <n>"));
-
-    one_line(S("<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>\n"
-               "<n> ::= __LOWER\n"),
-             S("top"),
-             S("<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>"));
 
     one_line(S("<top> ::= <n>? <n>* <n>+\n<n> ::= __LOWER\n"),
              S("top"),

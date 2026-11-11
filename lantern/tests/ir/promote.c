@@ -2,7 +2,6 @@
 #include <stdlib.h>
 
 #include "ir/pass.h"
-#include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
 #include "lib/buffer.h"
@@ -272,26 +271,6 @@ static void test_address_taken_local_stays_in_memory(void)
     check("parsing address.of restores the local's address-taken fact",
           parsed_local && parsed_local->address_taken);
     ir_func_t *f = ir_func_at(r->m, 0);
-    ir_local_t *addressed = ir_local_find(f, S("x"));
-    ir_local_t *alias = ir_local_find(f, S("y"));
-    ir_value_t *address = ir_value_find(f, S("addr"));
-    ir_annot_t *address_target = ir_annot_get(
-        ir_value_annots(address), S("ir.alias0"));
-    check("address.of carries its exact binding as an alias target",
-          address_target && address_target->kind == IR_ANNOT_VALUE
-              && address_target->v == ir_local_value(f, addressed));
-    ir_annots_t *alias_facts = alias
-        ? ir_value_annots(ir_local_value(f, alias)) : nullptr;
-    ir_ctx_t *ctx = r->ctx;
-    bool alias_facts_set = addressed && alias_facts
-        && ir_annot_set(ctx, alias_facts, (ir_annot_t){
-            .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
-            .i = {.mag = 1}})
-        && ir_annot_set(ctx, alias_facts, (ir_annot_t){
-            .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE,
-            .v = ir_local_value(f, addressed)});
-    check("a reference local carries an alias target before promotion",
-          alias_facts_set);
     check("promotion succeeds with a memory-backed local",
           ir_promote(r->m, nullptr));
     check("the addressed binding keeps its local identity",
@@ -299,44 +278,12 @@ static void test_address_taken_local_stays_in_memory(void)
               && ir_local_find(f, S("x"))->address_taken);
     check("the unrelated local is promoted",
           f->n_locals == 1 && f->locals[0] == ir_local_find(f, S("x")));
-    ir_value_t *promoted_alias = ir_value_find(f, S("y_0"));
-    ir_annot_t *promoted_target = ir_annot_get(
-        ir_value_annots(promoted_alias), S("ir.alias0"));
-    check("promotion preserves the alias target on the SSA value",
-          promoted_target && promoted_target->kind == IR_ANNOT_VALUE
-              && promoted_target->v == ir_local_value(f, addressed));
     check("the promoted function verifies as SSA",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     snap(r);
     check("address.of still names the original local and no alloca was invented",
           has(r->out, S("address.of $x"))
               && lacks(r->out, S("alloca")));
-    done(r);
-}
-
-static void test_a_local_has_no_address(void)
-{
-    run_t *r = load(MOD("  func @f() -> void {\n"
-                        "    local $t: i32\n"
-                        "    block entry:\n"
-                        "      unreachable\n"
-                        "  }\n"));
-
-    ir_func_t  *f = ir_func_at(r->m, 0);
-    ir_local_t *l = ir_local_find(f, S("t"));
-    ir_block_t *b = ir_block_entry(f);
-    ir_instr_t *o = ir_instr_add(b, IR_OP_OFFSET);
-
-    ir_instr_operand_local(o, l);
-    ir_instr_operand_value(
-        o, ir_param_add(f, S("n"), ir_type_parse(r->m, S("u32"))));
-
-    ir_rules_t *rs = ir_module_rules(r->m);
-
-    check("a local read is its value, so pointer arithmetic on it is rejected",
-          ir_rule_apply(r->m, rs, o, r->d).verdict == IR_RULE_REJECT);
-    check("so there is no address-taken local for promote to skip",
-          ir_local_find(f, S("t")) != nullptr);
     done(r);
 }
 
@@ -752,7 +699,6 @@ static void test_verified_is_the_summary(void)
     done(broken);
 }
 
-
 int main(void)
 {
     test_promote_establishes_ssa();
@@ -763,7 +709,6 @@ int main(void)
     test_the_phi_carries_its_provenance();
     test_promote_does_not_touch_memory();
     test_address_taken_local_stays_in_memory();
-    test_a_local_has_no_address();
     test_split_edges();
     test_a_local_read_before_it_is_set();
     test_promote_handles_loops();

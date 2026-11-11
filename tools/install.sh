@@ -193,7 +193,7 @@ stage_files() {
              "$STAGE/share/writ" "$STAGE/include" || return 1
     cp "$COMPILER" "$STAGE/bin/n00b" || return 1
     cp "$BUILD/libn00b-abi-runtime.a" "$BUILD/libn00b-abi-runtime.bc" \
-       "$STAGE/lib/" || return 1
+       "$BUILD/n00b-comptime.o" "$STAGE/lib/" || return 1
     for cross in "$BUILD"/*/libn00b-abi-runtime.a; do
         [ -f "$cross" ] || continue
         profile="$(basename "$(dirname "$cross")")"

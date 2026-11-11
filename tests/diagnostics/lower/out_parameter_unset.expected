@@ -1,0 +1,2 @@
+tests/diagnostics/lower/out_parameter_unset.n:6:5: error N00B-S0004: `slot` is not assigned on every path to this return
+  tests/diagnostics/lower/out_parameter_unset.n:1:15: note: `slot` is declared here

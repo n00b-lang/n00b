@@ -33,6 +33,12 @@ runtime)
     N00B_PATH="$program_dir" "$compiler" build --generic --verify-analyses \
         --output "$tmp/generic" "$program_dir/bitcode_generic.n"
     "$tmp/generic"
+    "$compiler" build --output "$tmp/narrowed_global_field" \
+        "$program_dir/bitcode_narrowed_global_field.n"
+    "$tmp/narrowed_global_field"
+    "$compiler" build --output "$tmp/generic_finalizer_probe" \
+        "$program_dir/bitcode_generic_finalizer_probe.n"
+    "$tmp/generic_finalizer_probe"
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
@@ -43,10 +49,6 @@ litmod)
         'hello|world|123|2a|1.5|last'
     ;;
 build-time)
-    "$compiler" build --output "$tmp/script_once" \
-        "$program_dir/bitcode_script_once.n" >"$tmp/script_once_compile"
-    test ! -s "$tmp/script_once_compile"
-    test "$("$tmp/script_once")" = "top"
     N00B_PATH="$program_dir" "$compiler" build --output "$tmp/importer" \
         "$program_dir/bitcode_importer.n"
     if (ulimit -c 0; "$tmp/importer") >/dev/null 2>&1; then
@@ -60,19 +62,30 @@ build-time)
     "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
-    build_time_failure bitcode_litmod_comptime_fail 'prelude failed' \
+    build_time_failure bitcode_litmod_comptime_fail \
+        'uncaught failure "prelude failed"' \
         'bitcode_litmod_comptime_fail.n:7:5'
-    grep -q 'error N00B-B0012: the build-time program' \
+    grep -q 'the comptime run of `bitcode_litmod_comptime_fail` exited' \
         "$tmp/bitcode_litmod_comptime_fail.out"
-    build_time_failure bitcode_litmod_fence_nil_fail 'fence failed' \
+    build_time_failure bitcode_litmod_fence_nil_fail \
+        'uncaught failure "fence failed"' \
         'bitcode_litmod_fence_nil_fail.n:6:1'
-    build_time_failure bitcode_litmod_string_fail 'bad literal' \
+    build_time_failure bitcode_litmod_string_fail \
+        'uncaught failure "bad literal"' \
         'bitcode_litmod_string_fail.n:7:12'
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'
-    grep -q 'error N00B-B0012: the build-time program' \
+    grep -q 'the comptime run of `bitcode_comptime_fail` exited' \
         "$tmp/bitcode_comptime_fail.out"
+    "$compiler" build --profile-compile --output "$tmp/build_time_skipped" \
+        "$program_dir/bitcode_build_time_skipped.n" \
+        2>"$tmp/build_time_skipped.err"
+    if grep -q '^PROFILE build-time ' "$tmp/build_time_skipped.err"; then
+        echo 'the build-time stage ran without static literals' >&2
+        exit 1
+    fi
+    test "$("$tmp/build_time_skipped")" = 3
     ;;
 *)
     echo "unknown part $part" >&2

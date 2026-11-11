@@ -256,7 +256,7 @@ func __db_cell(raw: uint) -> Db {
 func __finalize(consume self: Ref[Db_Cell]) {
     if self.__value.raw != 0 and debug_enabled() {
         __fd_write(2, "Db collected while open; releasing it\n")
-        let released = __db_close(self.__value.raw)
+        _ = __db_close(self.__value.raw)
     }
 }
 
@@ -284,29 +284,29 @@ record Plain layout(c) {
 func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_kb: u32? = nil) -> Db fail: Error {
     var opts_record: Open_Opts = (present = 0, timeout_ms = 0, readonly = false, cache_kb = 0)
     if timeout_ms != nil {
-        opts_record.timeout_ms = timeout_ms.get()
+        opts_record.timeout_ms = timeout_ms
         opts_record.present = opts_record.present | 1
     } else {
         opts_record.timeout_ms = 30000
     }
     if readonly != nil {
-        opts_record.readonly = readonly.get()
+        opts_record.readonly = readonly
         opts_record.present = opts_record.present | 2
     } else {
         opts_record.readonly = false
     }
     if cache_kb != nil {
-        opts_record.cache_kb = cache_kb.get()
+        opts_record.cache_kb = cache_kb
         opts_record.present = opts_record.present | 4
     }
     var path_value: Array[u8] = __text_byte_array(path)
-    var result: uint = 0
-    let outcome = __db_open(ref path_value, ref opts_record, ref result)
+    var returned: uint = 0
+    let outcome = __db_open(ref path_value, ref opts_record, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_open")
         fail failure
     }
-    return __db_cell(result)
+    return __db_cell(returned)
 }
 
 record Db_Limit_Options {
@@ -318,21 +318,21 @@ func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {
     var limits_record: Limits = (max_rows = 0, min_rows = 0)
     let limits_max_rows = limits.max_rows
     if limits_max_rows != nil {
-        limits_record.max_rows = limits_max_rows.get()
+        limits_record.max_rows = limits_max_rows
     } else {
         limits_record.max_rows = -1
     }
     let limits_min_rows = limits.min_rows
     if limits_min_rows != nil {
-        limits_record.min_rows = limits_min_rows.get()
+        limits_record.min_rows = limits_min_rows
     } else {
         limits_record.min_rows = -1
     }
     if db.__value.raw == 0 {
         panic("db_limit: handle is closed")
     }
-    let result = __db_limit(db.__value.raw, ref limits_record)
-    return result
+    let returned = __db_limit(db.__value.raw, ref limits_record)
+    return returned
 }
 
 func db_flags(db: Db, flags: u32 = 4) -> u32 {
@@ -342,8 +342,8 @@ func db_flags(db: Db, flags: u32 = 4) -> u32 {
     if db.__value.raw == 0 {
         panic("db_flags: handle is closed")
     }
-    let result = __db_flags(db.__value.raw, ref sized_record)
-    return result
+    let returned = __db_flags(db.__value.raw, ref sized_record)
+    return returned
 }
 
 func db_depth(db: Db, depth: i32 = 3) -> i32 {
@@ -352,8 +352,8 @@ func db_depth(db: Db, depth: i32 = 3) -> i32 {
     if db.__value.raw == 0 {
         panic("db_depth: handle is closed")
     }
-    let result = __db_depth(db.__value.raw, ref plain_record)
-    return result
+    let returned = __db_depth(db.__value.raw, ref plain_record)
+    return returned
 }
 
 func close(modify self: Db) fail: Error {

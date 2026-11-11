@@ -46,12 +46,31 @@ typedef struct {
     writ_str_t            type_namespace;
 } writ_gen_n00b_request_t;
 
+typedef enum {
+    WRIT_N00B_TYPE_NAMED,
+    WRIT_N00B_TYPE_REF,
+    WRIT_N00B_TYPE_ARRAY,
+    WRIT_N00B_TYPE_LIST,
+    WRIT_N00B_TYPE_OPTION,
+} writ_n00b_type_kind_t;
+
+typedef struct writ_n00b_type_t writ_n00b_type_t;
+
+struct writ_n00b_type_t {
+    writ_n00b_type_kind_t   kind;
+    writ_str_t              name;
+    const writ_n00b_type_t *item;
+};
+
 typedef struct {
-    writ_str_t name;
-    writ_str_t symbol;
-    writ_str_t  signature;
-    bool        pure;
-    writ_span_t declared_at;
+    writ_str_t                     name;
+    writ_str_t                     symbol;
+    const writ_n00b_type_t *const *params;
+    size_t                         params_count;
+    const writ_n00b_type_t        *result;
+    bool                           pure;
+    writ_effects_t                 effects;
+    writ_span_t                    declared_at;
 } writ_n00b_extern_t;
 
 typedef struct {

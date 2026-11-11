@@ -9,7 +9,7 @@ fence litmod bnf(contents: string, site: Literal_Site)
     } fail(diags) {
         let offset: u32 = cast[u32](site.line)
         var shifted: List[diag.Diagnostic] = new[List[diag.Diagnostic]]()
-        for let d in diags {
+        for d in diags {
             var moved: diag.Diagnostic = d
             moved.span.start_line += offset
             moved.span.end_line += offset

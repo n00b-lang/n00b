@@ -118,7 +118,7 @@ func cache_tables() {
 inline func type_at(index: u32) -> Ref[Type_Record]? {
     let rows: Ref[byte]? = type_rows
     if index < type_row_count and rows != nil {
-        return unsafe_cast[Ref[Type_Record]] __gc_byte_offset(rows.get(),
+        return unsafe_cast[Ref[Type_Record]] __gc_byte_offset(rows,
             cast[uint](index) * type_row_bytes)
     }
     return __abi_type(index)
@@ -143,7 +143,7 @@ func physical_run_at(index: u32) -> Ref[Physical_Run_Record]? {
 inline func trace_at(index: u32) -> Ref[Trace_Record]? {
     let rows: Ref[byte]? = trace_rows
     if index < trace_row_count and rows != nil {
-        return unsafe_cast[Ref[Trace_Record]] __gc_byte_offset(rows.get(),
+        return unsafe_cast[Ref[Trace_Record]] __gc_byte_offset(rows,
             cast[uint](index) * trace_row_bytes)
     }
     return __abi_trace(index)
@@ -152,7 +152,7 @@ inline func trace_at(index: u32) -> Ref[Trace_Record]? {
 inline func trace_child_at(index: u32) -> Ref[Trace_Child_Record]? {
     let rows: Ref[byte]? = trace_child_rows
     if index < trace_child_row_count and rows != nil {
-        return unsafe_cast[Ref[Trace_Child_Record]] __gc_byte_offset(rows.get(),
+        return unsafe_cast[Ref[Trace_Child_Record]] __gc_byte_offset(rows,
             cast[uint](index) * trace_child_row_bytes)
     }
     return __abi_trace_child(index)
@@ -166,7 +166,7 @@ inline func tag_extractor_at(index: u32) -> Ref[Tag_Extractor_Record]? {
     let rows: Ref[byte]? = tag_extractor_rows
     if index < tag_extractor_row_count and rows != nil {
         return unsafe_cast[Ref[Tag_Extractor_Record]] __gc_byte_offset(
-            rows.get(), cast[uint](index) * tag_extractor_row_bytes)
+            rows, cast[uint](index) * tag_extractor_row_bytes)
     }
     return __abi_tag_extractor(index)
 }
@@ -227,8 +227,8 @@ func baked_address(address: uint) -> bool {
         let row: Ref[Baked_Node_Record]? = baked_node_at(index)
         let base: Ref[byte]? = baked_node_address(index)
         if row != nil and base != nil {
-            let start: uint = __abi_ref_address(base.get())
-            if address >= start and address < start + cast[uint]row.get().__value.byte_length {
+            let start: uint = __abi_ref_address(base)
+            if address >= start and address < start + cast[uint]row.__value.byte_length {
                 return true
             }
         }
@@ -274,7 +274,7 @@ inline func range_index(range: Range, ordinal: u32) -> i64 {
     if ordinal < range.count and rows != nil and
         cast[u64](range.first) + cast[u64](range.count) <= cast[u64](u32_row_count) {
         let at: uint = (cast[uint](range.first) + cast[uint](ordinal)) * 4
-        return cast[i64]((unsafe_cast[Ref[u32]] __gc_byte_offset(rows.get(), at)).__value)
+        return cast[i64]((unsafe_cast[Ref[u32]] __gc_byte_offset(rows, at)).__value)
     }
     return __abi_range_index(range.first, range.count, ordinal)
 }
@@ -290,7 +290,7 @@ func first_component(row: Ref[Type_Record]) -> Ref[Type_Record]? {
 func reference_target(descriptor: typespec) -> Ref[Type_Record]? {
     let reference: Ref[Type_Record]? = type_for(descriptor)
     if reference != nil {
-        return first_component(reference.get())
+        return first_component(reference)
     }
     return nil
 }
@@ -298,9 +298,9 @@ func reference_target(descriptor: typespec) -> Ref[Type_Record]? {
 func optional_reference_target(descriptor: typespec) -> Ref[Type_Record]? {
     let option: Ref[Type_Record]? = type_for(descriptor)
     if option != nil {
-        let reference: Ref[Type_Record]? = first_component(option.get())
+        let reference: Ref[Type_Record]? = first_component(option)
         if reference != nil {
-            return first_component(reference.get())
+            return first_component(reference)
         }
     }
     return nil

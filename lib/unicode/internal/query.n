@@ -152,7 +152,7 @@ func filter_char(cp: char) -> internal.types.Char_Filter {
 
 func matches(self: internal.types.Char_Filter, cp: char) -> bool {
     if self.kind == internal.types.Char_Filter_Kind.set {
-        return self.set != nil and holds(self.set.get(), cp)
+        return self.set != nil and holds(self.set, cp)
     }
 
     if self.kind == internal.types.Char_Filter_Kind.gc {
@@ -240,7 +240,7 @@ func ranges(self: internal.types.Char_Filter)
     }
     else {
         if blk != nil {
-            let want: u32 = cast[u32] blk.get()
+            let want: u32 = cast[u32] blk
 
             var i: u32 = 0
             while i < generated.blocks.block_count {

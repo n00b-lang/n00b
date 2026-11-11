@@ -1,0 +1,2 @@
+tests/diagnostics/lower/finalizer_allocates.n:7:1: error N00B-S0078: `__finalize` implements `Finalize.__finalize`, which must never have effect `allocates`, but:
+  tests/diagnostics/lower/finalizer_allocates.n:8:5: note: `__finalize` calls `builtin.containers.buffer.__add_assign`, which may have effect `allocates`

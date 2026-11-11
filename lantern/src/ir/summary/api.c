@@ -202,18 +202,44 @@ merge_effects(ir_summary_t *into, const ir_summary_t *from)
 }
 
 
+static const uint32_t worst_case_flags = IR_SUMMARY_MAY_FAIL
+    | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
+    | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_MAY_DIVERGE
+    | IR_SUMMARY_OBSERVES;
+
 ir_summary_t *
 ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
 {
     ir_summary_t *summary = ir_summary_new(summaries, function);
-    summary->flags = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP
-        | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
-        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
-        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES;
+    summary->flags = worst_case_flags | IR_SUMMARY_CALLS_UNKNOWN;
     add_path(summary, &(ir_spath_t){
         .root  = IR_SPLACE_UNKNOWN,
         .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
     summary->traps = IR_STRAP_ALL;
+    return summary;
+}
+
+ir_summary_t *
+ir_summary_bounded(ir_summaries_t *summaries, const ir_func_t *function,
+                   uint64_t forbidden)
+{
+    ir_summary_t *summary = ir_summary_new(summaries, function);
+    summary->flags = (worst_case_flags | IR_SUMMARY_STARTS_THREADS)
+        & ~(uint32_t)forbidden;
+    if (!(summary->flags & IR_SUMMARY_OBSERVES))
+        summary->flags &= ~(uint32_t)IR_SUMMARY_MAY_IO;
+    uint8_t globals = (forbidden & IR_SEFFECT_READS_NONLOCAL
+                       ? 0 : IR_SPATH_READ | IR_SPATH_READS_ENTRY)
+        | (forbidden & IR_SEFFECT_WRITES_NONLOCAL ? 0 : IR_SPATH_WRITE);
+    if (globals)
+        add_path(summary, &(ir_spath_t){
+            .root = IR_SPLACE_UNKNOWN, .flags = globals | IR_SPATH_DEEP});
+    for (uint32_t p = 0; p < function->n_params; p++) {
+        ir_spath_t path = ir_spath_of_place(&(ir_splace_t){
+            .kind = IR_SPLACE_PARAM, .param = p}, IR_SPATH_ACCESS);
+        add_path(summary, &path);
+    }
+    if (summary->flags & IR_SUMMARY_MAY_TRAP) summary->traps = IR_STRAP_ALL;
     return summary;
 }
 
@@ -424,17 +450,49 @@ ir_switness_callee_text(const ir_switness_t *witness, core_buffer_t *out)
                                      : witness->name.u8_bytes);
 }
 
+static int
+compare_targets(const void *left, const void *right)
+{
+    const ir_func_t *a = *(const ir_func_t *const *)left;
+    const ir_func_t *b = *(const ir_func_t *const *)right;
+    int order = core_string_cmp(ir_module_name(a->owner),
+                                ir_module_name(b->owner));
+    return order ? order : core_string_cmp(a->name, b->name);
+}
+
+static uint8_t
+witness_tier(const ir_switness_t *witness, const ir_func_t *self)
+{
+    if (self && witness->callee == self) return 2;
+    return !witness->callee
+        && core_string_eq(witness->name, CORE_STRING_STATIC("?"));
+}
+
+static bool
+better_witness(const ir_switness_t *witness, const ir_switness_t *candidate,
+               const ir_func_t *self)
+{
+    uint8_t tier = witness_tier(witness, self);
+    uint8_t candidate_tier = witness_tier(candidate, self);
+    if (tier != candidate_tier) return candidate_tier < tier;
+    if (!candidate->callee || !witness->callee) return false;
+    if (candidate->line != witness->line)
+        return candidate->line < witness->line;
+    if (candidate->column != witness->column)
+        return candidate->column < witness->column;
+    return compare_targets(&candidate->callee, &witness->callee) < 0;
+}
+
 static void
 add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
           ir_func_t *callee, core_string_t name)
 {
-    uint32_t added = flags & ~summary->flags;
     summary->flags |= flags;
-    for (uint32_t b = 0; added && b < IR_SEFFECT_FLAG_BITS; b++) {
+    if (!summary->deferring) summary->own_flags |= flags;
+    for (uint32_t b = 0; flags && b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
-        if (!(added & flag) || ir_summary_witness_for(summary, flag))
-            continue;
-        core_list_push(summary->witnesses, ((ir_switness_t){
+        if (!(flags & flag)) continue;
+        ir_switness_t candidate = {
             .flag   = flag,
             .callee = callee,
             .module = callee ? ir_module_name(callee->owner)
@@ -442,7 +500,14 @@ add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
             .name   = callee ? callee->name : name,
             .line   = in ? in->span.start_line : 0,
             .column = in ? in->span.start_col : 0,
-        }));
+        };
+        ir_switness_t *witness = nullptr;
+        for (size_t i = 0; !witness && i < summary->witnesses.len; i++)
+            if (summary->witnesses.data[i].flag == flag)
+                witness = &summary->witnesses.data[i];
+        if (!witness) core_list_push(summary->witnesses, candidate);
+        else if (better_witness(witness, &candidate, summary->function))
+            *witness = candidate;
     }
 }
 
@@ -553,6 +618,9 @@ adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
     uint32_t before = summary->flags;
     summary->flags  = hooks->adjust(hooks->context, summary->function,
                                     summary->flags);
+    if (summary->callback_params)
+        summary->own_flags = hooks->adjust(hooks->context, summary->function,
+                                           summary->own_flags);
     const ir_func_t *f     = summary->function;
     uint32_t         added = summary->flags & ~before;
     for (uint32_t b = 0; f && added && b < IR_SEFFECT_FLAG_BITS; b++)
@@ -863,6 +931,19 @@ summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
                               false))
             return true;
     return false;
+}
+
+bool
+ir_summary_call_adds_effects(ir_summaries_t *summaries, const ir_func_t *caller,
+                             const ir_func_t *callee)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    if (!hooks || !hooks->callee_effects || !caller || !callee) return false;
+    ir_summary_t *probe = ir_summary_new(nullptr, caller);
+    hooks->callee_effects(hooks->context, callee, probe);
+    bool adds = probe->flags || probe->effects.len;
+    summary_free(probe);
+    return adds;
 }
 
 bool

@@ -61,20 +61,22 @@
              "reads and writes, and where its result comes from; " \
              "separate several names with commas"), \
     DEV_FLAG("--effects-json", NO_ALIAS, BOOL, false, \
-             "print the --effects-of report as JSON")
-#define NO_COMPTIME_FLAG \
-    FLAG("--no-comptime", NO_ALIAS, BOOL, false, \
-         "skip the comptime phase; a program that needs build-time values fails")
+             "print the --effects-of report as JSON"), \
+    DEV_FLAG("--effects-explain", NO_ALIAS, BOOL, false, \
+             "print the --effects-of report as `n00b explain effects` does"), \
+    DEV_FLAG("--effects-query", NO_ALIAS, WORD, true, \
+             "list the functions whose effects match this query"), \
+    DEV_FLAG("--effects-in", NO_ALIAS, WORD, true, \
+             "with --effects-query, the comma-separated names to ask about"), \
+    DEV_FLAG("--effects-not-in", NO_ALIAS, WORD, true, \
+             "with --effects-query, the comma-separated names to leave out"), \
+    DEV_FLAG("--effects-why", NO_ALIAS, BOOL, false, \
+             "with --effects-query, show why each match has its effects")
 #define PROGRAM_FLAGS \
-    NO_COMPTIME_FLAG, \
     LINK_INTERFACE_FLAG, \
     SHOW_FFI_FLAG, \
     FRONT_END_DUMP_FLAGS, \
     LOWERING_DUMP_FLAGS, \
-    DEV_FLAG("--build-time", NO_ALIAS, BOOL, false, \
-             "compile the program that computes consts"), \
-    DEV_FLAG("--literal-stage", NO_ALIAS, BOOL, false, \
-             "with --build-time, compile only the static literal producers"), \
     KEYED_FLAG("--unchecked-wide-narrowing", NO_ALIAS, BOOL, false, \
                "narrow 128-bit integers without the runtime range check", \
                SETS(BUILD_UNCHECKED_WIDE_NARROWING, true)), \
@@ -84,6 +86,9 @@
          "native object to link into an executable"), \
     DEV_FLAG("--native-root", NO_ALIAS, WORD, true, \
              "qualified n00b function used by native code"), \
+    KEYED_FLAG("--comptime-timeout", NO_ALIAS, INT, true, \
+               "seconds a module's comptime may run; 0 for no limit", \
+               SETS(BUILD_COMPTIME_TIMEOUT, true)), \
     KEYED_FLAG("--lto", NO_ALIAS, BOOL, false, \
                "optimize runtime modules and C support together", \
                SETS(BUILD_LTO, true)), \
@@ -149,6 +154,13 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
                "platform to build for: host, arm64-macos, x86_64-linux, "
                "arm64-linux or x86_64-windows",
                SETS(BUILD_TARGET, true)),
+    KEYED_FLAG("--atomic128", NO_ALIAS, BOOL, false,
+               "use 16-byte compare-and-swap on x86_64 (the default)",
+               SETS(BUILD_ATOMIC128, true)),
+    KEYED_FLAG("--no-atomic128", NO_ALIAS, BOOL, false,
+               "run on x86_64 CPUs without 16-byte compare-and-swap; "
+               "16-byte atomics are then rejected there",
+               SETS(BUILD_ATOMIC128, false)),
     DEV_FLAG("--warn-changed-files-only", NO_ALIAS, BOOL, false,
              "report warnings only for modules compiled in this build"),
     KEYED_FLAG("--package-warnings", NO_ALIAS, BOOL, false,
@@ -161,8 +173,11 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
                "disable syntax spelling warnings",
                SETS(SYNTAX_WARNINGS, false)),
     KEYED_FLAG("--terse-diagnostics", NO_ALIAS, BOOL, false,
-               "print each diagnostic on one line with its code",
+               "print each diagnostic on one line",
                SETS(DIAGNOSTICS_TERSE, true)),
+    KEYED_FLAG("--diagnostic-codes", NO_ALIAS, BOOL, false,
+               "show each diagnostic's code, such as N00B-S0078",
+               SETS(DIAGNOSTICS_CODES, true)),
     KEYED_FLAG("--no-hints", NO_ALIAS, BOOL, false,
                "hide hints such as parameters that could be `view`",
                SETS(DIAGNOSTICS_HINTS, false)),
@@ -172,6 +187,9 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
     DEV_KEYED_FLAG("--profile-compile", NO_ALIAS, BOOL, false,
                    "print compile phase timings to stderr",
                    SETS(DEV_PROFILE_COMPILE, true)),
+    DEV_KEYED_FLAG("--errors-only", NO_ALIAS, BOOL, false,
+                   "print only errors, not warnings or notes",
+                   SETS(DEV_ERRORS_ONLY, true)),
     DEV_KEYED_FLAG("--cache-log", NO_ALIAS, WORD, true,
                    "append object cache decisions to this file",
                    SETS(DEV_CACHE_LOG, true)),
@@ -196,6 +214,8 @@ static const parse_cmdr_flag_t FMT_FLAGS[] = {
          "check formatting without writing files"),
     FLAG("--normalize", NO_ALIAS, BOOL, false,
          "normalize source using inferred type information"),
+    FLAG("--keep-layout", NO_ALIAS, BOOL, false,
+         "with --normalize, rewrite only what normalization changes"),
     KEYED_FLAG("--ascii-tags", NO_ALIAS, BOOL, false,
                "write rich-string tags as [: :] instead of « »",
                SETS(FMT_ASCII_TAGS, true)),
@@ -225,7 +245,6 @@ static const parse_cmdr_flag_t LIBRARY_FLAGS[] = {
 
 static const parse_cmdr_flag_t LOWERING_FLAGS[] = {
     OUTPUT_FLAG,
-    NO_COMPTIME_FLAG,
     LINK_INTERFACE_FLAG,
     FRONT_END_DUMP_FLAGS,
     LOWERING_DUMP_FLAGS,
@@ -249,6 +268,25 @@ static const parse_cmdr_flag_t TOOLCHAIN_FLAGS[] = {
 static const parse_cmdr_flag_t CACHE_FLAGS[] = {
     FLAG("--all", NO_ALIAS, BOOL, false,
          "remove the caches of every toolchain, not just this one"),
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t EFFECTS_FLAGS[] = {
+    FLAG("--in", NO_ALIAS, WORD, true,
+         "ask only about this package, module or function; repeat to add "
+         "more, or use `all` for the whole program"),
+    FLAG("--not-in", NO_ALIAS, WORD, true,
+         "leave out this package, module or function; can be repeated"),
+    FLAG("--json", NO_ALIAS, BOOL, false, "print the matches as JSON"),
+    FLAG("--why", NO_ALIAS, BOOL, false,
+         "show the calls that give each match its effects"),
+    LINK_INTERFACE_FLAG,
+    END_FLAGS,
+};
+
+static const parse_cmdr_flag_t EXPLAIN_FLAGS[] = {
+    FLAG("--json", NO_ALIAS, BOOL, false,
+         "with `effects`, print the report as JSON"),
     END_FLAGS,
 };
 
@@ -292,8 +330,15 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
     COMMAND("completions",
             "print tab completion for a shell: bash, zsh, fish, powershell",
             nullptr, "shell", 1, 1, false),
-    COMMAND("explain", "explain a diagnostic code such as N00B-T0042",
-            nullptr, "code", 1, 1, false),
+    COMMAND("effects",
+            "list the functions whose effects match a query, such as "
+            "`may_effect impure and not has_effect Audited`; the last "
+            "argument is the program",
+            EFFECTS_FLAGS, "query... module|file", 2, -1, false),
+    COMMAND("explain",
+            "explain a diagnostic code such as N00B-T0042, or a function's "
+            "effects: explain effects MODULE.FUNCTION [module|file]",
+            EXPLAIN_FLAGS, "code", 1, 3, false),
     COMMAND("compile", "emit ABI metadata for one translation unit",
             LOWERING_FLAGS, "input", 1, 1, true),
     COMMAND("preprocess", "emit preprocessor output for one input",
@@ -405,6 +450,8 @@ make_cli(void)
         CORE_STRING_STATIC("--link-object"),
         CORE_STRING_STATIC("--native-root"),
         CORE_STRING_STATIC("--syntax-preference"),
+        CORE_STRING_STATIC("--in"),
+        CORE_STRING_STATIC("--not-in"),
     };
     for (size_t i = 0; i < sizeof(repeatable) / sizeof(repeatable[0]); i++) {
         for (const parse_cmdr_flag_t *flag = GLOBAL_FLAGS; flag->name.data;

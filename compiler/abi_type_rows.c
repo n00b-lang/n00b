@@ -225,9 +225,7 @@ n00bb_abi_type_identity_rows_build(
         if (!valid) break;
         if (row->kind == N00B_ABI_TYPE_VARIABLE) continue;
         failed_reason = CORE_STRING_STATIC("canonical type name");
-        th_print_options_t print_options = {.omit_constraints = true};
-        core_string_t spelling = th_print_with_options(types, type,
-                                                       &print_options);
+        core_string_t spelling = th_print(types, type);
         valid = spelling.data && n00bb_abi_name_pool_encode(names,
                 spelling, N00B_ABI_TABLE_TYPE,
                 (uint32_t)i, offsetof(n00b_abi_type_v1, canonical_name),
@@ -687,7 +685,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
          symbol_index++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)symbol_index);
-        if (!symbol || symbol->kind != PARSE_SYM_VARIABLE
+        if (!symbol || (symbol->kind != PARSE_SYM_VARIABLE
+                        && symbol->kind != PARSE_SYM_PARAM)
             || !symbol->decl_node || !symbol->type) continue;
         th_type **free_vars = nullptr;
         size_t free_count = th_free_vars(types, symbol->type, &free_vars);

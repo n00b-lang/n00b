@@ -1,0 +1,46 @@
+object Holder {
+    items: Array[int]
+}
+
+var kept_items: Array[int] = new[Array[int]](0)
+
+func __init(self: Holder) {
+    self.items = new[Array[int]](0)
+}
+
+func keep(self: Holder, items: Array[int]) {
+    self.items = items
+}
+
+func keep_global(items: Array[int]) {
+    kept_items = items
+}
+
+func wrap(consume items: Array[int]) -> Holder {
+    let holder: Holder = new[Holder]()
+    holder.items = items
+    return holder
+}
+
+func keep_copy(self: Holder, items: Array[int]) {
+    var copy: Array[int] = new[Array[int]](cast[int]__array_length(items))
+    var at: uint = 0
+    while at < __array_length(items) {
+        copy[at] = items[at]
+        at += 1
+    }
+    self.items = copy
+}
+
+func copy_elements(self: Holder, items: Array[int]) {
+    self.items[0] = items[0]
+}
+
+func pass_through(items: Array[int]) -> Array[int] {
+    return items
+}
+
+func keep_fixed(self: Holder, items: Array[int][2]) -> int {
+    let copy: Array[int][2] = items
+    return copy[0]
+}

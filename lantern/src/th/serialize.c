@@ -68,36 +68,6 @@ writer_node(th_type_writer_t *writer, const th_type *type)
 }
 
 static void
-visit_constraint(th_type_writer_t *writer, const th_constraint *constraint)
-{
-    switch (constraint->kind) {
-    case TH_CON_UNIFIES:
-    case TH_CON_PROMOTES:
-    case TH_CON_EXCLUDES:
-        writer_node(writer, constraint->target);
-        break;
-    case TH_CON_ONE_OF:
-        for (size_t i = 0; i < constraint->one_of.n; i++)
-            writer_node(writer, constraint->one_of.types[i]);
-        break;
-    case TH_CON_HAS_FIELD:
-        writer_node(writer, constraint->field.type);
-        break;
-    case TH_CON_HAS_PARAM:
-        writer_node(writer, constraint->param.type);
-        break;
-    case TH_CON_METHOD:
-        writer_node(writer, constraint->method.result);
-        writer_node(writer, constraint->method.call);
-        break;
-    case TH_CON_IMPLEMENTS:
-    case TH_CON_KIND:
-    case TH_CON_INTEGER:
-        break;
-    }
-}
-
-static void
 visit_children(th_type_writer_t *writer, const th_type *type)
 {
     switch (type->kind) {
@@ -144,8 +114,6 @@ visit_children(th_type_writer_t *writer, const th_type *type)
         break;
     case TH_VAR:
         writer_node(writer, type->var.ref);
-        for (size_t i = 0; i < type->var.cons.len; i++)
-            visit_constraint(writer, &type->var.cons.data[i]);
         break;
     default:
         break;
@@ -186,58 +154,6 @@ static void
 put_ref(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
 {
     put_u32(out, writer_node(writer, type));
-}
-
-static void
-put_constraint(th_type_writer_t *writer, core_buffer_t *out,
-               const th_constraint *constraint)
-{
-    put_u32(out, (uint32_t)constraint->kind);
-    put_u32(out, constraint->has_scope);
-    put_text(out, constraint->scope_module);
-    put_text(out, constraint->scope_package);
-    put_text(out, constraint->span.file);
-    put_u32(out, constraint->span.start_line);
-    put_u32(out, constraint->span.start_col);
-    put_u32(out, constraint->span.end_line);
-    put_u32(out, constraint->span.end_col);
-    switch (constraint->kind) {
-    case TH_CON_KIND:
-        put_u32(out, (uint32_t)constraint->type_kind);
-        break;
-    case TH_CON_INTEGER:
-        put_u32(out, constraint->integer.flags);
-        put_u32(out, constraint->integer.owner);
-        break;
-    case TH_CON_IMPLEMENTS:
-        put_text(out, constraint->iface);
-        break;
-    case TH_CON_UNIFIES:
-    case TH_CON_PROMOTES:
-    case TH_CON_EXCLUDES:
-        put_ref(writer, out, constraint->target);
-        break;
-    case TH_CON_ONE_OF:
-        put_u64(out, constraint->one_of.n);
-        for (size_t i = 0; i < constraint->one_of.n; i++)
-            put_ref(writer, out, constraint->one_of.types[i]);
-        break;
-    case TH_CON_HAS_FIELD:
-        put_text(out, constraint->field.name);
-        put_ref(writer, out, constraint->field.type);
-        put_u32(out, constraint->field.auto_deref);
-        break;
-    case TH_CON_HAS_PARAM:
-        put_u64(out, constraint->param.index);
-        put_ref(writer, out, constraint->param.type);
-        break;
-    case TH_CON_METHOD:
-        put_text(out, constraint->method.name);
-        put_ref(writer, out, constraint->method.result);
-        put_ref(writer, out, constraint->method.call);
-        put_text(out, constraint->method.in_place);
-        break;
-    }
 }
 
 static void
@@ -341,9 +257,6 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
         put_u32(out, type->var.has_index);
         put_text(out, type->var.name);
         put_ref(writer, out, type->var.ref);
-        put_u64(out, type->var.cons.len);
-        for (size_t i = 0; i < type->var.cons.len; i++)
-            put_constraint(writer, out, &type->var.cons.data[i]);
         break;
     default:
         break;
@@ -424,71 +337,6 @@ get_ref(cursor_t *cursor, th_type_reader_t *reader)
         return nullptr;
     }
     return reader->nodes[index - 1];
-}
-
-static void
-get_constraint(cursor_t *cursor, th_type_reader_t *reader,
-               th_constraint *constraint)
-{
-    th_ctx *ctx = reader->ctx;
-    *constraint = (th_constraint){0};
-    constraint->kind = (th_con_kind)get_u32(cursor);
-    constraint->has_scope = get_u32(cursor) != 0;
-    constraint->scope_module = get_text(cursor, ctx);
-    constraint->scope_package = get_text(cursor, ctx);
-    constraint->span.file = get_text(cursor, ctx);
-    constraint->span.start_line = get_u32(cursor);
-    constraint->span.start_col = get_u32(cursor);
-    constraint->span.end_line = get_u32(cursor);
-    constraint->span.end_col = get_u32(cursor);
-    switch (constraint->kind) {
-    case TH_CON_KIND:
-        constraint->type_kind = (th_kind)get_u32(cursor);
-        break;
-    case TH_CON_INTEGER:
-        constraint->integer.flags = (uint8_t)get_u32(cursor);
-        constraint->integer.owner = get_u32(cursor);
-        break;
-    case TH_CON_IMPLEMENTS:
-        constraint->iface = get_text(cursor, ctx);
-        break;
-    case TH_CON_UNIFIES:
-    case TH_CON_PROMOTES:
-    case TH_CON_EXCLUDES:
-        constraint->target = get_ref(cursor, reader);
-        break;
-    case TH_CON_ONE_OF: {
-        uint64_t count = get_u64(cursor);
-        if (count > cursor->length) {
-            cursor->failed = true;
-            break;
-        }
-        constraint->one_of.n = (size_t)count;
-        constraint->one_of.types = count
-            ? th_alloc(ctx, (size_t)count * sizeof(th_type *)) : nullptr;
-        for (size_t i = 0; i < count && constraint->one_of.types; i++)
-            constraint->one_of.types[i] = get_ref(cursor, reader);
-        break;
-    }
-    case TH_CON_HAS_FIELD:
-        constraint->field.name = get_text(cursor, ctx);
-        constraint->field.type = get_ref(cursor, reader);
-        constraint->field.auto_deref = get_u32(cursor) != 0;
-        break;
-    case TH_CON_HAS_PARAM:
-        constraint->param.index = get_u64(cursor);
-        constraint->param.type = get_ref(cursor, reader);
-        break;
-    case TH_CON_METHOD:
-        constraint->method.name = get_text(cursor, ctx);
-        constraint->method.result = get_ref(cursor, reader);
-        constraint->method.call = get_ref(cursor, reader);
-        constraint->method.in_place = get_text(cursor, ctx);
-        break;
-    default:
-        cursor->failed = true;
-        break;
-    }
 }
 
 static void *
@@ -658,17 +506,6 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         type->var.has_index = get_u32(cursor) != 0;
         type->var.name = get_text(cursor, ctx);
         type->var.ref = get_ref(cursor, reader);
-        uint64_t count = get_u64(cursor);
-        if (count > cursor->length) {
-            cursor->failed = true;
-            break;
-        }
-        type->var.cons = (core_list_t(th_constraint)){0};
-        for (uint64_t i = 0; !cursor->failed && i < count; i++) {
-            th_constraint constraint;
-            get_constraint(cursor, reader, &constraint);
-            core_list_push(type->var.cons, constraint);
-        }
         break;
     }
     default:

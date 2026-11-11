@@ -94,7 +94,7 @@ private func level_style_index(body: Ref[Rich_Body], pos: u32, len: u32,
         n += 1
     }
     order_cover(cover, n, body.__value.style_info)
-    let theme: Ref[internal.theme.Theme] = internal.theme.theme_current()
+    let theme: View[internal.theme.Theme] = internal.theme.theme_current()
     var k: i32 = 0
     while k < n {
         let at: uint = cover[cast[int] k]
@@ -103,7 +103,7 @@ private func level_style_index(body: Ref[Rich_Body], pos: u32, len: u32,
         if tag == nil {
             continue
         }
-        acc = merge(acc, internal.theme.style_for_tag(theme.__value, tag.get()))
+        acc = merge(acc, internal.theme.style_for_tag(theme.__value, tag))
     }
     return acc
 }
@@ -128,7 +128,10 @@ private func level_next_boundary(body: Ref[Rich_Body], pos: u32, len: u32,
     return best
 }
 
-func next(modify self: Cascade) -> Style_Run? {
+func __cleanup(consume self: Cascade) {
+}
+
+func __next(modify self: Cascade) -> Style_Run? {
     if self.pos >= self.len {
         return nil
     }
@@ -153,7 +156,7 @@ func next(modify self: Cascade) -> Style_Run? {
         }
         let base: Text_Style? = body.__value.base_style
         if base != nil {
-            acc = merge(acc, base.get())
+            acc = merge(acc, base)
         }
         acc = level_style_index(body, self.pos, self.len, acc, false)
         next = level_next_boundary(body, self.pos, self.len, next)
@@ -187,7 +190,7 @@ func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
         }
         let base: Text_Style? = body.__value.base_style
         if base != nil {
-            acc = merge(acc, base.get())
+            acc = merge(acc, base)
         }
         acc = level_style_index(body, pos, len, acc, inclusive)
         cur = body.__value.s

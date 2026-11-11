@@ -3,7 +3,7 @@ import internal.abi
 func type_row(index: u32) -> Ref[internal.abi.Type_Record] {
     let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(index)
     require row != nil
-    return row.get()
+    return row
 }
 
 func box_view(slot: Ref[Any]) -> Ref[internal.abi.Box_Value] {
@@ -34,7 +34,7 @@ func load(address: Ref[byte], slot: Ref[Any]) {
     }
     let storage: Ref[byte]? = view.__value.payload
     require storage != nil
-    __gc_memcpy(storage.get(), address, bytes)
+    __gc_memcpy(storage, address, bytes)
 }
 
 
@@ -46,8 +46,8 @@ func payload_target(slot: Ref[Any], bytes: uint) -> Ref[byte] {
     }
     let storage: Ref[byte]? = view.__value.payload
     require storage != nil
-    __gc_memset(storage.get(), 0, bytes)
-    return storage.get()
+    __gc_memset(storage, 0, bytes)
+    return storage
 }
 
 func reference_locate(reference: Ref[Any], location: Ref[Location]) {
@@ -64,7 +64,7 @@ func reference_locate(reference: Ref[Any], location: Ref[Location]) {
         return
     }
     let bits: Ref[internal.abi.Bitptr_Value] =
-        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage
     require bits.__value.base != nil and bits.__value.type_index == child
         and bits.__value.start_bit <= 7 and bits.__value.end_bit > bits.__value.start_bit
     location.__value.address = bits.__value.base
@@ -111,7 +111,7 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     let data: Ref[byte]? = array.__value.data
     require header != nil and data != nil
-    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header
     require descriptor.__value.rank != 0 and descriptor.__value.flat_rank == 1
         and descriptor.__value.flags == 0 and row.__value.alignment_bytes != 0
         and internal.abi.packed_array_stride_bits(row) == 0
@@ -121,7 +121,7 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
         alignment_bits) * alignment_bits
     require stride_bits & 7 == 0
     element.__value = child
-    return __gc_byte_offset(data.get(), position * (stride_bits / 8))
+    return __gc_byte_offset(data, position * (stride_bits / 8))
 }
 
 func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
@@ -133,7 +133,7 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     let data: Ref[byte]? = array.__value.data
     require header != nil and data != nil
-    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header
     let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
         unsafe_cast[Ref[byte]] descriptor, 24)).__value
     require descriptor.__value.rank == 1 and descriptor.__value.flat_rank == 1
@@ -147,7 +147,7 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
         var bit: u64 = 0
         while bit < width {
             let at: u64 = start + bit
-            let into: Ref[byte] = __gc_byte_offset(data.get(), at >> 3)
+            let into: Ref[byte] = __gc_byte_offset(data, at >> 3)
             let existing: byte = into.__value
             into.__value = cast[byte](cast[u32](existing)
                 & ~(1 << cast[u32](at & 7)) & 0xff)
@@ -160,7 +160,7 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     let stride_bits: u64 = ((row.__value.size_bits + alignment * 8 - 1) /
         (alignment * 8)) * (alignment * 8)
     require stride_bits & 7 == 0
-    __gc_memset(__gc_byte_offset(data.get(), index * (stride_bits / 8)), 0,
+    __gc_memset(__gc_byte_offset(data, index * (stride_bits / 8)), 0,
                 stride_bits / 8)
 }
 
@@ -187,7 +187,7 @@ func array_value_of(source: Ref[Any],
     var type_index: u32 = view.__value.type_field & 0x7fffffff
     let storage: Ref[byte]? = view.__value.payload
     require storage != nil
-    var address: Ref[byte] = storage.get()
+    var address: Ref[byte] = storage
     if type_row(type_index).__value.kind
         == cast[u32](internal.abi.Type_Kind.reference_type) {
         type_index = component_of(type_index,
@@ -205,7 +205,7 @@ func array_count(source: Ref[Any]) -> uint {
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     require header != nil
     let count: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
-        unsafe_cast[Ref[byte]] header.get(), 24)).__value
+        unsafe_cast[Ref[byte]] header, 24)).__value
     return cast[uint] count
 }
 
@@ -218,9 +218,9 @@ func check_shape(source: Ref[Any], rank: u32, expected: Ref[byte]) {
     let array: Ref[internal.abi.Array_Value] = array_value_of(source,
                                                               ref array_type)
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
-    require header != nil and header.get().__value.rank == rank
+    require header != nil and header.__value.rank == rank
     let extents: Ref[byte] = __gc_byte_offset(
-        unsafe_cast[Ref[byte]] header.get(), 24)
+        unsafe_cast[Ref[byte]] header, 24)
     var level: u32 = 0
     while level < rank {
         let wanted: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(expected,
@@ -247,7 +247,7 @@ func array_locate(source: Ref[Any], index: i64,
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     let data: Ref[byte]? = array.__value.data
     require header != nil and data != nil
-    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header
     require descriptor.__value.rank != 0 and descriptor.__value.flat_rank != 0
         and descriptor.__value.flags & 0xfffffff8 == 0
     let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
@@ -271,7 +271,7 @@ func array_locate(source: Ref[Any], index: i64,
         require descriptor.__value.flags == 0 and alignment_bits != 0
         let stride_bits: u64 = ((element.__value.size_bits + alignment_bits - 1) /
             alignment_bits) * alignment_bits
-        location.__value.address = __gc_byte_offset(data.get(),
+        location.__value.address = __gc_byte_offset(data,
                                             position * (stride_bits / 8))
         location.__value.bit_offset = 0
         location.__value.width = element.__value.size_bits
@@ -279,7 +279,7 @@ func array_locate(source: Ref[Any], index: i64,
     }
     require width <= 128 and element.__value.size_bits >= width
     let bit_position: u64 = position * width + cast[u64](descriptor.__value.flags)
-    location.__value.address = __gc_byte_offset(data.get(), bit_position / 8)
+    location.__value.address = __gc_byte_offset(data, bit_position / 8)
     location.__value.bit_offset = bit_position & 7
     location.__value.width = width
     return true
@@ -295,7 +295,7 @@ func name_matches(field: Ref[internal.abi.Field_Record], name: Ref[byte],
     require stored != nil
     var at: uint = 0
     while at < name_bytes {
-        let left: byte = __gc_byte_offset(stored.get(), at).__value
+        let left: byte = __gc_byte_offset(stored, at).__value
         let right: byte = __gc_byte_offset(name, at).__value
         if left != right {
             return false
@@ -312,7 +312,7 @@ func reference_address(reference: Ref[Any]) -> Ref[byte] {
     let storage: Ref[byte]? = view.__value.payload
     require row.__value.kind == cast[u32](internal.abi.Type_Kind.reference_type)
         and row.__value.size_bits == 64 and storage != nil
-    return storage.get()
+    return storage
 }
 
 func type_component(type_field: u32, ordinal: u32) -> u32 {
@@ -477,9 +477,9 @@ func reference_equal(left: Ref[Any], right: Ref[Any]) -> bool {
     }
     require a_row.__value.size_bits == 128 and a_storage != nil and b_storage != nil
     let a_bits: Ref[internal.abi.Bitptr_Value] =
-        unsafe_cast[Ref[internal.abi.Bitptr_Value]] a_storage.get()
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] a_storage
     let b_bits: Ref[internal.abi.Bitptr_Value] =
-        unsafe_cast[Ref[internal.abi.Bitptr_Value]] b_storage.get()
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] b_storage
     return option_address(a_bits.__value.base) == option_address(b_bits.__value.base)
         and a_bits.__value.type_index == b_bits.__value.type_index
         and a_bits.__value.start_bit == b_bits.__value.start_bit
@@ -490,7 +490,7 @@ func option_address(address: Ref[byte]?) -> uint {
     if address == nil {
         return 0
     }
-    return __abi_ref_address(address.get())
+    return __abi_ref_address(address)
 }
 
 func field_row(row: Ref[internal.abi.Type_Record],
@@ -501,12 +501,12 @@ func field_row(row: Ref[internal.abi.Type_Record],
         let arm: Ref[internal.abi.Arm_Record]? = internal.abi.arm_at(
             cast[u32] index)
         require arm != nil
-        return unsafe_cast[Ref[internal.abi.Field_Record]] arm.get()
+        return unsafe_cast[Ref[internal.abi.Field_Record]] arm
     }
     let field: Ref[internal.abi.Field_Record]? = internal.abi.field_at(
         cast[u32] index)
     require field != nil
-    return field.get()
+    return field
 }
 
 func arm_row(row: Ref[internal.abi.Type_Record],
@@ -516,7 +516,7 @@ func arm_row(row: Ref[internal.abi.Type_Record],
     let arm: Ref[internal.abi.Arm_Record]? = internal.abi.arm_at(
         cast[u32] index)
     require arm != nil
-    return arm.get()
+    return arm
 }
 
 func run_at(runs: internal.abi.Range,
@@ -525,8 +525,8 @@ func run_at(runs: internal.abi.Range,
     require index >= 0
     let run: Ref[internal.abi.Physical_Run_Record]? =
         internal.abi.physical_run_at(cast[u32] index)
-    require run != nil and run.get().__value.width_bits != 0
-    return run.get()
+    require run != nil and run.__value.width_bits != 0
+    return run
 }
 
 func field_locate(target: Ref[Any], name: Ref[byte]?, name_bytes: uint,
@@ -561,7 +561,7 @@ func field_locate(target: Ref[Any], name: Ref[byte]?, name_bytes: uint,
     while at < end {
         let field: Ref[internal.abi.Field_Record] = field_row(row, at)
         at += 1
-        if name != nil and !name_matches(field, name.get(), name_bytes) {
+        if name != nil and !name_matches(field, name, name_bytes) {
             continue
         }
         require field.__value.physical_runs.count != 0
@@ -578,7 +578,7 @@ func field_locate(target: Ref[Any], name: Ref[byte]?, name_bytes: uint,
             next_bit += cast[u64](piece.__value.width_bits)
             part += 1
         }
-        location.__value.address = __gc_byte_offset(base.get(), run.__value.byte_offset)
+        location.__value.address = __gc_byte_offset(base, run.__value.byte_offset)
         location.__value.type_index = field.__value.child_type_index
         location.__value.bit_offset = cast[u64](run.__value.bit_offset)
         location.__value.width = next_bit - first_bit
@@ -611,7 +611,7 @@ func reference_at(location: Ref[Location], slot: Ref[Any]) {
                  and location.__value.width == cast[u64](child.__value.semantic_width_bits)))
         and location.__value.bit_offset <= 7
     let bits: Ref[internal.abi.Bitptr_Value] =
-        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage
     bits.__value.base = location.__value.address
     bits.__value.type_index = location.__value.type_index
     bits.__value.start_bit = cast[u16](location.__value.bit_offset)
@@ -634,13 +634,13 @@ func read_at(location: Ref[Location], slot: Ref[Any]) {
     require address != nil
     if location.__value.bit_offset == 0 and location.__value.width == child.__value.size_bits
         and location.__value.width & 7 == 0 {
-        load(address.get(), slot)
+        load(address, slot)
         return
     }
     require location.__value.width != 0 and location.__value.bit_offset <= 7
         and (location.__value.width == child.__value.size_bits
             or location.__value.width == cast[u64](child.__value.semantic_width_bits))
-    copy_bits(address.get(), location.__value.bit_offset, location.__value.width,
+    copy_bits(address, location.__value.bit_offset, location.__value.width,
               payload_target(slot, (child.__value.size_bits + 7) / 8))
 }
 
@@ -671,7 +671,7 @@ func arm_tag(slot: Ref[Any]) -> uint {
     let length: uint = internal.abi.string_length(address)
     let stored: Ref[byte]? = internal.abi.string_bytes(address)
     require stored != nil
-    let tag: uint = cast[uint](builtin.xxh3_128_at(stored.get(), length)
+    let tag: uint = cast[uint](builtin.xxh3_128_at(stored, length)
                                & cast[u128]0xffffffffffffffff)
     if tag == 0 {
         return 1
@@ -727,9 +727,9 @@ func dispatch_address(source: Ref[Any], writable: bool, slot: Ref[Any]) {
                                       internal.abi.Type_Kind.reference_type)
         if writable {
             location.address = __ref_address_mut_boxed(type_index,
-                                                        payload.get())
+                                                        payload)
         } else {
-            location.address = __ref_address_boxed(type_index, payload.get())
+            location.address = __ref_address_boxed(type_index, payload)
         }
         require location.address != nil
         location.type_index = child
@@ -754,7 +754,7 @@ func finalize_ref(target: Ref['T]) {
     reference_locate(__box_of(target), ref location)
     if location.address != nil and location.bit_offset == 0 {
         __finalize_boxed(location.type_index & 0x7fffffff,
-                         location.address.get())
+                         location.address)
     }
 }
 
@@ -778,7 +778,7 @@ func option_present(reference: Ref[Any]) -> bool {
     let location: Location = option_storage(reference)
     let address: Ref[byte]? = location.address
     require address != nil
-    return builtin.__tag_at(location.type_index, address.get()) != 0
+    return builtin.__tag_at(location.type_index, address) != 0
 }
 
 func option_payload(target: Ref['T?]) -> Ref['T] {
@@ -798,7 +798,7 @@ func element_present(items: Ref[Any], index: i64) -> bool {
     let location: Location = element_storage(items, index)
     let address: Ref[byte]? = location.address
     require address != nil
-    return builtin.__tag_at(location.type_index, address.get()) != 0
+    return builtin.__tag_at(location.type_index, address) != 0
 }
 
 func element_payload(items: Array['T?], index: i64) -> Ref['T] {
@@ -845,8 +845,8 @@ func fill(slot: Ref[Any], value: Ref[Any]) {
     let into_storage: Ref[byte]? = into.__value.payload
     let given_storage: Ref[byte]? = given.__value.payload
     require into_storage != nil and given_storage != nil
-    let target: Ref[byte] = into_storage.get()
-    let origin: Ref[byte] = given_storage.get()
+    let target: Ref[byte] = into_storage
+    let origin: Ref[byte] = given_storage
     if __abi_ref_address(target) != __abi_ref_address(origin) {
         __gc_memcpy(target, origin, bytes)
     }

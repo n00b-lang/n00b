@@ -93,10 +93,10 @@ private func run_break_suite(blob: Array[u8], kind: unicode.Break_Type)
         var ok: bool = true
         var bi: u32 = 1
 
-        var nxt: u32? = unicode.next(it)
+        var nxt: u32? = unicode.__next(it)
 
         while nxt != nil {
-            let got: u32 = nxt.get()
+            let got: u32 = nxt
 
             while bi <= n and blob[bounds_off + bi] == 0 {
                 bi += 1
@@ -112,7 +112,7 @@ private func run_break_suite(blob: Array[u8], kind: unicode.Break_Type)
             }
 
             bi += 1
-            nxt = unicode.next(it)
+            nxt = unicode.__next(it)
         }
 
         while bi <= n and blob[bounds_off + bi] == 0 {

@@ -1,0 +1,5 @@
+tests/diagnostics/lower/mark_annotations.n:9:6: warning N00B-N0019: function `log` is never called
+  help: call it or delete it
+tests/diagnostics/lower/mark_annotations.n:16:35: error N00B-S0082: `Nothing` is not a mark
+tests/diagnostics/lower/mark_annotations.n:21:18: error N00B-S0082: only a parameter can reject `Secret`; a field or type can carry it
+tests/diagnostics/lower/mark_annotations.n:25:24: error N00B-S0082: `Secret` can only mark a parameter of a function, a record field or a record

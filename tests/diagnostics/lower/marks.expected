@@ -1,0 +1,111 @@
+tests/diagnostics/lower/marks.n:5:6: warning N00B-N0019: function `trim` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:9:6: warning N00B-N0019: function `check` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:16:6: warning N00B-N0019: function `open` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:29:6: warning N00B-N0019: function `bad` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:31:12: error N00B-S0081: `name` may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:30:29: note: `name` comes from `marks.read_env`
+  tests/diagnostics/lower/marks.n:30:24: note: `marks.trim` passes its argument through to its result
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:34:6: warning N00B-N0019: function `good` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:40:6: warning N00B-N0019: function `reassigned` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:44:12: error N00B-S0081: `name` may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:43:12: note: `name` comes from `marks.read_env`
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:47:6: warning N00B-N0019: function `wrapper` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:51:6: warning N00B-N0019: function `indirect` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:52:12: error N00B-S0081: this argument may carry `Untrusted`, but `target` of `marks.wrapper` rejects it
+  tests/diagnostics/lower/marks.n:52:20: note: this argument comes from `marks.read_env`
+  tests/diagnostics/lower/marks.n:48:12: note: `marks.wrapper` passes `target` to `marks.open`
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:55:6: warning N00B-N0019: function `constant` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:59:6: warning N00B-N0019: function `tried` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:65:16: error N00B-S0081: `name` may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:60:24: note: `name` comes from `marks.read_env`
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:69:6: warning N00B-N0019: function `normalized` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:75:6: warning N00B-N0019: function `plain` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:81:17: error N00B-S0082: `plain` can't fail, so it can't clear a mark
+tests/diagnostics/lower/marks.n:82:18: error N00B-S0082: `open` has no parameter `nothing`
+tests/diagnostics/lower/marks.n:83:18: error N00B-S0082: `missing` is not a function
+tests/diagnostics/lower/marks.n:86:1: error N00B-S0082: `other.Thing` names another module's mark; declare a mark in its own module
+tests/diagnostics/lower/marks.n:90:6: warning N00B-N0019: function `listed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:93:12: error N00B-S0081: this argument may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:92:18: note: this argument comes from `marks.read_env`
+  tests/diagnostics/lower/marks.n:93:17: note: `builtin.containers.list.__read` passes its argument through to its result
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:96:8: warning N00B-N0023: type `Box` is never used
+  help: remove it
+tests/diagnostics/lower/marks.n:100:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:104:6: warning N00B-N0019: function `boxed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:107:12: error N00B-S0081: this argument may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:106:16: note: this argument comes from `marks.read_env`
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:114:8: warning N00B-N0023: type `Credentials` is never used
+  help: remove it
+tests/diagnostics/lower/marks.n:119:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:124:8: warning N00B-N0023: type `Token` is never used
+  help: remove it
+tests/diagnostics/lower/marks.n:128:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:132:6: warning N00B-N0019: function `log` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:139:6: warning N00B-N0019: function `on_request` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:140:12: error N00B-S0081: `body` may carry `Untrusted`, but `path` of `marks.open` rejects it
+  tests/diagnostics/lower/marks.n:139:1: note: parameter `body` carries `Untrusted` by its declaration
+  help: check it with `marks.check` first
+tests/diagnostics/lower/marks.n:144:6: warning N00B-N0019: function `leak` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:145:12: error N00B-S0081: this argument may carry `Secret`, but `text` of `marks.log` rejects it
+  tests/diagnostics/lower/marks.n:145:16: note: field `password` carries `Secret`
+  help: `Secret` has no validator, so pass a value that doesn't carry it
+tests/diagnostics/lower/marks.n:148:6: warning N00B-N0019: function `fine` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:152:6: warning N00B-N0019: function `token_leak` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:153:12: error N00B-S0081: this argument may carry `Secret`, but `text` of `marks.log` rejects it
+  tests/diagnostics/lower/marks.n:153:12: note: every `Token` carries `Secret`
+  help: `Secret` has no validator, so pass a value that doesn't carry it
+tests/diagnostics/lower/marks.n:156:6: warning N00B-N0019: function `probe` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:166:9: warning N00B-S0005: this code can never run: the condition that guards it is constant
+tests/diagnostics/lower/marks.n:171:6: warning N00B-N0019: function `carries_still` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:173:5: error N00B-S0073: this check is false: `name` may carry `Untrusted` here
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/marks.n:177:6: warning N00B-N0019: function `token_caller` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:189:6: warning N00B-N0019: function `vet_one` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:193:6: warning N00B-N0019: function `vet_two` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:197:6: warning N00B-N0019: function `sink_one` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:202:6: warning N00B-N0019: function `sink_two` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:213:6: warning N00B-N0019: function `listed_leaks` is never called
+  help: call it or delete it
+tests/diagnostics/lower/marks.n:214:12: error N00B-S0081: this argument may carry `Listed`, but `path` of `marks.sink_one` rejects it
+  tests/diagnostics/lower/marks.n:214:21: note: this argument comes from `marks.source_two`
+  help: check it with `marks.vet_one` first
+tests/diagnostics/lower/marks.n:214:37: error N00B-S0081: this argument may carry `Listed`, but `path` of `marks.sink_two` rejects it
+  tests/diagnostics/lower/marks.n:214:46: note: this argument comes from `marks.source_one`
+  help: check it with `marks.vet_one` first
+tests/diagnostics/lower/marks.n:217:6: warning N00B-N0019: function `listed_vetted` is never called
+  help: call it or delete it

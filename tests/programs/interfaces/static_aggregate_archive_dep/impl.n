@@ -7,6 +7,6 @@ const point: StaticPoint = (label = "point", x = 7)
 const anonymous = (right = "r", left = 8)
 const pair = (9, "tuple")
 const lookup: Dict[string, int] = {"one": 1, "two": 2}
-const flags: Set[int] = {1, 2}
+const flags: Dict[int, nil] = {1, 2}
 const empty_lookup: Dict[string, int] = {}
-const empty_flags: Set[int] = {}
+const empty_flags: Dict[int, nil] = {}

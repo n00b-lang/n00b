@@ -2,7 +2,6 @@ import internal.abi
 import internal.gc.core
 import internal.gc.heap
 import internal.gc.hash
-import internal.gc.sync
 import internal.memory
 
 record Root_Entry layout(c) {
@@ -18,7 +17,7 @@ func tls_root_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[TLS_Root_Entry]?          = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -34,7 +33,7 @@ func capture_tls(mutator: Ref[internal.gc.core.Mutator]) -> bool {
     while index < internal.abi.storage_count() {
         let row: Ref[internal.abi.Storage_Record]? = internal.abi.storage_at(index)
         if row != nil {
-            if row.get().__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) {
+            if row.__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) {
                 count += 1
             }
         }
@@ -51,18 +50,18 @@ func capture_tls(mutator: Ref[internal.gc.core.Mutator]) -> bool {
     let mapped: Ref[byte]? = internal.memory.map_zeroed(count * stride,
         internal.abi.alignment_bytes(row))
     if mapped != nil {
-        let base: Ref[byte] = mapped.get()
+        let base: Ref[byte] = mapped
         var used: uint      = 0
         index = 1
         while index < internal.abi.storage_count() {
             let storage: Ref[internal.abi.Storage_Record]? = internal.abi.storage_at(index)
             if storage != nil {
-                if storage.get().__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) {
+                if storage.__value.segment_kind == cast[u32](internal.abi.Storage_Kind.tls) {
                     let address: Ref[byte]? = internal.abi.storage_address(index)
                     if address != nil {
                         let entry: Ref[TLS_Root_Entry] = tls_root_entry_at(base, used)
-                        entry.__value.address = address.get()
-                        entry.__value.type_index = storage.get().__value.type_index
+                        entry.__value.address = address
+                        entry.__value.type_index = storage.__value.type_index
                         used += 1
                     } else {
                         internal.memory.unmap(base, count * stride)
@@ -84,7 +83,7 @@ func tls_root_at(mutator: Ref[internal.gc.core.Mutator], index: uint) -> Ref[TLS
     require index < mutator.__value.ntls_roots
     let storage: Ref[byte]? = mutator.__value.tls_roots
     if storage != nil {
-        return tls_root_entry_at(storage.get(), index)
+        return tls_root_entry_at(storage, index)
     }
     require false
 }
@@ -92,7 +91,7 @@ func tls_root_at(mutator: Ref[internal.gc.core.Mutator], index: uint) -> Ref[TLS
 func free_tls(mutator: Ref[internal.gc.core.Mutator]) {
     let storage: Ref[byte]? = mutator.__value.tls_roots
     if storage != nil {
-        internal.memory.unmap(storage.get(), mutator.__value.ntls_roots
+        internal.memory.unmap(storage, mutator.__value.ntls_roots
             * internal.abi.size_bytes(tls_root_record()))
     }
     mutator.__value.tls_roots = nil
@@ -103,7 +102,7 @@ func root_entry_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Root_Entry]?              = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -127,7 +126,7 @@ func push(mutator: Ref[internal.gc.core.Mutator], slot: Ref[Ref[byte]?]) -> bool
     }
     let storage: Ref[byte]? = mutator.__value.roots
     if storage != nil {
-        let entry: Ref[Root_Entry] = root_entry_at(storage.get(),
+        let entry: Ref[Root_Entry] = root_entry_at(storage,
                                                    mutator.__value.nroots, stride)
         entry.__value.slot = slot
         __gc_signal_fence()
@@ -142,7 +141,7 @@ func slot_at(mutator: Ref[internal.gc.core.Mutator], index: uint) -> Ref[Ref[byt
     let storage: Ref[byte]? = mutator.__value.roots
     if storage != nil {
         let stride: uint = internal.abi.size_bytes(root_entry_record())
-        return root_entry_at(storage.get(), index, stride).__value.slot
+        return root_entry_at(storage, index, stride).__value.slot
     }
     require false
 }
@@ -157,7 +156,7 @@ func free(mutator: Ref[internal.gc.core.Mutator]) {
     let storage: Ref[byte]? = mutator.__value.roots
     if storage != nil {
         let stride: uint = internal.abi.size_bytes(root_entry_record())
-        internal.memory.unmap(storage.get(), mutator.__value.cap_roots * stride)
+        internal.memory.unmap(storage, mutator.__value.cap_roots * stride)
     }
     mutator.__value.roots = nil
     mutator.__value.nroots = 0
@@ -168,7 +167,7 @@ func global_pointer_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Ref[byte]?]?              = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
     if row != nil {
-        return row.get()
+        return row
     }
     require false
 }
@@ -177,7 +176,7 @@ func global_pointer_at(heap: Ref[internal.gc.core.Heap], index: uint) -> Ref[Ref
     let storage: Ref[byte]? = heap.__value.globals
     if storage != nil {
         let stride:  uint      = internal.abi.size_bytes(global_pointer_record())
-        let address: Ref[byte] = __gc_byte_offset(storage.get(), index * stride)
+        let address: Ref[byte] = __gc_byte_offset(storage, index * stride)
         return unsafe_cast[Ref[Ref[Ref[byte]?]]] address
     }
     require false
@@ -189,7 +188,7 @@ func global_slot_at(heap: Ref[internal.gc.core.Heap], index: uint) -> Ref[Ref[by
 }
 
 func add_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) -> bool {
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     let key:     uint                         = __abi_ref_address(slot)
     let pointer: Ref[internal.abi.Type_Record] = global_pointer_record()
     let grown:   bool                         = internal.gc.heap.grow_array(ref heap.__value.globals,
@@ -209,7 +208,7 @@ func add_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) -> bool
 }
 
 func remove_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) {
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     let key:     uint = __abi_ref_address(slot)
     let indexed: uint = internal.gc.hash.index_tab_lookup(ref heap.__value.global_index, key)
     if indexed != 0 {

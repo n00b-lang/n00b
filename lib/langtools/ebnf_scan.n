@@ -171,7 +171,7 @@ private func unicode_escape(sc: Ebnf_Scanner, from: Mark) -> string? {
         if digit == nil or digits == 6 {
             break
         }
-        value = (value << 4) | digit.get()
+        value = (value << 4) | digit
         digits += 1
         step(sc)
     }
@@ -233,7 +233,7 @@ private func literal(sc: Ebnf_Scanner, start: Mark) -> string {
             case 'u' {
                 let decoded: string? = unicode_escape(sc, escape)
                 if decoded != nil {
-                    pieces.append(decoded.get())
+                    pieces.append(decoded)
                 }
             }
             else {
@@ -469,7 +469,7 @@ func next_token(sc: Ebnf_Scanner) -> Ebnf_Token {
             }
         }
         if found != nil {
-            return found.get()
+            return found
         }
     }
     return token(sc, Tok_Kind.eof, "", point(sc))

@@ -1,0 +1,20 @@
+var kept: List[string] = new[List[string]]()
+
+func peek() -> uint {
+    return len(kept)
+}
+
+func scratch() -> uint {
+    var local: List[string] = new[List[string]]()
+    local.append("x")
+    return len(local)
+}
+
+func keep(s: string) {
+    kept.append(s)
+}
+
+keep("value")
+peek()
+scratch()
+require len(kept) == 1

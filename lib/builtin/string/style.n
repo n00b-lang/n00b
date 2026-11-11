@@ -79,7 +79,7 @@ private func tri_rank(v: bool?) -> u64 {
     if v == nil {
         return 0
     }
-    if v.get() {
+    if v {
         return 2
     }
     return 1
@@ -154,7 +154,7 @@ private func cmp_opt_u32(left: u32?, right: u32?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_words(cast[u64] left.get(), cast[u64] right.get())
+    return cmp_words(cast[u64] left, cast[u64] right)
 }
 
 private func cmp_opt_string(left: string?, right: string?) -> int {
@@ -169,7 +169,7 @@ private func cmp_opt_string(left: string?, right: string?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_text(left.get(), right.get())
+    return cmp_text(left, right)
 }
 
 private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
@@ -208,7 +208,7 @@ private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
 }
 
 private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
-    var result: int = cmp_opt_u32(left.start_ix, right.start_ix)
+    result = cmp_opt_u32(left.start_ix, right.start_ix)
     if result != 0 {
         return result
     }
@@ -237,7 +237,7 @@ private func cmp_opt_i8(left: i8?, right: i8?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_words(unsafe_cast[u64] left.get(), unsafe_cast[u64] right.get())
+    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
 }
 
 private func cmp_opt_i16(left: i16?, right: i16?) -> int {
@@ -250,7 +250,7 @@ private func cmp_opt_i16(left: i16?, right: i16?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_words(unsafe_cast[u64] left.get(), unsafe_cast[u64] right.get())
+    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
 }
 
 private func cmp_opt_color(left: Color?, right: Color?) -> int {
@@ -263,12 +263,12 @@ private func cmp_opt_color(left: Color?, right: Color?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_words(cast[u64] unsafe_cast[u32] left.get(),
-                     cast[u64] unsafe_cast[u32] right.get())
+    return cmp_words(cast[u64] unsafe_cast[u32] left,
+                     cast[u64] unsafe_cast[u32] right)
 }
 
 private func cmp_style(left: Text_Style, right: Text_Style) -> int {
-    var result: int = cmp_words(tri_rank(left.bold), tri_rank(right.bold))
+    result = cmp_words(tri_rank(left.bold), tri_rank(right.bold))
     if result != 0 {
         return result
     }
@@ -343,7 +343,7 @@ private func cmp_opt_style(left: Text_Style?, right: Text_Style?) -> int {
     if left == nil or right == nil {
         return 0
     }
-    return cmp_style(left.get(), right.get())
+    return cmp_style(left, right)
 }
 
 private func is_rich(s: string) -> bool {
@@ -356,7 +356,6 @@ private func rich_body(s: string) -> Ref[Rich_Body] {
 
 private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
     -> int {
-    var result: int
     let left_rich: bool = is_rich(left.__value.s)
     let right_rich: bool = is_rich(right.__value.s)
     if left_rich != right_rich {
@@ -432,7 +431,7 @@ private func hash_opt_u32(o: u32?) -> u128 {
     var words: Array[u64] = new[Array[u64]](2)
     if o != nil {
         words[0] = 1
-        words[1] = cast[u64] o.get()
+        words[1] = cast[u64] o
     }
     return words.hash()
 }
@@ -446,7 +445,7 @@ private func hash_opt_string(o: string?) -> u128 {
     if o == nil {
         return acc
     }
-    return hash_chain(acc, hash_text(o.get()))
+    return hash_chain(acc, hash_text(o))
 }
 
 private func hash_sub_spec(sub: Sub_Spec) -> u128 {
@@ -470,7 +469,7 @@ private func hash_opt_i8(o: i8?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64](unsafe_cast[u8] o.get()) + 1
+    let word: u64 = cast[u64](unsafe_cast[u8] o) + 1
     return word.hash()
 }
 
@@ -479,7 +478,7 @@ private func hash_opt_i16(o: i16?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64](unsafe_cast[u16] o.get()) + 1
+    let word: u64 = cast[u64](unsafe_cast[u16] o) + 1
     return word.hash()
 }
 
@@ -488,7 +487,7 @@ private func hash_opt_color(o: Color?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64](unsafe_cast[u32] o.get()) + 1
+    let word: u64 = cast[u64](unsafe_cast[u32] o) + 1
     return word.hash()
 }
 
@@ -518,7 +517,7 @@ private func hash_opt_style(o: Text_Style?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    return hash_style(o.get())
+    return hash_style(o)
 }
 
 private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
@@ -574,12 +573,12 @@ private func format_style_tag(fd: int, tag: string, closing: bool)
 }
 
 private func opens_here(r: Style_Record, pos: u64) -> bool {
-    return r.start_ix != nil and cast[u64](r.start_ix.get_or_else(0)) == pos and
+    return r.start_ix != nil and cast[u64](r.start_ix) == pos and
         r.style_tag != nil
 }
 
 private func closes_here(r: Style_Record, pos: u64) -> bool {
-    return r.end_ix != nil and cast[u64](r.end_ix.get_or_else(0)) == pos and
+    return r.end_ix != nil and cast[u64](r.end_ix) == pos and
         r.start_ix != nil and r.style_tag != nil
 }
 
@@ -605,7 +604,7 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     }
     if r.format_spec != nil {
         out += io.format.format_byte(fd, 0x3a)!
-        out += io.format.format_string(fd, r.format_spec.get())!
+        out += io.format.format_string(fd, r.format_spec)!
     }
     out += io.format.format_string(fd, "»")!
     return out
@@ -628,7 +627,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
             if !opens_here(r, i) or r.end_ix == nil {
                 continue
             }
-            let e: u64 = cast[u64] r.end_ix.get()
+            let e: u64 = cast[u64] r.end_ix
             if !open_first and e >= open_mark {
                 continue
             }
@@ -645,7 +644,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
             let r: Style_Record = body.__value.style_info[j]
             j += 1
             if !opens_here(r, i) or r.end_ix == nil or
-                cast[u64](r.end_ix.get_or_else(0)) != best {
+                cast[u64](r.end_ix) != best {
                 continue
             }
             out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
@@ -657,7 +656,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
     while k < nrec {
         let r: Style_Record = body.__value.style_info[k]
         k += 1
-        if r.start_ix != nil and cast[u64](r.start_ix.get_or_else(0)) == i and
+        if r.start_ix != nil and cast[u64](r.start_ix) == i and
             sub_arm(r.substitution) != sub_arm_none {
             out += format_substitution(fd, r)!
         }
@@ -765,7 +764,7 @@ func raw_repr_string(s: string, fd: int, common: io.format.Repr_Options?)
     -> uint fail: int {
     var fmt: io.format.String_Repr = default_string_format
     if common != nil {
-        fmt.common = common.get()
+        fmt.common = common
     }
     if is_rich(s) {
         return repr_rich_string(s, fd)!
@@ -843,7 +842,7 @@ private func opt_i8_eq(a: i8?, b: i8?) -> bool {
     if a == nil or b == nil {
         return true
     }
-    return a.get() == b.get()
+    return a == b
 }
 
 private func opt_i16_eq(a: i16?, b: i16?) -> bool {
@@ -853,7 +852,7 @@ private func opt_i16_eq(a: i16?, b: i16?) -> bool {
     if a == nil or b == nil {
         return true
     }
-    return a.get() == b.get()
+    return a == b
 }
 
 private func opt_color_eq(a: Color?, b: Color?) -> bool {
@@ -863,10 +862,10 @@ private func opt_color_eq(a: Color?, b: Color?) -> bool {
     if a == nil or b == nil {
         return true
     }
-    return a.get() == b.get()
+    return a == b
 }
 
-func __equal(self: Text_Style, other: Text_Style) -> bool {
+func __equal(view self: Text_Style, view other: Text_Style) -> bool {
     return tri_rank(self.bold) == tri_rank(other.bold) and
         tri_rank(self.italic) == tri_rank(other.italic) and
         tri_rank(self.underline) == tri_rank(other.underline) and
@@ -1399,7 +1398,7 @@ private func build_style_records(segments: List[Markup_Segment])
             case Markup_Kind.subst {
                 var substitution: Sub_Spec = (argname = seg.name)
                 if seg.sub_index != nil {
-                    substitution = (position = seg.sub_index.get())
+                    substitution = (position = seg.sub_index)
                 }
                 let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
                                           style_tag = nil,

@@ -1,0 +1,27 @@
+tests/diagnostics/lower/effect_user.n:18:1: error N00B-S0079: `missing.Thing` is not an effect
+tests/diagnostics/lower/effect_user.n:23:11: error N00B-S0079: `3` is not a function
+tests/diagnostics/lower/effect_user.n:27:5: error N00B-S0073: this check is false: `handle` can return without effect `Audited`
+  tests/diagnostics/lower/effect_user.n:31:5: note: this `return` is reached without it
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_user.n:40:6: warning N00B-N0019: function `leaky` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_user.n:41:5: error N00B-S0073: this check is false: `leaky` may have effect `Audited`
+  tests/diagnostics/lower/effect_user.n:42:5: note: `leaky` calls `effect_user.note`, which may have effect `effect_user.Audited`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_user.n:54:1: error N00B-S0075: `Unknown` is not an effect
+tests/diagnostics/lower/effect_user.n:61:15: note N00B-S0064: parameter `step` could be `view`: `run_step` never writes anything reachable from it
+tests/diagnostics/lower/effect_user.n:70:6: warning N00B-N0019: function `noted` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_user.n:75:6: warning N00B-N0019: function `plain` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_user.n:82:6: warning N00B-N0019: function `steps` is never called
+  help: call it or delete it
+tests/diagnostics/lower/effect_user.n:85:33: error N00B-S0077: the callback passed as `step` to `run_step` must never have effect `effect_user.Audited`, but:
+  tests/diagnostics/lower/effect_user.n:71:5: note: `noted` calls `effect_user.note`, which may have effect `effect_user.Audited`
+  help: pass a function that meets the check, or forward a parameter that has the same check
+tests/diagnostics/lower/effect_user.n:115:1: error N00B-S0073: this check is false: `via_stamps` can return without effect `Stamped`
+  tests/diagnostics/lower/effect_user.n:107:2: note: the implicit `return` at the end of `via_stamps` is reached without it
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/effect_user.n:120:5: error N00B-S0079: `Twice` is given a scope more than once
+tests/diagnostics/lower/effect_user.n:125:12: error N00B-S0079: `everywhere` is not a scope; use `caller`, `package` or `thread`
+tests/diagnostics/lower/effect_user.n:130:5: error N00B-S0079: `allocates` is a built-in effect, so it always reaches the whole thread

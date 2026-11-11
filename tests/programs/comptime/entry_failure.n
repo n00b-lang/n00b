@@ -1,0 +1,5 @@
+if comptime() {
+    __os_exit(3)
+}
+func start() {
+}

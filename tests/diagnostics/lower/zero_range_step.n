@@ -1,0 +1,7 @@
+func count(n: int) -> int {
+    var total = 0
+    for i from 0 to n step 0 {
+        total += i
+    }
+    return total
+}

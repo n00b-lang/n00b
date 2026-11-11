@@ -23,6 +23,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int
+n00bb_env_command(core_string_t argv0);
 
 static const core_diag_location_t nowhere = {0};
 
@@ -48,7 +50,7 @@ n00bb_finish_command_diagnostics(core_diagnostics_t *diagnostics, int status)
     return status;
 }
 
-void
+static void
 n00bb_print_version(FILE *out)
 {
     fprintf(out, "n00b %s (build %s, rev %s%s, %s)\n", N00BB_VERSION,
@@ -374,6 +376,186 @@ child_status(core_process_status_t status)
     return status.exited ? status.code : 128 + status.code;
 }
 
+static core_string_t
+effects_module(core_string_t argv0, core_string_t name)
+{
+    core_diagnostics_t *d = core_diagnostics_new();
+    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0, d);
+    core_string_t found = {0};
+    int64_t dot = core_string_rfind_byte(name, '.');
+    core_string_t fallback = dot > 0
+        ? core_string_slice(name, 0, (size_t)dot) : name;
+    while (resolver && !found.data && dot > 0) {
+        core_string_t prefix = core_string_slice(name, 0, (size_t)dot);
+        core_buffer_t package = {0};
+        core_buffer_append_string(&package, prefix);
+        core_buffer_puts(&package, ".__init");
+        if (n00bb_resolver_has_source_module(resolver, prefix))
+            found = core_string_dup(prefix);
+        else if (n00bb_resolver_has_source_module(resolver,
+                     core_buffer_string(&package)))
+            found = core_string_dup(core_buffer_string(&package));
+        core_buffer_release(&package);
+        dot = core_string_rfind_byte(prefix, '.');
+    }
+    if (resolver) n00bb_resolver_free(resolver);
+    core_diagnostics_free(d);
+    return found.data ? found : core_string_dup(fallback);
+}
+
+static int
+explain_effects_command(const n00bb_invocation_t *invocation)
+{
+    bool json = false;
+    core_string_t operands[2] = {0};
+    int count = 0;
+    for (int i = invocation->command_at + 2; i < invocation->end; i++) {
+        core_string_t word = invocation->words[i];
+        if (core_string_eq(word, CORE_STRING_STATIC("--json"))) json = true;
+        else if (count < 2) operands[count++] = word;
+        else count = 3;
+    }
+    if (count < 1 || count > 2) {
+        parse_cmdr_print_command_help(invocation->cli,
+            CORE_STRING_STATIC("explain"), stderr);
+        return 2;
+    }
+    core_string_t input = count > 1 ? core_string_dup(operands[1])
+        : effects_module(invocation->argv0, operands[0]);
+    core_string_t compiler = core_os_executable_path(invocation->argv0);
+    char *arguments[] = {
+        core_string_to_cstr(compiler), "check", "--effects-of",
+        core_string_to_cstr(operands[0]),
+        json ? "--effects-json" : "--effects-explain",
+        core_string_to_cstr(input), nullptr,
+    };
+    core_free(compiler.data);
+    core_free(input.data);
+    core_buffer_t out = {0};
+    core_buffer_t err = {0};
+    core_process_status_t status = {0};
+    int launched = arguments[0] ? core_process_capture(arguments, nullptr, 0,
+                                                       &out, &err, &status)
+                                : ENOENT;
+    int code = launched ? 1 : child_status(status);
+    fwrite(out.data ? out.data : "", 1, out.byte_len, stdout);
+    if (code)
+        fwrite(err.data ? err.data : "", 1, err.byte_len, stderr);
+    core_buffer_release(&out);
+    core_buffer_release(&err);
+    core_free(arguments[0]);
+    core_free(arguments[3]);
+    core_free(arguments[5]);
+    return code;
+}
+
+static void
+join_flag_values(parse_cmdr_result_t *parsed, core_string_t flag,
+                 core_buffer_t *out, const char *separator, bool quote)
+{
+    int32_t count = parse_cmdr_flag_value_count(parsed, flag);
+    for (int32_t i = 0; i < count; i++) {
+        core_string_t value = parse_cmdr_flag_str_at(parsed, flag, i);
+        if (!value.data) continue;
+        if (out->byte_len) core_buffer_printf(out, "%s", separator);
+        if (quote) core_buffer_putc(out, '`');
+        core_buffer_append_string(out, value);
+        if (quote) core_buffer_putc(out, '`');
+    }
+}
+
+typedef char *char_ptr_t;
+core_list_decl(char_ptr_t);
+
+static void
+push_argument(core_list_t(char_ptr_t) *arguments, core_string_t text)
+{
+    core_list_push(*arguments, core_string_to_cstr(text));
+}
+
+static int
+effects_command(const n00bb_invocation_t *invocation)
+{
+    parse_cmdr_result_t *parsed = parsed_or_report(invocation);
+    if (!parsed) return 2;
+    int32_t count = parse_cmdr_arg_count(parsed);
+    core_buffer_t query = {0};
+    for (int32_t i = 0; i + 1 < count; i++) {
+        if (i) core_buffer_putc(&query, ' ');
+        core_buffer_append_string(&query, parse_cmdr_arg_str(parsed, i));
+    }
+    core_buffer_t in = {0};
+    core_buffer_t not_in = {0};
+    join_flag_values(parsed, CORE_STRING_STATIC("--in"), &in, ",", false);
+    join_flag_values(parsed, CORE_STRING_STATIC("--not-in"), &not_in, ",",
+                     false);
+    bool json = parse_cmdr_flag_present(parsed, CORE_STRING_STATIC("--json"));
+    core_list_t(char_ptr_t) arguments = core_list_new(char_ptr_t);
+    core_string_t compiler = core_os_executable_path(invocation->argv0);
+    push_argument(&arguments, compiler);
+    core_free(compiler.data);
+    push_argument(&arguments, CORE_STRING_STATIC("--errors-only"));
+    push_argument(&arguments, CORE_STRING_STATIC("check"));
+    push_argument(&arguments, CORE_STRING_STATIC("--effects-query"));
+    push_argument(&arguments, core_buffer_string(&query));
+    if (in.byte_len) {
+        push_argument(&arguments, CORE_STRING_STATIC("--effects-in"));
+        push_argument(&arguments, core_buffer_string(&in));
+    }
+    if (not_in.byte_len) {
+        push_argument(&arguments, CORE_STRING_STATIC("--effects-not-in"));
+        push_argument(&arguments, core_buffer_string(&not_in));
+    }
+    if (json) push_argument(&arguments, CORE_STRING_STATIC("--effects-json"));
+    if (parse_cmdr_flag_present(parsed, CORE_STRING_STATIC("--why")))
+        push_argument(&arguments, CORE_STRING_STATIC("--effects-why"));
+    core_string_t interface_flag = CORE_STRING_STATIC("--link-interface");
+    for (int32_t i = 0;
+         i < parse_cmdr_flag_value_count(parsed, interface_flag); i++) {
+        push_argument(&arguments, interface_flag);
+        push_argument(&arguments,
+                      parse_cmdr_flag_str_at(parsed, interface_flag, i));
+    }
+    push_argument(&arguments, parse_cmdr_arg_str(parsed, count - 1));
+    core_list_push(arguments, (char *)nullptr);
+    core_buffer_t out = {0};
+    core_buffer_t err = {0};
+    core_process_status_t status = {0};
+    bool complete = true;
+    for (size_t i = 0; i + 1 < arguments.len; i++)
+        complete = complete && arguments.data[i];
+    int launched = complete ? core_process_capture(arguments.data, nullptr, 0,
+                                                   &out, &err, &status)
+                            : ENOENT;
+    int code = launched ? 2 : child_status(status) ? 2 : 0;
+    if (code)
+        fwrite(err.data ? err.data : "", 1, err.byte_len, stderr);
+    else if (out.byte_len)
+        fwrite(out.data, 1, out.byte_len, stdout);
+    else {
+        if (json) fputs("[]\n", stdout);
+        core_buffer_t scope = {0};
+        join_flag_values(parsed, CORE_STRING_STATIC("--in"), &scope, ", ",
+                         true);
+        core_string_t message = scope.byte_len
+            ? n00bb_text(N00B_TEXT_NO_FUNCTION_IN_MATCHES,
+                         N00BB_ARGS(ARG_TEXT(core_buffer_string(&scope))))
+            : n00bb_text(N00B_TEXT_NO_FUNCTION_MATCHES, N00BB_NO_ARGS);
+        fprintf(stderr, "%.*s\n", (int)message.u8_bytes, message.data);
+        core_free(message.data);
+        core_buffer_release(&scope);
+        code = 1;
+    }
+    for (size_t i = 0; i < arguments.len; i++) core_free(arguments.data[i]);
+    core_list_free(arguments);
+    core_buffer_release(&out);
+    core_buffer_release(&err);
+    core_buffer_release(&query);
+    core_buffer_release(&in);
+    core_buffer_release(&not_in);
+    return code;
+}
+
 static int
 run_command(const n00bb_invocation_t *invocation)
 {
@@ -660,11 +842,8 @@ cache_problem(core_string_t cache, int *failure)
 }
 
 static void
-warn_environment(core_diagnostics_t *d, parse_cmdr_result_t *parsed)
+warn_environment(core_diagnostics_t *d)
 {
-    if (n00bb_handoff()->capture_fd >= 0
-        || parse_cmdr_flag_present(parsed, CORE_STRING_STATIC("--build-time")))
-        return;
     warn_contract_dirs(d);
     each_package_path(warn_package_path, d);
     core_string_t cache = n00bb_cache_directory(CORE_STRING_STATIC(""));
@@ -701,7 +880,7 @@ check_build_request(const n00bb_invocation_t *invocation, bool *handled)
         bool output_valid = check_library_output(d, parsed);
         if (!roots_valid || !output_valid) status = 2;
     }
-    if (!status) warn_environment(d, parsed);
+    if (!status) warn_environment(d);
     n00bb_finish_command_diagnostics(d, status);
     *handled = status != 0;
     return status;
@@ -763,6 +942,13 @@ n00bb_cli_preflight(n00bb_invocation_t *invocation, bool *handled)
         else parse_cmdr_print_command_help(cli, invocation->words[at], stdout);
         return 0;
     }
+    if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("explain"))
+        && at + 1 < invocation->end
+        && core_string_eq(invocation->words[at + 1],
+                          CORE_STRING_STATIC("effects")))
+        return explain_effects_command(invocation);
+    if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("effects")))
+        return effects_command(invocation);
     if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("explain")) && at + 1 < invocation->end)
         return n00bb_explain_command(invocation->words[at + 1]);
     if (n00bb_invocation_command_is(invocation, CORE_STRING_STATIC("completions")) && at + 1 < invocation->end) {
@@ -786,7 +972,7 @@ n00bb_cli_preflight(n00bb_invocation_t *invocation, bool *handled)
     return check_build_request(invocation, handled);
 }
 
-bool
+static bool
 n00bb_stderr_color(void)
 {
     core_string_t mode = n00bb_setting_string(
@@ -810,6 +996,8 @@ n00bb_diag_render_options(void)
     return (core_diag_render_t){
         .color = (forced || !terse) && n00bb_stderr_color(),
         .terse = terse,
+        .codes = n00bb_setting_bool(N00BB_KEY_DIAGNOSTICS_CODES),
+        .errors_only = n00bb_setting_bool(N00BB_KEY_DEV_ERRORS_ONLY),
         .hints = n00bb_setting_bool(N00BB_KEY_DIAGNOSTICS_HINTS),
         .sorted = true,
         .words = n00bb_diag_words(),
@@ -934,7 +1122,7 @@ env_path_check(core_string_t argv0)
     core_free(self.data);
 }
 
-int
+static int
 n00bb_env_command(core_string_t argv0)
 {
     const n00bb_toolchain_t *toolchain = n00bb_toolchain();

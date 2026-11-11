@@ -1,0 +1,27 @@
+tests/diagnostics/lower/array_handoff.n:1:8: warning N00B-N0023: type `Holder` is never used
+  help: remove it
+tests/diagnostics/lower/array_handoff.n:5:5: warning N00B-N0024: `kept_items` is never used
+  help: remove it
+tests/diagnostics/lower/array_handoff.n:7:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:11:6: warning N00B-N0019: function `keep` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:12:5: error N00B-S0072: this keeps array parameter `items` where it outlives the call
+  tests/diagnostics/lower/array_handoff.n:12:5: note: this place outlives the call
+  help: take `items` as `consume`, or keep a copy
+tests/diagnostics/lower/array_handoff.n:15:6: warning N00B-N0019: function `keep_global` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:16:5: error N00B-S0072: this keeps array parameter `items` where it outlives the call
+  tests/diagnostics/lower/array_handoff.n:5:5: note: `kept_items` outlives the call
+  help: take `items` as `consume`, or keep a copy
+tests/diagnostics/lower/array_handoff.n:19:6: warning N00B-N0019: function `wrap` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:25:6: warning N00B-N0019: function `keep_copy` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:35:6: warning N00B-N0019: function `copy_elements` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:39:6: warning N00B-N0019: function `pass_through` is never called
+  help: call it or delete it
+tests/diagnostics/lower/array_handoff.n:39:19: note N00B-S0064: parameter `items` could be `view`: `pass_through` never writes anything reachable from it
+tests/diagnostics/lower/array_handoff.n:43:6: warning N00B-N0019: function `keep_fixed` is never called
+  help: call it or delete it

@@ -129,6 +129,13 @@ read_location(const uint8_t *data)
     return at;
 }
 
+bool
+n00bb_declaration_site_key(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
+                           parse_sym_entry_t *owner, core_buffer_t *out)
+{
+    return declaration_site_key(grammar, symbol, owner, out);
+}
+
 static const size_t declaration_site_bytes = 32;
 
 static void
@@ -306,7 +313,7 @@ push_builtin_type_names(core_list_t(core_string_t) *out)
         CORE_STRING_STATIC("string"), CORE_STRING_STATIC("char"),
         CORE_STRING_STATIC("byte"), CORE_STRING_STATIC("Any"),
         CORE_STRING_STATIC("List"), CORE_STRING_STATIC("Dict"),
-        CORE_STRING_STATIC("Set"), CORE_STRING_STATIC("Array"),
+        CORE_STRING_STATIC("Array"), CORE_STRING_STATIC("Slice"),
         CORE_STRING_STATIC("Ref"), CORE_STRING_STATIC("View"),
         CORE_STRING_STATIC("Atomic"), CORE_STRING_STATIC("Tuple"),
         CORE_STRING_STATIC("Foreign"), CORE_STRING_STATIC("Buffer"),
@@ -318,7 +325,7 @@ push_builtin_type_names(core_list_t(core_string_t) *out)
         push_name(out, profile->scalars[i].type_text);
 }
 
-core_list_t(core_string_t)
+static core_list_t(core_string_t)
 n00bb_visible_names(core_translation_unit_t *unit, parse_scope_t *scope,
                     n00bb_name_kinds_t kinds)
 {
@@ -478,205 +485,3 @@ n00bb_explain_hidden_name(core_diagnostics_t *diagnostics,
     return false;
 }
 
-static int32_t
-declaration_start(const parse_sym_entry_t *symbol)
-{
-    return symbol->decl_node ? core_tree_node_value(symbol->decl_node).start
-                             : 0;
-}
-
-static void
-push_record_scope_fields(parse_scope_t *scope,
-                         core_list_t(core_string_t) *out)
-{
-    core_list_t(parse_sym_entry_ptr_t) ordered =
-        core_list_new(parse_sym_entry_ptr_t);
-    for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope : nullptr;
-         symbol; symbol = symbol->next_in_scope) {
-        if (!symbol->is_field || symbol->is_synthetic) continue;
-        size_t at = ordered.len;
-        core_list_push(ordered, symbol);
-        while (at > 0 && declaration_start(ordered.data[at - 1])
-                             > declaration_start(symbol)) {
-            ordered.data[at] = ordered.data[at - 1];
-            at--;
-        }
-        ordered.data[at] = symbol;
-    }
-    for (size_t i = 0; i < ordered.len; i++)
-        push_name(out, ordered.data[i]->name);
-    core_list_free(ordered);
-}
-
-static void
-push_structural_fields(th_type *type, core_list_t(core_string_t) *out)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || th_kind_of(type) != TH_RECORD) return;
-    for (size_t i = 0; i < th_record_len(type); i++) {
-        const th_member *member = th_record_member(type, i);
-        if (member) push_name(out, member->name);
-    }
-}
-
-static void
-describe_fields(core_diagnostics_t *diagnostics, core_string_t type_text,
-                const core_list_t(core_string_t) *fields)
-{
-    if (!fields->len) {
-        n00bb_report_note(diagnostics, N00B_TEXT_HAS_NO_FIELDS,
-            N00BB_ARGS(ARG_TEXT(type_text)));
-        return;
-    }
-    n00bb_report_note(diagnostics, N00B_TEXT_TYPE_HAS_FIELDS,
-        N00BB_ARGS(ARG_NAMES(fields->data, fields->len), ARG_TEXT(type_text)));
-}
-
-void
-n00bb_report_missing_field(core_translation_unit_t *unit, th_ctx *types,
-                           parse_tree_t *member_node, th_type *receiver_type,
-                           core_string_t member, parse_scope_t *record_scope,
-                           parse_sym_entry_t *record_symbol)
-{
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    core_string_t type_text = receiver_type && types
-        ? n00bb_print_type(types, receiver_type)
-        : record_symbol ? record_symbol->name : CORE_STRING_STATIC("record");
-    n00bb_report(diagnostics, unit, N00B_DIAG_FIELD_MISSING,
-        n00bb_node_span(member_node), N00B_TEXT_HAS_NO_FIELD,
-        N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(member)));
-    n00bb_report_label(diagnostics, N00B_TEXT_UNKNOWN_FIELD, N00BB_NO_ARGS);
-    core_list_t(core_string_t) fields = core_list_new(core_string_t);
-    if (record_scope) push_record_scope_fields(record_scope, &fields);
-    else push_structural_fields(receiver_type, &fields);
-    if (!n00bb_diag_did_you_mean(diagnostics, member, fields.data,
-                                 fields.len))
-        describe_fields(diagnostics, type_text, &fields);
-    core_list_free(fields);
-    if (record_symbol)
-        n00bb_diag_declared_here(diagnostics, record_symbol,
-                                 N00B_TEXT_TYPE_IS_DECLARED_HERE);
-}
-
-void
-n00bb_report_missing_method(core_translation_unit_t *unit, th_ctx *types,
-                            parse_tree_t *member, th_type *receiver_type,
-                            core_string_t method, bool ambiguous)
-{
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    size_t children = member && !core_tree_is_leaf(member)
-        ? core_tree_num_children(member) : 0;
-    parse_tree_t *name_node = children >= 3 ? core_tree_child(member, 2)
-                                            : member;
-    core_string_t type_text = n00bb_print_type(types, receiver_type);
-    if (ambiguous) {
-        n00bb_report(diagnostics, unit,
-            N00B_DIAG_TRAIT_IMPLEMENTATION_AMBIGUOUS,
-            n00bb_node_span(name_node),
-            N00B_TEXT_MORE_THAN_ONE_IMPLEMENTATION_OF,
-            N00BB_ARGS(ARG_TEXT(method), ARG_TEXT(type_text)));
-        n00bb_report_help(diagnostics, N00B_TEXT_ANNOTATE_THE_VALUE_WITH_A,
-            N00BB_NO_ARGS);
-        return;
-    }
-    n00bb_report(diagnostics, unit, N00B_DIAG_METHOD_NOT_FOUND,
-        n00bb_node_span(name_node), N00B_TEXT_HAS_NO_METHOD,
-        N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(method)));
-    n00bb_report_label(diagnostics, N00B_TEXT_UNKNOWN_METHOD, N00BB_NO_ARGS);
-    n00bb_report_note(diagnostics, N00B_TEXT_METHODS_COME_FROM_TRAITS_THAT,
-        N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(method)));
-}
-
-void
-n00bb_report_inference_failure(void *context, parse_visit_t *visit,
-                               th_ctx *types, const th_error_t *reason)
-{
-    core_translation_unit_t *unit = context;
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    if (!diagnostics) return;
-    core_diag_location_t at = link_source_location(visit->node);
-    th_type *called = nullptr;
-    if (parse_annot_infer_calls_value(reason, &called)) {
-        core_string_t text = called ? n00bb_print_type(types, called)
-                                    : (core_string_t){0};
-        if (called)
-            n00bb_report(diagnostics, unit, N00B_DIAG_NOT_CALLABLE, at,
-                N00B_TEXT_THIS_VALUE_IS_NOT_A,
-                N00BB_ARGS(ARG_TEXT(text)));
-        else
-            n00bb_report(diagnostics, unit, N00B_DIAG_NOT_CALLABLE, at,
-                N00B_TEXT_THIS_VALUE_IS_AN_INTEGER,
-                N00BB_NO_ARGS);
-        n00bb_report_label(diagnostics, N00B_TEXT_CALLED_HERE, N00BB_NO_ARGS);
-        return;
-    }
-    th_type *expected = reason ? reason->expected : nullptr;
-    th_type *got = reason ? reason->got : nullptr;
-    core_string_t why = reason && reason->message.data
-        ? reason->message : (core_string_t){0};
-    th_err_kind kind = reason ? reason->kind : TH_ERR_UNIFY;
-    if (kind == TH_ERR_FREE_VAR) {
-        n00bb_internal_error(diagnostics, unit, at, "inferring types",
-                             "%.*s", (int)why.u8_bytes, why.data);
-        return;
-    }
-    if (kind == TH_ERR_BAD_NAME) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_INVALID_TYPE_NAME, at,
-            N00B_TEXT_THIS_TYPE_NAME_IS_NOT,
-            N00BB_ARGS(ARG_TEXT(why)));
-        return;
-    }
-    if (kind == TH_ERR_OCCURS) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_RECURSIVE_TYPE, at,
-            N00B_TEXT_THIS_VALUE_WOULD_NEED_A,
-            N00BB_NO_ARGS);
-        return;
-    }
-    if (kind == TH_ERR_NO_SUCH_FIELD && got
-        && th_kind_of(th_resolve(got)) == TH_RECORD
-        && member_access_node(visit->grammar, visit->node) == visit->node)
-        return;
-    core_string_t expected_text = expected
-        ? n00bb_print_type(types, expected) : (core_string_t){0};
-    core_string_t got_text = got ? n00bb_print_type(types, got)
-                                 : (core_string_t){0};
-    if (kind == TH_ERR_NO_SUCH_FIELD && got) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_FIELD_MISSING, at,
-            N00B_TEXT_HAS_NO_SUCH_FIELD,
-            N00BB_ARGS(ARG_TEXT(got_text)));
-        return;
-    }
-    if (expected && got) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_MISMATCH, at,
-            N00B_TEXT_EXPECTED_FOUND,
-            N00BB_ARGS(ARG_TEXT(expected_text), ARG_TEXT(got_text)));
-        if (why.u8_bytes)
-            n00bb_report_label(diagnostics, N00B_TEXT_TEXT,
-                N00BB_ARGS(ARG_TEXT(why)));
-    }
-    else if (got) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_REQUIREMENT, at,
-            N00B_TEXT_CANNOT_BE_USED_HERE,
-            N00BB_ARGS(ARG_TEXT(got_text)));
-        if (why.u8_bytes)
-            n00bb_report_label(diagnostics, N00B_TEXT_TEXT,
-                N00BB_ARGS(ARG_TEXT(why)));
-    }
-    else if (why.u8_bytes)
-        n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_MISMATCH, at,
-            N00B_TEXT_TEXT,
-            N00BB_ARGS(ARG_TEXT(why)));
-    else
-        n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_MISMATCH, at,
-            N00B_TEXT_THE_TYPES_IN_THIS_EXPRESSION,
-            N00BB_NO_ARGS);
-    if (reason && reason->has_related && reason->related.start_line)
-        n00bb_report_secondary(diagnostics, unit, (core_diag_location_t){
-                .line = reason->related.start_line,
-                .column = reason->related.start_col,
-                .end_line = reason->related.end_line,
-                .end_column = reason->related.end_col,
-                .has_location = true,
-            }, N00B_TEXT_THE_OTHER_USE_IS_HERE,
-            N00BB_NO_ARGS);
-}

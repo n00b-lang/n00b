@@ -28,7 +28,7 @@ func __init(self: Lex_Context, g: grammar.Grammar, source: string) {
     for i : uint from 0 until g.classes.len() {
         self.policies.append(grammar.Token_Policy.normal)
     }
-    for let class in g.classes {
+    for class in g.classes {
         self.classes[class.name] = class.id
         let slot: u128 = grammar.raw_token_id(class.id) -
             grammar.identifier_token_id
@@ -61,17 +61,17 @@ func emit(ctx  : Lex_Context, start: uint, end: uint,
         return (id = grammar.literal_token_id(spelling), alt_id = nil,
                 start = start, end = end, flags = Token_Flags.none)
     }
-    var id:     grammar.Token_Id  = class.get()
+    var id:     grammar.Token_Id  = class
     var alt_id: grammar.Token_Id? = nil
     let raw:    u128              = grammar.raw_token_id(id)
     if raw == grammar.identifier_token_id {
         let lit: grammar.Literal? = grammar.find_literal(ctx.g, spelling)
-        if lit != nil and lit.get().identifier {
-            if lit.get().hard {
-                id = lit.get().id
+        if lit != nil and lit.identifier {
+            if lit.hard {
+                id = lit.id
             }
             else {
-                alt_id = lit.get().id
+                alt_id = lit.id
             }
         }
     }

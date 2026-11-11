@@ -15,7 +15,7 @@ private func simple_map(cp: char, index: Array[u32], index_len: u32,
         return cp
     }
 
-    let at: u32 = off.get()
+    let at: u32 = off
 
     if data[at] >= 1 {
         return cast[char] data[at + 1]
@@ -56,7 +56,7 @@ private func full_map_char(cp: char, full_index: Array[u32],
     let off: u32? = internal.blob.sparse_lookup(full_index, full_index_len, cp)
 
     if off != nil {
-        let at: u32 = off.get()
+        let at: u32 = off
         let count: u32 = full_data[at]
 
         var i: u32 = 0
@@ -128,7 +128,7 @@ private func map_final_sigma(cp: char, after_cased: bool, s: string,
         return false
     }
 
-    let at: u32 = off.get()
+    let at: u32 = off
     let count: u32 = generated.casemap.final_sigma_lower_data(at)
 
     var i: u32 = 0

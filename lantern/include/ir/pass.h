@@ -3,6 +3,7 @@
 
 #include "ir/diag.h"
 #include "ir/ir.h"
+#include "lib/dict.h"
 #include "lib/string.h"
 
 ir_instr_t *ir_instr_insert(ir_block_t *b, ir_op_t op, uint32_t at);
@@ -13,6 +14,23 @@ ir_instr_t *ir_instr_generated(ir_block_t *b, ir_op_t op, ir_span_t near,
                                core_string_t pass, uint32_t at);
 bool        ir_instr_move(ir_instr_t *in, ir_block_t *to, uint32_t at);
 bool        ir_instr_erase(ir_instr_t *in);
+bool        ir_block_erase(ir_block_t *b);
+ir_block_t *ir_block_split(ir_block_t *b, uint32_t at, core_string_t name);
+
+typedef bool (*ir_use_filter_fn)(const ir_instr_t *in, void *state);
+typedef bool (*ir_use_visit_fn)(ir_instr_t *in, uint32_t operand,
+                                void *state);
+
+bool ir_value_visit_uses(ir_func_t *f, const ir_value_t *value,
+                         ir_use_visit_fn visit, void *state);
+
+void ir_value_replace_uses(ir_func_t *f, ir_value_t *from, ir_value_t *to,
+                           ir_use_filter_fn keep, void *state);
+ir_value_t *ir_value_replacement(core_dict_t *replacements, ir_value_t *value);
+void ir_func_replace_values(ir_func_t *f, core_dict_t *replacements);
+void ir_instr_use_added(ir_instr_t *in, uint32_t o);
+void ir_instr_uses_changed(ir_instr_t *in);
+bool ir_func_uses_consistent(ir_func_t *f);
 bool        ir_instr_inlined_from(ir_instr_t *in, ir_span_t call_site,
                                   core_string_t agent);
 

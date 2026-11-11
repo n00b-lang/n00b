@@ -1,0 +1,154 @@
+func note(entry: string) {
+    _ = entry
+}
+
+func flush() {
+    note("batch")
+}
+
+effect Audited {
+    from: note
+    handled_by: flush
+}
+
+effect output {
+    from: note
+}
+
+effect missing.Thing {
+    from: note
+}
+
+effect Counted {
+    from: 3
+}
+
+func handle(n: int) -> int {
+    has_effect(Audited)
+    if n > 1 {
+        note("handle")
+    }
+    return n
+}
+
+func batched(n: int) -> int {
+    forbids_effect(Audited)
+    flush()
+    return n
+}
+
+func leaky(n: int) -> int {
+    forbids_effect(Audited)
+    note("leak")
+    return n
+}
+
+func always(n: int) -> int {
+    has_effect(Audited)
+    note("always")
+    return n
+}
+
+forbids_effect(batched, Audited)
+has_effect(always, Audited) and may_effect(handle, Audited)
+has_effect(batched, Unknown)
+
+callback Step {
+    call (n: int) -> int
+    handler (n: int) -> int
+}
+
+func run_step(step: Step, n: int) -> int {
+    forbids_effect(step, Audited)
+    return step.call(n)
+}
+
+func run_any(step: Step, n: int) -> int {
+    return step.call(n)
+}
+
+func noted(n: int) -> int {
+    note("noted")
+    return n
+}
+
+func plain(n: int) -> int {
+    return n
+}
+
+forbids_effect(run_step, Audited)
+may_effect(run_any, Audited)
+
+func steps() -> int {
+    let quiet: Step = callback[Step](ref plain)
+    let loud: Step = callback[Step](ref noted)
+    return run_step(quiet, 1) + run_step(loud, 2)
+}
+
+func stamp(_entry: string) {
+}
+
+func close_out() {
+    stamp("end")
+}
+
+effect Stamped {
+    from: stamp
+    handled_by: close_out
+    scope: caller
+}
+
+func stamps() {
+    stamp("x")
+}
+
+func via_stamps() {
+    stamps()
+}
+
+func closes() {
+    close_out()
+}
+
+has_effect(stamps, Stamped) and forbids_effect(via_stamps, Stamped)
+forbids_effect(closes, Stamped)
+has_effect(via_stamps, Stamped)
+
+effect Twice {
+    from: stamp
+    scope: caller
+    scope: thread
+}
+
+effect Odd {
+    from: stamp
+    scope: everywhere
+}
+
+effect allocates {
+    from: stamp
+    scope: package
+}
+
+func list_time() {
+}
+
+func closes_both() {
+    list_time()
+}
+
+effect Listed {
+    from: stamp, list_time
+    handled_by: close_out, closes_both
+}
+
+func lists() {
+    list_time()
+}
+
+func closes_listed() {
+    closes_both()
+}
+
+has_effect(stamps, Listed) and has_effect(lists, Listed)
+forbids_effect(closes_listed, Listed) and forbids_effect(closes, Listed)

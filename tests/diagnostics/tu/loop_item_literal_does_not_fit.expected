@@ -1,2 +1,2 @@
-tests/diagnostics/tu/loop_item_literal_does_not_fit.n:7:9: error N00B-N0520: `n` is used as `u8`, but its items are `u32`, which may not fit
-  help: convert `n` explicitly where `u8` is needed
+tests/diagnostics/tu/loop_item_literal_does_not_fit.n:7:21: error N00B-T0524: integer constant 70000 does not fit in `u8`
+  help: use a wider integer type, or a value inside the range of `u8`

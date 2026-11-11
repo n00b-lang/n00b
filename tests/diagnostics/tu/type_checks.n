@@ -54,7 +54,7 @@ func f() -> i32 {
 }
 
 f()
-var d: Dict[int] = {:}
+var d: Dict[int] = {}
 record Box {
     v: 'T
 }
@@ -167,3 +167,12 @@ func h_1(n: int) -> int {
 require poisoned(1) + risky(1)! + calls_after_errors() == squares.len()
 var frozen = (x = 1, y = 2)
 frozen.x = 3
+
+object Tally {
+    count: int
+}
+
+func write_missing(t: Tally, b: Buffer) {
+    t.missing = 1
+    b.lock = 0
+}

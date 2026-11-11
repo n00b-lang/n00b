@@ -1,0 +1,9 @@
+import alpha
+
+func quiet() {
+    alpha.note("quiet")
+}
+
+effect alpha.Audited {
+    handled_by: quiet
+}

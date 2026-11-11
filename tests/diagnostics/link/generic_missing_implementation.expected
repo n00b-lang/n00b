@@ -1,0 +1,3 @@
+tests/diagnostics/link/generic_missing_implementation.n:11:12: error N00B-T0021: `same` uses `Equal.__equal` here, but `Step` does not implement it
+  tests/diagnostics/link/generic_missing_implementation.n:15:9: note: `same` is used with `Step` here
+  help: implement `Equal` for `Step`, or call a function that does not need it

@@ -6,6 +6,7 @@
 #include "flagset_value.h"
 #include "record_layout_request.h"
 #include "global_metadata.h"
+#include "qualified_names.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,8 +132,8 @@ materialize_interface_export_origin(n00bb_interface_context_t *loader,
 }
 
 static th_type *
-interface_callback_contract(n00bb_interface_context_t *loader,
-                            core_string_t qualified_name)
+interface_value_type(n00bb_interface_context_t *loader,
+                     core_string_t qualified_name)
 {
     for (size_t e = 0; loader && e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
@@ -216,7 +217,7 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
     bool ok = callback_protocol_name(canonical_type,
         CORE_STRING_STATIC("__callback_contract__"), &protocol);
     th_type *roles = ok
-        ? interface_callback_contract(loader, core_buffer_string(&protocol))
+        ? interface_value_type(loader, core_buffer_string(&protocol))
         : nullptr;
     core_buffer_release(&protocol);
     roles = roles ? th_resolve(roles) : nullptr;
@@ -245,6 +246,8 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
     members->adt_kind = CORE_STRING_STATIC("callback");
     symbol->member_scope = members;
     symbol->adt_kind = CORE_STRING_STATIC("callback");
+    ok = symbol->type
+        && n00bb_define_callback_type(state->types, symbol->type);
 
     static const core_string_t role_names[] = {
         CORE_STRING_STATIC("call"), CORE_STRING_STATIC("handler"),
@@ -542,8 +545,7 @@ decode_interface_array_shape(n00bb_interface_context_t *loader,
         offset += 4;
         uint64_t static_value = read_u64_le(data + offset);
         offset += 8;
-        if (kind == IR_SHAPE_EXTENT_COMPTIME || kind > IR_SHAPE_EXTENT_RUNTIME)
-            return false;
+        if (kind > IR_SHAPE_EXTENT_RUNTIME) return false;
         ir_shape_extent_t extent = {.kind = kind};
         if (kind == IR_SHAPE_EXTENT_STATIC) {
             if (!static_value) return false;
@@ -720,6 +722,42 @@ restore_interface_function_semantics(n00bb_interface_context_t *loader,
 }
 
 static bool
+restore_interface_function_bounds(n00bb_interface_context_t *loader,
+                                  n00bb_tu_state_t *state,
+                                  parse_sym_entry_t *symbol,
+                                  core_string_t qualified_name)
+{
+    const th_env *owner = nullptr;
+    size_t count = 0;
+    for (size_t e = 0; loader && !count && e < loader->linked_interface_count;
+         e++) {
+        owner = loader->linked_interfaces[e];
+        count = th_env_function_requirements(owner, qualified_name, nullptr,
+                                             0);
+    }
+    if (!count) return true;
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    n00bb_declared_where_t *facts = core_arena_alloc(&state->semantic_values,
+                                                     sizeof(*facts));
+    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
+                                                   count * sizeof(*items));
+    if (!facts || !items
+        || th_env_function_requirements(owner, qualified_name, items, count)
+            != count) return false;
+    for (size_t i = 0; i < count; i++) {
+        core_string_t subject_name = th_var_name(th_resolve(items[i].subject));
+        for (size_t v = 0; variables && v < variables->len; v++)
+            if (core_string_eq(variables->data[v].name, subject_name))
+                items[i].subject = variables->data[v].type;
+        if (items[i].iface.u8_bytes)
+            items[i].iface = store_semantic_string(state, items[i].iface);
+    }
+    *facts = (n00bb_declared_where_t){.data = items, .len = count};
+    return parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY, facts);
+}
+
+static bool
 restore_interface_function_typevars(n00bb_interface_context_t *loader,
                                     n00bb_tu_state_t *state,
                                     parse_sym_entry_t *symbol,
@@ -793,11 +831,7 @@ interface_static_record_shape(n00bb_interface_context_t *loader,
     core_string_t name = {0};
     if (!type || !th_named_info(type, &name, nullptr, nullptr))
         return nullptr;
-    int64_t name_dot = core_string_rfind_byte(name, '.');
-    core_string_t short_name = name_dot >= 0
-        ? core_string_slice(name, (size_t)name_dot + 1,
-                            name.u8_bytes - (size_t)name_dot - 1)
-        : name;
+    core_string_t short_name = n00bb_name_leaf(name);
     th_type *preferred = nullptr, *fallback = nullptr;
     bool ambiguous_fallback = false;
     for (size_t e = 0; e < loader->linked_interface_count; e++) {
@@ -814,13 +848,8 @@ interface_static_record_shape(n00bb_interface_context_t *loader,
                 preferred = declaration.type_shape;
                 break;
             }
-            core_string_t qualified = declaration.qualified_name;
-            int64_t dot = core_string_rfind_byte(qualified, '.');
-            core_string_t root = dot >= 0
-                ? core_string_slice(qualified, (size_t)dot + 1,
-                                    qualified.u8_bytes - (size_t)dot - 1)
-                : qualified;
-            if (!core_string_eq(root, short_name)) continue;
+            if (!core_string_eq(n00bb_name_leaf(declaration.qualified_name),
+                                short_name)) continue;
             if (preferred_module.data && declaration.module.data
                 && core_string_eq(declaration.module, preferred_module)) {
                 preferred = declaration.type_shape;
@@ -882,9 +911,7 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
     }
     case N00BB_STATIC_VALUE_NIL:
     {
-        th_type *element = nullptr;
-        return th_is_nil(type)
-            || n00bb_option_type_element(type, &element);
+        return th_is_nil(type) || th_option_item(type);
     }
     case N00BB_STATIC_VALUE_ADDRESS:
         return false;
@@ -951,7 +978,7 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
             if (kind == N00BB_STATIC_VALUE_SEQUENCE)
                 child_type = static_sequence_element_type(type);
             else if (kind == N00BB_STATIC_VALUE_TUPLE)
-                child_type = static_tuple_element_type(type, i, nullptr);
+                child_type = th_tuple_element(type, i, nullptr);
             else {
                 const th_member *member = th_record_member(shape, i);
                 child_type = member ? member->type : nullptr;
@@ -984,13 +1011,11 @@ restore_interface_value_semantics(n00bb_interface_context_t *loader,
     if (!n00bb_global_metadata_read_storage(data, size, &requested,
             &storage_required, &offset)) return false;
     symbol->mutability = (parse_sym_mutability_t)data[0];
-    if (symbol->mutability > PARSE_SYM_GLOBAL || data[1] > PARSE_SYM_PHASE_BOTH
-        || data[2] > PARSE_SYM_PHASE_BOTH
-        || data[3] > PARSE_SYM_PHASE_BOTH
+    if (symbol->mutability > PARSE_SYM_GLOBAL || data[1] > 1
         || data[4] > PARSE_SYM_STORAGE_DYNAMIC || data[5] > 1 || data[6] > 1)
         return false;
-    parse_sym_set_phases(symbol, (parse_sym_phase_t)data[1],
-        (parse_sym_phase_t)data[2], (parse_sym_phase_t)data[3]);
+    if (data[1] && !parse_sym_set_binding(symbol,
+            N00BB_UNTYPED_CONST_KEY, symbol)) return false;
     parse_sym_set_storage_duration(symbol,
         (parse_sym_storage_duration_t)data[4]);
     symbol->is_thread_local = data[5] != 0;
@@ -999,27 +1024,6 @@ restore_interface_value_semantics(n00bb_interface_context_t *loader,
     if (data[7] && !parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.global-explicit-initializer"),
             symbol)) return false;
-    size_t untyped_size = 0;
-    const uint8_t *untyped = interface_owned_metadata(loader,
-        TH_ENV_METADATA_VALUE, qualified_name,
-        CORE_STRING_STATIC("n00b.untyped-integer"), 1, &untyped_size);
-    if (untyped) {
-        n00bb_tu_state_t *owner_state = tu_state(unit);
-        n00bb_untyped_integer_t *restored = untyped_size == 9 && untyped[8] <= 1
-            && owner_state
-            ? core_arena_alloc(&owner_state->semantic_values,
-                               sizeof(*restored))
-            : nullptr;
-        if (!restored) return false;
-        uint64_t value = 0;
-        for (int i = 0; i < 8; i++) value |= (uint64_t)untyped[i] << (8 * i);
-        *restored = (n00bb_untyped_integer_t){
-            .value = (int64_t)value, .is_unsigned = untyped[8] != 0,
-        };
-        if (!parse_sym_set_binding(symbol,
-                CORE_STRING_STATIC("n00bb.untyped-integer"), restored))
-            return false;
-    }
     if (data[10] > 1 || data[11] > N00BB_STATIC_VALUE_VARIANT)
         return false;
     bool has_value = data[10] != 0;
@@ -1098,8 +1102,6 @@ restore_interface_context_semantics(n00bb_interface_context_t *loader,
         : 0;
     if (!signature || th_kind_of(signature) != TH_FUNCTION
         || expected != parameter_count) return false;
-    parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-                         PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
     return true;
 }
 
@@ -1352,8 +1354,6 @@ materialize_interface_trait_members(n00bb_interface_context_t *loader,
         entry->error_type = th_kind_of(th_resolve(method->type)) == TH_FUNCTION
             ? th_func_error(th_resolve(method->type)) : nullptr;
         entry->visibility = trait_symbol->visibility;
-        parse_sym_set_phases(entry, PARSE_SYM_PHASE_BOTH,
-                             PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
         core_buffer_t key = {0};
         core_buffer_printf(&key, "n00b.trait-method-params.%.*s",
                            (int)method->name.u8_bytes, method->name.data);
@@ -1505,8 +1505,6 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
         }
         if (kind == PARSE_SYM_ENUM_CONST) {
             entry->mutability = PARSE_SYM_CONST;
-            parse_sym_set_phases(entry, PARSE_SYM_PHASE_BOTH,
-                PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_COMPTIME);
             parse_sym_set_storage_duration(entry,
                 PARSE_SYM_STORAGE_COMPTIME);
             if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET) {
@@ -1619,13 +1617,7 @@ interface_declaration_local_name(const th_env_declaration_view_t *declaration)
     if (declaration->kind == TH_ENV_DECLARATION_FUNCTION
         || declaration->kind == TH_ENV_DECLARATION_VALUE)
         return declaration->root_name;
-    core_string_t qualified = declaration->qualified_name;
-    int64_t dot = qualified.data ? core_string_rfind_byte(qualified, '.')
-                                 : -1;
-    return dot >= 0
-        ? core_string_slice(qualified, (size_t)dot + 1,
-                            qualified.u8_bytes - (size_t)dot - 1)
-        : (core_string_t){0};
+    return n00bb_name_leaf(declaration->qualified_name);
 }
 
 static bool
@@ -1677,9 +1669,7 @@ restore_interface_grants(n00bb_interface_context_t *loader,
             || !read_grant_string(data, size, &at, &module)
             || !read_grant_string(data, size, &at, &local)) return false;
         core_buffer_t source_name = {0};
-        core_buffer_printf(&source_name, "%.*s.%.*s",
-            (int)module.u8_bytes, module.data,
-            (int)local.u8_bytes, local.data);
+        n00bb_qualify(&source_name, module, local);
         core_list_push(package->exports, ((n00bb_package_export_t){
             .source_name = store_semantic_string(state,
                 core_string_borrow(source_name.data, source_name.byte_len)),
@@ -1804,15 +1794,10 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                                    unit->module.identifier))
                 continue;
             core_string_t qualified_name = declaration.qualified_name;
-            int64_t declaration_dot = qualified_name.data
-                ? core_string_rfind_byte(qualified_name, '.') : -1;
+            core_string_t declaration_tail = n00bb_name_leaf(qualified_name);
             if (declaration.kind == TH_ENV_DECLARATION_VALUE
-                && declaration_dot >= 0
-                && core_string_starts_with(
-                    core_string_slice(qualified_name,
-                        (size_t)declaration_dot + 1,
-                        qualified_name.u8_bytes - (size_t)declaration_dot - 1),
-                    CORE_STRING_STATIC("__callback_contract__")))
+                && core_string_starts_with(declaration_tail,
+                       CORE_STRING_STATIC("__callback_contract__")))
                 continue;
             core_string_t declaration_module = declaration.module;
             bool is_value = declaration.kind == TH_ENV_DECLARATION_VALUE;
@@ -1963,6 +1948,12 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         "interface function has invalid type-variable metadata");
                     return false;
                 }
+                if (!restore_interface_function_bounds(loader, state,
+                        symbol, declaration.qualified_name)) {
+                    if (failure) *failure = CORE_STRING_STATIC(
+                        "interface function has invalid declared bounds");
+                    return false;
+                }
                 if (!restore_interface_function_shapes(loader, state,
                         symbol, declaration.qualified_name)) {
                     if (failure) *failure =
@@ -1972,9 +1963,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                                 "interface function has invalid array-shape metadata"));
                     return false;
                 }
-                parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-                                     PARSE_SYM_PHASE_NONE,
-                                     PARSE_SYM_PHASE_NONE);
             }
             else if (is_value) {
                 symbol->type = declaration.value_type;
@@ -2000,9 +1988,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                 }
             }
             else {
-                parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
-                                     PARSE_SYM_PHASE_NONE,
-                                     PARSE_SYM_PHASE_NONE);
                 bool defined_shape = declaration.type_shape
                     && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ALIAS
                     && declaration.type_shape_kind != TH_ENV_TYPE_SHAPE_ENUM

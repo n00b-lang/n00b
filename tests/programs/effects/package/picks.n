@@ -1,0 +1,21 @@
+import sorter
+
+func noisy(a: int, b: int) -> int {
+    raw_debug("picked")
+    return a + b
+}
+
+func larger(a: int, b: int) -> int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func good() -> int {
+    return sorter.pick(callback[sorter.Pick](ref larger), 1, 2)
+}
+
+func bad() -> int {
+    return sorter.pick(callback[sorter.Pick](ref noisy), 1, 2)
+}

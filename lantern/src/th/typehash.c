@@ -36,82 +36,14 @@ core_string_t th_strdup(th_ctx *ctx, core_string_t s)
     return core_string_borrow(d, s.u8_bytes);
 }
 
-void th_var_cons_push(th_type *var, th_constraint constraint)
-{
-    if (var->var.cons_borrowed) {
-        core_list_t(th_constraint) owned =
-            core_list_new_cap(th_constraint, var->var.cons.len + 1);
-        for (size_t i = 0; i < var->var.cons.len; i++)
-            core_list_push(owned, var->var.cons.data[i]);
-        var->var.cons = owned;
-        var->var.cons_borrowed = false;
-    }
-    core_list_push(var->var.cons, constraint);
-}
-
-th_probe_t th_probe_begin(th_ctx *ctx)
-{
-    size_t depth = ctx->probe_depth++;
-    return (th_probe_t){
-        .depth     = depth,
-        .arena     = core_arena_mark(&ctx->arena),
-        .err       = ctx->err,
-        .errors    = ctx->errors.len,
-        .coercions = ctx->coercions.len,
-        .pending_environment_constraints =
-            ctx->pending_environment_constraints.len,
-        .active_environment_constraints =
-            ctx->active_environment_constraints.len,
-        .type_records     = ctx->type_records.len,
-        .methods          = ctx->methods.len,
-        .method_resolvers = ctx->method_resolvers.len,
-        .promos           = ctx->promos.len,
-        .ifaces           = ctx->ifaces.len,
-    };
-}
-
-void th_probe_drop_constraints(th_ctx *ctx, const th_probe_t *probe)
-{
-    ctx->pending_environment_constraints.len =
-        probe->pending_environment_constraints;
-}
-
-bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
-{
-    ctx->probe_depth = probe->depth;
-    if (ctx->probe_errors_discarded) {
-        ctx->errors.len = probe->errors;
-        ctx->err        = probe->err;
-    }
-    bool observable = ctx->err.data != probe->err.data
-        || ctx->err.u8_bytes != probe->err.u8_bytes
-        || ctx->errors.len != probe->errors
-        || ctx->coercions.len != probe->coercions
-        || ctx->pending_environment_constraints.len
-            != probe->pending_environment_constraints
-        || ctx->active_environment_constraints.len
-            != probe->active_environment_constraints
-        || ctx->type_records.len != probe->type_records
-        || ctx->methods.len != probe->methods
-        || ctx->method_resolvers.len != probe->method_resolvers
-        || ctx->promos.len != probe->promos
-        || ctx->ifaces.len != probe->ifaces;
-    if (observable) return false;
-    core_arena_rewind(&ctx->arena, probe->arena);
-    return true;
-}
-
 th_ctx *th_ctx_new(void)
 {
     th_ctx *ctx = core_alloc(th_ctx);
-
-    static uint32_t next_owner;
 
     memset(ctx, 0, sizeof(*ctx));
     core_arena_init(&ctx->arena, 0);
     core_arena_init(&ctx->memo_arena, 0);
     ctx->type_records = core_list_new(th_type_record_t);
-    ctx->integer_owner = __atomic_add_fetch(&next_owner, 1, __ATOMIC_RELAXED);
     th_builtin_defaults_apply(ctx);
 
     return ctx;
@@ -131,39 +63,14 @@ void th_ctx_free(th_ctx *ctx)
         return;
     }
 
-    if (ctx->promo_index) {
-        core_dict_foreach (ctx->promo_index, e) {
-            core_list_t(core_string_t) *edges = e->value;
-
-            core_list_free(*edges);
-            core_free(edges);
-        }
-
-        core_dict_free(ctx->promo_index);
-        core_free(ctx->promo_index);
-    }
-
-    if (ctx->iface_index) {
-        core_dict_free(ctx->iface_index);
-        core_free(ctx->iface_index);
-    }
-
-    core_list_free(ctx->promos);
-    core_list_free(ctx->ifaces);
     core_list_free(ctx->type_records);
-    core_list_free(ctx->integer_methods_pending);
     free_index(ctx->builtin_heads);
     free_index(ctx->closed_type_records);
     free_index(ctx->open_type_records);
     free_index(ctx->generic_type_heads);
     free_index(ctx->implements_memo);
     free_index(ctx->method_memo);
-    core_list_free(ctx->methods);
-    core_list_free(ctx->method_resolvers);
     core_list_free(ctx->errors);
-    core_list_free(ctx->coercions);
-    core_list_free(ctx->pending_environment_constraints);
-    core_list_free(ctx->active_environment_constraints);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);
     core_buffer_release(&ctx->scratch);
@@ -191,62 +98,6 @@ static th_type *clone_type_graph(th_ctx *destination, const th_type *source,
 
 static atomic_uint_fast64_t next_var_origin = 1;
 
-
-static bool
-clone_constraint_graph(th_ctx *destination, const th_constraint *source,
-                       th_constraint *copy,
-                       core_list_t(th_clone_entry_t) *seen)
-{
-    *copy = *source;
-    copy->scope_module = clone_string(destination, source->scope_module);
-    copy->scope_package = clone_string(destination, source->scope_package);
-    switch (source->kind) {
-    case TH_CON_UNIFIES:
-    case TH_CON_PROMOTES:
-    case TH_CON_EXCLUDES:
-        copy->target = clone_type_graph(destination, source->target, seen);
-        return !source->target || copy->target;
-    case TH_CON_ONE_OF:
-        copy->one_of.types = source->one_of.n
-            ? clone_array(destination, th_type *, source->one_of.n)
-            : nullptr;
-        for (size_t i = 0; i < source->one_of.n; i++) {
-            copy->one_of.types[i] = clone_type_graph(destination,
-                source->one_of.types[i], seen);
-            if (!copy->one_of.types[i]) return false;
-        }
-        return true;
-    case TH_CON_IMPLEMENTS:
-        copy->iface = clone_string(destination, source->iface);
-        return !source->iface.data || copy->iface.data;
-    case TH_CON_KIND:
-        return true;
-    case TH_CON_INTEGER:
-        copy->integer.owner = destination->integer_owner;
-        return true;
-    case TH_CON_HAS_FIELD:
-        copy->field.name = clone_string(destination, source->field.name);
-        copy->field.type = clone_type_graph(destination, source->field.type,
-                                             seen);
-        return (!source->field.name.data || copy->field.name.data)
-            && (!source->field.type || copy->field.type);
-    case TH_CON_HAS_PARAM:
-        copy->param.type = clone_type_graph(destination, source->param.type,
-                                            seen);
-        return !source->param.type || copy->param.type;
-    case TH_CON_METHOD:
-        copy->method.name = clone_string(destination, source->method.name);
-        copy->method.result = clone_type_graph(destination,
-            source->method.result, seen);
-        copy->method.call = clone_type_graph(destination,
-            source->method.call, seen);
-        return (!source->method.name.data || copy->method.name.data)
-            && (!source->method.result || copy->method.result)
-            && (!source->method.call || copy->method.call);
-    }
-    return false;
-}
-
 static th_type *
 clone_type_graph(th_ctx *destination, const th_type *source,
                 core_list_t(th_clone_entry_t) *seen)
@@ -260,8 +111,6 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 && seen->data[i].source->kind == TH_VAR
                 && seen->data[i].source->var.origin == source->var.origin)
                 return seen->data[i].copy;
-    if (!destination->probe_depth && th_var_owned_integer(destination, source))
-        return (th_type *)source;
 
     th_type *copy = th_alloc(destination, sizeof(*copy));
     if (!copy) return nullptr;
@@ -427,21 +276,6 @@ clone_type_graph(th_ctx *destination, const th_type *source,
         copy->var.has_index = source->var.has_index;
         copy->var.name = clone_string(destination, source->var.name);
         copy->var.ref = clone_type_graph(destination, source->var.ref, seen);
-        copy->var.cons = (core_list_t(th_constraint)){
-            .data = source->var.cons.len
-                ? clone_array(destination, th_constraint,
-                              source->var.cons.len)
-                : nullptr,
-            .cap = source->var.cons.len,
-        };
-        copy->var.cons_borrowed = true;
-        for (size_t i = 0; i < source->var.cons.len; i++) {
-            if (!clone_constraint_graph(destination,
-                    &source->var.cons.data[i],
-                    &copy->var.cons.data[i], seen))
-                return nullptr;
-            copy->var.cons.len = i + 1;
-        }
         return copy;
     }
     return nullptr;

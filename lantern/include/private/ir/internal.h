@@ -20,11 +20,14 @@ typedef struct ir_cleanup_t {
 
 typedef struct ir_reinterpretations_t ir_reinterpretations_t;
 
+typedef struct ir_parsed_scalars_t ir_parsed_scalars_t;
+
 struct ir_ctx_t {
     core_arena_t            arena;
     th_ctx                 *types;
     ir_cleanup_t           *cleanups;
     ir_reinterpretations_t *reinterpretations;
+    ir_parsed_scalars_t    *parsed_scalars;
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
@@ -49,15 +52,10 @@ struct ir_module_t {
     ir_annots_t         annots;
     ir_span_t           span;
 
-    parse_tree_t   *tree;
-    parse_grammar_t      *tree_grammar;
-    parse_symtab_t       *symtab;
-
     ir_typeslot_t *types;
     size_t         n_types;
     size_t         cap_types;
     void          *type_index;
-    struct ir_rules_t *rules;
 
     uint64_t *scalar_hashes;
     th_type **scalar_types;
@@ -108,6 +106,7 @@ typedef struct ir_rd_t   ir_rd_t;
 typedef struct ir_doms_t ir_doms_t;
 
 ir_rd_t    *ir_rd_of(ir_func_t *f, ir_doms_t *d);
+bool        ir_rd_is_use(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 uint32_t    ir_rd_count(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 ir_instr_t *ir_rd_at(ir_rd_t *r, ir_instr_t *use, ir_local_t *l, uint32_t i);
 bool        ir_rd_maybe_unset(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
@@ -132,5 +131,13 @@ uint32_t    ir_rd_use_tok(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
 void          ir_lit_into(core_buffer_t *b, ir_lit_t v);
 core_string_t ir_lit_text(ir_lit_t v);
+
+typedef struct ir_pdg_t  ir_pdg_t;
+typedef struct ir_doms_t ir_doms_t;
+
+ir_pdg_t *ir_pdg_with_doms(ir_func_t *f, ir_doms_t *dom);
+void      ir_pdg_complete(ir_pdg_t *g);
+void      ir_pdg_free(ir_pdg_t *g);
+ir_rd_t  *ir_pdg_rd(const ir_pdg_t *g);
 
 #endif

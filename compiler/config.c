@@ -70,7 +70,6 @@ core_list_decl(setting_t);
 typedef struct {
     bool                     loaded;
     bool                     reported;
-    bool                     quiet;
     bool                     flag_failed;
     core_list_t(setting_t)   settings;
     core_diagnostics_t      *diagnostics;
@@ -1063,8 +1062,6 @@ n00bb_config_load(const n00bb_invocation_t *invocation)
     if (config.loaded) return;
     config.loaded = true;
     config.diagnostics = core_diagnostics_new();
-    config.quiet = n00bb_invocation_flag(invocation,
-        CORE_STRING_STATIC("--build-time"), (core_string_t){});
     collect_settings();
     config.user_path = user_config_path();
     config.user_found = load_file(config.user_path,
@@ -1077,7 +1074,7 @@ n00bb_config_load(const n00bb_invocation_t *invocation)
     if (invocation && invocation->end > 1) apply_flags(invocation->parsed);
     setting_t *lto = &config.settings.data[N00BB_KEY_BUILD_LTO];
     const setting_t *release = &config.settings.data[N00BB_KEY_BUILD_RELEASE];
-    if (lto->source == N00BB_SETTING_FROM_DEFAULT && !config.quiet) {
+    if (lto->source == N00BB_SETTING_FROM_DEFAULT) {
         lto->value.boolean = release->value.boolean;
         core_free(lto->origin.data);
         lto->origin = core_string_dup(release->key);
@@ -1100,7 +1097,7 @@ n00bb_config_report(void)
     ensure_loaded();
     int status = config.flag_failed ? 2
         : core_diagnostics_failed(config.diagnostics) ? 1 : 0;
-    if (config.reported || config.quiet) return status;
+    if (config.reported) return status;
     config.reported = true;
     n00bb_print_diagnostics(config.diagnostics);
     return status;

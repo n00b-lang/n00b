@@ -42,9 +42,10 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
         if r.start_ix == nil {
             continue
         }
-        let rs: u64 = r.start_ix.get()
+        let rs: u64 = r.start_ix
         var is_sub: bool = r.end_ix == nil
-        switch r.substitution {
+        let substitution = r.substitution
+        switch substitution {
             case position {
                 is_sub = true
             }

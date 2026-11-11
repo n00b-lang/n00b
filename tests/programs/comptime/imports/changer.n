@@ -1,0 +1,9 @@
+import shared
+
+if comptime() {
+    shared.count = 99
+}
+
+func start() {
+    if shared.count == 2 { __fd_write(2, "imported state kept\n") }
+}

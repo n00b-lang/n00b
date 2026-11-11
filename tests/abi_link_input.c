@@ -49,6 +49,15 @@ host_triple(void)
 #endif
 }
 
+static bool
+host_target(core_target_desc_t *target)
+{
+    core_string_t triple = host_triple();
+    bool wide = core_string_starts_with(triple, S("x86_64"));
+    return core_target_profile(triple,
+        wide ? CORE_TARGET_FEATURE_NATIVE_ATOMIC128 : 0, target);
+}
+
 static size_t
 count_string_pool_sections(const uint8_t *object, size_t object_bytes,
                            const core_target_desc_t *target)
@@ -194,7 +203,7 @@ select_fixture_graph(abi_fixture_graph_t *graph, const core_string_t *paths,
         .count = count,
     };
     assert(graph->objects && graph->inputs
-        && core_target_profile(host_triple(), 0, &graph->target));
+        && host_target(&graph->target));
     for (size_t i = 0; i < count; i++) {
         abi_fixture_object_t *item = &graph->objects[i];
         item->object = read_object(paths[i], &item->object_bytes);
@@ -413,7 +422,7 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
                                       &archive_bytes);
     n00bb_abi_archive_inputs_t archive_inputs = {0};
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     assert(!n00bb_abi_archive_inputs_open(&target, archive,
         archive_bytes - 1, &archive_inputs) && !archive_inputs.objects);
     assert(n00bb_abi_archive_inputs_open(&target, archive,
@@ -751,7 +760,7 @@ test_self_import_selection(core_string_t path)
         .object = object, .object_bytes = object_bytes,
     };
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_selected_objects_t selected = {0};
     assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
         && selected.count == 1);
@@ -806,7 +815,7 @@ test_duplicate_record_field(core_string_t path)
     uint8_t *left_object = read_object(path, &left_bytes);
     uint8_t *right_object = read_object(path, &right_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t views[2] = {0};
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
@@ -967,7 +976,7 @@ test_trait_type_requirement(core_string_t path)
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *requirements =
@@ -1002,7 +1011,7 @@ test_trait_type_import(core_string_t path)
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
@@ -1074,7 +1083,7 @@ test_linked_library_object(core_string_t path)
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *modules =
@@ -1146,7 +1155,7 @@ test_linked_flagset(core_string_t path)
     size_t object_bytes;
     uint8_t *object = read_object(path, &object_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, object, object_bytes, &view));
     const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
@@ -1387,7 +1396,7 @@ test_duplicate_member(core_string_t path, bool variant)
     uint8_t *left_object = read_object(path, &left_bytes);
     uint8_t *right_object = read_object(path, &right_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t views[2] = {0};
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
@@ -1441,7 +1450,7 @@ test_imported_callback_reference(core_string_t provider_path,
     uint8_t *left_object = read_object(provider_path, &left_bytes);
     uint8_t *right_object = read_object(consumer_path, &right_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t views[2] = {0};
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
@@ -1492,7 +1501,7 @@ test_duplicate_signature(core_string_t path)
     uint8_t *left_object = read_object(path, &left_bytes);
     uint8_t *right_object = read_object(path, &right_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t views[2] = {0};
     assert(n00bb_abi_object_open(&target, left_object, left_bytes, &views[0])
         && n00bb_abi_object_open(&target, right_object, right_bytes,
@@ -2972,7 +2981,7 @@ test_string_storage_link(core_string_t path)
     size_t linked_bytes;
     uint8_t *linked = read_object(path, &linked_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target)
+    assert(host_target(&target)
         && count_string_pool_sections(linked, linked_bytes, &target) == 1);
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, linked, linked_bytes, &view));
@@ -3134,7 +3143,7 @@ test_semantic_rows_link(core_string_t path, bool trait)
     core_target_desc_t target;
     core_string_t name = trait ? S("trait_methods") : S("where_excludes");
     assert(init_unit(&unit, name)
-        && core_target_profile(host_triple(), 0, &target));
+        && host_target(&target));
     core_link_unit_t *link = core_link_unit_new();
     assert(link && core_link_unit_add_root(link, &unit)
         && core_link_unit_finalize_graph(link));
@@ -3319,7 +3328,7 @@ test_generic_type_identity(core_string_t path, core_string_t linked_path)
     size_t source_bytes;
     uint8_t *source = read_object(path, &source_bytes);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t original = {0};
     assert(n00bb_abi_object_open(&target, source, source_bytes, &original));
     uint32_t first = GENERIC_FUNCTION_TYPE(&original, "first");
@@ -3350,7 +3359,7 @@ test_imported_generic_owner(core_string_t consumer_path,
                             core_string_t linked_path)
 {
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     core_string_t paths[] = {consumer_path, provider_path, linked_path};
     for (size_t file = 0; file < 3; file++) {
         size_t bytes = 0;
@@ -3703,7 +3712,7 @@ main(int argc, char **argv)
     size_t length;
     uint8_t *object = read_object(args[1], &length);
     core_target_desc_t target;
-    assert(core_target_profile(host_triple(), 0, &target));
+    assert(host_target(&target));
     n00bb_abi_object_view_t view = {0};
     assert(n00bb_abi_object_open(&target, object, length, &view));
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(

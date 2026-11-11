@@ -10,25 +10,27 @@ const rw_writer:      u32 = 0x8000_0000
 const rw_readers:     u32 = 0x1fff_ffff
 const rw_records:     uint = 16
 
-record Mutex {
+record Mutex layout(c) {
     state:       Atomic[u32]
     should_wake: Atomic[u32]
     owner:       Atomic[u64]
     nesting:     u32
+    collector:   bool
 }
 
-record Condition {
+record Condition layout(c) {
     mutex:      Mutex
     epoch:      Atomic[u32]
     waiters:    Atomic[u32]
     wake_slots: Atomic[u32]
 }
 
-record Rw_Lock {
+record Rw_Lock layout(c) {
     state:        Atomic[u32]
     owner:        Atomic[u64]
     parked:       Atomic[u32]
     nonrecursive: bool
+    collector:    bool
 }
 
 thread var held_rw: Array[uint][rw_records] =
@@ -45,10 +47,30 @@ func self_tag() -> u64 {
     return internal.threads.thread_id() + 1
 }
 
-func futex_park(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) {
+func futex_park(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint,
+                collector: bool) {
+    if collector {
+        internal.threads.futex_wait(word, expected, timeout_ns)
+        return
+    }
     __gc_enter_blocking()
     internal.threads.futex_wait(word, expected, timeout_ns)
     __gc_leave_blocking()
+}
+
+func mutex_init(mutex: Ref[Mutex], collector: bool = false) {
+    __atomic_store(ref mutex.__value.state, mutex_unlocked)
+    __atomic_store(ref mutex.__value.should_wake, 0)
+    __atomic_store(ref mutex.__value.owner, 0)
+    mutex.__value.nesting = 0
+    mutex.__value.collector = collector
+}
+
+func condition_init(cv: Ref[Condition], collector: bool = false) {
+    mutex_init(ref cv.__value.mutex, collector = collector)
+    __atomic_store(ref cv.__value.epoch, 0)
+    __atomic_store(ref cv.__value.waiters, 0)
+    __atomic_store(ref cv.__value.wake_slots, 0)
 }
 
 func mutex_owned(mutex: Ref[Mutex]) -> bool {
@@ -78,11 +100,14 @@ func mutex_lock(mutex: Ref[Mutex]) {
         return
     }
     __atomic_fetch_add(ref mutex.__value.should_wake, 1)
-    while __atomic_fetch_or(ref mutex.__value.state, mutex_locked) != mutex_unlocked {
-        futex_park(ref mutex.__value.state, mutex_locked, wait_slice_ns)
+    while true {
+        futex_park(ref mutex.__value.state, mutex_locked, wait_slice_ns,
+                   mutex.__value.collector)
+        if mutex_fast(mutex, me) {
+            __atomic_fetch_sub(ref mutex.__value.should_wake, 1)
+            return
+        }
     }
-    __atomic_fetch_sub(ref mutex.__value.should_wake, 1)
-    __atomic_store(ref mutex.__value.owner, me)
 }
 
 func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
@@ -94,7 +119,8 @@ func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
     var now: u64 = internal.clock.now_ns()
     let deadline: u64 = now + timeout_ns
     while now < deadline {
-        futex_park(ref mutex.__value.state, mutex_locked, deadline - now)
+        futex_park(ref mutex.__value.state, mutex_locked, deadline - now,
+                   mutex.__value.collector)
         if mutex_fast(mutex, me) {
             return true
         }
@@ -158,7 +184,8 @@ func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
             }
             remaining = deadline - now
         }
-        futex_park(ref cv.__value.epoch, seen, remaining)
+        futex_park(ref cv.__value.epoch, seen, remaining,
+                   cv.__value.mutex.collector)
         if __atomic_load(ref cv.__value.epoch) == seen {
             continue
         }
@@ -195,11 +222,13 @@ func condition_notify(cv: Ref[Condition], all: bool = false,
     }
 }
 
-func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true) {
+func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true,
+                  collector: bool = false) {
     __atomic_store(ref lock.__value.state, 0)
     __atomic_store(ref lock.__value.owner, 0)
     __atomic_store(ref lock.__value.parked, 0)
     lock.__value.nonrecursive = !recursive
+    lock.__value.collector = collector
 }
 
 func rw_backoff(lock: Ref[Rw_Lock], seen: u32, round: u32) {
@@ -208,7 +237,8 @@ func rw_backoff(lock: Ref[Rw_Lock], seen: u32, round: u32) {
         return
     }
     __atomic_fetch_add(ref lock.__value.parked, 1)
-    futex_park(ref lock.__value.state, seen, wait_slice_ns)
+    futex_park(ref lock.__value.state, seen, wait_slice_ns,
+               lock.__value.collector)
     __atomic_fetch_sub(ref lock.__value.parked, 1)
 }
 

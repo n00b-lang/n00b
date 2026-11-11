@@ -558,7 +558,7 @@ func idna_map(consume s: string) -> string fail: Idna_Error {
             let off: u32? = idna_map_lookup(cp)
 
             if off != nil {
-                let at: u32 = off.get()
+                let at: u32 = off
                 let count: u32 = generated.idna.idna_map_data(at)
 
                 var i: u32 = 0
@@ -840,7 +840,7 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
                 fail Idna_Error.punycode_error
             }
 
-            let e: string = enc.get()
+            let e: string = enc
 
             internal.runebuf.push(out, 'x')
             internal.runebuf.push(out, 'n')

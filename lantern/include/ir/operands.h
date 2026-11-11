@@ -23,6 +23,8 @@ typedef struct {
     const ir_value_t *value;
 } ir_call_arg_t;
 
+ir_value_t   *ir_call_callee(const ir_instr_t *call);
+ir_func_t    *ir_call_function(const ir_instr_t *call);
 uint32_t      ir_call_argument_count(const ir_instr_t *call);
 ir_call_arg_t ir_call_argument(const ir_instr_t *call, uint32_t param);
 bool          ir_call_argument_writes(const ir_call_arg_t *argument);

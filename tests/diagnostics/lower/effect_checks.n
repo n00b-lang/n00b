@@ -1,0 +1,130 @@
+import sys.clock
+import sys.env
+
+func stamp() -> uint {
+    return sys.clock.now_ns()
+}
+
+func render(page: string) -> string {
+    forbids_effect(impure)
+    if stamp() == 0 {
+        return ""
+    }
+    return page
+}
+
+func area(w: int, h: int) -> int {
+    forbids_effect(impure) and !may_write(w)
+    return w * h
+}
+
+func quit(code: int) {
+    sys.env.exit(code)
+}
+
+func leave(code: int) {
+    has_effect(output) and has_effect(noreturn)
+    quit(code)
+}
+
+func maybe_leave(code: int) {
+    has_effect(noreturn)
+    if code != 0 {
+        quit(code)
+    }
+}
+
+func steady(code: int) -> int {
+    forbids_effect(noreturn) or may_effect(output)
+    return code + 1
+}
+
+func reads_only(items: List[int]) -> uint {
+    may_read(items) and !may_write(items)
+    return items.len()
+}
+
+func writes(items: List[int]) {
+    !may_write(items)
+    items.append(1)
+}
+
+func mixed(x: int) -> int {
+    forbids_effect(output) and x > 3
+    return x
+}
+
+func unknowns(x: int) {
+    forbids_effect(teleport)
+    has_effect(impure)
+    may_read(z)
+}
+
+forbids_effect(area, clock)
+may_effect(render, clock)
+!may_write(area, h)
+has_effect(leave, output)
+forbids_effect(render, clock)
+may_effect(output)
+forbids_effect(Dict.get, impure)
+!may_write(Dict.get, self)
+!may_write(List.append, self)
+forbids_effect(Dict.nope, impure)
+
+func first_item(view items: List[int]) -> int {
+    return items[0]
+}
+
+forbids_effect(first_item, noreturn)
+may_effect(first_item, panics)
+
+func sum_items(view items: List[int]) -> int {
+    !may_write(items)
+    var sum: int = 0
+    for x in items {
+        sum += x
+    }
+    return sum
+}
+
+const loud = [-
+library loud
+
+opaque loud_state
+handle Loud = *loud_state release loud_free
+
+fn loud_open() -> own ?Loud release loud_free
+fn loud_free(r: consume ?Loud)
+  effects output
+-]'ffi
+
+record Noisy {
+    id: int
+}
+
+func __finalize(consume self: Ref[Noisy]) {
+    __fd_write(2, "finalized\n")
+}
+
+func copy_twice(view item: 'T) -> 'T {
+    var first: 'T = item
+    var second: 'T = first
+    return second
+}
+
+func noisy_copy(n: Noisy) -> Noisy {
+    return copy_twice(n)
+}
+
+let sample: Noisy = (id = 1)
+require noisy_copy(sample).id == 1
+require quiet_copy(2) == 2
+
+func quiet_copy(n: int) -> int {
+    return copy_twice(n)
+}
+
+may_effect(noisy_copy, output)
+!may_effect(quiet_copy, output)
+!may_effect(copy_twice, output)
+!may_effect(Dict.get, output)

@@ -9,16 +9,13 @@
 #include "lib/list.h"
 
 typedef struct {
-    ir_block_t *block;
-    uint32_t    at;
-} init_site_t;
-core_list_decl(init_site_t);
-
-typedef struct {
     ir_instr_t *allocation;
     bool        local;
 } placed_alloc_t;
 core_list_decl(placed_alloc_t);
+
+typedef ir_block_t *placed_block_ptr_t;
+core_list_decl(placed_block_ptr_t);
 
 static ir_instr_t *
 placed_instruction(ir_block_t *block, uint32_t at, ir_span_t span, ir_op_t op,
@@ -83,51 +80,6 @@ n00bb_binding_escapes(ir_summaries_t *summaries, ir_func_t *function,
         && ir_address_escapes(summaries, function, binding);
 }
 
-static bool
-initialized_before(ir_doms_t *doms, const core_list_t(init_site_t) *inits,
-                   ir_block_t *block, uint32_t at)
-{
-    for (size_t i = 0; i < inits->len; i++) {
-        init_site_t init = inits->data[i];
-        if (init.block == block ? init.at < at
-                                : ir_dominates(doms, init.block, block))
-            return true;
-    }
-    return false;
-}
-
-static bool
-needs_entry_storage(ir_doms_t *doms, const ir_func_t *function,
-                    const ir_local_t *local)
-{
-    core_list_t(init_site_t) inits = core_list_new(init_site_t);
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            const ir_instr_t *in = block->instrs[i];
-            if (in->dest_kind == IR_DEST_LOCAL && in->dest_local == local
-                && ir_instr_is_binding_initialization(in))
-                core_list_push(inits, ((init_site_t){block, i}));
-        }
-    }
-    bool needed = false;
-    for (uint32_t b = 0; !needed && b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; !needed && i < block->n_instrs; i++) {
-            const ir_instr_t *in = block->instrs[i];
-            bool uses = in->dest_kind == IR_DEST_LOCAL
-                && in->dest_local == local
-                && !ir_instr_is_binding_initialization(in);
-            for (uint32_t k = 0; !uses && k < in->n_operands; k++)
-                uses = in->operands[k].kind == IR_OPD_VALUE
-                    && in->operands[k].value == local->value;
-            needed = uses && !initialized_before(doms, &inits, block, i);
-        }
-    }
-    core_list_free(inits);
-    return needed;
-}
-
 static ir_value_t *
 fresh_storage(ir_block_t *block, uint32_t at, ir_span_t span,
               const ir_local_t *local, ir_local_t *holder,
@@ -156,6 +108,7 @@ read_through(ir_instr_t *in, uint32_t operand, ir_value_t *held,
                                           IR_OP_LOAD, local->type);
     if (!load || !ir_instr_operand_value(load, address->dest)) return false;
     in->operands[operand].value = load->dest;
+    ir_instr_use_added(in, operand);
     return true;
 }
 
@@ -244,8 +197,7 @@ write_through(ir_instr_t *in, ir_local_t *holder, ir_value_t *held,
 }
 
 static bool
-move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
-                      bool entry_storage)
+move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local)
 {
     th_type *storage_type = th_ind(types, 0, local->type);
     core_buffer_t name = {0};
@@ -258,9 +210,8 @@ move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
     ir_value_t *held = holder ? ir_local_value(function, holder) : nullptr;
     ir_value_t *target = local->value;
     if (!held || !target || !function->n_blocks
-        || (entry_storage
-            && !fresh_storage(function->blocks[0], 0, function->span, local,
-                              holder, storage_type)))
+        || !fresh_storage(function->blocks[0], 0, function->span, local,
+                          holder, storage_type))
         return false;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
@@ -272,6 +223,7 @@ move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
                 if (in->op == IR_OP_ADDRESS_OF) {
                     in->op = IR_OP_COPY;
                     in->operands[k].value = held;
+                    ir_instr_use_added(in, k);
                     continue;
                 }
                 if (!read_through(in, k, held, local, storage_type))
@@ -342,6 +294,32 @@ retire_scope_finalizers(ir_ctx_t *context, ir_func_t *function)
 }
 
 static bool
+block_in_cycle(ir_block_t *block)
+{
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_t(placed_block_ptr_t) work = core_list_new(placed_block_ptr_t);
+    core_list_push(work, block);
+    bool cycle = false;
+    while (!cycle && work.len) {
+        ir_block_t *at = work.data[--work.len];
+        ir_instr_t *last = at->n_instrs ? at->instrs[at->n_instrs - 1]
+                                        : nullptr;
+        for (uint32_t s = 0; last && !cycle && s < ir_succ_count(last); s++) {
+            ir_block_t *next = ir_succ_at(last, s);
+            cycle = next == block;
+            if (next && !cycle && !core_dict_contains(&seen, next)) {
+                core_dict_put(&seen, next, next);
+                core_list_push(work, next);
+            }
+        }
+    }
+    core_list_free(work);
+    core_dict_free(&seen);
+    return cycle;
+}
+
+static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
                      ir_func_t *function)
 {
@@ -357,7 +335,8 @@ annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
             core_list_push(found, ((placed_alloc_t){
                 .allocation = allocation,
                 .local      = !ir_address_escapes(summaries, function,
-                                                  allocation->dest)}));
+                                                  allocation->dest)
+                    && !block_in_cycle(block)}));
         }
     }
     bool ok = true;
@@ -383,29 +362,25 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         if (!function || !function->n_blocks) continue;
         uint32_t locals = function->n_locals;
         ir_local_t **moved = core_alloc_array(ir_local_t *, locals + 1);
-        bool *entry = core_alloc_array(bool, locals + 1);
         uint32_t count = 0;
         size_t scope = ir_analysis_scope_begin();
-        ir_doms_t *doms = ir_func_doms(function);
         core_dict_t escaping;
         core_dict_init(&escaping, nullptr, nullptr);
         escaping_locals(summaries, function, &escaping);
-        for (uint32_t l = 0; doms && l < locals; l++) {
+        for (uint32_t l = 0; l < locals; l++) {
             ir_local_t *local = function->locals[l];
             if (!local->address_taken
                 || !core_dict_contains(&escaping, local->value)) continue;
-            entry[count] = needs_entry_storage(doms, function, local);
             moved[count++] = local;
         }
         core_dict_free(&escaping);
-        bool ok = doms != nullptr;
         ir_analysis_scope_end(scope);
+        bool ok = true;
         for (uint32_t m = 0; ok && m < count; m++) {
             release_scope_finalizer(function, moved[m]->value);
-            ok = move_local_to_storage(function, types, moved[m], entry[m]);
+            ok = move_local_to_storage(function, types, moved[m]);
         }
         core_free(moved);
-        core_free(entry);
         if (!ok) return false;
         if (!annotate_allocations(context, summaries, function)
             || !retire_scope_finalizers(context, function))

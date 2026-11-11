@@ -20,32 +20,11 @@ typedef struct {
 } th_slice;
 
 typedef struct {
-  core_string_t from;
-  core_string_t to;
-} th_promo;
-
-typedef struct {
-  core_string_t name;
-  th_type *methods;
-} th_iface;
-
-typedef struct {
   uint64_t hash;
   th_type *type;
   th_type *definition;
   void *owner;
 } th_type_record_t;
-
-typedef struct {
-  th_type *receiver;
-  core_string_t name;
-  th_type *signature;
-} th_method;
-
-typedef struct {
-  th_method_resolver_fn resolver;
-  void *user;
-} th_method_resolver;
 
 typedef struct {
   core_string_t name;
@@ -69,8 +48,16 @@ typedef struct {
   th_type *error_type;
   th_type *contract;
   size_t required_params;
+  th_type *requirements;
+  th_con_kind *requirement_kinds;
+  core_string_t *requirement_traits;
+  size_t requirement_count;
   core_datalog_symbol_t logic_symbol;
 } th_env_function_t;
+
+th_type *th_env_function_copy_source(const th_env_function_t *function);
+bool th_env_copy_function(th_env *env, const th_env_function_t *function,
+                          th_type *copied);
 
 typedef struct {
   core_string_t qualified_name;
@@ -112,17 +99,7 @@ typedef struct {
 } th_env_metadata_record_t;
 
 core_list_decl(th_constraint);
-
-typedef struct {
-  th_type *var;
-  th_constraint method;
-} th_pending_method_t;
-core_list_decl(th_pending_method_t);
-core_list_decl(th_promo);
-core_list_decl(th_iface);
 core_list_decl(th_type_record_t);
-core_list_decl(th_method);
-core_list_decl(th_method_resolver);
 core_list_decl(th_env_trait_t);
 core_list_decl(th_env_function_t);
 core_list_decl(th_env_value_t);
@@ -198,28 +175,16 @@ struct th_type {
       uint64_t index;
       uint64_t origin;
       bool has_index;
-      bool cons_borrowed;
       bool open_slot;
       th_type *ref;
       core_string_t name;
-      core_list_t(th_constraint) cons;
     } var;
   };
 };
 
 core_list_decl(th_error_t);
-core_list_decl(th_coercion_t);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
-
-typedef struct {
-  th_con_kind kind;
-  core_string_t name;
-  core_string_t module;
-  core_string_t package;
-  uint64_t receiver_hash;
-} th_active_constraint_t;
-core_list_decl(th_active_constraint_t);
 
 struct th_ctx {
   core_arena_t arena;
@@ -228,8 +193,6 @@ struct th_ctx {
   void *norm_state;
   core_string_t err;
   uint64_t next_var;
-  core_list_t(th_promo) promos;
-  core_list_t(th_iface) ifaces;
   const th_builtin_type_t *builtin_types;
   size_t builtin_count;
   core_dict_t *builtin_heads;
@@ -237,34 +200,11 @@ struct th_ctx {
   core_dict_t *closed_type_records;
   core_dict_t *open_type_records;
   core_dict_t *generic_type_heads;
-  core_list_t(th_method) methods;
-  core_list_t(th_method_resolver) method_resolvers;
-  core_dict_t *promo_index;
-  core_dict_t *iface_index;
   core_list_t(th_error_t) errors;
-  core_list_t(th_coercion_t) coercions;
-  core_list_t(th_type_ptr_t) pending_environment_constraints;
-  core_list_t(th_active_constraint_t) active_environment_constraints;
-  th_coerce_fn custom;
-  th_coerce_target_fn custom_target;
-  th_coerce_target_fn receiver_view;
-  void *custom_user;
-  th_convert_fn conversion;
-  void *conversion_user;
-  th_integer_class_fn integer_class;
-  th_integer_method_fn integer_method;
-  void *integer_method_user;
-  core_list_t(th_pending_method_t) integer_methods_pending;
-  uint32_t integer_method_depth;
-  uint32_t integer_owner;
-  size_t probe_depth;
-  bool grounding_integers;
-  uint8_t method_argument_coercions;
   th_span_t span;
   core_string_t source_file;
   th_span_t related;
   bool has_related;
-  bool probe_errors_discarded;
   const th_env *environment;
   core_string_t module;
   core_string_t package;
@@ -272,6 +212,15 @@ struct th_ctx {
   core_dict_t *method_memo;
   core_arena_t memo_arena;
 };
+
+typedef struct {
+  core_dict_t heads;
+  core_list_t(uint32_t) next;
+  size_t indexed;
+  bool ready;
+} th_env_index_t;
+
+void th_env_reset_indexes(th_env *env);
 
 struct th_env {
   th_ctx *types;
@@ -286,29 +235,13 @@ struct th_env {
   core_datalog_relation_id_t candidate_relation;
   core_datalog_relation_id_t intrinsic_type_relation;
   core_object_archive_t *persisted_archive;
+  th_env_index_t type_index;
+  th_env_index_t value_index;
+  th_env_index_t metadata_index;
   bool owns_types;
   bool frozen;
 };
 
-typedef struct {
-  core_arena_mark_t arena;
-  core_string_t err;
-  size_t errors;
-  size_t coercions;
-  size_t pending_environment_constraints;
-  size_t active_environment_constraints;
-  size_t type_records;
-  size_t methods;
-  size_t method_resolvers;
-  size_t promos;
-  size_t ifaces;
-  size_t depth;
-} th_probe_t;
-
-void th_var_cons_push(th_type *var, th_constraint constraint);
-th_probe_t th_probe_begin(th_ctx *ctx);
-bool th_probe_end(th_ctx *ctx, const th_probe_t *probe);
-void th_probe_drop_constraints(th_ctx *ctx, const th_probe_t *probe);
 
 void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
             th_type *expected, th_type *got, core_string_t message);
@@ -316,8 +249,6 @@ void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);
 core_string_t th_strdup(th_ctx *ctx, core_string_t s);
-size_t th_child_count(const th_type *t);
-th_type *th_child(const th_type *t, size_t i);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);

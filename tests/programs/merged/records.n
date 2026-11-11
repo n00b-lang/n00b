@@ -144,7 +144,7 @@ func check(packed_p: Packed?) -> int {
     if packed_p == nil {
         return 0
     }
-    return packed_p.get().count
+    return packed_p.count
 }
 
 var packed_p: Packed = base
@@ -301,7 +301,7 @@ func limit_of(failure: Failure) -> u32 {
     if limit == nil {
         return 0
     }
-    return limit.get()
+    return limit
 }
 
 let failure_plain = new[Failure](cast[i64]1, "named", limit = 7)
@@ -358,7 +358,7 @@ func loads() -> bool {
     var copy: Atomic[u32] = width
     atomic_bump(copy)
     return flag and total == 15 and width == 5 and small == -3 and
-        ratio * 2.0 == 3.0 and h != nil and h.get().__value.value == 7 and
+        ratio * 2.0 == 3.0 and h != nil and h.__value.value == 7 and
         copy == 6
 }
 
@@ -736,6 +736,89 @@ func ref_created() -> int {
     return lent.__value.value * 10 + again.__value.value + store.handed
 }
 
+func lease_store() -> int {
+    var items: Array[int] = new[Array[int]](3)
+    items[0] = 1
+    items[1] = 2
+    items[2] = 3
+    var store: Leasable[int] = new[Leasable[int]](items)
+    store[1] = 20
+    {
+        let lease: Lease[int] = ref store
+        require leased(store)
+        store[2] = 30
+        require lease.__value[2] == 3 and store[2] == 30
+    }
+    require !leased(store)
+    return store[1] + cast[int]len(store)
+}
+
+func lease_list_append() -> int {
+    var items: List[int] = [1, 2, 3]
+    var total: int = 0
+    for value in items {
+        require value != 1 or leased(items.items)
+        items.append(value * 10)
+        total += value
+    }
+    require !leased(items.items) and items.len() == 6 and items[5] == 30
+    return total
+}
+
+func lease_list_break() -> bool {
+    var items: List[int] = [1, 2, 3]
+    for value in items {
+        if value == 2 {
+            break
+        }
+    }
+    return !leased(items.items)
+}
+
+func lease_list_find(items: List[int], wanted: int) -> int {
+    for value in items {
+        if value == wanted {
+            return value
+        }
+    }
+    return 0
+}
+
+func lease_list_cursor() -> int {
+    var items: List[int] = [4, 5]
+    var walk: Lease_Cursor[int] = items.__iterator()
+    var total: int = 0
+    var item: int? = walk.__next()
+    while item != nil {
+        total += item
+        item = walk.__next()
+    }
+    require !leased(items.items)
+    return total
+}
+
+func lease_rows_append() -> int {
+    var rows: List[Array[int]] = new[List[Array[int]]]()
+    var first: Array[int] = [1, 2]
+    rows.append(first)
+    for row in rows {
+        rows.append(row)
+    }
+    return rows.len() + rows[1][1]
+}
+
+func lease_dict_writes() -> int {
+    var table: Dict[int, int] = {1: 10, 2: 20, 3: 30}
+    var total: int = 0
+    for key, value in table {
+        table[key + 100] = value
+        _ = table.remove(2)
+        total += value
+    }
+    require table.len() == 5
+    return total
+}
+
 require fin_scoped() == 0
 require fin_count == 1 and fin_order == 1
 fin_reset()
@@ -827,4 +910,12 @@ require ref_generic() == 60
 let fin_kept: Fin_Value = fin_returned_temporary()
 require fin_kept.v == 5 and fin_count == 0
 fin_reset()
+var lease_probe: List[int] = [3, 4]
+require lease_list_find(lease_probe, 4) == 4 and !leased(lease_probe.items)
+require lease_store() == 23
+require lease_list_append() == 6
+require lease_list_break()
+require lease_list_cursor() == 9
+require lease_rows_append() == 4
+require lease_dict_writes() == 60
 __fd_write(2, "ok")

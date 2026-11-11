@@ -1647,7 +1647,6 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
       continue;
     }
 
-    int32_t penalty_cost = 0;
     core_string_t disambig_predicate = {0};
     int32_t disambig_cost = 0;
     bnf_result_t *annots_r = (pair->len >= 3) ? slist_get(pair, 2) : nullptr;
@@ -1678,9 +1677,6 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
         if (a_r && a_r->tag == BNF_ANNOT) {
           parse_annotation_t *info = (parse_annotation_t *)a_r->data;
 
-          if (info->penalty_cost > 0) {
-            penalty_cost = info->penalty_cost;
-          }
           if (info->disambig_predicate.data) {
             disambig_predicate = info->disambig_predicate;
             disambig_cost = info->disambig_cost;
@@ -1702,27 +1698,11 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
 
       parse_rule_t *rule_p = nullptr;
 
-      if (penalty_cost > 0) {
-        if (items.len > 0) {
-          rule_p =
-              parse_add_rule_with_cost_v(user_g, nt_id, penalty_cost,
-                                         (int)items.len, items.data);
-        } else {
-          parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
-          rule_p = parse_add_rule_with_cost_v(user_g, nt_id, penalty_cost, 1,
-                                              &empty);
-        }
-
-        if (rule_p) {
-          rule_p->penalty_rule = true;
-        }
+      if (items.len > 0) {
+        rule_p = parse_add_rule_v(user_g, nt_id, (int)items.len, items.data);
       } else {
-        if (items.len > 0) {
-          rule_p = parse_add_rule_v(user_g, nt_id, (int)items.len, items.data);
-        } else {
-          parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
-          rule_p = parse_add_rule_v(user_g, nt_id, 1, &empty);
-        }
+        parse_match_t empty = {.kind = PARSE_MATCH_EMPTY};
+        rule_p = parse_add_rule_v(user_g, nt_id, 1, &empty);
       }
 
       if (rule_p && disambig_predicate.data) {

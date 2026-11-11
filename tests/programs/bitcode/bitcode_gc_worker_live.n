@@ -8,7 +8,6 @@ import sys.gc.los
 import sys.gc.mark
 import sys.gc.mutator
 import sys.gc.roots
-import sys.gc.sync
 import sys.threads
 import sys.clock
 
@@ -20,10 +19,10 @@ sys.gc.heap.config_default(config)
 config.scan_stacks = false
 let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
 if created != nil {
-    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let heap: Ref[sys.gc.core.Heap] = created
     let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
     if attached != nil {
-        let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+        let mutator: Ref[sys.gc.core.Mutator] = attached
         let probe: byte = 0
         let object: Ref[byte]? = sys.gc.alloc.allocate_large(mutator,
             cast[u32](typeof(probe)), sys.gc.los.los_threshold + 1,
@@ -37,7 +36,7 @@ if created != nil {
             if __abi_ref_address(entry.__value.address) == __abi_ref_address(ref tls_root) {
                 let root_type: Ref[sys.abi.Type_Record]? = sys.abi.type_at(entry.__value.type_index)
                 require root_type != nil
-                require root_type.get().__value.tracing_index != 0
+                require root_type.__value.tracing_index != 0
                 saw_tls_root = true
             }
             tls_index += 1
@@ -55,20 +54,20 @@ if created != nil {
         var complete: bool = false
         while !complete {
             sys.gc.handshake.safepoint(mutator)
-            sys.gc.sync.ticket_lock(ref heap.__value.lock)
+            sys.gc.heap.lock(heap)
             complete = heap.__value.collections != 0
             sys.gc.heap.unlock(heap)
             require complete or sys.clock.now_ns() < deadline
             sys.threads.thread_yield()
         }
         if tls_root != nil {
-            require sys.gc.mark.is_marked(heap, tls_root.get())
+            require sys.gc.mark.is_marked(heap, tls_root)
         } else { require false }
 
         sys.gc.collect.collect(heap)
         require heap.__value.collections >= 2
         if tls_root != nil {
-            require sys.gc.mark.is_marked(heap, tls_root.get())
+            require sys.gc.mark.is_marked(heap, tls_root)
         } else { require false }
 
         __atomic_store(ref heap.__value.shutdown, true)

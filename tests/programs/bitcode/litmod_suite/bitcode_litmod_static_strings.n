@@ -15,7 +15,7 @@ func observe(items: Array[string]) {
     require true
 }
 
-when comptime() {
+if comptime() {
     observe(["compile-time cached string"]'bundle_static_strings)
 }
 

@@ -22,7 +22,7 @@ func __equl(a: Holder, b: Holder) -> bool {
     return true
 }
 
-func __equal(a: Holder, b: Holder) -> bool {
+func __equal(view a: Holder, view b: Holder) -> bool {
     return true
 }
 

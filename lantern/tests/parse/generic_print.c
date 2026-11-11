@@ -508,7 +508,7 @@ test_notrivia_clears_it(void)
     parse_tree_t   *tree = parse_pwz_get_tree(p);
     parse_annot_result_t *r = parse_annot_result_new(nullptr);
     parse_tree_walk_t *walk = parse_tree_walk_new(g, r);
-    parse_annot_register(walk, r, nullptr, nullptr);
+    parse_annot_register(walk, r);
     parse_tree_walk_run(walk, tree);
     parse_tree_walk_free(walk);
 

@@ -22,8 +22,9 @@ static bool
 constant_global(const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
-    return identity->mutability != IR_MUT_MUTABLE
-        && identity->has_static_initializer;
+    return identity->mutability == IR_MUT_CONST
+        || (identity->mutability != IR_MUT_MUTABLE
+            && identity->has_static_initializer);
 }
 
 static ir_sflow_kind_t
@@ -275,34 +276,11 @@ write_kill(const pt_write_t *write)
         ? FLOW_KILL_CELL : FLOW_KILL_NONE;
 }
 
-static void
-flow_apply(const pt_flow_t *flow, const flow_step_t *step, uint64_t *state)
+static bool
+kills_cell(const flow_def_t *def, core_string_t cell)
 {
-    if (step->block) memset(state, 0, flow->words * sizeof(uint64_t));
-    for (uint32_t d = step->first; d < step->first + step->count; d++) {
-        const uint64_t *kill = &flow->kills[(size_t)d * flow->words];
-        for (uint32_t w = 0; w < flow->words; w++) state[w] &= ~kill[w];
-    }
-    for (uint32_t d = step->first; d < step->first + step->count; d++)
-        state[d / 64] |= UINT64_C(1) << (d % 64);
-}
-
-static void
-flow_kills(pt_flow_t *flow)
-{
-    core_free(flow->kills);
-    flow->kills = core_alloc_array(uint64_t,
-                                   flow->defs.len * flow->words + 1);
-    for (size_t d = 0; d < flow->defs.len; d++) {
-        const flow_def_t *def = &flow->defs.data[d];
-        if (def->kill == FLOW_KILL_NONE) continue;
-        uint64_t *kill = &flow->kills[d * flow->words];
-        for (size_t e = 0; e < flow->defs.len; e++)
-            if (flow->defs.data[e].site == def->site
-                && (def->kill == FLOW_KILL_SITE
-                    || core_string_eq(flow->defs.data[e].cell, def->cell)))
-                kill[e / 64] |= UINT64_C(1) << (e % 64);
-    }
+    return def->kill == FLOW_KILL_SITE
+        || (def->kill == FLOW_KILL_CELL && core_string_eq(def->cell, cell));
 }
 
 static void
@@ -310,12 +288,12 @@ flow_build(pt_t *pt)
 {
     pt_flow_t       *flow = &pt->flow;
     const ir_func_t *f    = pt->f;
-    flow->defs.len  = 0;
-    flow->steps.len = 0;
-    core_free(flow->block_steps);
-    flow->block_steps = core_alloc_array(uint32_t, f->n_blocks + 1);
+    flow->defs.len = 0;
+    core_dict_free(&flow->at_instr);
+    core_dict_init(&flow->at_instr, nullptr, nullptr);
+    core_dict_free(&flow->covered);
+    core_dict_init(&flow->covered, nullptr, nullptr);
     for (uint32_t b = 0; b < f->n_blocks; b++) {
-        flow->block_steps[b] = (uint32_t)flow->steps.len;
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in     = f->blocks[b]->instrs[i];
             bool              found  = false;
@@ -359,79 +337,153 @@ flow_build(pt_t *pt)
                             ? write->path.steps[0] : (core_string_t){0},
                         .kill = kill}));
             }
-            bool block = false;
-            core_dict_get(&flow->pending, in, &block);
-            if (flow->defs.len != first || block)
-                core_list_push(flow->steps, ((flow_step_t){
-                    .index = i, .first = first,
-                    .count = (uint32_t)flow->defs.len - first,
-                    .block = block}));
-        }
-    }
-    flow->block_steps[f->n_blocks] = (uint32_t)flow->steps.len;
-    flow->words = (uint32_t)((flow->defs.len + 63) / 64) + 1;
-    flow_kills(flow);
-    core_free(flow->block_in);
-    core_free(flow->state);
-    flow->block_in = core_alloc_array(uint64_t,
-                                      (size_t)flow->words * f->n_blocks + 1);
-    flow->state    = core_alloc_array(uint64_t, flow->words);
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (uint32_t b = 0; b < f->n_blocks; b++) {
-            ir_block_t *block = f->blocks[b];
-            memcpy(flow->state, &flow->block_in[(size_t)b * flow->words],
-                   flow->words * sizeof(uint64_t));
-            for (uint32_t s = flow->block_steps[b];
-                 s < flow->block_steps[b + 1]; s++)
-                flow_apply(flow, &flow->steps.data[s], flow->state);
-            ir_instr_t *last = block->n_instrs
-                ? block->instrs[block->n_instrs - 1] : nullptr;
-            for (uint32_t s = 0; last && s < ir_succ_count(last); s++) {
-                ir_block_t *next = ir_succ_at(last, s);
-                uint64_t   *in   = next
-                    ? &flow->block_in[(size_t)next->index * flow->words]
-                    : nullptr;
-                for (uint32_t w = 0; in && w < flow->words; w++) {
-                    uint64_t merged = in[w] | flow->state[w];
-                    changed |= merged != in[w];
-                    in[w] = merged;
-                }
-            }
+            if (flow->defs.len != first)
+                core_dict_put(&flow->at_instr, (void *)in, (void *)(
+                    (uintptr_t)first << 32 | (flow->defs.len - first)));
         }
     }
     flow->stale = false;
 }
 
+static void
+flow_sources(pt_t *pt)
+{
+    pt_flow_t *flow = &pt->flow;
+    if (flow->sourced) return;
+    flow->sourced = true;
+    ir_pdg_t *pdg = ir_func_pdg((ir_func_t *)pt->f);
+    pt->pdg      = pdg;
+    flow->memory = ir_pdg_memory(pdg);
+    flow->rd     = ir_pdg_rd(pdg);
+}
+
 static bool
-flow_state_at(pt_t *pt, const ir_instr_t *in)
+site_covered(pt_t *pt, uint32_t site)
 {
     pt_flow_t *flow  = &pt->flow;
+    void      *key   = (void *)(uintptr_t)(site + 1);
     bool       found = false;
-    uintptr_t  at    = (uintptr_t)core_dict_get(&flow->positions, in, &found);
-    if (!found) return false;
+    uintptr_t  known = (uintptr_t)core_dict_get(&flow->covered, key, &found);
+    if (found) return known == 2;
+    const ir_local_t *local   = pt->sites.data[site].local;
+    bool              chained = local && local->address_taken;
+    bool              covered = local
+        && (chained ? flow->memory != nullptr : flow->rd != nullptr);
+    for (size_t d = 0; covered && d < flow->defs.len; d++) {
+        const flow_def_t *def = &flow->defs.data[d];
+        if (def->site != site) continue;
+        covered = chained
+            ? ir_pdg_memory_defines(flow->memory, def->instr)
+            : def->instr->dest_kind == IR_DEST_LOCAL
+                && def->instr->dest_local == local;
+    }
+    core_dict_put(&flow->covered, key, (void *)(uintptr_t)(covered ? 2 : 1));
+    return covered;
+}
+
+static void
+reach_instr(pt_flow_t *flow, const ir_instr_t *in, uint32_t site,
+            core_string_t cell, bool *stop)
+{
+    bool      found = false;
+    uintptr_t range = (uintptr_t)core_dict_get(&flow->at_instr, in, &found);
+    uint32_t  first = (uint32_t)(range >> 32);
+    uint32_t  count = (uint32_t)range;
+    *stop = core_dict_contains(&flow->pending, (void *)in);
+    for (uint32_t d = first; found && d < first + count; d++) {
+        const flow_def_t *def = &flow->defs.data[d];
+        if (def->site != site) continue;
+        if (core_string_eq(def->cell, cell)) core_list_push(flow->reached, d);
+        *stop |= kills_cell(def, cell);
+    }
+}
+
+static void
+chain_reach(pt_flow_t *flow, uint32_t site, core_string_t cell,
+            uint32_t start)
+{
+    const ir_pdg_memory_t *m = flow->memory;
+    uint64_t mark = ++flow->mark;
+    flow->walk.len = 0;
+    core_list_push(flow->walk, start);
+    while (flow->walk.len) {
+        uint32_t id = flow->walk.data[--flow->walk.len];
+        if (id == UINT32_MAX) continue;
+        void *key = (void *)(uintptr_t)(id + 1);
+        if ((uintptr_t)core_dict_get(&flow->visited, key, nullptr) == mark)
+            continue;
+        core_dict_put(&flow->visited, key, (void *)(uintptr_t)mark);
+        const ir_memdef_t *def = ir_pdg_memory_def(m, id);
+        if (def->kind == IR_MEMDEF_ENTRY) continue;
+        if (def->kind == IR_MEMDEF_PHI || def->kind == IR_MEMDEF_ELEMENT_PHI) {
+            for (uint32_t p = 0; p < ir_pdg_memory_phi_count(m, id); p++)
+                core_list_push(flow->walk, ir_pdg_memory_phi_incoming(m, id, p));
+            continue;
+        }
+        bool      stop = false;
+        uintptr_t seen = (uintptr_t)core_dict_get(&flow->visited, def->instr,
+                                                  nullptr);
+        if (seen >> 1 == mark) stop = seen & 1;
+        else {
+            reach_instr(flow, def->instr, site, cell, &stop);
+            core_dict_put(&flow->visited, def->instr,
+                          (void *)(uintptr_t)(mark << 1 | stop));
+        }
+        if (!stop) core_list_push(flow->walk, ir_pdg_memory_def_prev(m, id));
+    }
+}
+
+static bool
+reaching_defs(pt_t *pt, uint32_t site, const ir_instr_t *at)
+{
+    pt_flow_t *flow = &pt->flow;
+    if (!core_dict_contains(&flow->positions, (void *)at)) return false;
     if (flow->stale) flow_build(pt);
-    uint32_t block = (uint32_t)(at >> 32), index = (uint32_t)at;
-    memcpy(flow->state, &flow->block_in[(size_t)block * flow->words],
-           flow->words * sizeof(uint64_t));
-    for (uint32_t s = flow->block_steps[block];
-         s < flow->block_steps[block + 1]
-         && flow->steps.data[s].index < index; s++)
-        flow_apply(flow, &flow->steps.data[s], flow->state);
+    flow_sources(pt);
+    if (!site_covered(pt, site)) return false;
+    const ir_local_t *local = pt->sites.data[site].local;
+    flow->reached.len = 0;
+    if (!local->address_taken) {
+        ir_instr_t *use = (ir_instr_t *)at;
+        if (!ir_rd_is_use(flow->rd, use, (ir_local_t *)local)) return false;
+        uint32_t count = ir_rd_count(flow->rd, use, (ir_local_t *)local);
+        for (uint32_t r = 0; r < count; r++) {
+            const ir_instr_t *def = ir_rd_at(flow->rd, use,
+                                             (ir_local_t *)local, r);
+            bool      found = false;
+            uintptr_t range = (uintptr_t)core_dict_get(&flow->at_instr, def,
+                                                       &found);
+            uint32_t  first = (uint32_t)(range >> 32);
+            for (uint32_t d = first; found && d < first + (uint32_t)range; d++)
+                if (flow->defs.data[d].site == site)
+                    core_list_push(flow->reached, d);
+        }
+        return true;
+    }
+    uint32_t start = ir_pdg_memory_def_before(flow->memory, at);
+    if (start == UINT32_MAX) return false;
+    for (size_t d = 0; d < flow->defs.len; d++) {
+        const flow_def_t *def = &flow->defs.data[d];
+        bool              first = def->site == site;
+        for (size_t e = 0; first && e < d; e++)
+            first = flow->defs.data[e].site != site
+                || !core_string_eq(flow->defs.data[e].cell, def->cell);
+        if (first) chain_reach(flow, site, def->cell, start);
+    }
     return true;
 }
 
 static void
 settle_writes(pt_t *pt, const ir_instr_t *in)
 {
-    pt_flow_t *flow    = &pt->flow;
-    bool       pending = false;
-    core_dict_get(&flow->pending, in, &pending);
-    if (!pending) return;
-    if (flow_state_at(pt, in))
-        for (size_t d = 0; d < flow->defs.len; d++)
-            if (flow->state[d / 64] >> (d % 64) & 1)
-                pt_notify(pt, contents_key(flow->defs.data[d].site));
+    pt_flow_t *flow = &pt->flow;
+    if (!core_dict_contains(&flow->pending, (void *)in)) return;
     core_dict_remove(&flow->pending, in);
-    flow->stale = true;
+    uint32_t last = UINT32_MAX;
+    for (size_t d = 0; d < flow->defs.len; d++) {
+        uint32_t site = flow->defs.data[d].site;
+        if (site == last) continue;
+        last = site;
+        pt_notify(pt, contents_key(site));
+    }
 }

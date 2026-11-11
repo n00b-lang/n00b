@@ -144,8 +144,12 @@
 <bounded-extent> ::= %"cap" <expr> %"," %"len" <expr>
 <choice-extent> ::= <or-expr> %"?" <extent> %":" <extent>
 
-<fn-clause> ::= <pure-clause> | <sizing-clause> | <error-clause> | <outcome-clause> | <expands-clause> | <on-clause> | <thread-clause> | <reentrant-clause> | <unwind-clause> | <signal-safe-clause> | <note-clause> | <source-clause> | <symbol-clause> | <format-clause> | <pack-clause> | <pack-keywords-clause> | <since-clause> | <removed-clause>
+<fn-clause> ::= <pure-clause> | <effects-clause> | <sizing-clause> | <error-clause> | <outcome-clause> | <expands-clause> | <on-clause> | <thread-clause> | <reentrant-clause> | <unwind-clause> | <signal-safe-clause> | <note-clause> | <source-clause> | <symbol-clause> | <format-clause> | <pack-clause> | <pack-keywords-clause> | <since-clause> | <removed-clause>
 <pure-clause> ::= %"pure"
+<effects-clause> ::= %"effects" <effect-entry> (%"," <effect-entry>)*
+<effect-entry> ::= <effect-of> | <effect-name>
+<effect-of> ::= %"of" %IDENTIFIER
+<effect-name> ::= %IDENTIFIER
 <sizing-clause> ::= %"sizing" <sizing-protocol>? <sizing-for>? %"needs" <expr>
 <sizing-protocol> ::= <sizing-query> | <sizing-retry>
 <sizing-query> ::= %"query" %"(" <assign> (%"," <assign>)* %")"

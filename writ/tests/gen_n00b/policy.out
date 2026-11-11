@@ -292,8 +292,8 @@ func __stmt_cell(raw: uint) -> Stmt {
 func __finalize(consume self: Ref[Stmt_Cell]) {
     if self.__value.raw != 0 and debug_enabled() {
         __fd_write(2, "Stmt collected while open; releasing it\n")
-        __ffi_event("policy:stmt_release", [cast[u64](self.__value.raw)]'array, __os_thread_id())
-        let released = __stmt_release(self.__value.raw)
+        __ffi_event_key("policy:stmt_release", cast[u64](self.__value.raw), __os_thread_id())
+        _ = __stmt_release(self.__value.raw)
     }
 }
 
@@ -304,13 +304,13 @@ func __ffi_kept_free(kept: u64) {
 
 func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
-    var result: i32 = 0
+    var returned: i32 = 0
     if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
     var text_kept: uint = 0
-    let outcome = __bind_text_text_static(stmt.__value.raw, ref text_value, ref result, ref text_kept)
+    let outcome = __bind_text_text_static(stmt.__value.raw, ref text_value, ref returned, ref text_kept)
     if outcome < 0 {
         __ffi_kept_free(cast[u64](text_kept))
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
@@ -318,37 +318,37 @@ func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
     }
     let text_kept_group = __ffi_hold_group()
     __ffi_hold(text_kept_group, cast[u64](text_kept), ref __ffi_kept_free, "policy:stmt_release", [cast[u64](stmt.__value.raw)]'array, 0)
-    return result
+    return returned
 }
 
 func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
-    var result: i32 = 0
+    var returned: i32 = 0
     if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
-    let outcome = __bind_text_text_transient(stmt.__value.raw, ref text_value, ref result)
+    let outcome = __bind_text_text_transient(stmt.__value.raw, ref text_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
     }
-    return result
+    return returned
 }
 
 func bind_text_owned(stmt: Stmt, text: string) -> i32 fail: Error {
     var text_value: Array[u8] = __text_byte_array(text)
-    var result: i32 = 0
+    var returned: i32 = 0
     if stmt.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
-    let outcome = __bind_text_with_dtor(stmt.__value.raw, ref text_value, ref result)
+    let outcome = __bind_text_with_dtor(stmt.__value.raw, ref text_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
     }
-    return result
+    return returned
 }
 
 enum Bind_Text_Dtor {

@@ -1,3 +1,10 @@
+tests/diagnostics/link/names.n:1:6: warning: function `f` is never called
+
+    1 | func f() -> int {
+      |      ^
+
+  help: call it or delete it
+
 tests/diagnostics/link/names.n:5:6: error: function `f` is defined more than once
 
     5 | func f() -> int {
@@ -16,6 +23,13 @@ tests/diagnostics/link/names.n:12:12: error: cannot find `countr` in this scope
        |            ^^^^^^ not found in this scope
 
   help: did you mean `counter`?
+
+tests/diagnostics/link/names.n:15:6: warning: function `add` is never called
+
+    15 | func add(a: int, b: int) -> int {
+       |      ^^^
+
+  help: call it or delete it
 
 tests/diagnostics/link/names.n:19:9: error: cannot find `ad` in this scope
 

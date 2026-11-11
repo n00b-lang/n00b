@@ -1,0 +1,31 @@
+tests/diagnostics/lower/read_only_views.n:2:5: warning N00B-N0021: field `n` of `Counter` is set but never read
+tests/diagnostics/lower/read_only_views.n:11:5: warning N00B-N0024: `current` is never used
+  help: remove it
+tests/diagnostics/lower/read_only_views.n:12:5: warning N00B-N0024: `kept` is never used
+  help: remove it
+tests/diagnostics/lower/read_only_views.n:13:5: warning N00B-N0024: `raw` is never used
+  help: remove it
+tests/diagnostics/lower/read_only_views.n:16:5: error N00B-S0019: `View[Style]` is a read-only reference: it has no `__ref_address_mut`
+tests/diagnostics/lower/read_only_views.n:19:6: warning N00B-N0019: function `deep` is never called
+  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n:21:5: error N00B-T0501: cannot write through a read-only `View[Style]`; nothing reachable from it is writable
+  help: copy the value out of the `View[Style]` to change it
+tests/diagnostics/lower/read_only_views.n:24:6: warning N00B-N0019: function `bump` is never called
+  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n:28:6: warning N00B-N0019: function `through_call` is never called
+  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n:29:5: error N00B-S0010: this call may write memory reachable from a read-only `View[Style]`, which must not change
+  help: copy the value out of the `View[Style]` to change it
+tests/diagnostics/lower/read_only_views.n:32:6: warning N00B-N0019: function `keep_owner` is never called
+  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n:33:5: error N00B-S0083: this stores a reference reachable from a read-only `View[Style]` where it could be written
+  tests/diagnostics/lower/read_only_views.n:12:5: note: `kept` is not constant
+  help: keep a `View` of it instead, or store a copy
+tests/diagnostics/lower/read_only_views.n:36:6: warning N00B-N0019: function `keep_constant` is never called
+  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n:37:5: error N00B-S0083: this stores a reference reachable from constant `plain` where it could be written
+  tests/diagnostics/lower/read_only_views.n:10:7: note: `plain` is declared here
+  tests/diagnostics/lower/read_only_views.n:13:5: note: `raw` is not constant
+  help: keep a `View` of it instead, or store a copy
+tests/diagnostics/lower/read_only_views.n:40:6: warning N00B-N0019: function `allowed` is never called
+  help: call it or delete it

@@ -11,7 +11,7 @@ func dynamic_values(value: int) -> Array[Tuple[bool, int]] {
     return [(true, value)]'bundle_bool_tuple_array
 }
 
-when comptime() {
+if comptime() {
     static_values()
 }
 

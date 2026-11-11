@@ -1,0 +1,3 @@
+tests/diagnostics/tu/callback_roles.n:1:1: error N00B-T0544: the roles of callback `Step` do not fit together: it has no `handler` role
+  note: `handler` takes the `call` parameters, after a `modify` state when there is a `setup`; `setup` takes the handler and the state
+tests/diagnostics/tu/callback_roles.n:13:9: error N00B-T0047: `n` is not a function, so it cannot be called

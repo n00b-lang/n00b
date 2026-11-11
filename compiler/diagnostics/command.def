@@ -125,6 +125,19 @@ N00B_DIAG(EFFECTS_OF_UNKNOWN_FUNCTION, "N00B-C0035", ERROR,
     "and the function, for example `sys.fs.read_file`. The function has to\n"
     "be in the program, either in one of its modules or in a module it\n"
     "imports.")
+N00B_DIAG(EFFECTS_QUERY_INVALID, "N00B-C0036", ERROR,
+    "an `n00b effects` query can't be read",
+    "A query combines effect questions with `and`, `or`, `not` and\n"
+    "parentheses. The questions are `may_effect`, `forbids_effect` and\n"
+    "`has_effect`, each naming one effect, written `may_effect(impure)` or\n"
+    "`may_effect impure`. Each question is asked of every function in\n"
+    "scope.")
+N00B_DIAG(EFFECTS_SCOPE_UNKNOWN, "N00B-C0037", ERROR,
+    "`--in` or `--not-in` names nothing in the program",
+    "`--in` and `--not-in` take a package, a module or a function, by its\n"
+    "qualified name. A name covers everything under it: `alpha` covers\n"
+    "`alpha.impl` and `alpha.impl.flush`. `--in all` covers the whole\n"
+    "program.")
 N00B_DIAG(PROCESS_START_FAILED, "N00B-C0040", ERROR,
     "`n00b run` cannot start the compiler or the built program",
     "The message names the program and the reason the operating system\n"
@@ -164,8 +177,3 @@ N00B_DIAG(CONFIG_UNREADABLE, "N00B-C0105", ERROR,
     "a configuration file exists but cannot be read",
     "The message names the file and the reason the operating system gave.\n"
     "Fix its permissions, or move it aside.")
-N00B_DIAG(COMPTIME_DISABLED, "N00B-C0106", ERROR,
-    "the program needs the comptime phase, but `--no-comptime` turns it off",
-    "Some constants or literals in the program are computed by running code\n"
-    "at build time. `--no-comptime` skips that run, so the program cannot be\n"
-    "built with it. Build without the flag.")

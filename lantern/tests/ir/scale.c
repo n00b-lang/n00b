@@ -4,11 +4,11 @@
 #include <time.h>
 
 #include "ir/layout.h"
+#include "ir/analyses.h"
 #include "ir/analyze.h"
 #include "ir/pass.h"
 #include "ir/pdg.h"
 #include "ir/text.h"
-#include "ir/rule.h"
 #include "ir/verify.h"
 #include "harness.h"
 
@@ -196,7 +196,7 @@ static void test_the_dependence_graph_stays_linear(void)
         ir_diags_t  *d = ir_diags_new(c, nullptr);
         ir_module_t *m = staircase(c, n);
         clock_t      a = clock();
-        ir_pdg_t    *g = ir_pdg_of(ir_func_at(m, 0));
+        ir_pdg_t    *g = ir_func_pdg(ir_func_at(m, 0));
 
         clock_t b = clock();
 
@@ -587,85 +587,6 @@ static void test_parsing_is_linear_in_the_annotations(void)
     }
 }
 
-static ir_rule_result_t decline(ir_module_t *m, ir_instr_t *in, ir_diags_t *d,
-                                void *state)
-{
-    (void)m;
-    (void)in;
-    (void)d;
-    (void)state;
-
-    return (ir_rule_result_t){.verdict = IR_RULE_DECLINE};
-}
-
-static void test_typing_does_not_cost_the_rule_count(void)
-{
-    double before = 0;
-
-    for (uint32_t rules = 256; rules <= 16384; rules *= 64) {
-        ir_ctx_t    *c  = ir_ctx_new();
-        ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
-        ir_rules_t  *rs = ir_rules_new(c);
-        ir_func_t   *f  = ir_func_add(m, S("f"),
-                                      ir_type_parse(m, S("(i32) -> void")),
-                                      IR_LINK_EXTERNAL);
-        ir_value_t  *av = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
-        ir_block_t  *b  = ir_block_add(f, S("entry"));
-
-        for (uint32_t i = 0; i < rules; i++) {
-            char nm[32];
-
-            ir_rules_add(rs, (ir_rule_t){
-                                 .name = named(nm, sizeof nm, "filler%u", i),
-                                 .op        = IR_OP_SELECT,
-                                 .match     = IR_MATCH_DEFAULT,
-                                 .type_rule = decline});
-        }
-        ir_rules_add(rs, (ir_rule_t){.name      = S("the-one-that-matches"),
-                                     .op        = IR_OP_ADD,
-                                     .match     = IR_MATCH_DEFAULT,
-                                     .type_rule = decline});
-
-        for (uint32_t i = 0; i < 20000; i++) {
-            char        nm[32];
-            ir_instr_t *in = ir_instr_add(b, IR_OP_ADD);
-
-            ir_instr_operand_value(in, av);
-            ir_instr_operand_value(in, av);
-            ir_instr_set_dest(in, named(nm, sizeof nm, "v%u", i),
-                              ir_type_parse(m, S("i32")));
-        }
-        ir_instr_add(b, IR_OP_RETURN);
-
-        clock_t  a = clock();
-        uint32_t n = 0;
-
-        for (uint32_t i = 0; i < b->n_instrs; i++) {
-            if (b->instrs[i]->op == IR_OP_ADD) {
-                n += ir_rule_resolve(m, rs, b->instrs[i], nullptr) != nullptr;
-            }
-        }
-
-        double now = ms(a, clock());
-
-        check("the rule that matches is found for every instruction",
-              n == 20000);
-
-        if (fails || getenv("IR_SCALE_REPORT")) {
-            printf("      20000 instructions against %u rules: resolve "
-                   "%.1f ms\n", rules, now);
-        }
-
-        if (before) {
-            check("sixty-four times the rules does not cost sixty-four times "
-                  "as much to resolve",
-                  now < before * 4 || now < 5.0);
-        }
-        before = now;
-        ir_ctx_free(c);
-    }
-}
-
 static void test_a_long_function_is_not_a_long_call_chain(void)
 {
     const uint32_t n = 60000;
@@ -820,7 +741,6 @@ int main(void)
     test_structure_is_linear_in_the_loops();
     test_splitting_a_wide_join_is_linear();
     test_parsing_is_linear_in_the_annotations();
-    test_typing_does_not_cost_the_rule_count();
     test_a_long_function_is_not_a_long_call_chain();
     test_the_shapes_that_were_quadratic();
 

@@ -1,0 +1,14 @@
+func make(y: int) -> Array[int] {
+    return [1, 2, y, 4, 5]
+}
+
+func start() {
+    var a: Array[int] = make(30)
+    var b: Array[int] = make(31)
+    a[0] = 100
+    if a[2] == 30 and b[2] == 31 and b[0] == 1 and a[4] == 5 and a[0] == 100 {
+        __fd_write(2, "templated\n")
+    }
+    var f: Array[f64] = [1.5, 2.5, 3.5]
+    if f[1] == 2.5 { __fd_write(2, "floats\n") }
+}

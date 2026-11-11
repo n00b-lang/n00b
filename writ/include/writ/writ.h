@@ -64,6 +64,18 @@ enum {
     WRIT_NOTE,
 };
 
+typedef uint32_t writ_effects_t;
+enum {
+    WRIT_EFFECTS_DECLARED  = 1u << 0,
+    WRIT_EFFECTS_ALLOC     = 1u << 1,
+    WRIT_EFFECTS_BLOCKING  = 1u << 2,
+    WRIT_EFFECTS_NORETURN  = 1u << 3,
+    WRIT_EFFECTS_INPUT     = 1u << 4,
+    WRIT_EFFECTS_OUTPUT    = 1u << 5,
+    WRIT_EFFECTS_CALLBACKS = 1u << 6,
+    WRIT_EFFECTS_OTHER     = 1u << 7,
+};
+
 typedef struct {
     writ_span_t         span;
     writ_str_t          label;

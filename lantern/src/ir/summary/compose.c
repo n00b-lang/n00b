@@ -224,32 +224,97 @@ ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
     return callee_effect(summary, flags, outcome);
 }
 
+struct ir_summary_state_query_t {
+    ir_func_t            *f;
+    uint8_t               entry;
+    ir_splace_t           place;
+    core_dict_t           cache;
+    flow_query_t          q;
+    ir_paths_solution_t  *whole;
+    bool                  split;
+    path_list_t           leaves;
+    flow_query_t         *leaf_queries;
+    ir_paths_solution_t **leaf_solutions;
+};
+
+ir_summary_state_query_t *
+ir_summary_state_query(ir_summaries_t *summaries, ir_func_t *f,
+                       const ir_splace_t *place, uint8_t entry)
+{
+    pt_t *pt = function_engine(summaries, f);
+    if (!pt) return nullptr;
+    ir_summary_state_query_t *query = core_alloc(ir_summary_state_query_t);
+    query->f     = f;
+    query->entry = entry;
+    query->place = *place;
+    core_dict_init(&query->cache, nullptr, nullptr);
+    query->q = (flow_query_t){.summaries = summaries, .f = f, .pt = pt,
+                              .target = &query->place,
+                              .path_places = &query->cache};
+    query->whole = ir_paths_solve(f, entry, flow_step, &query->q);
+    return query;
+}
+
+static void
+split_leaves(ir_summary_state_query_t *query)
+{
+    query->split  = true;
+    query->leaves = place_leaves(query->f, &query->place);
+    query->leaf_queries = core_alloc_array(flow_query_t,
+                                           query->leaves.len + 1);
+    query->leaf_solutions = core_alloc_array(ir_paths_solution_t *,
+                                             query->leaves.len + 1);
+}
+
+uint8_t
+ir_summary_state_query_at(ir_summary_state_query_t *query,
+                          const ir_instr_t *in)
+{
+    if (!query) return IR_PATH_UNPASSED;
+    uint8_t state = ir_paths_solution_state(query->whole, in);
+    if (!(state & IR_PATH_UNPASSED)) return state;
+    if (!query->split) split_leaves(query);
+    ir_spath_t read  = read_path(&query->place, in);
+    bool       first = true;
+    for (size_t l = 0; query->leaves.data[0].depth && l < query->leaves.len;
+         l++) {
+        if (!paths_overlap(&query->leaves.data[l], &read)) continue;
+        if (!query->leaf_solutions[l]) {
+            query->leaf_queries[l]      = query->q;
+            query->leaf_queries[l].leaf = &query->leaves.data[l];
+            query->leaf_solutions[l] = ir_paths_solve(query->f, query->entry,
+                flow_step, &query->leaf_queries[l]);
+        }
+        state = combine_leaf(state,
+            ir_paths_solution_state(query->leaf_solutions[l], in), first);
+        first = false;
+    }
+    return state;
+}
+
+void
+ir_summary_state_query_free(ir_summary_state_query_t *query)
+{
+    if (!query) return;
+    ir_paths_solution_free(query->whole);
+    for (size_t l = 0; query->split && l < query->leaves.len; l++)
+        ir_paths_solution_free(query->leaf_solutions[l]);
+    if (query->split) core_list_free(query->leaves);
+    core_free(query->leaf_queries);
+    core_free(query->leaf_solutions);
+    path_places_free(&query->cache);
+    core_free(query);
+}
+
 uint8_t
 ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                         const ir_splace_t *place, uint8_t entry,
                         const ir_instr_t *in)
 {
-    pt_t *pt = function_engine(summaries, f);
-    if (!pt) return IR_PATH_UNPASSED;
-    core_dict_t cache;
-    core_dict_init(&cache, nullptr, nullptr);
-    flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
-                      .target = place, .path_places = &cache};
-    uint8_t state = ir_paths_state(f, entry, flow_step, &q, in);
-    if (state & IR_PATH_UNPASSED) {
-        ir_spath_t  read   = read_path(place, in);
-        path_list_t leaves = place_leaves(f, place);
-        bool first = true;
-        for (size_t l = 0; leaves.data[0].depth && l < leaves.len; l++) {
-            if (!paths_overlap(&leaves.data[l], &read)) continue;
-            q.leaf = &leaves.data[l];
-            state  = combine_leaf(state,
-                ir_paths_state(f, entry, flow_step, &q, in), first);
-            first  = false;
-        }
-        core_list_free(leaves);
-    }
-    path_places_free(&cache);
+    ir_summary_state_query_t *query = ir_summary_state_query(summaries, f,
+                                                             place, entry);
+    uint8_t state = ir_summary_state_query_at(query, in);
+    ir_summary_state_query_free(query);
     return state;
 }
 
@@ -275,6 +340,156 @@ call_unobserved(const ir_instr_t *call)
     return false;
 }
 
+enum {
+    CALLBACK_PARAM_LIMIT = 32,
+    CALLBACK_DEPTH_LIMIT = 4,
+    INHERITED_FLAGS = IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
+        | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
+        | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
+        | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
+        | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
+        | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
+        | IR_SUMMARY_FINALIZES_PARAMS,
+};
+
+static const ir_value_t *
+copied_value(const ir_value_t *value)
+{
+    for (int depth = 0; value && value->kind == IR_VAL_INSTR && value->def
+         && depth < 8; depth++) {
+        const ir_instr_t *def = value->def;
+        if ((def->op != IR_OP_COPY && def->op != IR_OP_RETAIN_REF)
+            || def->n_operands != 1 || def->operands[0].kind != IR_OPD_VALUE)
+            break;
+        value = def->operands[0].value;
+    }
+    return value;
+}
+
+static int32_t
+callback_param(const ir_value_t *value)
+{
+    value = copied_value(value);
+    return value && value->kind == IR_VAL_PARAM
+        && value->index < CALLBACK_PARAM_LIMIT ? (int32_t)value->index : -1;
+}
+
+static ir_func_t *
+created_handler(const ir_value_t *value)
+{
+    value = copied_value(value);
+    const ir_instr_t *create = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    if (!create || create->op != IR_OP_CALLBACK_CREATE || !create->n_operands
+        || create->operands[0].kind != IR_OPD_VALUE) return nullptr;
+    const ir_value_t *handler = copied_value(create->operands[0].value);
+    return handler && handler->kind == IR_VAL_FUNC && handler->owner
+        && handler->owner->n_blocks ? handler->owner : nullptr;
+}
+
+static void compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
+                           const ir_instr_t *call, ir_func_t *target,
+                           uint32_t observes, int depth);
+static bool panic_only(const ir_summary_t *summary);
+
+static void
+add_finalizer(void *sink, ir_func_t *finalizer)
+{
+    core_list_t(summary_func_ptr_t) *finalizers = sink;
+    core_list_push(*finalizers, finalizer);
+}
+
+static bool
+substitute_finalizers(ir_summaries_t *summaries, ir_summary_t *summary,
+                      const ir_instr_t *call, const ir_summary_t *callee,
+                      ir_func_t *target, uint32_t observes, int depth)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (!(callee->flags & IR_SUMMARY_FINALIZES_PARAMS) || !hooks
+        || !hooks->call_finalizers || depth >= CALLBACK_DEPTH_LIMIT)
+        return false;
+    core_list_t(summary_func_ptr_t) finalizers =
+        core_list_new(summary_func_ptr_t);
+    bool bound = hooks->call_finalizers(hooks->context, call, target,
+                                        add_finalizer, &finalizers);
+    for (size_t i = 0; bound && i < finalizers.len; i++)
+        compose_target(summaries, summary, call, finalizers.data[i],
+                       observes, depth + 1);
+    core_list_free(finalizers);
+    return bound;
+}
+
+static bool
+substitute_callbacks(ir_summaries_t *summaries, ir_summary_t *summary,
+                     const ir_instr_t *call, const ir_summary_t *callee,
+                     ir_func_t *target, uint32_t observes, int depth)
+{
+    if (!callee->callback_params || depth >= CALLBACK_DEPTH_LIMIT)
+        return false;
+    ir_func_t *handlers[CALLBACK_PARAM_LIMIT] = {0};
+    uint32_t forwarded = 0;
+    for (uint32_t p = 0; p < CALLBACK_PARAM_LIMIT; p++) {
+        if (!(callee->callback_params >> p & 1)) continue;
+        const ir_value_t *argument = p + 1 < call->n_operands
+            && call->operands[p + 1].kind == IR_OPD_VALUE
+            ? call->operands[p + 1].value : nullptr;
+        handlers[p] = created_handler(argument);
+        int32_t param = handlers[p] ? -1 : callback_param(argument);
+        if (!handlers[p] && param < 0) return false;
+        if (param >= 0) forwarded |= 1u << param;
+    }
+    if (forwarded) {
+        bool deferring = summary->deferring;
+        summary->deferring = true;
+        summary->callback_params |= forwarded;
+        uint32_t flags = callee->flags & ~callee->own_flags
+            & (INHERITED_FLAGS | observes);
+        if (flags)
+            add_flags(summary, flags, call, target, (core_string_t){0});
+        summary->traps |= callee->traps;
+        summary->deferring = deferring;
+    }
+    for (uint32_t p = 0; p < CALLBACK_PARAM_LIMIT; p++)
+        if (handlers[p])
+            compose_target(summaries, summary, call, handlers[p], observes,
+                           depth + 1);
+    return true;
+}
+
+static void
+compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
+               const ir_instr_t *call, ir_func_t *target, uint32_t observes,
+               int depth)
+{
+    ir_summary_t *callee = target_summary(summaries, target);
+    bool substituted = substitute_callbacks(summaries, summary, call, callee,
+                                            target, observes, depth);
+    uint32_t callee_flags = substituted ? callee->own_flags : callee->flags;
+    uint8_t callee_traps = substituted ? callee->own_traps : callee->traps;
+    summary->traps |= callee_traps;
+    if (!summary->deferring) summary->own_traps |= callee_traps;
+    uint32_t flags = callee_flags & (INHERITED_FLAGS | observes);
+    if ((callee->flags & IR_SUMMARY_DIVERGES) && !panic_only(callee))
+        flags |= IR_SUMMARY_MAY_DIVERGE;
+    if (substitute_finalizers(summaries, summary, call, callee, target,
+                              observes, depth))
+        flags &= ~(uint32_t)IR_SUMMARY_FINALIZES_PARAMS;
+    if (flags) add_flags(summary, flags, call, target, (core_string_t){0});
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    for (size_t e = 0; e < callee->effects.len; e++)
+        if (!hooks || !hooks->inherits_effect
+            || hooks->inherits_effect(hooks->context, summary->function,
+                                      target, callee->effects.data[e]))
+            (void)ir_summary_add_effect(summary, callee->effects.data[e]);
+    if (hooks && hooks->callee_effects) {
+        uint32_t before = summary->flags;
+        hooks->callee_effects(hooks->context, target, summary);
+        uint32_t added = summary->flags & ~before;
+        if (added)
+            add_flags(summary, added, call, target, (core_string_t){0});
+    }
+}
+
 static void
 compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
              const ir_instr_t *call)
@@ -282,35 +497,49 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
     uint32_t observes = call_unobserved(call) ? 0 : IR_SUMMARY_OBSERVES;
+    int32_t param = call->op == IR_OP_CALLBACK_INVOKE && call->n_operands
+        && call->operands[0].kind == IR_OPD_VALUE
+        ? callback_param(call->operands[0].value) : -1;
+    bool deferred = targets.unknown && param >= 0;
+    bool deferring = summary->deferring;
+    if (deferred) {
+        summary->deferring = true;
+        summary->callback_params |= 1u << param;
+    }
     if (call->op == IR_OP_CALLBACK_INVOKE)
         add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call, nullptr,
                   (core_string_t){0});
-    if (targets.unknown) {
-        add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-                      | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
-                      | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-                      | observes,
-                  call, nullptr, CORE_STRING_STATIC("?"));
-        summary->traps |= IR_STRAP_ALL;
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    uint32_t extra = hooks && hooks->call_flags
+        ? hooks->call_flags(hooks->context, call) : 0;
+    if (extra)
+        add_flags(summary, extra, call,
+                  targets.targets.len ? targets.targets.data[0] : nullptr,
+                  (core_string_t){0});
+    if (extra & IR_SUMMARY_FINALIZES_PARAMS) {
+        summary->deferring = deferring;
         core_list_free(targets.targets);
         return;
     }
-    for (size_t t = 0; t < targets.targets.len; t++) {
-        ir_summary_t *callee = target_summary(summaries,
-                                              targets.targets.data[t]);
-        summary->traps |= callee->traps;
-        uint32_t flags = callee->flags
-            & (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-               | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
-               | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-               | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
-               | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
-               | IR_SUMMARY_CALLS_CALLBACKS | observes);
-        if (flags & ~summary->flags)
-            add_flags(summary, flags, call, targets.targets.data[t],
-                      (core_string_t){0});
-        (void)merge_effects(summary, callee);
+    if (targets.unknown) {
+        const ir_func_t *f = summary->function;
+        core_string_t name = deferred && f
+            && (uint32_t)param < f->n_params && f->params[param]
+            ? f->params[param]->name : CORE_STRING_STATIC("?");
+        add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
+                      | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
+                      | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
+                      | IR_SUMMARY_MAY_DIVERGE | observes,
+                  call, nullptr, name);
+        summary->traps |= IR_STRAP_ALL;
+        if (!summary->deferring) summary->own_traps |= IR_STRAP_ALL;
+        summary->deferring = deferring;
+        core_list_free(targets.targets);
+        return;
     }
+    for (size_t t = 0; t < targets.targets.len; t++)
+        compose_target(summaries, summary, call, targets.targets.data[t],
+                       observes, 0);
     core_list_free(targets.targets);
 }
 
@@ -334,7 +563,7 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
     case IR_OP_BOX:
         return IR_SUMMARY_MAY_ALLOCATE;
     case IR_OP_BUFFER_AS_STRING:
-    case IR_OP_BUFFER_BORROW_END:
+    case IR_OP_BUFFER_SLICE_END:
         return IR_SUMMARY_MAY_COLLECT;
     default:
         return 0;
@@ -400,11 +629,109 @@ exit_site(ir_summaries_t *summaries, const ir_func_t *f, uint32_t flag,
     return nullptr;
 }
 
+static bool
+panic_only(const ir_summary_t *summary)
+{
+    return (summary->flags & IR_SUMMARY_DIVERGES)
+        && (summary->flags & IR_SUMMARY_MAY_TRAP)
+        && !(summary->flags & IR_SUMMARY_MAY_DIVERGE);
+}
+
+static bool
+diverges_by_panic(ir_summaries_t *summaries, const ir_func_t *f)
+{
+    bool panics = false;
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->op == IR_OP_TRAP) {
+                panics = true;
+                continue;
+            }
+            if (in->op == IR_OP_UNREACHABLE) return false;
+            if (!is_call(in)) continue;
+            call_targets_t targets;
+            resolve_targets(summaries, in, &targets);
+            bool real = targets.unknown;
+            for (size_t t = 0; !real && t < targets.targets.len; t++) {
+                ir_summary_t *callee = target_summary(summaries,
+                                                      targets.targets.data[t]);
+                if (!(callee->flags & (IR_SUMMARY_DIVERGES
+                                       | IR_SUMMARY_MAY_DIVERGE))) continue;
+                if (panic_only(callee)) panics = true;
+                else real = true;
+            }
+            core_list_free(targets.targets);
+            if (real) return false;
+        }
+    return panics;
+}
+
+static bool
+reaches_exit(ir_block_t *block, const bool *exits)
+{
+    ir_instr_t *term = ir_block_terminator(block);
+    if (!term) return false;
+    if (term->op == IR_OP_RETURN || term->op == IR_OP_FAIL
+        || term->op == IR_OP_TRAP || term->op == IR_OP_UNREACHABLE)
+        return true;
+    for (uint32_t s = 0; s < ir_succ_count(term); s++) {
+        ir_block_t *to = ir_succ_at(term, s);
+        if (to && exits[to->index]) return true;
+    }
+    return false;
+}
+
+static const ir_instr_t *
+endless_loop(ir_func_t *f)
+{
+    uint32_t count = f->n_blocks;
+    bool *exits = core_alloc_array(bool, count ? count : 1);
+    bool *seen = core_alloc_array(bool, count ? count : 1);
+    uint32_t *stack = core_alloc_array(uint32_t, count ? count : 1);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = count; b-- > 0;)
+            if (!exits[b] && reaches_exit(f->blocks[b], exits))
+                changed = exits[b] = true;
+    }
+    const ir_instr_t *found = nullptr;
+    ir_block_t *entry = ir_block_entry(f);
+    uint32_t depth = 0;
+    if (entry && entry->index < count) {
+        seen[entry->index] = true;
+        stack[depth++] = entry->index;
+    }
+    while (depth && !found) {
+        ir_block_t *block = f->blocks[stack[--depth]];
+        ir_instr_t *term = ir_block_terminator(block);
+        for (uint32_t i = 0; !exits[block->index] && !found
+             && i < block->n_instrs; i++)
+            if (ir_span_known(block->instrs[i]->span))
+                found = block->instrs[i];
+        if (!exits[block->index] && !found) found = term;
+        for (uint32_t s = 0; term && s < ir_succ_count(term); s++) {
+            ir_block_t *to = ir_succ_at(term, s);
+            if (!to || to->index >= count || seen[to->index]) continue;
+            seen[to->index] = true;
+            stack[depth++] = to->index;
+        }
+    }
+    core_free(stack);
+    core_free(seen);
+    core_free(exits);
+    return found;
+}
+
 static void
 summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                    ir_func_t *f, const uint32_t *settled)
 {
     summary->flags = 0;
+    summary->own_flags = 0;
+    summary->own_traps = 0;
+    summary->callback_params = 0;
+    summary->deferring = false;
     for (uint32_t e = 0;; e++) {
         core_string_t effect = ir_func_effect_at(f, e);
         if (!effect.u8_bytes) break;
@@ -416,19 +743,20 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_REINTERPRETS, reinterpret, nullptr,
                   (core_string_t){0});
     ir_sites_t  *sites  = ir_func_sites(f);
-    ir_ranges_t *prove_ranges = (!summaries->hooks
+    ir_abcd_t *prove_ranges = (!summaries->hooks
                                  || !summaries->hooks->defer_trap_proofs)
         && (ir_module_props(f->owner) & IR_PROP_SSA)
-        ? ir_func_ranges(f) : nullptr;
+        ? ir_func_abcd(f) : nullptr;
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
         if (site->kind != IR_SITE_TRAP
-            || (prove_ranges && ir_range_trap_proven(prove_ranges,
+            || (prove_ranges && ir_abcd_trap_proven(prove_ranges,
                                                      site->instr))) continue;
         uint8_t kind = trap_kind(site->instr);
         add_flags(summary, IR_SUMMARY_MAY_TRAP, site->instr, nullptr,
                   (core_string_t){0});
         summary->traps |= kind;
+        summary->own_traps |= kind;
         core_list_push(summary->trap_sites, ((ir_strap_site_t){
             .kind   = kind,
             .line   = site->instr->span.start_line,
@@ -456,13 +784,40 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
              | *settled;
     for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
-        if (!(ends & flag) || (summary->flags & flag)) continue;
+        if (!(ends & flag) || (summary->own_flags & flag)) continue;
         ir_func_t        *callee = nullptr;
         const ir_instr_t *site   = exit_site(summaries, f, flag, &callee);
         if (!site && flag == IR_SUMMARY_NO_RETURN)
             site = exit_site(summaries, f, IR_SUMMARY_MAY_FAIL, &callee);
         if (site) add_flags(summary, flag, site, callee, (core_string_t){0});
-        else summary->flags |= flag;
+        else {
+            summary->flags |= flag;
+            summary->own_flags |= flag;
+        }
+    }
+    if (!(summary->own_flags & IR_SUMMARY_MAY_DIVERGE)) {
+        ir_func_t        *callee = nullptr;
+        bool panics = (summary->own_flags & IR_SUMMARY_DIVERGES)
+            && diverges_by_panic(summaries, f);
+        const ir_instr_t *site   = summary->own_flags & IR_SUMMARY_DIVERGES
+                && !panics
+            ? exit_site(summaries, f, IR_SUMMARY_DIVERGES, &callee)
+            : nullptr;
+        if (!site) site = endless_loop(f);
+        if (site)
+            add_flags(summary, IR_SUMMARY_MAY_DIVERGE, site, callee,
+                      (core_string_t){0});
+        else if ((summary->own_flags & IR_SUMMARY_DIVERGES) && !panics) {
+            summary->flags |= IR_SUMMARY_MAY_DIVERGE;
+            summary->own_flags |= IR_SUMMARY_MAY_DIVERGE;
+        }
+        if (panics && !(summary->own_flags & IR_SUMMARY_MAY_TRAP)) {
+            ir_func_t        *trapper = nullptr;
+            const ir_instr_t *at = exit_site(summaries, f,
+                                             IR_SUMMARY_DIVERGES, &trapper);
+            add_flags(summary, IR_SUMMARY_MAY_TRAP, at, trapper,
+                      (core_string_t){0});
+        }
     }
     adjust_flags(summaries, summary);
 }

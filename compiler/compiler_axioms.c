@@ -61,6 +61,8 @@ static const n00bb_axiom_t axioms[] = {
     NATIVE("__os_close", "n00b_os_close", NATIVE_INPUT, 0, 0),
     NATIVE("__os_exit", "n00b_os_exit", NATIVE_OUTPUT | IR_SUMMARY_DIVERGES,
            0, 0),
+    NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
+    NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
     NATIVE("__os_futex_wait", "n00b_os_futex_wait", IR_SUMMARY_MAY_BLOCK,
            0x1, 0),
     NATIVE("__os_futex_wake_all", "n00b_os_futex_wake_all", 0, 0, 0),
@@ -77,15 +79,13 @@ static const n00bb_axiom_t axioms[] = {
          | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_STARTS_THREADS,
      .entries = 0x1,
      .returns = IR_SRETURN_NONE},
-    COLLECTION_FREE_NATIVE("__function_effects", "n00bb_function_effects", 0,
-                           0, 0),
+    COLLECTION_FREE_NATIVE("__effect_query", "n00bb_effect_query", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__function_has_effect",
                            "n00bb_function_has_effect", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__function_reads", "n00bb_function_reads", 0, 0,
                            0),
     COLLECTION_FREE_NATIVE("__function_writes", "n00bb_function_writes", 0,
                            0, 0),
-    COLLECTION_FREE_NATIVE("__effect", "n00bb_effect", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__unobserved", "n00bb_unobserved", 0, 0, 0),
     NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
            0, 0, 0),
@@ -197,10 +197,6 @@ static const n00bb_axiom_t axioms[] = {
     FUNCTION("sys.internal.gc.alloc", "mutator_for_native", 0,
              N00BB_AXIOM_MUTATOR_GETTER),
     FUNCTION("builtin.containers.buffer", "write_lock", 0x1, 0),
-    FUNCTION("sys.internal.gc.sync", "ticket_lock", 0,
-             N00BB_AXIOM_LOCK_ACQUIRE),
-    FUNCTION("sys.internal.gc.sync", "ticket_unlock", 0,
-             N00BB_AXIOM_LOCK_RELEASE),
     FUNCTION("sys.internal.locks", "mutex_lock", 0, N00BB_AXIOM_LOCK_ACQUIRE),
     FUNCTION("sys.internal.locks", "mutex_unlock", 0,
              N00BB_AXIOM_LOCK_RELEASE),
@@ -335,20 +331,31 @@ enum { NATIVE_PURE = 1, NATIVE_FOREIGN = 2 };
 
 static pthread_rwlock_t generated_lock = PTHREAD_RWLOCK_INITIALIZER;
 static core_dict_t      generated_natives;
+static core_dict_t      foreign_names;
 static bool             generated_ready;
 
 static void
-note_generated_native(core_string_t symbol, uintptr_t kind)
+note_generated_native(core_string_t symbol, uintptr_t kind,
+                      core_string_t name)
 {
     if (!symbol.data) return;
     pthread_rwlock_wrlock(&generated_lock);
     if (!generated_ready) {
         core_dict_init_string(&generated_natives);
+        core_dict_init_string(&foreign_names);
         generated_ready = true;
     }
     if (!core_dict_contains(&generated_natives, &symbol))
         core_dict_put(&generated_natives, core_dict_string_key_copy(symbol),
                       (void *)kind);
+    if (name.u8_bytes && !core_dict_contains(&foreign_names, &symbol)) {
+        core_string_t *kept = core_alloc_array(core_string_t, 1);
+        if (kept) {
+            *kept = core_string_dup(name);
+            core_dict_put(&foreign_names, core_dict_string_key_copy(symbol),
+                          kept);
+        }
+    }
     pthread_rwlock_unlock(&generated_lock);
 }
 
@@ -369,13 +376,27 @@ generated_native(const ir_func_t *function)
 void
 n00bb_axiom_note_pure_native(core_string_t symbol)
 {
-    note_generated_native(symbol, NATIVE_PURE);
+    note_generated_native(symbol, NATIVE_PURE, (core_string_t){0});
 }
 
 void
-n00bb_axiom_note_foreign_native(core_string_t symbol)
+n00bb_axiom_note_foreign_native(core_string_t symbol, core_string_t name,
+                                uint32_t effects)
 {
-    note_generated_native(symbol, NATIVE_FOREIGN);
+    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2),
+                          name);
+}
+
+core_string_t
+n00bb_axiom_foreign_name(const ir_func_t *function)
+{
+    if (!function) return (core_string_t){0};
+    pthread_rwlock_rdlock(&generated_lock);
+    const core_string_t *name = generated_ready
+        ? core_dict_get(&foreign_names, (void *)&function->name, nullptr)
+        : nullptr;
+    pthread_rwlock_unlock(&generated_lock);
+    return name ? *name : function->name;
 }
 
 bool
@@ -385,7 +406,10 @@ n00bb_axiom_pure_native(const ir_func_t *function)
 }
 
 bool
-n00bb_axiom_foreign_native(const ir_func_t *function)
+n00bb_axiom_foreign_native(const ir_func_t *function, uint32_t *effects)
 {
-    return generated_native(function) == NATIVE_FOREIGN;
+    uintptr_t kind = generated_native(function);
+    if ((kind & 3) != NATIVE_FOREIGN) return false;
+    *effects = (uint32_t)(kind >> 2);
+    return true;
 }

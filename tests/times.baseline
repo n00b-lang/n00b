@@ -9,13 +9,12 @@ n00b/builtin-debug 3.51
 n00b/calls-n00b 23.57
 n00b/closed-world-n00b 8.72
 n00b/coercion-borrow 5.89
-n00b/compile-fallible-index-read-n00b 1.40
+n00b/compile-module-n00b 2.80
 n00b/config-layers 0.16
 n00b/consts-literals-n00b 3.24
 n00b/diagnostics 143.14
 n00b/fast-suite-n00b 0.00
 n00b/ffi 22.10
-n00b/ffi-bake 15.84
 n00b/ffi-basics 14.91
 n00b/ffi-edit 14.70
 n00b/ffi-linked 10.99
@@ -31,8 +30,6 @@ n00b/gc-units-n00b 23.96
 n00b/gc-worker-live-n00b 0.00
 n00b/generics-n00b 13.84
 n00b/generics-text-n00b 16.48
-n00b/hello-no-build-time-run-n00b 5.27
-n00b/import-cycle-declared-shape-n00b 1.40
 n00b/import-cycles-n00b 12.59
 n00b/imports-bring 13.61
 n00b/incremental-cache 27.83
@@ -63,9 +60,7 @@ n00b/records-n00b 14.25
 n00b/root-modules 8.74
 n00b/runtime-array-bound-n00b 1.56
 n00b/shift-count-n00b 15.96
-n00b/static-encoding-baked-n00b 5.42
 n00b/static-encoding-n00b 11.41
-n00b/static-literals-baked-n00b 5.27
 n00b/storage-facts-n00b 3.98
 n00b/summaries-n00b 1.84
 n00b/syntax-aliases 0.00

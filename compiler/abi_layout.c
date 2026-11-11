@@ -281,7 +281,8 @@ publish_from_definition(ir_module_t *module, th_type *type,
                         bool *handled)
 {
     const ir_final_layout_t *base = atomic
-        ? ir_layout_final(module, definition, target->triple) : nullptr;
+        ? ir_layout_final_visible(module, definition, target->triple)
+        : nullptr;
     if (!base) {
         if (th_kind_of(definition) == TH_RECORD) return true;
         bool definition_handled = false;

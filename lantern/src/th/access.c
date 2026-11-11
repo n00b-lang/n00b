@@ -354,6 +354,16 @@ th_type *th_option_item(const th_type *type)
     return option->named.args[0].type;
 }
 
+th_type *th_tuple_element(th_type *type, size_t index, size_t *count)
+{
+    type = th_builtin_applied(type, TH_BUILTIN_TUPLE, th_named_nargs(type));
+    if (!type || index >= th_named_nargs(type)) return nullptr;
+    if (count) *count = th_named_nargs(type);
+    const th_arg *argument = th_named_arg(type, index);
+    return argument && argument->kind == TH_ARG_TYPE ? argument->type
+                                                     : nullptr;
+}
+
 static const th_builtin_type_t *classify_named(th_type *named,
                                                core_dict_t *heads,
                                                const th_builtin_type_t *types)
@@ -513,6 +523,24 @@ void *th_type_definition_owner(th_ctx *ctx, const th_type *type)
     return record ? record->owner : nullptr;
 }
 
+th_type *th_fields_record(th_ctx *ctx, th_type *type)
+{
+    for (uint32_t depth = 0; type && depth < 8; depth++) {
+        type = th_resolve(type);
+        if (th_kind_of(type) == TH_RECORD) {
+            return type;
+        }
+        if (th_kind_of(type) != TH_NAMED) {
+            return nullptr;
+        }
+        type = th_resolve(th_type_definition(ctx, type));
+        if (type && th_kind_of(type) == TH_INDIRECTION) {
+            type = th_ind_referent(type);
+        }
+    }
+    return nullptr;
+}
+
 th_type *th_auto_deref(th_ctx *ctx, th_type *type)
 {
     type = type ? th_resolve(type) : nullptr;
@@ -542,7 +570,13 @@ th_type *th_type_definition(th_ctx *ctx, const th_type *type)
     if (!nargs) return nullptr;
     th_type_record_t *generic = record_at(ctx, ctx->generic_type_heads,
                                           (const void *)(uintptr_t)head);
-    if (!generic) return nullptr;
+    if (!generic) {
+        core_string_t name = {0};
+        th_named_info((th_type *)type, &name, nullptr, nullptr);
+        th_type_record_t *bare = name.data
+            ? record_lookup(ctx, th_name(ctx, name)) : nullptr;
+        return bare ? bare->definition : nullptr;
+    }
     const th_type **from = core_alloc_array(const th_type *, nargs);
     th_type **to = core_alloc_array(th_type *, nargs);
     bool valid = from && to;

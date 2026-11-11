@@ -1,0 +1,54 @@
+object Counter {
+    n: int
+}
+
+record Pt {
+    x: int
+    c: Counter
+}
+
+const points: Array[Pt] = [(x = 1, c = (n = 1)), (x = 2, c = (n = 2))]
+const FIXED: Counter = (n = 1)
+
+func record_copy() -> int {
+    var p = points[0]
+    p.x = 10
+    return p.x
+}
+
+func rebound(view c: Counter) -> int {
+    var other = c
+    other = (n = 5)
+    other.n = 6
+    return other.n
+}
+
+func reads(view c: Counter) -> int {
+    let k = c.n
+    return k + FIXED.n
+}
+
+func deep_record() {
+    var p = points[1]
+    p.c.n = 3
+}
+
+func deep_view(view c: Counter, flag: bool) {
+    var target: Counter = (n = 0)
+    if flag {
+        target = c
+    }
+    target.n = 1
+}
+
+func poke(c: Counter) {
+    c.n = 9
+}
+
+func through_field() {
+    poke(points[0].c)
+}
+
+require record_copy() == 10
+require rebound(FIXED) == 6
+require reads(FIXED) == 2

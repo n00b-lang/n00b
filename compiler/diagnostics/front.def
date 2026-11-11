@@ -31,6 +31,12 @@ N00B_DIAG(SYNTAX_INTERLEAVED_ARGUMENTS, "N00B-P0041", ERROR,
     "positional arguments or after them:\n"
     "    total(1, 2, 3, bias = 4)\n"
     "    total(bias = 4, 1, 2, 3)")
+N00B_DIAG(COMPTIME_IN_WHEN, "N00B-P0042", ERROR,
+    "`comptime()` is used in a `when` condition",
+    "`when` selects code before the program is compiled, but `comptime()`\n"
+    "is a value of the running program: it is true while the module's\n"
+    "build-time initializer runs and false at runtime. Write\n"
+    "`if comptime() { ... }` instead.")
 N00B_DIAG(SYNTAX_BLANK_LINE_IN_STATEMENT, "N00B-P0006", ERROR,
     "a statement continues across a blank line",
     "A statement may continue onto the next line, but a blank line always\n"
@@ -386,11 +392,6 @@ N00B_DIAG(PACKAGE_SCAN_FAILED, "N00B-B0011", ERROR,
     "the package directories cannot be scanned",
     "n00b lists the source files under each package root before building.\n"
     "A directory on the search path could not be read.")
-N00B_DIAG(BUILD_TIME_RUN_FAILED, "N00B-B0012", ERROR,
-    "the program run that computes compile-time values failed",
-    "Programs that use `comptime()` or build-time constants are first built\n"
-    "and run to compute those values. That run failed; its output appears\n"
-    "above.")
 N00B_DIAG(FMT_OUTPUT_ARGUMENTS, "N00B-B0013", ERROR,
     "`n00b fmt --output` is used with several inputs or with `--check`",
     "`--output` writes one formatted file, so it takes exactly one input and\n"

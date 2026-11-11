@@ -46,8 +46,8 @@ func classify(x: 'T) -> int {
 }
 
 var d: Dict[string, int] = {"a": 1, "b": 2}
-var s: Set[int] = {1, 2, 3, 4}
-var t: Set[int] = {4, 3, 2, 1}
+var s: Dict[int, nil] = {1, 2, 3, 4}
+var t: Dict[int, nil] = {4, 3, 2, 1}
 let l = [1, 2, 3]
 let a: Array[int] = [5, 6]
 require size_of(d) == 2

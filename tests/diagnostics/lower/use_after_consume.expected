@@ -1,0 +1,22 @@
+tests/diagnostics/lower/use_after_consume.n:1:8: warning N00B-N0023: type `Counter` is never used
+  help: remove it
+tests/diagnostics/lower/use_after_consume.n:4:6: warning N00B-N0019: function `drop` is never called
+  help: call it or delete it
+tests/diagnostics/lower/use_after_consume.n:9:10: error N00B-S0003: `c` is used here after it may have been consumed
+  tests/diagnostics/lower/use_after_consume.n:8:10: note: `c` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
+tests/diagnostics/lower/use_after_consume.n:16:12: error N00B-S0003: `c` is used here after it may have been consumed
+  tests/diagnostics/lower/use_after_consume.n:14:14: note: `c` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
+tests/diagnostics/lower/use_after_consume.n:18:6: warning N00B-N0019: function `refill` is never called
+  help: call it or delete it
+tests/diagnostics/lower/use_after_consume.n:20:5: warning N00B-S0062: this call has no effect and its result is ignored: `drop` changes nothing the caller can see and has no other effect
+tests/diagnostics/lower/use_after_consume.n:28:12: error N00B-S0003: `other` is used here after it may have been consumed
+  tests/diagnostics/lower/use_after_consume.n:27:10: note: `c` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
+tests/diagnostics/lower/use_after_consume.n:34:14: error N00B-S0003: `c` is used here after it may have been consumed
+  tests/diagnostics/lower/use_after_consume.n:34:14: note: `c` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
+tests/diagnostics/lower/use_after_consume.n:42:21: error N00B-S0003: `shared` is used here after it may have been consumed
+  tests/diagnostics/lower/use_after_consume.n:41:31: note: `b` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it

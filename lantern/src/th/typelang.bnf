@@ -30,7 +30,7 @@
                  | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
                  | %"nullable" | %"reseatable" | %"indexable" | %"owning"
                  | %"exclusive" | %"temporary" | %"foreign" | %"array" | %"t" | %"fail"
-                 | %"where" | %"in" | %"out" | %"inout" | %"consume" | %"view"
+                 | %"in" | %"out" | %"inout" | %"consume" | %"view"
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 
@@ -84,16 +84,7 @@
 
 <tuple-args> @nospace($1) ::= <union-type> (%"," <union-type>)*
 
-<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <function-result> <function-where>?
-
-<function-where> ::= %"where" <function-constraint> (%"," <function-constraint>)*
-
-<function-constraint> ::= %"`" %IDENTIFIER %":" <function-constraint-items>
-
-<function-constraint-items> ::= <function-constraint-item> (%"+" <function-constraint-item>)*
-
-<function-constraint-item> ::= %"!=" <union-type>
-                             | <qualified-name>
+<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <function-result>
 
 <function-result> ::= <union-type>
                     | <union-type> <function-error>

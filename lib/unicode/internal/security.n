@@ -35,7 +35,7 @@ private func id_or_none(name: string, fallback: internal.types.Script)
 
     var out: internal.types.Script = fallback
     if id != nil {
-        out = id.get()
+        out = id
     }
     return out
 }
@@ -112,7 +112,7 @@ func skeleton(consume s: string) -> string {
             continue
         }
 
-        let at: u32 = off.get()
+        let at: u32 = off
         let count: u32 = generated.confusables.confusable_data(at)
 
         var i: u32 = 0

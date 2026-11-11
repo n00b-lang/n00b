@@ -1,31 +1,49 @@
 import panic
 
 record View {
-    items:    Array['T]
-    start_ix: int
-    end_ix:   int
+    private target: Ref['T]
+    private items:  Array['T]?
+    private start:  uint
+    private count:  uint
 }
 
-func __init(modify self: View['T], consume items: Array['T],
-            start_ix: int, end_ix: int) {
+func __init(modify self: View['T], target: Ref['T],
+            items: Array['T]? = nil, start: uint = 0, count: uint = 1) {
+    self.target = target
     self.items = items
-    self.start_ix = start_ix
-    self.end_ix = end_ix
+    self.start = start
+    self.count = count
 }
 
-func __slice(self: Array['T], start_ix: int, end_ix: int) -> View['T] {
-    var snapshot: Array['T] = self
-    return new[View['T]](snapshot, start_ix, end_ix)
+func __ref_address(self: View['T]) -> Ref['T] {
+    return self.target
 }
 
 inline func __read(self: View['T], index: int) -> 'T {
-    let length: int = self.end_ix - self.start_ix
-    if index < 0 or index >= length {
-        panic.index_out_of_range(index, cast[uint] length, "a view")
+    if index < 0 or (cast[uint] index) >= self.count {
+        panic.index_out_of_range(index, self.count, "a view")
     }
-    return self.items[self.start_ix + index]
+    let backing: Array['T]? = self.items
+    if backing != nil {
+        return backing[self.start + cast[uint] index]
+    }
+    return self.target.__value
 }
 
 inline func len(self: View['T]) -> uint {
-    return cast[uint](self.end_ix - self.start_ix)
+    return self.count
+}
+
+func __equal(view self: View['T], view other: View['T]) -> bool {
+    return self.target == other.target and self.count == other.count
+}
+
+func view(items: Array['T], start_ix: int, end_ix: int) -> View['T] {
+    let available: uint = __array_length(items)
+    if start_ix < 0 or start_ix >= end_ix
+        or (cast[uint] end_ix) > available {
+        panic.index_out_of_range(end_ix, available, "an array")
+    }
+    return new[View['T]](ref items[start_ix], items, cast[uint] start_ix,
+                         cast[uint](end_ix - start_ix))
 }

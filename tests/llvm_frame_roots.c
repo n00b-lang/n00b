@@ -360,7 +360,7 @@ main(void)
         CHECK(collector && call_collector(runtime, collector, collecting[i]));
     core_diagnostics_t *diagnostics = core_diagnostics_new();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
-        runtime, true, false, diagnostics);
+        runtime, true, false, 0, diagnostics);
     CHECK(backend && n00bb_llvm_backend_bind_storage_origin(backend, origin)
         && n00bb_llvm_backend_enable_frame_maps(backend));
     core_buffer_t object = {0};

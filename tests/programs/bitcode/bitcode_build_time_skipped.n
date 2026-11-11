@@ -1,0 +1,15 @@
+// Every literal here is built from runtime values, so nothing needs baking:
+// tests/bitcode.sh checks that building this skips the build-time stage.
+
+func one(s: string) -> List[string] {
+    return [s]
+}
+
+func pair(k: string, v: int) -> Dict[string, int] {
+    return {k: v}
+}
+
+var xs: List[string] = one(decimal(1))
+xs.append("a")
+let d: Dict[string, int] = pair(decimal(2), 1)
+__fd_write(1, decimal(xs.len() + d.len()))

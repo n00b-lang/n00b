@@ -23,6 +23,10 @@
 	    sep("_"),
 	    point("leading"),
 	    exp("eE"),
+	    sign("-"),
+	    sign_not_after("IDENTIFIER", "INT_LIT", "HEX_LIT", "FLOAT_LIT",
+			   "STRING_LIT", "CHAR_LIT", "EMBED", "TYPE_VAR",
+			   "true", "false", "nil", ")", "]", "}", "!"),
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
 @lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), sep("_"),
@@ -33,7 +37,9 @@
                    "litmod", "modify", "consume", "where", "count", "by",
                    "union", "from", "all", "struct", "object", "view",
                    "fn", "function", "not", "null", "None",
-                   "elseif")
+                   "elseif", "effect", "handled_by", "mark",
+                   "cleared_by", "rejected_by", "carries",
+                   "rejects", "scope")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

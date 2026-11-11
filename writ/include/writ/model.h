@@ -392,6 +392,7 @@ struct writ_fn_view {
     writ_thread_kind_t thread;
     writ_span_t declared_at;
     uint32_t keywords_slot;
+    writ_effects_t effects;
 };
 
 struct writ_union_arm_view {

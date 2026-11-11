@@ -1,0 +1,25 @@
+server.handle: (int) -> int
+  panics          here (14:12)
+  named           audit_log.Audited  audit_log.note (13:5)
+  param n         untouched
+server.stamp: () -> nil
+  no effects      
+  named           audit_log.Audited, a source
+server.maybe: (int) -> int
+  no effects      
+  named           audit_log.Audited  server.stamp (19:9)
+  param n         untouched
+server.batched: (int) -> int
+  no effects      
+  param n         untouched
+audit_log.note: (string) -> nil
+  no effects      
+  named           audit_log.Audited, a source
+  param _entry    untouched
+audit_log.flush: () -> nil
+  no effects      
+  named           audit_log.Audited, handled here  audit_log.note (5:5)
+server.n:11:6: warning N00B-N0019: function `handle` is never called
+  help: call it or delete it
+server.n:24:6: warning N00B-N0019: function `batched` is never called
+  help: call it or delete it

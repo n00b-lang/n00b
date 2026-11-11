@@ -30,14 +30,19 @@ summarize_fields(ir_summaries_t *summaries, ir_summary_t *summary,
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->op == IR_OP_COPY && in->dest && in->n_operands == 1) {
+                bool        found = false;
+                ir_instr_t *field = core_dict_get(&pointers,
+                    ir_operand_value(&in->operands[0]), &found);
+                if (found) core_dict_put(&pointers, in->dest, field);
+                continue;
+            }
             if (in->n_operands < 2 || in->operands[1].kind != IR_OPD_NAME)
                 continue;
             const ir_value_t *base = ir_operand_value(&in->operands[0]);
             if (in->op == IR_OP_FIELD && in->dest) {
-                th_type *record = base && base->type
-                    ? record_key(f, th_ind_referent(th_resolve(base->type)))
-                    : nullptr;
-                if (record) core_dict_put(&pointers, in->dest, in);
+                if (record_or_referent(f, base))
+                    core_dict_put(&pointers, in->dest, in);
             }
             else if (in->op == IR_OP_EXTRACT || in->op == IR_OP_INSERT) {
                 th_type *record = base ? record_key(f, base->type) : nullptr;
@@ -56,15 +61,12 @@ summarize_fields(ir_summaries_t *summaries, ir_summary_t *summary,
                 if (!value) continue;
                 bool        found = false;
                 ir_instr_t *field = core_dict_get(&pointers, value, &found);
-                if (found) {
-                    const ir_value_t *base =
-                        ir_operand_value(&field->operands[0]);
-                    add_field(summary,
-                              record_key(f, th_ind_referent(
-                                  th_resolve(base->type))),
+                if (found && !(in->op == IR_OP_COPY && in->dest
+                               && core_dict_contains(&pointers, in->dest)))
+                    add_field(summary, record_or_referent(f,
+                                  ir_operand_value(&field->operands[0])),
                               field->operands[1].name,
                               field_pointer_use(in, o));
-                }
                 th_type *record = opaque || generic_argument(summaries, in, o)
                     ? record_or_referent(f, value) : nullptr;
                 if (record)
@@ -212,7 +214,11 @@ join_rounds(ir_summary_t *next, const ir_summary_t *previous)
     uint32_t shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
     next->flags = ((next->flags | previous->flags) & ~shrinking)
                 | (next->flags & previous->flags & shrinking);
+    next->own_flags = ((next->own_flags | previous->own_flags) & ~shrinking)
+                    | (next->own_flags & previous->own_flags & shrinking);
     next->traps |= previous->traps;
+    next->own_traps |= previous->own_traps;
+    next->callback_params |= previous->callback_params;
     next->returns_external |= previous->returns_external;
     merge_effects(next, previous);
     join_flows(&next->flows[IR_SFLOW_RESULTS],
@@ -276,6 +282,8 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             prune_flows(&next->flows[IR_SFLOW_STORES]);
             bool differs = cyclic
                 && (next->flags != summary->flags
+                    || next->own_flags != summary->own_flags
+                    || next->callback_params != summary->callback_params
                     || next->traps != summary->traps
                     || !same_effects(next, summary)
                     || !same_paths(next, summary));
@@ -327,6 +335,9 @@ direct_callees(ir_summaries_t *summaries, ir_func_t *f,
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = f->blocks[b]->instrs[i];
+            ir_func_t *handler = in->op == IR_OP_CALLBACK_CREATE && in->dest
+                ? created_handler(in->dest) : nullptr;
+            if (handler) core_list_push(*out, handler);
             if (!is_call(in)) continue;
             call_targets_t targets;
             resolve_targets(summaries, in, &targets);
@@ -465,11 +476,13 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     core_dict_init(&t.index, nullptr, nullptr);
     core_dict_init(&t.lowlink, nullptr, nullptr);
     core_dict_init(&t.on_stack, nullptr, nullptr);
+    ir_analysis_read_only_begin();
     for (size_t i = 0; i < count; i++) {
         bool found = false;
         dict_u32(&t.index, functions[i], &found);
         if (!found && functions[i]->n_blocks) strongconnect(&t, functions[i]);
     }
+    ir_analysis_read_only_end();
     core_dict_free(&t.index);
     core_dict_free(&t.lowlink);
     core_dict_free(&t.on_stack);

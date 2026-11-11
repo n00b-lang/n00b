@@ -797,6 +797,11 @@ static uint32_t use_slot(ir_rd_t *r, ir_instr_t *use, ir_local_t *l)
     return RD_NONE;
 }
 
+bool ir_rd_is_use(ir_rd_t *r, ir_instr_t *use, ir_local_t *l)
+{
+    return use_slot(r, use, l) != RD_NONE;
+}
+
 uint32_t ir_rd_count(ir_rd_t *r, ir_instr_t *use, ir_local_t *l)
 {
     uint32_t u = use_slot(r, use, l);

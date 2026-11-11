@@ -1,6 +1,7 @@
 TEST_RESULTS := $(BUILD)/test-results
 export TEST_RESULTS
 export N00B_DIAGNOSTICS := terse
+export N00B_DIAGNOSTIC_CODES := true
 export XDG_CONFIG_HOME := $(BUILD)/test-config
 export N00B_RUST
 export CC

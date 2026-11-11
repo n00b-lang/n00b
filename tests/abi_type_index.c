@@ -51,12 +51,6 @@ main(void)
     th_type *first_var = th_var_named(types, S("value"));
     th_type *second_var = th_var_named(types, S("value"));
     assert(first_var && second_var);
-    th_type *choices[] = {integer, boolean};
-    th_constraint one_of = {
-        .kind = TH_CON_ONE_OF,
-        .one_of = {.types = choices, .n = 2},
-    };
-    assert(th_var_constrain(types, first_var, one_of));
     th_param parameters[] = {{.mode = TH_IN, .type = first_var}};
     th_type *function = th_func_with_error(types, nil, boolean,
         parameters, 1, nullptr, nullptr, 0);
@@ -64,19 +58,20 @@ main(void)
     uint32_t function_index = UINT32_MAX;
     assert(n00bb_abi_type_index_add(index, function, &function_index));
     uint32_t first_index = UINT32_MAX, second_index = UINT32_MAX;
-    uint32_t integer_index = UINT32_MAX, boolean_index = UINT32_MAX;
+    uint32_t boolean_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, first_var, &first_index));
-    assert(n00bb_abi_type_index_find(index, integer, &integer_index));
     assert(n00bb_abi_type_index_find(index, boolean, &boolean_index));
-    assert(first_index != function_index && integer_index != boolean_index);
+    assert(first_index != function_index && first_index != boolean_index);
     assert(n00bb_abi_type_index_add(index, second_var, &second_index));
     assert(first_index != second_index);
 
     assert(ir_type_intern(comptime, th_array(types, integer)));
     assert(n00bb_abi_type_index_collect_module_types(index, comptime));
     uint32_t array_index = UINT32_MAX;
+    uint32_t integer_index = UINT32_MAX;
     assert(n00bb_abi_type_index_find(index, th_array(types, integer),
                                      &array_index));
+    assert(n00bb_abi_type_index_find(index, integer, &integer_index));
     assert(array_index != integer_index);
     size_t count = n00bb_abi_type_index_count(index);
     assert(n00bb_abi_type_index_collect_module_types(index, comptime));

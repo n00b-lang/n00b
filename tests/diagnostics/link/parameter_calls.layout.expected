@@ -1,3 +1,10 @@
+tests/diagnostics/link/parameter_calls.n:9:24: warning: parameter `rest` is never used
+
+    9 | func total(first: int, *rest: int, bias: int = 0) -> int {
+      |                        ^
+
+  help: if a signature requires it, name it `_rest`
+
 tests/diagnostics/link/parameter_calls.n:13:35: error: `scale` takes 1 positional argument, but this call passes 2
 
     13 | let positional_keyword = scale(3, 4)
@@ -32,10 +39,50 @@ tests/diagnostics/link/parameter_calls.n:15:30: error: `rest` is the varargs par
 
   help: pass its items as extra positional arguments, after the positional ones
 
+tests/diagnostics/link/parameter_calls.n:16:5: warning: `keyword_first` is never used
+
+    16 | let keyword_first = scale(factor = 3, 4)
+       |     ^^^^^^^^^^^^^
+
+  help: remove it
+
+tests/diagnostics/link/parameter_calls.n:17:5: warning: `all_named` is never used
+
+    17 | let all_named = area(height = 3, width = 2)
+       |     ^^^^^^^^^
+
+  help: remove it
+
+tests/diagnostics/link/parameter_calls.n:18:5: warning: `extra_items` is never used
+
+    18 | let extra_items = total(1, 2, 3, bias = 4)
+       |     ^^^^^^^^^^^
+
+  help: remove it
+
+tests/diagnostics/link/parameter_calls.n:19:5: warning: `keyword_first_items` is never used
+
+    19 | let keyword_first_items = total(bias = 4, 1, 2, 3)
+       |     ^^^^^^^^^^^^^^^^^^^
+
+  help: remove it
+
 tests/diagnostics/link/parameter_calls.n:20:28: error: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
 
     20 | let whole_array = total(1, [2, 3])
        |                            ^^^^^^ expected `int`
+
+  `total` is declared here:
+
+     9 | func total(first: int, *rest: int, bias: int = 0) -> int {
+       |      ^^^^^
+
+  help: pass each item as its own argument
+
+tests/diagnostics/link/parameter_calls.n:22:31: error: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
+
+    22 | let whole_variable = total(1, items)
+       |                               ^^^^^ expected `int`
 
   `total` is declared here:
 

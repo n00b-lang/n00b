@@ -61,8 +61,7 @@ run_action(parse_reduce_t *r)
     }
 
     parse_nonterm_t    *nt     = parse_get_nonterm(r->grammar, pn->id);
-    parse_walk_action_t action = (nt && nt->action) ? nt->action
-                                                  : r->grammar->default_action;
+    parse_walk_action_t action = nt ? nt->action : nullptr;
 
     if (!action) {
         return kids;

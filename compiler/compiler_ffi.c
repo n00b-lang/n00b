@@ -23,6 +23,7 @@
 #include "lib/string.h"
 #include "diagnostics.h"
 #include "driver.h"
+#include "ir/summary.h"
 #include "writ/gen.h"
 
 typedef struct {
@@ -407,18 +408,13 @@ refresh_selection(n00bb_ffi_t *ffi)
     clear_strings(&ffi->frameworks);
     clear_strings(&ffi->search_paths);
     ffi->selected_shims.len = 0;
-    bool hosted = !n00bb_native_root_hosted_hidden();
     for (size_t i = 0; i < ffi->records.len; i++) {
         const ffi_literal_t *record = &ffi->records.data[i];
         if (!record->used) {
             continue;
         }
-        for (size_t j = 0; j < record->shims.len; j++) {
-            size_t shim = record->shims.data[j];
-            if (hosted || !core_string_ends_with(ffi->shims.data[shim].name,
-                              CORE_STRING_STATIC("_n00b_export.c")))
-                core_list_push(ffi->selected_shims, shim);
-        }
+        for (size_t j = 0; j < record->shims.len; j++)
+            core_list_push(ffi->selected_shims, record->shims.data[j]);
         push_all(&ffi->archives, &record->archives);
         push_all(&ffi->libraries, &record->libraries);
         push_all(&ffi->frameworks, &record->frameworks);
@@ -432,12 +428,11 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     if (!ffi) {
         return;
     }
-    bool hosted = !n00bb_native_root_hosted_hidden();
     core_dict_t by_prefix;
     core_dict_init_string(&by_prefix);
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
-        record->used = record->exports && hosted;
+        record->used = record->exports;
         core_dict_put(&by_prefix, &record->prefix, record);
     }
     core_string_t stem = CORE_STRING_STATIC("n00b_ffi_");
@@ -458,6 +453,50 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     refresh_selection(ffi);
 }
 
+static n00bb_native_type_t *
+keep_type(const writ_n00b_type_t *type)
+{
+    static const n00bb_native_type_kind_t kinds[] = {
+        [WRIT_N00B_TYPE_NAMED]  = N00BB_NATIVE_TYPE_NAMED,
+        [WRIT_N00B_TYPE_REF]    = N00BB_NATIVE_TYPE_REF,
+        [WRIT_N00B_TYPE_ARRAY]  = N00BB_NATIVE_TYPE_ARRAY,
+        [WRIT_N00B_TYPE_LIST]   = N00BB_NATIVE_TYPE_LIST,
+        [WRIT_N00B_TYPE_OPTION] = N00BB_NATIVE_TYPE_OPTION,
+    };
+    n00bb_native_type_t *kept = core_alloc(n00bb_native_type_t);
+    *kept = (n00bb_native_type_t){
+        .kind = kinds[type->kind],
+        .name = type->name.length ? core_string_dup(as_core(type->name)) : (core_string_t){0},
+        .item = type->item ? keep_type(type->item) : nullptr,
+    };
+    return kept;
+}
+
+static uint32_t
+native_effects(writ_effects_t declared)
+{
+    uint32_t unknown = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_BLOCK
+        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_IO
+        | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES;
+    if (!(declared & WRIT_EFFECTS_DECLARED) || (declared & WRIT_EFFECTS_OTHER))
+        return unknown;
+    static const struct {
+        writ_effects_t declared;
+        uint32_t       flags;
+    } effects[] = {
+        {WRIT_EFFECTS_ALLOC, IR_SUMMARY_MAY_ALLOCATE},
+        {WRIT_EFFECTS_BLOCKING, IR_SUMMARY_MAY_BLOCK},
+        {WRIT_EFFECTS_NORETURN, IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES},
+        {WRIT_EFFECTS_INPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_INPUT},
+        {WRIT_EFFECTS_OUTPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_OUTPUT},
+        {WRIT_EFFECTS_CALLBACKS, IR_SUMMARY_CALLS_CALLBACKS},
+    };
+    uint32_t flags = 0;
+    for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)
+        if (declared & effects[i].declared) flags |= effects[i].flags;
+    return flags;
+}
+
 static bool
 keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *natives)
 {
@@ -470,11 +509,19 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
         return false;
     }
     for (size_t i = 0; i < externs->count; i++) {
+        const writ_n00b_extern_t *declared = &externs->items[i];
+        n00bb_native_type_t **params = declared->params_count
+            ? core_alloc_array(n00bb_native_type_t *, declared->params_count) : nullptr;
+        for (size_t p = 0; p < declared->params_count; p++)
+            params[p] = keep_type(declared->params[p]);
         natives->items[i] = (n00bb_native_declaration_t){
-            .name      = core_string_dup(as_core(externs->items[i].name)),
-            .symbol    = core_string_dup(as_core(externs->items[i].symbol)),
-            .signature = core_string_dup(as_core(externs->items[i].signature)),
-            .pure      = externs->items[i].pure,
+            .name        = core_string_dup(as_core(declared->name)),
+            .symbol      = core_string_dup(as_core(declared->symbol)),
+            .params      = params,
+            .param_count = declared->params_count,
+            .result      = keep_type(declared->result),
+            .pure        = declared->pure,
+            .effects     = native_effects(declared->effects),
         };
     }
     natives->count = externs->count;
@@ -495,7 +542,7 @@ register_exports(const writ_n00b_externs_t *externs, core_string_t module)
         }
         core_string_t symbol = as_core(externs->exports[i].symbol);
         bool registered = function.data && symbol.data
-                       && n00bb_native_root_register_hosted(core_buffer_string(&function), symbol);
+                       && n00bb_native_root_register(core_buffer_string(&function), symbol);
         core_buffer_release(&function);
         if (!registered) {
             return false;
@@ -1095,18 +1142,6 @@ n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t n
     return ok;
 }
 
-size_t
-n00bb_ffi_input_count(const n00bb_ffi_t *ffi)
-{
-    return ffi ? ffi->inputs.len : 0;
-}
-
-core_string_t
-n00bb_ffi_input_at(const n00bb_ffi_t *ffi, size_t index)
-{
-    return ffi->inputs.data[index];
-}
-
 bool
 n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output)
 {
@@ -1137,11 +1172,13 @@ n00bb_ffi_shim_count(const n00bb_ffi_t *ffi)
     return ffi ? ffi->selected_shims.len : 0;
 }
 
-n00bb_ffi_file_t
-n00bb_ffi_shim_at(const n00bb_ffi_t *ffi, size_t index)
+bool
+n00bb_ffi_has_exports(const n00bb_ffi_t *ffi)
 {
-    const ffi_output_t *shim = &ffi->shims.data[ffi->selected_shims.data[index]];
-    return (n00bb_ffi_file_t){shim->name, shim->contents};
+    for (size_t i = 0; ffi && i < ffi->records.len; i++)
+        if (ffi->records.data[i].used && ffi->records.data[i].exports)
+            return true;
+    return false;
 }
 
 size_t

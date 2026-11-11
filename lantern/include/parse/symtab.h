@@ -29,20 +29,6 @@ typedef struct parse_symtab_t    parse_symtab_t;
 typedef struct core_translation_unit_t core_translation_unit_t;
 
 typedef enum {
-    PARSE_SYM_PHASE_NONE      = 0,
-    PARSE_SYM_PHASE_COMPTIME  = 1u << 0,
-    PARSE_SYM_PHASE_RUNTIME   = 1u << 1,
-    PARSE_SYM_PHASE_BOTH      = PARSE_SYM_PHASE_COMPTIME
-                              | PARSE_SYM_PHASE_RUNTIME,
-} parse_sym_phase_t;
-
-typedef enum {
-    PARSE_SYM_ALIAS_MAY,
-    PARSE_SYM_ALIAS_MUST,
-    PARSE_SYM_ALIAS_DERIVED,
-} parse_sym_alias_kind_t;
-
-typedef enum {
     PARSE_SYM_STORAGE_UNSPECIFIED,
     PARSE_SYM_STORAGE_COMPTIME,
     PARSE_SYM_STORAGE_AUTOMATIC,
@@ -50,54 +36,6 @@ typedef enum {
     PARSE_SYM_STORAGE_THREAD,
     PARSE_SYM_STORAGE_DYNAMIC,
 } parse_sym_storage_duration_t;
-
-typedef struct {
-    parse_sym_entry_t    *other;
-    parse_sym_alias_kind_t kind;
-    uint64_t              derived_at;
-    uint64_t              last_use;
-    bool                  has_last_use;
-    bool                  escapes;
-} parse_sym_alias_t;
-
-typedef struct {
-    parse_sym_phase_t phase;
-    void *function;
-    void *binding;
-} parse_sym_function_binding_t;
-
-typedef struct {
-    parse_sym_phase_t phase;
-    void *function;
-    void *binding;
-    void *point;
-    bool at_entry;
-} parse_sym_lifetime_start_t;
-
-typedef struct {
-    parse_sym_phase_t phase;
-    void *function;
-    void *binding;
-    size_t start_count;
-    bool complete;
-} parse_sym_lifetime_range_t;
-
-typedef struct {
-    uint64_t region;
-    uint64_t start_point;
-    uint64_t end_point;
-    uint64_t finalization_point;
-    bool     has_region;
-    bool     has_start;
-    bool     has_end;
-    bool     has_finalization_point;
-    parse_sym_lifetime_start_t *starts;
-    size_t start_count;
-    size_t start_capacity;
-    parse_sym_lifetime_range_t *ranges;
-    size_t range_count;
-    size_t range_capacity;
-} parse_sym_lifetime_t;
 
 struct parse_sym_entry_t {
     core_string_t             name;
@@ -129,13 +67,9 @@ struct parse_sym_entry_t {
     parse_scope_t             *exposed_scope;
     core_string_t             adt_kind;
     core_string_t             visibility;
-    core_string_t             inherits_name;
     core_list_t(core_string_t) implements;
     bool                     is_field;
-    bool                     is_method;
-    bool                     is_static;
     bool                     is_thread_local;
-    bool                     is_abstract;
     bool                     is_optional;
     bool                     is_variadic;
     bool                     is_synthetic;
@@ -146,33 +80,12 @@ struct parse_sym_entry_t {
     uint64_t                 bit_width;
     bool                     has_bit_offset;
     bool                     has_bit_width;
-    parse_sym_phase_t        phases;
-    parse_sym_phase_t        mutable_phases;
-    parse_sym_phase_t        initializer_phases;
     void                    *comptime_value;
-    void                    *runtime_initializer;
     bool                     has_comptime_value;
-    bool                     has_runtime_initializer;
-    void                    *comptime_binding;
-    void                    *runtime_binding;
-    bool                     has_comptime_binding;
-    bool                     has_runtime_binding;
-    parse_sym_function_binding_t *function_bindings;
-    size_t function_binding_count;
-    size_t function_binding_capacity;
     core_string_t            requested_storage_class;
     core_string_t            selected_storage_class;
     bool                     storage_class_required;
     parse_sym_storage_duration_t storage_duration;
-    parse_sym_lifetime_t     lifetime;
-    parse_sym_alias_t       *aliases;
-    size_t                   alias_count;
-    size_t                   alias_capacity;
-    parse_sym_alias_t       *aliased_by;
-    size_t                   aliased_by_count;
-    size_t                   aliased_by_capacity;
-    bool                     alias_analysis_complete;
-    bool                     alias_unresolved;
     void                    *namespaced_bindings;
     void                    *user_data;
 };
@@ -261,38 +174,6 @@ bool parse_sym_add_use(parse_sym_entry_t *symbol, parse_tree_t *node);
 bool parse_sym_remove_use(parse_sym_entry_t *symbol, parse_tree_t *node);
 void parse_sym_mark_type_inferred(parse_sym_entry_t *symbol);
 
-void parse_sym_set_phases(parse_sym_entry_t *symbol,
-                          parse_sym_phase_t available,
-                          parse_sym_phase_t mutable_in,
-                          parse_sym_phase_t initializable_in);
-bool parse_sym_can_read(const parse_sym_entry_t *symbol,
-                        parse_sym_phase_t phase);
-bool parse_sym_can_write(const parse_sym_entry_t *symbol,
-                         parse_sym_phase_t phase);
-bool parse_sym_can_initialize(const parse_sym_entry_t *symbol,
-                              parse_sym_phase_t phase);
-void parse_sym_set_phase_values(parse_sym_entry_t *symbol,
-                                void *comptime_value,
-                                void *runtime_initializer);
-void parse_sym_set_phase_values_with_presence(
-    parse_sym_entry_t *symbol, bool has_comptime_value,
-    void *comptime_value, bool has_runtime_initializer,
-    void *runtime_initializer);
-bool parse_sym_get_comptime_value(const parse_sym_entry_t *symbol,
-                                  void **value);
-bool parse_sym_get_runtime_initializer(const parse_sym_entry_t *symbol,
-                                      void **value);
-bool parse_sym_set_phase_binding(parse_sym_entry_t *symbol,
-                                 parse_sym_phase_t phase, void *binding);
-void *parse_sym_phase_binding(const parse_sym_entry_t *symbol,
-                              parse_sym_phase_t phase);
-bool parse_sym_set_function_binding(parse_sym_entry_t *symbol,
-                                    parse_sym_phase_t phase,
-                                    void *function, void *binding);
-size_t parse_sym_function_binding_count(const parse_sym_entry_t *symbol,
-                                        parse_sym_phase_t phase);
-const parse_sym_function_binding_t *parse_sym_function_binding_at(
-    const parse_sym_entry_t *symbol, parse_sym_phase_t phase, size_t index);
 void parse_sym_set_storage_class(parse_sym_entry_t *symbol,
                                 core_string_t requested,
                                 bool required,
@@ -301,44 +182,6 @@ void parse_sym_set_storage_duration(
     parse_sym_entry_t *symbol, parse_sym_storage_duration_t duration);
 core_string_t parse_sym_storage_duration_name(
     parse_sym_storage_duration_t duration);
-void parse_sym_set_lifetime(parse_sym_entry_t *symbol,
-                            parse_sym_lifetime_t lifetime);
-bool parse_sym_set_lifetime_start(parse_sym_entry_t *symbol,
-                                  parse_sym_lifetime_start_t start);
-size_t parse_sym_lifetime_start_count(const parse_sym_entry_t *symbol);
-const parse_sym_lifetime_start_t *parse_sym_lifetime_start_at(
-    const parse_sym_entry_t *symbol, size_t index);
-bool parse_sym_begin_lifetime_range(parse_sym_entry_t *symbol,
-                                    parse_sym_phase_t phase,
-                                    void *function, void *binding);
-bool parse_sym_finish_lifetime_range(parse_sym_entry_t *symbol,
-                                     parse_sym_phase_t phase,
-                                     void *function, void *binding,
-                                     bool complete);
-size_t parse_sym_lifetime_range_count(const parse_sym_entry_t *symbol);
-const parse_sym_lifetime_range_t *parse_sym_lifetime_range_at(
-    const parse_sym_entry_t *symbol, size_t index);
-bool parse_symtab_add_alias(parse_sym_entry_t *alias,
-                            parse_sym_entry_t *target,
-                            parse_sym_alias_kind_t kind,
-                            uint64_t derived_at,
-                            bool escapes);
-bool parse_symtab_update_alias_use(parse_sym_entry_t *alias,
-                                   parse_sym_entry_t *target,
-                                   parse_sym_alias_kind_t kind,
-                                   uint64_t derived_at,
-                                   uint64_t last_use,
-                                   bool escapes);
-void parse_sym_set_alias_analysis_complete(parse_sym_entry_t *symbol,
-                                           bool complete);
-bool parse_sym_can_finalize_at(const parse_sym_entry_t *symbol,
-                               uint64_t point);
-size_t parse_sym_alias_count(const parse_sym_entry_t *symbol);
-const parse_sym_alias_t *parse_sym_alias_at(const parse_sym_entry_t *symbol,
-                                            size_t index);
-size_t parse_sym_aliased_by_count(const parse_sym_entry_t *symbol);
-const parse_sym_alias_t *parse_sym_aliased_by_at(
-    const parse_sym_entry_t *symbol, size_t index);
 
 parse_sym_entry_t *parse_symtab_lookup(parse_symtab_t *st, core_string_t ns_name,
                                    core_string_t name);

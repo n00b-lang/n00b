@@ -1,0 +1,135 @@
+record Point {
+    x: int
+    y: int
+}
+
+func __equal(view a: Point, view b: Point) -> bool {
+    return a.x == b.x
+}
+
+func count_equal(items: List['T], value: 'T) -> int where 'T: Equal {
+    var found: int = 0
+    var index: int = 0
+    while index < cast[int]items.len() {
+        if items[index] == value {
+            found += 1
+        }
+        index += 1
+    }
+    return found
+}
+
+var points: List[Point] = new[List[Point]]()
+points.append((x = 1, y = 2))
+points.append((x = 1, y = 9))
+points.append((x = 3, y = 2))
+let same_x: int = count_equal(points, (x = 1, y = 0))
+assert same_x == 2
+
+var numbers: List[int] = new[List[int]]()
+numbers.append(4)
+numbers.append(5)
+numbers.append(4)
+let fours: int = count_equal(numbers, 4)
+assert fours == 2
+
+var words: List[string] = new[List[string]]()
+words.append("a")
+words.append("b")
+words.append("a")
+let found_a: int = count_equal(words, "a")
+assert found_a == 2
+
+trait Checker {
+    func check(self: 'C, n: int) -> int fail: string
+}
+
+record Even {
+    bias: int
+}
+
+func check(self: Even, n: int) -> int fail: string {
+    if n % 2 == 1 {
+        fail "odd"
+    }
+    return n + self.bias
+}
+
+func run_check(c: Checker, n: int) -> int {
+    var out = -1
+    try {
+        out = c.check(n)!
+    } fail(e) {
+        out = -1
+    }
+    return out
+}
+
+let even: Even = (bias = 1)
+assert run_check(even, 4) == 5
+assert run_check(even, 3) == -1
+
+trait Bumps {
+    func bump(modify self: 'B) -> nil
+}
+
+record Counter {
+    n: int
+}
+
+func bump(modify self: Counter) -> nil {
+    self.n = self.n + 1
+}
+
+func bump_twice(modify b: Bumps) -> nil {
+    b.bump()
+    b.bump()
+}
+
+var counter: Counter = (n = 0)
+bump_twice(counter)
+assert counter.n == 2
+
+trait Scales {
+    func scale(self: 'S, by: int = 2) -> int
+}
+
+record Box {
+    v: int
+}
+
+func scale(self: Box, by: int = 2) -> int {
+    return self.v * by
+}
+
+func scaled(s: Scales) -> int {
+    return s.scale() + s.scale(by = 10)
+}
+
+let box: Box = (v = 3)
+assert scaled(box) == 36
+
+trait Sums {
+    func total(self: 'S, *rest: int) -> int
+}
+
+record Base {
+    v: int
+}
+
+func total(self: Base, *rest: int) -> int {
+    var sum = self.v
+    for x in rest {
+        sum += x
+    }
+    return sum
+}
+
+func summed(s: Sums) -> int {
+    return s.total(1, 2, 3) + s.total()
+}
+
+let base: Base = (v = 4)
+assert summed(base) == 14
+assert base.total(1) == 5
+assert base.total() == 4

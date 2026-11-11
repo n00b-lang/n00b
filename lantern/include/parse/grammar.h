@@ -34,7 +34,6 @@ int64_t parse_terminal_id(parse_grammar_t *g, core_string_t name);
 void  parse_nonterm_set_action(parse_nonterm_t *nt, parse_walk_action_t action);
 void  parse_nonterm_set_user_data(parse_nonterm_t *nt, void *data);
 void *parse_nonterm_get_user_data(parse_nonterm_t *nt);
-void  parse_grammar_set_default_action(parse_grammar_t *g, parse_walk_action_t a);
 void  parse_grammar_set_terminal_category(parse_grammar_t *g, int64_t tid,
                                           core_string_t category);
 

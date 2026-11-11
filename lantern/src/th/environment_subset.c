@@ -1,33 +1,75 @@
 #include "private/th/internal.h"
+#include "lib/dict.h"
 
-core_list_decl(size_t);
+typedef struct {
+    core_dict_t types;
+    core_dict_t traits;
+    core_dict_t functions;
+    core_dict_t values;
+} owner_index_t;
+
+static void
+index_owner(core_dict_t *index, const core_string_t *name, size_t at)
+{
+    core_dict_add(index, name, at + 1);
+}
+
+static void
+owner_index_build(owner_index_t *index, const th_env *source)
+{
+    core_dict_init_string(&index->types);
+    core_dict_init_string(&index->traits);
+    core_dict_init_string(&index->functions);
+    core_dict_init_string(&index->values);
+    for (size_t i = 0; i < source->type_origins.len; i++)
+        index_owner(&index->types, &source->type_origins.data[i].name, i);
+    for (size_t i = 0; i < source->traits.len; i++)
+        index_owner(&index->traits, &source->traits.data[i].name, i);
+    for (size_t i = 0; i < source->functions.len; i++)
+        index_owner(&index->functions,
+                    &source->functions.data[i].qualified_name, i);
+    for (size_t i = 0; i < source->values.len; i++)
+        index_owner(&index->values, &source->values.data[i].qualified_name,
+                    i);
+}
+
+static void
+owner_index_free(owner_index_t *index)
+{
+    core_dict_free(&index->types);
+    core_dict_free(&index->traits);
+    core_dict_free(&index->functions);
+    core_dict_free(&index->values);
+}
+
+static size_t
+owner_at(core_dict_t *index, core_string_t owner)
+{
+    bool found = false;
+    uintptr_t at = (uintptr_t)core_dict_get(index, &owner, &found);
+    return found ? (size_t)at : 0;
+}
 
 static core_string_t
-declaration_module(const th_env *source, th_env_metadata_owner_t kind,
-                   core_string_t owner)
+declaration_module(const th_env *source, owner_index_t *index,
+                   th_env_metadata_owner_t kind, core_string_t owner)
 {
+    size_t at = 0;
     switch (kind) {
     case TH_ENV_METADATA_TYPE:
-        for (size_t i = 0; i < source->type_origins.len; i++)
-            if (core_string_eq(source->type_origins.data[i].name, owner))
-                return source->type_origins.data[i].module;
-        return (core_string_t){};
+        at = owner_at(&index->types, owner);
+        return at ? source->type_origins.data[at - 1].module
+                  : (core_string_t){};
     case TH_ENV_METADATA_TRAIT:
-        for (size_t i = 0; i < source->traits.len; i++)
-            if (core_string_eq(source->traits.data[i].name, owner))
-                return source->traits.data[i].module;
-        return (core_string_t){};
+        at = owner_at(&index->traits, owner);
+        return at ? source->traits.data[at - 1].module : (core_string_t){};
     case TH_ENV_METADATA_FUNCTION:
-        for (size_t i = 0; i < source->functions.len; i++)
-            if (core_string_eq(source->functions.data[i].qualified_name,
-                               owner))
-                return source->functions.data[i].module;
-        return (core_string_t){};
+        at = owner_at(&index->functions, owner);
+        return at ? source->functions.data[at - 1].module
+                  : (core_string_t){};
     case TH_ENV_METADATA_VALUE:
-        for (size_t i = 0; i < source->values.len; i++)
-            if (core_string_eq(source->values.data[i].qualified_name, owner))
-                return source->values.data[i].module;
-        return (core_string_t){};
+        at = owner_at(&index->values, owner);
+        return at ? source->values.data[at - 1].module : (core_string_t){};
     case TH_ENV_METADATA_ENVIRONMENT:
         return (core_string_t){};
     }
@@ -62,11 +104,8 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
         const th_env_function_t *entry = &source->functions.data[i];
         if (!filter->module || !filter->module(context, entry->module))
             continue;
-        ok = th_env_register_function_contract(env, entry->qualified_name,
-            entry->root_name, entry->module, entry->package,
-            entry->visibility, entry->contract)
-            && th_env_set_function_required(env, entry->qualified_name,
-                                            entry->required_params);
+        ok = th_env_copy_function(env, entry,
+                                  th_env_function_copy_source(entry));
     }
     for (size_t i = 0; ok && i < source->values.len; i++) {
         const th_env_value_t *entry = &source->values.data[i];
@@ -76,34 +115,34 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
             entry->root_name, entry->module, entry->package,
             entry->visibility, entry->type);
     }
-    core_list_t(size_t) carried = core_list_new(size_t);
+    owner_index_t index;
+    owner_index_build(&index, source);
+    core_dict_t carried;
+    core_dict_init(&carried, core_hash_word, nullptr);
     for (size_t i = 0; ok && i < source->intrinsic_types.len; i++) {
         const th_env_intrinsic_type_t *entry =
             &source->intrinsic_types.data[i];
         if (!filter->intrinsic
             || !filter->intrinsic(context, entry->trait_name,
                                   entry->receiver_pattern)) continue;
-        for (size_t t = 0; ok && t < source->traits.len; t++) {
-            const th_env_trait_t *trait = &source->traits.data[t];
-            if (!core_string_eq(trait->name, entry->trait_name)) continue;
-            bool present = filter->module
-                && filter->module(context, trait->module);
-            for (size_t c = 0; !present && c < carried.len; c++)
-                present = carried.data[c] == t;
-            if (present) break;
+        size_t at = owner_at(&index.traits, entry->trait_name);
+        const th_env_trait_t *trait = at ? &source->traits.data[at - 1]
+                                         : nullptr;
+        bool present = !trait
+            || (filter->module && filter->module(context, trait->module))
+            || !core_dict_add(&carried, at, at);
+        if (!present)
             ok = th_env_register_trait_contracts(env, trait->name,
                 trait->module, trait->package, trait->visibility,
                 trait->contracts);
-            core_list_push(carried, t);
-            break;
-        }
         if (ok) ok = th_env_register_intrinsic_type_pattern(env,
             entry->trait_name, entry->receiver_pattern);
     }
-    core_list_free(carried);
+    core_dict_free(&carried);
     for (size_t i = 0; ok && i < source->metadata.len; i++) {
         const th_env_metadata_record_t *entry = &source->metadata.data[i];
-        core_string_t module = declaration_module(source, entry->owner_kind,
+        core_string_t module = declaration_module(source, &index,
+                                                  entry->owner_kind,
                                                   entry->owner_name);
         bool keep = entry->owner_kind == TH_ENV_METADATA_ENVIRONMENT
             ? filter->metadata && filter->metadata(context, entry->owner_kind,
@@ -115,6 +154,7 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
             entry->owner_name, entry->key, entry->version, entry->data,
             entry->size);
     }
+    owner_index_free(&index);
     if (!ok || !th_env_freeze(env)) {
         th_env_free(env);
         return nullptr;

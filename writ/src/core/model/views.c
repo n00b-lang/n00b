@@ -209,6 +209,7 @@ build_fns(writ_model_t *model)
             .thread             = record->thread,
             .declared_at        = writ_loc_span(session, record->loc),
             .keywords_slot      = record->keywords_slot,
+            .effects            = record->effects,
         };
     }
 }

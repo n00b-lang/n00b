@@ -137,10 +137,6 @@ func run(selected: string) {
         require doubled(2) == 5
     } elif selected == "shift" {
         require sh(1, 70) == 1
-    } elif selected == "uninit" {
-        let reader: Ref[() -> int] = ref read_value
-        reader.call()
-        value = 7
     } elif selected == "panic_live" {
         panic_with_live_value()
     }

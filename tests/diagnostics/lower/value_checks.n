@@ -236,3 +236,9 @@ func constructed_literal() -> int {
     let built: Tuple_Built = (x = 2)
     return built.x
 }
+
+func append_unread() -> int {
+    var b: Buffer = buffer_from_string("start")
+    b += "!"
+    return 1
+}

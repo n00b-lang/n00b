@@ -1,6 +1,7 @@
 import hashing
 import containers.hash_index
-import containers.view
+import containers.slice
+import containers.lease
 import cursor
 import sort
 import panic
@@ -15,11 +16,18 @@ record Item {
 record Entry {
     key:   'K
     value: 'V
+    live:  bool
 }
 
 object Dict {
-    entries: Array[Entry['K, 'V]]
+    entries: containers.lease.Leasable[Entry['K, 'V]]
     index:   containers.hash_index.Hash_Index
+}
+
+record Dict_Cursor {
+    lease: containers.lease.Lease[Entry['K, 'V]]
+    end:   uint
+    index: uint
 }
 
 func key_hash(key: 'K) -> u128 where 'K : hashing . Hash {
@@ -27,7 +35,7 @@ func key_hash(key: 'K) -> u128 where 'K : hashing . Hash {
 }
 
 func ensure_entries(self: Dict['K, 'V], needed: uint) {
-    let capacity: uint = __array_length(self.entries)
+    let capacity: uint = containers.lease.len(self.entries)
     if needed <= capacity {
         return
     }
@@ -42,10 +50,10 @@ func ensure_entries(self: Dict['K, 'V], needed: uint) {
         new[Array[Entry['K, 'V]]](cast[int]next_capacity)
     var at: uint = 0
     while at < self.index.used {
-        next[at] = self.entries[at]
+        next[at] = self.entries[cast[int]at]
         at += 1
     }
-    self.entries = next
+    containers.lease.replace_storage(self.entries, next)
 }
 
 func compact(self: Dict['K, 'V]) {
@@ -55,7 +63,7 @@ func compact(self: Dict['K, 'V]) {
     while read < used {
         if !containers.hash_index.is_dead(ref self.index, read) {
             if write != read {
-                self.entries[write] = self.entries[read]
+                self.entries[cast[int]write] = self.entries[cast[int]read]
             }
             write += 1
         }
@@ -63,13 +71,13 @@ func compact(self: Dict['K, 'V]) {
     }
     while read > write {
         read -= 1
-        __array_clear(ref self.entries, read)
+        __array_clear(containers.lease.writable(self.entries), read)
     }
     containers.hash_index.compact(ref self.index)
 }
 
 inline func prepare(self: Dict['K, 'V]) {
-    if self.index.used == __array_length(self.entries) {
+    if self.index.used == containers.lease.len(self.entries) {
         if containers.hash_index.should_compact(ref self.index) {
             compact(self)
         } else {
@@ -81,7 +89,8 @@ inline func prepare(self: Dict['K, 'V]) {
 
 func __init(self: Dict['K, 'V], pairs : Array[Tuple['K, 'V]] = [])
            where 'K : hashing . Hash {
-    self.entries = new[Array[Entry['K, 'V]]](0)
+    self.entries = new[containers.lease.Leasable[Entry['K, 'V]]](
+        new[Array[Entry['K, 'V]]](0))
     self.index = new[containers.hash_index.Hash_Index]()
     for key, value in pairs {
         _ = put(self, key, value)
@@ -97,7 +106,7 @@ inline func get(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
     if entry == nil {
         return nil
     }
-    return self.entries[entry.get()].value
+    return self.entries[cast[int]entry].value
 }
 
 func contains(self: Dict['K, 'V], key: 'K) -> bool where 'K : hashing . Hash {
@@ -111,13 +120,16 @@ inline func insert_entry(self: Dict['K, 'V], key: 'K, value: 'V, hash: u128)
     if existing != nil {
         return existing
     }
-    self.entries[self.index.used - 1] = (key = key, value = value)
+    let entry: Entry['K, 'V] = (key = key, value = value, live = true)
+    self.entries[cast[int](self.index.used - 1)] = entry
     return nil
 }
 
 inline func replace_at(self: Dict['K, 'V], entry: uint, value: 'V) -> 'V {
-    let prior: Entry['K, 'V] = self.entries[entry]
-    self.entries[entry] = (key = prior.key, value = value)
+    let prior: Entry['K, 'V] = self.entries[cast[int]entry]
+    let replaced: Entry['K, 'V] = (key = prior.key, value = value,
+                                   live = true)
+    self.entries[cast[int]entry] = replaced
     return prior.value
 }
 
@@ -125,7 +137,7 @@ func put(self: Dict['K, 'V], key: 'K, value: 'V)
         -> 'V? where 'K : hashing . Hash {
     let existing: uint? = insert_entry(self, key, value, key_hash(key))
     if existing != nil {
-        return replace_at(self, existing.get(), value)
+        return replace_at(self, existing, value)
     }
     return nil
 }
@@ -141,7 +153,7 @@ func replace(self: Dict['K, 'V], key: 'K, value: 'V)
     if found == nil {
         return false
     }
-    _ = replace_at(self, found.get(), value)
+    _ = replace_at(self, found, value)
     return true
 }
 
@@ -153,13 +165,14 @@ inline func remove(self: Dict['K, 'V], key: 'K)
         return false
     }
     let removed: uint = containers.hash_index.remove_at(ref self.index,
-                                                        found.get())
-    __array_clear(ref self.entries, removed)
+                                                        found)
+    __array_clear(containers.lease.writable(self.entries), removed)
     return true
 }
 
 func clear(self: Dict['K, 'V]) {
-    self.entries = new[Array[Entry['K, 'V]]](0)
+    containers.lease.replace_storage(self.entries,
+                                     new[Array[Entry['K, 'V]]](0))
     self.index = new[containers.hash_index.Hash_Index]()
 }
 
@@ -172,20 +185,31 @@ func __write(self: Dict['K, 'V], key: 'K, value: 'V)
     _ = put(self, key, value)
 }
 
-func iter(self: Dict['K, 'V]) -> cursor.Cursor[Item['K, 'V]] {
-    var pairs: Array[Item['K, 'V]] =
-        new[Array[Item['K, 'V]]](cast[int]self.index.live)
-    var write: uint = 0
-    var read:  uint = 0
-    while read < self.index.used {
-        if !containers.hash_index.is_dead(ref self.index, read) {
-            let entry: Entry['K, 'V] = self.entries[read]
-            pairs[write] = (key = entry.key, value = entry.value)
-            write += 1
+func __iterator(self: Dict['K, 'V]) -> Dict_Cursor['K, 'V] {
+    return new[Dict_Cursor['K, 'V]](ref self.entries, self.index.used)
+}
+
+func __init(modify self: Dict_Cursor['K, 'V],
+            consume lease: containers.lease.Lease[Entry['K, 'V]], end: uint) {
+    self.lease = lease
+    self.end = end
+    self.index = 0
+}
+
+func __next(modify self: Dict_Cursor['K, 'V]) -> Tuple['K, 'V]? {
+    while self.index < self.end {
+        let entry: Entry['K, 'V] = self.lease.__value[self.index]
+        self.index += 1
+        if entry.live {
+            return (entry.key, entry.value)
         }
-        read += 1
     }
-    return cursor.iter(pairs)
+    containers.lease.release(self.lease)
+    return nil
+}
+
+func __cleanup(consume self: Dict_Cursor['K, 'V]) {
+    containers.lease.release(self.lease)
 }
 
 func snapshot_entries(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
@@ -195,7 +219,7 @@ func snapshot_entries(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
     var read:  uint = 0
     while read < self.index.used {
         if !containers.hash_index.is_dead(ref self.index, read) {
-            entries[write] = self.entries[read]
+            entries[write] = self.entries[cast[int]read]
             write += 1
         }
         read += 1
@@ -257,57 +281,149 @@ func ordered_entries(self: Dict['K, 'V], order: Sort_Order) -> Array[Entry['K, '
     return entries_in_value_order(self)
 }
 
-func key_view(entries: Array[Entry['K, 'V]], count: int)
-             -> containers.view.View['K] {
+func key_slice(entries: Array[Entry['K, 'V]], count: int)
+              -> containers.slice.Slice['K] {
     var items: Array['K] = new[Array['K]](count)
     var at:    int       = 0
     while at < count {
         items[at] = entries[at].key
         at += 1
     }
-    return new[containers.view.View['K]](items, 0, count)
+    return new[containers.slice.Slice['K]](items, 0, count)
 }
 
-func value_view(entries: Array[Entry['K, 'V]], count: int)
-               -> containers.view.View['V] {
+func value_slice(entries: Array[Entry['K, 'V]], count: int)
+                -> containers.slice.Slice['V] {
     var items: Array['V] = new[Array['V]](count)
     var at:    int       = 0
     while at < count {
         items[at] = entries[at].value
         at += 1
     }
-    return new[containers.view.View['V]](items, 0, count)
+    return new[containers.slice.Slice['V]](items, 0, count)
 }
 
-func insertion_keys(self: Dict['K, 'V]) -> containers.view.View['K] {
-    let count: int = cast[int]self.index.live
-    if self.index.used == self.index.live {
-        return key_view(self.entries, count)
-    }
-    return key_view(snapshot_entries(self), count)
+func insertion_keys(self: Dict['K, 'V]) -> containers.slice.Slice['K] {
+    return key_slice(snapshot_entries(self), cast[int]self.index.live)
 }
 
 func keys(self: Dict['K, 'V],
                  sort_order : Sort_Order = Sort_Order.none)
-         -> containers.view.View['K] {
+         -> containers.slice.Slice['K] {
     if sort_order == Sort_Order.none {
         return insertion_keys(self)
     }
-    return key_view(ordered_entries(self, sort_order),
-                    cast[int]self.index.live)
+    return key_slice(ordered_entries(self, sort_order),
+                     cast[int]self.index.live)
 }
 
 func values(self: Dict['K, 'V],
                    sort_order : Sort_Order = Sort_Order.none)
-           -> containers.view.View['V] {
-    let count: int = cast[int]self.index.live
-    if sort_order == Sort_Order.none and self.index.used == self.index.live {
-        return value_view(self.entries, count)
-    }
-    return value_view(ordered_entries(self, sort_order), count)
+           -> containers.slice.Slice['V] {
+    return value_slice(ordered_entries(self, sort_order),
+                       cast[int]self.index.live)
 }
 
 alias litmod d = dict
-dict litmod dict(pairs: Array[Tuple['K, 'V]]) -> Dict['K, 'V] fail: string {
+dict litmod dict(pairs: Array[Tuple['K, 'V]]) -> Dict['K, 'V] fail: string
+    where 'K : hashing . Hash {
     return new[Dict['K, 'V]](pairs = pairs)
+}
+
+func is_subset(left: Dict['K, nil], right: Dict['K, nil])
+              -> bool where 'K : hashing . Hash {
+    for value in insertion_keys(left) {
+        if !contains(right, value) {
+            return false
+        }
+    }
+    return true
+}
+
+func is_superset(left: Dict['K, nil], right: Dict['K, nil])
+                -> bool where 'K : hashing . Hash {
+    return is_subset(right, left)
+}
+
+func is_disjoint(left: Dict['K, nil], right: Dict['K, nil])
+                -> bool where 'K : hashing . Hash {
+    for value in insertion_keys(left) {
+        if contains(right, value) {
+            return false
+        }
+    }
+    return true
+}
+
+func __equal(view self: Dict['K, nil], view other: Dict['K, nil])
+            -> bool where 'K : hashing . Hash {
+    return len(self) == len(other) and is_subset(self, other)
+}
+
+func hash(self: Dict['K, nil]) -> u128 where 'K : hashing . Hash {
+    result = len(self)
+    for value in insertion_keys(self) {
+        result = result ^ value.hash()
+    }
+    return result
+}
+
+func __add(view left: Dict['K, nil], view right: Dict['K, nil])
+          -> Dict['K, nil] where 'K : hashing . Hash {
+    result = new[Dict['K, nil]]()
+    for value in insertion_keys(left) {
+        _ = add(result, value, nil)
+    }
+    for value in insertion_keys(right) {
+        _ = add(result, value, nil)
+    }
+    return result
+}
+
+func __subtract(view left: Dict['K, nil], view right: Dict['K, nil])
+               -> Dict['K, nil] where 'K : hashing . Hash {
+    result = new[Dict['K, nil]]()
+    for value in insertion_keys(left) {
+        if !contains(right, value) {
+            _ = add(result, value, nil)
+        }
+    }
+    return result
+}
+
+func __bit_and(view left: Dict['K, nil], view right: Dict['K, nil])
+              -> Dict['K, nil] where 'K : hashing . Hash {
+    result = new[Dict['K, nil]]()
+    for value in insertion_keys(left) {
+        if contains(right, value) {
+            _ = add(result, value, nil)
+        }
+    }
+    return result
+}
+
+func __bit_xor(view left: Dict['K, nil], view right: Dict['K, nil])
+              -> Dict['K, nil] where 'K : hashing . Hash {
+    result = new[Dict['K, nil]]()
+    for value in insertion_keys(left) {
+        if !contains(right, value) {
+            _ = add(result, value, nil)
+        }
+    }
+    for value in insertion_keys(right) {
+        if !contains(left, value) {
+            _ = add(result, value, nil)
+        }
+    }
+    return result
+}
+
+alias litmod s = set
+set litmod set(items: Array['K]) -> Dict['K, nil] fail: string
+    where 'K : hashing . Hash {
+    result = new[Dict['K, nil]]()
+    for value in items {
+        _ = add(result, value, nil)
+    }
+    return result
 }

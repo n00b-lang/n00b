@@ -266,50 +266,28 @@ n00bb_abi_constraint_rows_build(
     core_list_push(rows, ((n00b_abi_constraint_v1){0}));
     core_list_push(shapes, ((n00b_abi_call_shape_v1){0}));
     bool valid = true;
-    for (size_t i = 1; valid && i < types->count; i++) {
-        n00b_abi_type_v1 *type_row = &types->rows[i];
-        if (type_row->kind != N00B_ABI_TYPE_VARIABLE
-            || type_row->typevar_import_requirement_index) continue;
-        th_type *variable = n00bb_abi_type_index_at(index, (uint32_t)i);
-        if (!variable || th_kind_of(th_resolve(variable)) != TH_VAR
-            || (!type_row->typevar_owner_scope_index
-                && !type_row->typevar_owner_type_index
-                && !type_row->typevar_import_requirement_index)) {
-            valid = false;
-            break;
-        }
-        core_list_t(uint32_t) members = {0};
-        for (size_t j = 0; valid && j < th_var_constraint_count(variable); j++) {
-            th_constraint constraint;
-            uint32_t row_index = 0;
-            valid = th_var_constraint_at(variable, j, &constraint)
-                && append_constraint(index, names, constraint,
-                    type_row->typevar_ordinal, stream_base,
-                    parameter_base, &rows, &shapes, &parameters,
-                    &stream, &row_index);
-            if (valid) core_list_push(members, row_index);
-        }
-        if (valid) valid = append_membership(&stream, stream_base,
-            &members, &type_row->constraints);
-        core_list_free(members);
-    }
     for (size_t i = 1; valid && i < functions->function_count; i++) {
         n00b_abi_function_v1 *function = &functions->functions[i];
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             function->symbol_index);
-        n00bb_declared_where_t *declared = symbol
-            ? parse_sym_binding(symbol, N00BB_DECLARED_WHERE_KEY) : nullptr;
-        if (!declared || !declared->len) continue;
+        core_list_t(th_trait_requirement) declared =
+            n00bb_declared_bounds(symbol);
+        if (!declared.len) {
+            core_list_free(declared);
+            continue;
+        }
         n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
             N00BB_SIGNATURE_TYPEVARS_KEY);
-        if (!variables || !variables->data || !declared->data) {
+        if (!variables || !variables->data) {
+            core_list_free(declared);
             valid = false;
             break;
         }
         core_list_t(uint32_t) members = {0};
-        for (size_t j = 0; valid && j < declared->len; j++) {
-            th_trait_requirement *requirement = &declared->data[j];
-            if (th_kind_of(th_resolve(requirement->subject)) != TH_VAR)
+        for (size_t j = 0; valid && j < declared.len; j++) {
+            th_trait_requirement *requirement = &declared.data[j];
+            if (th_kind_of(th_resolve(requirement->subject)) != TH_VAR
+                || !th_occurs(nullptr, requirement->subject, symbol->type))
                 continue;
             size_t ordinal = variables->len;
             for (size_t k = 0; k < variables->len; k++)
@@ -323,20 +301,39 @@ n00bb_abi_constraint_rows_build(
                 break;
             }
             th_constraint constraint = {.kind = requirement->kind};
+            th_type *members_of = th_resolve(requirement->target);
+            size_t arms = constraint.kind == TH_CON_ONE_OF && members_of
+                ? th_sum_len(members_of) : 0;
+            th_type **choices = arms ? core_alloc_array(th_type *, arms)
+                                     : nullptr;
+            for (size_t k = 0; choices && k < arms; k++)
+                choices[k] = th_sum_arm(members_of, k);
             if (constraint.kind == TH_CON_IMPLEMENTS)
                 constraint.iface = requirement->iface;
             else if (constraint.kind == TH_CON_EXCLUDES)
                 constraint.target = requirement->target;
+            else if (constraint.kind == TH_CON_ONE_OF && choices) {
+                constraint.one_of.types = choices;
+                constraint.one_of.n = arms;
+            }
+            else if (constraint.kind == TH_CON_METHOD && requirement->target) {
+                constraint.method.name = requirement->iface;
+                constraint.method.result =
+                    th_func_ret(th_resolve(requirement->target));
+                constraint.method.call = requirement->target;
+            }
             else { valid = false; break; }
             uint32_t row_index = 0;
             valid = append_constraint(index, names, constraint,
                 (uint32_t)ordinal, stream_base, parameter_base,
                 &rows, &shapes, &parameters, &stream, &row_index);
+            core_free(choices);
             if (valid) core_list_push(members, row_index);
         }
         if (valid) valid = append_membership(&stream, stream_base,
             &members, &function->constraints);
         core_list_free(members);
+        core_list_free(declared);
     }
     if (valid) *out = (n00bb_abi_constraint_rows_t){
         .rows = rows.data, .count = rows.len,

@@ -1,0 +1,9 @@
+tests/diagnostics/tu/ambiguous_method.n:1:7: warning N00B-N0023: type `Frobs` is never used
+  help: remove it
+tests/diagnostics/tu/ambiguous_method.n:4:7: warning N00B-N0023: type `Twiddles` is never used
+  help: remove it
+tests/diagnostics/tu/ambiguous_method.n:9:12: error N00B-T0590: `frob` is ambiguous: the type of `x` isn't known here, and more than one trait has `frob`
+  note: `frob` is a method of `Frobs` and `Twiddles`
+  help: say which trait `x` must implement, as in `where 'X: Frobs`, or give `x` that trait as its type
+tests/diagnostics/tu/ambiguous_method.n:12:12: error N00B-T0590: no trait has a method `zap`, so it can't be called on `x`, whose type isn't known here
+  help: give `x` a type that has `zap`

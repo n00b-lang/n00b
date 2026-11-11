@@ -1,7 +1,7 @@
-tests/diagnostics/tu/type_checks.n:2:21: error N00B-T0524: integer constant 300 does not fit in `u8`
-  help: use a wider integer type, or a value inside the range of `u8`
-tests/diagnostics/tu/type_checks.n:10:9: error N00B-T0524: integer value 18446744073709551616 does not fit in `uint`
+tests/diagnostics/tu/type_checks.n:2:21: error N00B-S0053: this operation always overflows: 200 and 100
+tests/diagnostics/tu/type_checks.n:10:18: error N00B-T0524: integer constant 18446744073709551616 does not fit in `uint`
   help: use a wider integer type, or a value inside the range of `uint`
+tests/diagnostics/tu/type_checks.n:16:5: warning N00B-N0021: field `count` of `Counter_2` is set but never read
 tests/diagnostics/tu/type_checks.n:25:5: error N00B-T0501: cannot write through constant `bytes`; nothing reachable from a constant is writable
   tests/diagnostics/tu/type_checks.n:20:7: note: `bytes` is declared here
   help: declare `bytes` with `var` to make it writable
@@ -17,26 +17,31 @@ tests/diagnostics/tu/type_checks.n:37:5: error N00B-T0501: cannot write through 
 tests/diagnostics/tu/type_checks.n:44:1: error N00B-T0501: cannot write through constant `FIXED`; nothing reachable from a constant is writable
   tests/diagnostics/tu/type_checks.n:19:7: note: `FIXED` is declared here
   help: declare `FIXED` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:47:5: warning N00B-N0022: field `value` of `Sample` is never used
 tests/diagnostics/tu/type_checks.n:50:17: error N00B-T0552: the receiver of `__finalize` cannot be optional (`Ref[Sample]?`); a finalizer always runs on a live value
   help: write `func __finalize(consume self: Ref[T])`
-tests/diagnostics/tu/type_checks.n:53:12: error N00B-T0500: `0xff & 0x0f` is an integer, but `f` returns `i32`
-  tests/diagnostics/tu/type_checks.n:52:13: note: the return type of `f` is declared here
+tests/diagnostics/tu/type_checks.n:56:1: warning N00B-S0062: this call has no effect and its result is ignored: `f` changes nothing the caller can see and has no other effect
 tests/diagnostics/tu/type_checks.n:57:12: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
-  lib/builtin/containers/dict.n:20:8: note: `Dict` is declared here
+  lib/builtin/containers/dict.n:22:8: note: `Dict` is declared here
   help: add the missing type argument
+tests/diagnostics/tu/type_checks.n:58:8: warning N00B-N0023: type `Box` is never used
+  help: remove it
 tests/diagnostics/tu/type_checks.n:61:16: error N00B-T0515: `Box` takes 1 type argument, but 2 are given
   tests/diagnostics/tu/type_checks.n:58:8: note: `Box` is declared here
   help: remove the extra type argument
 tests/diagnostics/tu/type_checks.n:64:16: error N00B-T0515: `List` takes 1 type argument, but 2 are given
-  lib/builtin/containers/list.n:6:8: note: `List` is declared here
+  lib/builtin/containers/list.n:8:8: note: `List` is declared here
   help: remove the extra type argument
 tests/diagnostics/tu/type_checks.n:66:12: error N00B-T0500: `"bob"` is `string`, but `name` returns `int`
   tests/diagnostics/tu/type_checks.n:65:16: note: the return type of `name` is declared here
+tests/diagnostics/tu/type_checks.n:72:5: warning N00B-N0021: field `y` of `Point` is set but never read
 tests/diagnostics/tu/type_checks.n:76:11: error N00B-N0005: `Point` has no field `z`
   note: `Point` has fields `x` and `y`
   tests/diagnostics/tu/type_checks.n:70:8: note: type `Point` is declared here
 tests/diagnostics/tu/type_checks.n:79:9: error N00B-T0518: `+` needs operands of the same type, but `a` is an integer and `b` is `string`
   help: convert one operand so both have the same type
+tests/diagnostics/tu/type_checks.n:88:14: error N00B-S0009: `v` may be nil here
+  help: use its value only where a test such as `v != nil` proves it, with no assignment to it in between
 tests/diagnostics/tu/type_checks.n:89:9: error N00B-T0516: `v` is `int?` and may be `nil`, so it cannot be used with `+`
   help: test it against `nil` first; inside `if v != nil { ... }`, `v` is `int`
 tests/diagnostics/tu/type_checks.n:95:5: error N00B-T0501: cannot write through view parameter `c`; nothing reachable from a view parameter is writable
@@ -53,10 +58,13 @@ tests/diagnostics/tu/type_checks.n:117:13: error N00B-T0504: cannot assign `0` t
   help: only a value of type `'T`, such as another parameter of that type, can be stored in `value`
 tests/diagnostics/tu/type_checks.n:125:8: error N00B-T0502: type variable `'T` does not belong to an enclosing function, record, variant or trait
   help: type variables are declared by using them in a function signature or a generic type declaration; use a concrete type here
+tests/diagnostics/tu/type_checks.n:127:5: warning N00B-N0022: field `a` of `Pair` is never used
+tests/diagnostics/tu/type_checks.n:128:5: warning N00B-N0022: field `b` of `Pair` is never used
+tests/diagnostics/tu/type_checks.n:131:5: warning N00B-N0021: field `s` of `Sq` is set but never read
 tests/diagnostics/tu/type_checks.n:134:13: error N00B-T0518: `+` needs operands of the same type, but `3.5` is `f64` and `true` is `bool`
   help: convert one operand so both have the same type
 tests/diagnostics/tu/type_checks.n:137:18: error N00B-T0500: `"a"` is `string`, which does not convert to `int`
-tests/diagnostics/tu/type_checks.n:138:19: error N00B-T0500: `7` is `u8`, which does not convert to `bool`
+tests/diagnostics/tu/type_checks.n:138:19: error N00B-T0500: `7` is an integer, which does not convert to `bool`
 tests/diagnostics/tu/type_checks.n:140:16: error N00B-N0001: cannot find `undefined_name` in this scope
 tests/diagnostics/tu/type_checks.n:142:6: error N00B-T0546: the body of `risky` fails with an integer, but `risky` is declared to fail with `string`
 tests/diagnostics/tu/type_checks.n:146:20: error N00B-T0530: `"three"` is `string`, but the other items of this literal are integers
@@ -73,6 +81,16 @@ tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 posit
   help: remove the extra argument
 tests/diagnostics/tu/type_checks.n:160:18: error N00B-T0018: `string` does not implement `Multiply` for these arguments
   note: 13 implementations of `Multiply` were considered
-tests/diagnostics/tu/type_checks.n:161:23: error N00B-T0500: `9` is `u8`, which does not convert to `bool`
+tests/diagnostics/tu/type_checks.n:161:23: error N00B-T0500: `9` is an integer, which does not convert to `bool`
+tests/diagnostics/tu/type_checks.n:167:23: error N00B-S0027: this call can fail with `string`, but it is top-level code, which has no caller to pass the failure to
+  help: handle the failure with `try`, or move this code into a function that declares a failure type
 tests/diagnostics/tu/type_checks.n:169:1: error N00B-T0581: cannot assign to an element of a tuple; tuples are immutable
   help: build a new tuple and assign that instead
+tests/diagnostics/tu/type_checks.n:171:8: warning N00B-N0023: type `Tally` is never used
+  help: remove it
+tests/diagnostics/tu/type_checks.n:176:7: error N00B-N0005: `Tally` has no field `missing`
+  note: `Tally` has field `count`
+  tests/diagnostics/tu/type_checks.n:171:8: note: type `Tally` is declared here
+tests/diagnostics/tu/type_checks.n:177:7: error N00B-N0006: field `lock` of `Buffer` is private to module `builtin.containers.buffer`
+  lib/builtin/containers/buffer.n:8:13: note: field `lock` is declared here
+  help: use a function of module `builtin.containers.buffer` to read or change it, or remove `private` from the field

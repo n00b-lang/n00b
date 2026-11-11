@@ -12,7 +12,7 @@ enum Valign {
 }
 
 record Box_Props {
-    border_theme: Ref[internal.border.Border_Theme]?
+    border_theme: View[internal.border.Border_Theme]?
     border_style: Text_Style?
     fill_style:   Text_Style?
     text_style:   Text_Style?
@@ -306,7 +306,7 @@ func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
         style_opt = table_style_default()
     }
     if style_opt != nil {
-        let preset: Table_Style = style_opt.get()
+        let preset: Table_Style = style_opt
         if frame_opt == nil {
             frame_opt = preset.table_props
         }
@@ -321,7 +321,7 @@ func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
         }
     }
     if frame_opt != nil {
-        self.table_props = frame_opt.get()
+        self.table_props = frame_opt
     }
     else {
         let zero: Box_Props = (
@@ -333,7 +333,7 @@ func __init(modify self: Table, num_cols: uint = 0, style: Table_Style? = nil,
         self.table_props = box_props_new(zero)
     }
     if cells_opt != nil {
-        self.default_cell_props = cells_opt.get()
+        self.default_cell_props = cells_opt
     }
     else {
         self.default_cell_props =
@@ -583,26 +583,26 @@ func set_col_props(modify self: Table, col: uint, props: Box_Props)
 func resolve_cell_props(self: Table, row_ix: i64, col_ix: uint,
                         cell: Table_Cell? = nil) -> Box_Props {
     if cell != nil {
-        let c: Table_Cell = cell.get()
+        let c: Table_Cell = cell
         let own: Box_Props? = c.cell_props
         if own != nil {
-            return own.get()
+            return own
         }
     }
     if col_ix < self.col_specs.len() {
         let spec: Table_Col_Spec = self.col_specs[cast[int] col_ix]
         let col_props: Box_Props? = spec.col_props
         if col_props != nil {
-            return col_props.get()
+            return col_props
         }
     }
     let header: Box_Props? = self.header_props
     if row_ix == 0 and header != nil {
-        return header.get()
+        return header
     }
     let alt: Box_Props? = self.alt_cell_props
     if unsafe_and(row_ix, 1) != 0 and alt != nil {
-        return alt.get()
+        return alt
     }
     return self.default_cell_props
 }

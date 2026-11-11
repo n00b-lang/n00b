@@ -1,0 +1,22 @@
+func compared(x: int) -> int {
+    let a: int = 3
+    var r = x
+    if a == 3 {
+        r = r + 1
+    }
+    if a != 3 {
+        r = r + 2
+    }
+    return r
+}
+
+func dead(x: int) -> int {
+    let a: int = 3
+    if a <= 4 {
+        return 1
+    }
+    if a == 3 {
+        return 3
+    }
+    return x
+}

@@ -337,6 +337,22 @@ set_order(const pt_item_t *a, const pt_item_t *b)
 }
 
 static void
+set_difference(const pt_set_t *set, pt_set_t *old)
+{
+    pt_set_t fresh = (pt_set_t){0};
+    size_t   o     = 0;
+    for (size_t i = 0; i < set->len; i++) {
+        while (o < old->len && set_order(&old->data[o], &set->data[i]) < 0)
+            o++;
+        if (o < old->len && !set_order(&old->data[o], &set->data[i]))
+            continue;
+        core_list_push(fresh, set->data[i]);
+    }
+    core_list_free(*old);
+    *old = fresh;
+}
+
+static void
 drop_covered(pt_set_t *set, const pt_item_t *item, size_t low, size_t high)
 {
     size_t kept = low;

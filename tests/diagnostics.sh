@@ -46,7 +46,7 @@ for program in tests/diagnostics/*/*.n; do
     *)
         if [ -d "$(modules "$program")" ]; then
             N00B_PATH=$(modules "$program") "$compiler" check \
-                --no-comptime "$program" >/dev/null 2>"$raw" &
+                "$program" >/dev/null 2>"$raw" &
         else
             checked="$checked $program"
         fi ;;
@@ -55,15 +55,15 @@ done
 for layout in tests/diagnostics/*/*.layout.expected; do
     [ -f "$layout" ] || continue
     stem=${layout%.expected}
-    N00B_DIAGNOSTICS= NO_COLOR=1 "$compiler" check --no-comptime \
+    N00B_DIAGNOSTICS= N00B_DIAGNOSTIC_CODES=false NO_COLOR=1 "$compiler" check \
         "${stem%.layout}.n" >/dev/null 2>"$tmp/raw/$(key "$stem")" &
 done
 for package in tests/diagnostics/packages/*/; do
     package=${package%/}
-    N00B_PATH=tests/diagnostics/packages "$compiler" check --no-comptime \
+    N00B_PATH=tests/diagnostics/packages "$compiler" check \
         "${package##*/}.facade" >/dev/null 2>"$tmp/raw/$(key "$package")" &
 done
-"$compiler" check --no-comptime $checked >"$tmp/stdout" 2>"$tmp/check"
+"$compiler" check $checked >"$tmp/stdout" 2>"$tmp/check"
 checked_status=$?
 awk -v dir="$tmp/raw" '
     /^[^ ]/ {

@@ -40,6 +40,10 @@ func put_in_typecase(modify values: 'L, value: 'T) {
     }
 }
 
+func put_in_appendable(modify values: Appendable, value: 'T) {
+    values.append(value)
+}
+
 func put_in_unconstrained(modify values: 'L, value: 'T) {
     values.append(value)
 }
@@ -49,15 +53,31 @@ put_in(box, 9)
 require box.value == 9
 put_in_typecase(box, 11)
 require box.value == 11
-put_in_unconstrained(box, 13)
+put_in_appendable(box, 13)
 require box.value == 13
 var other: OtherBox = (value = 0)
 put_in(other, 9)
 require other.value == 10
 put_in_typecase(other, 11)
 require other.value == 12
-put_in_unconstrained(other, 13)
+put_in_appendable(other, 13)
 require other.value == 14
+put_in_unconstrained(other, 15)
+require other.value == 16
+var listed: List[int] = [1]
+let pushed: int = 2
+put_in_unconstrained(listed, pushed)
+require listed.len() == 2 and listed[1] == 2
+put_in_unconstrained(listed, 3)
+require listed.len() == 3 and listed[2] == 3
+
+func fill_out(out slot: 'T, value: 'T) {
+    slot = value
+}
+
+var filled: int = 0
+fill_out(filled, 5)
+require filled == 5
 
 func echo(value: (int | string)) {
     return value
@@ -83,13 +103,13 @@ record Counter {
     value: int
 }
 
-func __add(left: Meter, right: Meter) -> Meter {
-    let result: Meter = (value = left.value + right.value)
+func __add(view left: Meter, view right: Meter) -> Meter {
+    result = (value = left.value + right.value)
     return result
 }
 
-func __add(left: Counter, right: Counter) -> Counter {
-    let result: Counter = (value = left.value + right.value)
+func __add(view left: Counter, view right: Counter) -> Counter {
+    result = (value = left.value + right.value)
     return result
 }
 
@@ -149,4 +169,20 @@ func pair_cmp(left: Comparable_Item, right: Comparable_Item) -> int {
 let item_a: Comparable_Item = (value = 3)
 let item_b: Comparable_Item = (value = 2)
 require compare_self(item_a) == 0
+
+func next_of(x: 'T) -> 'T {
+    return x + 1
+}
+
+let wide_next: i64 = 41
+require next_of(4) == 5
+require next_of(wide_next) == 42
+
+func add_two(x: 'T, y: 'U) -> 'T {
+    return x + y
+}
+
+let narrow_part: i32 = 2
+require add_two(wide_next, narrow_part) == 43
+require add_two(1, 2) == 3
 __fd_write(2, "ok")

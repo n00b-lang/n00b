@@ -187,6 +187,18 @@ core_process_wait(core_process_t process, core_process_status_t *out)
 }
 
 bool
+core_process_wait_timeout(core_process_t process, uint64_t milliseconds,
+                          core_process_status_t *out, bool *timed_out)
+{
+    HANDLE handle = (HANDLE)process.handle;
+    DWORD limit = !milliseconds ? INFINITE
+        : milliseconds >= INFINITE ? INFINITE - 1 : (DWORD)milliseconds;
+    *timed_out = WaitForSingleObject(handle, limit) == WAIT_TIMEOUT;
+    if (*timed_out) TerminateProcess(handle, 1);
+    return core_process_wait(process, out);
+}
+
+bool
 core_process_wait_any(const core_process_t *processes, size_t count,
                       size_t *which, core_process_status_t *out)
 {
@@ -308,8 +320,10 @@ core_process_capture(char *const *arguments, const void *input,
 #else
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -357,6 +371,44 @@ core_process_wait(core_process_t process, core_process_status_t *out)
               .code = WIFSIGNALED(status) ? WTERMSIG(status) : 0,
           };
     return true;
+}
+
+static uint64_t
+monotonic_milliseconds(void)
+{
+    struct timespec now = {0};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+}
+
+bool
+core_process_wait_timeout(core_process_t process, uint64_t milliseconds,
+                          core_process_status_t *out, bool *timed_out)
+{
+    *timed_out = false;
+    if (!milliseconds) return core_process_wait(process, out);
+    pid_t child = (pid_t)process.handle;
+    uint64_t deadline = monotonic_milliseconds() + milliseconds;
+    int status = 0;
+    pid_t got = 0;
+    while (!(got = waitpid(child, &status, WNOHANG))
+           && monotonic_milliseconds() < deadline) {
+        struct timespec pause = {.tv_nsec = 10000000};
+        nanosleep(&pause, nullptr);
+    }
+    if (got < 0 && errno != EINTR) return false;
+    if (got == child) {
+        if (out) *out = WIFEXITED(status)
+            ? (core_process_status_t){.exited = true,
+                                      .code = WEXITSTATUS(status)}
+            : (core_process_status_t){
+                  .code = WIFSIGNALED(status) ? WTERMSIG(status) : 0,
+              };
+        return true;
+    }
+    *timed_out = true;
+    kill(child, SIGKILL);
+    return core_process_wait(process, out);
 }
 
 bool

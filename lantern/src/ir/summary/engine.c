@@ -55,10 +55,14 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     pt->calls     = core_list_new(pt_callees_t);
     pt->context   = core_list_new(pt_access_t);
     pt->flow      = (pt_flow_t){
-        .defs  = core_list_new(flow_def_t),
-        .steps = core_list_new(flow_step_t),
-        .items = (pt_set_t){0},
+        .defs    = core_list_new(flow_def_t),
+        .walk    = core_list_new(uint32_t),
+        .reached = core_list_new(uint32_t),
+        .items   = (pt_set_t){0},
     };
+    core_dict_init(&pt->flow.at_instr, nullptr, nullptr);
+    core_dict_init(&pt->flow.covered, nullptr, nullptr);
+    core_dict_init(&pt->flow.visited, nullptr, nullptr);
     core_dict_init(&pt->flow.writes, nullptr, nullptr);
     core_dict_init(&pt->flow.positions, nullptr, nullptr);
     core_dict_init(&pt->flow.pending, nullptr, nullptr);
@@ -95,13 +99,13 @@ flow_free(pt_flow_t *flow)
     core_dict_free(&flow->positions);
     core_dict_free(&flow->pending);
     core_dict_free(&flow->released);
+    core_dict_free(&flow->at_instr);
+    core_dict_free(&flow->covered);
+    core_dict_free(&flow->visited);
     core_list_free(flow->defs);
-    core_list_free(flow->steps);
+    core_list_free(flow->walk);
+    core_list_free(flow->reached);
     core_list_free(flow->items);
-    core_free(flow->block_steps);
-    core_free(flow->kills);
-    core_free(flow->block_in);
-    core_free(flow->state);
 }
 
 static void
@@ -139,6 +143,7 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->mapped, entry) {
         mapped_entry_t *mapped = entry->value;
         core_list_free(mapped->items);
+        core_list_free(mapped->added);
         memo_free(&mapped->memo);
         core_free(mapped);
     }
@@ -176,7 +181,11 @@ pt_free(pt_t *pt)
     }
     core_dict_free(&pt->source_maps);
     core_list_free(pt->source_stack);
-    core_dict_foreach(&pt->flow_nodes, entry) core_free(entry->key);
+    core_dict_foreach(&pt->flow_nodes, entry) {
+        flow_node_t *node = entry->value;
+        core_list_free(node->filled);
+        core_free(node);
+    }
     core_dict_free(&pt->flow_nodes);
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);

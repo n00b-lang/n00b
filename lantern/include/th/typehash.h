@@ -105,13 +105,9 @@ typedef struct {
     core_string_t    sequence;
     core_string_t    reference;
     core_string_t    option_suffix;
-    bool             omit_constraints;
     bool             omit_nil_failure;
     bool             source_spelling;
 } th_print_options_t;
-
-typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
-                                          core_string_t name, void *user);
 
 typedef struct {
     core_string_t file;
@@ -166,12 +162,6 @@ typedef enum : uint8_t {
 enum {
     TH_INTEGER_UNSIGNED = 1u << 0,
 };
-
-typedef enum : uint8_t {
-    TH_INTEGER_NONE,
-    TH_INTEGER_SIGNED,
-    TH_INTEGER_UNSIGNED_TYPE,
-} th_integer_class;
 
 typedef struct {
     th_con_kind kind;
@@ -245,7 +235,6 @@ typedef struct {
 
 th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
-uint64_t th_type_graph_revision(th_type *const *roots, size_t count);
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
 th_type *th_type_clone_fresh(th_ctx *destination, const th_type *source);
 typedef struct th_type_cloner th_type_cloner_t;
@@ -311,9 +300,8 @@ typedef enum : uint8_t {
     TH_BUILTIN_SET,
     TH_BUILTIN_DICT,
     TH_BUILTIN_CONTAINER_LIST,
-    TH_BUILTIN_CONTAINER_SET,
     TH_BUILTIN_CONTAINER_DICT,
-    TH_BUILTIN_VIEW,
+    TH_BUILTIN_SLICE,
     TH_BUILTIN_TUPLE,
     TH_BUILTIN_ANY,
     TH_BUILTIN_NIL,
@@ -352,6 +340,7 @@ bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
 void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
+th_type *th_fields_record(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              core_string_t name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
@@ -369,6 +358,7 @@ th_type *th_var_named(th_ctx *ctx, core_string_t name);
 th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
 th_type *th_option(th_ctx *ctx, th_type *item);
 th_type *th_option_item(const th_type *type);
+th_type *th_tuple_element(th_type *type, size_t index, size_t *count);
 th_type *th_nil(th_ctx *ctx);
 bool     th_is_nil(const th_type *type);
 bool     th_zero_size(th_ctx *ctx, th_type *type);
@@ -397,7 +387,6 @@ th_span_t th_ctx_span(const th_ctx *ctx);
 size_t      th_error_count(const th_ctx *ctx);
 bool        th_error_at(const th_ctx *ctx, size_t i, th_error_t *out);
 void        th_errors_clear(th_ctx *ctx);
-void        th_ctx_set_probe_errors_observable(th_ctx *ctx, bool observable);
 core_string_t th_err_kind_name(th_err_kind kind);
 
 bool   th_named_info(const th_type *type, core_string_t *name,
@@ -447,38 +436,10 @@ th_type *th_sum_arm(const th_type *type, size_t i);
 bool th_var_index(const th_type *type, uint64_t *index);
 core_string_t th_var_name(const th_type *type);
 
-bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
-bool   th_require_method(th_ctx *ctx, th_type *receiver, core_string_t name,
-                         th_type *result, th_type *call);
-bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
-                                  core_string_t name, core_string_t in_place,
-                                  th_type *result, th_type *call);
-bool   th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
-                            core_string_t in_place, th_type *result,
-                            th_type *call, const void *site);
-bool   th_awaits_method_result(th_ctx *ctx, th_type *type);
-bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
-                                      core_string_t name, th_type *result,
-                                      th_type *error);
 typedef struct {
     core_string_t name;
     bool        optional;
 } th_formal_name;
-th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
-                                     const th_formal_name *formals,
-                                     size_t formal_count);
-bool   th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
-                                          core_string_t name,
-                                          const th_formal_name *formals,
-                                          size_t formal_count);
-size_t th_var_constraint_count(const th_type *var);
-bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
-bool   th_ctx_validate_constraints(th_ctx *ctx);
-
-void th_register_promotion(th_ctx *ctx, core_string_t from, core_string_t to);
-bool th_promotes_to(th_ctx *ctx, core_string_t from, core_string_t to);
-bool th_type_promotes_to(th_ctx *ctx, const th_type *from,
-                         const th_type *to);
 
 typedef enum : uint8_t {
     TH_COERCE_NONE        = 0,
@@ -490,63 +451,16 @@ typedef enum : uint8_t {
     TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
 } th_coerce_flag;
 
-void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed);
-
-typedef struct {
-    uint8_t  allow;
-    th_type *target;
-} th_coerce_policy;
-
-typedef struct {
-    th_coerce_flag kind;
-    th_type       *from;
-    th_type       *to;
-    th_span_t      span;
-} th_coercion_t;
-
-typedef bool (*th_coerce_fn)(th_ctx *ctx, th_type *from, th_type *to,
-                             void *user);
-typedef th_type *(*th_coerce_target_fn)(th_ctx *ctx, th_type *from,
-                                        void *user);
-typedef bool (*th_convert_fn)(th_ctx *ctx, th_type *from, th_type *to,
-                              void *site, void *context, void *user);
-typedef th_integer_class (*th_integer_class_fn)(th_ctx *ctx, th_type *type);
-typedef bool (*th_integer_method_fn)(th_ctx *ctx, th_type *receiver,
-                                     const th_constraint *method, void *user);
-
-th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
-
-void   th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user);
-void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
-void   th_register_receiver_view(th_ctx *ctx, th_coerce_target_fn fn);
-void   th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user);
-void   th_register_integer_class(th_ctx *ctx, th_integer_class_fn fn);
-void   th_register_integer_method(th_ctx *ctx, th_integer_method_fn fn,
-                                  void *user);
-bool   th_var_is_integer(const th_type *var, uint8_t *flags);
-bool   th_var_owned_integer(const th_ctx *ctx, const th_type *var);
-bool   th_ground_integer(th_ctx *ctx, th_type *var, th_type *type);
-void   th_var_mark_open(th_type *type);
-bool   th_var_is_open(const th_type *type);
-bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
-                   void *context);
-bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);
-size_t th_coercion_count(const th_ctx *ctx);
-bool   th_coercion_at(const th_ctx *ctx, size_t i, th_coercion_t *out);
-void   th_coercions_clear(th_ctx *ctx);
-
-void   th_register_iface(th_ctx *ctx, core_string_t name, th_type *methods);
-bool   th_register_method(th_ctx *ctx, th_type *receiver, core_string_t name,
-                          th_type *signature);
-bool   th_register_method_resolver(th_ctx *ctx,
-                                   th_method_resolver_fn resolver,
-                                   void *user);
-th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, core_string_t name);
 bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
-size_t th_infer_ifaces(th_ctx *ctx, th_type *type, core_string_t *out,
-                       size_t max);
 
 th_type *th_resolve(th_type *type);
+th_type *th_var_ref(const th_type *var);
+uint64_t th_var_revision(const th_type *var);
+bool     th_var_bind(th_type *var, th_type *to);
+bool     th_var_rebind(th_type *var, th_type *to);
+size_t   th_child_count(const th_type *type);
+th_type *th_child(const th_type *type, size_t i);
+bool     th_same_shape(const th_type *a, const th_type *b);
 
 bool     th_is_erased(const th_type *type);
 bool     th_is_bottom(const th_type *type);
@@ -557,10 +471,18 @@ size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
-th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b);
-bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b);
-bool th_unifies(th_ctx *ctx, th_type *a, th_type *b);
-th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b);
+bool     th_match(th_type *pattern, th_type *concrete);
+bool     th_matches(th_type *pattern, th_type *concrete);
+typedef bool (*th_binding_fn)(void *context, th_type *variable,
+                              th_type *value);
+bool     th_match_each(th_type *pattern, th_type *concrete,
+                       th_binding_fn bound, void *context);
+bool     th_same_type(th_type *a, th_type *b);
+th_type *th_fill(th_type *placeholder, th_type *type);
+bool     th_compatible(th_type *a, th_type *b);
+bool     th_match_pair(th_type *a, th_type *b);
+th_type *th_meet(th_ctx *ctx, th_type *a, th_type *b);
+bool     th_type_widens_to(const th_type *from, const th_type *to);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);
 th_type *th_generalize(th_ctx *ctx, th_type *type);
 th_type *th_generalize_excluding(th_ctx *ctx, th_type *type,

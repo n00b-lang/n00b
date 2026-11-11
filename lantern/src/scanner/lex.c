@@ -964,6 +964,22 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
        sigil && sigil->prefix.data; sigil++) {
     lex->sigil_count++;
   }
+  if (lex->number_form_count) {
+    lex->number_sign_not_after = core_alloc_array(lex_tid_set_t,
+                                                   lex->number_form_count);
+    for (size_t i = 0; i < lex->number_form_count; i++) {
+      for (const core_string_t *name = spec->number_forms[i].sign_not_after;
+           name && name->data; name++) {
+        int64_t tid = parse_terminal_id(g, *name);
+        if (!tid && name->u8_bytes == 1) {
+          tid = (unsigned char)name->data[0];
+        }
+        if (tid) {
+          tid_set_add(&lex->number_sign_not_after[i], (int32_t)tid);
+        }
+      }
+    }
+  }
   if (lex->sigil_count) {
     lex->sigil_attach_after = core_alloc_array(lex_tid_set_t,
                                                 lex->sigil_count);
@@ -1427,6 +1443,11 @@ void scan_lex_free(scan_lex_t *lex) {
     core_free(lex->sigil_attach_after[i].slots);
   }
   core_free(lex->sigil_attach_after);
+  for (size_t i = 0; lex->number_sign_not_after
+                     && i < lex->number_form_count; i++) {
+    core_free(lex->number_sign_not_after[i].slots);
+  }
+  core_free(lex->number_sign_not_after);
   core_free(lex->regex_dispatch);
   for (size_t i = 0; i < lex->regex_count; i++) {
     core_free(lex->regex_not_after[i].slots);
@@ -4060,6 +4081,15 @@ static bool try_number(parse_scanner_t *s) {
 
   core_codepoint_t c = scan_peek(s, 0);
   bool signed_start = plain && in_set(lex, plain->sign, c);
+
+  if (signed_start) {
+    parse_token_info_t *previous = scan_prev_token(s);
+    size_t form_index = (size_t)(plain - lex->spec->number_forms);
+
+    signed_start = !previous
+        || !tid_set_contains(&lex->number_sign_not_after[form_index],
+                             parse_token_tid(previous));
+  }
 
   if (signed_start && scan_remaining(s) == 1 && !s->source_final) {
     scan_mark(s);

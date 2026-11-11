@@ -2,6 +2,55 @@
 
 enum { SUMMARY_CODEC_VERSION = 1 };
 
+static const core_string_t callbacks_prefix =
+    CORE_STRING_STATIC("ir.callbacks:");
+
+enum { CALLBACKS_TAG_DIGITS = 8 + 8 + 2 };
+
+static bool
+callbacks_tag(core_string_t name)
+{
+    return core_string_starts_with(name, callbacks_prefix);
+}
+
+static void
+put_hex(core_buffer_t *text, uint64_t value, int digits)
+{
+    static const char hex[] = "0123456789abcdef";
+    for (int d = digits - 1; d >= 0; d--)
+        core_buffer_putc(text, hex[(value >> (4 * d)) & 0xf]);
+}
+
+static void
+callbacks_tag_text(const ir_summary_t *summary, core_buffer_t *text)
+{
+    core_buffer_append_string(text, callbacks_prefix);
+    put_hex(text, summary->callback_params, 8);
+    put_hex(text, summary->own_flags, 8);
+    put_hex(text, summary->own_traps, 2);
+}
+
+static bool
+read_callbacks_tag(core_string_t name, ir_summary_t *summary)
+{
+    size_t at = callbacks_prefix.u8_bytes;
+    if (name.u8_bytes != at + CALLBACKS_TAG_DIGITS) return false;
+    uint64_t fields[3] = {0};
+    const int widths[3] = {8, 8, 2};
+    for (int f = 0; f < 3; f++)
+        for (int d = 0; d < widths[f]; d++, at++) {
+            char c = name.data[at];
+            int digit = c >= '0' && c <= '9' ? c - '0'
+                : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (digit < 0) return false;
+            fields[f] = fields[f] << 4 | (uint64_t)digit;
+        }
+    summary->callback_params = (uint32_t)fields[0];
+    summary->own_flags = (uint32_t)fields[1];
+    summary->own_traps = (uint8_t)fields[2] & IR_STRAP_ALL;
+    return true;
+}
+
 typedef struct {
     const uint8_t *data;
     size_t         size;
@@ -123,9 +172,16 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         put_u32(out, site->line);
         put_u32(out, site->column);
     }
-    put_u32(out, (uint32_t)summary->effects.len);
+    bool callbacks = summary->callback_params != 0;
+    put_u32(out, (uint32_t)summary->effects.len + (callbacks ? 1 : 0));
     for (size_t i = 0; i < summary->effects.len; i++)
         put_text(out, texts, summary->effects.data[i]);
+    if (callbacks) {
+        core_buffer_t tag = {0};
+        callbacks_tag_text(summary, &tag);
+        put_text(out, texts, core_buffer_string(&tag));
+        core_buffer_release(&tag);
+    }
     put_paths(out, texts, types, &summary->paths);
     put_u8(out, (uint8_t)(summary->results_known
                           | summary->returns_external << 1));
@@ -350,6 +406,10 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     uint32_t effects = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < effects; i++) {
         core_string_t name = get_text(&r);
+        if (callbacks_tag(name)) {
+            if (!read_callbacks_tag(name, summary)) r.failed = true;
+            continue;
+        }
         if (!name.u8_bytes || !ir_summary_add_effect(summary, name))
             r.failed = true;
     }

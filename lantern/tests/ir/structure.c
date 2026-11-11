@@ -4,7 +4,6 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/region_walk.h"
-#include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
 #include "lib/buffer.h"

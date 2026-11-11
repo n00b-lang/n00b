@@ -2950,6 +2950,18 @@ n00b_abi_v1_runtime_function_index(const void *address)
     return 0;
 }
 
+const void *
+n00b_abi_v1_runtime_trait_method_address(uint32_t trait_type_index,
+                                         uint32_t method_ordinal,
+                                         uint32_t receiver_type_index)
+{
+    uint32_t function_index = 0;
+    return n00b_abi_v1_resolve_trait_method(n00b_abi_v1_current_snapshot(),
+            trait_type_index, method_ordinal, receiver_type_index,
+            &function_index) == 1
+        ? n00b_abi_v1_runtime_function_address(function_index) : nullptr;
+}
+
 int32_t
 n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
                           uint64_t typehash, uint32_t *type_index)

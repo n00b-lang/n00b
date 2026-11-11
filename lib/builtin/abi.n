@@ -247,17 +247,17 @@ func relocate_thread_storage(index: u32, row: Ref[Storage_Record]) {
         let relocation: Ref[Tls_Relocation_Record]? =
             __abi_tls_relocation(cast[u32]at)
         require relocation != nil
-        let fixup: Ref[Tls_Relocation_Record] = relocation.get()
+        let fixup: Ref[Tls_Relocation_Record] = relocation
         if fixup.__value.target_kind == tls_segment {
             let base: Ref[byte]? = __abi_storage_address(index)
             let target: Ref[byte]? =
                 __abi_storage_address(fixup.__value.referenced_storage_index)
             require base != nil
             require target != nil
-            let slot: Ref[byte] = __gc_byte_offset(base.get(),
+            let slot: Ref[byte] = __gc_byte_offset(base,
                 cast[int]fixup.__value.write_byte_offset)
             (unsafe_cast[Ref[uint]] slot).__value =
-                __abi_ref_address(target.get()) + cast[uint]fixup.__value.addend_bytes
+                __abi_ref_address(target) + cast[uint]fixup.__value.addend_bytes
         }
         ordinal += 1
     }
@@ -272,8 +272,8 @@ func tls_relocate() {
     while index < __abi_storage_count() {
         let row: Ref[Storage_Record]? = __abi_storage(index)
         if row != nil {
-            if row.get().__value.segment_kind == tls_segment {
-                relocate_thread_storage(index, row.get())
+            if row.__value.segment_kind == tls_segment {
+                relocate_thread_storage(index, row)
             }
         }
         index += 1
@@ -285,7 +285,7 @@ func __type_has_kind(type_field: u32, kind: u32) -> i32 {
     if row == nil {
         return 0
     }
-    if row.get().__value.kind == kind {
+    if row.__value.kind == kind {
         return 1
     }
     return 0
@@ -299,7 +299,7 @@ func __box_value_address(box: Ref[Box_Record], size_bits: u64) -> Ref[byte] {
     let slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] payload
     let stored: Ref[byte]? = slot.__value
     require stored != nil
-    return stored.get()
+    return stored
 }
 
 func __tag_unit(unit: Ref[byte], width_bits: u32) -> u64 {
@@ -340,12 +340,12 @@ func __set_tag_unit(unit: Ref[byte], width_bits: u32, bits: u64) {
 func __type_tag_extractor(type_index: u32) -> Ref[Tag_Extractor_Record] {
     let row: Ref[Type_Record]? = __abi_type(type_index)
     require row != nil
-    let layout: Ref[Layout_Record]? = __abi_layout(row.get().__value.layout_index)
+    let layout: Ref[Layout_Record]? = __abi_layout(row.__value.layout_index)
     require layout != nil
     let found: Ref[Tag_Extractor_Record]? = __abi_tag_extractor(
-        layout.get().__value.tag_extractor_index)
+        layout.__value.tag_extractor_index)
     require found != nil
-    return found.get()
+    return found
 }
 
 func __tag_at(type_index: u32, value: Ref[byte]) -> u64 {
@@ -379,28 +379,28 @@ func __box_tag(box: Ref[Box_Record]) -> u64 {
     let index: u32 = box.__value.type_field & 0x7fffffff
     let row: Ref[Type_Record]? = __abi_type(index)
     require row != nil
-    return __tag_at(index, __box_value_address(box, row.get().__value.size_bits))
+    return __tag_at(index, __box_value_address(box, row.__value.size_bits))
 }
 
 func __box_set_tag(box: Ref[Box_Record], physical: u64) {
     let index: u32 = box.__value.type_field & 0x7fffffff
     let row: Ref[Type_Record]? = __abi_type(index)
     require row != nil
-    __set_tag_at(index, __box_value_address(box, row.get().__value.size_bits),
+    __set_tag_at(index, __box_value_address(box, row.__value.size_bits),
                  physical)
 }
 
 func __box_address(box: Ref[Box_Record]) -> Ref[byte] {
     let row: Ref[Type_Record]? = __abi_type(box.__value.type_field & 0x7fffffff)
     require row != nil
-    return __box_value_address(box, row.get().__value.size_bits)
+    return __box_value_address(box, row.__value.size_bits)
 }
 
 func __box_component(box: Ref[Box_Record], ordinal: u32) -> u32 {
     let row: Ref[Type_Record]? = __abi_type(box.__value.type_field & 0x7fffffff)
     require row != nil
-    let index: i64 = __abi_range_index(row.get().__value.components.first,
-                                       row.get().__value.components.count, ordinal)
+    let index: i64 = __abi_range_index(row.__value.components.first,
+                                       row.__value.components.count, ordinal)
     require index >= 0
     return cast[u32] index
 }

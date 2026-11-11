@@ -111,9 +111,3 @@ void th_errors_clear(th_ctx *ctx)
     ctx->err        = (core_string_t){};
 }
 
-void th_ctx_set_probe_errors_observable(th_ctx *ctx, bool observable)
-{
-    if (ctx) {
-        ctx->probe_errors_discarded = !observable;
-    }
-}

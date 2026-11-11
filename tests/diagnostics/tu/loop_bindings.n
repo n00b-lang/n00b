@@ -1,0 +1,21 @@
+func outer_let() -> int {
+    let item = 0
+    var total = 0
+    for item in [1, 2] {
+        total += item
+    }
+    return total
+}
+
+func typed_outer_var() -> int {
+    var item = 0
+    for item: int in [1, 2] {
+    }
+    return item
+}
+
+func pattern_arity() -> int {
+    let (a, b) = (1, 2, 3)
+    let (c, _, d) = (4, 5, 6)
+    return a + b + c + d
+}

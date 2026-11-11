@@ -1,0 +1,5 @@
+var maybe: int? = nil
+
+func reset() {
+    maybe = nil
+}

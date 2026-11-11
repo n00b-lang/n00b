@@ -1,5 +1,5 @@
 panic: live value
-  --> tests/diagnostics/runtime/failures.n:160:9
+  --> tests/diagnostics/runtime/failures.n:156:9
 backtrace:
-  at panic_with_live_value (tests/diagnostics/runtime/failures.n:160:9)
-  at run (tests/diagnostics/runtime/failures.n:145:9)
+  at panic_with_live_value (tests/diagnostics/runtime/failures.n:156:9)
+  at run (tests/diagnostics/runtime/failures.n:141:9)

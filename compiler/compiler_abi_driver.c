@@ -20,7 +20,9 @@
 #include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
+#include "builtin_abi.h"
 #include "compiler_cache.h"
+#include "comptime.h"
 #include "compiler_ffi.h"
 #include "cached_body.h"
 #include "qualified_names.h"
@@ -28,12 +30,10 @@
 #include "abi_emit.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
-#include "abi_static_graph.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
 #include "lib/os.h"
 #include "lib/process.h"
-#include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
 #include "compiler_native_roots.h"
@@ -50,6 +50,19 @@
 #include "parse/tree.h"
 #include "ir/ir.h"
 #include "th/environment.h"
+
+static bool
+n00bb_reemit_abi_artifact(core_link_unit_t *link,
+                          n00bb_link_analysis_t *analysis,
+                          bool debug_enabled,
+                          core_translation_unit_t *unit);
+static bool
+n00bb_link_abi_artifact(core_link_unit_t *link,
+                        n00bb_link_analysis_t *analysis,
+                        const core_target_desc_t *target,
+                        bool final_image,
+                        uint8_t **out_object, size_t *out_object_bytes,
+                        core_diagnostics_t *diagnostics);
 
 typedef struct {
     n00bb_abi_packed_tables_t packed;
@@ -73,63 +86,6 @@ temporary_object_argument(const void *bytes, size_t length)
     return argument;
 }
 
-static bool
-archive_file(const char *path)
-{
-    static const char magic[] = "!<arch>\n";
-    char header[sizeof(magic) - 1] = {0};
-    int fd = open(path, O_RDONLY);
-    bool archive = fd >= 0
-        && read(fd, header, sizeof(header)) == (ssize_t)sizeof(header)
-        && !memcmp(header, magic, sizeof(header));
-    if (fd >= 0) close(fd);
-    return archive;
-}
-
-static bool
-host_object_archive(parse_cmdr_result_t *args, int32_t count,
-                    const char *staging, char **out)
-{
-    *out = nullptr;
-    core_buffer_t path = {0};
-    core_buffer_printf(&path, "%s.hosts.a", staging);
-    char *archive = core_string_to_cstr(core_buffer_string(&path));
-    core_buffer_release(&path);
-    const char *archiver = n00bb_toolchain()->archiver;
-    char **arguments = archive && archiver
-        ? calloc((size_t)count + 4, sizeof(*arguments)) : nullptr;
-    bool ok = arguments != nullptr;
-    if (ok) {
-        arguments[0] = (char *)archiver;
-        arguments[1] = "crs";
-        arguments[2] = archive;
-    }
-    int32_t objects = 0;
-    for (int32_t i = 0; ok && i < count; i++) {
-        char *object = core_string_to_cstr(parse_cmdr_flag_str_at(args,
-            CORE_STRING_STATIC("--link-object"), i));
-        ok = object != nullptr;
-        if (ok && archive_file(object)) core_free(object);
-        else if (ok) arguments[3 + objects++] = object;
-    }
-    core_process_spec_t spec = {.arguments = arguments, .search_path = true};
-    core_process_t child;
-    core_process_status_t status = {0};
-    ok = ok && (!objects
-        || (!core_process_start(&spec, &child)
-            && core_process_wait(child, &status) && status.exited
-            && status.code == 0));
-    for (int32_t i = 0; arguments && i < objects; i++)
-        core_free(arguments[3 + i]);
-    free(arguments);
-    if (ok && objects) *out = archive;
-    else {
-        if (archive && objects) unlink(archive);
-        core_free(archive);
-    }
-    return ok;
-}
-
 static core_string_t
 qualified_function_name(core_string_t module, core_string_t function)
 {
@@ -142,7 +98,7 @@ qualified_function_name(core_string_t module, core_string_t function)
 
 static bool
 n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
-                             const n00bb_cache_t *cache,
+                             const n00bb_link_analysis_t *analysis,
                              core_translation_unit_t *const *units,
                              size_t unit_count,
                              n00bb_llvm_global_binding_t **out,
@@ -159,8 +115,8 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             || ir_global_count(state->ir_module) > SIZE_MAX - capacity)
             return false;
         capacity += ir_global_count(state->ir_module);
-        ir_module_t *cached = state->interface_module && cache
-            ? n00bb_cache_module(cache, units[i]->module.identifier)
+        ir_module_t *cached = state->interface_module
+            ? interface_body_module(analysis, units[i]->module.identifier)
             : nullptr;
         if (cached) capacity += ir_global_count(cached);
     }
@@ -193,8 +149,8 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
         for (size_t u = 0; valid && !matched && u < 2 * unit_count; u++) {
             n00bb_tu_state_t *unit_state = tu_state(units[u % unit_count]);
             ir_module_t *runtime = u < unit_count ? unit_state->ir_module
-                : unit_state->interface_module && cache
-                    ? n00bb_cache_module(cache,
+                : unit_state->interface_module
+                    ? interface_body_module(analysis,
                         units[u % unit_count]->module.identifier)
                     : nullptr;
             if (!runtime) continue;
@@ -237,15 +193,16 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             (int64_t)(native_name.length - prefix));
         valid = name.data != nullptr;
         if (valid) bindings[count++] = (n00bb_llvm_global_binding_t){
-            .global = matched, .native_name = name, .storage_index = i,
+            .global = matched, .native_name = name,
+            .storage_key = n00b_abi_storage_key(module_name.bytes,
+                module_name.length, symbol_name.bytes, symbol_name.length),
         };
     }
     for (size_t u = 0; valid && u < unit_count; u++) {
         ir_module_t *runtime = tu_state(units[u])->ir_module;
         for (size_t g = 0; valid && g < ir_global_count(runtime); g++) {
             ir_global_t *global = ir_global_at(runtime, g);
-            if (global->is_extern || !ir_global_can_read(global,
-                    IR_PHASE_RUNTIME)
+            if (global->is_extern
                 || ir_global_storage_duration(global)
                     == IR_STORAGE_DURATION_THREAD) continue;
             bool found = false;
@@ -286,6 +243,39 @@ linked_instance(const core_list_t(n00bb_specialization_t) *specializations,
             return instance;
     }
     return nullptr;
+}
+
+static ir_func_t *
+unique_runtime_function(core_translation_unit_t *const *units,
+                        size_t unit_count, core_string_t module,
+                        core_string_t root, uint64_t typehash,
+                        bool skip_specialized, bool *ambiguous)
+{
+    ir_func_t *matched = nullptr;
+    *ambiguous = false;
+    for (size_t u = 0; u < unit_count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        ir_module_t *runtime = state ? state->ir_module : nullptr;
+        if (!runtime || !core_string_eq(ir_module_name(runtime), module))
+            continue;
+        for (size_t f = 0; f < ir_func_count(runtime); f++) {
+            ir_func_t *candidate = ir_func_at(runtime, f);
+            ir_func_t *body = n00bb_cached_body(candidate);
+            if (!body->n_blocks
+                || (skip_specialized
+                    && core_string_find(candidate->name,
+                                        CORE_STRING_STATIC("$spec$")) >= 0)
+                || !n00bb_names_function(root, candidate->name)
+                || th_hash(ir_module_types(runtime), body->type) != typehash)
+                continue;
+            if (matched) {
+                *ambiguous = true;
+                return nullptr;
+            }
+            matched = candidate;
+        }
+    }
+    return matched;
 }
 
 static bool
@@ -331,27 +321,11 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
             continue;
         }
         if (!signature) continue;
-        ir_func_t *matched = nullptr;
-        for (size_t u = 0; u < unit_count; u++) {
-            n00bb_tu_state_t *state = tu_state(units[u]);
-            ir_module_t *runtime = state ? state->ir_module : nullptr;
-            if (!runtime || !core_string_eq(ir_module_name(runtime),
-                                            view_text(module_name)))
-                continue;
-            for (size_t f = 0; f < ir_func_count(runtime); f++) {
-                ir_func_t *candidate = ir_func_at(runtime, f);
-                ir_func_t *body = n00bb_cached_body(candidate);
-                if (!body->n_blocks
-                    || core_string_find(candidate->name,
-                                        CORE_STRING_STATIC("$spec$")) >= 0
-                    || !n00bb_names_function(view_text(function_name),
-                                             candidate->name)
-                    || th_hash(ir_module_types(runtime), body->type)
-                        != signature->typehash) continue;
-                if (matched) { free(bindings); return false; }
-                matched = candidate;
-            }
-        }
+        bool ambiguous = false;
+        ir_func_t *matched = unique_runtime_function(units, unit_count,
+            view_text(module_name), view_text(function_name),
+            signature->typehash, true, &ambiguous);
+        if (ambiguous) { free(bindings); return false; }
         if (matched) bindings[count++] = (n00bb_llvm_function_binding_t){
             .function = matched, .index = i,
         };
@@ -442,26 +416,12 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                                          &module_name)
             && n00bb_abi_object_string(view, &function->name,
                                          &function_name);
-        ir_func_t *matched = nullptr;
-        for (size_t u = 0; valid && u < unit_count; u++) {
-            n00bb_tu_state_t *state = tu_state(units[u]);
-            ir_module_t *runtime = state ? state->ir_module : nullptr;
-            if (!runtime || !core_string_eq(ir_module_name(runtime),
-                                            view_text(module_name)))
-                continue;
-            for (size_t f = 0; f < ir_func_count(runtime); f++) {
-                ir_func_t *candidate = ir_func_at(runtime, f);
-                ir_func_t *body = n00bb_cached_body(candidate);
-                if (!body->n_blocks
-                    || !n00bb_names_function(
-                        n00bb_function_root(view_text(function_name)),
-                        candidate->name)
-                    || th_hash(ir_module_types(runtime), body->type)
-                        != signature->typehash) continue;
-                if (matched) { valid = false; break; }
-                matched = candidate;
-            }
-        }
+        bool ambiguous = false;
+        ir_func_t *matched = valid ? unique_runtime_function(units, unit_count,
+            view_text(module_name),
+            n00bb_function_root(view_text(function_name)),
+            signature->typehash, false, &ambiguous) : nullptr;
+        valid = valid && !ambiguous;
         if (valid && matched
             && !th_is_closed(ir_module_types(matched->owner), matched->type))
             matched = n00bb_finalizer_instance(specializations, matched,
@@ -575,12 +535,8 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
             n00bb_link_payload_t *facts = core_link_declaration_binding(
                 declaration,
                 CORE_STRING_STATIC("n00bb.semantic.declaration-facts"));
-            valid = facts && facts->facts_complete
-                && facts->cfg_liveness_complete
-                && facts->cleanup_obligations_complete;
-            if (!valid) missing = !facts || !facts->facts_complete
-                ? "declaration facts" : !facts->cfg_liveness_complete
-                    ? "CFG liveness" : "cleanup obligations";
+            valid = facts && facts->facts_complete;
+            if (!valid) missing = "declaration facts";
             break;
         }
         if (valid) continue;
@@ -631,35 +587,12 @@ debug_bundle_path(core_string_t executable)
     return path;
 }
 
-void
-n00bb_remove_executable(core_string_t path)
-{
-    if (!path.data) return;
-    core_os_remove_file(path);
-    core_string_t bundle = debug_bundle(path);
-    core_os_remove_tree(bundle, nullptr);
-    core_free(bundle.data);
-}
-
-bool
-n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
-{
-    if (analysis && n00bb_literal_stage())
-        return analysis->literal_capture
-            || n00bb_cache_needs_literal_capture(analysis->cache);
-    return analysis && (analysis->build_time_capture
-        || n00bb_cache_needs_build_time_capture(analysis->cache)
-        || n00bb_root_entry(analysis,
-                            CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)));
-}
-
 typedef struct {
     n00bb_link_analysis_t *analysis;
     parse_cmdr_result_t *args;
     bool debug_enabled;
     bool native_cpu;
     bool lto;
-    n00bb_native_cache_t *native_cache;
     ir_storage_origin_t *storage_origin;
     const n00bb_llvm_callback_bindings_t *callback_bindings;
     const n00bb_llvm_type_index_t *type_indices;
@@ -671,6 +604,9 @@ typedef struct {
     n00bb_native_frames_t *native_frames;
     core_diagnostics_t *diagnostics;
     core_list_t(n00bb_cache_module_object_t) *kept;
+    const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
+    const core_dict_t *mutator_decisions;
+    bool keep_shims;
 } module_emission_t;
 
 typedef struct {
@@ -722,11 +658,13 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     const n00bb_abi_artifact_t *artifact = item->artifact;
     double started = monotonic_seconds();
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(item->module,
-        emission->debug_enabled, emission->native_cpu, module_diagnostics);
+        emission->debug_enabled, emission->native_cpu,
+        analysis->target.enabled_features, module_diagnostics);
     item->backend = backend;
     if (!backend) return item->ok = false;
-    n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
     n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
+    n00bb_llvm_backend_bind_mutator_decisions(backend,
+                                              emission->mutator_decisions);
     core_string_t table_symbol = artifact
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
@@ -747,7 +685,11 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
             analysis->emitted_functions.data,
             analysis->emitted_functions.len, emission->callback_bindings)
         && n00bb_llvm_backend_bind_storage_origin(backend,
-            emission->storage_origin);
+            emission->storage_origin)
+        && (!emission->runtime_functions
+            || n00bb_llvm_backend_restrict_functions(backend,
+                   emission->runtime_functions->data,
+                   emission->runtime_functions->len));
     if (ok && !parse_cmdr_flag_present(emission->args,
             CORE_STRING_STATIC("--gc-conservative-stacks")))
         ok = n00bb_llvm_backend_enable_frame_maps(backend);
@@ -904,6 +846,11 @@ complete_module_object(const module_emission_t *emission,
         core_diagnostics_free(item->diagnostics);
         item->diagnostics = nullptr;
     }
+    core_string_t entries = n00bb_llvm_backend_mutator_entries(item->backend);
+    size_t mutators_bytes = entries.u8_bytes;
+    uint8_t *mutators = malloc(mutators_bytes ? mutators_bytes : 1);
+    if (mutators && mutators_bytes)
+        memcpy(mutators, entries.data, mutators_bytes);
     n00bb_llvm_backend_free(item->backend);
     item->backend = nullptr;
     if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE)) {
@@ -913,7 +860,7 @@ complete_module_object(const module_emission_t *emission,
     }
     core_buffer_t object = item->object;
     item->object = (core_buffer_t){0};
-    if (ok && emission->kept && item->artifact) {
+    if (ok && emission->kept && item->artifact && mutators) {
         uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
         if (copy) {
             if (object.byte_len) memcpy(copy, object.data, object.byte_len);
@@ -922,9 +869,12 @@ complete_module_object(const module_emission_t *emission,
                 .object = copy, .object_bytes = object.byte_len,
                 .abi = item->artifact->object,
                 .abi_bytes = item->artifact->object_bytes,
+                .mutators = mutators, .mutators_bytes = mutators_bytes,
             }));
+            mutators = nullptr;
         }
     }
+    free(mutators);
     if (ok && emission->lto) {
         *item->bitcode = object;
         return true;
@@ -1369,14 +1319,53 @@ report_link_warnings(core_diagnostics_t *diagnostics, core_string_t text)
     }
 }
 
+enum { LINKER_COMMAND_LIMIT = 16384 };
+
+static core_string_t
+linker_response_file(char *const *arguments)
+{
+    size_t length = 0;
+    for (size_t i = 0; arguments[i]; i++)
+        for (const char *c = arguments[i]; ; c++) {
+            length++;
+            if (!*c) break;
+        }
+    if (length <= LINKER_COMMAND_LIMIT) return (core_string_t){0};
+    core_buffer_t text = {0};
+    for (size_t i = 1; arguments[i]; i++) {
+        core_buffer_putc(&text, '"');
+        for (const char *c = arguments[i]; *c; c++) {
+            if (*c == '"' || *c == '\\') core_buffer_putc(&text, '\\');
+            core_buffer_putc(&text, *c);
+        }
+        core_buffer_puts(&text, "\"\n");
+    }
+    core_string_t path = n00bb_write_temporary_object(text.data,
+                                                      text.byte_len);
+    core_buffer_release(&text);
+    return path;
+}
+
 static bool
 run_linker(const link_report_t *report, core_diagnostics_t *diagnostics)
 {
     core_buffer_t output = {0};
     core_buffer_t errors = {0};
     core_process_status_t status = {0};
-    int launched = core_process_capture(report->arguments, nullptr, 0,
-                                        &output, &errors, &status);
+    core_string_t response = linker_response_file(report->arguments);
+    core_buffer_t file_argument = {0};
+    char *short_arguments[3] = {report->arguments[0], nullptr, nullptr};
+    if (response.data) {
+        core_buffer_putc(&file_argument, '@');
+        core_buffer_append_string(&file_argument, response);
+        short_arguments[1] = file_argument.data;
+    }
+    int launched = core_process_capture(
+        response.data ? short_arguments : report->arguments, nullptr, 0,
+        &output, &errors, &status);
+    if (response.data) core_os_remove_file(response);
+    core_free(response.data);
+    core_buffer_release(&file_argument);
     if (launched) {
         core_buffer_release(&output);
         core_buffer_release(&errors);
@@ -1400,11 +1389,573 @@ run_linker(const link_report_t *report, core_diagnostics_t *diagnostics)
     return ok;
 }
 
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    parse_cmdr_result_t *args;
+    const n00bb_native_inputs_t *native;
+    char **objects;
+    size_t object_slots;
+    const char *linker;
+    char *target_flag;
+    char *archive;
+    core_buffer_t *lto_modules;
+    size_t lto_module_count;
+    bool debug_enabled;
+    bool native_cpu;
+    bool precise_stacks;
+} program_link_t;
+
+static bool
+link_program(const program_link_t *program, char *extra_object,
+             char *staging, char *output, core_diagnostics_t *diagnostics)
+{
+    const n00bb_native_inputs_t *native = program->native;
+    int32_t extra_count = parse_cmdr_flag_value_count(program->args,
+        CORE_STRING_STATIC("--link-object"));
+    size_t extra_used = 0;
+    size_t object_count = extra_object ? 1 : 0;
+    for (size_t i = 0; i < program->object_slots; i++)
+        if (program->objects[i]) object_count++;
+    size_t native_flags = native->archive_count
+        + native->search_path_count + native->library_count
+        + 2 * native->framework_count;
+    char **arguments = calloc(object_count + (size_t)extra_count
+                                  + native_flags
+                                  + N00BB_SYSTEM_LIBRARY_LIMIT + 10,
+                              sizeof(*arguments));
+    char **native_arguments = native_flags
+        ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
+    bool ok = arguments != nullptr && (!native_flags || native_arguments);
+    size_t native_used = 0;
+    for (size_t i = 0; ok && i < native->archive_count; i++)
+        native_arguments[native_used++] = n00bb_flag_argument("",
+            native->archives[i]);
+    for (size_t i = 0; ok && i < native->search_path_count; i++)
+        native_arguments[native_used++] = n00bb_flag_argument("-L",
+            native->search_paths[i]);
+    for (size_t i = 0; ok && i < native->library_count; i++)
+        native_arguments[native_used++] = n00bb_flag_argument("-l",
+            native->libraries[i]);
+    for (size_t i = 0; ok && i < native->framework_count; i++) {
+        native_arguments[native_used++] = core_string_to_cstr(
+            CORE_STRING_STATIC("-framework"));
+        native_arguments[native_used++] = n00bb_flag_argument("",
+            native->frameworks[i]);
+    }
+    for (size_t i = 0; ok && i < native_used; i++)
+        if (!native_arguments[i]) ok = false;
+    size_t next = 1;
+    if (ok) {
+        arguments[0] = (char *)program->linker;
+        if (program->target_flag) {
+            arguments[next++] = program->target_flag;
+            arguments[next++] = "-fuse-ld=lld";
+        }
+        for (size_t i = 0; i < program->object_slots; i++)
+            if (program->objects[i]) arguments[next++] = program->objects[i];
+        if (extra_object) arguments[next++] = extra_object;
+        for (int32_t i = 0; ok && i < extra_count; i++) {
+            char *object = core_string_to_cstr(parse_cmdr_flag_str_at(
+                program->args, CORE_STRING_STATIC("--link-object"), i));
+            if (!object) ok = false;
+            else arguments[next + extra_used++] = object;
+        }
+    }
+    if (ok) {
+        n00bb_link_analysis_t *analysis = program->analysis;
+        size_t tail = next + extra_used;
+        arguments[tail++] = program->archive;
+        for (size_t i = 0; i < native_used; i++)
+            arguments[tail++] = native_arguments[i];
+        for (const char *const *library =
+                 n00bb_system_libraries(&analysis->target);
+             *library; library++)
+            arguments[tail++] = (char *)*library;
+        if (analysis->target.object_format == CORE_TARGET_OBJECT_COFF)
+            arguments[tail++] = "-Wl,--stack,8388608";
+        arguments[tail++] = "-o";
+        arguments[tail] = staging;
+        link_report_t report = {
+            .arguments = arguments,
+            .objects = program->objects,
+            .object_count = program->object_slots,
+            .staging = staging,
+            .output = output,
+            .mach_o = analysis->target.object_format
+                == CORE_TARGET_OBJECT_MACH_O,
+        };
+        ok = run_linker(&report, diagnostics);
+    }
+    for (size_t i = 0; i < extra_used; i++)
+        core_free(arguments[next + i]);
+    for (size_t i = 0; i < native_used; i++)
+        core_free(native_arguments[i]);
+    free(native_arguments);
+    free(arguments);
+    return ok;
+}
+
+static void
+refresh_kept_abi(core_link_unit_t *link, core_translation_unit_t *unit,
+                 core_list_t(n00bb_cache_module_object_t) *kept)
+{
+    core_link_artifact_view_t view = {0};
+    const n00bb_abi_artifact_t *artifact = core_link_unit_require_artifact(
+            link, unit->module.identifier,
+            CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+        ? view.payload : nullptr;
+    core_string_t name = ir_module_name(tu_state(unit)->ir_module);
+    for (size_t i = 0; artifact && i < kept->len; i++)
+        if (core_string_eq(kept->data[i].module, name)) {
+            kept->data[i].abi = artifact->object;
+            kept->data[i].abi_bytes = artifact->object_bytes;
+        }
+}
+
+static bool
+relink_abi(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+           char **slot, core_diagnostics_t *diagnostics)
+{
+    uint8_t *linked = nullptr;
+    size_t linked_bytes = 0;
+    bool ok = n00bb_link_abi_artifact(link, analysis, &analysis->target, true,
+                                      &linked, &linked_bytes, diagnostics);
+    char *object = ok ? temporary_object_argument(linked, linked_bytes)
+                      : nullptr;
+    core_free(linked);
+    if (!object) return false;
+    unlink(*slot);
+    core_free(*slot);
+    *slot = object;
+    return true;
+}
+
+static bool
+lto_link(const program_link_t *program, bool runtime, char **objects,
+         core_diagnostics_t *diagnostics)
+{
+    const n00bb_native_inputs_t *native = program->native;
+    size_t modules = program->lto_module_count + (runtime ? 1 : 0);
+    size_t count = modules + native->bitcode_count;
+    n00bb_llvm_bitcode_input_t *inputs = calloc(count ? count : 1,
+                                                sizeof(*inputs));
+    if (!inputs) return false;
+    for (size_t i = 0; i < modules; i++)
+        inputs[i] = (n00bb_llvm_bitcode_input_t){
+            .data = program->lto_modules[i].data,
+            .length = program->lto_modules[i].byte_len,
+            .native_support = i == program->lto_module_count,
+        };
+    for (size_t i = 0; i < native->bitcode_count; i++)
+        inputs[modules + i] = (n00bb_llvm_bitcode_input_t){
+            .data = native->bitcode[i].data,
+            .length = native->bitcode[i].byte_len,
+        };
+    core_buffer_t object = {0};
+    bool ok = n00bb_llvm_backend_link_bitcode(inputs, count,
+        program->debug_enabled, program->native_cpu,
+        program->analysis->target.enabled_features, program->precise_stacks,
+        &object, diagnostics);
+    free(inputs);
+    n00bb_native_frames_t *frames = ok
+        ? n00bb_native_frames_new(program->analysis->target.object_format)
+        : nullptr;
+    uint8_t *frame_object = nullptr;
+    size_t frame_object_bytes = 0;
+    ok = frames && n00bb_native_frames_add(frames, object.data,
+                                           object.byte_len)
+        && n00bb_native_frames_emit(frames, &program->analysis->target,
+                                    &frame_object, &frame_object_bytes);
+    size_t frames_slot = program->object_slots - 3;
+    if (ok) {
+        objects[0] = temporary_object_argument(object.data, object.byte_len);
+        objects[frames_slot] = temporary_object_argument(frame_object,
+                                                         frame_object_bytes);
+        ok = objects[0] && objects[frames_slot];
+    }
+    if (frames) n00bb_native_frames_free(frames);
+    core_free(frame_object);
+    core_buffer_release(&object);
+    return ok;
+}
+
+static bool
+run_comptime(core_link_unit_t *link, program_link_t *program,
+             core_translation_unit_t *const *order, size_t count, bool lto,
+             bool debug_enabled,
+             core_list_t(n00bb_cache_module_object_t) *kept,
+             core_list_t(core_translation_unit_ptr_t) *runtime_units,
+             core_diagnostics_t *diagnostics)
+{
+    n00bb_link_analysis_t *analysis = program->analysis;
+    core_translation_unit_t *root = core_link_unit_root(link, 0);
+    core_list_t(core_translation_unit_ptr_t) targets =
+        core_list_new(core_translation_unit_ptr_t);
+    for (size_t i = 0; i < count; i++)
+        if (!tu_state(order[i])->interface_module
+            && n00bb_comptime_needed(order[i]))
+            core_list_push(targets, order[i]);
+    if (!targets.len) {
+        core_list_free(targets);
+        return true;
+    }
+    bool ok = true;
+    core_string_t runtime_name = n00bb_archive_path(
+        CORE_STRING_STATIC(N00BB_COMPTIME_RUNTIME));
+    char *runtime = runtime_name.data ? core_string_to_cstr(runtime_name)
+                                      : nullptr;
+    core_free(runtime_name.data);
+    if (ok && !runtime) {
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_RUNTIME_LIBRARY_MISSING,
+            (core_diag_location_t){}, N00B_TEXT_THE_N00B_RUNTIME_LIBRARY_IS,
+            N00BB_ARGS(ARG_NATIVE(N00BB_COMPTIME_RUNTIME),
+                       ARG_TEXT(n00bb_toolchain()->runtime)));
+        ok = false;
+    }
+    core_string_t made = {0};
+    if (ok) {
+        core_string_t temp = core_os_temp_root();
+        core_buffer_t stem = {0};
+        core_buffer_append_string(&stem, temp);
+        core_buffer_puts(&stem, "/n00bb-comptime-program.");
+        core_free(temp.data);
+        int fd = core_os_make_unique_file(core_buffer_string(&stem), &made);
+        core_buffer_release(&stem);
+        if (fd >= 0) close(fd);
+        ok = fd >= 0;
+    }
+    char *path = ok ? core_string_to_cstr(made) : nullptr;
+    size_t abi_slot = program->object_slots - 4;
+    program_link_t comptime = *program;
+    char **lto_objects = nullptr;
+    if (ok && path && lto) {
+        lto_objects = core_alloc_array(char *, program->object_slots);
+        ok = lto_objects && lto_link(program, false, lto_objects,
+                                     diagnostics);
+        comptime.objects = lto_objects;
+    }
+    core_buffer_t frozen = {0};
+    for (size_t i = 0; i < count; i++)
+        if (tu_state(order[i])->interface_module
+            && n00bb_comptime_needed(order[i]))
+            core_buffer_printf(&frozen, "%s%llx", frozen.byte_len ? "," : "",
+                (unsigned long long)n00bb_comptime_module_key(
+                    ir_module_name(tu_state(order[i])->ir_module)));
+    core_list_t(core_translation_unit_ptr_t) baked =
+        core_list_new(core_translation_unit_ptr_t);
+    for (size_t i = 0; ok && i < targets.len; i++) {
+        if (lto_objects) lto_objects[abi_slot] = program->objects[abi_slot];
+        char *frozen_keys = core_string_to_cstr(frozen.byte_len
+            ? core_buffer_string(&frozen) : CORE_STRING_STATIC(""));
+        baked.len = 0;
+        bool exited = false;
+        ok = frozen_keys && link_program(&comptime, runtime, path, path,
+                                         diagnostics)
+            && n00bb_comptime_run(analysis, targets.data[i], path,
+                   targets.data[i] == root, frozen_keys, diagnostics,
+                   &baked, &exited);
+        core_free(frozen_keys);
+        for (size_t b = 0; ok && b < baked.len; b++) {
+            ok = n00bb_reemit_abi_artifact(link, analysis, debug_enabled,
+                                           baked.data[b]);
+            if (ok) refresh_kept_abi(link, baked.data[b], kept);
+            bool listed = false;
+            for (size_t r = 0; r < runtime_units->len; r++)
+                listed |= runtime_units->data[r] == baked.data[b];
+            if (ok && !exited && !listed
+                && !tu_state(baked.data[b])->interface_module)
+                core_list_push(*runtime_units, baked.data[b]);
+        }
+        if (ok && baked.len)
+            ok = relink_abi(link, analysis, &program->objects[abi_slot],
+                            diagnostics);
+        core_buffer_printf(&frozen, "%s%llx", frozen.byte_len ? "," : "",
+            (unsigned long long)n00bb_comptime_module_key(
+                ir_module_name(tu_state(targets.data[i])->ir_module)));
+    }
+    core_list_free(baked);
+    core_buffer_release(&frozen);
+    if (lto_objects) {
+        for (size_t i = 0; i < program->object_slots; i++)
+            if (i != abi_slot && lto_objects[i]) {
+                unlink(lto_objects[i]);
+                core_free(lto_objects[i]);
+            }
+        core_free(lto_objects);
+    }
+    if (made.data) core_os_remove_file(made);
+    core_free(made.data);
+    core_free(path);
+    core_free(runtime);
+    core_list_free(targets);
+    return ok;
+}
+
+static bool
+reaches_ffi_shim(const core_list_t(n00bb_ir_func_ptr_t) *functions)
+{
+    core_string_t prefix = CORE_STRING_STATIC("n00b_ffi_");
+    for (size_t i = 0; i < functions->len; i++) {
+        const ir_func_t *function = functions->data[i];
+        core_string_t name = function->name;
+        if (!function->n_blocks && core_string_starts_with(name, prefix)
+            && name.u8_bytes > prefix.u8_bytes
+            && name.data[prefix.u8_bytes] >= '0'
+            && name.data[prefix.u8_bytes] <= '9') return true;
+    }
+    return false;
+}
+
+static void
+cached_mutator_decisions(core_link_unit_t *link,
+                         n00bb_link_analysis_t *analysis,
+                         core_translation_unit_t *const *order, size_t count,
+                         core_dict_t *decisions)
+{
+    core_dict_init(decisions, nullptr, nullptr);
+    if (!analysis->cache) return;
+    n00bb_cache_module_object_t cached = {0};
+    for (size_t i = 0; i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order[i]);
+        if (state->interface_module
+            && n00bb_cache_module_object(analysis->cache,
+                   ir_module_name(state->ir_module), &cached))
+            n00bb_llvm_mutator_decisions_add(decisions, state->ir_module,
+                core_string_borrow((const char *)cached.mutators,
+                                   cached.mutators_bytes));
+    }
+    for (size_t i = 0; i < analysis->specializations.len; i++) {
+        const n00bb_specialization_t *item =
+            &analysis->specializations.data[i];
+        if (n00bb_cache_instance_object(analysis->cache, link, analysis,
+                                        item, &cached))
+            n00bb_llvm_mutator_decisions_add(decisions,
+                item->instance->owner,
+                core_string_borrow((const char *)cached.mutators,
+                                   cached.mutators_bytes));
+    }
+}
+
+static bool
+cached_runtime_object(n00bb_link_analysis_t *analysis,
+                      core_translation_unit_t *unit,
+                      n00bb_cache_module_object_t *out)
+{
+    return tu_state(unit)->interface_module
+        && n00bb_cache_module_object(analysis->cache,
+               ir_module_name(tu_state(unit)->ir_module), out)
+        && out->runtime_object;
+}
+
+static bool
+any_cached_runtime_object(n00bb_link_analysis_t *analysis,
+                          core_translation_unit_t *const *order,
+                          size_t count)
+{
+    n00bb_cache_module_object_t cached = {0};
+    for (size_t i = 0; i < count; i++)
+        if (cached_runtime_object(analysis, order[i], &cached)) return true;
+    return false;
+}
+
+static bool
+use_cached_runtime_objects(const module_emission_t *emission,
+                           program_link_t *program,
+                           core_translation_unit_t *const *order,
+                           size_t count)
+{
+    bool ok = true;
+    for (size_t slot = 0; ok && slot < count; slot++) {
+        n00bb_cache_module_object_t cached = {0};
+        if (!cached_runtime_object(emission->analysis, order[slot], &cached))
+            continue;
+        n00bb_cache_log_runtime_object(cached.module);
+        if (emission->lto) {
+            core_buffer_release(&program->lto_modules[slot]);
+            core_buffer_append(&program->lto_modules[slot],
+                (const char *)cached.runtime_object,
+                cached.runtime_object_bytes);
+            continue;
+        }
+        char *path = temporary_object_argument(cached.runtime_object,
+                                               cached.runtime_object_bytes);
+        ok = path != nullptr;
+        if (!ok) break;
+        if (program->objects[slot]) unlink(program->objects[slot]);
+        core_free(program->objects[slot]);
+        program->objects[slot] = path;
+    }
+    return ok;
+}
+
+static void
+keep_runtime_objects(core_list_t(n00bb_cache_module_object_t) *kept,
+                     core_list_t(n00bb_cache_module_object_t) *runtime)
+{
+    for (size_t r = 0; r < runtime->len; r++) {
+        n00bb_cache_module_object_t *object = &runtime->data[r];
+        for (size_t k = 0; kept && object->object && k < kept->len; k++) {
+            if (!core_string_eq(kept->data[k].module, object->module))
+                continue;
+            free((void *)kept->data[k].runtime_object);
+            kept->data[k].runtime_object = object->object;
+            kept->data[k].runtime_object_bytes = object->object_bytes;
+            object->object = nullptr;
+        }
+        free((void *)object->object);
+        free((void *)object->mutators);
+    }
+    core_list_free(*runtime);
+}
+
+static core_list_t(core_translation_unit_ptr_t)
+units_to_reemit(const n00bb_link_analysis_t *analysis,
+                core_translation_unit_t *const *order, size_t count,
+                const core_list_t(core_translation_unit_ptr_t) *baked,
+                const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions)
+{
+    core_list_t(core_translation_unit_ptr_t) units =
+        core_list_new(core_translation_unit_ptr_t);
+    core_dict_t listed;
+    core_dict_init(&listed, nullptr, nullptr);
+    for (size_t i = 0; i < baked->len; i++) {
+        core_list_push(units, baked->data[i]);
+        core_dict_put(&listed, baked->data[i], baked->data[i]);
+    }
+    core_dict_t runtime;
+    core_dict_init(&runtime, nullptr, nullptr);
+    for (size_t i = 0; i < runtime_functions->len; i++)
+        core_dict_put(&runtime, runtime_functions->data[i],
+                      runtime_functions->data[i]);
+    core_dict_t stale;
+    core_dict_init(&stale, nullptr, nullptr);
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
+        if (function->n_blocks && !core_dict_contains(&runtime, function))
+            core_dict_put(&stale, function->owner, function->owner);
+    }
+    for (size_t i = 0; i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(order[i]);
+        if (state->interface_module || core_dict_contains(&listed, order[i])
+            || !core_dict_contains(&stale, state->ir_module)) continue;
+        core_list_push(units, order[i]);
+    }
+    core_dict_free(&stale);
+    core_dict_free(&runtime);
+    core_dict_free(&listed);
+    return units;
+}
+
+static bool
+emit_runtime_objects(core_link_unit_t *link,
+                     const module_emission_t *emission,
+                     program_link_t *program,
+                     core_translation_unit_t *const *order, size_t count,
+                     const core_list_t(core_translation_unit_ptr_t) *baked,
+                     const module_entry_t *root_entry,
+                     core_diagnostics_t *diagnostics)
+{
+    if (!use_cached_runtime_objects(emission, program, order, count))
+        return false;
+    n00bb_comptime_prune(emission->analysis, baked->data, baked->len);
+    core_list_t(n00bb_ir_func_ptr_t) runtime_functions = {0};
+    if (!n00bb_runtime_functions(emission->analysis, &runtime_functions))
+        return false;
+    core_list_t(core_translation_unit_ptr_t) reemitted = units_to_reemit(
+        emission->analysis, order, count, baked, &runtime_functions);
+    const core_list_t(core_translation_unit_ptr_t) *units = &reemitted;
+    core_list_t(n00bb_cache_module_object_t) runtime_kept =
+        core_list_new(n00bb_cache_module_object_t);
+    module_emission_t runtime = *emission;
+    runtime.kept = &runtime_kept;
+    runtime.runtime_functions = &runtime_functions;
+    runtime.native_frames = n00bb_native_frames_new(
+        emission->analysis->target.object_format);
+    size_t modules = program->object_slots - 4;
+    if (program->objects[modules + 3] && !emission->keep_shims
+        && !reaches_ffi_shim(&runtime_functions)) {
+        unlink(program->objects[modules + 3]);
+        core_free(program->objects[modules + 3]);
+        program->objects[modules + 3] = nullptr;
+    }
+    bool *fresh = core_alloc_array(bool, program->object_slots);
+    bool ok = runtime.native_frames != nullptr;
+    core_translation_unit_t *root = core_link_unit_root(link, 0);
+    for (size_t u = 0; ok && u < units->len; u++) {
+        size_t slot = 0;
+        while (slot < count && order[slot] != units->data[u]) slot++;
+        if (slot == count) continue;
+        core_link_artifact_view_t view = {0};
+        char *path = nullptr;
+        core_buffer_t bitcode = {0};
+        module_object_t item = {
+            .module = tu_state(order[slot])->ir_module,
+            .artifact = core_link_unit_require_artifact(link,
+                    order[slot]->module.identifier,
+                    CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+                ? view.payload : nullptr,
+            .object_path = &path,
+            .bitcode = emission->lto ? &bitcode : nullptr,
+        };
+        (void)begin_module_object(&runtime, &item,
+            core_translation_unit_diagnostics(order[slot]),
+            order[slot] == root ? root_entry : nullptr);
+        finish_if_needed(&item);
+        ok = complete_module_object(&runtime, &item);
+        release_module_object(&item);
+        if (ok && emission->lto) {
+            core_buffer_release(&program->lto_modules[slot]);
+            program->lto_modules[slot] = bitcode;
+        }
+        else if (ok) {
+            unlink(program->objects[slot]);
+            core_free(program->objects[slot]);
+            program->objects[slot] = path;
+            fresh[slot] = true;
+        }
+    }
+    for (size_t i = 0; ok && !emission->lto && i < modules; i++) {
+        if (!program->objects[i] || fresh[i]) continue;
+        core_string_t name = core_string_from_cstr(program->objects[i]);
+        char *contents = nullptr;
+        size_t size = 0;
+        ok = core_os_read_file(name, &contents, &size)
+            && n00bb_native_frames_add(runtime.native_frames,
+                                       (const uint8_t *)contents, size);
+        core_free(contents);
+        core_free(name.data);
+    }
+    if (ok && !emission->lto) {
+        uint8_t *frame_object = nullptr;
+        size_t frame_object_bytes = 0;
+        char *frames = n00bb_native_frames_emit(runtime.native_frames,
+                &emission->analysis->target, &frame_object,
+                &frame_object_bytes)
+            ? temporary_object_argument(frame_object, frame_object_bytes)
+            : nullptr;
+        core_free(frame_object);
+        ok = frames != nullptr;
+        if (ok) {
+            unlink(program->objects[modules + 1]);
+            core_free(program->objects[modules + 1]);
+            program->objects[modules + 1] = frames;
+        }
+    }
+    if (runtime.native_frames) n00bb_native_frames_free(runtime.native_frames);
+    keep_runtime_objects(emission->kept, &runtime_kept);
+    core_list_free(runtime_functions);
+    core_list_free(reemitted);
+    core_free(fresh);
+    if (!ok && !core_diagnostics_failed(diagnostics))
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "emitting runtime code", "could not re-emit baked modules");
+    return ok;
+}
+
 bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
                        bool native_cpu,
-                       core_string_t compiler_path,
                        const n00bb_native_inputs_t *native,
                        core_diagnostics_t *diagnostics)
 {
@@ -1463,7 +2014,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t count = order.len;
     size_t modules = count + analysis->specializations.len;
     bool lto = n00bb_setting_bool(N00BB_KEY_BUILD_LTO);
-    core_string_t *names = calloc(2 * count + 2, sizeof(*names));
+    core_string_t *names = calloc(count + 1, sizeof(*names));
     char **objects = calloc(modules + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
         ? calloc(modules + 1, sizeof(*lto_modules)) : nullptr;
@@ -1516,7 +2067,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
             if (ok) {
                 read_stage = "matching global bindings";
-                ok = n00bb_linked_global_bindings(&view, analysis->cache,
+                ok = n00bb_linked_global_bindings(&view, analysis,
                     order.data, count, &global_bindings,
                     &global_binding_count, diagnostics);
             }
@@ -1571,10 +2122,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     ok = ok && objects[modules];
     core_free(linked_abi);
     size_t initializer_count = 0;
-    const core_string_t initializers[] = {
-        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
-        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
-    };
+    core_string_t initializer = CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME);
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
         if (!state || !state->ir_module) {
@@ -1585,32 +2133,17 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             break;
         }
         if (state->interface_module && state->package_interface) continue;
-        for (size_t k = 0; ok && k < n00bb_initializer_kinds(); k++) {
-            if (!ir_func_find(state->ir_module, initializers[k])) continue;
-            names[initializer_count] = qualified_function_name(
-                ir_module_name(state->ir_module), initializers[k]);
-            ok = names[initializer_count++].data != nullptr;
-        }
+        if (!ir_func_find(state->ir_module, initializer)) continue;
+        names[initializer_count] = qualified_function_name(
+            ir_module_name(state->ir_module), initializer);
+        ok = names[initializer_count++].data != nullptr;
     }
-    bool build_time = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
-    ir_func_t *entry = ok && !n00bb_literal_stage()
-        ? n00bb_root_entry(analysis, build_time
-        ? CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)
-        : CORE_STRING_STATIC(N00BB_START_NAME)) : nullptr;
+    ir_func_t *entry = ok
+        ? n00bb_root_entry(analysis, CORE_STRING_STATIC(N00BB_START_NAME))
+        : nullptr;
     if (entry) {
         names[initializer_count] = qualified_function_name(
             ir_module_name(entry->owner), entry->name);
-        ok = names[initializer_count++].data != nullptr;
-    }
-    for (size_t i = 0; ok && i < count && build_time; i++) {
-        n00bb_tu_state_t *state = tu_state(order.data[i]);
-        if (!core_string_eq(ir_module_name(state->ir_module),
-                            CORE_STRING_STATIC(N00BB_CAPTURE_MODULE))
-            || !ir_func_find(state->ir_module,
-                             CORE_STRING_STATIC(N00BB_CAPTURE_FUNCTION)))
-            continue;
-        names[initializer_count] = core_string_dup(CORE_STRING_STATIC(
-            N00BB_CAPTURE_MODULE "." N00BB_CAPTURE_FUNCTION));
         ok = names[initializer_count++].data != nullptr;
     }
     n00bb_storage_origin_context_t origin_context = {
@@ -1638,19 +2171,18 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_frames_t *native_frames = ok
         ? n00bb_native_frames_new(analysis->target.object_format) : nullptr;
     if (ok && !native_frames) ok = false;
-    core_string_t executable_path = ok && !lto
-        ? core_os_executable_path(compiler_path) : (core_string_t){};
-    n00bb_native_cache_t *native_cache = executable_path.data
-        && !n00bb_setting_bool(N00BB_KEY_DEV_NO_NATIVE_CACHE)
-        ? n00bb_native_cache_open(executable_path) : nullptr;
-    core_free(executable_path.data);
     core_list_t(n00bb_cache_module_object_t) kept =
         core_list_new(n00bb_cache_module_object_t);
+    core_dict_t mutator_decisions;
+    cached_mutator_decisions(link, analysis, order.data, count,
+                             &mutator_decisions);
     module_emission_t emission = {
         .kept = &kept,
+        .mutator_decisions = &mutator_decisions,
+        .keep_shims = native && native->exports,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
-        .lto = lto, .native_cache = native_cache,
+        .lto = lto,
         .storage_origin = storage_origin,
         .callback_bindings = callback_bindings,
         .type_indices = type_indices, .type_index_count = type_index_count,
@@ -1664,6 +2196,18 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         N00BB_KEY_BUILD_JOBS);
     size_t native_workers = requested_workers > 0
         ? (size_t)requested_workers : 1;
+    module_entry_t root_entry = {
+        .initializers = names,
+        .initializer_count = initializer_count,
+        .metadata_bytes = metadata.size,
+        .finalizers = finalizers, .finalizer_count = finalizer_count,
+        .boxed_finalizers = boxed_finalizers,
+        .boxed_addresses = boxed_addresses,
+        .boxed_address_count = boxed_address_count,
+        .boxed_mutable_addresses = boxed_mutable_addresses,
+        .boxed_mutable_address_count = boxed_mutable_address_count,
+        .boxed_finalizer_count = boxed_finalizer_count,
+    };
     module_emitter_t emitter;
     module_emitter_start(&emitter, &emission,
                          count + analysis->specializations.len,
@@ -1675,18 +2219,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 order.data[i]->module.identifier,
                 CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
             ? artifact_view.payload : nullptr;
-        module_entry_t root_entry = {
-            .initializers = names,
-            .initializer_count = initializer_count,
-            .metadata_bytes = metadata.size,
-            .finalizers = finalizers, .finalizer_count = finalizer_count,
-            .boxed_finalizers = boxed_finalizers,
-            .boxed_addresses = boxed_addresses,
-            .boxed_address_count = boxed_address_count,
-            .boxed_mutable_addresses = boxed_mutable_addresses,
-            .boxed_mutable_address_count = boxed_mutable_address_count,
-            .boxed_finalizer_count = boxed_finalizer_count,
-        };
         module_object_t *item = module_emitter_slot(&emitter);
         *item = (module_object_t){
             .module = tu_state(order.data[i])->ir_module,
@@ -1695,14 +2227,20 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .bitcode = lto ? &lto_modules[i] : nullptr,
         };
         n00bb_cache_module_object_t cached = {0};
-        if (tu_state(order.data[i])->interface_module
-            && n00bb_cache_module_object(analysis->cache,
+        bool interface = tu_state(order.data[i])->interface_module;
+        if (interface && n00bb_cache_module_object(analysis->cache,
                 ir_module_name(item->module), &cached)) {
             item->cached = cached.object;
             item->cached_bytes = cached.object_bytes;
             item->ok = true;
+            module_emitter_publish(&emitter);
+            continue;
         }
-        else ok = begin_module_object(&emission, item,
+        ir_module_t *library = interface
+            ? library_ir_module(analysis, ir_module_name(item->module))
+            : nullptr;
+        if (library) item->module = library;
+        ok = begin_module_object(&emission, item,
             core_translation_unit_diagnostics(order.data[i]),
             order.data[i] == core_link_unit_root(link, 0)
                 ? &root_entry : nullptr);
@@ -1739,42 +2277,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     bool emitted = module_emitter_finish(&emitter);
     ok = ok && emitted;
-    if (ok && lto) {
-        build_stage = "link-time optimization";
-        core_string_t runtime_path = n00bb_archive_path(
-            CORE_STRING_STATIC(N00BB_RUNTIME_BITCODE));
-        ok = runtime_path.data && n00bb_read_bitcode(runtime_path,
-            &lto_modules[modules]);
-        core_free(runtime_path.data);
-        size_t input_count = modules + 1 + native->bitcode_count;
-        n00bb_llvm_bitcode_input_t *inputs = ok
-            ? calloc(input_count, sizeof(*inputs)) : nullptr;
-        ok = ok && inputs;
-        for (size_t i = 0; ok && i < modules + 1; i++)
-            inputs[i] = (n00bb_llvm_bitcode_input_t){
-                .data = lto_modules[i].data,
-                .length = lto_modules[i].byte_len,
-                .native_support = i == modules,
-            };
-        for (size_t i = 0; ok && i < native->bitcode_count; i++)
-            inputs[modules + 1 + i] = (n00bb_llvm_bitcode_input_t){
-                .data = native->bitcode[i].data,
-                .length = native->bitcode[i].byte_len,
-            };
-        core_buffer_t object = {0};
-        if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs, input_count,
-            debug_enabled, native_cpu,
-            !parse_cmdr_flag_present(args,
-                CORE_STRING_STATIC("--gc-conservative-stacks")),
-            &object, diagnostics);
-        if (ok) ok = n00bb_native_frames_add(native_frames,
-            object.data, object.byte_len);
-        if (ok) objects[0] = temporary_object_argument(
-            object.data, object.byte_len);
-        ok = ok && objects[0];
-        core_buffer_release(&object);
-        free(inputs);
-    }
     if (ok && !lto && native->bitcode_count) {
         build_stage = "compiling C shims";
         n00bb_llvm_bitcode_input_t *inputs = calloc(native->bitcode_count,
@@ -1787,15 +2289,15 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             };
         core_buffer_t object = {0};
         if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
-            native->bitcode_count, debug_enabled, native_cpu, false,
-            &object, diagnostics);
+            native->bitcode_count, debug_enabled, native_cpu,
+            analysis->target.enabled_features, false, &object, diagnostics);
         if (ok) objects[modules + 3] = temporary_object_argument(
             object.data, object.byte_len);
         ok = ok && objects[modules + 3];
         core_buffer_release(&object);
         free(inputs);
     }
-    if (ok) {
+    if (ok && !lto) {
         uint8_t *frame_object = nullptr;
         size_t frame_object_bytes = 0;
         ok = n00bb_native_frames_emit(native_frames, &analysis->target,
@@ -1845,134 +2347,62 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         ok = false;
     }
     if (ok && archive) {
-        int32_t extra_count = parse_cmdr_flag_value_count(args,
-            CORE_STRING_STATIC("--link-object"));
-        bool lazy_hosts = extra_count > 0
-            && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
-        char *host_archive = nullptr;
-        if (lazy_hosts
-            && !host_object_archive(args, extra_count, staging,
-                                    &host_archive)) ok = false;
-        size_t extra_used = 0;
-        size_t object_count = 0;
-        for (size_t i = 0; i < modules + 4; i++)
-            if (objects[i]) object_count++;
-        size_t native_flags = native->archive_count
-            + native->search_path_count + native->library_count
-            + 2 * native->framework_count;
-        char **arguments = calloc(object_count + (size_t)extra_count
-                                      + native_flags
-                                      + N00BB_SYSTEM_LIBRARY_LIMIT + 10,
-                                  sizeof(*arguments));
-        char **native_arguments = native_flags
-            ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
-        ok = arguments != nullptr && (!native_flags || native_arguments);
-        size_t native_used = 0;
-        for (size_t i = 0; ok && i < native->archive_count; i++)
-            native_arguments[native_used++] = n00bb_flag_argument("",
-                native->archives[i]);
-        for (size_t i = 0; ok && i < native->search_path_count; i++)
-            native_arguments[native_used++] = n00bb_flag_argument("-L",
-                native->search_paths[i]);
-        for (size_t i = 0; ok && i < native->library_count; i++)
-            native_arguments[native_used++] = n00bb_flag_argument("-l",
-                native->libraries[i]);
-        for (size_t i = 0; ok && i < native->framework_count; i++) {
-            native_arguments[native_used++] = core_string_to_cstr(
-                CORE_STRING_STATIC("-framework"));
-            native_arguments[native_used++] = n00bb_flag_argument("",
-                native->frameworks[i]);
+        program_link_t program = {
+            .analysis = analysis, .args = args, .native = native,
+            .objects = objects, .object_slots = modules + 4,
+            .linker = linker, .target_flag = target_flag, .archive = archive,
+            .lto_modules = lto_modules, .lto_module_count = modules,
+            .debug_enabled = debug_enabled, .native_cpu = native_cpu,
+            .precise_stacks = !parse_cmdr_flag_present(args,
+                CORE_STRING_STATIC("--gc-conservative-stacks")),
+        };
+        core_list_t(core_translation_unit_ptr_t) runtime_units =
+            core_list_new(core_translation_unit_ptr_t);
+        ok = run_comptime(link, &program, order.data, count, lto,
+                          debug_enabled, &kept, &runtime_units, diagnostics)
+            && ((!runtime_units.len
+                 && !any_cached_runtime_object(analysis, order.data, count))
+                || emit_runtime_objects(link, &emission,
+                    &program, order.data, count, &runtime_units, &root_entry,
+                    diagnostics));
+        core_list_free(runtime_units);
+        if (ok && lto) {
+            build_stage = "link-time optimization";
+            core_string_t runtime_path = n00bb_archive_path(
+                CORE_STRING_STATIC(N00BB_RUNTIME_BITCODE));
+            ok = runtime_path.data && n00bb_read_bitcode(runtime_path,
+                    &lto_modules[modules])
+                && lto_link(&program, true, objects, diagnostics);
+            core_free(runtime_path.data);
+            build_stage = "linking native executable";
         }
-        for (size_t i = 0; ok && i < native_used; i++)
-            if (!native_arguments[i]) ok = false;
-        if (ok) {
-            arguments[0] = (char *)linker;
-            size_t next = 1;
-            if (target_flag) {
-                arguments[next++] = target_flag;
-                arguments[next++] = "-fuse-ld=lld";
-            }
-            for (size_t i = 0; i < modules + 4; i++)
-                if (objects[i]) arguments[next++] = objects[i];
-            for (int32_t i = 0; ok && i < extra_count; i++) {
-                char *object = core_string_to_cstr(parse_cmdr_flag_str_at(
-                    args, CORE_STRING_STATIC("--link-object"), i));
-                if (!object) ok = false;
-                else if (lazy_hosts && !archive_file(object))
-                    core_free(object);
-                else arguments[next + extra_used++] = object;
-            }
-            if (ok) {
-                size_t tail = next + extra_used;
-                if (host_archive) arguments[tail++] = host_archive;
-                arguments[tail++] = archive;
-                for (size_t i = 0; i < native_used; i++)
-                    arguments[tail++] = native_arguments[i];
-                for (const char *const *library =
-                         n00bb_system_libraries(&analysis->target);
-                     *library; library++)
-                    arguments[tail++] = (char *)*library;
-                if (parse_cmdr_flag_present(args,
-                        CORE_STRING_STATIC("--build-time"))) {
-                    if (analysis->target.object_format
-                        == CORE_TARGET_OBJECT_ELF)
-                        arguments[tail++] = "-rdynamic";
-                    else if (analysis->target.object_format
-                             == CORE_TARGET_OBJECT_COFF)
-                        arguments[tail++] = "-Wl,--export-all-symbols";
-                }
-                if (analysis->target.object_format == CORE_TARGET_OBJECT_COFF)
-                    arguments[tail++] = "-Wl,--stack,8388608";
-                arguments[tail++] = "-o";
-                arguments[tail] = staging;
-                link_report_t report = {
-                    .arguments = arguments,
-                    .objects = objects,
-                    .object_count = modules + 4,
-                    .staging = staging,
-                    .output = output,
-                    .mach_o = analysis->target.object_format
-                        == CORE_TARGET_OBJECT_MACH_O,
-                };
-                ok = run_linker(&report, diagnostics);
-            }
-            if (ok) ok = finish_output(&plan, diagnostics);
+        ok = ok && link_program(&program, nullptr, staging, output,
+                                diagnostics);
+        if (ok) ok = finish_output(&plan, diagnostics);
 #ifdef __APPLE__
-            if (ok && debug_enabled && !plan.device
-                && analysis->target.object_format
-                    == CORE_TARGET_OBJECT_MACH_O) {
-                char *native_bundle = debug_bundle_path(output_name);
-                char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
-                                    native_bundle, nullptr};
-                core_process_spec_t spec = {.arguments = dsymutil};
-                core_process_t child;
-                if (native_bundle && !core_process_start(&spec, &child))
-                    (void)core_process_wait(child, nullptr);
-                core_free(native_bundle);
-            }
+        if (ok && debug_enabled && !plan.device
+            && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O) {
+            char *native_bundle = debug_bundle_path(output_name);
+            char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
+                                native_bundle, nullptr};
+            core_process_spec_t spec = {.arguments = dsymutil};
+            core_process_t child;
+            if (native_bundle && !core_process_start(&spec, &child))
+                (void)core_process_wait(child, nullptr);
+            core_free(native_bundle);
+        }
 #endif
-            if (host_archive) {
-                unlink(host_archive);
-                core_free(host_archive);
-            }
-            for (size_t i = 0; i < extra_used; i++)
-                core_free(arguments[next + i]);
-        }
-        else if (host_archive) {
-            unlink(host_archive);
-            core_free(host_archive);
-        }
-        for (size_t i = 0; i < native_used; i++)
-            core_free(native_arguments[i]);
-        free(native_arguments);
-        free(arguments);
     } else ok = false;
     if (ok)
         (void)n00bb_cache_store(analysis->cache, link, analysis, kept.data,
                                 kept.len);
-    for (size_t i = 0; i < kept.len; i++)
+    for (size_t i = 0; i < kept.len; i++) {
         free((void *)kept.data[i].object);
+        free((void *)kept.data[i].runtime_object);
+        free((void *)kept.data[i].mutators);
+    }
     core_list_free(kept);
+    core_dict_free(&mutator_decisions);
     release_output(&plan);
     core_free(archive);
     core_free(target_flag);
@@ -1983,7 +2413,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             core_free(objects[i]);
         }
     }
-    for (size_t i = 0; i < 2 * count + 1; i++)
+    for (size_t i = 0; i < count + 1; i++)
         if (names) core_free(names[i].data);
     free(objects);
     if (lto_modules) {
@@ -2001,7 +2431,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     free(boxed_addresses);
     free(boxed_mutable_addresses);
     free(function_indices);
-    n00bb_native_cache_close(native_cache);
     n00bb_native_frames_free(native_frames);
     ir_storage_origin_free(storage_origin);
     n00bb_llvm_callback_bindings_free(callback_bindings);
@@ -2151,121 +2580,6 @@ free_abi_artifact(void *payload)
 }
 
 static bool
-abi_graph_root(void *context, core_string_t identifier, size_t *index)
-{
-    n00bb_link_analysis_t *analysis = context;
-    if (!analysis || !identifier.data || !index) return false;
-    for (size_t i = 0; i < analysis->baked_roots.len; i++) {
-        const n00bb_baked_root_t *root = &analysis->baked_roots.data[i];
-        if (core_string_eq(root->identifier, identifier)
-            && root->root_index < analysis->static_graph_nodes.len) {
-            *index = root->root_index;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool
-abi_graph_node(void *context, size_t index, const uint8_t **bytes,
-    size_t *size, uint32_t *alignment, uint64_t *typehash)
-{
-    n00bb_link_analysis_t *analysis = context;
-    if (!analysis || index >= analysis->static_graph_nodes.len
-        || !bytes || !size || !alignment || !typehash) return false;
-    const n00bb_captured_graph_node_t *node =
-        &analysis->static_graph_nodes.data[index];
-    *bytes = node->node.bytes;
-    *size = node->node.size;
-    *alignment = node->node.alignment;
-    *typehash = node->typehash;
-    return true;
-}
-
-static bool
-abi_graph_edge(void *context, size_t index, size_t *source,
-    size_t *source_offset, size_t *target, size_t *target_offset)
-{
-    n00bb_link_analysis_t *analysis = context;
-    if (!analysis || index >= analysis->static_graph_edges.len
-        || !source || !source_offset || !target || !target_offset)
-        return false;
-    const n00bb_static_graph_edge_t *edge =
-        &analysis->static_graph_edges.data[index];
-    *source = edge->source;
-    *source_offset = edge->source_offset;
-    *target = edge->target;
-    *target_offset = edge->target_offset;
-    return true;
-}
-
-static core_string_t
-abi_graph_type_name(void *context, size_t index)
-{
-    n00bb_link_analysis_t *analysis = context;
-    return analysis->static_graph_nodes.data[index].type_name;
-}
-
-static bool
-abi_graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
-{
-    n00bb_link_analysis_t *analysis = context;
-    if (index >= analysis->static_graph_slots.len) return false;
-    const n00bb_static_graph_slot_t *slot =
-        &analysis->static_graph_slots.data[index];
-    if (slot->table == N00B_ABI_TABLE_NATIVE_BINDING) {
-        *out = (n00bb_abi_graph_slot_t){
-            .node = slot->node,
-            .offset = slot->offset,
-            .table = slot->table,
-            .native = slot->name,
-        };
-        return true;
-    }
-    bool type = slot->table == N00B_ABI_TABLE_TYPE;
-    ir_func_t *function = type ? nullptr
-        : n00bb_baked_function(analysis, slot->module, slot->name);
-    if (!type && !function) return false;
-    function = n00bb_cached_body(function);
-    *out = (n00bb_abi_graph_slot_t){
-        .node = slot->node,
-        .offset = slot->offset,
-        .table = slot->table,
-        .kind = slot->kind,
-        .typehash = slot->typehash,
-        .type_name = type ? slot->name : (core_string_t){},
-        .module = type ? (core_string_t){} : slot->module,
-        .function = type ? (core_string_t){} : slot->name,
-        .function_type = function ? function->type : nullptr,
-    };
-    return true;
-}
-
-static uint32_t
-abi_graph_flags(void *context, size_t index)
-{
-    n00bb_link_analysis_t *analysis = context;
-    const n00bb_captured_graph_node_t *node =
-        &analysis->static_graph_nodes.data[index];
-    return (node->immutable ? N00B_ABI_BAKED_NODE_IMMUTABLE : 0)
-        | (node->array_backing ? N00B_ABI_BAKED_NODE_ARRAY_BACKING : 0)
-        | (node->foreign ? N00B_ABI_BAKED_NODE_FOREIGN : 0);
-}
-
-static core_translation_unit_t *
-module_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
-{
-    core_string_t name = ir_module_name(module);
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        core_string_t identifier = analysis->units.data[i]->module.identifier;
-        if (tu_state(analysis->units.data[i])->ir_module == module
-            || core_string_eq(identifier, name))
-            return analysis->units.data[i];
-    }
-    return nullptr;
-}
-
-static bool
 emit_specialization_abi(core_link_unit_t *link,
                         n00bb_link_analysis_t *analysis,
                         const n00bb_specialization_t *specialization,
@@ -2273,8 +2587,9 @@ emit_specialization_abi(core_link_unit_t *link,
                         n00bb_abi_source_context_t *sources)
 {
     ir_module_t *module = specialization->instance->owner;
-    core_translation_unit_t *generic = module_unit(analysis,
-        specialization->generic->owner);
+    ir_module_t *owner = specialization->generic->owner;
+    core_translation_unit_t *generic = unit_for_ir_module(analysis, owner);
+    if (!generic) generic = n00bb_unit_named(analysis, ir_module_name(owner));
     core_string_t name = core_string_dup(ir_module_name(module));
     core_source_file_t source = {0};
     core_translation_unit_t unit = {0};
@@ -2322,6 +2637,59 @@ emit_specialization_abi(core_link_unit_t *link,
     return valid;
 }
 
+static bool
+abi_sources_open(core_link_unit_t *link, n00bb_abi_source_context_t *sources)
+{
+    sources->scopes = core_indexed_table_new(1, UINT32_MAX, abi_scope_hash,
+                                             abi_scope_equal);
+    bool valid = sources->scopes != nullptr;
+    size_t count = core_link_unit_translation_unit_count(link);
+    for (size_t i = 0; valid && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+        if (!state || !state->annotations || !state->annotations->symtab
+            || !state->lex || !state->lex->tokens || !state->ir_module)
+            return false;
+        th_ctx *types = ir_module_types(state->ir_module);
+        if (!types || (sources->types && sources->types != types))
+            return false;
+        sources->types = types;
+        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+             valid && scope; scope = scope->all_next) {
+            const core_indexed_entry_t *entry = core_indexed_table_intern(
+                sources->scopes, scope, state, nullptr);
+            valid = entry && entry->value == state;
+        }
+    }
+    return valid && abi_collect_type_owners(link, sources);
+}
+
+static void
+abi_sources_close(n00bb_abi_source_context_t *sources)
+{
+    if (sources->scopes) core_indexed_table_free(sources->scopes);
+    core_dict_free(&sources->type_owners);
+    core_dict_free(&sources->generic_type_owners);
+}
+
+static bool
+abi_emit_source_unit(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+                     core_translation_unit_t *unit, bool debug_enabled,
+                     n00bb_abi_source_context_t *sources,
+                     n00bb_abi_artifact_t *artifact)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    return n00bb_abi_emit_unit(link, unit, n00bb_package_id(unit),
+        state->annotations->symtab, state->lex->tokens, state->ir_module,
+        &analysis->target, debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
+        abi_declaration_for_symbol, analysis,
+        abi_source_of_node, sources, abi_type_owner, sources,
+        n00bb_comptime_graph(unit),
+        &artifact->packed, &artifact->index_table,
+        &artifact->object, &artifact->object_bytes);
+}
+
 bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
@@ -2330,49 +2698,11 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
 {
     if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
         || core_link_unit_stage_state(link,
-            N00BB_LINK_STAGE_STORAGE_LIFETIMES) != CORE_LINK_STAGE_COMPLETE)
+            N00BB_LINK_STAGE_IR_BINDINGS) != CORE_LINK_STAGE_COMPLETE)
         return false;
-    n00bb_abi_source_context_t sources = {
-        .scopes = core_indexed_table_new(1, UINT32_MAX,
-            abi_scope_hash, abi_scope_equal),
-    };
-    n00bb_abi_graph_source_t graphs = {
-        .context = analysis,
-        .node_count = analysis->static_graph_nodes.len,
-        .edge_count = analysis->static_graph_edges.len,
-        .slot_count = analysis->static_graph_slots.len,
-        .root = abi_graph_root,
-        .node = abi_graph_node,
-        .edge = abi_graph_edge,
-        .flags = abi_graph_flags,
-        .type_name = abi_graph_type_name,
-        .slot = abi_graph_slot,
-    };
-    bool valid = sources.scopes != nullptr;
+    n00bb_abi_source_context_t sources = {0};
+    bool valid = abi_sources_open(link, &sources);
     size_t count = core_link_unit_translation_unit_count(link);
-    for (size_t i = 0; valid && i < count; i++) {
-        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
-            i);
-        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        if (!state || !state->annotations || !state->annotations->symtab
-            || !state->lex || !state->lex->tokens || !state->ir_module) {
-            valid = false;
-            break;
-        }
-        th_ctx *types = ir_module_types(state->ir_module);
-        if (!types || (sources.types && sources.types != types)) {
-            valid = false;
-            break;
-        }
-        sources.types = types;
-        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
-             valid && scope; scope = scope->all_next) {
-            const core_indexed_entry_t *entry = core_indexed_table_intern(
-                sources.scopes, scope, state, nullptr);
-            valid = entry && entry->value == state;
-        }
-    }
-    if (valid) valid = abi_collect_type_owners(link, &sources);
     for (size_t i = 0; valid && i < count; i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
@@ -2387,6 +2717,11 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         bool from_cache = state->interface_module
             && n00bb_cache_module_object(analysis->cache,
                 ir_module_name(state->ir_module), &cached);
+        if (!from_cache && state->interface_module) {
+            cached.abi = library_abi_object(analysis,
+                unit->module.identifier, &cached.abi_bytes);
+            from_cache = cached.abi && cached.abi_bytes;
+        }
         if (from_cache) {
             artifact->object = core_alloc_array(uint8_t, cached.abi_bytes);
             if (artifact->object)
@@ -2394,16 +2729,8 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             artifact->object_bytes = cached.abi_bytes;
         }
         bool emitted = from_cache ? artifact->object != nullptr
-            : n00bb_abi_emit_unit(link, unit,
-            n00bb_package_id(unit),
-            state->annotations->symtab, state->lex->tokens,
-            state->ir_module,
-            &analysis->target,
-            debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
-            abi_declaration_for_symbol, analysis,
-            abi_source_of_node, &sources, abi_type_owner, &sources, &graphs,
-            &artifact->packed, &artifact->index_table,
-            &artifact->object, &artifact->object_bytes);
+            : abi_emit_source_unit(link, analysis, unit, debug_enabled,
+                                   &sources, artifact);
         if (!emitted) {
             free_abi_artifact(artifact);
             valid = false;
@@ -2422,10 +2749,64 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
         valid = emit_specialization_abi(link, analysis,
             &analysis->specializations.data[i], debug_enabled, &sources);
     }
-    core_indexed_table_free(sources.scopes);
-    core_dict_free(&sources.type_owners);
-    core_dict_free(&sources.generic_type_owners);
+    abi_sources_close(&sources);
     return valid;
+}
+
+bool
+n00bb_register_library_abi(core_link_unit_t *link,
+                           n00bb_link_analysis_t *analysis)
+{
+    th_env *environment = analysis ? analysis->interface_environment
+                                   : nullptr;
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    bool ok = environment != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        if (!library_unit(unit)) continue;
+        core_link_artifact_view_t view = {0};
+        const n00bb_abi_artifact_t *artifact =
+            core_link_unit_require_artifact(link, unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+            ? view.payload : nullptr;
+        ok = artifact && artifact->object && artifact->object_bytes
+            && th_env_register_metadata(environment,
+                   TH_ENV_METADATA_ENVIRONMENT, unit->module.identifier,
+                   CORE_STRING_STATIC(N00BB_LIBRARY_ABI_KEY), 1,
+                   artifact->object, artifact->object_bytes);
+    }
+    return ok;
+}
+
+static bool
+n00bb_reemit_abi_artifact(core_link_unit_t *link,
+                          n00bb_link_analysis_t *analysis,
+                          bool debug_enabled,
+                          core_translation_unit_t *unit)
+{
+    core_link_artifact_view_t view = {0};
+    n00bb_abi_artifact_t *existing = core_link_unit_require_artifact(link,
+            unit->module.identifier, CORE_STRING_STATIC("n00bb.abi.object"),
+            1, &view)
+        ? (n00bb_abi_artifact_t *)view.payload : nullptr;
+    n00bb_abi_source_context_t sources = {0};
+    n00bb_abi_artifact_t fresh = {0};
+    bool valid = existing && abi_sources_open(link, &sources)
+        && abi_emit_source_unit(link, analysis, unit, debug_enabled,
+                                &sources, &fresh);
+    abi_sources_close(&sources);
+    if (!valid) {
+        n00bb_abi_packed_tables_release(&fresh.packed);
+        n00bb_abi_index_table_release(&fresh.index_table);
+        core_free(fresh.object);
+        return false;
+    }
+    n00bb_abi_packed_tables_release(&existing->packed);
+    n00bb_abi_index_table_release(&existing->index_table);
+    core_free(existing->object);
+    *existing = fresh;
+    return true;
 }
 
 static bool
@@ -2489,7 +2870,7 @@ n00bb_validate_linked_metadata(const uint8_t *metadata, size_t bytes,
     return n00b_abi_v1_validate_image(&image, context) == N00B_ABI_OK;
 }
 
-bool
+static bool
 n00bb_link_abi_artifact(core_link_unit_t *link,
                         n00bb_link_analysis_t *analysis,
                         const core_target_desc_t *target,

@@ -3,7 +3,7 @@ quotes litmod make_stamp(raw: string) -> int fail: string {
     return 42
 }
 
-tuple litmod count_pair(items: Array[Tuple[int, int] | string]) -> int fail: string {
+tuple litmod count_pair(items: Array[Any]) -> int fail: string {
     return 2
 }
 
@@ -11,7 +11,7 @@ func value() -> int {
     return "dependency"'stamp
 }
 
-when comptime() {
+if comptime() {
     require value() == 42
     require ((1, 2), "three")'count_pair == 2
 } else {

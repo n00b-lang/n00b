@@ -56,7 +56,7 @@ int main(void)
     check("apply_subst on a cyclic type preserves identity",
           th_hash(ctx, sa) == th_hash(ctx, a));
 
-    th_type *u = th_unify(ctx, a, a);
+    th_type *u = th_meet(ctx, a, a);
 
     check("a cyclic type unifies with itself", u != nullptr);
 
@@ -76,12 +76,12 @@ int main(void)
     th_type *v2;
     th_type *c = rec_var(ctx, CORE_STRING_STATIC("next"), &v2);
 
-    th_type *bc = th_unify(ctx, b, c);
+    th_type *bc = th_meet(ctx, b, c);
 
     check("two cyclic types with variables unify", bc != nullptr);
 
     th_type *d   = rec_self(ctx, CORE_STRING_STATIC("next"));
-    th_type *bad = th_unify(ctx, b, d);
+    th_type *bad = th_meet(ctx, b, d);
 
     check("cyclic types with differing field sets do not unify",
           bad == nullptr);
@@ -91,7 +91,7 @@ int main(void)
     check("occurs is false for an unrelated variable",
           !th_occurs(ctx, var, a));
 
-    th_type *bound = th_unify(ctx, var, a);
+    th_type *bound = th_meet(ctx, var, a);
 
     check("a bare variable unifies with a cyclic type", bound != nullptr);
 

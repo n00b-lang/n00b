@@ -281,29 +281,29 @@ func scale(modify p: Point, k: f64) fail: Scale_Failure {
 }
 
 func origin() -> Point fail: Error {
-    var result = point()
-    let outcome = __pt_origin(ref result.storage)
+    var returned = point()
+    let outcome = __pt_origin(ref returned.storage)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_origin")
         fail failure
     }
-    return result
+    return returned
 }
 
 func type_(mode: Mode) -> i32 {
-    let result = __pt_type(mode)
-    return result
+    let returned = __pt_type(mode)
+    return returned
 }
 
 func sum(args: List[f64]) -> f64 fail: Error {
     var args_value = args
-    var result: f64 = 0
-    let outcome = __pt_sum(ref args_value, ref result)
+    var returned: f64 = 0
+    let outcome = __pt_sum(ref args_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_sum")
         fail failure
     }
-    return result
+    return returned
 }
 7	tests/gen_n00b/float_record.writ:4:1	point
 32	tests/gen_n00b/float_record.writ:9:1	pt_mode

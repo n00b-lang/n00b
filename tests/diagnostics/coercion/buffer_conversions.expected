@@ -2,6 +2,8 @@ tests/diagnostics/coercion/buffer_conversions.n:1:50: error N00B-T0529: `"x"` is
   help: copy it into a buffer with `buffer_from_string("x")`
 tests/diagnostics/coercion/buffer_conversions.n:2:24: error N00B-T0529: `"x"` is a `string`, which is immutable and does not convert to `Buffer`
   help: copy it into a buffer with `buffer_from_string("x")`
+tests/diagnostics/coercion/buffer_conversions.n:4:5: warning N00B-N0022: field `b` of `Holder` is never used
+tests/diagnostics/coercion/buffer_conversions.n:5:5: warning N00B-N0022: field `n` of `Holder` is never used
 tests/diagnostics/coercion/buffer_conversions.n:7:22: error N00B-T0529: `"x"` is a `string`, which is immutable and does not convert to `Buffer`
   help: copy it into a buffer with `buffer_from_string("x")`
 tests/diagnostics/coercion/buffer_conversions.n:9:12: error N00B-T0529: `"text"` is a `string`, which is immutable and does not convert to `Buffer`

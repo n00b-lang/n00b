@@ -179,7 +179,12 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
     pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
     add_root(resolver, n00bb_toolchain()->stdlib, false);
-    add_root(resolver, cwd, true);
+    core_string_t real_cwd = core_os_real_path(cwd);
+    if (!resolver->roots.len
+        || !path_within(real_cwd.data ? real_cwd : cwd,
+                        resolver->roots.data[0].path))
+        add_root(resolver, cwd, true);
+    core_free(real_cwd.data);
     add_environment_roots(resolver, cwd, diagnostics);
     core_snapshot_root_t *roots = core_alloc_array(core_snapshot_root_t,
                                                    resolver->roots.len);
@@ -298,14 +303,29 @@ n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifie
     return true;
 }
 
+static void
+native_type_free(n00bb_native_type_t *type)
+{
+    while (type) {
+        n00bb_native_type_t *item = type->item;
+        core_free(type->name.data);
+        core_free(type);
+        type = item;
+    }
+}
+
 void
 n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
 {
     if (!declarations) return;
     for (size_t i = 0; i < declarations->count; i++) {
-        core_free(declarations->items[i].name.data);
-        core_free(declarations->items[i].symbol.data);
-        core_free(declarations->items[i].signature.data);
+        n00bb_native_declaration_t *native = &declarations->items[i];
+        core_free(native->name.data);
+        core_free(native->symbol.data);
+        for (size_t p = 0; p < native->param_count; p++)
+            native_type_free(native->params[p]);
+        core_free(native->params);
+        native_type_free(native->result);
     }
     core_free(declarations->items);
     *declarations = (n00bb_native_declarations_t){0};
@@ -807,6 +827,19 @@ resolve_file(void *context, const core_module_spec_t *module,
     return CORE_MODULE_NOT_FOUND;
 }
 
+bool
+n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
+                                 core_string_t identifier)
+{
+    core_module_spec_t module = {0};
+    core_source_file_t source = {0};
+    bool found = core_module_spec_init(&module, identifier)
+        && resolve_file(resolver, &module, &source) == CORE_MODULE_RESOLVED;
+    core_source_file_release(&source);
+    core_module_spec_release(&module);
+    return found;
+}
+
 static bool
 snapshot_may_contain_package(const core_source_snapshot_t *snapshot)
 {
@@ -1011,18 +1044,6 @@ n00bb_resolver_package_manifests(n00bb_resolver_t *resolver,
                           emit_context) != CORE_MODULE_RESOLVE_ERROR;
 }
 
-bool
-n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
-                                 core_string_t identifier)
-{
-    core_module_spec_t module = {0};
-    core_source_file_t source = {0};
-    bool found = core_module_spec_init(&module, identifier)
-        && resolve_file(resolver, &module, &source) == CORE_MODULE_RESOLVED;
-    core_source_file_release(&source);
-    core_module_spec_release(&module);
-    return found;
-}
 
 
 bool

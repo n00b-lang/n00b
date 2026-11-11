@@ -70,7 +70,7 @@ IR_OP(TYPE_TEST,       "type.test",       2, 2,  BOOL,        "vt",  0,         
 IR_OP(TYPE_NARROW,     "type.narrow",     2, 2,  ANNOTATED,   "vt",  0,                              HASRESULT, NOMEM)
 IR_OP(TYPE_OF,         "type.of",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
 IR_OP(BUFFER_AS_STRING, "buffer.as_string", 1, 1, ANNOTATED,  "v",   0,                              HASRESULT | SIDEEFFECT, NOMEM)
-IR_OP(BUFFER_BORROW_END, "buffer.borrow_end", 1, 1, NONE,     "v",   0,                              SIDEEFFECT, NOMEM)
+IR_OP(BUFFER_SLICE_END, "buffer.slice_end", 2, 2, NONE,      "vv",  0,                              SIDEEFFECT, NOMEM)
 
 IR_OP(ADD,             "add",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT, NOMEM)
 IR_OP(SUB,             "sub",             2, 2,  OPERAND0,    "vv",  IR_MOD_OVERFLOW,                HASRESULT, NOMEM)
@@ -120,7 +120,6 @@ IR_OP(OFFSETOF,        "offsetof",        2, 2,  U64,         "tn",  0,         
 IR_OP(TYPEHASH,        "typehash",        1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)
 IR_OP(TYPENAME,        "typename",        1, 1,  STR,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)
 IR_OP(ARMTAG,          "armtag",          1, 1,  U64,         "n",   0,                              HASRESULT | COMPTIME, NOMEM)
-IR_OP(PHASE_RESULT,    "phase.result",    0, 0,  ANNOTATED,   "",    0,                              HASRESULT, NOMEM)
 
 IR_OP(JUMP,            "jump",            1, 1,  NONE,        "b",   0,                              TERMINATOR, NOMEM)
 IR_OP(BRANCH,          "branch",          3, 3,  NONE,        "vbb", 0,                              TERMINATOR, NOMEM)
@@ -133,3 +132,4 @@ IR_OP(UNREACHABLE,     "unreachable",     0, 0,  NONE,        "",    0,         
 IR_OP(TYPE_INDEX,      "type.index",      1, 1,  ANNOTATED,   "t",   0,                              HASRESULT, NOMEM)
 IR_OP(BOX_RAW,        "box.raw",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
 IR_OP(BOX_FROM_RAW,    "box.from_raw",    1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
+IR_OP(DISPATCH,        "dispatch",        2, VAR, ANNOTATED,   "nk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)

@@ -1,0 +1,15 @@
+trait Frobs {
+    func frob(self: 'A) -> int
+}
+trait Twiddles {
+    func frob(self: 'A) -> int
+    func twiddle(self: 'A) -> int
+}
+func use_it(x: 'X) -> int {
+    return x.frob()
+}
+func nothing(x: 'X) -> int {
+    return x.zap()
+}
+func start() -> nil {
+}

@@ -1,11 +1,10 @@
-#include "private/ir/internal.h"
 #include "ir/abcd.h"
+#include "private/ir/internal.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
-#include "ir/memssa.h"
+#include "ir/pdg_memory.h"
 #include "ir/operands.h"
 #include "ir/pass.h"
-#include "ir/ranges.h"
 #include "ir/summary.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
@@ -13,14 +12,17 @@
 #include "lib/dict.h"
 #include "lib/hash.h"
 #include "lib/list.h"
-
 #include <stdlib.h>
+#include "ir/places.h"
 
 enum {
-    STEP_BUDGET  = 4096,
-    CALL_DEPTH   = 4,
-    PATH_DEPTH   = 16,
-    MAX_EDGES    = 64,
+    WIDEN_AFTER   = 3,
+    MAX_PASSES    = 64,
+    NARROW_PASSES = 2,
+    STEP_BUDGET   = 4096,
+    CALL_DEPTH    = 4,
+    PATH_DEPTH    = 16,
+    MAX_EDGES     = 64,
 };
 
 typedef enum : uint8_t {
@@ -41,6 +43,21 @@ typedef struct {
     bool              all;
 } edge_t;
 core_list_decl(edge_t);
+
+typedef struct {
+    const ir_value_t *value;
+    ir_abcd_range_t   range;
+    uint32_t          changes;
+    bool              set;
+    bool              clamped;
+} range_node_t;
+core_list_decl(range_node_t);
+
+typedef struct {
+    const ir_instr_t *user;
+    uint32_t          operand;
+} trap_use_t;
+core_list_decl(trap_use_t);
 
 typedef const ir_value_t *value_ptr_t;
 typedef const ir_instr_t *instr_ptr_t;
@@ -71,10 +88,16 @@ core_list_decl(callee_bound_t);
 struct ir_abcd_t {
     ir_func_t                  *f;
     ir_doms_t                  *doms;
+    ir_pdg_t                   *pdg;
     ir_value_numbers_t         *numbers;
-    ir_ranges_t                *ranges;
-    ir_memssa_t                *memssa;
+    ir_pdg_memory_t            *memssa;
     ir_places_t                *places;
+    core_dict_t                 views;
+    core_dict_t                 slots;
+    core_list_t(range_node_t)   nodes;
+    core_dict_t                 trap_uses;
+    bool                        narrowing;
+    bool                        clamps_known;
     core_list_t(length_t)       lengths;
     core_list_t(instr_ptr_t)    effects;
     core_list_t(callee_bound_t) callees;
@@ -96,6 +119,7 @@ typedef struct {
 typedef struct {
     ir_abcd_t               *abcd;
     bool                     upper;
+    bool                     propagating;
     core_list_t(value_ptr_t) targets;
     bool                     length_target;
     bool                     type_target;
@@ -106,11 +130,452 @@ typedef struct {
     uint32_t                 steps;
 } query_t;
 
+typedef void (*condition_visit_t)(void *context, const ir_value_t *condition,
+                                  bool sense, const ir_block_t *from);
+
+static void
+controlling_conditions(ir_pdg_t *pdg, ir_doms_t *doms, const ir_block_t *block,
+                       condition_visit_t visit, void *context)
+{
+    ir_func_t *f = block ? block->owner : nullptr;
+    if (!pdg || !doms || !f || !f->n_blocks) return;
+    bool *seen = core_alloc_array(bool, f->n_blocks);
+    core_list_t(uint32_t) pending = core_list_new(uint32_t);
+    core_list_push(pending, block->index);
+    while (pending.len) {
+        uint32_t index = pending.data[--pending.len];
+        if (index >= f->n_blocks || seen[index]) continue;
+        seen[index] = true;
+        ir_block_t *at = f->blocks[index];
+        for (uint32_t i = 0; i < ir_controllers_of(pdg, at); i++) {
+            ir_block_t *controller = ir_controller_at(pdg, at, i);
+            uint32_t slot = ir_controller_slot_at(pdg, at, i);
+            ir_instr_t *end = controller ? ir_block_terminator(controller)
+                                         : nullptr;
+            ir_block_t *taken = end && slot < end->n_operands
+                ? ir_succ_of(&end->operands[slot]) : nullptr;
+            if (!taken || ir_pred_count(doms, taken) != 1
+                || !ir_dominates(doms, taken, (ir_block_t *)block))
+                continue;
+            const ir_value_t *condition = nullptr;
+            bool sense = false;
+            if (ir_edge_condition(controller, taken, &condition, &sense))
+                visit(context, condition, sense, controller);
+            core_list_push(pending, controller->index);
+        }
+    }
+    core_list_free(pending);
+    core_free(seen);
+}
+
+static const ir_instr_t *
+viewed(ir_abcd_t *a, const ir_instr_t *in)
+{
+    const ir_instr_t *view = in ? core_dict_get(&a->views, (void *)in, nullptr)
+                                : nullptr;
+    return view ? view : in;
+}
+
 static bool
 same_value(ir_abcd_t *a, const ir_value_t *left, const ir_value_t *right)
 {
-    return ir_value_numbers_same(a->numbers, ir_value_uncopied(left),
-                                 ir_value_uncopied(right));
+    left  = ir_value_uncopied(left);
+    right = ir_value_uncopied(right);
+    if (!left || !right) return false;
+    return left == right
+        || (a->numbers && ir_value_numbers_same(a->numbers, left, right));
+}
+
+static bool
+settled_value(const ir_value_t *value)
+{
+    return ir_value_stable(value)
+        || (value && value->kind == IR_VAL_INSTR && value->def
+            && value->def->op == IR_OP_COPY);
+}
+
+bool
+ir_abcd_type_bounds(const ir_func_t *f, const ir_value_t *value,
+                     ir_interval_t *out)
+{
+    return f && value
+        && ir_interval_of_integer_type(f->owner, value->type, out);
+}
+
+static bool
+value_bounds(const ir_func_t *f, const ir_value_t *value, ir_interval_t *out)
+{
+    if (ir_abcd_type_bounds(f, value, out)) return true;
+    th_type *type = value ? th_resolve(value->type) : nullptr;
+    if (!type || th_kind_of(type) != TH_VAR || th_var_ref(type)) return false;
+    *out = (ir_interval_t){ir_int_min, ir_int_max};
+    return true;
+}
+
+static bool
+is_signed(const ir_func_t *f, const ir_value_t *value)
+{
+    return value && value->type
+        && ir_machine_of(f->owner, value->type).class == IR_CLASS_SINT;
+}
+
+static bool
+constant_of(const ir_instr_t *in, ir_int_t *out)
+{
+    if (in->op != IR_OP_CONST || in->n_operands != 1
+        || in->operands[0].kind != IR_OPD_CONST
+        || in->operands[0].lit.is_float) return false;
+    ir_lit_t literal = in->operands[0].lit.i;
+    if (literal.mag > ((ir_uint_t)1 << 126)) return false;
+    *out = literal.neg ? -(ir_int_t)literal.mag : (ir_int_t)literal.mag;
+    return true;
+}
+
+static ir_int_t
+saturating_add(ir_int_t value, ir_int_t weight)
+{
+    ir_int_t sum;
+    if (!__builtin_add_overflow(value, weight, &sum)) return sum;
+    return weight > 0 ? ir_int_max : ir_int_min;
+}
+
+static ir_abcd_range_t
+unknown_range(ir_interval_t type)
+{
+    return (ir_abcd_range_t){.seen = type, .unbounded_min = true,
+                             .unbounded_max = true};
+}
+
+static ir_abcd_range_t
+seen_range(ir_interval_t seen)
+{
+    return (ir_abcd_range_t){.seen = seen};
+}
+
+static void
+settle_bits(ir_abcd_range_t *range, ir_interval_t type)
+{
+    range->unbounded_min = range->unbounded_min && range->seen.lo <= type.lo;
+    range->unbounded_max = range->unbounded_max && range->seen.hi >= type.hi;
+}
+
+static ir_abcd_range_t
+derived_range(ir_interval_t seen, ir_interval_t type, bool unbounded_min,
+              bool unbounded_max)
+{
+    ir_abcd_range_t range = {.seen = seen, .unbounded_min = unbounded_min,
+                             .unbounded_max = unbounded_max};
+    settle_bits(&range, type);
+    return range;
+}
+
+static bool
+unbounded(ir_abcd_range_t range)
+{
+    return range.unbounded_min || range.unbounded_max;
+}
+
+static void
+tighten_lo(ir_abcd_range_t *range, ir_int_t lo, bool unbounded_min)
+{
+    if (lo > range->seen.lo) {
+        range->seen.lo = lo;
+        range->unbounded_min = unbounded_min;
+    }
+    else if (lo == range->seen.lo)
+        range->unbounded_min = range->unbounded_min && unbounded_min;
+}
+
+static void
+tighten_hi(ir_abcd_range_t *range, ir_int_t hi, bool unbounded_max)
+{
+    if (hi < range->seen.hi) {
+        range->seen.hi = hi;
+        range->unbounded_max = unbounded_max;
+    }
+    else if (hi == range->seen.hi)
+        range->unbounded_max = range->unbounded_max && unbounded_max;
+}
+
+static void
+meet_range(ir_abcd_range_t *range, ir_abcd_range_t other)
+{
+    tighten_lo(range, other.seen.lo, other.unbounded_min);
+    tighten_hi(range, other.seen.hi, other.unbounded_max);
+}
+
+static void
+join_range(ir_abcd_range_t *range, ir_abcd_range_t other)
+{
+    if (other.seen.lo < range->seen.lo) {
+        range->seen.lo = other.seen.lo;
+        range->unbounded_min = other.unbounded_min;
+    }
+    else if (other.seen.lo == range->seen.lo)
+        range->unbounded_min = range->unbounded_min || other.unbounded_min;
+    if (other.seen.hi > range->seen.hi) {
+        range->seen.hi = other.seen.hi;
+        range->unbounded_max = other.unbounded_max;
+    }
+    else if (other.seen.hi == range->seen.hi)
+        range->unbounded_max = range->unbounded_max || other.unbounded_max;
+}
+
+static range_node_t *
+node_of(ir_abcd_t *a, const ir_value_t *value)
+{
+    bool found = false;
+    void *slot = core_dict_get(&a->slots, (void *)value, &found);
+    return found ? &a->nodes.data[(uintptr_t)slot - 1] : nullptr;
+}
+
+static bool
+global_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
+{
+    ir_interval_t type;
+    if (!value || !value_bounds(a->f, value, &type)) return false;
+    range_node_t *node = node_of(a, value);
+    *out = node && node->set ? node->range : unknown_range(type);
+    return true;
+}
+
+static bool
+constant_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
+{
+    ir_int_t constant = 0;
+    ir_interval_t type;
+    if (value->kind != IR_VAL_INSTR || !value->def
+        || !constant_of(value->def, &constant)
+        || !value_bounds(a->f, value, &type)
+        || constant < type.lo || constant > type.hi) return false;
+    *out = seen_range(ir_interval_point(constant));
+    return true;
+}
+
+static const ir_value_t *
+related_by(ir_abcd_t *a, const ir_value_t *condition, bool sense,
+           const ir_value_t *value, ir_op_t *op)
+{
+    const ir_instr_t *test = viewed(a, ir_condition_test(condition, &sense));
+    if (!test || !ir_op_is_comparison(test->op) || test->n_operands != 2)
+        return nullptr;
+    const ir_value_t *left  = ir_value_operand(test, 0);
+    const ir_value_t *right = ir_value_operand(test, 1);
+    if (!left || !right || is_signed(a->f, left) != is_signed(a->f, right))
+        return nullptr;
+    ir_op_t oriented = sense ? test->op : ir_comparison_negated(test->op);
+    if (same_value(a, left, value)) {
+        *op = oriented;
+        return right;
+    }
+    if (same_value(a, right, value)) {
+        *op = ir_comparison_swapped(oriented);
+        return left;
+    }
+    return nullptr;
+}
+
+static void
+apply_condition(ir_abcd_t *a, const ir_value_t *value,
+                const ir_value_t *condition, bool sense,
+                ir_abcd_range_t *range)
+{
+    if (!settled_value(value)) return;
+    ir_op_t op = IR_OP_EQ;
+    const ir_value_t *other = related_by(a, condition, sense, value, &op);
+    ir_abcd_range_t bound;
+    if (!other || !global_range(a, other, &bound)) return;
+    ir_interval_t next = ir_interval_constrain(range->seen, op, bound.seen);
+    if (next.lo != range->seen.lo) range->unbounded_min = false;
+    if (next.hi != range->seen.hi) range->unbounded_max = false;
+    range->seen = next;
+}
+
+typedef struct {
+    ir_abcd_t        *abcd;
+    const ir_value_t *value;
+    ir_abcd_range_t  *range;
+} refine_t;
+
+static void
+refine_by_condition(void *context, const ir_value_t *condition, bool sense,
+                    const ir_block_t *from)
+{
+    (void)from;
+    refine_t *refine = context;
+    apply_condition(refine->abcd, refine->value, condition, sense,
+                    refine->range);
+}
+
+static void
+refine_in_block(ir_abcd_t *a, const ir_value_t *value,
+                const ir_block_t *block, ir_abcd_range_t *range)
+{
+    refine_t refine = {.abcd = a, .value = value, .range = range};
+    controlling_conditions(a->pdg, a->doms, block, refine_by_condition,
+                           &refine);
+}
+
+static bool
+trap_bound(ir_abcd_t *a, const trap_use_t *use, ir_interval_t *out)
+{
+    const ir_instr_t *in = use->user;
+    ir_interval_t type;
+    ir_abcd_range_t other = seen_range(ir_interval_point(0));
+    if (!value_bounds(a->f, in->dest, &type)) return false;
+    if ((in->op == IR_OP_ADD || in->op == IR_OP_SUB)
+        && !global_range(a, ir_value_operand(in, 1 - use->operand), &other))
+        return false;
+    switch (in->op) {
+    case IR_OP_CAST:
+        *out = type;
+        return true;
+    case IR_OP_NEG:
+        *out = ir_interval_apply(IR_OP_NEG, type, other.seen);
+        return true;
+    case IR_OP_ADD:
+        *out = ir_interval_apply(IR_OP_SUB, type, other.seen);
+        return true;
+    case IR_OP_SUB:
+        *out = use->operand == 0
+            ? ir_interval_apply(IR_OP_ADD, type, other.seen)
+            : ir_interval_apply(IR_OP_SUB, other.seen, type);
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool
+executed_before(ir_abcd_t *a, const ir_instr_t *first, const ir_instr_t *at)
+{
+    if (first->block == at->block) return first->index < at->index;
+    return a->doms && ir_dominates(a->doms, first->block, at->block);
+}
+
+static void
+refine_by_traps(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
+                ir_abcd_range_t *range)
+{
+    if (!settled_value(value)) return;
+    core_list_t(trap_use_t) *uses = core_dict_get(&a->trap_uses,
+        (void *)ir_value_uncopied(value), nullptr);
+    for (size_t i = 0; uses && at && i < uses->len; i++) {
+        ir_interval_t bound;
+        if (!executed_before(a, uses->data[i].user, at)
+            || !trap_bound(a, &uses->data[i], &bound)) continue;
+        ir_interval_t met;
+        if (!ir_interval_meet(range->seen, bound, &met)) continue;
+        tighten_lo(range, met.lo, false);
+        tighten_hi(range, met.hi, false);
+    }
+}
+
+static bool
+range_at(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
+         ir_abcd_range_t *out)
+{
+    if (!value || !global_range(a, value, out)) return false;
+    if (constant_range(a, value, out)) return true;
+    if (at) refine_in_block(a, value, at->block, out);
+    refine_by_traps(a, value, at, out);
+    return true;
+}
+
+static bool
+range_on_edge(ir_abcd_t *a, const ir_value_t *value, ir_block_t *from,
+              ir_block_t *to, ir_abcd_range_t *out)
+{
+    if (!value || !global_range(a, value, out)) return false;
+    if (constant_range(a, value, out)) return true;
+    refine_in_block(a, value, from, out);
+    refine_by_traps(a, value, ir_block_terminator(from), out);
+    const ir_value_t *condition = nullptr;
+    bool sense = false;
+    if (ir_edge_condition(from, to, &condition, &sense))
+        apply_condition(a, value, condition, sense, out);
+    return true;
+}
+
+static bool
+arithmetic_range(ir_abcd_t *a, const ir_instr_t *in, ir_abcd_range_t *left,
+                 ir_abcd_range_t *right, ir_interval_t *exact)
+{
+    const ir_value_t *first  = ir_value_operand(in, 0);
+    const ir_value_t *second = ir_value_operand(in, 1);
+    if (!first || !range_at(a, first, in, left)) return false;
+    switch (in->op) {
+    case IR_OP_NEG:
+        *right = seen_range(ir_interval_point(0));
+        break;
+    case IR_OP_ADD:
+    case IR_OP_SUB:
+    case IR_OP_MUL:
+    case IR_OP_SHL:
+        if (!second || !range_at(a, second, in, right)) return false;
+        if (in->op == IR_OP_SHL
+            && (left->seen.lo < 0 || right->seen.lo < 0
+                || right->seen.hi >= 127))
+            return false;
+        break;
+    default:
+        return false;
+    }
+    *exact = ir_interval_apply(in->op, left->seen, right->seen);
+    return exact->lo != ir_int_min && exact->hi != ir_int_max;
+}
+
+static bool
+overflow_interval(ir_abcd_t *a, const ir_instr_t *in, ir_interval_t *left,
+                  ir_interval_t *right, ir_interval_t *exact)
+{
+    const ir_value_t *first  = ir_value_operand(in, 0);
+    const ir_value_t *second = ir_value_operand(in, 1);
+    ir_abcd_range_t a_range, b_range;
+    switch (in->op) {
+    case IR_OP_CAST:
+        if (in->n_operands != 1 || !first
+            || !range_at(a, first, in, &a_range))
+            return false;
+        *left  = a_range.seen;
+        *right = ir_interval_point(0);
+        *exact = *left;
+        return true;
+    case IR_OP_DIV:
+    case IR_OP_REM: {
+        if (!first || !second || !range_at(a, first, in, &a_range)
+            || !range_at(a, second, in, &b_range)) return false;
+        *left  = a_range.seen;
+        *right = b_range.seen;
+        ir_interval_t negated = ir_interval_apply(IR_OP_NEG, *left,
+                                                  ir_interval_point(0));
+        bool minus_one = right->lo <= -1 && right->hi >= -1;
+        *exact = !minus_one ? ir_interval_point(0)
+            : right->lo == right->hi ? negated
+            : ir_interval_join(negated, ir_interval_point(0));
+        return true;
+    }
+    default:
+        if (!arithmetic_range(a, in, &a_range, &b_range, exact)) return false;
+        *left  = a_range.seen;
+        *right = b_range.seen;
+        return true;
+    }
+}
+
+static ir_overflow_t
+overflow_of(ir_abcd_t *a, const ir_instr_t *in, ir_interval_t *left,
+            ir_interval_t *right)
+{
+    ir_interval_t type, first = {0}, second = {0}, exact;
+    if (!a || !in || !in->dest || !value_bounds(a->f, in->dest, &type)
+        || !overflow_interval(a, in, &first, &second, &exact))
+        return IR_OVERFLOW_UNKNOWN;
+    if (left) *left = first;
+    if (right) *right = second;
+    if (exact.lo >= type.lo && exact.hi <= type.hi) return IR_OVERFLOW_NEVER;
+    if (exact.lo > type.hi || exact.hi < type.lo) return IR_OVERFLOW_ALWAYS;
+    return IR_OVERFLOW_MAY;
 }
 
 static bool
@@ -348,12 +813,70 @@ may_clobber(const ir_instr_t *effect)
 }
 
 static bool
+memory_effect(const ir_instr_t *effect)
+{
+    return effect->op == IR_OP_STORE || effect->op == IR_OP_SEQUENCE_SET
+        || effect->op == IR_OP_CALL || effect->op == IR_OP_CALLBACK_INVOKE
+        || effect->op == IR_OP_BUFFER_AS_STRING
+        || effect->op == IR_OP_BUFFER_SLICE_END;
+}
+
+static bool
+memory_stable(ir_abcd_t *a, const ir_value_t *base, bool through_address,
+              const ir_instr_t *from, const ir_instr_t *to)
+{
+    ir_pdg_memory_t *memory = a->memssa;
+    uint32_t stop = memory ? ir_pdg_memory_def_before(memory, from)
+                           : UINT32_MAX;
+    uint32_t start = memory ? ir_pdg_memory_def_before(memory, to)
+                            : UINT32_MAX;
+    if (stop == UINT32_MAX || start == UINT32_MAX) return false;
+    uint32_t count = ir_pdg_memory_def_count(memory);
+    bool *seen = core_alloc_array(bool, count ? count : 1);
+    core_list_t(uint32_t) pending = core_list_new(uint32_t);
+    core_list_push(pending, start);
+    bool stable = true;
+    while (stable && pending.len) {
+        uint32_t id = pending.data[--pending.len];
+        if (id == stop || id >= count || seen[id]) continue;
+        seen[id] = true;
+        const ir_memdef_t *def = ir_pdg_memory_def(memory, id);
+        switch (def->kind) {
+        case IR_MEMDEF_ENTRY:
+            stable = false;
+            break;
+        case IR_MEMDEF_ELEMENT_PHI:
+            break;
+        case IR_MEMDEF_PHI:
+            for (uint32_t i = 0; i < ir_pdg_memory_phi_count(memory, id); i++)
+                core_list_push(pending,
+                               ir_pdg_memory_phi_incoming(memory, id, i));
+            break;
+        case IR_MEMDEF_CALL:
+            stable = def->instr == from || pure_call(def->instr);
+            core_list_push(pending, ir_pdg_memory_def_prev(memory, id));
+            break;
+        case IR_MEMDEF_STORE:
+            stable = def->instr == from || !through_address
+                || !store_may_replace(a, def->instr, base);
+            core_list_push(pending, ir_pdg_memory_def_prev(memory, id));
+            break;
+        }
+    }
+    core_list_free(pending);
+    core_free(seen);
+    return stable;
+}
+
+static bool
 sequence_stable(ir_abcd_t *a, const ir_value_t *base, bool through_address,
                 const ir_instr_t *from, const ir_instr_t *to)
 {
+    if (!memory_stable(a, base, through_address, from, to)) return false;
     for (size_t e = 0; e < a->effects.len; e++) {
         const ir_instr_t *effect = a->effects.data[e];
-        if (effect != from && instruction_reaches(a, from, effect)
+        if (effect != from && !memory_effect(effect)
+            && instruction_reaches(a, from, effect)
             && instruction_reaches(a, effect, to)
             && clobbers(a, effect, base, through_address))
             return false;
@@ -436,19 +959,11 @@ access_check(const ir_instr_t *in)
 }
 
 static bool
-range_at(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
-         ir_interval_t *out)
-{
-    return a->ranges && value && ir_range_of(a->ranges, value, at, out);
-}
-
-static bool
 exact_arithmetic(ir_abcd_t *a, const ir_instr_t *in)
 {
     if (ir_instr_has_mod((ir_instr_t *)in, CORE_STRING_STATIC("trap")))
         return true;
-    return a->ranges && ir_range_overflow(a->ranges, in, nullptr, nullptr)
-        == IR_OVERFLOW_NEVER;
+    return overflow_of(a, in, nullptr, nullptr) == IR_OVERFLOW_NEVER;
 }
 
 static void
@@ -465,47 +980,44 @@ value_node(const ir_value_t *value)
     return (node_t){.kind = NODE_VALUE, .value = value};
 }
 
+typedef struct {
+    query_t             *q;
+    const ir_value_t    *value;
+    core_list_t(edge_t) *edges;
+} condition_edges_t;
+
+static void
+condition_edge(void *context, const ir_value_t *condition, bool sense,
+               const ir_block_t *from)
+{
+    condition_edges_t *c = context;
+    query_t *q = c->q;
+    ir_op_t op = IR_OP_EQ;
+    const ir_value_t *other = related_by(q->abcd, condition, sense, c->value,
+                                         &op);
+    const ir_instr_t *point = ir_block_terminator((ir_block_t *)from);
+    if (other && q->upper) {
+        if (op == IR_OP_LT) push_edge(c->edges, value_node(other), -1,
+                                      point, false);
+        if (op == IR_OP_LE || op == IR_OP_EQ)
+            push_edge(c->edges, value_node(other), 0, point, false);
+    }
+    if (other && !q->upper) {
+        if (op == IR_OP_GT) push_edge(c->edges, value_node(other), 1,
+                                      point, false);
+        if (op == IR_OP_GE || op == IR_OP_EQ)
+            push_edge(c->edges, value_node(other), 0, point, false);
+    }
+}
+
 static void
 condition_edges(query_t *q, const ir_value_t *value, const ir_instr_t *at,
                 core_list_t(edge_t) *edges)
 {
-    ir_abcd_t *a = q->abcd;
-    for (const ir_block_t *block = at ? at->block : nullptr;
-         block && a->doms;) {
-        ir_block_t *parent = ir_idom_of(a->doms, (ir_block_t *)block);
-        if (!parent || parent == block) break;
-        const ir_value_t *condition = nullptr;
-        bool sense = false;
-        const ir_instr_t *test = nullptr;
-        if (ir_pred_count(a->doms, (ir_block_t *)block) == 1
-            && ir_edge_condition(parent, block, &condition, &sense))
-            test = ir_condition_test(condition, &sense);
-        if (test && ir_op_is_comparison(test->op) && test->n_operands == 2) {
-            const ir_value_t *left  = ir_value_operand(test, 0);
-            const ir_value_t *right = ir_value_operand(test, 1);
-            ir_op_t op = sense ? test->op : ir_comparison_negated(test->op);
-            const ir_value_t *other = nullptr;
-            if (same_value(a, left, value)) other = right;
-            else if (same_value(a, right, value)) {
-                other = left;
-                op = ir_comparison_swapped(op);
-            }
-            const ir_instr_t *point = ir_block_terminator(parent);
-            if (other && q->upper) {
-                if (op == IR_OP_LT) push_edge(edges, value_node(other), -1,
-                                              point, false);
-                if (op == IR_OP_LE || op == IR_OP_EQ)
-                    push_edge(edges, value_node(other), 0, point, false);
-            }
-            if (other && !q->upper) {
-                if (op == IR_OP_GT) push_edge(edges, value_node(other), 1,
-                                              point, false);
-                if (op == IR_OP_GE || op == IR_OP_EQ)
-                    push_edge(edges, value_node(other), 0, point, false);
-            }
-        }
-        block = parent;
-    }
+    condition_edges_t c = {.q = q, .value = value, .edges = edges};
+    if (at)
+        controlling_conditions(q->abcd->pdg, q->abcd->doms, at->block,
+                               condition_edge, &c);
 }
 
 static void
@@ -537,23 +1049,94 @@ checked_access_edges(query_t *q, const ir_value_t *value,
 static bool callee_return_bound(ir_abcd_t *a, ir_func_t *callee,
                                 uint32_t parameter, ir_int_t *offset);
 
+static bool
+slot_store_edge(void *context, const ir_memdef_t *def)
+{
+    core_list_t(edge_t) *edges = context;
+    const ir_value_t *stored = def->instr && def->instr->op == IR_OP_STORE
+        ? ir_value_operand(def->instr, 1) : nullptr;
+    if (!stored || edges->len >= MAX_EDGES) return false;
+    push_edge(edges, value_node(stored), 0, def->instr, true);
+    return true;
+}
+
 static void
-definition_edges(query_t *q, const ir_value_t *value,
-                 core_list_t(edge_t) *edges)
+memory_edges(ir_abcd_t *a, const ir_instr_t *in, core_list_t(edge_t) *edges)
+{
+    uint32_t access = a->memssa
+        ? ir_pdg_memory_access_of(a->memssa, in, IR_ACCESS_LOAD) : UINT32_MAX;
+    if (access == UINT32_MAX) return;
+    uint32_t count = ir_pdg_memory_element_link_count(a->memssa, access);
+    size_t mark = edges->len;
+    if (!count) {
+        if (!ir_pdg_memory_slot_stores(a->memssa, access, slot_store_edge,
+                                       edges))
+            edges->len = mark;
+        return;
+    }
+    if (mark + count > MAX_EDGES) return;
+    for (uint32_t l = 0; l < count; l++) {
+        const ir_memdef_t *store = ir_pdg_memory_def(a->memssa,
+            ir_pdg_memory_element_link(a->memssa, access, l));
+        const ir_instr_t *write = store && store->kind == IR_MEMDEF_STORE
+            ? store->instr : nullptr;
+        const ir_value_t *stored = !write ? nullptr
+            : write->op == IR_OP_STORE ? ir_value_operand(write, 1)
+            : write->op == IR_OP_SEQUENCE_SET ? ir_value_operand(write, 2)
+            : nullptr;
+        if (!stored) {
+            edges->len = mark;
+            return;
+        }
+        push_edge(edges, value_node(stored), 0, write, true);
+    }
+}
+
+static void
+local_edges(ir_abcd_t *a, const ir_instr_t *in, core_list_t(edge_t) *edges)
+{
+    ir_local_t *local = in->n_operands == 1
+        ? ir_operand_local(&in->operands[0]) : nullptr;
+    if (!local || !a->pdg) return;
+    size_t mark = edges->len;
+    ir_instr_t *read = (ir_instr_t *)in;
+    for (uint32_t i = 0; i < ir_pdg_in_count(a->pdg, read); i++) {
+        const ir_dep_edge_t *edge = ir_pdg_in_at(a->pdg, read, i);
+        if (edge->kind != IR_DEP_DATA || edge->via != local) continue;
+        const ir_instr_t *write = edge->from;
+        const ir_value_t *source = write->op == IR_OP_COPY
+            && write->dest_kind == IR_DEST_LOCAL && write->n_operands == 1
+            ? ir_value_operand(write, 0) : nullptr;
+        if (!source || edges->len >= MAX_EDGES) {
+            edges->len = mark;
+            return;
+        }
+        push_edge(edges, value_node(source), 0, write, true);
+    }
+}
+
+static void
+instruction_edges(query_t *q, const ir_instr_t *in, const ir_instr_t *at,
+                  const ir_value_t *value, core_list_t(edge_t) *edges)
 {
     ir_abcd_t *a = q->abcd;
-    const ir_instr_t *in = ir_value_uncopied(value) ? ir_value_uncopied(value)->def : nullptr;
-    if (!in) return;
     ir_module_t *module = a->f->owner;
     const ir_value_t *left = ir_value_operand(in, 0);
     const ir_value_t *right = ir_value_operand(in, 1);
-    ir_interval_t other = {0};
+    ir_abcd_range_t other = {0};
+    ir_interval_t bounds = {0};
     switch (in->op) {
+    case IR_OP_COPY:
+        if (in->n_operands == 1 && ir_operand_local(&in->operands[0]))
+            local_edges(a, in, edges);
+        else if (left && value_bounds(a->f, left, &bounds))
+            push_edge(edges, value_node(left), 0, at, false);
+        break;
     case IR_OP_CAST: {
         ir_interval_t from = {0}, to = {0};
         bool preserving = left
-            && ir_range_type_bounds(a->f, left, &from)
-            && ir_range_type_bounds(a->f, value, &to)
+            && ir_abcd_type_bounds(a->f, left, &from)
+            && ir_abcd_type_bounds(a->f, value, &to)
             && ir_interval_contains(to, from);
         uint64_t from_width = 0, to_width = 0;
         bool truncating = q->upper && left
@@ -563,34 +1146,36 @@ definition_edges(query_t *q, const ir_value_t *value,
             && (preserving || truncating
                 || ir_instr_has_mod((ir_instr_t *)in,
                                     CORE_STRING_STATIC("trap"))))
-            push_edge(edges, value_node(left), 0, in, false);
+            push_edge(edges, value_node(left), 0, at, false);
         break;
     }
     case IR_OP_ADD:
-        if (!exact_arithmetic(a, in) || !left || !right) break;
-        if (range_at(a, right, in, &other)
-            && (q->upper ? other.hi != ir_int_max : other.lo != ir_int_min))
-            push_edge(edges, value_node(left), q->upper ? other.hi : other.lo,
-                      in, false);
-        if (range_at(a, left, in, &other)
-            && (q->upper ? other.hi != ir_int_max : other.lo != ir_int_min))
+        if (!left || !right || !exact_arithmetic(a, in)) break;
+        if (range_at(a, right, at, &other)
+            && (q->upper ? other.seen.hi != ir_int_max
+                         : other.seen.lo != ir_int_min))
+            push_edge(edges, value_node(left),
+                      q->upper ? other.seen.hi : other.seen.lo, at, false);
+        if (range_at(a, left, at, &other)
+            && (q->upper ? other.seen.hi != ir_int_max
+                         : other.seen.lo != ir_int_min))
             push_edge(edges, value_node(right),
-                      q->upper ? other.hi : other.lo, in, false);
+                      q->upper ? other.seen.hi : other.seen.lo, at, false);
         break;
     case IR_OP_SUB:
-        if (!exact_arithmetic(a, in) || !left || !right
-            || !range_at(a, right, in, &other)) break;
-        if (q->upper && other.lo != ir_int_min)
-            push_edge(edges, value_node(left), -other.lo, in, false);
-        if (!q->upper && other.hi != ir_int_max)
-            push_edge(edges, value_node(left), -other.hi, in, false);
+        if (!left || !right || !exact_arithmetic(a, in)
+            || !range_at(a, right, at, &other)) break;
+        if (q->upper && other.seen.lo != ir_int_min)
+            push_edge(edges, value_node(left), -other.seen.lo, at, false);
+        if (!q->upper && other.seen.hi != ir_int_max)
+            push_edge(edges, value_node(left), -other.seen.hi, at, false);
         break;
     case IR_OP_AND: {
         uint64_t width = 0;
         if (!unsigned_width(module, value, &width)) break;
         if (q->upper) {
-            if (left) push_edge(edges, value_node(left), 0, in, false);
-            if (right) push_edge(edges, value_node(right), 0, in, false);
+            if (left) push_edge(edges, value_node(left), 0, at, false);
+            if (right) push_edge(edges, value_node(right), 0, at, false);
         }
         break;
     }
@@ -598,12 +1183,16 @@ definition_edges(query_t *q, const ir_value_t *value,
     case IR_OP_SHR: {
         uint64_t width = 0;
         if (!q->upper || !unsigned_width(module, value, &width)) break;
-        if (left) push_edge(edges, value_node(left), 0, in, false);
+        if (left) push_edge(edges, value_node(left), 0, at, false);
         if (in->op == IR_OP_REM && right)
-            push_edge(edges, value_node(right), -1, in, false);
+            push_edge(edges, value_node(right), -1, at, false);
         break;
     }
     case IR_OP_PHI:
+        if (in->n_operands > MAX_EDGES) {
+            edges->len = 0;
+            return;
+        }
         for (uint32_t i = 0; i < in->n_operands; i++) {
             const ir_operand_t *od = &in->operands[i];
             if (od->kind != IR_OPD_PHI_ARM || !od->phi.value) {
@@ -617,51 +1206,40 @@ definition_edges(query_t *q, const ir_value_t *value,
     case IR_OP_SELECT: {
         const ir_value_t *third = ir_value_operand(in, 2);
         if (right && third) {
-            push_edge(edges, value_node(right), 0, in, true);
-            push_edge(edges, value_node(third), 0, in, true);
+            push_edge(edges, value_node(right), 0, at, true);
+            push_edge(edges, value_node(third), 0, at, true);
         }
         break;
     }
     case IR_OP_LOAD:
-    case IR_OP_SEQUENCE_GET: {
-        uint32_t access = a->memssa
-            ? ir_memssa_access_of(a->memssa, in, IR_ACCESS_LOAD) : UINT32_MAX;
-        uint32_t count = access == UINT32_MAX ? 0
-            : ir_memssa_element_link_count(a->memssa, access);
-        size_t mark = edges->len;
-        for (uint32_t l = 0; l < count; l++) {
-            const ir_memdef_t *store = ir_memssa_def(a->memssa,
-                ir_memssa_element_link(a->memssa, access, l));
-            const ir_instr_t *write = store && store->kind == IR_MEMDEF_STORE
-                ? store->instr : nullptr;
-            const ir_value_t *stored = !write ? nullptr
-                : write->op == IR_OP_STORE ? ir_value_operand(write, 1)
-                : write->op == IR_OP_SEQUENCE_SET ? ir_value_operand(write, 2)
-                : nullptr;
-            if (!stored) {
-                edges->len = mark;
-                break;
-            }
-            push_edge(edges, value_node(stored), 0, write, true);
-        }
+    case IR_OP_SEQUENCE_GET:
+        memory_edges(a, in, edges);
         break;
-    }
     case IR_OP_CALL: {
         const ir_value_t *callee = left;
         ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
             ? callee->owner : nullptr;
-        if (!target || !q->upper || !pure_call(in)) break;
+        if (q->propagating || !target || !q->upper || !pure_call(in)) break;
         for (uint32_t p = 0; p < target->n_params; p++) {
             ir_int_t offset = 0;
             const ir_value_t *argument = ir_value_operand(in, p + 1);
             if (argument && callee_return_bound(a, target, p, &offset))
-                push_edge(edges, value_node(argument), offset, in, false);
+                push_edge(edges, value_node(argument), offset, at, false);
         }
         break;
     }
     default:
         break;
     }
+}
+
+static void
+definition_edges(query_t *q, const ir_value_t *value,
+                 core_list_t(edge_t) *edges)
+{
+    const ir_value_t *source = ir_value_uncopied(value);
+    const ir_instr_t *in = source ? source->def : nullptr;
+    if (in) instruction_edges(q, viewed(q->abcd, in), in, value, edges);
 }
 
 static bool
@@ -705,13 +1283,13 @@ collect_edges(query_t *q, node_t node, const ir_instr_t *at,
     ir_abcd_t *a = q->abcd;
     if (node.kind != NODE_VALUE) return;
     const ir_value_t *value = node.value;
-    ir_interval_t range = {0};
+    ir_abcd_range_t range = {0};
     if (range_at(a, value, at, &range)) {
-        if (q->upper && range.hi != ir_int_max)
-            push_edge(edges, (node_t){.kind = NODE_ZERO}, range.hi, at,
+        if (q->upper && range.seen.hi != ir_int_max)
+            push_edge(edges, (node_t){.kind = NODE_ZERO}, range.seen.hi, at,
                       false);
-        if (!q->upper && range.lo != ir_int_min)
-            push_edge(edges, (node_t){.kind = NODE_ZERO}, range.lo, at,
+        if (!q->upper && range.seen.lo != ir_int_min)
+            push_edge(edges, (node_t){.kind = NODE_ZERO}, range.seen.lo, at,
                       false);
     }
     definition_edges(q, value, edges);
@@ -732,7 +1310,7 @@ is_target(query_t *q, node_t node)
         uint32_t number = ir_value_number(q->abcd->numbers,
                                           ir_value_uncopied(node.value));
         return number != q->origin
-            && ir_range_type_bounds(q->abcd->f, node.value, &bounds)
+            && ir_abcd_type_bounds(q->abcd->f, node.value, &bounds)
             && (q->upper ? bounds.hi <= q->type_limit.hi
                          : bounds.lo >= q->type_limit.lo);
     }
@@ -748,9 +1326,9 @@ zero_reaches(query_t *q, const ir_instr_t *at, ir_int_t needed)
 {
     ir_abcd_t *a = q->abcd;
     for (size_t i = 0; i < q->targets.len; i++) {
-        ir_interval_t range = {0};
+        ir_abcd_range_t range = {0};
         if (!range_at(a, q->targets.data[i], at, &range)) continue;
-        if (q->upper ? range.lo >= -needed : range.hi <= -needed)
+        if (q->upper ? range.seen.lo >= -needed : range.seen.hi <= -needed)
             return true;
     }
     return q->upper && q->length_target && needed >= 0;
@@ -984,26 +1562,569 @@ free_index(core_dict_t *index)
     core_dict_free(index);
 }
 
+static ir_abcd_range_t
+fitted(ir_abcd_range_t exact, ir_interval_t type, bool trapping)
+{
+    if (exact.seen.lo >= type.lo && exact.seen.hi <= type.hi) {
+        settle_bits(&exact, type);
+        return exact;
+    }
+    ir_interval_t clamped = {ir_int_greater(exact.seen.lo, type.lo),
+                             ir_int_lesser(exact.seen.hi, type.hi)};
+    if (!trapping || clamped.lo > clamped.hi) return unknown_range(type);
+    return derived_range(clamped, type, exact.unbounded_min,
+                         exact.unbounded_max);
+}
+
+static ir_int_t
+mask_ceiling(ir_int_t value)
+{
+    ir_int_t mask = 0;
+    while (mask < value) mask = (mask << 1) | 1;
+    return mask;
+}
+
+static bool
+loose_side(ir_abcd_range_t left, ir_abcd_range_t right, bool upper)
+{
+    if (upper)
+        return left.seen.hi < right.seen.hi ? left.unbounded_max
+             : left.seen.hi > right.seen.hi ? right.unbounded_max
+             : left.unbounded_max && right.unbounded_max;
+    return left.seen.lo > right.seen.lo ? left.unbounded_min
+         : left.seen.lo < right.seen.lo ? right.unbounded_min
+         : left.unbounded_min && right.unbounded_min;
+}
+
+static ir_abcd_range_t
+zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
+           ir_interval_t type)
+{
+    bool trapping = ir_instr_has_mod((ir_instr_t *)in,
+                                     CORE_STRING_STATIC("trap"));
+    const ir_value_t *first  = ir_value_operand(in, 0);
+    const ir_value_t *second = ir_value_operand(in, 1);
+    ir_abcd_range_t x = {0}, y = {0};
+    bool pair = range_at(a, first, at, &x) && range_at(a, second, at, &y);
+    ir_interval_t exact;
+    ir_int_t constant = 0;
+    switch (in->op) {
+    case IR_OP_CONST:
+        if (constant_of(in, &constant) && constant >= type.lo
+            && constant <= type.hi)
+            return seen_range(ir_interval_point(constant));
+        return unknown_range(type);
+    case IR_OP_CAST:
+        if (!range_at(a, first, at, &x)) return unknown_range(type);
+        return fitted(x, type, trapping);
+    case IR_OP_MUL:
+    case IR_OP_NEG:
+    case IR_OP_SHL: {
+        bool known = arithmetic_range(a, in, &x, &y, &exact);
+        if (!known && in->op != IR_OP_SHL && range_at(a, first, in, &x)) {
+            y = seen_range(ir_interval_point(0));
+            known = in->op == IR_OP_NEG || range_at(a, second, in, &y);
+            exact = ir_interval_apply(in->op, x.seen, y.seen);
+        }
+        if (!known) return unknown_range(type);
+        bool loose = unbounded(x) || unbounded(y);
+        return fitted((ir_abcd_range_t){.seen = exact, .unbounded_min = loose,
+                                        .unbounded_max = loose},
+                      type, trapping);
+    }
+    case IR_OP_AND:
+        if (pair && x.seen.lo >= 0 && y.seen.lo >= 0)
+            return derived_range((ir_interval_t){0, ir_int_lesser(x.seen.hi,
+                                                                  y.seen.hi)},
+                                 type, false, loose_side(x, y, true));
+        if (pair && x.seen.lo >= 0)
+            return derived_range((ir_interval_t){0, x.seen.hi}, type, false,
+                                 x.unbounded_max);
+        if (pair && y.seen.lo >= 0)
+            return derived_range((ir_interval_t){0, y.seen.hi}, type, false,
+                                 y.unbounded_max);
+        return unknown_range(type);
+    case IR_OP_OR:
+    case IR_OP_XOR: {
+        if (!pair || x.seen.lo < 0 || y.seen.lo < 0) return unknown_range(type);
+        ir_interval_t candidate = {0, mask_ceiling(ir_int_greater(x.seen.hi,
+                                                                  y.seen.hi))};
+        if (candidate.hi > type.hi) return unknown_range(type);
+        return derived_range(candidate, type, false,
+                             x.unbounded_max || y.unbounded_max);
+    }
+    case IR_OP_SHR:
+        if (!pair || x.seen.lo < 0 || y.seen.lo < 0 || y.seen.hi >= 127)
+            return unknown_range(type);
+        return derived_range((ir_interval_t){x.seen.lo >> y.seen.hi,
+                                             x.seen.hi >> y.seen.lo},
+                             type, x.unbounded_min || y.unbounded_max,
+                             x.unbounded_max || y.unbounded_min);
+    case IR_OP_DIV:
+        if (!pair || x.seen.lo < 0 || y.seen.lo <= 0)
+            return unknown_range(type);
+        return derived_range((ir_interval_t){x.seen.lo / y.seen.hi,
+                                             x.seen.hi / y.seen.lo},
+                             type, x.unbounded_min || y.unbounded_max,
+                             x.unbounded_max || y.unbounded_min);
+    case IR_OP_REM:
+        if (!pair || x.seen.lo < 0 || y.seen.lo <= 0)
+            return unknown_range(type);
+        return derived_range((ir_interval_t){0, ir_int_lesser(x.seen.hi,
+                                                              y.seen.hi - 1)},
+                             type, false,
+                             x.seen.hi < y.seen.hi - 1 ? x.unbounded_max
+                                                       : y.unbounded_max);
+    case IR_OP_CLZ:
+    case IR_OP_CTZ:
+    case IR_OP_POPCOUNT: {
+        ir_machine_t machine = ir_machine_of(a->f->owner,
+                                             first ? first->type : nullptr);
+        if (!machine.width || (ir_int_t)machine.width > type.hi)
+            return unknown_range(type);
+        return seen_range((ir_interval_t){0, (ir_int_t)machine.width});
+    }
+    case IR_OP_SEQUENCE_LENGTH:
+        return derived_range((ir_interval_t){ir_int_greater(type.lo, 0),
+                                             type.hi},
+                             type, false, true);
+    default:
+        return unknown_range(type);
+    }
+}
+
+static bool
+edge_source(ir_abcd_t *a, const ir_instr_t *in, const edge_t *edge,
+            ir_abcd_range_t *out)
+{
+    if (edge->from.kind != NODE_VALUE || !edge->point) return false;
+    if (in->op == IR_OP_PHI && edge->all)
+        return range_on_edge(a, edge->from.value, edge->point->block,
+                             in->block, out);
+    return range_at(a, edge->from.value, edge->point, out);
+}
+
+static bool
+apply_edges(ir_abcd_t *a, const ir_instr_t *in, bool upper,
+            ir_abcd_range_t *range)
+{
+    query_t q = {.abcd = a, .upper = upper, .propagating = true};
+    core_list_t(edge_t) edges = core_list_new(edge_t);
+    instruction_edges(&q, viewed(a, in), in, in->dest, &edges);
+    bool any_all = false, all_known = true, joined_any = false;
+    bool joined_loose = false;
+    ir_int_t joined = 0;
+    for (size_t i = 0; i < edges.len; i++) {
+        const edge_t *edge = &edges.data[i];
+        range_node_t *node = edge->from.kind == NODE_VALUE
+            ? node_of(a, edge->from.value) : nullptr;
+        any_all |= edge->all;
+        if (edge->all && node && !node->set) continue;
+        ir_abcd_range_t from = {0};
+        bool known = edge_source(a, in, edge, &from);
+        if (edge->all && known && from.seen.lo > from.seen.hi) continue;
+        ir_int_t bound = saturating_add(upper ? from.seen.hi : from.seen.lo,
+                                        edge->weight);
+        bool loose = upper ? from.unbounded_max : from.unbounded_min;
+        if (!edge->all) {
+            if (known && upper) tighten_hi(range, bound, loose);
+            if (known && !upper) tighten_lo(range, bound, loose);
+            continue;
+        }
+        if (!known) {
+            all_known = false;
+            continue;
+        }
+        if (!joined_any || (upper ? bound > joined : bound < joined)) {
+            joined = bound;
+            joined_loose = loose;
+        }
+        else if (bound == joined) joined_loose = joined_loose || loose;
+        joined_any = true;
+    }
+    core_list_free(edges);
+    if (!any_all) return true;
+    if (!joined_any) return false;
+    if (all_known && upper) tighten_hi(range, joined, joined_loose);
+    if (all_known && !upper) tighten_lo(range, joined, joined_loose);
+    return true;
+}
+
+static bool
+evaluate(ir_abcd_t *a, const ir_instr_t *in, ir_interval_t type,
+         ir_abcd_range_t *out)
+{
+    *out = zero_bound(a, viewed(a, in), in, type);
+    if (!apply_edges(a, in, true, out) || !apply_edges(a, in, false, out))
+        return false;
+    if (out->seen.lo < type.lo) out->seen.lo = type.lo;
+    if (out->seen.hi > type.hi) out->seen.hi = type.hi;
+    if (out->seen.lo > out->seen.hi) *out = unknown_range(type);
+    settle_bits(out, type);
+    return true;
+}
+
+static bool
+update(ir_abcd_t *a, range_node_t *node, ir_abcd_range_t next,
+       ir_interval_t type)
+{
+    if (a->narrowing) {
+        meet_range(&next, node->range);
+        if (next.seen.lo > next.seen.hi) return false;
+    }
+    else if (node->set) {
+        ir_abcd_range_t previous = node->range;
+        join_range(&next, previous);
+        if (++node->changes > WIDEN_AFTER) {
+            if (next.seen.lo < previous.seen.lo) {
+                next.seen.lo = type.lo;
+                next.unbounded_min = true;
+            }
+            if (next.seen.hi > previous.seen.hi) {
+                next.seen.hi = type.hi;
+                next.unbounded_max = true;
+            }
+        }
+    }
+    bool changed = !node->set || next.seen.lo != node->range.seen.lo
+        || next.seen.hi != node->range.seen.hi
+        || next.unbounded_min != node->range.unbounded_min
+        || next.unbounded_max != node->range.unbounded_max;
+    node->range = next;
+    node->set   = true;
+    return changed;
+}
+
+static bool
+pass(ir_abcd_t *a)
+{
+    bool changed = false;
+    uint32_t n = a->f->n_blocks;
+    ir_block_t **order = core_alloc_array(ir_block_t *, n ? n : 1);
+    for (uint32_t b = 0; b < n; b++) {
+        ir_block_t *block = a->f->blocks[b];
+        if (!ir_block_reachable(a->doms, block)) continue;
+        uint32_t at = ir_rpo_index(a->doms, block);
+        if (at < n) order[at] = block;
+    }
+    for (uint32_t k = 0; k < n; k++) {
+        ir_block_t *block = order[k];
+        for (uint32_t i = 0; block && i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+            range_node_t *node = in->dest ? node_of(a, in->dest) : nullptr;
+            ir_interval_t type;
+            ir_abcd_range_t next;
+            if (!node || !value_bounds(a->f, in->dest, &type)) continue;
+            if (evaluate(a, in, type, &next) && next.seen.lo <= next.seen.hi)
+                changed |= update(a, node, next, type);
+        }
+    }
+    core_free(order);
+    return changed;
+}
+
+static bool
+phi_arms(const ir_instr_t *phi, const ir_block_t *latch,
+         const ir_value_t **init, const ir_value_t **next)
+{
+    if (phi->op != IR_OP_PHI || !phi->dest || phi->n_operands != 2)
+        return false;
+    *init = *next = nullptr;
+    for (uint32_t o = 0; o < 2; o++) {
+        const ir_operand_t *arm = &phi->operands[o];
+        if (arm->kind != IR_OPD_PHI_ARM) return false;
+        if (arm->phi.block == latch) *next = arm->phi.value;
+        else *init = arm->phi.value;
+    }
+    return *init && *next;
+}
+
+static bool
+phi_step(ir_abcd_t *a, const ir_instr_t *phi, const ir_value_t *next,
+         ir_interval_t *step)
+{
+    const ir_value_t *advanced = ir_value_uncopied(next);
+    const ir_instr_t *in = advanced ? viewed(a, advanced->def) : nullptr;
+    if (!in || (in->op != IR_OP_ADD && in->op != IR_OP_SUB)
+        || !ir_instr_has_mod((ir_instr_t *)in, CORE_STRING_STATIC("trap")))
+        return false;
+    for (uint32_t side = 0; side < 2; side++) {
+        ir_abcd_range_t amount;
+        if (!same_value(a, ir_value_operand(in, side), phi->dest)
+            || (in->op == IR_OP_SUB && side == 1)
+            || !range_at(a, ir_value_operand(in, 1 - side), in, &amount))
+            continue;
+        *step = in->op == IR_OP_SUB
+            ? ir_interval_apply(IR_OP_NEG, amount.seen, ir_interval_point(0))
+            : amount.seen;
+        return true;
+    }
+    return false;
+}
+
+static bool
+trip_count(ir_abcd_t *a, ir_block_t *header, ir_block_t *latch,
+           ir_int_t *count)
+{
+    ir_instr_t *end = ir_block_terminator(header);
+    if (!end || end->op != IR_OP_BRANCH || end->n_operands != 3) return false;
+    ir_block_t *yes = ir_succ_of(&end->operands[1]);
+    ir_block_t *no  = ir_succ_of(&end->operands[2]);
+    bool yes_inside = yes && ir_dominates(a->doms, yes, latch);
+    bool no_inside  = no && ir_dominates(a->doms, no, latch);
+    if (yes_inside == no_inside) return false;
+    for (uint32_t i = 0; i < header->n_instrs; i++) {
+        const ir_instr_t *phi = header->instrs[i];
+        const ir_value_t *init = nullptr, *next = nullptr;
+        ir_interval_t step;
+        ir_abcd_range_t start, limit;
+        if (!phi_arms(phi, latch, &init, &next)
+            || !phi_step(a, phi, next, &step) || step.lo != step.hi
+            || step.lo == 0) continue;
+        ir_op_t op = IR_OP_EQ;
+        const ir_value_t *bound = related_by(a, ir_value_operand(end, 0),
+                                             yes_inside, phi->dest, &op);
+        if (!bound || !range_at(a, init, end, &start)
+            || !range_at(a, bound, end, &limit)) continue;
+        bool rising = step.lo > 0;
+        ir_int_t span = 0;
+        if (rising && (op == IR_OP_LT || op == IR_OP_LE))
+            span = limit.seen.hi - start.seen.lo + (op == IR_OP_LE);
+        else if (!rising && (op == IR_OP_GT || op == IR_OP_GE))
+            span = start.seen.hi - limit.seen.lo + (op == IR_OP_GE);
+        else continue;
+        ir_int_t stride = rising ? step.lo : -step.lo;
+        if (limit.seen.hi == ir_int_max || limit.seen.lo == ir_int_min
+            || start.seen.lo == ir_int_min || start.seen.hi == ir_int_max)
+            continue;
+        *count = span <= 0 ? 0 : (span + stride - 1) / stride;
+        return true;
+    }
+    return false;
+}
+
+static bool
+bound_loop_phis(ir_abcd_t *a)
+{
+    bool bounded = false;
+    for (uint32_t b = 0; a->doms && b < a->f->n_blocks; b++) {
+        ir_block_t *latch = a->f->blocks[b];
+        ir_instr_t *end = ir_block_terminator(latch);
+        for (uint32_t s = 0; end && s < ir_succ_count(end); s++) {
+            ir_block_t *header = ir_succ_at(end, s);
+            ir_int_t count = 0;
+            if (!header || !ir_dominates(a->doms, header, latch)
+                || ir_pred_count(a->doms, header) != 2
+                || !trip_count(a, header, latch, &count)) continue;
+            for (uint32_t i = 0; i < header->n_instrs; i++) {
+                const ir_instr_t *phi = header->instrs[i];
+                const ir_value_t *init = nullptr, *next = nullptr;
+                ir_interval_t step;
+                ir_abcd_range_t start;
+                range_node_t *node = phi->dest ? node_of(a, phi->dest)
+                                               : nullptr;
+                if (!node || !node->set
+                    || !phi_arms(phi, latch, &init, &next)
+                    || !phi_step(a, phi, next, &step)
+                    || !range_at(a, init, ir_block_terminator(header),
+                                 &start)) continue;
+                ir_interval_t per = {ir_int_lesser(step.lo, 0),
+                                     ir_int_greater(step.hi, 0)};
+                ir_interval_t reach = ir_interval_apply(IR_OP_ADD, start.seen,
+                    ir_interval_apply(IR_OP_MUL, ir_interval_point(count),
+                                      per));
+                ir_interval_t met;
+                if (!ir_interval_meet(node->range.seen, reach, &met)
+                    || (met.lo == node->range.seen.lo
+                        && met.hi == node->range.seen.hi))
+                    continue;
+                tighten_lo(&node->range, met.lo, false);
+                tighten_hi(&node->range, met.hi, false);
+                bounded = true;
+            }
+        }
+    }
+    return bounded;
+}
+
+static void
+propagate(ir_abcd_t *a)
+{
+    for (uint32_t round = 0; a->doms && round < MAX_PASSES; round++)
+        if (!pass(a)) break;
+    a->narrowing = true;
+    for (uint32_t round = 0; a->doms && round < NARROW_PASSES; round++)
+        if (!pass(a)) break;
+    for (uint32_t round = 0; a->doms && round < NARROW_PASSES
+         && bound_loop_phis(a); round++)
+        for (uint32_t narrow = 0; narrow < NARROW_PASSES; narrow++)
+            if (!pass(a)) break;
+    a->narrowing = false;
+}
+
+static bool
+operand_clamped(ir_abcd_t *a, const ir_instr_t *in)
+{
+    for (uint32_t o = 0; o < in->n_operands; o++) {
+        range_node_t *node = node_of(a, ir_operand_value(&in->operands[o]));
+        if (node && node->clamped) return true;
+    }
+    return false;
+}
+
+static bool
+clamped_result(ir_abcd_t *a, const ir_instr_t *in)
+{
+    ir_abcd_range_t x, y;
+    ir_interval_t exact, type;
+    bool trapping = ir_instr_has_mod((ir_instr_t *)in,
+                                     CORE_STRING_STATIC("trap"));
+    switch (in->op) {
+    case IR_OP_ADD:
+    case IR_OP_SUB:
+    case IR_OP_MUL:
+    case IR_OP_NEG:
+    case IR_OP_SHL:
+        if (trapping && arithmetic_range(a, in, &x, &y, &exact)
+            && value_bounds(a->f, in->dest, &type)
+            && (exact.lo < type.lo || exact.hi > type.hi)) return true;
+        return operand_clamped(a, in);
+    case IR_OP_CAST:
+        if (trapping && range_at(a, ir_value_operand(in, 0), in, &x)
+            && value_bounds(a->f, in->dest, &type)
+            && (x.seen.lo < type.lo || x.seen.hi > type.hi)) return true;
+        return operand_clamped(a, in);
+    case IR_OP_COPY:
+    case IR_OP_PHI:
+    case IR_OP_SELECT:
+        return operand_clamped(a, in);
+    default:
+        return false;
+    }
+}
+
+static void
+compute_clamps(ir_abcd_t *a)
+{
+    a->clamps_known = true;
+    for (uint32_t round = 0, changed = 1; changed && round < MAX_PASSES;
+         round++) {
+        changed = 0;
+        for (uint32_t b = 0; b < a->f->n_blocks; b++)
+            for (uint32_t i = 0; i < a->f->blocks[b]->n_instrs; i++) {
+                const ir_instr_t *in = a->f->blocks[b]->instrs[i];
+                range_node_t *node = in->dest ? node_of(a, in->dest)
+                                              : nullptr;
+                if (!node || node->clamped
+                    || !clamped_result(a, viewed(a, in)))
+                    continue;
+                node->clamped = true;
+                changed = 1;
+            }
+    }
+}
+
+static void
+track(ir_abcd_t *a, const ir_value_t *value)
+{
+    ir_interval_t type;
+    if (!value || node_of(a, value) || !value_bounds(a->f, value, &type))
+        return;
+    core_list_push(a->nodes, ((range_node_t){
+        .value = value, .range = unknown_range(type)}));
+    core_dict_put(&a->slots, (void *)value, (void *)(uintptr_t)a->nodes.len);
+}
+
+static void
+collect_trap_uses(ir_abcd_t *a, const ir_instr_t *in)
+{
+    bool bounded = in->op == IR_OP_ADD || in->op == IR_OP_SUB
+        || in->op == IR_OP_NEG || in->op == IR_OP_CAST;
+    if (!bounded || !in->dest
+        || !ir_instr_has_mod((ir_instr_t *)in, CORE_STRING_STATIC("trap")))
+        return;
+    for (uint32_t o = 0; o < in->n_operands; o++) {
+        const ir_value_t *value = ir_value_uncopied(ir_value_operand(in, o));
+        ir_interval_t type;
+        if (!value || !value_bounds(a->f, value, &type)) continue;
+        core_list_t(trap_use_t) *uses = core_dict_get(&a->trap_uses,
+            (void *)value, nullptr);
+        if (!uses) {
+            uses = core_alloc(core_list_t(trap_use_t));
+            *uses = core_list_new(trap_use_t);
+            core_dict_put(&a->trap_uses, (void *)value, uses);
+        }
+        core_list_push(*uses, ((trap_use_t){in, o}));
+    }
+}
+
+static ir_instr_t *
+view_instr(const ir_instr_t *in, const ir_abcd_view_t *view)
+{
+    static core_string_t trap = CORE_STRING_STATIC("trap");
+    ir_instr_t *shadow = core_alloc(ir_instr_t);
+    *shadow = (ir_instr_t){.op = view->op, .dest_kind = in->dest_kind,
+                           .dest = in->dest, .span = in->span,
+                           .block = in->block, .index = in->index};
+    shadow->n_operands = view->right ? 2 : 1;
+    shadow->operands = core_alloc_array(ir_operand_t, shadow->n_operands);
+    shadow->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                         .value = (ir_value_t *)view->left};
+    if (view->right)
+        shadow->operands[1] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                             .value = (ir_value_t *)view->right};
+    if (view->trapping) {
+        shadow->mods = &trap;
+        shadow->n_mods = 1;
+    }
+    return shadow;
+}
+
+static void
+build_views(ir_abcd_t *a, const ir_abcd_hooks_t *hooks)
+{
+    for (uint32_t b = 0; hooks && hooks->view && b < a->f->n_blocks; b++)
+        for (uint32_t i = 0; i < a->f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = a->f->blocks[b]->instrs[i];
+            ir_abcd_view_t view = {0};
+            if (hooks->view(hooks->context, in, &view) && view.left)
+                core_dict_put(&a->views, (void *)in, view_instr(in, &view));
+        }
+}
+
 ir_abcd_t *
 ir_abcd_build(ir_func_t *f)
+{
+    return ir_abcd_build_with(f, nullptr);
+}
+
+ir_abcd_t *
+ir_abcd_build_with(ir_func_t *f, const ir_abcd_hooks_t *hooks)
 {
     if (!f || !f->n_blocks) return nullptr;
     ir_abcd_t *a = core_alloc(ir_abcd_t);
     a->f = f;
     a->doms = ir_func_doms(f);
+    a->pdg = ir_func_pdg(f);
     a->numbers = ir_func_value_numbers(f);
-    a->ranges = ir_func_ranges(f);
-    a->memssa = ir_func_memssa(f);
+    a->memssa = ir_pdg_memory(a->pdg);
     a->places = ir_func_places(f);
+    a->nodes = core_list_new(range_node_t);
     a->lengths = core_list_new(length_t);
     a->effects = core_list_new(instr_ptr_t);
     a->callees = core_list_new(callee_bound_t);
+    core_dict_init(&a->views, nullptr, nullptr);
+    core_dict_init(&a->slots, nullptr, nullptr);
+    core_dict_init(&a->trap_uses, nullptr, nullptr);
     core_dict_init(&a->offsets_of, nullptr, nullptr);
     core_dict_init(&a->checks_of, nullptr, nullptr);
+    build_views(a, hooks);
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             const ir_instr_t *in = block->instrs[i];
+            track(a, in->dest);
+            collect_trap_uses(a, viewed(a, in));
             sequence_origin_t origin = {0};
             if (length_origin(in, &origin))
                 core_list_push(a->lengths, ((length_t){in, origin}));
@@ -1026,6 +2147,7 @@ ir_abcd_build(ir_func_t *f)
                     ir_value_uncopied(offset_of)), in);
         }
     }
+    propagate(a);
     return a;
 }
 
@@ -1636,8 +2758,146 @@ ir_abcd_free(ir_abcd_t *a)
     ir_reach_free(a->reach);
     free_index(&a->offsets_of);
     free_index(&a->checks_of);
+    core_list_free(a->nodes);
+    core_dict_free(&a->slots);
+    core_dict_foreach(&a->trap_uses, entry) {
+        core_list_t(trap_use_t) *uses = entry->value;
+        core_list_free(*uses);
+        core_free(uses);
+    }
+    core_dict_free(&a->trap_uses);
+    core_dict_foreach(&a->views, entry) {
+        ir_instr_t *shadow = entry->value;
+        core_free(shadow->operands);
+        core_free(shadow);
+    }
+    core_dict_free(&a->views);
     core_list_free(a->lengths);
     core_list_free(a->effects);
     core_list_free(a->callees);
     core_free(a);
+}
+
+bool
+ir_abcd_range_of(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
+                 ir_abcd_range_t *out)
+{
+    return a && range_at(a, value, at, out);
+}
+
+bool
+ir_abcd_range_of_conditions(ir_abcd_t *a, const ir_value_t *value,
+                            const ir_instr_t *at, ir_abcd_range_t *out)
+{
+    if (!a || !value || !global_range(a, value, out)) return false;
+    if (constant_range(a, value, out)) return true;
+    if (!a->clamps_known) compute_clamps(a);
+    range_node_t *node = node_of(a, value);
+    ir_interval_t type;
+    if (node && node->clamped && value_bounds(a->f, value, &type))
+        *out = unknown_range(type);
+    if (at) refine_in_block(a, value, at->block, out);
+    return true;
+}
+
+ir_overflow_t
+ir_abcd_overflow(ir_abcd_t *a, const ir_instr_t *in, ir_interval_t *left,
+                 ir_interval_t *right)
+{
+    return overflow_of(a, in, left, right);
+}
+
+bool
+ir_abcd_index_proven(ir_abcd_t *a, const ir_instr_t *index)
+{
+    return ir_abcd_check_redundant(a, index);
+}
+
+bool
+ir_abcd_unsigned_sub_safe(ir_abcd_t *a, const ir_instr_t *sub)
+{
+    if (!a || !sub || sub->op != IR_OP_SUB || !sub->dest
+        || !ir_instr_has_mod((ir_instr_t *)sub, CORE_STRING_STATIC("trap"))
+        || ir_machine_of(a->f->owner, sub->dest->type).class
+            != IR_CLASS_UINT)
+        return false;
+    if (overflow_of(a, sub, nullptr, nullptr) == IR_OVERFLOW_NEVER)
+        return true;
+    if (!(ir_module_props(sub->block->owner->owner) & IR_PROP_SSA))
+        return false;
+    return ir_abcd_at_most(a, ir_value_operand(sub, 1),
+                           ir_value_operand(sub, 0), 0, sub);
+}
+
+static bool
+range_within(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
+             ir_interval_t bounds)
+{
+    ir_abcd_range_t range;
+    return range_at(a, value, at, &range)
+        && ir_interval_contains(bounds, range.seen);
+}
+
+static bool
+range_excludes(ir_abcd_t *a, const ir_value_t *value, const ir_instr_t *at,
+               ir_int_t point)
+{
+    ir_abcd_range_t range;
+    return range_at(a, value, at, &range)
+        && (point < range.seen.lo || point > range.seen.hi);
+}
+
+bool
+ir_abcd_site_proven(ir_abcd_t *a, const ir_instr_t *in, ir_site_kind_t kind)
+{
+    uint32_t operand = 0;
+    if (!a || !in || !in->n_operands || !ir_instr_site(in, kind, &operand))
+        return false;
+    const ir_value_t *value = ir_value_operand(in, operand);
+    const ir_value_t *subject = ir_value_operand(in, 0);
+    ir_machine_t machine = subject
+        ? ir_machine_of(a->f->owner, subject->type) : (ir_machine_t){0};
+    switch (kind) {
+    case IR_SITE_DIVISOR:
+        return range_excludes(a, value, in, 0)
+            || (machine.class == IR_CLASS_UINT
+                && ir_abcd_at_least(a, value, nullptr, 1, in));
+    case IR_SITE_SHIFT_AMOUNT:
+        return machine.width
+            && range_within(a, value, in,
+                            (ir_interval_t){0, machine.width - 1});
+    case IR_SITE_ADDRESS:
+        return operand == 1 && ir_abcd_check_redundant(a, in);
+    default:
+        return false;
+    }
+}
+
+bool
+ir_abcd_trap_proven(ir_abcd_t *a, const ir_instr_t *in)
+{
+    if (!a || !in || !(ir_module_props(a->f->owner) & IR_PROP_SSA))
+        return false;
+    if (ir_instr_site(in, IR_SITE_ADDRESS, nullptr)
+        && ir_abcd_site_proven(a, in, IR_SITE_ADDRESS))
+        return true;
+    if (!in->dest) return false;
+    bool fits = overflow_of(a, in, nullptr, nullptr) == IR_OVERFLOW_NEVER
+        || ir_abcd_overflow_safe(a, in);
+    if (ir_instr_site(in, IR_SITE_DIVISOR, nullptr))
+        return fits && ir_abcd_site_proven(a, in, IR_SITE_DIVISOR);
+    if (ir_instr_site(in, IR_SITE_SHIFT_AMOUNT, nullptr))
+        return ir_abcd_site_proven(a, in, IR_SITE_SHIFT_AMOUNT)
+            && (in->op == IR_OP_SHR || fits);
+    switch (in->op) {
+    case IR_OP_ADD:
+    case IR_OP_MUL:
+    case IR_OP_NEG:
+    case IR_OP_CAST:
+        return fits;
+    case IR_OP_SUB:
+        return fits || ir_abcd_unsigned_sub_safe(a, in);
+    default:
+        return false;
+    }
 }

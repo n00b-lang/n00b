@@ -1,8 +1,8 @@
 import containers.array
 import containers.list
 import containers.dict
-import containers.set
 import containers.tree
+import containers.slice
 import containers.view
 import containers.buffer
 import containers.errors
@@ -10,7 +10,9 @@ import cursor
 import hashing
 import integer
 import containers.traits
+import containers.lease
 import reference
+import option
 import io.debug
 import io.raw
 import io.format
@@ -90,6 +92,8 @@ package builtin {
     export string.core.__add
     export string.core.__cmp
     export string.core.__equal
+    export containers.buffer.__equal
+    export option.__equal
     export string.core.__fd_write
     export string.core.__fd_write_bytes
     export string.core.__string_from_utf8
@@ -121,8 +125,12 @@ package builtin {
     export containers.array.len
     export containers.dict.len
     export containers.list.len
-    export containers.set.len
+    export containers.lease.len
+    export containers.lease.leased
+    export containers.lease.release
+    export containers.slice.len
     export containers.view.len
+    export containers.view.view
     export string.core.widen_encoding
     export string.core.string
     export string.style.rich
@@ -141,6 +149,7 @@ package builtin {
     export ffi.__ffi_hold_group
     export ffi.__ffi_hold
     export ffi.__ffi_event
+    export ffi.__ffi_event_key
     export panic.panic
     export containers.buffer.Buffer
     export containers.buffer.Buffer_Error
@@ -165,23 +174,27 @@ package builtin {
     export containers.list.list
     export containers.list.l
     export containers.dict.Dict
+    export containers.dict.Dict_Cursor
     export containers.dict.dict
     export containers.dict.d
-    export containers.set.Set
-    export containers.set.set
-    export containers.set.s
+    export containers.dict.set
+    export containers.dict.s
     export containers.tree.Tree
+    export containers.slice.Slice
     export containers.view.View
     export containers.errors.Container_Err
     export cursor.Cursor
+    export cursor.Lease_Cursor
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup
     export containers.traits.Has_Length
     export containers.traits.Appendable
-    export containers.traits.Associative
-    export containers.traits.SetLike
     export containers.traits.TreeLike
+    export containers.traits.Copy
+    export containers.lease.Leasable
+    export containers.lease.Lease
+    export containers.lease.Lease_Count
     export reference.Referenceable
     export reference.Reference
     export reference.Mutable_Reference
@@ -205,7 +218,8 @@ package sort {
 
 package cursor {
     export cursor.Cursor
-    export cursor.iter
-    export cursor.next
-    export cursor.cleanup
+    export cursor.Lease_Cursor
+    export cursor.__iterator
+    export cursor.__next
+    export cursor.__cleanup
 }

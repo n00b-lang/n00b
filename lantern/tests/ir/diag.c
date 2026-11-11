@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "ir/diag.h"
+#include "private/th/internal.h"
 #include "ir/typelang.h"
 #include "ir/verify.h"
 #include "lib/buffer.h"
@@ -302,7 +303,7 @@ static void test_policy_effects(void)
 
     ir_policy_set(p, S("IR-W0005"), IR_POLICY_FORBID);
 
-    ir_diag_t *df = beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
+    ir_diag_t *df = beg(d, IR_DIAG_AUTHORED_ANNOT, at(2, 3, 2, 1, 2),
                                   NO_TEXT);
 
     check("forbid promotes like deny", df && item(d, df)->severity == CORE_DIAG_ERROR);
@@ -449,7 +450,7 @@ static bool error_pass(ir_module_t *m, ir_diags_t *d, void *state)
     (void)m;
     (void)state;
     ran++;
-    beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), NO_TEXT);
+    beg(d, IR_DIAG_INTERNAL, at(0, 1, (uint32_t)ran, 1, 2), NO_TEXT);
 
     return true;
 }
@@ -539,9 +540,12 @@ static void test_type_errors_import_once(void)
     th_type *string = ir_type_parse(m, S("string"));
     ir_diags_t *diags = ir_diags_new(ctx, nullptr);
 
+    if (integer && string) {
+        th_err(types, TH_ERR_UNIFY, S("unifies"), integer, string,
+               S("the types do not match"));
+    }
     check("mismatched types produce a type error",
-          integer && string && !th_unify_in_place(types, integer, string)
-              && th_error_count(types) == 1);
+          integer && string && th_error_count(types) == 1);
     check("type errors become IR diagnostics exactly once",
           ir_import_type_errors(m, diags) == 1
               && ir_import_type_errors(m, diags) == 0

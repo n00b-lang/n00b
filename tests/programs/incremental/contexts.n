@@ -8,7 +8,7 @@ func __init(self: Point, x: int) {
     self.x = x
 }
 
-func __equal(self: Point, other: Point) -> bool {
+func __equal(view self: Point, view other: Point) -> bool {
     return self.x == other.x
 }
 

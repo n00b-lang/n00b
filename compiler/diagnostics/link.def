@@ -96,18 +96,32 @@ N00B_DIAG(OVERLAPPING_IMPORT, "N00B-N0018", WARNING,
     "Rename the local function if the imported one was meant, or call the\n"
     "imported one by its qualified path.")
 N00B_DIAG(UNUSED_FUNCTION, "N00B-N0019", WARNING,
-    "a function that no other module can call is never called",
-    "A private function, or a function nested in another function, that is\n"
-    "never called is dead code. Call it, remove `private` so other modules\n"
-    "can use it, or delete it. Exported functions and `main` and `start`\n"
-    "are never reported.")
+    "a function is never called",
+    "Nothing in the program calls this function, directly or through a\n"
+    "trait, so it is dead code. Call it or delete it. `main`, `start`,\n"
+    "`comptime_start`, native entry points and literal handlers are never\n"
+    "reported.")
 N00B_DIAG(FIELD_NEVER_SET, "N00B-N0020", WARNING,
-    "a private field is never given a value",
+    "a field is never given a value",
     "No code ever writes this field, so it always holds its default value.\n"
     "Set it where the value is built, or remove it.")
 N00B_DIAG(FIELD_NEVER_READ, "N00B-N0021", WARNING,
-    "a private field is written but never read",
+    "a field is written but never read",
     "Values are stored in this field but nothing reads them. Read the field\n"
+    "where it is needed, or remove it.")
+N00B_DIAG(FIELD_NEVER_USED, "N00B-N0022", WARNING,
+    "a field is never read or written",
+    "Nothing in the program uses this field. Remove it.")
+N00B_DIAG(UNUSED_TYPE, "N00B-N0023", WARNING,
+    "a type is never used",
+    "Nothing in the program names this type or makes a value of it. Remove\n"
+    "it.")
+N00B_DIAG(UNUSED_GLOBAL, "N00B-N0024", WARNING,
+    "a module variable or constant is never used",
+    "Nothing in the program reads or writes it. Remove it.")
+N00B_DIAG(GLOBAL_NEVER_READ, "N00B-N0025", WARNING,
+    "a module variable is written but never read",
+    "Values are stored in this variable but nothing reads them. Read it\n"
     "where it is needed, or remove it.")
 N00B_DIAG(CALL_TOO_MANY_ARGUMENTS, "N00B-T0001", ERROR,
     "a call passes more positional arguments than the function takes",
@@ -149,140 +163,38 @@ N00B_DIAG(CALL_ARGUMENT_TYPE, "N00B-T0005", ERROR,
     "declares. Convert the value before the call, or pass another value:\n"
     "    func twice(n: int) -> int\n"
     "    require twice(4) == 8")
-N00B_DIAG(METHOD_RECEIVER_TYPE, "N00B-T0006", ERROR,
-    "a method is called on a value of the wrong type",
-    "The value before the `.` becomes the method's first parameter, so it\n"
-    "must have, or convert to, that parameter's type.")
-N00B_DIAG(CALL_RESULT_TYPE, "N00B-T0007", ERROR,
-    "a function's result is used as a different type",
-    "A call produces a value of the function's declared result type, and the\n"
-    "surrounding code expects another type. Convert the result, or call a\n"
-    "function that returns the expected type.")
-N00B_DIAG(TRAIT_SIGNATURE_MISMATCH, "N00B-T0008", ERROR,
-    "a trait implementation's signature does not fit a call",
-    "The implementation chosen for this call has a signature that does not\n"
-    "fit the argument and result types at the call. Make the implementation\n"
-    "match the trait's declared signature.")
-N00B_DIAG(OVERLOAD_NEEDS_TYPE, "N00B-T0010", ERROR,
-    "an overloaded function is called with an argument of unknown type",
-    "Choosing between overloads needs the argument types. Annotate the\n"
-    "argument or the variable it comes from:\n"
-    "    let n: i64 = 0")
 N00B_DIAG(OVERLOAD_NO_MATCH, "N00B-T0011", ERROR,
     "no overload of a function accepts the arguments of a call",
     "Each overload was checked against the call's argument types and none\n"
     "accepted them. Compare the argument types with the candidate signatures\n"
     "listed with the error.")
-N00B_DIAG(OVERLOAD_AMBIGUOUS, "N00B-T0012", ERROR,
-    "more than one overload accepts a call equally well",
-    "Two or more overloads accept the argument types and none is more\n"
-    "specific. Annotate an argument with the exact type of the overload you\n"
-    "mean.")
-N00B_DIAG(OVERLOAD_FROM_SEVERAL_MODULES, "N00B-T0013", ERROR,
-    "functions from different modules all accept a call",
-    "The called name refers to functions from more than one module, and\n"
-    "more than one of them accepts the arguments. Call the one you mean by\n"
-    "its qualified path.")
-N00B_DIAG(OVERLOAD_PREFERS_EXACT, "N00B-T0014", WARNING,
-    "an exact overload is chosen over one that needs a conversion",
-    "An overload that accepts the arguments without conversion wins over one\n"
-    "that would convert them. Annotate the argument if the converting\n"
-    "overload was meant.")
-N00B_DIAG(CONSUME_BORROWED_PARAMETER, "N00B-T0015", ERROR,
-    "a borrowed parameter is passed to a `consume` parameter",
-    "A `consume` parameter takes ownership of its argument. An `in` or\n"
-    "`view` parameter only borrows its value, so it cannot pass ownership\n"
-    "on. Pass a copy, or declare the parameter `consume`.")
-N00B_DIAG(VIEW_VALUE_TO_NON_VIEW, "N00B-T0016", ERROR,
-    "a value reached through a `view` parameter is passed where it could be changed",
-    "Everything reachable from a `view` parameter is read-only, so it can\n"
-    "only be passed on to other `view` parameters. Declare the callee's\n"
-    "parameter `view`, or declare this parameter `modify`.")
-N00B_DIAG(METHOD_NOT_FOUND, "N00B-T0017", ERROR,
-    "a method is called on a type that has no method of that name",
-    "`value.name(...)` calls a method declared by a trait that the value's\n"
-    "type implements, and no such trait declares this method. Check the\n"
-    "spelling, or implement a trait that declares it. Plain functions are\n"
-    "called as `name(value)`.")
+N00B_DIAG(CONSUME_UNOWNED_PARAMETER, "N00B-T0015", ERROR,
+    "a parameter the caller still owns is passed to a `consume` parameter",
+    "A `consume` parameter takes ownership of its argument. An `in`,\n"
+    "`view` or `modify` parameter does not own its value, so it cannot pass\n"
+    "ownership on. Pass a copy, or declare the parameter `consume`.")
+N00B_DIAG(NO_TRAIT_PROVIDES, "N00B-T0017", ERROR,
+    "a dispatched call names something no trait of the value's type provides",
+    "`value.name(...)` dispatches through the traits the value's type\n"
+    "implements, and none of them provides `name`. Check the spelling, or\n"
+    "implement a trait that provides it. Plain functions are called as\n"
+    "`name(value)`.")
+N00B_DIAG(GENERIC_MISSING_IMPLEMENTATION, "N00B-T0021", ERROR,
+    "a generic function is used with a type that lacks a trait it needs",
+    "A generic function can require traits of its type parameters, either\n"
+    "in a `where` clause or by using a trait function in its body, such as\n"
+    "`==` using `Equal.__equal`. A call that fills the type parameter with\n"
+    "a type that does not implement that trait cannot work. Implement the\n"
+    "trait for the type, or call a function that does not need it.")
 N00B_DIAG(TRAIT_NOT_IMPLEMENTED, "N00B-T0018", ERROR,
     "an operation needs a trait that the value's type does not implement",
     "Operators, method calls and generic functions require their operand\n"
     "types to implement particular traits. Implement the trait for the type,\n"
     "or use a value of a type that implements it.")
-N00B_DIAG(TRAIT_IMPLEMENTATION_AMBIGUOUS, "N00B-T0019", ERROR,
-    "more than one trait implementation fits a value equally well",
-    "Two or more implementations apply to the value's type and none is more\n"
-    "specific. Annotate the value with a more specific type, or remove one\n"
-    "of the implementations.")
-N00B_DIAG(CONSTRUCTOR_TRAIT_REQUIRED, "N00B-T0022", ERROR,
-    "a construction's argument lacks a trait that `__init` requires",
-    "The `__init` that would build this value constrains its argument to a\n"
-    "trait, and the argument's type does not implement that trait.")
-N00B_DIAG(CONSTRUCTOR_MISSING, "N00B-T0023", ERROR,
-    "a type is constructed with arguments but has no visible `__init`",
-    "`new[T](...)` with arguments calls a visible `__init` of `T`. Declare\n"
-    "one, or build the value from its fields.")
 N00B_DIAG(CONSTRUCTOR_NO_MATCH, "N00B-T0024", ERROR,
     "no `__init` of a type accepts the arguments of a construction",
     "Each visible `__init` of the type was checked against the arguments and\n"
     "none accepted them. Compare the arguments with the `__init` signatures.")
-N00B_DIAG(CONSTRUCTOR_AMBIGUOUS, "N00B-T0025", ERROR,
-    "more than one `__init` accepts a construction equally well",
-    "Two or more `__init` functions fit the arguments and none is more\n"
-    "specific. Annotate the arguments with exact types, or remove one.")
-N00B_DIAG(OPERATOR_OPERAND_TYPES, "N00B-T0026", ERROR,
-    "an operator's operands do not fit the implementation it resolves to",
-    "Both operands must fit the trait method that implements the operator\n"
-    "for the left operand's type. Convert one operand so both sides have\n"
-    "matching types.")
-N00B_DIAG(INDEX_RESULT_TYPE, "N00B-T0027", ERROR,
-    "an indexing expression is used as a type its implementation does not produce",
-    "`value[i]` produces the result type of the container's index\n"
-    "implementation, and the surrounding code expects another type.")
-N00B_DIAG(CALLBACK_AMBIGUOUS, "N00B-T0029", ERROR,
-    "more than one callback setup fits a handler type",
-    "Two or more callback setup implementations fit the handler type equally\n"
-    "well. Annotate the handler with a more specific type.")
-N00B_DIAG(CALLBACK_PRIVATE, "N00B-T0030", ERROR,
-    "the callback setup implementation for a handler is private",
-    "The implementation that fits this handler is private to its module, so\n"
-    "it cannot be used here. Remove `private` from it.")
-N00B_DIAG(CALLBACK_MISSING, "N00B-T0031", ERROR,
-    "no callback setup implementation fits a handler type",
-    "No visible callback setup implementation accepts this handler's type.\n"
-    "Change the handler's signature, or provide an implementation.")
-N00B_DIAG(GENERIC_METHOD_UNDECLARED, "N00B-T0032", ERROR,
-    "a method is called on a generic value but no trait declares it",
-    "A value whose type is a type parameter such as `'T` can only use\n"
-    "methods that a trait declares, so that every possible `'T` is checked\n"
-    "the same way. Declare the method in a trait.")
-N00B_DIAG(OPERATOR_NOT_IMPLEMENTED, "N00B-T0033", ERROR,
-    "an operator is used on a type that does not implement it",
-    "Operators such as `+`, `==` and `[]` are implemented by traits, and the\n"
-    "operand's type does not implement the trait for this operator.\n"
-    "Implement it, or convert the operand to a type that does.")
-N00B_DIAG(GENERIC_TRAIT_AMBIGUOUS, "N00B-T0034", ERROR,
-    "a generic call finds two equally good implementations for its argument",
-    "The generic function uses a trait method on its argument, and for the\n"
-    "argument type used here more than one implementation fits equally well.\n"
-    "Remove or specialize one of them.")
-N00B_DIAG(GENERIC_TRAIT_MISSING, "N00B-T0035", ERROR,
-    "a generic function is called with a type that lacks a trait it uses",
-    "The generic function uses a trait method on its argument, and the\n"
-    "argument type used here does not implement that trait. Implement the\n"
-    "trait for the type, or pass a value of a type that implements it.")
-N00B_DIAG(INVALID_TYPE_NAME, "N00B-T0036", ERROR,
-    "a type name is not a valid identifier",
-    "Type names must be identifiers in Unicode normal form C. Rename the\n"
-    "type.")
-N00B_DIAG(GENERIC_RETURN_TYPE, "N00B-T0037", ERROR,
-    "a generic function's returned values do not fit its result type for a call",
-    "For the argument types of this call, the values the generic function\n"
-    "returns do not fit its declared result type.")
-N00B_DIAG(FAILURE_TYPES_INCOMPATIBLE, "N00B-T0038", ERROR,
-    "the failures a generic call can raise do not combine into one type",
-    "The trait implementations used by this generic call fail with types\n"
-    "that cannot be combined. Make their failure types agree.")
 N00B_DIAG(TYPE_REFERENCE_CONFLICT, "N00B-T0039", ERROR,
     "a type name is used where a different type is required",
     "The type a name refers to does not fit the way the surrounding code\n"
@@ -292,27 +204,6 @@ N00B_DIAG(CYCLIC_ALIAS, "N00B-T0040", ERROR,
     "A transparent alias is another name for its target, so an alias whose\n"
     "target leads back to the alias names nothing. Break the cycle with a\n"
     "record, an object or a nominal alias.")
-N00B_DIAG(FIELD_TYPE_MISMATCH, "N00B-T0041", ERROR,
-    "a field's value is used as a type the field does not have",
-    "Reading `value.field` produces the field's declared type, and the\n"
-    "surrounding code expects another type.")
-N00B_DIAG(REFERENT_NEEDS_REFERENCE, "N00B-T0042", ERROR,
-    "`__value` is read from a value that is not a reference",
-    "`r.__value` reads what a `Ref` or `Foreign` pointer refers to. Other\n"
-    "values have no referent; use the value directly.")
-N00B_DIAG(MEMBER_ON_UNKNOWN_TYPE, "N00B-T0043", ERROR,
-    "a member is read from a value whose type is not known",
-    "Reading `value.name` needs the value's type. Annotate the variable or\n"
-    "parameter the value comes from:\n"
-    "    func f(p: Point) -> int")
-N00B_DIAG(MEMBER_ON_NON_RECORD, "N00B-T0044", ERROR,
-    "a field is read from a value whose type has no fields",
-    "Only record and object values have fields. Check that the value has\n"
-    "the type you expect.")
-N00B_DIAG(IMPORTED_VALUE_TYPE, "N00B-T0045", ERROR,
-    "an imported value is used as a type it does not have",
-    "The imported declaration's type does not fit the way it is used here.\n"
-    "Convert it, or use a different declaration.")
 N00B_DIAG(TYPE_MISMATCH, "N00B-T0046", ERROR,
     "an expression's type does not match the type its context requires",
     "Each expression has one type, and every use of it must agree with that\n"
@@ -321,11 +212,6 @@ N00B_DIAG(NOT_CALLABLE, "N00B-T0047", ERROR,
     "a value that is not a function is called",
     "Only functions can be called with `(...)`. Check that the name refers\n"
     "to the function you meant and is not hidden by a variable.")
-N00B_DIAG(RECURSIVE_TYPE, "N00B-T0048", ERROR,
-    "a value would need a type that contains itself",
-    "An expression's type cannot contain itself, as in a list that would\n"
-    "have to hold itself. This usually means one value is used both as a\n"
-    "container and as its own element.")
 N00B_DIAG(TYPE_REQUIREMENT, "N00B-T0049", ERROR,
     "a value's type is not of the kind an operation requires",
     "Some operations accept only certain kinds of types, such as integers\n"

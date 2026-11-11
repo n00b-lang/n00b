@@ -46,7 +46,7 @@ require opts.b == nil
 
 let found = overloads.find_first(5)
 if found != nil {
-    require found.get().__value.raw == 5
+    require found.__value.raw == 5
 }
 
 require bare.impl.answer() == 1

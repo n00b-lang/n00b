@@ -10,7 +10,6 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/pdg.h"
-#include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/doms.h"
 #include "ir/walk.h"
@@ -51,7 +50,6 @@ static int cmd_parse(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_print(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_verify(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_analyze(job *j, FILE *out, FILE *err, core_string_t list);
-static int cmd_explain(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_pass(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_cfg(job *j, FILE *out, FILE *err, core_string_t list);
 static int cmd_dom(job *j, FILE *out, FILE *err, core_string_t list);
@@ -70,8 +68,6 @@ static const struct {
     {CORE_STRING_STATIC("verify"),  CORE_STRING_STATIC("report which properties hold"), cmd_verify},
     {CORE_STRING_STATIC("analyze"), CORE_STRING_STATIC("report unreachable blocks, unset and unused locals"),
      cmd_analyze},
-    {CORE_STRING_STATIC("explain"), CORE_STRING_STATIC("say which typing rule fires for each instruction"),
-     cmd_explain},
     {CORE_STRING_STATIC("pass"),    CORE_STRING_STATIC("run passes in order, then print"), cmd_pass},
     {CORE_STRING_STATIC("cfg"),     CORE_STRING_STATIC("blocks and their successors, with edge kinds"), cmd_cfg},
     {CORE_STRING_STATIC("dom"),     CORE_STRING_STATIC("dominators, post-dominators, dominance frontiers"), cmd_dom},
@@ -280,12 +276,25 @@ static core_string_t tag(ir_instr_t *in)
     return core_buffer_take_string(buf);
 }
 
+static core_string_t end_tag(ir_instr_t *in, const ir_value_t *param)
+{
+    if (in) {
+        return tag(in);
+    }
+
+    core_buffer_t *buf = core_buffer_empty();
+    core_buffer_puts(buf, "param:");
+    if (param) {
+        core_buffer_append_string(buf, param->name);
+    }
+    return core_buffer_take_string(buf);
+}
+
 typedef struct {
     FILE        *out;
     ir_module_t *m;
     ir_pdg_t    *pdg;
     ir_doms_t   *dom;
-    ir_rules_t  *rules;
     bool         control;
     bool         data;
 } dump;
@@ -478,9 +487,12 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
         if ((is && !control) || (!is && !data)) {
             continue;
         }
-        core_string_t from = tag(e->from);
-        core_string_t to   = tag(e->to);
-        fprintf(out, "  %-8s %.*s %s %.*s", is ? "control" : "data",
+        core_string_t from = end_tag(e->from, e->param);
+        core_string_t to   = end_tag(e->to, e->param);
+        fprintf(out, "  %-8s %.*s %s %.*s",
+                is                          ? "control"
+                : e->kind == IR_DEP_MEMORY ? "memory"
+                                           : "data",
                 (int)from.u8_bytes, from.data,
                 e->certainty == IR_DEP_EXACT ? "=>" : "~>",
                 (int)to.u8_bytes, to.data);
@@ -493,39 +505,6 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
         }
         fputc('\n', out);
     }
-}
-
-static bool explain_func(ir_visit_t *vi)
-{
-    dump *u = vi->user;
-
-    put_func(u->out, vi->func);
-    fputc('\n', u->out);
-
-    return true;
-}
-
-static bool explain_instr(ir_visit_t *vi)
-{
-    dump         *u   = vi->user;
-    core_string_t why = ir_rule_explain(u->m, u->rules, vi->instr);
-    core_string_t nm  = tag(vi->instr);
-
-    fprintf(u->out, "  %.*s\n", (int)nm.u8_bytes, nm.data);
-    core_free(nm.data);
-
-    if (why.data) {
-        put(u->out, why);
-        core_free(why.data);
-    }
-
-    return false;
-}
-
-static void install_explain(ir_walk_t *w)
-{
-    ir_walk_on_func(w, explain_func, nullptr, nullptr);
-    ir_walk_on_instr(w, explain_instr, nullptr, nullptr);
 }
 
 static bool graph_func(ir_visit_t *vi)
@@ -572,16 +551,6 @@ static int cmd_regions(job *j, FILE *out, FILE *err, core_string_t list)
     }
 
     return IR_CLI_OK;
-}
-
-static int cmd_explain(job *j, FILE *out, FILE *err, core_string_t list)
-{
-    (void)err;
-    (void)list;
-
-    dump u = {.out = out, .rules = ir_module_rules(j->m)};
-
-    return dump_run(j, &u, install_explain);
 }
 
 static int cmd_verify(job *j, FILE *out, FILE *err, core_string_t list)

@@ -81,7 +81,7 @@ private func spec_dim(dim: internal.layout.Layout_Dim?, available: i64) -> i64 {
     if dim == nil {
         return 0
     }
-    let d: internal.layout.Layout_Dim = dim.get()
+    let d: internal.layout.Layout_Dim = dim
     return internal.layout.resolve(d, available)
 }
 
@@ -160,7 +160,7 @@ private func scan_column_preferences(table: internal.table.Table, width: i64)
         var cur_min: i64 = 0
         let spec_min: internal.layout.Layout_Dim? = spec.min
         if spec_min != nil {
-            let min_dim: internal.layout.Layout_Dim = spec_min.get()
+            let min_dim: internal.layout.Layout_Dim = spec_min
             cur_min = internal.layout.resolve(min_dim, width)
         }
         if longest_word > cur_min {

@@ -8,9 +8,6 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
-#ifndef _WIN32
-#include <sys/wait.h>
-#endif
 #include <unistd.h>
 
 extern char **environ;
@@ -40,16 +37,17 @@ double n00bb_profile_seconds(void);
 #include "abi_emit.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
-#include "abi_static_graph.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
+#include "compiler_lower_emit.h"
+#include "compiler_types.h"
 #include "flagset_value.h"
 #include "frame_roots.h"
+#include "qualified_names.h"
 #include "global_metadata.h"
 #include "ir/abcd.h"
 #include "llvm_backend.h"
-#include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
@@ -57,7 +55,6 @@ double n00bb_profile_seconds(void);
 #include "specialize.h"
 #include "box_calls.h"
 #include "compiler_ffi.h"
-#include "compiler_baked.h"
 #include "lib/alloc.h"
 #include "lib/arena.h"
 #include "lib/buffer.h"
@@ -80,7 +77,6 @@ double n00bb_profile_seconds(void);
 #include "parse/annot_walk.h"
 #include "ir/ir.h"
 #include "ir/analyses.h"
-#include "ir/exec_graph.h"
 #include "ir/doms.h"
 #include "ir/analyze.h"
 #include "ir/layout.h"
@@ -329,33 +325,6 @@ print_counted_diagnostics(const core_diagnostics_t *diagnostics,
 }
 
 static void
-count_replayed_headers(core_string_t text)
-{
-    size_t start = 0;
-    while (start < text.u8_bytes) {
-        int64_t newline = core_string_find_byte(
-            core_string_slice(text, start, text.u8_bytes - start), '\n');
-        size_t length = newline < 0 ? text.u8_bytes - start : (size_t)newline;
-        core_string_t line = core_string_slice(text, start, length);
-        start += length + 1;
-        if (!line.u8_bytes || line.data[0] == ' ' || line.data[0] == '|'
-            || (line.data[0] >= '0' && line.data[0] <= '9'))
-            continue;
-        if (core_string_starts_with(line, CORE_STRING_STATIC("error"))
-            || core_string_starts_with(line,
-                   CORE_STRING_STATIC("internal compiler error"))
-            || core_string_find(line, CORE_STRING_STATIC(": error")) >= 0
-            || core_string_find(line,
-                   CORE_STRING_STATIC(": internal compiler error")) >= 0)
-            printed_errors++;
-        else if (core_string_starts_with(line, CORE_STRING_STATIC("warning"))
-                 || core_string_find(line, CORE_STRING_STATIC(": warning"))
-                        >= 0)
-            printed_warnings++;
-    }
-}
-
-static void
 print_build_summary(core_string_t input)
 {
     if (n00bb_diag_render_options().terse && (printed_errors || printed_warnings))
@@ -495,18 +464,6 @@ symbol_mutability_name(parse_sym_mutability_t mutability)
 }
 
 static core_string_t
-symbol_phase_name(parse_sym_phase_t phase)
-{
-    switch (phase) {
-    case PARSE_SYM_PHASE_NONE: return CORE_STRING_STATIC("none");
-    case PARSE_SYM_PHASE_COMPTIME: return CORE_STRING_STATIC("comptime");
-    case PARSE_SYM_PHASE_RUNTIME: return CORE_STRING_STATIC("runtime");
-    case PARSE_SYM_PHASE_BOTH: return CORE_STRING_STATIC("comptime+runtime");
-    }
-    return CORE_STRING_STATIC("invalid");
-}
-
-static core_string_t
 static_value_kind_name(n00bb_static_value_kind_t kind)
 {
     static const core_string_t names[] = {
@@ -523,7 +480,6 @@ static core_string_t
 shape_extent_kind_name(ir_shape_extent_kind_t kind)
 {
     return kind == IR_SHAPE_EXTENT_STATIC ? CORE_STRING_STATIC("static")
-        : kind == IR_SHAPE_EXTENT_COMPTIME ? CORE_STRING_STATIC("comptime")
         : kind == IR_SHAPE_EXTENT_RUNTIME ? CORE_STRING_STATIC("runtime")
         : CORE_STRING_STATIC("unresolved");
 }
@@ -641,12 +597,6 @@ dump_symbols(core_translation_unit_t *unit)
                     if (!ir_shape_extent(array_shape, d, &extent)) continue;
                     core_string_t kind = shape_extent_kind_name(extent.kind);
                     printf(", dim%u=%.*s", d, TEXT_ARGS(kind));
-                    if (extent.producer)
-                        printf("(producer=%.*s)",
-                               TEXT_ARGS(extent.producer->name));
-                    else if (extent.producer_identifier.data)
-                        printf("(producer=%.*s)",
-                               TEXT_ARGS(extent.producer_identifier));
                 }
             }
             if (symbol->member_scope)
@@ -720,44 +670,9 @@ dump_symbols(core_translation_unit_t *unit)
                 printf(", pass_by=%.*s", (int)symbol->pass_by.u8_bytes,
                        symbol->pass_by.data);
             if (symbol->is_thread_local) printf(", thread-local");
-            core_string_t phases = symbol_phase_name(symbol->phases);
-            core_string_t mutable_phases =
-                symbol_phase_name(symbol->mutable_phases);
-            core_string_t initializer_phases =
-                symbol_phase_name(symbol->initializer_phases);
-            printf(", phases=%.*s, mutable-in=%.*s, initializer-in=%.*s",
-                   TEXT_ARGS(phases), TEXT_ARGS(mutable_phases),
-                   TEXT_ARGS(initializer_phases));
             core_string_t storage_duration = parse_sym_storage_duration_name(
                 symbol->storage_duration);
             printf(", storage-duration=%.*s", TEXT_ARGS(storage_duration));
-            printf(", lifetime-region=%llu, aliases=%zu, aliased-by=%zu",
-                   (unsigned long long)symbol->lifetime.region,
-                   parse_sym_alias_count(symbol),
-                   parse_sym_aliased_by_count(symbol));
-            size_t complete_lifetime_ranges = 0;
-            for (size_t r = 0;
-                 r < parse_sym_lifetime_range_count(symbol); r++) {
-                const parse_sym_lifetime_range_t *range =
-                    parse_sym_lifetime_range_at(symbol, r);
-                complete_lifetime_ranges += range && range->complete;
-            }
-            printf(", lifetime-ranges=%zu, complete-ranges=%zu",
-                   parse_sym_lifetime_range_count(symbol),
-                   complete_lifetime_ranges);
-            printf(", alias-analysis=%s",
-                   symbol->alias_analysis_complete ? "complete"
-                                                   : "incomplete");
-            size_t escaping_aliases = 0;
-            size_t escaping_aliased_by = 0;
-            for (size_t a = 0; a < parse_sym_alias_count(symbol); a++)
-                escaping_aliases +=
-                    parse_sym_alias_at(symbol, a)->escapes;
-            for (size_t a = 0; a < parse_sym_aliased_by_count(symbol); a++)
-                escaping_aliased_by +=
-                    parse_sym_aliased_by_at(symbol, a)->escapes;
-            printf(", escaping-aliases=%zu, escaping-aliased-by=%zu",
-                   escaping_aliases, escaping_aliased_by);
             if (symbol->requested_storage_class.data)
                 printf(", requested-storage=%.*s",
                        (int)symbol->requested_storage_class.u8_bytes,
@@ -768,7 +683,6 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->selected_storage_class.data);
             if (symbol->storage_class_required)
                 printf(", storage-class-required");
-            if (symbol->alias_unresolved) printf(", alias-unresolved");
             printf(", uses=%u", symbol->uses);
             parse_token_info_t *token = symbol->decl_node
                 ? parse_tree_find_first_terminal(symbol->decl_node) : nullptr;
@@ -863,19 +777,6 @@ link_dependency_state_name(core_link_dependency_state_t state)
     return CORE_STRING_STATIC("invalid");
 }
 
-static core_string_t
-cleanup_release_policy_name(n00bb_cleanup_release_policy_t policy)
-{
-    switch (policy) {
-    case N00BB_CLEANUP_RELEASE_NONE: return CORE_STRING_STATIC("none");
-    case N00BB_CLEANUP_RELEASE_RUNTIME_MANAGED:
-        return CORE_STRING_STATIC("runtime-managed");
-    case N00BB_CLEANUP_RELEASE_POLICY_UNAVAILABLE:
-        return CORE_STRING_STATIC("unavailable");
-    }
-    return CORE_STRING_STATIC("invalid");
-}
-
 static void
 dump_link_unit(core_link_unit_t *link)
 {
@@ -932,101 +833,16 @@ dump_link_unit(core_link_unit_t *link)
             if (core_link_declaration_binding(declaration, binding_roles[r]))
                 printf(" binding %.*s", TEXT_ARGS(binding_roles[r]));
         }
-        bool has_context_hooks = false;
-        for (size_t r = 6; r < sizeof(binding_roles) / sizeof(binding_roles[0]);
-             r++)
-            has_context_hooks |= core_link_declaration_binding(declaration,
-                binding_roles[r]) != nullptr;
         n00bb_link_payload_t *facts = core_link_declaration_binding(
             declaration,
             CORE_STRING_STATIC("n00bb.semantic.declaration-facts"));
         if (facts) {
-            core_string_t phases = symbol_phase_name(facts->phases);
             core_string_t storage = parse_sym_storage_duration_name(
                 facts->storage_duration);
-            printf(" facts[dimensions=%u, initializers=%zu, phases=%.*s, "
-                   "storage=%.*s, alias-analysis=%s]",
+            printf(" facts[dimensions=%u, initializers=%zu, storage=%.*s]",
                    ir_shape_rank(parse_sym_binding(facts->symbol,
                        CORE_STRING_STATIC("ir.array-shape"))),
-                   facts->initializers.len,
-                   TEXT_ARGS(phases), TEXT_ARGS(storage),
-                   facts->alias_analysis_complete ? "complete" : "incomplete");
-            if (facts->symbol
-                && (facts->symbol->kind == PARSE_SYM_FUNCTION
-                    || has_context_hooks))
-                printf(" cfg-liveness[symbols=%zu,ranges=%zu,complete-ranges=%zu,starts=%zu,end-points=%zu,end-edges=%zu,missing-starts=%zu,edges=%zu,direct-live=%zu,direct-dead=%zu,direct-unknown=%zu,alias-live=%zu,alias-dead=%zu,alias-unknown=%zu,range-ends=%zu,missing=%zu,owner-mismatch=%zu,empty-functions=%zu,open-blocks=%zu,%s]",
-                       facts->cfg_liveness_symbols,
-                       facts->cfg_liveness_ranges,
-                       facts->cfg_liveness_complete_ranges,
-                       facts->cfg_liveness_start_points,
-                       facts->cfg_liveness_end_points,
-                       facts->cfg_liveness_end_edges,
-                       facts->cfg_liveness_missing_starts,
-                       facts->cfg_liveness_edges,
-                       facts->cfg_liveness_direct_live_edges,
-                       facts->cfg_liveness_direct_dead_edges,
-                       facts->cfg_liveness_direct_unknown_edges,
-                       facts->cfg_liveness_alias_live_edges,
-                       facts->cfg_liveness_alias_dead_edges,
-                       facts->cfg_liveness_alias_unknown_edges,
-                       facts->cfg_liveness_range_ends,
-                       facts->cfg_liveness_missing_bindings,
-                       facts->cfg_liveness_owner_mismatches,
-                       facts->cfg_liveness_empty_functions,
-                       facts->cfg_liveness_incomplete_blocks,
-                       facts->cfg_liveness_complete
-                           ? "complete" : "incomplete");
-            if (facts->cleanup_obligations_complete
-                || facts->cleanup_facts.len) {
-                printf(" cleanup[ranges=%zu,complete-ranges=%zu,"
-                       "cfg-edges=%zu,endpoints=%zu,exits=%zu,safe-exits=%zu,"
-                       "live-exits=%zu,unknown-exits=%zu,release-none=%zu,"
-                       "release-runtime=%zu,release-unavailable=%zu,%s]",
-                       facts->cleanup_range_count,
-                       facts->cleanup_complete_ranges,
-                       facts->cleanup_cfg_edges,
-                       facts->cleanup_endpoint_count,
-                       facts->cleanup_exit_edges,
-                       facts->cleanup_safe_exit_edges,
-                       facts->cleanup_live_exit_edges,
-                       facts->cleanup_unknown_exit_edges,
-                       facts->cleanup_no_release_ranges,
-                       facts->cleanup_runtime_managed_ranges,
-                       facts->cleanup_unavailable_ranges,
-                       facts->cleanup_obligations_complete
-                           ? "complete" : "incomplete");
-                for (size_t c = 0; c < facts->cleanup_facts.len; c++) {
-                    const n00bb_cleanup_fact_t *cleanup =
-                        &facts->cleanup_facts.data[c];
-                    core_string_t cleanup_phase =
-                        symbol_phase_name(cleanup->phase);
-                    core_string_t cleanup_storage =
-                        parse_sym_storage_duration_name(
-                            cleanup->storage_duration);
-                    core_string_t cleanup_release =
-                        cleanup_release_policy_name(cleanup->release_policy);
-                    printf(" cleanup-range[%.*s,phase=%.*s,storage=%.*s,"
-                           "release=%.*s,cfg-edges=%zu,endpoints=%zu,point-endpoints=%zu,"
-                           "edge-endpoints=%zu,exits=%zu,safe-exits=%zu,"
-                           "live-exits=%zu,unknown-exits=%zu,evidence=%s,"
-                           "finalizer=unspecified]",
-                           (int)cleanup->symbol->name.u8_bytes,
-                           cleanup->symbol->name.data,
-                           TEXT_ARGS(cleanup_phase),
-                           TEXT_ARGS(cleanup_storage),
-                           TEXT_ARGS(cleanup_release),
-                           cleanup->cfg_edges,
-                           cleanup->safe_endpoints,
-                           cleanup->point_endpoints,
-                           cleanup->edge_endpoints,
-                           cleanup->exit_edges,
-                           cleanup->safe_exit_edges,
-                           cleanup->live_exit_edges,
-                           cleanup->unknown_exit_edges,
-                           cleanup->range_complete ? "complete"
-                                                   : "incomplete");
-                }
-            }
+                   facts->initializers.len, TEXT_ARGS(storage));
             if (facts->initializers.len)
                 printf(" initializers=%zu", facts->initializers.len);
             dump_static_value(facts->static_value);
@@ -1046,21 +862,8 @@ dump_link_unit(core_link_unit_t *link)
                 if (!ir_shape_extent(array_shape, d, &extent)) continue;
                 core_string_t kind = shape_extent_kind_name(extent.kind);
                 printf(",dim%u=%.*s", d, TEXT_ARGS(kind));
-                if (extent.producer)
-                    printf(":producer=%.*s", TEXT_ARGS(extent.producer->name));
-                else if (extent.producer_identifier.data)
-                    printf(":producer=%.*s",
-                           TEXT_ARGS(extent.producer_identifier));
             }
             printf("]");
-            ir_shape_measure_t element_count;
-            if (ir_shape_element_count(array_shape, &element_count)
-                && element_count.kind == IR_SHAPE_MEASURE_COMPTIME) {
-                printf(" array-element-count=comptime");
-                if (element_count.producer)
-                    printf(":producer=%.*s",
-                           TEXT_ARGS(element_count.producer->name));
-            }
         }
         for (size_t site_index = 0;
              site_index < core_link_declaration_site_count(declaration);
@@ -1278,8 +1081,10 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
     core_source_file_t source = {0};
     const core_module_spec_t *module = core_work_job_module(job);
     bool interface_allowed = !context->cache
-        || (module && n00bb_cache_has_module(context->cache,
-                                             module->identifier));
+        || (module && (n00bb_cache_has_module(context->cache,
+                                              module->identifier)
+                       || n00bb_cache_library_module(context->cache,
+                                                     module->identifier)));
     bool logical_import = !root_input && module && operand.data
         && interface_allowed
         && (core_string_eq(operand, module->identifier) || context->cache);
@@ -1598,10 +1403,7 @@ static bool
 manifest_mentions(core_translation_unit_t *manifest, core_string_t package)
 {
     if (!manifest || !package.u8_bytes) return false;
-    int64_t dot = core_string_rfind_byte(package, '.');
-    core_string_t leaf = dot < 0 ? package
-        : core_string_slice(package, (size_t)dot + 1,
-                            package.u8_bytes - (size_t)dot - 1);
+    core_string_t leaf = n00bb_name_leaf(package);
     core_string_t text = core_string_borrow(
         core_source_file_contents(&manifest->source).data,
         core_source_file_size(&manifest->source));
@@ -2117,7 +1919,6 @@ package_has_manifest(import_driver_t *driver,
     return found;
 }
 
-
 static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit);
@@ -2371,6 +2172,8 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
     }
     n00bb_cache_declaration_sites(driver->loader->cache, module,
                                   &tu_state(unit)->declaration_sites);
+    n00bb_cache_unused_facts(driver->loader->cache, module,
+                             &tu_state(unit)->unused_facts);
     core_string_t module_name = module;
     size_t size = 0;
     const uint8_t *data = module_name.data
@@ -2595,18 +2398,6 @@ typedef struct {
 } program_link_inputs_t;
 
 static bool
-program_has_semantic_errors(const program_link_inputs_t *inputs)
-{
-    for (size_t i = 0; i < inputs->requests->ordered.len; i++) {
-        core_translation_unit_t *unit = core_work_job_result(inputs->queue,
-            inputs->requests->ordered.data[i].job);
-        n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-        if (state && state->semantic_errors) return true;
-    }
-    return false;
-}
-
-static bool
 link_located_program(const program_link_inputs_t *inputs,
                      th_env **environment_out, core_link_unit_t **link_out,
                      n00bb_link_analysis_t **analysis_out)
@@ -2665,15 +2456,6 @@ link_located_program(const program_link_inputs_t *inputs,
     static const uint32_t ir_binding_prerequisites[] = {
         N00BB_LINK_STAGE_CONTRIBUTIONS,
     };
-    static const uint32_t cfg_liveness_prerequisites[] = {
-        N00BB_LINK_STAGE_IR_BINDINGS,
-    };
-    static const uint32_t cleanup_obligations_prerequisites[] = {
-        N00BB_LINK_STAGE_CFG_LIVENESS,
-    };
-    static const uint32_t storage_lifetimes_prerequisites[] = {
-        N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS,
-    };
     static const uint32_t contribution_prerequisites[] = {
         N00BB_LINK_STAGE_SEMANTICS,
     };
@@ -2698,27 +2480,8 @@ link_located_program(const program_link_inputs_t *inputs,
         && core_link_unit_register_stage(link,
             N00BB_LINK_STAGE_IR_BINDINGS, ir_binding_prerequisites, 1,
             CORE_STRING_STATIC("n00bb.ir-bindings.v1"), true,
-            n00bb_link_stage_ir_bindings, analysis)
-        && core_link_unit_register_stage(link,
-            N00BB_LINK_STAGE_CFG_LIVENESS,
-            cfg_liveness_prerequisites, 1,
-            CORE_STRING_STATIC("n00bb.cfg-liveness.v1"), true,
-            n00bb_link_stage_cfg_liveness, analysis)
-        && core_link_unit_register_stage(link,
-            N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS,
-            cleanup_obligations_prerequisites, 1,
-            CORE_STRING_STATIC("n00bb.cleanup-obligations.v1"),
-            true, n00bb_link_stage_cleanup_obligations, analysis)
-        && core_link_unit_register_stage(link,
-            N00BB_LINK_STAGE_STORAGE_LIFETIMES,
-            storage_lifetimes_prerequisites, 1,
-            CORE_STRING_STATIC("n00bb.storage-lifetimes.v1"),
-            true, n00bb_link_stage_storage_lifetimes, analysis);
-    if (stages_registered && program_has_semantic_errors(inputs)) {
-        (void)core_link_unit_run_stage(link, N00BB_LINK_STAGE_SEMANTICS);
-        success = false;
-    }
-    else success = stages_registered
+            n00bb_link_stage_ir_bindings, analysis);
+    success = stages_registered
         && core_link_unit_run_stage(link, N00BB_LINK_STAGE_CONTRIBUTIONS)
         && !core_link_unit_has_fatal_diagnostics(link);
     if (profile_compile)
@@ -2803,7 +2566,6 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.prepare_import = prepare_import;
     active_options.record_import = record_import_shape;
     active_options.selected_body = n00bb_tu_remember_selected_when_body;
-    active_options.build_time_use = n00bb_tu_remember_build_time_use;
     active_options.selected_body_context = nullptr;
     active_options.register_litmod = register_user_litmod;
     active_options.register_litmod_alias = register_user_litmod_alias;
@@ -3915,6 +3677,75 @@ n00bb_format_type_names(parse_grammar_t *grammar, parse_tree_t *node,
         };
 }
 
+static parse_token_info_t *
+n00bb_format_edge_token(parse_tree_t *node, bool last)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        size_t count = core_tree_num_children(node);
+        if (!count) return nullptr;
+        node = core_tree_child(node, last ? count - 1 : 0);
+    }
+    return node ? parse_node_token(node) : nullptr;
+}
+
+static parse_tree_t *
+n00bb_format_empty_list(parse_grammar_t *grammar, parse_tree_t *node,
+                        core_string_t source)
+{
+    while (node && !core_tree_is_leaf(node)
+           && !nt_is(grammar, node, CORE_STRING_STATIC("new-expr"))
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    if (!node || core_tree_is_leaf(node)
+        || !nt_is(grammar, node, CORE_STRING_STATIC("new-expr"))
+        || child_nt(grammar, node, CORE_STRING_STATIC("call-args")))
+        return nullptr;
+    parse_tree_t *type = child_nt(grammar, node,
+                                  CORE_STRING_STATIC("type-spec"));
+    parse_token_info_t *first = type
+        ? n00bb_format_edge_token(type, false) : nullptr;
+    if (!first) return nullptr;
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(first);
+    if (end > source.u8_bytes || end - start != 4
+        || memcmp(source.data + start, "List", 4))
+        return nullptr;
+    return node;
+}
+
+static void
+n00bb_format_empty_lists(parse_grammar_t *grammar, parse_tree_t *node,
+                         core_string_t source,
+                         n00bb_format_type_insertion_t *insertions,
+                         size_t *used, size_t capacity)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    parse_tree_t *value = nullptr;
+    if ((nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
+         && child_nt(grammar, node, CORE_STRING_STATIC("type-spec")))
+        || nt_is(grammar, node, CORE_STRING_STATIC("return-stmt"))
+        || (nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt"))
+            && child_nt(grammar, node, CORE_STRING_STATIC("place"))))
+        value = child_nt(grammar, node, CORE_STRING_STATIC("expression"));
+    parse_tree_t *list = value
+        ? n00bb_format_empty_list(grammar, value, source) : nullptr;
+    parse_token_info_t *first = list
+        ? n00bb_format_edge_token(list, false) : nullptr;
+    parse_token_info_t *last = list
+        ? n00bb_format_edge_token(list, true) : nullptr;
+    if (first && last && *used < capacity) {
+        insertions[(*used)++] = (n00bb_format_type_insertion_t){
+            .at = parse_token_start_byte(first),
+            .end = parse_token_end_byte(last),
+            .type = core_string_dup(CORE_STRING_STATIC("[]")),
+        };
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        n00bb_format_empty_lists(grammar, core_tree_child(node, i), source,
+                                 insertions, used, capacity);
+}
+
 static core_string_t
 n00bb_format_canonical_type(core_string_t printed)
 {
@@ -3962,10 +3793,13 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
     n00bb_format_type_insertion_t *insertions =
         core_alloc_array(n00bb_format_type_insertion_t, capacity + 1);
     size_t used = 0;
-    if (state->lex && state->lex->parser)
-        n00bb_format_type_names(grammar,
-            parse_pwz_get_tree(state->lex->parser), source,
-            insertions, &used, capacity, false);
+    if (state->lex && state->lex->parser) {
+        parse_tree_t *tree = parse_pwz_get_tree(state->lex->parser);
+        n00bb_format_type_names(grammar, tree, source, insertions, &used,
+                                capacity, false);
+        n00bb_format_empty_lists(grammar, tree, source, insertions, &used,
+                                 capacity);
+    }
     for (parse_scope_t *scope = symtab->all_scopes; scope;
          scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -3994,7 +3828,8 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
             if (!printed.data || !printed.u8_bytes
                 || core_string_find_byte(printed, '<') >= 0
                 || core_string_find_byte(printed, '$') >= 0
-                || core_string_find_byte(printed, '%') >= 0)
+                || core_string_find_byte(printed, '%') >= 0
+                || core_string_find_byte(printed, '`') >= 0)
                 continue;
             if (used == capacity) continue;
             insertions[used++] = (n00bb_format_type_insertion_t){
@@ -4125,6 +3960,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     bool check = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--check"));
     bool normalize = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--normalize"));
+    bool keep_layout = normalize && parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--keep-layout"));
     bool ascii_tags = n00bb_setting_bool(N00BB_KEY_FMT_ASCII_TAGS);
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -4169,33 +4006,45 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             continue;
         }
         core_string_t print_source = normalized.data ? normalized : source;
-        if (normalized_parser) tree = parse_pwz_get_tree(normalized_parser);
-        parse_print_opts_t options = {
-            .source = print_source,
-            .width = 88,
-            .indent = 4,
-        };
-        core_string_t printed = parse_tree_print(grammar, tree, &options);
-        core_string_t restored = printed.data
-            ? n00bb_format_restore_breaks(grammar, print_source, printed)
-            : (core_string_t){0};
-        parse_pwz_free(normalized_parser);
-        scan_token_stream_free(normalized_tokens);
-        core_free(normalized.data);
-        core_free(printed.data);
-        core_string_t aligned = restored.data ? n00bb_format_align(restored)
-                                              : (core_string_t){0};
-        core_free(restored.data);
-        core_string_t signatures = aligned.data
-            ? n00bb_format_signatures(grammar, aligned) : (core_string_t){0};
-        core_free(aligned.data);
-        core_string_t channels = signatures.data
-            ? n00bb_format_channels(grammar, signatures) : (core_string_t){0};
-        core_free(signatures.data);
-        core_string_t formatted = channels.data
-            ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
-            : (core_string_t){0};
-        core_free(channels.data);
+        core_string_t formatted = {0};
+        if (keep_layout) {
+            formatted = core_string_dup(print_source);
+            parse_pwz_free(normalized_parser);
+            scan_token_stream_free(normalized_tokens);
+            core_free(normalized.data);
+        }
+        else {
+            if (normalized_parser)
+                tree = parse_pwz_get_tree(normalized_parser);
+            parse_print_opts_t options = {
+                .source = print_source,
+                .width = 88,
+                .indent = 4,
+            };
+            core_string_t printed = parse_tree_print(grammar, tree, &options);
+            core_string_t restored = printed.data
+                ? n00bb_format_restore_breaks(grammar, print_source, printed)
+                : (core_string_t){0};
+            parse_pwz_free(normalized_parser);
+            scan_token_stream_free(normalized_tokens);
+            core_free(normalized.data);
+            core_free(printed.data);
+            core_string_t aligned = restored.data
+                ? n00bb_format_align(restored) : (core_string_t){0};
+            core_free(restored.data);
+            core_string_t signatures = aligned.data
+                ? n00bb_format_signatures(grammar, aligned)
+                : (core_string_t){0};
+            core_free(aligned.data);
+            core_string_t channels = signatures.data
+                ? n00bb_format_channels(grammar, signatures)
+                : (core_string_t){0};
+            core_free(signatures.data);
+            formatted = channels.data
+                ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
+                : (core_string_t){0};
+            core_free(channels.data);
+        }
         if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
             n00bb_internal_error(requests->diagnostics, unit,
                 (core_diag_location_t){}, "formatting",
@@ -4228,89 +4077,17 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     return ok;
 }
 
-extern char **environ;
-
-static bool
-build_time_failure(core_diagnostics_t *diagnostics, n00bb_text_t what)
-{
-    int error = errno ? errno : EIO;
-    n00bb_report(diagnostics, nullptr, N00B_DIAG_BUILD_TIME_RUN_FAILED,
-        (core_diag_location_t){}, N00B_TEXT_BUILD_TIME_FAILURE,
-        N00BB_ARGS(ARG_PHRASE_ID(what), ARG_ERRNO(error)));
-    return false;
-}
-
-static bool
-build_time_unreported(core_diagnostics_t *diagnostics)
-{
-    n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
-                         "compiling the build-time program",
-                         "the build-time compile failed without a diagnostic");
-    return false;
-}
-
-static bool
-build_time_run_status(core_diagnostics_t *diagnostics,
-                      core_process_status_t status, bool started)
-{
-    if (!started)
-        return build_time_failure(diagnostics,
-                                  N00B_TEXT_PHRASE_COULD_NOT_START_THE_BUILD);
-    if (!status.exited)
-        n00bb_report(diagnostics, nullptr, N00B_DIAG_BUILD_TIME_RUN_FAILED,
-            (core_diag_location_t){}, N00B_TEXT_THE_BUILD_TIME_PROGRAM_WAS,
-            N00BB_ARGS(ARG_NUMBER(status.code),
-                       ARG_NATIVE(core_process_signal_name(status.code))));
-    else
-        n00bb_report(diagnostics, nullptr, N00B_DIAG_BUILD_TIME_RUN_FAILED,
-            (core_diag_location_t){}, N00B_TEXT_THE_BUILD_TIME_PROGRAM_EXITED,
-            N00BB_ARGS(ARG_NUMBER(status.code)));
-    n00bb_report_note(diagnostics, N00B_TEXT_THE_PROGRAM_IS_RUN_WHILE,
-        N00BB_NO_ARGS);
-    return false;
-}
-
-static bool
-succeeded(core_process_t child)
-{
-    core_process_status_t status = {0};
-    return core_process_wait(child, &status) && status.exited
-        && status.code == 0;
-}
-
-static int build_time_capture = -1;
-static bool build_time_capture_full;
-
-enum { FORKED_BUILD_TIME_FALLBACK = 75 };
-
-static bool forked_build_time;
-
 static void
 exec_compiler(core_string_t compiler, char **argv)
 {
-    if (forked_build_time) {
-        fflush(stdout);
-        fflush(stderr);
-        _exit(FORKED_BUILD_TIME_FALLBACK);
-    }
     char *native = core_string_to_cstr(compiler);
     if (!native) return;
-    n00bb_handoff_t *handoff = n00bb_handoff();
-    handoff->capture_fd = build_time_capture;
-    handoff->capture_full = build_time_capture_full;
     n00bb_handoff_pass();
     fflush(stdout);
     fflush(stderr);
-    core_process_redirect_t capture = {
-        build_time_capture, build_time_capture,
-    };
     char *invoked = argv[0];
     argv[0] = native;
-    core_process_exec(&(core_process_spec_t){
-        .arguments = argv,
-        .redirects = &capture,
-        .redirect_count = build_time_capture >= 0,
-    });
+    core_process_exec(&(core_process_spec_t){.arguments = argv});
     argv[0] = invoked;
     core_free(native);
 }
@@ -4409,18 +4186,6 @@ restart_with_summaries(char **argv, core_string_t argv0, n00bb_cache_t *cache)
 }
 
 static void
-restart_with_build_time(char **argv, core_string_t argv0, bool literal)
-{
-    core_string_t compiler = core_os_executable_path(argv0);
-    if (!compiler.data) return;
-    n00bb_handoff()->phase_order = literal ? N00BB_PHASE_ORDER_LITERAL_FIRST
-                                           : N00BB_PHASE_ORDER_BUILD_TIME_FIRST;
-    build_time_capture = -1;
-    exec_compiler(compiler, argv);
-    core_free(compiler.data);
-}
-
-static void
 restart_excluding_cached(char **argv, core_string_t argv0,
                          const core_buffer_t *stale)
 {
@@ -4435,119 +4200,6 @@ restart_excluding_cached(char **argv, core_string_t argv0,
     if (!compiler.data) return;
     exec_compiler(compiler, argv);
     core_free(compiler.data);
-}
-
-static bool
-diagnostic_is_error(const core_diagnostic_t *diagnostic)
-{
-    return diagnostic->severity == CORE_DIAG_ERROR
-        || diagnostic->severity == CORE_DIAG_FATAL
-        || diagnostic->severity == CORE_DIAG_INTERNAL;
-}
-
-
-static void
-put_handoff_u32(core_buffer_t *out, uint32_t value)
-{
-    core_buffer_append(out, (const char *)&value, sizeof(value));
-}
-
-typedef struct {
-    const uint8_t *data;
-    size_t length;
-    size_t at;
-    bool failed;
-} handoff_reader_t;
-
-static uint32_t
-read_handoff_u32(handoff_reader_t *r)
-{
-    uint32_t value = 0;
-    if (r->failed || r->length - r->at < sizeof(value)) {
-        r->failed = true;
-        return 0;
-    }
-    memcpy(&value, r->data + r->at, sizeof(value));
-    r->at += sizeof(value);
-    return value;
-}
-
-static bool
-write_check_handoff(const core_diagnostics_t *errors)
-{
-    core_buffer_t out = {0};
-    put_handoff_u32(&out, (uint32_t)core_diagnostics_count(errors));
-    for (size_t i = 0; i < core_diagnostics_count(errors); i++)
-        core_diagnostic_encode(&out, core_diagnostics_at(errors, i));
-    core_string_t root = core_os_temp_root();
-    core_buffer_t stem = {0};
-    core_buffer_append_string(&stem, root);
-    core_buffer_puts(&stem, "/n00bb-check-");
-    core_free(root.data);
-    core_string_t made = {};
-    int fd = core_os_make_unique_file(core_buffer_string(&stem), &made);
-    core_buffer_release(&stem);
-    bool ok = fd >= 0 && core_os_write_all(fd, out.data, out.byte_len);
-    if (fd >= 0) core_os_close(fd);
-    if (ok) n00bb_handoff_set(&n00bb_handoff()->check_diagnostics, made);
-    if (!ok && fd >= 0) core_os_remove_file(made);
-    core_free(made.data);
-    core_buffer_release(&out);
-    return ok;
-}
-
-static bool
-merge_check_handoff(core_diagnostics_t *into)
-{
-    n00bb_handoff_t *handoff = n00bb_handoff();
-    core_string_t file = handoff->check_diagnostics;
-    if (!file.u8_bytes) return false;
-    handoff->check_diagnostics = (core_string_t){};
-    n00bb_handoff_pass();
-    char *bytes = nullptr;
-    size_t length = 0;
-    if (!core_os_read_file(file, &bytes, &length)) length = 0;
-    core_os_remove_file(file);
-    core_free(file.data);
-    handoff_reader_t r = {.data = (const uint8_t *)bytes, .length = length};
-    uint32_t count = read_handoff_u32(&r);
-    bool merged = false;
-    for (uint32_t i = 0; !r.failed && i < count; i++) {
-        core_diagnostic_t item = {0};
-        if (!core_diagnostic_decode(r.data, r.length, &r.at, &item)) {
-            r.failed = true;
-            break;
-        }
-        if (!already_reported(into, &item)) {
-            core_diagnostics_append(into, &item);
-            merged = merged || diagnostic_is_error(&item);
-        }
-        core_diagnostic_release(&item);
-    }
-    core_free(bytes);
-    return merged;
-}
-
-static bool
-finish_check_comptime_phase(char **argv, core_string_t argv0,
-                            const core_diagnostics_t *diagnostics,
-                            n00bb_diagnostic_filter_t *filter)
-{
-    core_diagnostics_t *errors = core_diagnostics_new();
-    for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++)
-        if (diagnostic_is_error(core_diagnostics_at(diagnostics, i)))
-            core_diagnostics_append(errors,
-                                    core_diagnostics_at(diagnostics, i));
-    bool failed = core_diagnostics_count(errors) != 0;
-    bool handed_off = failed && write_check_handoff(errors);
-    if (failed && !handed_off) print_counted_diagnostics(errors, filter);
-    core_diagnostics_free(errors);
-    if (failed && !handed_off) return true;
-    core_string_t compiler = core_os_executable_path(argv0);
-    n00bb_handoff()->check_runtime_phase = true;
-    if (compiler.data) exec_compiler(compiler, argv);
-    core_free(compiler.data);
-    return false;
 }
 
 static char **
@@ -4627,360 +4279,6 @@ check_each_input(int argc, char **argv, core_string_t argv0,
     return worst;
 }
 
-static int
-build_time_log(void)
-{
-    return core_os_temp_fd();
-}
-
-static void
-replay_build_time_log(int log_fd, bool *reported)
-{
-    if (log_fd < 0 || lseek(log_fd, 0, SEEK_SET) != 0) return;
-    core_buffer_t log = {0};
-    char chunk[4096];
-    ssize_t got;
-    while ((got = read(log_fd, chunk, sizeof(chunk))) > 0)
-        core_buffer_append(&log, chunk, (size_t)got);
-    if (log.byte_len) fwrite(log.data, 1, log.byte_len, stderr);
-    core_string_t text = core_buffer_string(&log);
-    count_replayed_headers(text);
-    *reported = core_string_find(text, CORE_STRING_STATIC("error:")) >= 0
-        || core_string_find(text, CORE_STRING_STATIC("error N00B")) >= 0
-        || core_string_find(text, CORE_STRING_STATIC("error IR-")) >= 0
-        || core_string_find(text, CORE_STRING_STATIC("error LANTERN-")) >= 0
-        || core_string_find(text, CORE_STRING_STATIC("internal compiler error"))
-               >= 0;
-    core_buffer_release(&log);
-}
-
-static char **
-build_time_arguments(int argc, char **argv, char *compiler,
-                     char *native_executable, bool literal, size_t *count_out)
-{
-    char **arguments = calloc((size_t)argc + 6, sizeof(*arguments));
-    if (!arguments) return nullptr;
-    size_t count = 0;
-    arguments[count++] = compiler;
-    arguments[count++] = "build";
-    for (int i = 1; i < argc; i++) {
-        core_string_t argument = core_string_from_cstr(argv[i]);
-        bool output = core_string_eq(argument, CORE_STRING_STATIC("--output"))
-            || core_string_eq(argument, CORE_STRING_STATIC("-o"))
-            || core_string_eq(argument,
-                              CORE_STRING_STATIC("--emit-interface"))
-            || core_string_eq(argument, CORE_STRING_STATIC("--effects-of"));
-        bool dropped = (i == 1
-                && (core_string_eq(argument, CORE_STRING_STATIC("build"))
-                    || core_string_eq(argument, CORE_STRING_STATIC("lower"))
-                    || core_string_eq(argument, CORE_STRING_STATIC("check"))
-                    || core_string_eq(argument,
-                                      CORE_STRING_STATIC("library"))
-                    || core_string_eq(argument,
-                                      CORE_STRING_STATIC("compile"))))
-            || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"))
-            || core_string_starts_with(argument,
-                                       CORE_STRING_STATIC("--effects-of="));
-        core_free(argument.data);
-        if (output) {
-            i++;
-            continue;
-        }
-        if (dropped) continue;
-        arguments[count++] = argv[i];
-    }
-    arguments[count++] = "--build-time";
-    if (literal) arguments[count++] = "--literal-stage";
-    arguments[count++] = "--output";
-    arguments[count++] = native_executable;
-    *count_out = count;
-    return arguments;
-}
-
-static bool
-compile_build_time_program(int argc, char **argv, core_string_t argv0,
-                           core_string_t executable, bool literal,
-                           bool *reported)
-{
-    core_string_t compiler_path = core_os_executable_path(argv0);
-    char *compiler = core_string_to_cstr(compiler_path);
-    core_free(compiler_path.data);
-    char *native_executable = core_string_to_cstr(executable);
-    size_t count = 0;
-    char **arguments = compiler && native_executable
-        ? build_time_arguments(argc, argv, compiler, native_executable,
-                               literal, &count)
-        : nullptr;
-    bool ok = arguments != nullptr;
-    int log_fd = ok ? build_time_log() : -1;
-    core_process_redirect_t redirects[2] = {{1, log_fd}, {2, log_fd}};
-    core_process_spec_t spec = {
-        .arguments = arguments, .redirects = redirects, .redirect_count = 2,
-    };
-    core_process_t child;
-    ok = ok && log_fd >= 0 && !core_process_start(&spec, &child)
-        && succeeded(child);
-    *reported = false;
-    if (!ok) replay_build_time_log(log_fd, reported);
-    if (log_fd >= 0) close(log_fd);
-    free(arguments);
-    core_free(native_executable);
-    core_free(compiler);
-    return ok;
-}
-
-static bool
-run_build_time_program(core_string_t executable, int capture_fd,
-                       core_diagnostics_t *diagnostics)
-{
-    char *native = core_string_to_cstr(executable);
-    if (!native) return build_time_run_status(diagnostics, (core_process_status_t){}, false);
-    char *arguments[] = {native, nullptr};
-    core_process_redirect_t redirects[1] = {{3, capture_fd}};
-    core_process_spec_t spec = {
-        .arguments = arguments, .redirects = redirects, .redirect_count = 1,
-    };
-    core_process_t child;
-    int spawn_error = core_process_start(&spec, &child);
-    core_free(native);
-    if (spawn_error) {
-        errno = spawn_error;
-        return build_time_run_status(diagnostics, (core_process_status_t){},
-                                     false);
-    }
-    core_process_status_t status = {0};
-    if (!core_process_wait(child, &status))
-        return build_time_failure(diagnostics,
-                                  N00B_TEXT_PHRASE_COULD_NOT_WAIT_FOR_THE);
-    if (status.exited && status.code == 0) return true;
-    return build_time_run_status(diagnostics, status, true);
-}
-
-static bool
-read_capture(int capture_fd, bool full)
-{
-    core_buffer_t capture = {0};
-    char chunk[65536];
-    bool ok = lseek(capture_fd, 0, SEEK_SET) == 0;
-    ssize_t got;
-    while (ok && (got = read(capture_fd, chunk, sizeof(chunk))) > 0)
-        core_buffer_append(&capture, chunk, (size_t)got);
-    if (ok) n00bb_set_baked_capture((const uint8_t *)capture.data,
-                                    capture.byte_len, full);
-    core_buffer_release(&capture);
-    return ok;
-}
-
-static bool
-run_build_time_stage(int argc, char **argv, core_string_t argv0, bool literal,
-                     core_diagnostics_t *diagnostics, bool *reported)
-{
-    n00bb_handoff_t *handoff = n00bb_handoff();
-    if (handoff->capture_fd >= 0) {
-        build_time_capture = (int)handoff->capture_fd;
-        build_time_capture_full = handoff->capture_full;
-        handoff->capture_fd = -1;
-        n00bb_handoff_pass();
-        return read_capture(build_time_capture, build_time_capture_full)
-            || build_time_failure(diagnostics,
-                N00B_TEXT_PHRASE_COULD_NOT_READ_THE_VALUES);
-    }
-    core_string_t root = core_os_temp_root();
-    core_buffer_t stem = {0};
-    core_buffer_append_string(&stem, root);
-    core_buffer_puts(&stem, "/n00bb-build-time-");
-    core_free(root.data);
-    core_string_t executable_path = {};
-    int executable_fd = core_os_make_unique_file(core_buffer_string(&stem),
-                                                 &executable_path);
-    core_buffer_release(&stem);
-    if (executable_fd < 0)
-        return build_time_failure(diagnostics,
-            N00B_TEXT_PHRASE_COULD_NOT_CREATE_A_TEMPORARY);
-    close(executable_fd);
-    char *executable = core_string_to_cstr(executable_path);
-    int capture_fd = core_os_temp_fd();
-    bool ok = capture_fd >= 0 && executable;
-    if (!ok) build_time_failure(diagnostics,
-        N00B_TEXT_PHRASE_COULD_NOT_CREATE_A_TEMPORARY_2);
-    bool child_reported = false;
-    if (ok && !compile_build_time_program(argc, argv, argv0,
-            executable_path, literal, &child_reported)) {
-        *reported = child_reported;
-        ok = child_reported ? false : build_time_unreported(diagnostics);
-    }
-    struct stat program = {0};
-    bool needed = ok && !stat(executable, &program) && program.st_size;
-    if (ok && needed
-        && !run_build_time_program(executable_path, capture_fd, diagnostics))
-        ok = false;
-    if (ok && !read_capture(capture_fd, !literal))
-        ok = build_time_failure(diagnostics,
-            N00B_TEXT_PHRASE_COULD_NOT_READ_THE_VALUES);
-    if (ok) {
-        build_time_capture = capture_fd;
-        build_time_capture_full = !literal;
-    }
-    else if (capture_fd >= 0) close(capture_fd);
-    n00bb_remove_executable(executable_path);
-    core_free(executable);
-    core_free(executable_path.data);
-    return ok;
-}
-
-static bool
-build_time_needs_own_front_end(const n00bb_link_analysis_t *analysis)
-{
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        if (!state || state->build_time_use.has_location
-            || state->interface_module) return true;
-    }
-    return false;
-}
-
-static bool
-build_time_work_possible(const n00bb_link_analysis_t *analysis)
-{
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        if (!state || state->build_time_use.has_location) return true;
-        if (state->interface_module) continue;
-        if (state->literal_site_nodes.len) return true;
-        parse_scope_t *scope = module_scope(state);
-        for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope
-                                               : nullptr;
-             symbol; symbol = symbol->next_in_scope)
-            if (symbol->kind == PARSE_SYM_VARIABLE
-                && symbol->mutability == PARSE_SYM_CONST
-                && !n00bb_const_has_static_value(analysis->grammar,
-                       analysis->units.data[i], symbol)) return true;
-    }
-    return false;
-}
-
-static bool
-load_build_time_capture(n00bb_link_analysis_t *analysis,
-                        core_diagnostics_t *diagnostics)
-{
-    return n00bb_baked_graph_load(analysis)
-        || build_time_failure(diagnostics,
-            N00B_TEXT_PHRASE_COULD_NOT_READ_THE_VALUES);
-}
-
-static bool
-spawn_build_time_stage(int argc, char **argv, core_string_t argv0,
-                       n00bb_link_analysis_t *analysis,
-                       core_diagnostics_t *diagnostics, bool *reported)
-{
-    return run_build_time_stage(argc, argv, argv0, false, diagnostics,
-                                reported)
-        && load_build_time_capture(analysis, diagnostics);
-}
-
-static bool
-fork_build_time_stage(int argc, char **argv, core_string_t argv0,
-                      parse_cmdr_t *cli, parse_cmdr_result_t **args,
-                      core_link_unit_t *link,
-                      n00bb_link_analysis_t *analysis,
-                      core_diagnostics_t *diagnostics, bool *reported)
-{
-    *reported = false;
-#ifdef _WIN32
-    (void)cli;
-    (void)args;
-    (void)link;
-    return spawn_build_time_stage(argc, argv, argv0, analysis, diagnostics,
-                                  reported);
-#else
-    if (build_time_needs_own_front_end(analysis))
-        return spawn_build_time_stage(argc, argv, argv0, analysis,
-                                      diagnostics, reported);
-    static const char executable_template[] = "/tmp/n00bb-build-time-XXXXXX";
-    size_t executable_length = sizeof(executable_template) - 1;
-    char *executable = core_strndup(executable_template, executable_length);
-    int executable_fd = executable ? mkstemp(executable) : -1;
-    if (executable_fd < 0) {
-        core_free(executable);
-        return build_time_failure(diagnostics,
-            N00B_TEXT_PHRASE_COULD_NOT_CREATE_A_TEMPORARY);
-    }
-    close(executable_fd);
-    char capture_path[] = "/tmp/n00bb-build-time-capture-XXXXXX";
-    int capture_fd = mkstemp(capture_path);
-    if (capture_fd >= 0) unlink(capture_path);
-    int log_fd = build_time_log();
-    core_string_t compiler_path = core_os_executable_path(argv0);
-    char *compiler = core_string_to_cstr(compiler_path);
-    core_free(compiler_path.data);
-    size_t count = 0;
-    char **arguments = compiler
-        ? build_time_arguments(argc, argv, compiler, executable, false,
-                               &count)
-        : nullptr;
-    pid_t pid = -1;
-    if (capture_fd >= 0 && log_fd >= 0 && arguments) {
-        fflush(stdout);
-        fflush(stderr);
-        pid = fork();
-    }
-    if (pid == 0) {
-        dup2(log_fd, STDOUT_FILENO);
-        dup2(log_fd, STDERR_FILENO);
-        close(log_fd);
-        close(capture_fd);
-        forked_build_time = true;
-        n00bb_set_build_time(true);
-        n00bb_native_root_hide_hosted(true);
-        parse_cmdr_result_t *build_args = parse_cmdr_parse(cli,
-            (int)count - 1, (const char **)arguments + 1);
-        if (!parse_cmdr_result_ok(build_args)
-            || !core_link_unit_invalidate_stage(link,
-                   N00BB_LINK_STAGE_CONTRIBUTIONS)
-            || !core_link_unit_run_stage(link,
-                   N00BB_LINK_STAGE_CONTRIBUTIONS)
-            || core_link_unit_has_fatal_diagnostics(link))
-            _exit(FORKED_BUILD_TIME_FALLBACK);
-        *args = build_args;
-        return true;
-    }
-    free(arguments);
-    core_free(compiler);
-    int status = 0;
-    bool exited = pid > 0 && waitpid(pid, &status, 0) == pid
-        && WIFEXITED(status);
-    bool fallback = pid < 0
-        || (exited && WEXITSTATUS(status) == FORKED_BUILD_TIME_FALLBACK);
-    bool ok = !fallback && exited && WEXITSTATUS(status) == 0;
-    if (!fallback && !ok) {
-        replay_build_time_log(log_fd, reported);
-        if (!*reported) build_time_unreported(diagnostics);
-    }
-    if (log_fd >= 0) close(log_fd);
-    core_string_t executable_text = core_string_borrow(executable,
-                                                       executable_length);
-    struct stat program = {0};
-    bool needed = ok && !stat(executable, &program) && program.st_size;
-    if (ok && needed
-        && !run_build_time_program(executable_text, capture_fd, diagnostics))
-        ok = false;
-    if (ok && needed && !read_capture(capture_fd, true))
-        ok = build_time_failure(diagnostics,
-            N00B_TEXT_PHRASE_COULD_NOT_READ_THE_VALUES);
-    if (ok && needed) {
-        build_time_capture = capture_fd;
-        build_time_capture_full = true;
-    }
-    else if (capture_fd >= 0) close(capture_fd);
-    n00bb_remove_executable(core_string_borrow(executable, executable_length));
-    core_free(executable);
-    if (fallback)
-        return spawn_build_time_stage(argc, argv, argv0, analysis,
-                                      diagnostics, reported);
-    return ok && load_build_time_capture(analysis, diagnostics);
-#endif
-}
-
 static bool
 locate_cached_module(void *context, core_string_t module, core_string_t *path)
 {
@@ -4996,9 +4294,30 @@ locate_cached_module(void *context, core_string_t module, core_string_t *path)
     return found;
 }
 
+static void
+library_module_list(const th_env *const *interfaces, size_t count,
+                    core_buffer_t *out)
+{
+    for (size_t e = 0; e < count; e++)
+        for (size_t i = 0; i < th_env_metadata_count(interfaces[e]); i++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(interfaces[e], i, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || !metadata.owner_name.u8_bytes
+                || (!core_string_eq(metadata.key,
+                        CORE_STRING_STATIC("n00b.package-interface"))
+                    && !core_string_eq(metadata.key,
+                        CORE_STRING_STATIC("n00b.module-interface"))))
+                continue;
+            if (out->byte_len) core_buffer_putc(out, ',');
+            core_buffer_append_string(out, metadata.owner_name);
+        }
+}
+
 static n00bb_cache_t *
 open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
-                  ir_ctx_t *ir_context)
+                  ir_ctx_t *ir_context, const th_env *const *interfaces,
+                  size_t interface_count)
 {
     core_target_desc_t target;
     core_string_t input = parse_cmdr_arg_str(args, 0);
@@ -5011,8 +4330,12 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
     n00bb_cache_t *cache = nullptr;
     if (located) {
         core_string_t root = core_source_file_path(&source);
+        core_buffer_t libraries = {0};
+        library_module_list(interfaces, interface_count, &libraries);
         cache = n00bb_cache_open(root, args, target.triple, ir_context,
-                                 locate_cached_module, resolver);
+                                 locate_cached_module, resolver,
+                                 core_buffer_string(&libraries));
+        core_buffer_release(&libraries);
         core_source_file_release(&source);
         core_module_spec_release(&module);
     }
@@ -5046,8 +4369,8 @@ verify_analyses(n00bb_link_analysis_t *analysis,
     for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
         ir_func_t *function = analysis->emitted_functions.data[i];
         if (!function || !function->n_blocks) continue;
-        ir_memssa_t *memssa = ir_func_memssa(function);
-        if (!memssa || ir_memssa_verify(memssa)) continue;
+        ir_pdg_memory_t *memssa = ir_pdg_memory(ir_func_pdg(function));
+        if (!memssa || ir_pdg_memory_verify(memssa)) continue;
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
             "verifying analyses", "memory SSA for `%.*s` failed verification",
             TEXT_ARGS(function->name));
@@ -5081,12 +4404,83 @@ uncheck_wide_narrowing(n00bb_link_analysis_t *analysis)
     }
 }
 
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    core_dict_t            found;
+    n00bb_comparison_t     comparison;
+} trait_binder_state_t;
+
+static parse_sym_entry_t *const *
+comparison_members(void *context, th_type *type)
+{
+    trait_binder_state_t *state = context;
+    return n00bb_comparison_members(state->analysis, &state->comparison,
+                                    type);
+}
+
+static bool
+flagset_type(void *context, th_type *type)
+{
+    trait_binder_state_t *state = context;
+    return n00bb_declared_flagset(state->analysis, type);
+}
+
+static ir_func_t *
+trait_implementation(void *context, th_ctx *types, th_type *receiver,
+                     core_string_t trait, core_string_t method)
+{
+    trait_binder_state_t *state = context;
+    n00bb_link_analysis_t *analysis = state->analysis;
+    th_env_method_t chosen = {0};
+    th_env_method_status_t status = trait.data
+        ? th_env_method_resolve(types, receiver, trait, method, &chosen)
+        : th_env_method_resolve_by_name(types, receiver, method, &chosen,
+                                        nullptr);
+    if (status != TH_ENV_METHOD_FOUND || !chosen.contract) return nullptr;
+    uint64_t wanted = th_hash(types,
+                              th_func_collect_rest(types, chosen.contract));
+    uint64_t parts[] = {
+        wanted, core_xxh3_64bits_raw(chosen.qualified_name.data,
+                                     chosen.qualified_name.u8_bytes),
+    };
+    uint64_t key = core_xxh3_64bits_raw(parts, sizeof(parts)) | 1;
+    ir_func_t *known = core_dict_get(&state->found,
+                                     (const void *)(uintptr_t)key, nullptr);
+    if (known) return known;
+    core_string_t root = n00bb_function_root(
+        n00bb_name_leaf(chosen.qualified_name));
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        ir_module_t *module = tu_state(unit)->ir_module;
+        if (!module || (!core_string_eq(ir_module_name(module), chosen.module)
+                && !core_string_eq(unit->module.identifier, chosen.module)))
+            continue;
+        for (size_t f = 0; f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            if (n00bb_names_function(root, function->name)
+                && th_hash(ir_module_types(module), function->type) == wanted) {
+                core_dict_put(&state->found, (const void *)(uintptr_t)key,
+                              function);
+                return function;
+            }
+        }
+    }
+    return nullptr;
+}
+
 static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
                    size_t seed_count, n00bb_specialization_failure_t *failure,
                    core_diagnostics_t *diagnostics)
 {
+    trait_binder_state_t binder_state = {.analysis = analysis};
+    core_dict_init(&binder_state.found, nullptr, nullptr);
+    n00bb_trait_binder_t binder = {
+        .implementation = trait_implementation,
+        .comparison = comparison_members, .flagset = flagset_type,
+        .context = &binder_state,
+    };
     core_list_t(n00bb_ir_func_ptr_t) callers =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
@@ -5098,9 +4492,16 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
                 seeds, seed_count, &analysis->specializations,
                 &analysis->specialization_requests,
-                &analysis->boxed_hooks, failure)
-            && build_reachable_functions(analysis, &analysis->units,
-                                         diagnostics);
+                &analysis->boxed_hooks, &binder, failure);
+        if (!ok && !failure->message.byte_len)
+            core_buffer_puts(&failure->message,
+                "a generic call could not be specialized");
+        bool reached = ok && build_reachable_functions(analysis,
+            &analysis->units, diagnostics);
+        if (ok && !reached && !failure->message.byte_len)
+            core_buffer_puts(&failure->message,
+                "reachable functions could not be rebuilt after specializing");
+        ok = reached;
         seed_count = 0;
         for (size_t i = 0; i < callers.len; i++)
             core_dict_put(&visited, callers.data[i], callers.data[i]);
@@ -5112,6 +4513,7 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         }
     }
     core_dict_free(&visited);
+    core_dict_free(&binder_state.found);
     core_list_free(callers);
     return ok;
 }
@@ -5129,6 +4531,77 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
     }
 }
 
+static core_string_t
+builtin_operator_spelling(core_string_t trait)
+{
+    for (size_t i = 0; i < n00bb_binary_operator_count; i++) {
+        if (core_string_eq(trait, n00bb_binary_operators[i].trait))
+            return n00bb_binary_operators[i].spelling;
+        if (core_string_eq(trait, n00bb_binary_operators[i].in_place_trait))
+            return n00bb_binary_operators[i].assign_spelling;
+    }
+    if (core_string_eq(trait, CORE_STRING_STATIC("Negate")))
+        return CORE_STRING_STATIC("-");
+    if (core_string_eq(trait, CORE_STRING_STATIC("Not")))
+        return CORE_STRING_STATIC("not");
+    return (core_string_t){0};
+}
+
+static bool
+report_boxed_operators(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
+        ir_func_t *function = analysis->emitted_functions.data[f];
+        core_translation_unit_t *unit = unit_for_ir_module(analysis,
+                                                           function->owner);
+        for (uint32_t b = 0; unit && b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                const ir_instr_t *in = function->blocks[b]->instrs[i];
+                core_string_t spelling = in->op == IR_OP_TRAIT_METHOD
+                        && in->n_operands >= 2
+                        && in->operands[0].kind == IR_OPD_NAME
+                    ? builtin_operator_spelling(in->operands[0].name)
+                    : (core_string_t){0};
+                if (!spelling.u8_bytes) continue;
+                n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                    N00B_DIAG_NOT_SUPPORTED_YET, n00bb_span_location(in->span),
+                    N00B_TEXT_NOT_SUPPORTED_YET_BOXED_OPERATOR,
+                    N00BB_ARGS(ARG_TEXT(spelling)));
+                ok = false;
+            }
+    }
+    return ok;
+}
+
+static bool
+check_post_specialization(n00bb_link_analysis_t *analysis)
+{
+    bool traits = check_trait_implementations(analysis);
+    bool callbacks = check_callback_bounds(analysis);
+    return traits && callbacks && !analysis->effect_checks_failed;
+}
+
+static bool
+specialize_quietly(n00bb_link_analysis_t *analysis,
+                   core_diagnostics_t *diagnostics)
+{
+    n00bb_specialization_failure_t failure = {0};
+    core_list_t(n00bb_specialization_seed_t) seeds =
+        core_list_new(n00bb_specialization_seed_t);
+    n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
+                      n00bb_source_unit_module, analysis, &seeds);
+    bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
+                                 diagnostics);
+    core_list_free(seeds);
+    core_buffer_release(&failure.message);
+    if (failure.missing_implementation) {
+        core_free(failure.after.data);
+        core_free(failure.trait.data);
+    }
+    return ok;
+}
+
 static bool
 specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                  core_diagnostics_t *diagnostics)
@@ -5139,8 +4612,14 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
                       n00bb_source_unit_module, analysis, &seeds);
     bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
-                                 diagnostics)
-        && (check_only || n00bb_rewrite_box_operations(analysis))
+                                 diagnostics);
+    if (ok && !check_only
+        && !(n00bb_recompute_summaries(analysis)
+             && check_post_specialization(analysis))) {
+        core_list_free(seeds);
+        return false;
+    }
+    ok = ok && (check_only || n00bb_rewrite_box_operations(analysis))
         && (check_only
             || specialize_emitted(analysis, nullptr, 0, &failure,
                                   diagnostics));
@@ -5170,6 +4649,52 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
         n00bb_report_help(failure_diagnostics,
                           N00B_TEXT_MOVE_THE_WHOLE_VARIABLE, N00BB_NO_ARGS);
     }
+    else if (!ok && failure.located && failure.mismatched_operands) {
+        n00bb_report(failure_diagnostics, site,
+            N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION, failure_location,
+            N00B_TEXT_GENERIC_MISMATCHED_OPERANDS,
+            N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
+                       ARG_TEXT(failure.after), ARG_TEXT(failure.before),
+                       ARG_TEXT(failure.other)));
+        core_translation_unit_t *user = nullptr;
+        for (size_t i = 0; failure.site_located && !user
+             && i < analysis->units.len; i++)
+            if (core_string_eq(analysis->units.data[i]->module.identifier,
+                               failure.site_module))
+                user = analysis->units.data[i];
+        if (user)
+            n00bb_report_secondary(failure_diagnostics, user,
+                n00bb_span_location(failure.site),
+                N00B_TEXT_USED_WITH_TYPES_HERE,
+                N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
+                           ARG_TEXT(failure.before),
+                           ARG_TEXT(failure.other)));
+        n00bb_report_help(failure_diagnostics,
+            N00B_TEXT_MATCH_THE_OPERAND_TYPES,
+            N00BB_ARGS(ARG_TEXT(failure.after)));
+    }
+    else if (!ok && failure.located && failure.missing_implementation) {
+        n00bb_report(failure_diagnostics, site,
+            N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION, failure_location,
+            N00B_TEXT_GENERIC_MISSING_IMPLEMENTATION,
+            N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
+                       ARG_TEXT(failure.after), ARG_TEXT(failure.before)));
+        core_translation_unit_t *user = nullptr;
+        for (size_t i = 0; failure.site_located && !user
+             && i < analysis->units.len; i++)
+            if (core_string_eq(analysis->units.data[i]->module.identifier,
+                               failure.site_module))
+                user = analysis->units.data[i];
+        if (user)
+            n00bb_report_secondary(failure_diagnostics, user,
+                n00bb_span_location(failure.site),
+                N00B_TEXT_USED_WITH_TYPE_HERE,
+                N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
+                           ARG_TEXT(failure.before)));
+        n00bb_report_help(failure_diagnostics,
+            N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
+            N00BB_ARGS(ARG_TEXT(failure.trait), ARG_TEXT(failure.before)));
+    }
     else if (!ok && failure.located)
         n00bb_report(failure_diagnostics, site,
             N00B_DIAG_GENERIC_SPECIALIZATION_FAILED, failure_location,
@@ -5186,6 +4711,10 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                              "specializing generic calls",
                              "specialization failed without a diagnostic");
     core_buffer_release(&failure.message);
+    if (failure.missing_implementation) {
+        core_free(failure.after.data);
+        core_free(failure.trait.data);
+    }
     return ok;
 }
 
@@ -5227,7 +4756,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_invocation_close(&invocation);
         return selected;
     }
-    parse_cmdr_t *cli = invocation.cli;
     parse_cmdr_result_t *args = invocation.parsed;
 
     closed_world_build = parse_cmdr_flag_present(args,
@@ -5302,7 +4830,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && core_string_eq(command, CORE_STRING_STATIC("lower")));
     collect_located_diagnostics = check_command;
     n00bb_cache_set_check_only(check_command);
-    n00bb_set_baked_values_opaque(check_command);
     bool build_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("build"));
     bool library_command = !show_ffi
@@ -5315,17 +4842,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         ? parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--emit-interface")) : (core_string_t){0};
     bool options_valid = true;
-    bool no_comptime = parse_cmdr_flag_present(args,
-        CORE_STRING_STATIC("--no-comptime"));
-    bool check_comptime = check_command && !no_comptime
-        && !n00bb_handoff()->check_runtime_phase;
-    bool build_time = check_comptime || parse_cmdr_flag_present(args,
-        CORE_STRING_STATIC("--build-time"));
-    n00bb_set_build_time(build_time);
-    n00bb_set_literal_stage(parse_cmdr_flag_present(args,
-        CORE_STRING_STATIC("--literal-stage")));
-    n00bb_native_root_hide_hosted(build_time);
-    if (build_command && !build_time && input_count > 1) {
+    if (build_command && input_count > 1) {
         core_list_t(core_string_t) extra = core_list_new(core_string_t);
         for (int32_t i = 1; i < input_count; i++)
             core_list_push(extra, parse_cmdr_arg_str(args, i));
@@ -5338,20 +4855,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         core_list_free(extra);
         options_valid = false;
     }
-    bool build_time_reported = false;
-    n00bb_phase_order_t phase_order = n00bb_handoff()->phase_order;
-    bool full_first = phase_order == N00BB_PHASE_ORDER_BUILD_TIME_FIRST;
-    bool literal_first = phase_order == N00BB_PHASE_ORDER_LITERAL_FIRST;
-    bool inherited_capture = n00bb_handoff()->capture_fd >= 0;
-    bool deferred_build_time = build_command && !build_time && !no_comptime
-        && !inherited_capture && !full_first && !literal_first;
-    bool upfront_build_time = (build_command || lower_command
-            || library_command || compile_command)
-        && (inherited_capture || full_first || literal_first);
-    if (options_valid && upfront_build_time && !build_time
-        && !run_build_time_stage(argc, argv, argv0, literal_first,
-                                 cli_diagnostics, &build_time_reported))
-        options_valid = false;
     int32_t native_root_count = parse_cmdr_flag_value_count(args,
         CORE_STRING_STATIC("--native-root"));
     core_string_t *native_roots = native_root_count
@@ -5408,6 +4911,16 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                 N00BB_ARGS(ARG_TEXT(path), ARG_TEXT(reason)));
             options_valid = false;
         }
+        else if (build_command
+                 && !interface_has_library_ir(linked_interfaces[i])) {
+            n00bb_report(cli_diagnostics, nullptr,
+                N00B_DIAG_INTERFACE_HAS_NO_CODE, (core_diag_location_t){},
+                N00B_TEXT_INTERFACE_HAS_NO_CODE,
+                N00BB_ARGS(ARG_TEXT(path)));
+            n00bb_report_help(cli_diagnostics,
+                N00B_TEXT_BUILD_FROM_LIBRARY_SOURCES, N00BB_NO_ARGS);
+            options_valid = false;
+        }
     }
     bool show_tokens = lex_command || parse_cmdr_flag_present(
         args, CORE_STRING_STATIC("--dump-tokens"));
@@ -5459,7 +4972,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             N00BB_KEY_SYNTAX_WARNINGS),
         .release_mode = n00bb_setting_bool(
             N00BB_KEY_BUILD_RELEASE),
-        .build_time = build_time,
         .module_modifiers = module_modifiers,
         .module_modifier_count = 1,
         .module_literal_context = &generators,
@@ -5472,8 +4984,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
     n00bb_cache_t *cache = (build_command || check_command) && scheduled
-        && options_valid && input_count == 1 && !interface_count
-        ? open_object_cache(resolver, args, ir_context) : nullptr;
+        && options_valid && input_count == 1
+        ? open_object_cache(resolver, args, ir_context, linked_interfaces,
+                            (size_t)interface_count)
+        : nullptr;
     size_t linked_count = (size_t)interface_count
         + n00bb_cache_interface_count(cache);
     if (linked_count > (size_t)interface_count) {
@@ -5549,7 +5063,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         !locate_only && !lex_command, show_tree,
         needs_packages,
         show_preprocessed, show_symbols,
-        lower_command || build_command || library_command || compile_command,
+        lower_command || build_command || library_command || compile_command
+            || normalize_fmt,
         library_command || compile_command,
         build_command,
         native_roots, (size_t)native_root_count,
@@ -5559,7 +5074,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         &link_analysis);
     if (link_analysis) link_analysis->cache = cache;
     bool optimistic_cache = n00bb_cache_optimistic(cache);
-    if (optimistic_cache && !build_time_reported) {
+    if (optimistic_cache) {
         bool assumptions = n00bb_cache_assumptions_hold(cache, link,
                                                         link_analysis);
         core_string_t reason = !located
@@ -5578,14 +5093,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);
         core_buffer_release(&stale);
     }
-    if (located && deferred_build_time && link_analysis
-        && build_time_work_possible(link_analysis))
-    {
-        located = fork_build_time_stage(argc, argv, argv0, cli,
-            &invocation.parsed, link, link_analysis, cli_diagnostics,
-            &build_time_reported);
-        args = invocation.parsed;
-    }
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
@@ -5596,7 +5103,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             N00BB_ARGS(ARG_TEXT(requested)));
         located = false;
     }
-    if (located && fmt_command)
+    if (located && fmt_command && !normalize_fmt)
         located = n00bb_format_units(grammar, queue, &requests, args);
     if (profile_compile) {
         double now = n00bb_profile_seconds();
@@ -5606,13 +5113,23 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && link_analysis) {
         link_analysis->dump_ranges = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-ranges"));
-        link_analysis->effects_of = build_time ? (core_string_t){0}
-            : parse_cmdr_flag_str(args, CORE_STRING_STATIC("--effects-of"));
+        link_analysis->effects_of = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-of"));
         link_analysis->effects_json = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--effects-json"));
+        link_analysis->effects_explain = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--effects-explain"));
+        link_analysis->effects_query = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-query"));
+        link_analysis->effects_in = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-in"));
+        link_analysis->effects_not_in = parse_cmdr_flag_str(args,
+            CORE_STRING_STATIC("--effects-not-in"));
+        link_analysis->effects_why = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--effects-why"));
     }
     if (located && (lower_command || build_command || compile_command
-                    || library_command))
+                    || library_command || normalize_fmt))
         located = lower_requests_to_ir(grammar, link,
             link_analysis, ir_context, cli_diagnostics,
             (!build_command
@@ -5632,36 +5149,17 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
-    if (link_analysis && !build_time && !check_command && no_comptime
-        && (link_analysis->build_time_needed
-            || link_analysis->literal_needed)) {
-        n00bb_report(cli_diagnostics, nullptr, N00B_DIAG_COMPTIME_DISABLED,
-            (core_diag_location_t){}, N00B_TEXT_THIS_PROGRAM_COMPUTES_VALUES_AT,
-            N00BB_NO_ARGS);
-        n00bb_report_help(cli_diagnostics, N00B_TEXT_BUILD_WITHOUT_NO_COMPTIME,
-            N00BB_NO_ARGS);
-        located = false;
-    }
-    else if (link_analysis && !build_time && !check_command
-        && (link_analysis->build_time_needed
-            || link_analysis->literal_needed)) {
-        restart_with_build_time(argv, argv0,
-                                !link_analysis->build_time_needed);
-        n00bb_internal_error(cli_diagnostics, nullptr,
-            (core_diag_location_t){}, "restarting for the build-time run",
-            "could not restart the compiler: %s",
-            strerror(errno ? errno : EIO));
-        located = false;
-    }
+    if (located && normalize_fmt)
+        located = n00bb_format_units(grammar, queue, &requests, args);
     if (located && cache && !check_command) {
         bool recorded = n00bb_cache_record_summaries(cache, link,
                                                      link_analysis);
-        if (optimistic_cache && !build_time_reported && !recorded) {
+        if (optimistic_cache && !recorded) {
             n00bb_cache_log_restart(CORE_STRING_STATIC(
                 "cached summary assumptions do not hold"));
             restart_with_strict_cache(argv, argv0);
         }
-        if (optimistic_cache && !build_time_reported
+        if (optimistic_cache
             && !n00bb_cache_summary_assumptions_hold(cache))
             restart_with_summaries(argv, argv0, cache);
     }
@@ -5682,7 +5180,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     }
     if (located && library_command && emit_interface && link_analysis) {
         th_env *interface_environment = link_analysis->interface_environment;
-        located = interface_environment
+        core_translation_unit_t *library_root = link
+            ? core_link_unit_root(link, 0) : nullptr;
+        located = interface_environment && library_root
+            && n00bb_emit_abi_artifacts(link, link_analysis,
+                   !preprocessor_options.release_mode, false)
+            && n00bb_register_library_abi(link, link_analysis)
+            && register_library_ir(link_analysis,
+                                   library_root->module.identifier)
             && th_env_freeze(interface_environment);
         if (!located)
             n00bb_internal_error(cli_diagnostics, nullptr,
@@ -5695,9 +5200,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         core_object_archive_error_t archive_error =
             CORE_OBJECT_ARCHIVE_OK;
         th_env *interface_environment = link_analysis
-            ? link_analysis->interface_environment : nullptr;
+            ? library_interface_environment(link_analysis) : nullptr;
         bool saved = interface_environment
             && th_env_save(interface_environment, path, 0, &archive_error);
+        th_env_free(interface_environment);
         if (!saved) {
             core_string_t reason =
                 core_object_archive_error_string(archive_error);
@@ -5711,33 +5217,36 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool abi_emitted = false;
     bool specialize = !parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--no-specialize"));
-    bool emit_program = located && build_command
-        && (n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME
-            || n00bb_build_time_run_needed(link_analysis));
-    if (located && emit_program && cache && build_time) {
-        core_buffer_t objectless = {0};
-        n00bb_cache_objectless_modules(cache, &objectless);
-        if (objectless.byte_len)
-            restart_excluding_cached(argv, argv0, &objectless);
-        core_buffer_release(&objectless);
-    }
+    bool emit_program = located && build_command;
     if (located && emit_program && cache)
         (void)n00bb_cache_snapshot(cache, link);
-    if (located && build_command && build_time && !emit_program && cache
-        && n00bb_cache_snapshot(cache, link))
-        (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (located && check_command && cache
+        && !link_analysis->effect_checks_failed
         && n00bb_cache_snapshot(cache, link))
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
-    if ((emit_program || (located && check_command)) && specialize)
+    if (!located && link_analysis && link_analysis->lowered_with_errors
+        && specialize && (build_command || check_command)
+        && specialize_quietly(link_analysis, cli_diagnostics)
+        && n00bb_recompute_summaries(link_analysis))
+        (void)check_post_specialization(link_analysis);
+    bool specializing = (emit_program || (located && check_command))
+        && specialize;
+    if (specializing)
         located = specialize_calls(link_analysis, !emit_program,
                                    cli_diagnostics);
+    else if (located && emit_program)
+        located = report_boxed_operators(link_analysis);
+    if (located && specializing) warn_dead_type_arms(link_analysis);
+    if (located && !emit_program && link_analysis)
+        located = (!specializing || n00bb_recompute_summaries(link_analysis))
+            && check_post_specialization(link_analysis);
     if (located && emit_program && specialize
         && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--report-specialization-gaps")))
         (void)report_specialization_gaps(link_analysis);
     if (located && emit_program && !specialize)
-        located = n00bb_rewrite_box_operations(link_analysis)
+        located = check_post_specialization(link_analysis)
+            && n00bb_rewrite_box_operations(link_analysis)
             && publish_declared_aggregate_layouts(link_analysis)
             && publish_interned_variant_layouts(link_analysis);
     if (located && emit_program && n00bb_setting_bool(
@@ -5745,7 +5254,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         uncheck_wide_narrowing(link_analysis);
     if (located && emit_program) {
         optimize_range_checks(link_analysis);
-        located = n00bb_recompute_summaries(link_analysis);
+        located = n00bb_recompute_summaries(link_analysis)
+            && !link_analysis->effect_checks_failed;
     }
     if (located && emit_program && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--verify-analyses")))
@@ -5812,6 +5322,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_native_inputs_t native_inputs = {
             .bitcode = shim_bitcode.data,
             .bitcode_count = shim_bitcode.len,
+            .exports = n00bb_ffi_has_exports(ffi),
             .archives = archives.data,
             .archive_count = archives.len,
             .libraries = libraries.data,
@@ -5823,7 +5334,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         };
         if (located)
             located = n00bb_build_executable(link, link_analysis, args,
-                !preprocessor_options.release_mode, native_cpu, argv0,
+                !preprocessor_options.release_mode, native_cpu,
                 &native_inputs, cli_diagnostics);
         for (size_t i = 0; i < shim_bitcode.len; i++)
             core_buffer_release(&shim_bitcode.data[i]);
@@ -5845,10 +5356,11 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             abi_emitted = located = n00bb_write_compile_abi_artifact(
                 link, args, cli_diagnostics);
     }
-    if (located && library_command && !emit_interface
+    if (located && library_command
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
-        located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, false);
+        if (!emit_interface)
+            located = n00bb_emit_abi_artifacts(link, link_analysis,
+                !preprocessor_options.release_mode, false);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);
@@ -5869,7 +5381,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
 
     bool diagnostics_deferred = lower_command || build_command
         || library_command || compile_command;
-    if (diagnostics_deferred && !build_time_reported) {
+    if (diagnostics_deferred) {
         if (link_analysis) {
             core_translation_unit_t *root = link_analysis->units.len
                 ? link_analysis->units.data[0] : nullptr;
@@ -5884,7 +5396,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                                    core_link_unit_diagnostics(link));
     }
     core_string_t late_retry = optimistic_cache && !located
-        && !build_time_reported
         ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
         : (core_string_t){0};
     core_buffer_t unloadable = {0};
@@ -5895,6 +5406,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         restart_excluding_cached(argv, argv0, &unloadable);
     }
     core_buffer_release(&unloadable);
+    core_buffer_t refreeze = {0};
+    n00bb_cache_refreeze_modules(cache, &refreeze);
+    if (refreeze.byte_len) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "comptime_start changes the state of cached modules"));
+        restart_excluding_cached(argv, argv0, &refreeze);
+    }
+    core_buffer_release(&refreeze);
 
     core_link_unit_free(link);
     th_env_free(environment);
@@ -5913,19 +5432,11 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_cache_log_restart(late_retry);
         restart_with_strict_cache(argv, argv0);
     }
-    if (!check_comptime && merge_check_handoff(cli_diagnostics))
-        located = false;
-    if (core_diagnostics_count(cli_diagnostics) || check_comptime) {
+    if (core_diagnostics_count(cli_diagnostics)) {
         n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
-        bool continued = check_comptime
-            && finish_check_comptime_phase(argv, argv0, cli_diagnostics,
-                                           diagnostic_filter);
-        if (continued) located = false;
-        else
-            print_counted_diagnostics(cli_diagnostics, diagnostic_filter);
+        print_counted_diagnostics(cli_diagnostics, diagnostic_filter);
     }
-    if (!located && build_command && !build_time && !forked_build_time
-        && input_count >= 1) {
+    if (!located && build_command && input_count >= 1) {
         core_string_t input = parse_cmdr_arg_str(args, 0);
         print_build_summary(input.data ? input : CORE_STRING_STATIC(""));
     }

@@ -29,6 +29,7 @@ struct writ_span_t @size(32) @align(8) {
     column: u32 @28
 }
 type writ_severity_t = u32
+type writ_effects_t = u32
 struct core_string_t @size(16) @align(8) {
     data: ?c_char @0
     u8_bytes: usize @8
@@ -233,6 +234,7 @@ struct writ_fn_view_t @size(216) @align(8) {
     thread: writ_thread_kind_t @172
     declared_at: writ_span_t @176
     keywords_slot: u32 @208
+    effects: writ_effects_t @212
 }
 struct writ_union_arm_view_t @size(72) @align(8) {
     struct_size: usize @0
@@ -400,12 +402,27 @@ struct writ_gen_n00b_request_t @size(64) @align(8) {
     shim_prefix: writ_str_t @32
     type_namespace: writ_str_t @48
 }
-struct writ_n00b_extern_t @size(88) @align(8) {
+enum writ_n00b_type_kind_t : c_uint {
+    WRIT_N00B_TYPE_NAMED = 0,
+    WRIT_N00B_TYPE_REF = 1,
+    WRIT_N00B_TYPE_ARRAY = 2,
+    WRIT_N00B_TYPE_LIST = 3,
+    WRIT_N00B_TYPE_OPTION = 4,
+}
+struct writ_n00b_type_t @size(32) @align(8) {
+    kind: writ_n00b_type_kind_t @0
+    name: writ_str_t @8
+    item: ?writ_n00b_type_t @24
+}
+struct writ_n00b_extern_t @size(96) @align(8) {
     name: writ_str_t @0
     symbol: writ_str_t @16
-    signature: writ_str_t @32
-    pure: bool @48
-    declared_at: writ_span_t @56
+    params: ??writ_n00b_type_t @32
+    params_count: usize @40
+    result: ?writ_n00b_type_t @48
+    pure: bool @56
+    effects: writ_effects_t @60
+    declared_at: writ_span_t @64
 }
 struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0
@@ -453,6 +470,14 @@ const WRIT_SOURCE_EMBEDDED: c_int = 4
 const WRIT_ERROR: c_int = 0
 const WRIT_WARNING: c_int = 1
 const WRIT_NOTE: c_int = 2
+const WRIT_EFFECTS_DECLARED: c_int = 1
+const WRIT_EFFECTS_ALLOC: c_int = 2
+const WRIT_EFFECTS_BLOCKING: c_int = 4
+const WRIT_EFFECTS_NORETURN: c_int = 8
+const WRIT_EFFECTS_INPUT: c_int = 16
+const WRIT_EFFECTS_OUTPUT: c_int = 32
+const WRIT_EFFECTS_CALLBACKS: c_int = 64
+const WRIT_EFFECTS_OTHER: c_int = 128
 const WRIT_TYPE_VOID: c_int = 0
 const WRIT_TYPE_INT: c_int = 1
 const WRIT_TYPE_FLOAT: c_int = 2

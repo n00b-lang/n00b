@@ -593,6 +593,18 @@ add_cached_file(refresh_context_t *refresh, size_t root_index,
     return true;
 }
 
+static uint64_t
+cache_identity(core_string_t root, core_string_t group)
+{
+    core_buffer_t text = {0};
+    core_buffer_append_string(&text, root);
+    core_buffer_append(&text, "\0", 1);
+    core_buffer_append_string(&text, group);
+    uint64_t hash = core_xxh3_64bits_raw(text.data, text.byte_len);
+    core_buffer_release(&text);
+    return hash;
+}
+
 static bool
 load_package_cache(refresh_context_t *refresh, size_t root_index,
                    core_string_t group, bool recursive,
@@ -615,8 +627,8 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
     uint32_t file_count = core_le_load_u32(raw + 36);
     ok = !memcmp(raw, "LNSINV2", 8)
         && content_hash == core_xxh3_64bits_raw(raw + 40, size - 40)
-        && path_hash == core_xxh3_64bits_raw(group_path.data,
-                                             group_path.u8_bytes)
+        && path_hash == cache_identity(
+               inventory->roots.data[root_index].path, group)
         && filter_revision == inventory->filter_revision
         && directory_count <= 100000 && file_count <= 100000;
     inventory_reader_t reader = {.data = raw, .size = size, .offset = 40};
@@ -703,8 +715,8 @@ write_atomic_cache_file(core_string_t directory, core_string_t name,
 }
 
 static bool
-write_package_cache(refresh_context_t *refresh,
-                    core_string_t group_path,
+write_package_cache(refresh_context_t *refresh, size_t root_index,
+                    core_string_t group, core_string_t group_path,
                     core_list_t(inventory_directory_t) *directories,
                     size_t first_entry)
 {
@@ -734,7 +746,7 @@ write_package_cache(refresh_context_t *refresh,
     core_buffer_append(&buffer, "LNSINV2", 8);
     cache_put_u64(&buffer, 0);
     cache_put_u64(&buffer,
-        core_xxh3_64bits_raw(group_path.data, group_path.u8_bytes));
+        cache_identity(inventory->roots.data[root_index].path, group));
     cache_put_u64(&buffer, inventory->filter_revision);
     cache_put_u32(&buffer, (uint32_t)directories->len);
     cache_put_u32(&buffer, (uint32_t)(refresh->entries.len - first_entry));
@@ -805,7 +817,7 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
         && core_os_stat(path, true, &existing) == CORE_OS_FOUND;
     core_free(path.data);
     if (ok && (refresh->entries.len > first_entry || had_cache))
-        (void)write_package_cache(refresh, group_path,
+        (void)write_package_cache(refresh, root_index, group, group_path,
                                   &directories, first_entry);
     release_directories(&directories);
     core_free(group_path.data);

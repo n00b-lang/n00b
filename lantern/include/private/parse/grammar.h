@@ -56,7 +56,6 @@ struct parse_rule_t {
     bool                                  penalty_rule;
     bool                                  first_has_any;
     bool                                  nullable;
-    bool                                  identity_unit;
     void                                 *thunk;
 };
 
@@ -82,7 +81,6 @@ struct parse_grammar_t {
     bool                           hide_groups;
     int                            suspend_penalty_hiding;
     bool                           suspend_group_hiding;
-    parse_walk_action_t             default_action;
     void                          *tokenize_cb;
     const void                    *lex_spec;
     void                          *lex_compiled;

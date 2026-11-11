@@ -116,6 +116,7 @@ typedef struct {
     core_string_t            exponent;
     core_string_t            exponent_digits;
     core_string_t            sign;
+    const core_string_t     *sign_not_after;
     core_string_t            tok_int;
     core_string_t            tok_float;
     const scan_lex_suffix_t  *suffixes;

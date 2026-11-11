@@ -1,0 +1,46 @@
+record Used {
+    a: int
+    b: int
+    c: int
+}
+record Orphan {
+    z: int
+}
+object Box {
+    held: int
+    spare: int
+    unset: int
+    extra: int
+}
+enum Color {
+    red, green
+}
+var counter = 0
+var never_read = 1
+let never_used = 2
+func __init(self: Box, held: int) {
+    self.held = held
+    self.spare = held
+}
+record Only_Dead {
+    q: int
+}
+var dead_only = 3
+func dead() -> int {
+    return helper_of_dead() + dead_only
+}
+func helper_of_dead() -> int {
+    let d: Only_Dead = (q = 1)
+    return d.q
+}
+func make() -> Used {
+    never_read = 5
+    return (a = 1, b = counter, c = 3)
+}
+func start() {
+    let u = make()
+    let box = new[Box](4)
+    require u.a == 1
+    require box.held == 4
+    require box.unset == 0
+}

@@ -1,0 +1,9 @@
+func add2(x: 'T, y: 'U) -> 'T {
+    return x + y
+}
+
+let narrow: i32 = 1
+let wide: int = 2
+require add2(narrow, wide) == 3
+require add2(wide, narrow) == 3
+require add2(1, 2) == 3

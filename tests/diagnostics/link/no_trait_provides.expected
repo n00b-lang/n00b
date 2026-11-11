@@ -1,0 +1,2 @@
+tests/diagnostics/link/no_trait_provides.n:2:5: warning N00B-N0021: field `x` of `Point` is set but never read
+tests/diagnostics/link/no_trait_provides.n:6:9: error N00B-T0017: no trait that `Point` implements provides `length`

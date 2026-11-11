@@ -39,6 +39,7 @@ flow_probe.param_fields: (modify Array[Pair], int, int) -> int
   reads arr.__value[]
   reads+writes arr.__value[].a
   writes arr.__value[].b
+  reads arr
   traps bounds
   output result data[arr.__value[].a x] control[]
   output result 1 data[arr] control[]
@@ -47,6 +48,7 @@ flow_probe.param_fields: (modify Array[Pair], int, int) -> int
 flow_probe.put: (modify Array[int], int) -> nil
   effects may_trap
   writes arr.__value[]
+  reads arr
   traps bounds
   output result data[] control[]
   output result 1 data[arr] control[]

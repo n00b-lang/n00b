@@ -29,13 +29,15 @@ set --
 for module in builtin.__init builtin.io.debug builtin.io.raw builtin.ffi \
     builtin.panic builtin.string.core builtin.containers.array \
     builtin.containers.list builtin.containers.traits \
-    builtin.containers.view builtin.containers.errors builtin.cursor \
+    builtin.containers.slice builtin.containers.view \
+    builtin.containers.errors builtin.cursor \
     builtin.containers.dict \
     builtin.hashing builtin.containers.hash_index builtin.sort \
-    builtin.containers.set builtin.containers.tree builtin.hex \
+    builtin.containers.tree builtin.hex \
     builtin.bitptr builtin.abi builtin.containers.buffer builtin.io.format \
     builtin.string.style builtin.litmod_site builtin.embed builtin.floating \
-    builtin.integer builtin.ascii builtin.reference; do
+    builtin.integer builtin.ascii builtin.reference builtin.option \
+    builtin.containers.lease; do
     N00B_PATH="$script_dir/programs/link_records" "$compiler" compile \
         --output "$tmp/$module.n00bm" "$module" 2>"$tmp/$module.err" || {
         cat "$tmp/$module.err"

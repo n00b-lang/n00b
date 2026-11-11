@@ -1,0 +1,15 @@
+var answer: int
+var flag: bool
+
+if comptime() {
+    answer = 42
+    flag = true
+}
+
+func start() {
+    if answer == 42 and flag {
+        __fd_write(2, "baked\n")
+    } else {
+        __fd_write(2, "not baked\n")
+    }
+}

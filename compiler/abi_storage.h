@@ -19,6 +19,7 @@ typedef struct {
     core_string_t function;
     th_type *function_type;
     core_string_t native;
+    uint64_t addend;
 } n00bb_abi_graph_slot_t;
 
 typedef struct {

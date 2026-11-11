@@ -19,7 +19,6 @@ bool ir_instr_array_init(const ir_instr_t *instruction,
 typedef enum : uint8_t {
     IR_SHAPE_EXTENT_UNRESOLVED,
     IR_SHAPE_EXTENT_STATIC,
-    IR_SHAPE_EXTENT_COMPTIME,
     IR_SHAPE_EXTENT_RUNTIME,
 } ir_shape_extent_kind_t;
 
@@ -28,14 +27,11 @@ typedef struct {
     uint64_t static_value;
     const void *expression;
     ir_value_t *value;
-    ir_func_t *producer;
-    core_string_t producer_identifier;
 } ir_shape_extent_t;
 
 typedef enum : uint8_t {
     IR_SHAPE_MEASURE_UNKNOWN,
     IR_SHAPE_MEASURE_STATIC,
-    IR_SHAPE_MEASURE_COMPTIME,
     IR_SHAPE_MEASURE_RUNTIME,
     IR_SHAPE_MEASURE_SYMBOLIC,
 } ir_shape_measure_kind_t;
@@ -45,7 +41,6 @@ typedef struct {
     uint64_t static_value;
     const void *expression;
     ir_value_t *value;
-    ir_func_t *producer;
 } ir_shape_measure_t;
 
 typedef struct {
@@ -62,8 +57,6 @@ bool ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
                          ir_shape_extent_t extent);
 bool ir_shape_extent(const ir_shape_t *shape, uint32_t dimension,
                      ir_shape_extent_t *out);
-bool ir_shape_fold_comptime_extent(ir_shape_t *shape, uint32_t dimension,
-                                   uint64_t value);
 bool ir_shape_set_storage(ir_shape_t *shape, uint32_t flat_prefix_rank,
                           bool classification_known);
 bool ir_shape_storage(const ir_shape_t *shape, ir_shape_storage_t *out);

@@ -5,9 +5,9 @@
 #include "ir/ir.h"
 
 typedef struct ir_value_numbers_t ir_value_numbers_t;
-typedef struct ir_memssa_t ir_memssa_t;
+typedef struct ir_pdg_t ir_pdg_t;
 
-ir_value_numbers_t *ir_value_numbers_build(ir_func_t *f, ir_memssa_t *memssa);
+ir_value_numbers_t *ir_value_numbers_build(ir_func_t *f, const ir_pdg_t *pdg);
 ir_value_numbers_t *ir_func_value_numbers(ir_func_t *f);
 void                ir_value_numbers_free(ir_value_numbers_t *numbers);
 

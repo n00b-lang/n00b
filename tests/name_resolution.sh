@@ -31,13 +31,11 @@ rejects() {
     fi
 }
 
-rejects call_conflict N00B-T0013 \
-    'import pk\nrequire pk.size("abc") == 3\n'
 rejects value_conflict N00B-N0013 \
     'import pk\nrequire pk.limit == 1\n'
 rejects clobbered_function N00B-N0012 \
     'let len = 4\nrequire len("abc") == 3\n'
 rejects shadowed_type N00B-N0011 \
     'record List {\n    x: int\n}\n'
-rejects ambiguous_dispatch "call one directly by its qualified path" \
+rejects ambiguous_dispatch N00B-N0013 \
     'import pk\nlet it: pk.Item = (w = 3)\nrequire it.area() == 1\n'

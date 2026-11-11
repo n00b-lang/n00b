@@ -1,0 +1,9 @@
+const res = [-
+library res
+
+opaque res_state
+handle Res = *res_state release res_free
+
+fn res_open() -> own ?Res release res_free
+fn res_free(r: consume ?Res)
+-]'ffi

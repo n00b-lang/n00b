@@ -7,7 +7,7 @@ quotes litmod make_number(raw: string) -> int fail: string {
     return 42
 }
 
-when comptime() {
+if comptime() {
     require value() == 42
 }
 

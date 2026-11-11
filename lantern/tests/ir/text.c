@@ -468,34 +468,34 @@ static void test_consume_parameters_round_trip(void)
     ir_ctx_free(ctx);
 }
 
-static void test_phase_result_text_round_trips(void)
+static void test_out_parameters_have_no_value(void)
 {
-    ir_ctx_t *ctx = ir_ctx_new();
+    ir_ctx_t     *ctx = ir_ctx_new();
+    ir_diags_t   *d   = nullptr;
     core_string_t src = S(
-        "module m {\n"
+        "module out_params {\n"
         "  profile bce\n"
-        "  target t\n\n"
-        "  func @consumer() -> i32 {\n"
+        "  func @fill(out %target: i32, %seed: i32) -> void {\n"
+        "    local $target: i32\n"
         "    block entry:\n"
-        "      %result: i32 = phase.result !ir.phase_result(\"build.value.1\")\n"
-        "      return %result\n"
+        "      $target = copy %seed\n"
+        "      return $target\n"
         "  }\n"
         "}\n");
-    ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
-    ir_module_t *module = ir_module_parse(ctx, src, 0, PROFILES,
-        sizeof(PROFILES) / sizeof(PROFILES[0]), diagnostics);
-    ir_func_t *consumer = module ? ir_func_find(module, S("consumer"))
-                                 : nullptr;
-    ir_instr_t *phase_result = consumer && consumer->n_blocks
-        && consumer->blocks[0]->n_instrs
-        ? consumer->blocks[0]->instrs[0] : nullptr;
-    check("text IR parses typed cross-phase result references",
-          phase_result && phase_result->op == IR_OP_PHASE_RESULT
-              && ir_instr_phase_result(phase_result).data
-              && core_string_eq(ir_instr_phase_result(phase_result),
-                                S("build.value.1")));
-    check("text IR round-trips phase result identity",
-          module && round_trips(ctx, src, nullptr));
+    ir_module_t *m = parse(ctx, src, &d);
+    ir_func_t   *f = m ? ir_func_at(m, 0) : nullptr;
+
+    check("an out parameter gets no value, as lowering gives it none",
+          f && f->n_params == 1 && !ir_func_param_value(f, 0)
+              && ir_func_param_value(f, 1) == f->params[0]);
+
+    core_string_t printed = {};
+    bool          ok      = round_trips(ctx, src, &printed);
+
+    check("and it prints by position, pairing the next value correctly",
+          ok && printed.data && contains(printed, S("out %arg0: i32"))
+              && contains(printed, S("%seed: i32")));
+    free(printed.data);
     ir_ctx_free(ctx);
 }
 
@@ -761,29 +761,16 @@ static void test_recursive_global_initializers(void)
                   deferred->static_initializer->phase_result.identifier,
                   S("default:init_tree:deferred")));
     bool result_initializer = answer
-        && ir_global_set_phase_result_initializer(module, answer,
-                                                   S("default:init_tree:answer"));
+        && ir_global_replace_static_initializer(module, answer,
+               &(ir_global_init_value_t){
+                   .kind = IR_GLOBAL_INIT_PHASE_RESULT,
+                   .phase_result.identifier = S("default:init_tree:answer"),
+               });
     check("a phase result replaces literal data and remains type-valid",
           result_initializer
               && ir_global_static_initializer_valid(module, answer)
               && answer->static_initializer->kind
-                  == IR_GLOBAL_INIT_PHASE_RESULT
-              && ir_global_set_phase_result_initializer(module, answer,
-                   S("default:init_tree:answer"))
-              && !ir_global_set_phase_result_initializer(module, answer,
-                   S("other:answer")));
-    ir_global_init_value_t folded_answer = {
-        .kind = IR_GLOBAL_INIT_INT,
-        .integer = {.mag = 43},
-    };
-    check("a matching phase result becomes a typed static initializer",
-          answer && !ir_global_materialize_phase_result(module, answer,
-              S("other:answer"), &folded_answer)
-              && ir_global_materialize_phase_result(module, answer,
-                  S("default:init_tree:answer"), &folded_answer)
-              && answer->static_initializer->kind == IR_GLOBAL_INIT_INT
-              && ir_lit_signed(answer->static_initializer->integer) == 43
-              && ir_global_static_initializer_valid(module, answer));
+                  == IR_GLOBAL_INIT_PHASE_RESULT);
     check("sequence initializer is retained and type-valid",
           numbers && numbers->has_static_initializer
               && ir_global_static_initializer_valid(module, numbers)
@@ -875,14 +862,13 @@ static void test_recursive_global_initializers(void)
     ir_ctx_free(ctx);
 }
 
-static void test_phase_mutability_round_trips(void)
+static void test_storage_facts_round_trip(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
     core_string_t src = S(
-        "module phase {\n  profile bce\n  target host\n\n"
-        "  const global @config: i32 = 1 !ir.comptime_mutability(0)\n\n"
-        "  func @init(%source: i32, %target: ptr[i32]) -> i32 "
-        "!ir.execution_phase(1) {\n"
+        "module facts {\n  profile bce\n  target host\n\n"
+        "  const global @config: i32 = 1\n\n"
+        "  func @init(%source: i32, %target: ptr[i32]) -> i32 {\n"
         "    local $captured: i32\n"
         "    block entry:\n"
         "      $captured = copy %source\n"
@@ -892,44 +878,23 @@ static void test_phase_mutability_round_trips(void)
     ir_global_t *global = module ? ir_global_find(module, S("config"))
                                  : nullptr;
     ir_func_t *function = module ? ir_func_find(module, S("init")) : nullptr;
-    ir_value_t *source = function ? ir_value_find(function, S("source"))
-                                  : nullptr;
     ir_value_t *target = function ? ir_value_find(function, S("target"))
                                   : nullptr;
-    ir_local_t *captured = function
-        ? ir_local_find(function, S("captured")) : nullptr;
     ir_instr_t *copy_instruction = nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
         if (entry->instrs[i]->op == IR_OP_COPY)
             copy_instruction = entry->instrs[i];
 
-    check("phase-specific mutability metadata parses",
-          module && global && function);
-    check("runtime and compile-time mutability remain distinct",
-          global && global->mutability == IR_MUT_CONST
-              && ir_global_comptime_mutability(global) == IR_MUT_MUTABLE);
-    check("function execution phase parses",
-          function
-              && ir_func_execution_phase(function) == IR_PHASE_COMPTIME);
-    check("phase-specific metadata survives text round-trip",
-          round_trips(ctx, src, nullptr));
+    check("storage fact fixture parses", module && global && function);
     check("global storage rejects an unhonored required class",
           global && !ir_global_set_storage_class(
               ctx, global, S("pool"), true, S("gc")));
-    bool binding_facts = source && target && captured && copy_instruction
-        && ir_value_set_phase_access(ctx, source, IR_PHASE_ACCESS_BOTH,
-            IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE)
+    bool binding_facts = target && copy_instruction
         && ir_value_set_indirect_access(ctx, target,
             IR_INDIRECT_ACCESS_READ_WRITE)
-        && ir_value_set_phase_access(ctx, ir_local_value(function, captured),
-            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_NONE,
-            IR_PHASE_ACCESS_COMPTIME)
         && ir_instr_set_binding_initialization(copy_instruction, true);
     bool phase_facts = global && function && binding_facts
-        && ir_global_set_phase_access(ctx, global,
-            IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_COMPTIME,
-            IR_PHASE_ACCESS_COMPTIME)
         && ir_global_set_storage_class(ctx, global, S("pool"), true,
                                        S("pool"))
         && ir_global_set_storage_duration(
@@ -943,12 +908,8 @@ static void test_phase_mutability_round_trips(void)
         ? ir_global_find(copy, S("config")) : nullptr;
     ir_func_t *copy_function = copy
         ? ir_func_find(copy, S("init")) : nullptr;
-    ir_value_t *copy_source = copy_function
-        ? ir_value_find(copy_function, S("source")) : nullptr;
     ir_value_t *copy_target = copy_function
         ? ir_value_find(copy_function, S("target")) : nullptr;
-    ir_local_t *copy_captured = copy_function
-        ? ir_local_find(copy_function, S("captured")) : nullptr;
     ir_instr_t *copy_binding_init = nullptr;
     ir_block_t *copy_entry = copy_function
         ? ir_block_entry(copy_function) : nullptr;
@@ -960,13 +921,9 @@ static void test_phase_mutability_round_trips(void)
     core_string_t storage_requested = {};
     core_string_t storage_selected = ir_global_storage_class(
         copy_global, &storage_required, &storage_requested);
-    check("global phase masks and initializer identity survive IR round-trip",
+    check("global mutability and initializer identity survive IR round-trip",
           copy_global && copy_function
-              && ir_global_can_read(copy_global, IR_PHASE_COMPTIME)
-              && ir_global_can_read(copy_global, IR_PHASE_RUNTIME)
-              && ir_global_can_write(copy_global, IR_PHASE_COMPTIME)
-              && !ir_global_can_write(copy_global, IR_PHASE_RUNTIME)
-              && ir_global_can_initialize(copy_global, IR_PHASE_COMPTIME)
+              && copy_global->mutability == IR_MUT_CONST
               && ir_func_is_initializer(copy_function));
     check("global storage duration and required class survive IR round-trip",
           copy_global
@@ -976,13 +933,8 @@ static void test_phase_mutability_round_trips(void)
               && storage_selected.data
               && core_string_eq(storage_requested, S("pool"))
               && core_string_eq(storage_selected, S("pool")));
-    check("value phase facts and declaration initialization survive IR round-trip",
-          copy_source && copy_captured && copy_binding_init
-              && ir_value_can_read(copy_source, IR_PHASE_COMPTIME)
-              && !ir_value_can_write(copy_source, IR_PHASE_COMPTIME)
-              && ir_value_can_initialize(
-                  ir_local_value(copy_function, copy_captured),
-                  IR_PHASE_COMPTIME));
+    check("declaration initialization survives IR round-trip",
+          copy_binding_init != nullptr);
     check("indirect parameter effects survive IR text round-trip",
           copy_target
               && ir_value_indirect_access(copy_target)
@@ -1071,9 +1023,8 @@ static void test_binding_facts_round_trip(void)
     core_string_t src = S(
         "module binding {\n  profile bce\n\n"
         "  global @owner: i32\n"
-        "  global @view: i32 !ir.binding_phases(3) !ir.alias0(@owner)\n"
-        "\n  func @f(%owner: i32, %view: i32 !ir.binding_phases(3)"
-        " !ir.alias0(%owner)) -> i32 {\n"
+        "  global @view: i32 !ir.alias0(@owner)\n"
+        "\n  func @f(%owner: i32, %view: i32 !ir.alias0(%owner)) -> i32 {\n"
         "    local $owner2: i32\n"
         "    local $view2: i32 !ir.alias0($owner2)\n"
         "\n    block entry:\n  }\n}\n");
@@ -2190,12 +2141,12 @@ int main(int argc, char **argv)
     test_trait_method_round_trips();
     test_function_failure_channel_round_trips();
     test_consume_parameters_round_trip();
-    test_phase_result_text_round_trips();
+    test_out_parameters_have_no_value();
     test_variant_type_definition_round_trips();
     test_mutability_round_trips();
     test_global_string_initializer_round_trips();
     test_recursive_global_initializers();
-    test_phase_mutability_round_trips();
+    test_storage_facts_round_trip();
     test_meta_round_trip();
     test_binding_facts_round_trip();
     test_semantic_cast_round_trip();

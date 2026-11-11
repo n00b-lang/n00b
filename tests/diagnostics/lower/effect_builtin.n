@@ -1,0 +1,53 @@
+func log_line(_text: string) {
+}
+
+effect output {
+    from: log_line
+}
+
+func uses() {
+    log_line("x")
+}
+
+func maybe(n: int) {
+    if n > 1 {
+        log_line("x")
+    }
+}
+
+may_effect(uses, output) and has_effect(uses, output)
+may_effect(maybe, output) and !has_effect(maybe, output)
+forbids_effect(uses, impure)
+
+effect noreturn {
+    from: log_line
+}
+
+effect output {
+    handled_by: log_line
+}
+
+effect impure {
+    from: log_line
+}
+
+effect noreturn {
+    from: __os_stack_address
+}
+
+func stops() -> int {
+    _ = __os_stack_address()
+    return 1
+}
+
+has_effect(stops, noreturn)
+
+func partial(n: int) {
+    has_effect(output)
+    if n > 1 {
+        log_line("x")
+    }
+}
+
+may_effect(log_line, output) and has_effect(log_line, output)
+forbids_effect(log_line, impure)

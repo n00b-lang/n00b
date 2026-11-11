@@ -38,7 +38,7 @@ build() {
 }
 
 stored() {
-    grep '^runtime store scc ' "$tmp/log" | sed 's/^runtime store scc //' \
+    grep '^program store scc ' "$tmp/log" | sed 's/^program store scc //' \
         | sort | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -48,14 +48,16 @@ expect_stored() {
 }
 
 edits() {
-    grep -q '^runtime store scc ping,pong$' "$tmp/log" \
+    grep -q '^program store scc ping,pong$' "$tmp/log" \
         || fail "cycle: ping and pong were not stored as one SCC"
 
     build work main.n
     expect_stored "unchanged rebuild" ""
-    if grep -q '^runtime store instance ' "$tmp/log"; then
+    if grep -q '^program store instance ' "$tmp/log"; then
         fail "unchanged rebuild stored an instantiation"
     fi
+    grep -q '^program runtime object ' "$tmp/log" \
+        || fail "unchanged rebuild: no cached runtime-only object was used"
 
     sed 's/return 41/return 40 + 1/' "$tmp/work/leaf.n" >"$tmp/leaf.n"
     mv "$tmp/leaf.n" "$tmp/work/leaf.n"
@@ -65,7 +67,7 @@ edits() {
     printf 'func leaf_value() -> int {\n    let values: Array[int] = [40, 1]\n    return values[0] + values[1]\n}\n' \
         >"$tmp/work/leaf.n"
     build work main.n
-    grep -q '^runtime restart cached modules depend on summaries that changed$' \
+    grep -q '^program restart cached modules depend on summaries that changed$' \
         "$tmp/log" || fail "summary edit: the optimistic build did not restart"
     expect_stored "summary edit" "helper leaf"
 
@@ -93,6 +95,25 @@ edits() {
     mv "$tmp/trapper.n" "$tmp/work/trapper.n"
     build work main_relay.n
     expect_stored "line shift" "trapper"
+
+    mkdir -p "$tmp/unused"
+    printf 'func helper() -> int {\n    return 1\n}\n\nfunc other() -> int {\n    return 2\n}\n' \
+        >"$tmp/unused/parts.n"
+    printf 'import parts\n\nrequire parts.helper() + parts.other() == 3\n' \
+        >"$tmp/unused/main.n"
+    build unused main.n
+    printf 'import parts\n\nrequire parts.other() == 2\n' >"$tmp/unused/main.n"
+    build unused main.n
+    grep -q '^program reuse scc parts$' "$tmp/log" \
+        || fail "unused across modules: parts was not reused"
+    grep -q 'function `helper` is never called' "$tmp/build.out" \
+        || fail "unused across modules: the cached parts.helper was not reported"
+    printf 'import parts\n\nrequire parts.helper() + parts.other() == 3\n' \
+        >"$tmp/unused/main.n"
+    build unused main.n
+    if grep -q 'is never called' "$tmp/build.out"; then
+        fail "unused across modules: a stale warning was replayed"
+    fi
 }
 
 shapes() {
@@ -107,33 +128,60 @@ shapes() {
     mv "$tmp/pong.n" "$tmp/work/pong.n"
     build work main.n
     expect_stored "inline body and cycle edit" "ping,pong shapes user"
+
+    mkdir -p "$tmp/relay/hooks"
+    printf 'import hooks\n\nfunc twice(value: int) -> int {\n    return value * 2\n}\n\nlet step: hooks.Step = callback[hooks.Step](ref twice)\nrequire step.call(3) == 6\n' \
+        >"$tmp/relay/main.n"
+    printf 'callback Step {\n    call(value: int) -> int\n    handler(value: int) -> int\n}\n\nfunc extra() -> int {\n    return 1\n}\n' \
+        >"$tmp/relay/hooks/impl.n"
+    printf 'import impl\n\npackage hooks {\n    export impl.Step\n}\n' \
+        >"$tmp/relay/hooks/facade.n"
+    build relay main.n
+    printf 'import impl\n\npackage hooks {\n    export impl.Step\n    export impl.extra\n}\n' \
+        >"$tmp/relay/hooks/facade.n"
+    build relay main.n
+    grep -q '^program reuse scc hooks\.impl$' "$tmp/log" \
+        || fail "re-exported callback: the cached impl module was not reused"
 }
 
 instances() {
     build work main_new.n
-    count=$(grep -c '^runtime store instance boxes\.pick$' "$tmp/log" || true)
+    count=$(grep -c '^program store instance boxes\.pick$' "$tmp/log" || true)
     test "$count" = 1 \
         || fail "new instantiation: stored $count boxes.pick instantiations"
-    grep -q '^runtime reuse instance boxes\.pick$' "$tmp/log" \
+    grep -q '^program reuse instance boxes\.pick$' "$tmp/log" \
         || fail "new instantiation: the cached boxes.pick instantiation was not reused"
 
     prepare second
     build second main_new.n
-    grep -q '^runtime reuse scc builtin\.' "$tmp/log" \
+    grep -q '^program reuse scc builtin\.' "$tmp/log" \
         || fail "shared stdlib: a second project reused no builtin SCC"
-    if grep -q '^runtime store scc builtin\.' "$tmp/log"; then
+    if grep -q '^program store scc builtin\.' "$tmp/log"; then
         fail "shared stdlib: a second project stored its own builtin SCCs"
     fi
 
     build work generic_values.n
     build work generic_values.n
-    grep -q '^runtime reuse scc builtin\.containers\.list' "$tmp/log" \
+    grep -q '^program reuse scc builtin\.containers\.list' "$tmp/log" \
         || fail "generic values: the cached list module was not reused"
 
     build work generic_fields.n
     build work generic_fields.n
-    grep -q '^runtime reuse scc pairs$' "$tmp/log" \
+    grep -q '^program reuse scc pairs$' "$tmp/log" \
         || fail "generic fields: the cached pairs module was not reused"
+
+    build work imported_traits.n
+    build work imported_traits.n
+    grep -q '^program reuse scc scales$' "$tmp/log" \
+        || fail "imported traits: the cached scales module was not reused"
+    build_flags=--no-specialize
+    build work imported_traits.n
+    build_flags=
+
+    build work imported_consts.n
+    build work imported_consts.n
+    grep -q '^program reuse scc limits$' "$tmp/log" \
+        || fail "imported consts: the cached limits module was not reused"
 }
 
 contexts() {
@@ -153,7 +201,7 @@ contexts() {
     return probe[0] == other.x/' "$tmp/work/points.n" >"$tmp/points.n"
     mv "$tmp/points.n" "$tmp/work/points.n"
     build work main_points.n
-    grep -q '^runtime store instance compare\.same$' "$tmp/log" \
+    grep -q '^program store instance compare\.same$' "$tmp/log" \
         || fail "owner summary edit: the compare.same instantiation was reused"
 }
 
@@ -161,14 +209,16 @@ lto() {
     test -n "$lto_flag" || fail "the lto part needs the lto flag as its fourth argument"
     build_flags=$lto_flag
     build work main.n
-    grep -q '^runtime store scc leaf$' "$tmp/log" \
+    grep -q '^program store scc leaf$' "$tmp/log" \
         || fail "first lto build: leaf bitcode was not stored"
 
     build work main.n
     expect_stored "unchanged lto rebuild" ""
-    grep -q '^runtime reuse scc leaf$' "$tmp/log" \
+    grep -q '^program reuse scc leaf$' "$tmp/log" \
         || fail "unchanged lto rebuild: leaf was not reused"
-    if grep -q '^runtime store instance ' "$tmp/log"; then
+    grep -q '^program runtime object ' "$tmp/log" \
+        || fail "unchanged lto rebuild: no cached runtime-only object was used"
+    if grep -q '^program store instance ' "$tmp/log"; then
         fail "unchanged lto rebuild stored an instantiation"
     fi
 

@@ -139,12 +139,6 @@ typedef enum : uint16_t {
     IR_PROP_LAID_OUT     = 0x0010,
     IR_PROP_NO_CRIT_EDGE = 0x0020,
     IR_PROP_VERIFIED     = 0x0040,
-
-    IR_PROP_TREE         = 0x0080,
-    IR_PROP_SCOPED       = 0x0100,
-    IR_PROP_SYMBOLS      = 0x0200,
-    IR_PROP_CFLOW        = 0x0400,
-    IR_PROP_TREE_TYPED   = 0x0800,
 } ir_props_t;
 
 core_string_t ir_prop_name(ir_props_t one);
@@ -184,7 +178,6 @@ typedef struct ir_global_t  ir_global_t;
 typedef struct ir_shape_t   ir_shape_t;
 typedef struct ir_profile_t ir_profile_t;
 typedef struct ir_region_t  ir_region_t;
-struct ir_rule_t;
 
 typedef struct {
     int32_t  file;
@@ -394,19 +387,6 @@ typedef enum : uint8_t {
 } ir_mutability_t;
 
 typedef enum : uint8_t {
-    IR_PHASE_RUNTIME,
-    IR_PHASE_COMPTIME,
-} ir_execution_phase_t;
-
-typedef enum : uint8_t {
-    IR_PHASE_ACCESS_NONE = 0,
-    IR_PHASE_ACCESS_COMPTIME = 1u << 0,
-    IR_PHASE_ACCESS_RUNTIME = 1u << 1,
-    IR_PHASE_ACCESS_BOTH = IR_PHASE_ACCESS_COMPTIME
-                         | IR_PHASE_ACCESS_RUNTIME,
-} ir_phase_access_t;
-
-typedef enum : uint8_t {
     IR_INDIRECT_ACCESS_UNSPECIFIED,
     IR_INDIRECT_ACCESS_READ,
     IR_INDIRECT_ACCESS_WRITE,
@@ -424,23 +404,12 @@ typedef enum : uint8_t {
 
 core_string_t ir_mutability_name(ir_mutability_t m);
 bool        ir_mutability_from_name(core_string_t s, ir_mutability_t *out);
-bool        ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
-                                        ir_execution_phase_t phase);
-ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function);
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
                              bool is_initializer);
 bool ir_func_is_initializer(const ir_func_t *function);
 bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
                                bool enabled);
 bool ir_func_is_always_inline(const ir_func_t *function);
-bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
-                               ir_phase_access_t available,
-                               ir_phase_access_t mutable_in,
-                               ir_phase_access_t initializable_in);
-bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase);
-bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase);
-bool ir_value_can_initialize(const ir_value_t *value,
-                             ir_execution_phase_t phase);
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value);
 bool ir_value_has_external_writable_storage(const ir_value_t *value);
 bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
@@ -448,20 +417,6 @@ bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
 ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value);
 bool ir_value_set_binding_reentry(ir_value_t *value,
                                   ir_block_t *loop_header);
-bool        ir_global_set_comptime_mutability(ir_ctx_t *ctx,
-                                              ir_global_t *global,
-                                              ir_mutability_t mutability);
-ir_mutability_t ir_global_comptime_mutability(const ir_global_t *global);
-bool ir_global_set_phase_access(ir_ctx_t *ctx, ir_global_t *global,
-                                ir_phase_access_t available,
-                                ir_phase_access_t mutable_in,
-                                ir_phase_access_t initializable_in);
-bool ir_global_can_read(const ir_global_t *global,
-                        ir_execution_phase_t phase);
-bool ir_global_can_write(const ir_global_t *global,
-                         ir_execution_phase_t phase);
-bool ir_global_can_initialize(const ir_global_t *global,
-                              ir_execution_phase_t phase);
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
                                  core_string_t requested, bool required,
                                  core_string_t selected);
@@ -540,6 +495,7 @@ struct ir_func_t {
     ir_props_t    props;
     ir_module_t  *owner;
     struct ir_func_analyses_t *analyses;
+    struct ir_uses_t *uses;
 };
 
 ir_ctx_t *ir_ctx_new(void);
@@ -547,6 +503,9 @@ void      ir_ctx_free(ir_ctx_t *ctx);
 size_t    ir_ctx_bytes(const ir_ctx_t *ctx);
 th_ctx   *ir_ctx_types(ir_ctx_t *ctx);
 void     *ir_alloc(ir_ctx_t *ctx, size_t n);
+void     *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need,
+                  size_t elem);
+void      ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);
 core_string_t ir_strdup(ir_ctx_t *ctx, core_string_t s);
 
 ir_module_t *ir_module_new(ir_ctx_t *ctx, core_string_t name,
@@ -565,6 +524,7 @@ void         ir_module_set_span(ir_module_t *m, ir_span_t s);
 void         ir_module_set_target(ir_module_t *m, core_string_t target);
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t);
+bool     ir_module_reintern_types(ir_module_t *m);
 th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 size_t   ir_call_output_count(th_type *callable);
@@ -615,10 +575,8 @@ bool ir_global_adopt_static_initializer(ir_module_t *module,
 bool ir_global_set_static_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *value);
-bool ir_global_set_phase_result_initializer(
-    ir_module_t *m, ir_global_t *global, core_string_t identifier);
-bool ir_global_materialize_phase_result(
-    ir_module_t *m, ir_global_t *global, core_string_t identifier,
+bool ir_global_replace_static_initializer(
+    ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *value);
 bool ir_global_static_initializer_valid(
     ir_module_t *m, const ir_global_t *global);
@@ -645,8 +603,10 @@ bool         ir_func_set_parameter_optional(ir_func_t *function,
                                             uint32_t index, bool optional);
 bool         ir_func_parameter_is_optional(const ir_func_t *function,
                                            uint32_t index);
+ir_value_t  *ir_func_param_value(const ir_func_t *function, uint32_t index);
 size_t       ir_func_count(const ir_module_t *m);
 ir_func_t   *ir_func_at(ir_module_t *m, size_t i);
+bool         ir_func_erase(ir_func_t *f);
 ir_value_t  *ir_param_add(ir_func_t *f, core_string_t name, th_type *type);
 bool         ir_param_set_optional(ir_value_t *parameter, bool optional);
 bool         ir_param_is_optional(const ir_value_t *parameter);
@@ -659,6 +619,8 @@ bool         ir_local_set_source_name(ir_func_t *f, ir_local_t *local,
 core_string_t ir_local_display_name(const ir_local_t *local);
 core_string_t ir_local_label(const ir_local_t *local);
 core_string_t ir_value_display_name(const ir_value_t *value);
+
+#define IR_SOURCE_NAME_KEY CORE_STRING_STATIC("ir.source_name")
 ir_local_t  *ir_local_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_value_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_local_value(ir_func_t *f, ir_local_t *local);
@@ -668,92 +630,12 @@ typedef enum : uint8_t {
     IR_LIVENESS_DEAD,
     IR_LIVENESS_LIVE,
 } ir_liveness_t;
-typedef struct {
-    ir_value_t *value;
-    bool escapes;
-} ir_alias_target_t;
-typedef bool (*ir_store_target_visitor_fn)(void *context,
-                                           ir_value_t *target);
-bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
-                                const ir_alias_target_t *targets,
-                                size_t target_count, bool complete);
-bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
-                               ir_alias_target_t target);
-bool ir_value_complete_alias_targets(ir_ctx_t *ctx, ir_value_t *value);
-bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
-                                 const ir_value_t *source);
-bool ir_value_visit_store_targets(const ir_value_t *address,
-                                  ir_store_target_visitor_fn visitor,
-                                  void *context);
-bool ir_value_visit_store_origins(const ir_value_t *address,
-                                  ir_store_target_visitor_fn visitor,
-                                  void *context);
 bool ir_value_addresses_sequence_contents(const ir_value_t *address);
 ir_liveness_t ir_value_liveness_after(const ir_value_t *value,
                                       const ir_instr_t *point);
 ir_liveness_t ir_value_liveness_on_edge(const ir_value_t *value,
                                         const ir_block_t *from,
                                         const ir_block_t *to);
-ir_liveness_t ir_value_alias_liveness_after(const ir_value_t *value,
-                                             const ir_instr_t *point);
-ir_liveness_t ir_value_alias_liveness_on_edge(const ir_value_t *value,
-                                              const ir_block_t *from,
-                                              const ir_block_t *to);
-typedef struct ir_liveness_query ir_liveness_query_t;
-ir_liveness_query_t *ir_liveness_query_new(const ir_value_t *value);
-void ir_liveness_query_free(ir_liveness_query_t *query);
-ir_liveness_t ir_liveness_query_alias_after(
-    const ir_liveness_query_t *query, const ir_instr_t *point);
-ir_liveness_t ir_liveness_query_alias_on_edge(
-    const ir_liveness_query_t *query, const ir_block_t *from,
-    const ir_block_t *to);
-ir_liveness_t ir_liveness_query_direct_after(
-    const ir_liveness_query_t *query, const ir_instr_t *point);
-ir_liveness_t ir_liveness_query_direct_on_edge(
-    const ir_liveness_query_t *query, const ir_block_t *from,
-    const ir_block_t *to);
-typedef struct {
-    ir_func_t *function;
-    ir_value_t *binding;
-    ir_instr_t *point;
-    ir_block_t *from;
-    ir_block_t *to;
-} ir_lifetime_endpoint_t;
-typedef bool (*ir_lifetime_endpoint_visitor_fn)(
-    void *context, ir_lifetime_endpoint_t endpoint);
-bool ir_value_visit_lifetime_endpoints(
-    const ir_value_t *value, ir_lifetime_endpoint_visitor_fn visitor,
-    void *context);
-bool ir_liveness_query_visit_endpoints(
-    const ir_liveness_query_t *query,
-    ir_lifetime_endpoint_visitor_fn visitor, void *context);
-typedef bool (*ir_value_escape_fn)(void *context, const ir_value_t *value);
-typedef struct {
-    size_t cfg_edges;
-    size_t direct_live_edges;
-    size_t direct_dead_edges;
-    size_t direct_unknown_edges;
-    size_t alias_live_edges;
-    size_t alias_dead_edges;
-    size_t alias_unknown_edges;
-    size_t range_ends;
-    size_t exit_edges;
-    size_t safe_exit_edges;
-    size_t live_exit_edges;
-    size_t unknown_exit_edges;
-    size_t point_endpoints;
-    size_t edge_endpoints;
-    bool   escapes;
-    bool   resolved;
-    bool   complete;
-} ir_cleanup_range_t;
-bool ir_value_cleanup_range(const ir_value_t *value, ir_value_escape_fn escapes,
-                            void *context, ir_cleanup_range_t *out);
-bool         ir_value_can_finalize_at(const ir_value_t *value,
-                                      uint64_t point);
-bool         ir_value_can_finalize_on_edge(const ir_value_t *value,
-                                            const ir_block_t *from,
-                                            const ir_block_t *to);
 ir_block_t  *ir_block_add(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_add_entry(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_find(ir_func_t *f, core_string_t name);
@@ -810,9 +692,6 @@ bool ir_instr_callback_contract(const ir_instr_t *construction,
 bool ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
                                           th_type *handler_signature);
 th_type *ir_instr_callback_invoke_handler(const ir_instr_t *invocation);
-bool ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
-                               core_string_t identifier);
-core_string_t ir_instr_phase_result(const ir_instr_t *instruction);
 bool        ir_instr_operand_value(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
@@ -850,8 +729,6 @@ struct ir_profile_t {
     core_string_t name;
     size_t      n_scalars;
     const struct ir_scalar_t *scalars;
-    size_t      n_rules;
-    const struct ir_rule_t *rules;
     size_t      n_ext_ops;
     const ir_opinfo_t *ext_ops;
 };

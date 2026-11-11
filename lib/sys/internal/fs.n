@@ -58,9 +58,9 @@ func read_into(fd: int, modify buffer: Array[u8], at: uint, count: uint)
 }
 
 func close(fd: int) -> nil fail: int {
-    let result: int = __os_close(fd)
-    if result < 0 {
-        fail result
+    let status = __os_close(fd)
+    if status < 0 {
+        fail status
     }
 }
 

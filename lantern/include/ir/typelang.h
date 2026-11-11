@@ -7,8 +7,6 @@
 
 th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
                            core_string_t *err);
-th_type *ir_typelang_parse_function(th_ctx *ctx, core_string_t src,
-                                    th_type **failure, core_string_t *err);
 
 th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
                                   size_t *consumed, core_string_t *err);
@@ -26,11 +24,5 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l);
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec);
 
-void ir_module_set_tree(ir_module_t      *m,
-                        parse_grammar_t    *g,
-                        parse_tree_t *tree);
-
-parse_tree_t *ir_module_tree(ir_module_t *m);
-parse_grammar_t    *ir_module_grammar(ir_module_t *m);
-parse_symtab_t     *ir_module_symtab(ir_module_t *m);
 th_ctx           *ir_module_types(ir_module_t *m);
+ir_ctx_t         *ir_module_ctx(ir_module_t *m);

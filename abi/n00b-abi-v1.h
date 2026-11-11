@@ -882,6 +882,9 @@ int32_t n00b_abi_v1_bind_runtime_function_addresses(
     const void *const *addresses, uint32_t count);
 const void *n00b_abi_v1_runtime_function_address(uint32_t function_index);
 uint32_t n00b_abi_v1_runtime_function_index(const void *address);
+const void *n00b_abi_v1_runtime_trait_method_address(
+    uint32_t trait_type_index, uint32_t method_ordinal,
+    uint32_t receiver_type_index);
 const n00b_abi_call_signature_v1 *n00b_abi_v1_call_signature(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t signature_index);
 const n00b_abi_call_shape_v1 *n00b_abi_v1_call_shape(

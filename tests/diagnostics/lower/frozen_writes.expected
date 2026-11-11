@@ -1,0 +1,19 @@
+tests/diagnostics/lower/frozen_writes.n:19:14: warning N00B-S0063: parameter `c` is never used
+  help: if a signature requires it, name it `_c`
+tests/diagnostics/lower/frozen_writes.n:31:6: warning N00B-N0019: function `deep_record` is never called
+  help: call it or delete it
+tests/diagnostics/lower/frozen_writes.n:33:5: error N00B-T0501: cannot write through constant `points`; nothing reachable from a constant is writable
+  tests/diagnostics/lower/frozen_writes.n:10:7: note: `points` is declared here
+  help: declare `points` with `var` to make it writable
+tests/diagnostics/lower/frozen_writes.n:36:6: warning N00B-N0019: function `deep_view` is never called
+  help: call it or delete it
+tests/diagnostics/lower/frozen_writes.n:41:5: error N00B-T0501: cannot write through view parameter `c`; nothing reachable from a view parameter is writable
+  tests/diagnostics/lower/frozen_writes.n:36:16: note: `c` is declared here
+  help: declare `c` as a `modify` parameter to write through it
+tests/diagnostics/lower/frozen_writes.n:44:6: warning N00B-N0019: function `poke` is never called
+  help: call it or delete it
+tests/diagnostics/lower/frozen_writes.n:48:6: warning N00B-N0019: function `through_field` is never called
+  help: call it or delete it
+tests/diagnostics/lower/frozen_writes.n:49:5: error N00B-S0010: this call may write memory reachable from constant `points`, which must not change
+  tests/diagnostics/lower/frozen_writes.n:10:7: note: `points` is declared here
+  help: write to a copy of the constant instead

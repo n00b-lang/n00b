@@ -24,6 +24,13 @@ strong_writer(pt_t *pt, const ir_instr_t *in)
     return !released;
 }
 
+static int
+compare_defs(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return (x > y) - (x < y);
+}
+
 static const pt_set_t *
 site_contents(pt_t *pt, uint32_t site)
 {
@@ -31,12 +38,13 @@ site_contents(pt_t *pt, uint32_t site)
     if (!entry->local || !pt->at) return &entry->contents;
     pt->positional = true;
     pt_flow_t *flow = &pt->flow;
-    if (!flow_state_at(pt, pt->at)) return &entry->contents;
+    if (!reaching_defs(pt, site, pt->at)) return &entry->contents;
     flow->items.len = 0;
-    for (size_t d = 0; d < flow->defs.len; d++) {
-        const flow_def_t *def = &flow->defs.data[d];
-        if (def->site != site
-            || !(flow->state[d / 64] >> (d % 64) & 1)) continue;
+    qsort(flow->reached.data, flow->reached.len, sizeof(uint32_t),
+          compare_defs);
+    for (size_t r = 0; r < flow->reached.len; r++) {
+        if (r && flow->reached.data[r] == flow->reached.data[r - 1]) continue;
+        const flow_def_t  *def     = &flow->defs.data[flow->reached.data[r]];
         bool               present = false;
         const pt_writes_t *writes  = core_dict_get(&flow->writes, def->instr,
                                                    &present);
@@ -921,6 +929,18 @@ pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
 }
 
 static bool
+indexes_handle(pt_t *pt, const ir_value_t *base)
+{
+    th_type *type = base && base->type ? th_resolve(base->type) : nullptr;
+    if (!type || th_kind_of(type) != TH_INDIRECTION) return false;
+    th_type *referent = defined_type(pt->f, th_ind_referent(type));
+    uint64_t extent   = 0;
+    return referent && th_kind_of(referent) == TH_SEQUENCE
+        && !th_seq_extent(referent, &extent)
+        && !inline_field(pt->f, base, false);
+}
+
+static bool
 pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
 {
     pt_set_t items = (pt_set_t){0};
@@ -928,11 +948,7 @@ pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
     th_type *type   = base && base->type ? th_resolve(base->type) : nullptr;
     bool     memory = true;
     if (type && th_kind_of(type) == TH_INDIRECTION) {
-        th_type *referent = defined_type(pt->f, th_ind_referent(type));
-        uint64_t extent   = 0;
-        if (referent && th_kind_of(referent) == TH_SEQUENCE
-            && !th_seq_extent(referent, &extent)
-            && !inline_field(pt->f, base, false)) {
+        if (indexes_handle(pt, base)) {
             pt_set_t loaded = (pt_set_t){0};
             pt_load(pt, &items, &loaded);
             core_list_free(items);

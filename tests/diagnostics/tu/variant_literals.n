@@ -1,0 +1,17 @@
+variant Shape {
+    circle: int
+    square: string
+}
+
+func one_arm() -> Shape {
+    return (circle = 3)
+}
+
+func two_arms() -> Shape {
+    return (circle = 3, square = "x")
+}
+
+func declared() -> Shape {
+    let s: Shape = (square = "a", circle = 1)
+    return s
+}

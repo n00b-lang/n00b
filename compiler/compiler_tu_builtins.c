@@ -2,7 +2,9 @@
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "ir/summary.h"
-#include "ir/typelang.h"
+
+static bool
+n00bb_builtin_init_function(parse_sym_entry_t *symbol);
 
 const n00bb_axiom_t *
 n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
@@ -93,16 +95,14 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                      native->writes);
         return summary;
     }
-    bool foreign = n00bb_axiom_foreign_native(function);
+    uint32_t effects = 0;
+    bool     foreign = n00bb_axiom_foreign_native(function, &effects);
     if (!foreign && !n00bb_axiom_pure_native(function)) return nullptr;
     ir_summary_t *summary = ir_summary_new(summaries, function);
     if (foreign) {
-        ir_summary_set_flags(summary, IR_SUMMARY_MAY_FAIL
-            | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-            | IR_SUMMARY_MAY_BLOCK
-            | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
-            | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES);
-        ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
+        ir_summary_set_flags(summary, effects);
+        if (effects & IR_SUMMARY_MAY_TRAP)
+            ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
     }
     for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
         ir_summary_add_path(summary, &(ir_spath_t){
@@ -139,32 +139,9 @@ builtin_native_name(core_string_t name)
 }
 
 static th_type *
-one_of_named_types(th_ctx *types, core_arena_t *arena,
-                   const core_string_t *names, size_t n)
+n00bb_array_index_type(th_ctx *types)
 {
-    th_type *variable = th_var(types);
-    th_type **choices = arena && variable
-        ? core_arena_alloc(arena, n * sizeof(*choices)) : nullptr;
-    if (!choices) return nullptr;
-    for (size_t i = 0; i < n; i++)
-        if (!(choices[i] = th_name(types, names[i]))) return nullptr;
-    if (!th_var_constrain(types, variable, (th_constraint){
-            .kind = TH_CON_ONE_OF,
-            .one_of = {.types = choices, .n = n},
-        })) return nullptr;
-    return variable;
-}
-
-th_type *
-n00bb_array_index_type(th_ctx *types, core_arena_t *arena)
-{
-    static const core_string_t names[] = {
-        CORE_STRING_STATIC("int"), CORE_STRING_STATIC("uint"),
-        CORE_STRING_STATIC("u64"), CORE_STRING_STATIC("u32"),
-        CORE_STRING_STATIC("u16"), CORE_STRING_STATIC("u8"),
-    };
-    return one_of_named_types(types, arena, names,
-                              sizeof(names) / sizeof(names[0]));
+    return th_name(types, CORE_STRING_STATIC("int"));
 }
 
 
@@ -214,8 +191,6 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
         member->mutability = PARSE_SYM_CONST;
         member->comptime_value = value;
         member->has_comptime_value = true;
-        parse_sym_set_phases(member, PARSE_SYM_PHASE_BOTH,
-            PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_COMPTIME);
         parse_sym_set_storage_duration(member,
                                        PARSE_SYM_STORAGE_COMPTIME);
     }
@@ -306,6 +281,48 @@ register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("__bitptr"), result, &reference, 1) != nullptr;
 }
 
+static th_type *
+native_type(th_ctx *types, const n00bb_native_type_t *native)
+{
+    th_type *item = native->item ? native_type(types, native->item) : nullptr;
+    switch (native->kind) {
+    case N00BB_NATIVE_TYPE_REF:
+        return item ? th_ind(types, 0, item) : nullptr;
+    case N00BB_NATIVE_TYPE_ARRAY:
+        return item ? th_array(types, item) : nullptr;
+    case N00BB_NATIVE_TYPE_LIST: {
+        th_arg argument = {.kind = TH_ARG_TYPE, .type = item};
+        return item ? th_apply(types, native->name, &argument, 1) : nullptr;
+    }
+    case N00BB_NATIVE_TYPE_OPTION:
+        return item ? th_option(types, item) : nullptr;
+    default:
+        return th_name(types, native->name);
+    }
+}
+
+static th_type *
+native_signature(th_ctx *types, th_type *nil_type,
+                 const n00bb_native_declaration_t *native)
+{
+    th_param *parameters = native->param_count
+        ? core_alloc_array(th_param, native->param_count) : nullptr;
+    bool valid = true;
+    for (size_t p = 0; p < native->param_count; p++) {
+        parameters[p] = (th_param){
+            .mode = TH_IN, .type = native_type(types, native->params[p]),
+        };
+        valid = valid && parameters[p].type;
+    }
+    th_type *result = native_type(types, native->result);
+    th_type *signature = valid && result
+        ? th_func_with_error(types, result, nil_type, parameters,
+                             native->param_count, nullptr, nullptr, 0)
+        : nullptr;
+    core_free(parameters);
+    return signature;
+}
+
 bool
 register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
                              n00bb_native_declarations_t natives)
@@ -315,11 +332,8 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
                               : nullptr;
     if (!symtab || !nil_type) return false;
     for (size_t i = 0; i < natives.count; i++) {
-        th_type *failure = nullptr;
-        core_string_t error = {0};
-        th_type *signature = ir_typelang_parse_function(types,
-            natives.items[i].signature, &failure, &error);
-        core_free(error.data);
+        th_type *signature = native_signature(types, nil_type,
+                                              &natives.items[i]);
         parse_sym_entry_t *symbol = register_native_signature(symtab, types,
             nil_type, natives.items[i].name, &natives.items[i].symbol,
             signature);
@@ -328,7 +342,9 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
             return false;
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
-        else n00bb_axiom_note_foreign_native(natives.items[i].symbol);
+        else n00bb_axiom_note_foreign_native(natives.items[i].symbol,
+                                             natives.items[i].name,
+                                             natives.items[i].effects);
     }
     return true;
 }
@@ -386,10 +402,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *failure_args[] = {
         u32, u64, u64, u64, th_name(types, CORE_STRING_STATIC("string")),
     };
-    th_type *effects_subject = th_var(types);
-    th_type *effects_args[] = {
-        effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
-    };
     th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
     th_type *text = th_name(types, CORE_STRING_STATIC("string"));
     th_type *effect_subject = th_var(types);
@@ -404,7 +416,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *writes_args[] = {
         writes_subject ? th_ind(types, 0, writes_subject) : nullptr, text,
     };
-    th_type *effect_args[] = {text};
     th_type *unobserved = th_var(types);
     th_type *unobserved_args[] = {unobserved};
     return register_builtin_native_function(symtab, types, nil_type,
@@ -464,16 +475,12 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_thread_start"), i32,
             thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__function_effects"), u64, effects_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_has_effect"), boolean,
             has_effect_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_reads"), boolean, reads_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_writes"), boolean, writes_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__effect"), nil_type, effect_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__unobserved"), unobserved,
             unobserved_args, 1)
@@ -693,7 +700,7 @@ register_builtin_unsafe_arithmetic(parse_symtab_t *symtab, th_ctx *types,
         th_type *value = th_var(types);
         th_param parameters[] = {
             {.mode = TH_IN, .type = value},
-            {.mode = TH_IN, .type = entry->shift ? uint_type : value},
+            {.mode = TH_IN, .type = entry->shift ? th_var(types) : value},
         };
         th_type *signature = value && uint_type && nil_type
             ? th_func_with_error(types, value, nil_type, parameters,
@@ -1018,6 +1025,20 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     fence->type = fence_signature;
     fence->error_type = nil_type;
     fence->callable_contract = fence_contract;
+    th_type *comptime_signature = boolean
+        ? th_func_with_error(types, boolean, nil_type, nullptr, 0,
+                             nullptr, nullptr, 0) : nullptr;
+    th_type *comptime_contract = comptime_signature
+        ? th_env_signature_contract(types, comptime_signature, nil_type)
+        : nullptr;
+    parse_sym_entry_t *comptime = comptime_contract ? parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("comptime"),
+        PARSE_SYM_FUNCTION, nullptr) : nullptr;
+    if (!comptime || !parse_sym_set_binding(comptime,
+            CORE_STRING_STATIC("n00bb.comptime"), comptime)) return false;
+    comptime->type = comptime_signature;
+    comptime->error_type = nil_type;
+    comptime->callable_contract = comptime_contract;
     th_type *prefetch_item = th_var(types);
     th_type *prefetch_ref = prefetch_item
         ? th_ind(types, 0, prefetch_item) : nullptr;
@@ -1130,13 +1151,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_is_nil_signature = option_is_nil_type && bool_type
         ? th_func_with_error(types, bool_type, nil_type,
             &option_is_nil_parameter, 1, nullptr, nullptr, 0) : nullptr;
-    th_type *option_get_item = th_var(types);
-    th_type *option_get_type = option_get_item
-        ? th_option(types, option_get_item) : nullptr;
-    th_param option_get_parameter = {.mode = TH_IN, .type = option_get_type};
-    th_type *option_get_signature = option_get_type
-        ? th_func_with_error(types, option_get_item, nil_type,
-            &option_get_parameter, 1, nullptr, nullptr, 0) : nullptr;
     th_type *option_default_item = th_var(types);
     th_type *option_default_type = option_default_item
         ? th_option(types, option_default_item) : nullptr;
@@ -1150,16 +1164,12 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_is_nil_contract = option_is_nil_signature
         ? th_env_signature_contract(types, option_is_nil_signature, nil_type)
         : nullptr;
-    th_type *option_get_contract = option_get_signature
-        ? th_env_signature_contract(types, option_get_signature, nil_type)
-        : nullptr;
     th_type *option_get_or_else_contract = option_get_or_else_signature
         ? th_env_signature_contract(types, option_get_or_else_signature,
                                     nil_type) : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
-    th_type *array_write_index = n00bb_array_index_type(
-        types, &state->semantic_values);
+    th_type *array_write_index = n00bb_array_index_type(types);
     th_param array_write_parameters[] = {
         {.mode = TH_IN, .type = array_type},
         {.mode = TH_IN, .type = array_write_index},
@@ -1171,8 +1181,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *array_write_contract = array_write_signature
         ? th_env_signature_contract(types, array_write_signature, nil_type)
         : nullptr;
-    th_type *array_read_index = n00bb_array_index_type(
-        types, &state->semantic_values);
+    th_type *array_read_index = n00bb_array_index_type(types);
     th_param array_read_parameters[] = {
         {.mode = TH_IN, .type = array_type},
         {.mode = TH_IN, .type = array_read_index},
@@ -1194,8 +1203,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         ? th_env_signature_contract(types, init_signature, nil_type)
         : nullptr;
     if (!signature || !contract || !option_is_nil_signature
-        || !option_get_signature || !option_get_or_else_signature
-        || !option_is_nil_contract || !option_get_contract
+        || !option_get_or_else_signature
+        || !option_is_nil_contract
         || !option_get_or_else_contract
         || !array_read_contract
         || !array_write_contract)
@@ -1230,9 +1239,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     parse_sym_entry_t *option_is_nil_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"),
         CORE_STRING_STATIC("__option_is_nil"), PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *option_get_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__option_get"),
-        PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *option_get_or_else_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"),
         CORE_STRING_STATIC("__option_get_or_else"), PARSE_SYM_FUNCTION,
@@ -1295,7 +1301,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
     if (!symbol || !option_is_nil_symbol
-        || !option_get_symbol || !option_get_or_else_symbol
+        || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
         || !init_symbol || !init_contract
         || !os_builtins_registered || !abi_builtins_registered
@@ -1309,9 +1315,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     option_is_nil_symbol->type = option_is_nil_signature;
     option_is_nil_symbol->error_type = nil_type;
     option_is_nil_symbol->callable_contract = option_is_nil_contract;
-    option_get_symbol->type = option_get_signature;
-    option_get_symbol->error_type = nil_type;
-    option_get_symbol->callable_contract = option_get_contract;
     option_get_or_else_symbol->type = option_get_or_else_signature;
     option_get_or_else_symbol->error_type = nil_type;
     option_get_or_else_symbol->callable_contract = option_get_or_else_contract;
@@ -1335,7 +1338,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     return register_builtin_comparison_symbols(symtab, state, types)
         && symbol->callable_contract
         && option_is_nil_symbol->callable_contract
-        && option_get_symbol->callable_contract
         && option_get_or_else_symbol->callable_contract
         && array_read_symbol->callable_contract
         && array_write_symbol->callable_contract
@@ -1351,8 +1353,8 @@ n00bb_register_operator_function(th_env *environment, th_ctx *types,
                                  th_env_visibility_t visibility)
 {
     th_param parameters[] = {
-        {.mode = TH_IN, .type = self},
-        {.mode = TH_IN, .type = other},
+        {.mode = TH_VIEW, .type = self},
+        {.mode = TH_VIEW, .type = other},
     };
     th_type *signature = th_func_with_error(types, result,
         th_name(types, CORE_STRING_STATIC("nil")), parameters, other ? 2 : 1,
@@ -1489,7 +1491,7 @@ register_operator_trait(th_env *environment, th_ctx *types,
 {
     th_param parameters[] = {
         {.mode = receiver_mode, .type = th_var(types)},
-        {.mode = TH_IN, .type = th_var(types)},
+        {.mode = TH_VIEW, .type = th_var(types)},
     };
     th_type *contract = result
         ? th_func_with_error(types, result, th_var(types), parameters, 2,
@@ -1511,13 +1513,12 @@ static const core_string_t numeric_types[] = {
 };
 
 static bool
-register_builtin_binary_operators(th_env *environment, th_ctx *types,
-                                  core_arena_t *arena)
+register_builtin_binary_operators(th_env *environment, th_ctx *types)
 {
     const n00bb_binary_operator_t *operators = n00bb_binary_operators;
     for (size_t o = 0; o < n00bb_binary_operator_count; o++) {
         if (!register_operator_trait(environment, types, operators[o].trait,
-                operators[o].method, TH_IN, th_var(types))
+                operators[o].method, TH_VIEW, th_var(types))
             || !register_operator_trait(environment, types,
                 operators[o].in_place_trait, operators[o].in_place,
                 TH_INOUT, th_name(types, CORE_STRING_STATIC("nil")))) return false;
@@ -1527,7 +1528,7 @@ register_builtin_binary_operators(th_env *environment, th_ctx *types,
             if (operators[o].unsigned_only && !n00bb_bitwise_type(self))
                 continue;
             th_type *other = operators[o].shift
-                ? n00bb_array_index_type(types, arena) : self;
+                ? th_name(types, CORE_STRING_STATIC("uint")) : self;
             if (!n00bb_register_operator_function(environment, types,
                     operators[o].trait, operators[o].method, name, self,
                     other, self, CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC))
@@ -1552,7 +1553,7 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
         th_type *receiver = th_var(types);
         th_type *result = operators[o].boolean
             ? th_name(types, CORE_STRING_STATIC("bool")) : th_var(types);
-        th_param contract_param = {.mode = TH_IN, .type = receiver};
+        th_param contract_param = {.mode = TH_VIEW, .type = receiver};
         th_type *contract = th_func_with_error(types, result,
             th_var(types), &contract_param, 1, nullptr, nullptr, 0);
         th_member method = {
@@ -1616,8 +1617,8 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
         th_type *argument = th_var(types);
         th_type *result = th_name(types, operators[o].result);
         th_param parameters[] = {
-            {.mode = TH_IN, .type = receiver},
-            {.mode = TH_IN, .type = argument},
+            {.mode = TH_VIEW, .type = receiver},
+            {.mode = TH_VIEW, .type = argument},
         };
         th_type *contract = th_func_with_error(types, result,
             th_name(types, CORE_STRING_STATIC("nil")), parameters, 2, nullptr, nullptr, 0);
@@ -1636,19 +1637,13 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
                                           CORE_STRING_STATIC("Equal"));
         size_t equality_count = equal_trait
             ? sizeof(equality_types) / sizeof(equality_types[0]) : 0;
-        for (size_t n = 0; n <= ordered_count + equality_count; n++) {
-            bool sized_family = n == ordered_count + equality_count;
-            core_string_t name = sized_family
-                ? CORE_STRING_STATIC("sized_integer")
-                : n < ordered_count ? ordered_types[n]
+        for (size_t n = 0; n < ordered_count + equality_count; n++) {
+            core_string_t name = n < ordered_count ? ordered_types[n]
                 : equality_types[n - ordered_count];
-            th_type *self = sized_family ? th_var(types) : th_name(types, name);
-            if (sized_family && !th_var_constrain(types, self,
-                    (th_constraint){.kind = TH_CON_KIND,
-                                    .type_kind = TH_BITINT})) return false;
+            th_type *self = th_name(types, name);
             th_param primitive_params[] = {
-                {.mode = TH_IN, .type = self},
-                {.mode = TH_IN, .type = self},
+                {.mode = TH_VIEW, .type = self},
+                {.mode = TH_VIEW, .type = self},
             };
             th_type *signature = th_func_with_error(types, result,
                 th_name(types, CORE_STRING_STATIC("nil")), primitive_params, 2,
@@ -1671,8 +1666,8 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
             th_type *reference = referent
                 ? th_ind(types, 0, referent) : nullptr;
             th_param ref_params[] = {
-                {.mode = TH_IN, .type = reference},
-                {.mode = TH_IN, .type = reference},
+                {.mode = TH_VIEW, .type = reference},
+                {.mode = TH_VIEW, .type = reference},
             };
             th_type *signature = reference
                 ? th_func_with_error(types, result,
@@ -1690,31 +1685,14 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
 
 
 bool
-register_builtin_traits(th_env *environment, th_ctx *types,
-                        core_arena_t *arena)
+register_builtin_traits(th_env *environment, th_ctx *types)
 {
     th_type *methods = th_record(types, nullptr, 0);
     if (!methods ||
         !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Sequence_Like"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
-        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Set_Like"),
-            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
         !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Dict_Like"),
-            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
-        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Brace_Literal"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods))
-        return false;
-    th_type *callback_referent = th_var(types);
-    th_type *callback_reference = callback_referent
-        ? th_ind(types, 0, callback_referent) : nullptr;
-    if (!callback_referent || !callback_reference
-        || !th_var_constrain(types, callback_referent,
-            (th_constraint){.kind = TH_CON_KIND,
-                            .type_kind = TH_FUNCTION})
-        || !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Callback"),
-            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods)
-        || !th_env_register_intrinsic_type_pattern(environment, CORE_STRING_STATIC("Callback"),
-                                                    callback_reference))
         return false;
     th_type *finalizer_receiver = th_var(types);
     th_param finalizer_parameter = {
@@ -1748,7 +1726,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         || !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Init"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, initializer_contract))
         return false;
-    if (!register_builtin_binary_operators(environment, types, arena))
+    if (!register_builtin_binary_operators(environment, types))
         return false;
     if (!register_builtin_unary_operators(environment, types)) return false;
     if (!register_builtin_comparison_operators(environment, types)) return false;
@@ -1759,7 +1737,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
     th_type *iter_signature = th_func_with_error(types, cursor, iter_error,
         &iter_param, 1, nullptr, nullptr, 0);
     th_member iter_method = {
-        .name = CORE_STRING_STATIC("iter"),
+        .name = CORE_STRING_STATIC("__iterator"),
         .type = iter_signature,
     };
     th_type *iter_contracts = iter_method.type
@@ -1774,7 +1752,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         ? th_func_with_error(types, optional_item, next_error, &next_param,
             1, nullptr, nullptr, 0) : nullptr;
     th_member next_method = {
-        .name = CORE_STRING_STATIC("next"),
+        .name = CORE_STRING_STATIC("__next"),
         .type = next_signature,
     };
     th_param cleanup_param = {.mode = TH_CONSUME, .type = iterator};
@@ -1783,7 +1761,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         nullptr, nullptr, 0);
     th_member iterator_methods[] = {
         next_method,
-        {.name = CORE_STRING_STATIC("cleanup"), .type = cleanup_signature},
+        {.name = CORE_STRING_STATIC("__cleanup"), .type = cleanup_signature},
     };
     th_type *next_contracts = next_method.type && cleanup_signature
         ? th_record(types, iterator_methods, 2) : nullptr;
@@ -1795,15 +1773,11 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         return false;
 
     th_type *option_receiver = th_var(types);
-    th_type *option_result = th_var(types);
     th_type *option_bool = th_name(types, CORE_STRING_STATIC("bool"));
     th_param is_nil_parameter = {.mode = TH_IN, .type = option_receiver};
     th_type *is_nil_signature = option_bool
         ? th_func_with_error(types, option_bool, th_name(types, CORE_STRING_STATIC("nil")),
             &is_nil_parameter, 1, nullptr, nullptr, 0) : nullptr;
-    th_param get_parameter = {.mode = TH_IN, .type = option_receiver};
-    th_type *get_signature = th_func_with_error(types, option_result,
-        th_name(types, CORE_STRING_STATIC("nil")), &get_parameter, 1, nullptr, nullptr, 0);
     th_type *option_fallback_receiver = th_var(types);
     th_type *option_fallback_result = th_var(types);
     th_param get_or_else_parameters[] = {
@@ -1815,10 +1789,9 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         get_or_else_parameters, 2, nullptr, nullptr, 0);
     th_member option_methods[] = {
         {.name = CORE_STRING_STATIC("is_nil"), .type = is_nil_signature},
-        {.name = CORE_STRING_STATIC("get"), .type = get_signature},
         {.name = CORE_STRING_STATIC("get_or_else"), .type = get_or_else_signature},
     };
-    th_type *option_contracts = th_record(types, option_methods, 3);
+    th_type *option_contracts = th_record(types, option_methods, 2);
 
     th_type *option_item = th_var(types);
     th_type *option_type = th_option(types, option_item);
@@ -1826,13 +1799,6 @@ register_builtin_traits(th_env *environment, th_ctx *types,
     th_type *builtin_is_nil_signature = option_type && option_bool
         ? th_func_with_error(types, option_bool, th_name(types, CORE_STRING_STATIC("nil")),
             &builtin_is_nil_parameter, 1, nullptr, nullptr, 0) : nullptr;
-
-    th_type *get_item = th_var(types);
-    th_type *get_option = th_option(types, get_item);
-    th_param builtin_get_parameter = {.mode = TH_IN, .type = get_option};
-    th_type *builtin_get_signature = get_option
-        ? th_func_with_error(types, get_item, th_name(types, CORE_STRING_STATIC("nil")),
-            &builtin_get_parameter, 1, nullptr, nullptr, 0) : nullptr;
 
     th_type *fallback_item = th_var(types);
     th_type *fallback_option = th_option(types, fallback_item);
@@ -1844,21 +1810,16 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         ? th_func_with_error(types, fallback_item, th_name(types, CORE_STRING_STATIC("nil")),
             builtin_get_or_else_parameters, 2, nullptr, nullptr, 0) : nullptr;
     if (!option_contracts || !option_methods[0].type
-        || !option_methods[1].type || !option_methods[2].type
+        || !option_methods[1].type
         || !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Option"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, option_contracts)
-        || !builtin_is_nil_signature || !builtin_get_signature
+        || !builtin_is_nil_signature
         || !builtin_get_or_else_signature
         || !th_env_register_function(environment,
             CORE_STRING_STATIC("builtins.__option_is_nil"),
             CORE_STRING_STATIC("is_nil"), CORE_STRING_STATIC("builtins"),
             CORE_STRING_STATIC("default"), TH_ENV_PUBLIC,
             builtin_is_nil_signature)
-        || !th_env_register_function(environment,
-            CORE_STRING_STATIC("builtins.__option_get"),
-            CORE_STRING_STATIC("get"), CORE_STRING_STATIC("builtins"),
-            CORE_STRING_STATIC("default"), TH_ENV_PUBLIC,
-            builtin_get_signature)
         || !th_env_register_function(environment,
             CORE_STRING_STATIC("builtins.__option_get_or_else"), CORE_STRING_STATIC("get_or_else"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC,
@@ -1880,7 +1841,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         ? th_record(types, &read_method, 1) : nullptr;
     th_type *read_item = th_var(types);
     th_type *read_array = th_array(types, read_item);
-    th_type *array_read_index = n00bb_array_index_type(types, arena);
+    th_type *array_read_index = n00bb_array_index_type(types);
     th_param array_read_parameters[] = {
         {.mode = TH_IN, .type = read_array},
         {.mode = TH_IN, .type = array_read_index},
@@ -1965,7 +1926,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         ? th_record(types, &slice_write_method, 1) : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
-    th_type *array_write_index = n00bb_array_index_type(types, arena);
+    th_type *array_write_index = n00bb_array_index_type(types);
     th_param array_write_parameters[] = {
         {.mode = TH_INOUT, .type = array_type},
         {.mode = TH_IN, .type = array_write_index},
@@ -1987,19 +1948,15 @@ register_builtin_traits(th_env *environment, th_ctx *types,
 
     th_type *list_element = th_var(types);
     th_type *array_element = th_var(types);
-    th_type *set_element = th_var(types);
     th_type *dict_key = th_var(types);
     th_type *dict_value = th_var(types);
     th_arg list_arg = {.kind = TH_ARG_TYPE, .type = list_element};
-    th_arg set_arg = {.kind = TH_ARG_TYPE, .type = set_element};
     th_arg dict_args[] = {
         {.kind = TH_ARG_TYPE, .type = dict_key},
         {.kind = TH_ARG_TYPE, .type = dict_value},
     };
     th_type *list = th_apply(types,
         CORE_STRING_STATIC("builtin.containers.list.List"), &list_arg, 1);
-    th_type *set = th_apply(types,
-        CORE_STRING_STATIC("builtin.containers.set.Set"), &set_arg, 1);
     th_type *dict = th_apply(types,
         CORE_STRING_STATIC("builtin.containers.dict.Dict"), dict_args, 2);
     return th_env_register_intrinsic_type_pattern(environment,
@@ -2007,13 +1964,7 @@ register_builtin_traits(th_env *environment, th_ctx *types,
            th_env_register_intrinsic_type_pattern(environment,
                CORE_STRING_STATIC("Sequence_Like"), th_array(types, array_element)) &&
            th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Set_Like"), set) &&
-           th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Brace_Literal"), set) &&
-           th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Dict_Like"), dict) &&
-           th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Brace_Literal"), dict);
+               CORE_STRING_STATIC("Dict_Like"), dict);
 }
 bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
@@ -2037,6 +1988,7 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_gc_memory_function(symbol)
             || n00bb_builtin_volatile_load_function(symbol)
             || n00bb_builtin_signal_fence_function(symbol)
+            || n00bb_builtin_comptime_function(symbol)
             || n00bb_builtin_prefetch_function(symbol)
             || n00bb_builtin_atomic_rmw_function(symbol)
             || n00bb_builtin_atomic_cas_function(symbol)
@@ -2053,7 +2005,7 @@ n00bb_builtin_native_function(parse_sym_entry_t *symbol)
         && parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.abi.native"));
 }
 
-bool
+static bool
 n00bb_builtin_init_function(parse_sym_entry_t *symbol)
 {
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
@@ -2130,6 +2082,14 @@ n00bb_builtin_signal_fence_function(parse_sym_entry_t *symbol)
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.gc.signal_fence"));
+}
+
+bool
+n00bb_builtin_comptime_function(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        && !symbol->decl_node && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.comptime"));
 }
 
 bool

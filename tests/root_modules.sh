@@ -54,3 +54,13 @@ grep -Fq 'N00B-B0024' "$tmp/outside.log" || {
     cat "$tmp/outside.log" >&2
     exit 1
 }
+
+printf 'import sys.env\nrequire sys.env.args().len() > 0\n' >"$tmp/args.n"
+for place in "$root/../../../lib/sys" "$tmp"; do
+    if ! (cd "$place" && "$compiler" check "$tmp/args.n") \
+            >"$tmp/nested.log" 2>&1; then
+        echo "checking from $place failed" >&2
+        cat "$tmp/nested.log" >&2
+        exit 1
+    fi
+done

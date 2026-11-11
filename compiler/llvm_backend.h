@@ -11,7 +11,6 @@
 #include "lib/target.h"
 
 typedef struct n00bb_llvm_backend_t n00bb_llvm_backend_t;
-typedef struct n00bb_native_cache_t n00bb_native_cache_t;
 
 typedef struct {
     uint64_t typehash;
@@ -23,7 +22,7 @@ typedef struct {
 typedef struct {
     const ir_global_t *global;
     core_string_t native_name;
-    uint32_t storage_index;
+    uint64_t storage_key;
 } n00bb_llvm_global_binding_t;
 
 typedef struct {
@@ -45,7 +44,8 @@ typedef struct {
 } n00bb_llvm_index_table_t;
 
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(const ir_module_t *ir,
-    bool debug_enabled, bool native_cpu, core_diagnostics_t *diagnostics);
+    bool debug_enabled, bool native_cpu, uint64_t target_features,
+    core_diagnostics_t *diagnostics);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 bool n00bb_llvm_backend_bind_type_indices(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,
@@ -80,16 +80,23 @@ void n00bb_llvm_callback_bindings_free(
 bool n00bb_llvm_backend_bind_reachable_functions(
     n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count,
     const n00bb_llvm_callback_bindings_t *bindings);
+bool n00bb_llvm_backend_restrict_functions(n00bb_llvm_backend_t *backend,
+                                           ir_func_t *const *functions,
+                                           size_t count);
 bool n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
 bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
 void n00bb_llvm_backend_enable_panic_trap(n00bb_llvm_backend_t *backend);
-void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
-    n00bb_native_cache_t *cache);
 
 uint32_t n00bb_llvm_mutator_flags(const ir_func_t *function, uint32_t flags);
 void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     ir_summaries_t *summaries);
+void n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
+    const core_dict_t *decisions);
+core_string_t n00bb_llvm_backend_mutator_entries(
+    const n00bb_llvm_backend_t *backend);
+void n00bb_llvm_mutator_decisions_add(core_dict_t *decisions,
+    ir_module_t *module, core_string_t entries);
 
 bool n00bb_llvm_backend_write_bitcode(
     n00bb_llvm_backend_t *backend, core_buffer_t *out,
@@ -118,5 +125,6 @@ void n00bb_llvm_set_profiling(bool enabled);
 void n00bb_llvm_set_opt_level(int level);
 bool n00bb_llvm_backend_link_bitcode(
     const n00bb_llvm_bitcode_input_t *inputs, size_t count,
-    bool debug_enabled, bool native_cpu, bool emit_frame_maps,
-    core_buffer_t *out, core_diagnostics_t *diagnostics);
+    bool debug_enabled, bool native_cpu, uint64_t target_features,
+    bool emit_frame_maps, core_buffer_t *out,
+    core_diagnostics_t *diagnostics);

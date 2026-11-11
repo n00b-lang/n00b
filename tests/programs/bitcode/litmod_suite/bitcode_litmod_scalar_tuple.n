@@ -24,7 +24,7 @@ func observe(item: Tuple[string, int]) {
     require true
 }
 
-when comptime() {
+if comptime() {
     observe("comptime result"'bundle)
     observe([3, 4]'dynamic)
 }

@@ -20,6 +20,7 @@ typedef enum : uint8_t {
     REL_CALL_UNKNOWN,
     REL_OUT_ARGUMENT,
     REL_DISCARDED,
+    REL_DECLARED_EFFECT,
     REL_ADDRESSABLE_ARGUMENT,
     REL_RESULT_EFFECT,
     REL_ASSERT_EFFECT,
@@ -59,6 +60,7 @@ static const struct {
     [REL_CALL_UNKNOWN]         = {CORE_STRING_STATIC("call_unknown"), 1},
     [REL_OUT_ARGUMENT]         = {CORE_STRING_STATIC("out_argument"), 1},
     [REL_DISCARDED]            = {CORE_STRING_STATIC("discarded"), 1},
+    [REL_DECLARED_EFFECT]      = {CORE_STRING_STATIC("declared_effect"), 1},
     [REL_ADDRESSABLE_ARGUMENT] = {CORE_STRING_STATIC("addressable_argument"),
                                   2},
     [REL_RESULT_EFFECT]        = {CORE_STRING_STATIC("result_effect"), 1},
@@ -158,12 +160,15 @@ static const rule_t rules[] = {
     {ATOM1(REL_SIDE_EFFECT, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
       ATOM1(REL_ASSERT_EFFECT, "K")}},
+    {ATOM1(REL_SIDE_EFFECT, "S"), 1, {ATOM1(REL_DECLARED_EFFECT, "S")}},
+    {ATOM1(REL_EFFECTFUL_CALL, "S"), 1, {ATOM1(REL_DECLARED_EFFECT, "S")}},
     {ATOM1(REL_EFFECTFUL_CALL, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
       ATOM1(REL_RESULT_EFFECT, "K")}},
-    {ATOM1(REL_IGNORED_RESULT, "S"), 4,
+    {ATOM1(REL_IGNORED_RESULT, "S"), 5,
      {ATOM1(REL_DISCARDED, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
-      NOT1(REL_VISIBLE_WRITE, "S"), NOT1(REL_EFFECTFUL_CALL, "S")}},
+      NOT1(REL_VISIBLE_WRITE, "S"), NOT1(REL_EFFECTFUL_CALL, "S"),
+      NOT1(REL_OUT_ARGUMENT, "S")}},
     {ATOM2(REL_RESULT_ALIAS, "S", "I"), 3,
      {ATOM1(REL_IGNORED_RESULT, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
       ATOM2(REL_RETURN_ALIAS, "G", "I")}},
@@ -201,12 +206,16 @@ static const core_string_t result_effects[] = {
     CORE_STRING_STATIC("diverges"),
     CORE_STRING_STATIC("calls_unknown"),
     CORE_STRING_STATIC("may_io"),
+    CORE_STRING_STATIC("may_input"),
+    CORE_STRING_STATIC("may_output"),
     CORE_STRING_STATIC("calls_finalizers"),
     CORE_STRING_STATIC("starts_threads"),
 };
 
 static const core_string_t assert_effects[] = {
     CORE_STRING_STATIC("may_io"),
+    CORE_STRING_STATIC("may_input"),
+    CORE_STRING_STATIC("may_output"),
     CORE_STRING_STATIC("may_block"),
     CORE_STRING_STATIC("diverges"),
 };
@@ -306,8 +315,19 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
                   const ir_summary_t *summary, uint32_t mask)
 {
     uint32_t flags = ir_summary_flags(summary) & mask;
+    static const uint32_t first[] = {
+        IR_SUMMARY_MAY_OUTPUT, IR_SUMMARY_MAY_INPUT, IR_SUMMARY_MAY_IO,
+    };
+    uint32_t early = 0;
+    for (size_t f = 0; f < sizeof(first) / sizeof(*first); f++) {
+        early |= first[f];
+        for (uint32_t bit = 0; bit < IR_SEFFECT_FLAG_BITS; bit++)
+            if ((flags & first[f]) == (1u << bit))
+                fact(facts, REL_FLAG, symbol,
+                     constant(facts, ir_summary_flag_name(bit)), 0);
+    }
     for (uint32_t bit = 0; bit < IR_SEFFECT_FLAG_BITS; bit++)
-        if (flags & (1u << bit))
+        if ((flags & (1u << bit)) && !(early & (1u << bit)))
             fact(facts, REL_FLAG, symbol,
                  constant(facts, ir_summary_flag_name(bit)), 0);
     if ((flags & IR_SUMMARY_MAY_TRAP)
@@ -319,6 +339,8 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
         ir_splace_t       places[2];
         uint32_t          count = ir_summary_path_places(
             ir_summary_function(summary), path, places);
+        bool shared_root = path->root == IR_SPLACE_GLOBAL
+            || path->root == IR_SPLACE_THREAD;
         for (uint32_t p = 0; p < count; p++) {
             core_datalog_symbol_t place = place_symbol(facts, &places[p]);
             uint8_t flags = places[p].kind == IR_SPLACE_HEAP
@@ -329,6 +351,12 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
                 if (flags & access_names[n].flag)
                     fact(facts, REL_ACCESS, symbol, place,
                          constant(facts, access_names[n].name));
+            if (!shared_root || places[p].kind != IR_SPLACE_HEAP
+                || !(flags & IR_SPATH_WRITE)) continue;
+            fact(facts, REL_ACCESS, symbol, place_symbol(facts,
+                     &(ir_splace_t){.kind = path->root,
+                                    .global = path->global}),
+                 constant(facts, CORE_STRING_STATIC("write")));
         }
     }
 }
@@ -439,6 +467,7 @@ site_symbol(ir_summary_facts_t *facts, const ir_instr_t *in)
 
 typedef struct {
     ir_summary_facts_t   *facts;
+    const ir_func_t      *caller;
     const ir_instr_t     *call;
     core_datalog_symbol_t site;
 } callee_visit_t;
@@ -450,6 +479,11 @@ add_callee(void *context, const ir_func_t *target, const ir_summary_t *summary)
     ir_summary_facts_t *facts = visit->facts;
     core_datalog_symbol_t callee = function_symbol(facts, target, summary);
     fact(facts, REL_CALL_TARGET, visit->site, callee, 0);
+    if ((summary && ir_summary_effect_count(summary))
+        || (target
+            && ir_summary_call_adds_effects(facts->summaries, visit->caller,
+                                            target)))
+        fact(facts, REL_DECLARED_EFFECT, visit->site, 0, 0);
     for (uint32_t i = 0; summary && i < ir_summary_path_count(summary); i++) {
         const ir_spath_t *path = ir_summary_path_at(summary, i);
         if (path->root == IR_SPLACE_PARAM
@@ -475,7 +509,7 @@ static void
 add_call(ir_summary_facts_t *facts, ir_func_t *function, ir_instr_t *in)
 {
     core_datalog_symbol_t site = site_symbol(facts, in);
-    callee_visit_t visit = {facts, in, site};
+    callee_visit_t visit = {facts, function, in, site};
     const ir_summary_t *callbacks = in->op == IR_OP_CALLBACK_INVOKE
         ? ir_summary_entries(facts->summaries, IR_SUMMARY_CALLS_CALLBACKS)
         : nullptr;

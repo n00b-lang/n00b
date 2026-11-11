@@ -1,0 +1,3 @@
+tests/diagnostics/modules/imported_narrowing/narrowing_user.n:6:22: error N00B-S0009: `src.maybe` may be nil here
+  tests/diagnostics/modules/imported_narrowing/narrowing_user.n:5:9: note: `src.maybe` is assigned here, after the test
+  help: use its value only where a test such as `src.maybe != nil` proves it, with no assignment to it in between

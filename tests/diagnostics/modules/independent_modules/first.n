@@ -6,5 +6,5 @@ record Pair {
     right: Dict[int]
 }
 func pair() -> Pair {
-    return (left = 1, right = {:})
+    return (left = 1, right = {})
 }

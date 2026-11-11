@@ -97,7 +97,7 @@ private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
         return 0
     }
 
-    let at: u32 = off.get()
+    let at: u32 = off
     let len: u32 = generated.decomposition.canon_decomp_data(at)
 
     var i: u32 = 0
@@ -124,7 +124,7 @@ private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
         return 0
     }
 
-    let at: u32 = off.get()
+    let at: u32 = off
     let len: u32 = generated.decomposition.compat_decomp_data(at)
 
     var i: u32 = 0

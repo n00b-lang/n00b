@@ -50,7 +50,7 @@ func cache_take(heap: Ref[internal.gc.core.Heap], total: uint) -> Ref[internal.g
         let slot:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.__value.los_cache[index]
         let candidate: Ref[internal.gc.core.Los_Obj]?      = slot.__value
         if candidate != nil {
-            let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
+            let obj: Ref[internal.gc.core.Los_Obj] = candidate
             if obj.__value.bytes >= total {
                 slot.__value = obj.__value.next
                 heap.__value.los_cache_bytes -= obj.__value.mapped_bytes
@@ -68,7 +68,7 @@ func cache_drain(heap: Ref[internal.gc.core.Heap]) {
         let slot:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.__value.los_cache[index]
         var candidate: Ref[internal.gc.core.Los_Obj]?      = slot.__value
         while candidate != nil {
-            let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
+            let obj: Ref[internal.gc.core.Los_Obj] = candidate
             slot.__value = obj.__value.next
             internal.gc.registry.los_unregister(heap, obj)
             internal.memory.unmap(obj.__value.mapping, obj.__value.mapped_bytes)
@@ -90,6 +90,7 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
     }
     if __abi_ref_address(obj.__value.mapping) == __abi_ref_address(obj) and
         obj.__value.mapped_bytes == obj.__value.bytes and
+        obj.__value.bytes > los_threshold and
         obj.__value.bytes <= los_cache_object and
         heap.__value.los_cache_bytes + obj.__value.mapped_bytes <= limit {
         let index: uint = size_class(obj.__value.bytes)
@@ -98,7 +99,7 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
             let row: Ref[internal.abi.Type_Record]? = internal.abi.reference_target(typeof(ref obj.__value.hdr))
             if row != nil {
                 let payload: Ref[byte] = __gc_byte_offset(obj.__value.mapping,
-                    internal.gc.core.los_header_offset() + internal.abi.size_bytes(row.get()))
+                    internal.gc.core.los_header_offset() + internal.abi.size_bytes(row))
                 let end:   Ref[byte] = __gc_byte_offset(obj.__value.mapping, obj.__value.bytes)
                 let bytes: int       = __gc_byte_diff(end, payload)
                 require bytes >= 0
@@ -164,13 +165,13 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
         obj= cache_take(heap, total)
     }
     if obj!= nil {
-        let reused: Ref[internal.gc.core.Los_Obj]       = obj.get()
+        let reused: Ref[internal.gc.core.Los_Obj]       = obj
         let header: Ref[internal.gc.core.Object_Header] = ref reused.__value.hdr
         __gc_memset(header, 0, object_bytes)
         if backing != nil {
             require internal.gc.core.initialize_array_backing(
                 internal.gc.core.payload_of(header), payload_bytes,
-                backing.get())
+                backing)
         }
         header.__value.meta = internal.gc.core.meta_make(payload_bytes, flags)
         __atomic_store(ref reused.__value.marked, epoch)
@@ -179,16 +180,16 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
         let mapped: Ref[byte]? = internal.memory.map_zeroed(mapped_bytes,
             map_alignment)
         if mapped != nil {
-            let base:  Ref[byte]               = __gc_byte_offset(mapped.get(), pad)
+            let base:  Ref[byte]               = __gc_byte_offset(mapped, pad)
             let fresh: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] base
-            fresh.__value.mapping = mapped.get()
+            fresh.__value.mapping = mapped
             fresh.__value.mapped_bytes = mapped_bytes
             fresh.__value.bytes = total
             fresh.__value.hdr.type_index = type_index
             if backing != nil {
                 require internal.gc.core.initialize_array_backing(
                     internal.gc.core.payload_of(ref fresh.__value.hdr), payload_bytes,
-                    backing.get())
+                    backing)
             }
             fresh.__value.hdr.meta = internal.gc.core.meta_make(payload_bytes,
                 flags)
@@ -196,12 +197,12 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
             if internal.gc.registry.los_register(heap, fresh) {
                 obj= fresh
             } else {
-                internal.memory.unmap(mapped.get(), mapped_bytes)
+                internal.memory.unmap(mapped, mapped_bytes)
             }
         }
     }
     if obj!= nil {
-        let allocated: Ref[internal.gc.core.Los_Obj] = obj.get()
+        let allocated: Ref[internal.gc.core.Los_Obj] = obj
         allocated.__value.next = heap.__value.los
         heap.__value.los = allocated
         if finalizable {
@@ -214,7 +215,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
         let payload: Ref[byte] = internal.gc.core.payload_of(ref allocated.__value.hdr)
         if slot != nil {
             let published: Ref[byte]? = payload
-            slot.get().__value = published
+            slot.__value = published
             mutator.__value.last_alloc = nil
         } else {
             mutator.__value.last_alloc = payload
@@ -229,7 +230,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
 func free_all(heap: Ref[internal.gc.core.Heap]) {
     var candidate: Ref[internal.gc.core.Los_Obj]? = heap.__value.los
     while candidate != nil {
-        let obj:  Ref[internal.gc.core.Los_Obj]  = candidate.get()
+        let obj:  Ref[internal.gc.core.Los_Obj]  = candidate
         let next: Ref[internal.gc.core.Los_Obj]? = obj.__value.next
         internal.memory.unmap(obj.__value.mapping, obj.__value.mapped_bytes)
         candidate = next

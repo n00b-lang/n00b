@@ -1,0 +1,43 @@
+object Counter {
+    count: int
+}
+func drop(consume c: Counter) {
+}
+func twice() {
+    var c: Counter = (count = 1)
+    drop(c)
+    drop(c)
+}
+func reuse(flag: bool) -> int {
+    var c: Counter = (count = 1)
+    if flag {
+        drop(c)
+    }
+    return c.count
+}
+func refill() -> int {
+    var c: Counter = (count = 1)
+    drop(c)
+    c = (count = 2)
+    return c.count
+}
+func alias_use() -> int {
+    var c: Counter = (count = 1)
+    let other = c
+    drop(c)
+    return other.count
+}
+func in_loop(n: int) {
+    var c: Counter = (count = 1)
+    var i = 0
+    while i < n {
+        drop(c)
+        i += 1
+    }
+}
+func buffer_alias() -> uint {
+    var b: Buffer = buffer_from_string("detach")
+    var shared: Buffer = b
+    let s: string = to_string(b)
+    return byte_len(shared) + byte_len(s)
+}

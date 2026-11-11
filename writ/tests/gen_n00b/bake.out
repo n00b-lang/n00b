@@ -436,7 +436,7 @@ func __bake_root_cell(raw: uint) -> Bake_Root {
 func __finalize(consume self: Ref[Bake_Root_Cell]) {
     if self.__value.raw != nil and debug_enabled() and !__abi_baked_address(unsafe_cast[uint] self.__value.raw) {
         __fd_write(2, "Bake_Root collected while open; releasing it\n")
-        let released = __bake_free(unsafe_cast[uint] self.__value.raw)
+        _ = __bake_free(unsafe_cast[uint] self.__value.raw)
     }
 }
 
@@ -457,24 +457,24 @@ const BAKE_QUERY_CACHE: i32 = 8
 const BAKE_QUERY_FD: i32 = 9
 
 func bake_add(left: i64, right: i64) -> i64 {
-    let result = __bake_add(left, right)
-    return result
+    let returned = __bake_add(left, right)
+    return returned
 }
 
 func bake_multiply(left: i64, right: i64) -> i64 {
-    let result = __bake_multiply(left, right)
-    return result
+    let returned = __bake_multiply(left, right)
+    return returned
 }
 
 func bake_build(spec: string) -> Bake_Root fail: Error {
     var spec_value: Array[u8] = __text_byte_array(spec)
-    var result: uint = 0
-    let outcome = __bake_build(ref spec_value, ref result)
+    var returned: uint = 0
+    let outcome = __bake_build(ref spec_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_build")
         fail failure
     }
-    return __bake_root_cell(result)
+    return __bake_root_cell(returned)
 }
 
 func bake_query(root: Bake_Root, key: i32) -> i64 {
@@ -483,10 +483,10 @@ func bake_query(root: Bake_Root, key: i32) -> i64 {
     }
     let __fixup_root: string? = __ffi_fixup(root.__value.raw)
     if __fixup_root != nil {
-        panic(__fixup_root.get())
+        panic(__fixup_root)
     }
-    let result = __bake_query(unsafe_cast[uint] root.__value.raw, key)
-    return result
+    let returned = __bake_query(unsafe_cast[uint] root.__value.raw, key)
+    return returned
 }
 
 func bake_reopen(root: Bake_Root) fail: Error {
@@ -512,25 +512,25 @@ func bake_reopen(root: Bake_Root) fail: Error {
 
 func bake_open(path: string) -> i32 fail: Error {
     var path_value: Array[u8] = __text_byte_array(path)
-    var result: i32 = 0
-    let outcome = __bake_open(ref path_value, ref result)
+    var returned: i32 = 0
+    let outcome = __bake_open(ref path_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_open")
         fail failure
     }
-    return result
+    return returned
 }
 
 func bake_touch(path: string, text: string) -> i32 fail: Error {
     var path_value: Array[u8] = __text_byte_array(path)
     var text_value: Array[u8] = __text_byte_array(text)
-    var result: i32 = 0
-    let outcome = __bake_touch(ref path_value, ref text_value, ref result)
+    var returned: i32 = 0
+    let outcome = __bake_touch(ref path_value, ref text_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_touch")
         fail failure
     }
-    return result
+    return returned
 }
 
 func close(modify self: Bake_Root) fail: Error {

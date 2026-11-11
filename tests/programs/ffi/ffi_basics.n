@@ -25,6 +25,7 @@ const shim_c = [-
 library c
 header <stdlib.h>
 fn abs(x: c_int) -> c_int
+fn getenv(name: *cstr) -> ?cstr static
 -]'ffi
 
 require c.LIMIT == 40
@@ -33,4 +34,10 @@ require limits_path.LIMIT == 40
 require limits_search.LIMIT == 40
 require raw_c.abs_raw(-5) == 5
 require shim_c.abs(-5) == 5
+try {
+    require shim_c.getenv("PATH")! != nil
+    require shim_c.getenv("N00B_FFI_BASICS_UNSET")! == nil
+} fail(failure) {
+    require false
+}
 __fd_write(2, "ok")

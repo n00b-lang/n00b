@@ -18,3 +18,5 @@ let all_named = area(height = 3, width = 2)
 let extra_items = total(1, 2, 3, bias = 4)
 let keyword_first_items = total(bias = 4, 1, 2, 3)
 let whole_array = total(1, [2, 3])
+let items: Array[int] = [2, 3]
+let whole_variable = total(1, items)

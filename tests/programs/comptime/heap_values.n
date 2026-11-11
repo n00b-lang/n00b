@@ -1,0 +1,14 @@
+var greeting: string
+var squares: Array[int]
+
+if comptime() {
+    greeting = "hello from comptime, long enough to live on the heap"
+    var built: Array[int] = [1, 4, 9, 16]
+    squares = built
+}
+
+func start() {
+    if squares.len() == 4 and squares[3] == 16 {
+        __fd_write(2, greeting)
+    }
+}

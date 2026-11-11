@@ -1,0 +1,7 @@
+tests/diagnostics/lower/callback_arguments.n:29:5: error N00B-S0073: this check is false: `loud` may have effect `output`
+  tests/diagnostics/lower/callback_arguments.n:30:12: note: `loud` calls `callback_arguments.shout`
+  tests/diagnostics/lower/callback_arguments.n:19:5: note: `shout` calls `builtin.io.debug.raw_debug`, which may have effect `output`
+  help: change the code so the check holds, or change the check
+tests/diagnostics/lower/callback_arguments.n:33:1: error N00B-S0073: this check is false: `run` may have effect `output`
+  tests/diagnostics/lower/callback_arguments.n:7:12: note: `run` calls its callback parameter `step`, which has no check
+  help: change the code so the check holds, or change the check

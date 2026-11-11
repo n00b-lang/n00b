@@ -62,6 +62,7 @@ LANTERN_LIB := $(BUILD)/lantern/libir.a
 WRIT_LIB := $(BUILD)/writ/libwrit.a
 RUNTIME_LIB := $(BUILD)/libn00b-abi-runtime.a
 RUNTIME_BITCODE := $(BUILD)/libn00b-abi-runtime.bc
+COMPTIME_RUNTIME := $(BUILD)/n00b-comptime.o
 N00B := $(BUILD)/n00b
 
 include lantern/lantern.mk
@@ -74,7 +75,7 @@ include tests/tests.mk
 .PHONY: all clean compdb FORCE
 FORCE:
 
-all: $(N00B) $(RUNTIME_BITCODE) $(CROSS_RUNTIMES) compdb
+all: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES) compdb
 
 compdb: $(BUILD)/compile_commands.json
 
@@ -84,8 +85,8 @@ $(BUILD)/compile_commands.json: $(N00B)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: install uninstall regen-unicode regen-effects
-install: $(N00B) $(RUNTIME_BITCODE) $(CROSS_RUNTIMES)
+.PHONY: install uninstall regen-unicode
+install: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES)
 	@tools/install.sh --build $(BUILD) $(if $(PREFIX),--prefix $(PREFIX)) $(INSTALL_FLAGS)
 
 uninstall:
@@ -98,8 +99,5 @@ regen-unicode:
 	    --conformance-program tests/programs/unicode/gen_conformance.n \
 	    --test-data-dir $(BUILD)/unicode-test-data --allow-downloads --no-strict
 	python3 tools/gen_lantern_unicode.py --allow-downloads
-
-regen-effects:
-	python3 tools/gen_effects.py
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

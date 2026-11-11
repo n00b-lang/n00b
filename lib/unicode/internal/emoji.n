@@ -65,25 +65,25 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
         return out
     }
 
-    let cp: char = first.get()
+    let cp: char = first
 
     if !is_emoji_start(cp) {
         return out
     }
 
     let start: u32 = byte_pos
-    var result: Emoji_Type = Emoji_Type.basic
+    var kind: Emoji_Type = Emoji_Type.basic
 
     if internal.properties.has_property(cp,
         internal.types.Property.emoji_presentation) {
-        result = Emoji_Type.presentation_seq
+        kind = Emoji_Type.presentation_seq
     }
 
     var save: u32 = pos
     let nxt: char? = take_char(s, pos)
 
-    if nxt != nil and cast[u32](nxt.get()) == cp_vs16 {
-        result = Emoji_Type.presentation_seq
+    if nxt != nil and cast[u32](nxt) == cp_vs16 {
+        kind = Emoji_Type.presentation_seq
     }
     else {
         pos = save
@@ -95,8 +95,8 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
 
         let k1: char? = take_char(s, pos)
 
-        if k1 != nil and cast[u32](k1.get()) == cp_keycap {
-            result = Emoji_Type.keycap
+        if k1 != nil and cast[u32](k1) == cp_keycap {
+            kind = Emoji_Type.keycap
         }
         else {
             pos = save
@@ -109,9 +109,9 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
 
         let m: char? = take_char(s, pos)
 
-        if m != nil and internal.properties.has_property(m.get(),
+        if m != nil and internal.properties.has_property(m,
             internal.types.Property.emoji_modifier) {
-            result = Emoji_Type.modifier_seq
+            kind = Emoji_Type.modifier_seq
         }
         else {
             pos = save
@@ -123,9 +123,9 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
 
         let ri: char? = take_char(s, pos)
 
-        if ri != nil and cast[u32](ri.get()) >= cp_ri_first and
-            cast[u32](ri.get()) <= cp_ri_last {
-            result = Emoji_Type.flag
+        if ri != nil and cast[u32](ri) >= cp_ri_first and
+            cast[u32](ri) <= cp_ri_last {
+            kind = Emoji_Type.flag
         }
         else {
             pos = save
@@ -147,25 +147,25 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
             continue
         }
 
-        let next: u32 = cast[u32] n.get()
+        let next: u32 = cast[u32] n
 
         if next == cp_zwj {
             let after: char? = take_char(s, pos)
 
-            if after != nil and is_emoji_start(after.get()) {
+            if after != nil and is_emoji_start(after) {
                 had_zwj = true
 
                 var vs_save: u32 = pos
                 let vs: char? = take_char(s, vs_save)
 
-                if vs != nil and cast[u32](vs.get()) == cp_vs16 {
+                if vs != nil and cast[u32](vs) == cp_vs16 {
                     pos = vs_save
                 }
 
                 var mod_save: u32 = pos
                 let md: char? = take_char(s, mod_save)
 
-                if md != nil and internal.properties.has_property(md.get(),
+                if md != nil and internal.properties.has_property(md,
                     internal.types.Property.emoji_modifier) {
                     pos = mod_save
                 }
@@ -190,15 +190,15 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
                 let tag_save: u32 = pos
                 let tg: char? = take_char(s, pos)
 
-                if tg != nil and cast[u32](tg.get()) == cp_tag_end {
-                    result = Emoji_Type.tag_seq
+                if tg != nil and cast[u32](tg) == cp_tag_end {
+                    kind = Emoji_Type.tag_seq
                     tagging = false
 
                     continue
                 }
 
-                if tg == nil or cast[u32](tg.get()) < cp_tag_low or
-                    cast[u32](tg.get()) > cp_tag_high {
+                if tg == nil or cast[u32](tg) < cp_tag_low or
+                    cast[u32](tg) > cp_tag_high {
                     pos = tag_save
                     tagging = false
                 }
@@ -214,10 +214,10 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
     }
 
     if had_zwj {
-        result = Emoji_Type.zwj_seq
+        kind = Emoji_Type.zwj_seq
     }
 
-    out.kind = result
+    out.kind = kind
     out.seq_bytes = pos - start
 
     return out

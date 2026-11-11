@@ -1,0 +1,11 @@
+func fill(out slot: int, flag: bool) {
+    if flag {
+        slot = 1
+        return
+    }
+    return
+}
+
+var target = 0
+fill(target, true)
+require target == 1

@@ -6,6 +6,91 @@
 
 core_list_decl(th_member);
 
+typedef uint64_t (*env_entry_hash_fn)(const th_env *env, size_t index);
+
+static uint64_t text_hash(core_string_t text) {
+  return core_xxh3_64bits_raw(text.data, text.u8_bytes);
+}
+
+static uint64_t type_entry_hash(const th_env *env, size_t index) {
+  return text_hash(env->type_origins.data[index].name);
+}
+
+static uint64_t value_entry_hash(const th_env *env, size_t index) {
+  return text_hash(env->values.data[index].qualified_name);
+}
+
+static uint64_t metadata_key_hash(th_env_metadata_owner_t owner_kind,
+                                  core_string_t owner_name,
+                                  core_string_t key) {
+  uint64_t parts[] = {(uint64_t)owner_kind, text_hash(owner_name),
+                      text_hash(key)};
+  return core_xxh3_64bits_raw(parts, sizeof(parts));
+}
+
+static uint64_t metadata_entry_hash(const th_env *env, size_t index) {
+  const th_env_metadata_record_t *record = &env->metadata.data[index];
+  return metadata_key_hash(record->owner_kind, record->owner_name,
+                           record->key);
+}
+
+static void env_index_reset(th_env_index_t *index) {
+  if (index->ready) {
+    core_dict_free(&index->heads);
+    core_list_free(index->next);
+  }
+  *index = (th_env_index_t){0};
+}
+
+static size_t env_index_first(const th_env *env, th_env_index_t *index,
+                              size_t len, env_entry_hash_fn hash,
+                              uint64_t key) {
+  if (!index->ready) {
+    core_dict_init(&index->heads, core_hash_word, nullptr);
+    index->next = core_list_new(uint32_t);
+    index->ready = true;
+  }
+  for (; index->indexed < len; index->indexed++) {
+    void *slot = (void *)(uintptr_t)(hash(env, index->indexed) | 1);
+    uintptr_t previous = (uintptr_t)core_dict_get(&index->heads, slot,
+                                                  nullptr);
+    core_list_push(index->next, (uint32_t)previous);
+    core_dict_put(&index->heads, slot, index->indexed + 1);
+  }
+  return (uintptr_t)core_dict_get(&index->heads,
+                                  (void *)(uintptr_t)(key | 1), nullptr);
+}
+
+static size_t env_index_next(const th_env_index_t *index, size_t at) {
+  return index->next.data[at - 1];
+}
+
+static th_env_type_origin_t *type_origin_named(th_env *env,
+                                               core_string_t name) {
+  for (size_t at = env_index_first(env, &env->type_index,
+                                   env->type_origins.len, type_entry_hash,
+                                   text_hash(name));
+       at; at = env_index_next(&env->type_index, at))
+    if (core_string_eq(env->type_origins.data[at - 1].name, name))
+      return &env->type_origins.data[at - 1];
+  return nullptr;
+}
+
+static th_env_value_t *value_named(th_env *env, core_string_t name) {
+  for (size_t at = env_index_first(env, &env->value_index, env->values.len,
+                                   value_entry_hash, text_hash(name));
+       at; at = env_index_next(&env->value_index, at))
+    if (core_string_eq(env->values.data[at - 1].qualified_name, name))
+      return &env->values.data[at - 1];
+  return nullptr;
+}
+
+void th_env_reset_indexes(th_env *env) {
+  env_index_reset(&env->type_index);
+  env_index_reset(&env->value_index);
+  env_index_reset(&env->metadata_index);
+}
+
 static th_env_trait_t *trait_named(const th_env *env, core_string_t name) {
   for (size_t i = 0; i < env->traits.len; i++)
     if (core_string_eq(env->traits.data[i].name, name))
@@ -394,17 +479,7 @@ bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
   core_list_free(seen);
   if (!concrete || !th_env_type_pattern_subsumes(pattern, candidate))
     return false;
-  th_probe_t probe = th_probe_begin(context);
-  bool accepted = th_unify(context, (th_type *)pattern,
-                           (th_type *)candidate) != nullptr &&
-                  context->pending_environment_constraints.len ==
-                      probe.pending_environment_constraints;
-  context->errors.len = probe.errors;
-  context->pending_environment_constraints.len =
-      probe.pending_environment_constraints;
-  context->err = probe.err;
-  th_probe_end(context, &probe);
-  return accepted;
+  return th_matches((th_type *)pattern, (th_type *)candidate);
 }
 
 th_env *th_env_new(void) {
@@ -593,12 +668,9 @@ th_env_compose_diagnose_in_context(const th_env *const *environments,
     }
     for (size_t j = 0; j < source->functions.len; j++) {
       const th_env_function_t *function = &source->functions.data[j];
-      if (!th_env_register_function_contract(
-              composed, function->qualified_name, function->root_name,
-              function->module, function->package, function->visibility,
-              composition_type(source, composed, function->contract))
-          || !th_env_set_function_required(composed, function->qualified_name,
-                                           function->required_params)) {
+      if (!th_env_copy_function(composed, function,
+              composition_type(source, composed,
+                               th_env_function_copy_source(function)))) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_FUNCTION_CONFLICT,
@@ -676,6 +748,7 @@ void th_env_release_contents(th_env *env) {
   core_list_free(env->type_origins);
   core_list_free(env->method_symbols);
   core_list_free(env->metadata);
+  th_env_reset_indexes(env);
   core_datalog_engine_free(env->logic);
   env->logic = nullptr;
   if (env->owns_types)
@@ -701,14 +774,11 @@ bool th_env_register_type(th_env *env, core_string_t name,
     return false;
   if (visibility > TH_ENV_PUBLIC)
     return false;
-  for (size_t i = 0; i < env->type_origins.len; i++) {
-    th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (!core_string_eq(origin->name, name))
-      continue;
+  th_env_type_origin_t *origin = type_origin_named(env, name);
+  if (origin)
     return core_string_eq(origin->module, module) &&
            core_string_eq(origin->package, package) &&
            origin->visibility == visibility;
-  }
   core_list_push(env->type_origins,
                  ((th_env_type_origin_t){
                      .name = th_strdup(env->types, name),
@@ -726,18 +796,15 @@ bool th_env_register_type_shape(th_env *env, core_string_t name,
       shape_kind <= TH_ENV_TYPE_SHAPE_NONE ||
       shape_kind > TH_ENV_TYPE_SHAPE_OBJECT)
     return false;
-  for (size_t i = 0; i < env->type_origins.len; i++) {
-    th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (!core_string_eq(origin->name, name)) continue;
-    if (origin->shape_kind == TH_ENV_TYPE_SHAPE_NONE) {
-      origin->shape_kind = shape_kind;
-      origin->shape = shape;
-      return true;
-    }
-    if (origin->shape_kind != shape_kind) return false;
-    return same_type_pattern(origin->shape, shape);
+  th_env_type_origin_t *origin = type_origin_named(env, name);
+  if (!origin) return false;
+  if (origin->shape_kind == TH_ENV_TYPE_SHAPE_NONE) {
+    origin->shape_kind = shape_kind;
+    origin->shape = shape;
+    return true;
   }
-  return false;
+  if (origin->shape_kind != shape_kind) return false;
+  return same_type_pattern(origin->shape, shape);
 }
 
 bool th_env_register_trait(th_env *env, core_string_t name,
@@ -764,7 +831,7 @@ th_type *th_env_signature_contract(th_ctx *ctx, th_type *signature,
   if (!signature || th_kind_of(signature) != TH_FUNCTION || !error_type)
     return nullptr;
   if (signature->fn.error &&
-      !th_unifies(ctx, signature->fn.error, error_type)) return nullptr;
+      !th_compatible(signature->fn.error, error_type)) return nullptr;
   th_type *failure = signature->fn.error ? signature->fn.error : error_type;
   th_type *paired = th_func_with_error(
       ctx, signature->fn.ret, failure, signature->fn.params,
@@ -985,6 +1052,70 @@ bool th_env_register_function_contract(
   return true;
 }
 
+static th_type *tuple_item(const th_type *tuple, size_t index) {
+  const th_arg *arg = tuple ? th_named_arg(tuple, index) : nullptr;
+  return arg && arg->kind == TH_ARG_TYPE ? arg->type : nullptr;
+}
+
+static th_type *linked_requirements(th_ctx *ctx, th_type *contract,
+                                    th_type *requirements, size_t count) {
+  th_type **old_vars = nullptr, **new_vars = nullptr;
+  size_t old_count = th_free_vars(ctx, requirements, &old_vars);
+  size_t new_count = th_free_vars(ctx, contract, &new_vars);
+  const th_type **from = th_alloc(ctx, (old_count + 1) * sizeof(*from));
+  th_type **to = th_alloc(ctx, (old_count + 1) * sizeof(*to));
+  th_type **items = th_alloc(ctx, (count + 1) * sizeof(*items));
+  size_t mapped = 0;
+  for (size_t i = 0; from && to && i < old_count; i++) {
+    core_string_t name = th_var_name(old_vars[i]);
+    for (size_t j = 0; name.u8_bytes && j < new_count; j++)
+      if (core_string_eq(name, th_var_name(new_vars[j]))) {
+        from[mapped] = old_vars[i];
+        to[mapped++] = new_vars[j];
+        break;
+      }
+  }
+  th_type *linked = nullptr;
+  if (from && to && items) {
+    items[0] = contract;
+    bool ok = true;
+    th_type *old_tuple = th_resolve(requirements);
+    for (size_t i = 0; ok && i < count; i++) {
+      items[i + 1] = th_type_clone_replacing(ctx,
+          tuple_item(old_tuple, i + 1), from, to, mapped);
+      ok = items[i + 1] != nullptr;
+    }
+    linked = ok ? th_tuple(ctx, items, count + 1) : nullptr;
+  }
+  return linked;
+}
+
+bool th_env_replace_function_contract(th_env *env,
+                                      core_string_t qualified_name,
+                                      const th_type *contract) {
+  if (!env || env->frozen || !contract) return false;
+  th_type *owned = th_type_clone(env->types, contract);
+  th_type *signature = nullptr, *error_type = nullptr;
+  if (!owned || !th_env_signature_channels(env->types, owned, &signature,
+                                           &error_type))
+    return false;
+  for (size_t i = 0; i < env->functions.len; i++) {
+    th_env_function_t *function = &env->functions.data[i];
+    if (!core_string_eq(function->qualified_name, qualified_name)) continue;
+    th_type *requirements = function->requirement_count
+        ? linked_requirements(env->types, owned, function->requirements,
+                              function->requirement_count)
+        : nullptr;
+    if (function->requirement_count && !requirements) return false;
+    function->contract = owned;
+    function->scheme = signature;
+    function->error_type = error_type;
+    function->requirements = requirements;
+    return true;
+  }
+  return false;
+}
+
 bool th_env_set_function_required(th_env *env, core_string_t qualified_name,
                                   size_t required) {
   if (!env || env->frozen) return false;
@@ -1004,6 +1135,125 @@ size_t th_env_function_required(const th_env *env,
                        qualified_name))
       return env->functions.data[i].required_params;
   return SIZE_MAX;
+}
+
+static th_env_function_t *function_named(th_env *env,
+                                         core_string_t qualified_name) {
+  for (size_t i = 0; env && i < env->functions.len; i++)
+    if (core_string_eq(env->functions.data[i].qualified_name,
+                       qualified_name))
+      return &env->functions.data[i];
+  return nullptr;
+}
+
+static th_type *requirement_types(th_ctx *ctx, th_type *contract,
+                                  const th_trait_requirement *requirements,
+                                  size_t count) {
+  th_type **items = th_alloc(ctx, (count + 1) * sizeof(*items));
+  if (!items) return nullptr;
+  items[0] = contract;
+  for (size_t i = 0; i < count; i++) {
+    th_type *pair[] = {
+        requirements[i].subject,
+        requirements[i].target ? requirements[i].target : th_nil(ctx),
+    };
+    if (!pair[0]) return nullptr;
+    items[i + 1] = th_tuple(ctx, pair, 2);
+  }
+  return th_tuple(ctx, items, count + 1);
+}
+
+static bool store_requirements(th_env *env, th_env_function_t *function,
+                               th_type *types, const th_con_kind *kinds,
+                               const core_string_t *traits, size_t count) {
+  th_con_kind *kind_copy = count
+      ? th_alloc(env->types, count * sizeof(*kind_copy)) : nullptr;
+  core_string_t *trait_copy = count
+      ? th_alloc(env->types, count * sizeof(*trait_copy)) : nullptr;
+  if (count && (!kind_copy || !trait_copy)) return false;
+  for (size_t i = 0; i < count; i++) {
+    kind_copy[i] = kinds[i];
+    trait_copy[i] = traits[i].u8_bytes
+        ? th_strdup(env->types, traits[i]) : (core_string_t){0};
+  }
+  function->requirements = count ? types : nullptr;
+  function->requirement_kinds = kind_copy;
+  function->requirement_traits = trait_copy;
+  function->requirement_count = count;
+  return true;
+}
+
+th_type *th_env_function_copy_source(const th_env_function_t *function) {
+  return function->requirement_count ? function->requirements
+                                     : function->contract;
+}
+
+bool th_env_copy_function(th_env *env, const th_env_function_t *function,
+                          th_type *copied) {
+  th_type *contract = function->requirement_count
+      ? tuple_item(th_resolve(copied), 0) : copied;
+  if (!contract
+      || !th_env_register_function_contract(env, function->qualified_name,
+             function->root_name, function->module, function->package,
+             function->visibility, contract)
+      || !th_env_set_function_required(env, function->qualified_name,
+                                       function->required_params))
+    return false;
+  return !function->requirement_count
+      || store_requirements(env, function_named(env, function->qualified_name),
+                            copied, function->requirement_kinds,
+                            function->requirement_traits,
+                            function->requirement_count);
+}
+
+bool th_env_set_function_requirements(th_env *env,
+                                      core_string_t qualified_name,
+                                      const th_trait_requirement *requirements,
+                                      size_t count) {
+  th_env_function_t *function = env && !env->frozen
+      ? function_named(env, qualified_name) : nullptr;
+  if (!function || (count && !requirements)) return false;
+  th_type *given = count ? requirement_types(env->types, function->contract,
+                                             requirements, count)
+                         : nullptr;
+  th_type *types = given ? linked_requirements(env->types, function->contract,
+                                               given, count)
+                         : nullptr;
+  th_con_kind *kinds = count
+      ? th_alloc(env->types, count * sizeof(*kinds)) : nullptr;
+  core_string_t *traits = count
+      ? th_alloc(env->types, count * sizeof(*traits)) : nullptr;
+  if (count && (!types || !kinds || !traits)) return false;
+  for (size_t i = 0; i < count; i++) {
+    kinds[i] = requirements[i].kind;
+    traits[i] = requirements[i].iface;
+  }
+  return store_requirements(env, function, types, kinds, traits, count);
+}
+
+static th_trait_requirement requirement_at(const th_env_function_t *function,
+                                           th_type *types, size_t index) {
+  th_type *pair = th_resolve(tuple_item(th_resolve(types), index + 1));
+  th_type *target = th_resolve(tuple_item(pair, 1));
+  return (th_trait_requirement){
+      .subject = tuple_item(pair, 0),
+      .kind = function->requirement_kinds[index],
+      .target = target && !th_is_nil(target) ? target : nullptr,
+      .iface = function->requirement_traits[index],
+  };
+}
+
+size_t th_env_function_requirements(const th_env *env,
+                                    core_string_t qualified_name,
+                                    th_trait_requirement *requirements,
+                                    size_t max_requirements) {
+  const th_env_function_t *function =
+      function_named((th_env *)env, qualified_name);
+  if (!function) return 0;
+  for (size_t i = 0; requirements && i < function->requirement_count
+       && i < max_requirements; i++)
+    requirements[i] = requirement_at(function, function->requirements, i);
+  return function->requirement_count;
 }
 
 static bool reference_receiver(th_ctx *ctx, th_type *type) {
@@ -1031,10 +1281,52 @@ static bool receiver_fits_modify(th_ctx *ctx, th_type *signature,
       && reference_receiver(ctx, provided->type);
 }
 
+static th_type *fit_contract(th_ctx *ctx, const th_env_function_t *function,
+                             th_type *fresh, th_type *required_signature);
+
 static th_type *fitted_contract(th_ctx *ctx,
                                 const th_env_function_t *function,
                                 th_type *required_signature) {
-  th_type *fresh = fresh_pattern(ctx, function->contract);
+  return fit_contract(ctx, function, fresh_pattern(ctx, function->contract),
+                      required_signature);
+}
+
+static th_type *fitted_with_requirements(th_ctx *ctx,
+                                         const th_env_function_t *function,
+                                         th_type *required_signature,
+                                         th_type **requirements) {
+  *requirements = function->requirement_count
+      ? fresh_pattern(ctx, function->requirements) : nullptr;
+  if (!*requirements)
+    return fitted_contract(ctx, function, required_signature);
+  return fit_contract(ctx, function,
+                      tuple_item(th_resolve(*requirements), 0),
+                      required_signature);
+}
+
+static bool requirements_hold(th_ctx *ctx, const th_env_function_t *function,
+                              th_type *requirements) {
+  for (size_t i = 0; requirements && i < function->requirement_count; i++) {
+    th_trait_requirement requirement =
+        requirement_at(function, requirements, i);
+    th_type *subject = th_resolve(requirement.subject);
+    if (!subject || th_kind_of(subject) == TH_VAR) continue;
+    if (requirement.kind == TH_CON_IMPLEMENTS
+        && !th_env_implements(ctx, subject, requirement.iface))
+      return false;
+    if (requirement.kind == TH_CON_ONE_OF && requirement.target) {
+      bool member = false;
+      th_type *members = th_resolve(requirement.target);
+      for (size_t a = 0; !member && a < th_sum_len(members); a++)
+        member = th_same_type(subject, th_sum_arm(members, a));
+      if (!member) return false;
+    }
+  }
+  return true;
+}
+
+static th_type *fit_contract(th_ctx *ctx, const th_env_function_t *function,
+                             th_type *fresh, th_type *required_signature) {
   th_type *signature = nullptr;
   size_t wanted = required_signature
       ? th_func_nparams(required_signature) : SIZE_MAX;
@@ -1074,15 +1366,13 @@ bool th_env_register_value(th_env *env, core_string_t qualified_name,
   if (!env || env->frozen || !qualified_name.u8_bytes ||
       !root_name.u8_bytes || !module.data || !package.data || !value_type ||
       visibility > TH_ENV_PUBLIC) return false;
-  for (size_t i = 0; i < env->values.len; i++) {
-    const th_env_value_t *current = &env->values.data[i];
-    if (!core_string_eq(current->qualified_name, qualified_name)) continue;
+  const th_env_value_t *current = value_named(env, qualified_name);
+  if (current)
     return core_string_eq(current->module, module) &&
         core_string_eq(current->package, package) &&
         current->visibility == visibility &&
         core_string_eq(current->root_name, root_name) &&
         same_type_pattern(current->type, value_type);
-  }
   core_list_push(env->values, ((th_env_value_t){
       .qualified_name = th_strdup(env->types, qualified_name),
       .root_name = th_strdup(env->types, root_name),
@@ -1094,15 +1384,12 @@ bool th_env_register_value(th_env *env, core_string_t qualified_name,
   return true;
 }
 
-static bool metadata_owner_exists(const th_env *env,
+static bool metadata_owner_exists(th_env *env,
                                   th_env_metadata_owner_t owner_kind,
                                   core_string_t owner_name) {
   switch (owner_kind) {
   case TH_ENV_METADATA_TYPE:
-    for (size_t i = 0; i < env->type_origins.len; i++)
-      if (core_string_eq(env->type_origins.data[i].name, owner_name))
-        return true;
-    return false;
+    return type_origin_named(env, owner_name) != nullptr;
   case TH_ENV_METADATA_TRAIT:
     return trait_named(env, owner_name) != nullptr;
   case TH_ENV_METADATA_FUNCTION:
@@ -1111,14 +1398,28 @@ static bool metadata_owner_exists(const th_env *env,
         return true;
     return false;
   case TH_ENV_METADATA_VALUE:
-    for (size_t i = 0; i < env->values.len; i++)
-      if (core_string_eq(env->values.data[i].qualified_name, owner_name))
-        return true;
-    return false;
+    return value_named(env, owner_name) != nullptr;
   case TH_ENV_METADATA_ENVIRONMENT:
     return true;
   }
   return false;
+}
+
+static th_env_metadata_record_t *
+metadata_named(th_env *env, th_env_metadata_owner_t owner_kind,
+               core_string_t owner_name, core_string_t key) {
+  for (size_t at = env_index_first(env, &env->metadata_index,
+                                   env->metadata.len, metadata_entry_hash,
+                                   metadata_key_hash(owner_kind, owner_name,
+                                                     key));
+       at; at = env_index_next(&env->metadata_index, at)) {
+    th_env_metadata_record_t *current = &env->metadata.data[at - 1];
+    if (current->owner_kind == owner_kind &&
+        core_string_eq(current->owner_name, owner_name) &&
+        core_string_eq(current->key, key))
+      return current;
+  }
+  return nullptr;
 }
 
 bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
@@ -1130,14 +1431,11 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
       !owner_name.u8_bytes || !key.u8_bytes || !version ||
       (size && !data) || !metadata_owner_exists(env, owner_kind, owner_name))
     return false;
-  for (size_t i = 0; i < env->metadata.len; i++) {
-    const th_env_metadata_record_t *current = &env->metadata.data[i];
-    if (current->owner_kind == owner_kind &&
-        core_string_eq(current->owner_name, owner_name) &&
-        core_string_eq(current->key, key))
-      return current->version == version && current->size == size &&
-             (!size || !memcmp(current->data, data, size));
-  }
+  const th_env_metadata_record_t *current =
+      metadata_named(env, owner_kind, owner_name, key);
+  if (current)
+    return current->version == version && current->size == size &&
+           (!size || !memcmp(current->data, data, size));
 
   uint8_t *owned_data = size ? th_alloc(env->types, size) : nullptr;
   if (size)
@@ -1350,8 +1648,7 @@ bool th_ctx_set_environment(th_ctx *ctx, const th_env *env,
   if (!ctx->builtin_types && env->types && env->types->builtin_types)
     th_ctx_set_builtin_types(ctx, env->types->builtin_types,
                              env->types->builtin_count);
-  if (!th_ctx_set_scope(ctx, module, package)) return false;
-  return th_ctx_validate_constraints(ctx);
+  return th_ctx_set_scope(ctx, module, package);
 }
 
 const th_env *th_ctx_environment(const th_ctx *ctx) {
@@ -1451,7 +1748,10 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
   th_type *required = nullptr, *required_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
                          &required_error);
-  th_type *function_contract = fitted_contract(ctx, function, required);
+  th_type *requirements = nullptr;
+  th_type *function_contract = fitted_with_requirements(ctx, function,
+                                                        required,
+                                                        &requirements);
   signature_channels_raw(ctx, function_contract, &provided,
                          &provided_error);
   th_type *trait_receiver = first_parameter(required);
@@ -1462,15 +1762,17 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
   bool matches = required && provided && trait_receiver && function_receiver &&
                  required_error && provided_error && receiver_copy &&
                  receiver_subsumes(function_receiver, receiver) &&
-                 th_unify(ctx, th_tuple(ctx, need, 3),
-                          th_tuple(ctx, have, 3)) != nullptr;
+                 th_compatible(th_tuple(ctx, need, 3),
+                               th_tuple(ctx, have, 3));
+  if (matches && requirements)
+    matches = th_match_pair(th_tuple(ctx, need, 3), th_tuple(ctx, have, 3))
+        && requirements_hold(ctx, function, requirements);
   return matches;
 }
 
 static bool function_matches_with_promotion(
     th_ctx *ctx, th_type *receiver, const th_env_trait_t *trait,
     const th_env_function_t *function, core_string_t method_name) {
-  th_probe_t probe = th_probe_begin(ctx);
   bool matched = function_matches(ctx, receiver, trait, function,
                                   method_name);
   if (!matched) {
@@ -1479,18 +1781,16 @@ static bool function_matches_with_promotion(
                               &signature, nullptr);
     th_type *promoted_receiver = first_parameter(signature);
     matched = promoted_receiver &&
-              th_type_promotes_to(ctx, receiver, promoted_receiver) &&
+              th_type_widens_to(receiver, promoted_receiver) &&
               function_matches(ctx, promoted_receiver, trait, function,
                                method_name);
   }
-  th_probe_end(ctx, &probe);
   return matched;
 }
 
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
                                core_string_t method_name) {
-  th_probe_t probe = th_probe_begin(ctx);
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *required_contract =
       contract_lookup(trait_contracts, method_name);
@@ -1506,9 +1806,8 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
   bool matches = required && provided && first_parameter(required) &&
                  first_parameter(provided) && required_error && provided_error;
   if (matches) {
-    matches = th_unify(ctx, required_contract, function_contract) != nullptr;
+    matches = th_compatible(required_contract, function_contract);
   }
-  th_probe_end(ctx, &probe);
   return matches;
 }
 
@@ -1529,6 +1828,7 @@ typedef struct {
   core_datalog_symbol_t method;
   th_ctx *context;
   core_list_t(th_env_function_ptr_t) * functions;
+  bool every;
 } candidate_query_t;
 
 static bool collect_candidate(const core_datalog_symbol_t *tuple, int32_t arity,
@@ -1543,15 +1843,15 @@ static bool collect_candidate(const core_datalog_symbol_t *tuple, int32_t arity,
     return true;
   const th_env_function_t *function =
       &query->environment->functions.data[index.result.value];
-  if (visible_to(query->context, function->visibility, function->module,
-                 function->package))
+  if (query->every || visible_to(query->context, function->visibility,
+                                 function->module, function->package))
     core_list_push(*query->functions, function);
   return true;
 }
 
 static core_list_t(th_env_function_ptr_t)
-    candidate_functions(th_ctx *ctx, const th_env_trait_t *trait,
-                        core_string_t method_name) {
+    trait_candidates(th_ctx *ctx, const th_env_trait_t *trait,
+                     core_string_t method_name, bool every) {
   core_list_t(th_env_function_ptr_t) functions =
       core_list_new(th_env_function_ptr_t);
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !trait ||
@@ -1576,11 +1876,18 @@ static core_list_t(th_env_function_ptr_t)
       .method = method_symbol,
       .context = ctx,
       .functions = &functions,
+      .every = every,
   };
   core_datalog_query(ctx->environment->logic,
                      ctx->environment->candidate_relation, collect_candidate,
                      &query);
   return functions;
+}
+
+static core_list_t(th_env_function_ptr_t)
+    candidate_functions(th_ctx *ctx, const th_env_trait_t *trait,
+                        core_string_t method_name) {
+  return trait_candidates(ctx, trait, method_name, false);
 }
 
 typedef struct {
@@ -1625,7 +1932,7 @@ static bool collect_intrinsic_type(const core_datalog_symbol_t *tuple,
     return true;
   th_type *pattern = fresh_pattern(query->context,
                                    fact->receiver_pattern);
-  query->matched = pattern && th_unify_probe(query->context, pattern,
+  query->matched = pattern && th_compatible(pattern,
                                              query->receiver);
   return true;
 }
@@ -1674,7 +1981,7 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
     for (size_t promotion = 0; !matched && promotion < 2; promotion++) {
       th_type *actual = promotion ? provided_receiver : receiver;
       if ((!promotion && !receiver_subsumes(provided_receiver, receiver)) ||
-          (promotion && !th_type_promotes_to(ctx, receiver,
+          (promotion && !th_type_widens_to(receiver,
                                              provided_receiver)))
         continue;
       th_type *branch = fresh_pattern(ctx, attempt);
@@ -1687,8 +1994,9 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
               *implementation_error = nullptr;
       signature_channels_raw(ctx, branch_required, &branch_signature,
                              &branch_error);
-      th_type *branch_provided = fitted_contract(ctx, function,
-                                                 branch_signature);
+      th_type *branch_requirements = nullptr;
+      th_type *branch_provided = fitted_with_requirements(ctx, function,
+          branch_signature, &branch_requirements);
       signature_channels_raw(ctx, branch_provided,
                              &implementation_signature,
                              &implementation_error);
@@ -1698,8 +2006,9 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
       th_type *actual_copy = fresh_pattern(ctx, actual);
       th_type *have[] = {actual_copy, actual_copy, branch_provided};
       if (!need[0] || !need[1] || !actual_copy
-          || !th_unify_in_place(ctx, th_tuple(ctx, need, 3),
-                                th_tuple(ctx, have, 3)))
+          || !th_match_pair(th_tuple(ctx, need, 3),
+                            th_tuple(ctx, have, 3))
+          || !requirements_hold(ctx, function, branch_requirements))
         continue;
       matched = trait_methods_match(ctx, receiver, trait, branch,
                                     ordinal + 1);
@@ -1729,12 +2038,10 @@ static bool implements_uncached(th_ctx *ctx, th_type *receiver,
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
-  th_probe_t probe = th_probe_begin(ctx);
   th_type *methods = fresh_pattern(ctx, trait->contracts);
   bool implemented = contract_len(methods)
       ? trait_methods_match(ctx, receiver, trait, methods, 0)
       : intrinsic_type_matches(ctx, trait, receiver);
-  th_probe_end(ctx, &probe);
   return implemented;
 }
 
@@ -1833,11 +2140,9 @@ static th_env_method_status_t
 method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
                     core_string_t method_name,
                     const th_env_function_t **best_out) {
-  th_probe_t probe = th_probe_begin(ctx);
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_type *trait_methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
   if (!trait_methods || !contract_lookup(trait_methods, method_name)) {
-    th_probe_end(ctx, &probe);
     return TH_ENV_METHOD_NOT_FOUND;
   }
   th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
@@ -1871,12 +2176,12 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
       bool i_sub_j =
           receiver_subsumes(matches.data[j].receiver_pattern,
                             matches.data[i].receiver_pattern) ||
-          th_type_promotes_to(ctx, matches.data[i].receiver_pattern,
+          th_type_widens_to(matches.data[i].receiver_pattern,
                               matches.data[j].receiver_pattern);
       bool j_sub_i =
           receiver_subsumes(matches.data[i].receiver_pattern,
                             matches.data[j].receiver_pattern) ||
-          th_type_promotes_to(ctx, matches.data[j].receiver_pattern,
+          th_type_widens_to(matches.data[j].receiver_pattern,
                               matches.data[i].receiver_pattern);
       if (j_sub_i && !i_sub_j) {
         maximal[i] = false;
@@ -1924,20 +2229,12 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
   }
   core_free(maximal);
   core_list_free(matches);
-  th_probe_end(ctx, &probe);
   if (ambiguous || best_origin_count > 1)
     return TH_ENV_METHOD_AMBIGUOUS;
   if (!best)
     return TH_ENV_METHOD_NOT_FOUND;
   *best_out = best;
   return TH_ENV_METHOD_FOUND;
-}
-
-bool th_env_method_lookup(th_ctx *ctx, th_type *receiver,
-                          core_string_t trait_name, core_string_t method_name,
-                          th_env_method_t *out) {
-  return th_env_method_resolve(ctx, receiver, trait_name, method_name, out) ==
-         TH_ENV_METHOD_FOUND;
 }
 
 typedef struct {
@@ -1956,7 +2253,6 @@ static th_env_method_status_t method_resolve_by_name_choice(
   } name_match_t;
   core_list_decl(name_match_t);
   core_list_t(name_match_t) matches = core_list_new(name_match_t);
-  th_probe_t probe = th_probe_begin(ctx);
   for (size_t i = 0; i < ctx->environment->traits.len; i++) {
     const th_env_trait_t *trait = &ctx->environment->traits.data[i];
     if (!visible_to(ctx, trait->visibility, trait->module, trait->package) ||
@@ -1981,7 +2277,6 @@ static th_env_method_status_t method_resolve_by_name_choice(
   }
   if (!matches.len) {
     core_list_free(matches);
-    th_probe_end(ctx, &probe);
     return TH_ENV_METHOD_NOT_FOUND;
   }
 
@@ -1993,12 +2288,12 @@ static th_env_method_status_t method_resolve_by_name_choice(
       bool i_sub_j =
           receiver_subsumes(matches.data[j].receiver_pattern,
                             matches.data[i].receiver_pattern) ||
-          th_type_promotes_to(ctx, matches.data[i].receiver_pattern,
+          th_type_widens_to(matches.data[i].receiver_pattern,
                               matches.data[j].receiver_pattern);
       bool j_sub_i =
           receiver_subsumes(matches.data[i].receiver_pattern,
                             matches.data[j].receiver_pattern) ||
-          th_type_promotes_to(ctx, matches.data[j].receiver_pattern,
+          th_type_widens_to(matches.data[j].receiver_pattern,
                               matches.data[i].receiver_pattern);
       if (j_sub_i && !i_sub_j) {
         maximal[i] = false;
@@ -2032,7 +2327,6 @@ static th_env_method_status_t method_resolve_by_name_choice(
                                best->function->module))
       tied_functions = true;
   }
-  th_probe_end(ctx, &probe);
   th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
   if (incomparable || tied_functions)
     status = TH_ENV_METHOD_AMBIGUOUS;
@@ -2108,129 +2402,28 @@ th_env_method_status_t th_env_method_resolve_by_name(
 
 size_t th_env_method_candidates(th_ctx *ctx, core_string_t trait_name,
                                 core_string_t method_name,
-                                th_env_method_t *out, size_t max_methods) {
-  if (!ctx || !ctx->environment || !trait_name.data || !method_name.data)
-    return 0;
-  const th_env_trait_t *trait = visible_trait(ctx, trait_name);
-  th_probe_t probe = th_probe_begin(ctx);
-  th_type *methods = trait ? fresh_pattern(ctx, trait->contracts) : nullptr;
-  bool declared = methods && contract_lookup(methods, method_name);
-  th_probe_end(ctx, &probe);
-  if (!declared)
+                                th_env_method_t *methods,
+                                size_t max_methods) {
+  const th_env_trait_t *trait = ctx && ctx->environment && trait_name.data
+                                    ? trait_named(ctx->environment, trait_name)
+                                    : nullptr;
+  if (!trait)
     return 0;
   core_list_t(th_env_function_ptr_t) candidates =
-      candidate_functions(ctx, trait, method_name);
-  size_t count = 0;
-  for (size_t i = 0; i < candidates.len; i++) {
+      trait_candidates(ctx, trait, method_name, true);
+  for (size_t i = 0; methods && i < candidates.len && i < max_methods; i++) {
     const th_env_function_t *function = candidates.data[i];
-    if (out && count < max_methods) {
-      th_type *signature = nullptr, *error_type = nullptr;
-      if (!th_env_signature_channels(ctx,
-                                     function->contract, &signature,
-                                     &error_type))
-        continue;
-      out[count] = (th_env_method_t){
-          .qualified_name = function->qualified_name,
-          .root_name = function->root_name,
-          .module = function->module,
-          .package = function->package,
-          .signature = signature,
-          .error_type = error_type,
-          .contract = function->contract,
-      };
-    }
-    count++;
-  }
-  core_list_free(candidates);
-  return count;
-}
-
-th_env_method_status_t th_env_method_plan_dispatch(
-    th_ctx *ctx, core_string_t trait_name, core_string_t method_name,
-    th_type *const *receiver_types, size_t receiver_count,
-    th_env_dispatch_entry_t *entries, size_t capacity,
-    size_t *required_count, bool *direct_call) {
-  if (required_count) *required_count = 0;
-  if (direct_call) *direct_call = false;
-  if (!ctx || !ctx->environment || !ctx->environment->frozen ||
-      !trait_name.data || !method_name.data || !receiver_types ||
-      !receiver_count)
-    return TH_ENV_METHOD_NOT_FOUND;
-
-  th_env_dispatch_entry_t *plan =
-      core_alloc_array(th_env_dispatch_entry_t, receiver_count);
-  bool single_target = true;
-  for (size_t i = 0; i < receiver_count; i++) {
-    if (!receiver_types[i]) {
-      core_free(plan);
-      return TH_ENV_METHOD_NOT_FOUND;
-    }
-    th_env_method_status_t status = th_env_method_resolve(
-        ctx, receiver_types[i], trait_name, method_name, &plan[i].method);
-    if (status != TH_ENV_METHOD_FOUND) {
-      core_free(plan);
-      return status;
-    }
-    plan[i].receiver_type = receiver_types[i];
-    if (i && !core_string_eq(plan[0].method.qualified_name,
-                             plan[i].method.qualified_name))
-      single_target = false;
-  }
-
-  if (required_count) *required_count = receiver_count;
-  if (direct_call) *direct_call = single_target;
-  if (entries) {
-    size_t copied = capacity < receiver_count ? capacity : receiver_count;
-    memcpy(entries, plan, copied * sizeof(*entries));
-  }
-  core_free(plan);
-  return TH_ENV_METHOD_FOUND;
-}
-
-th_env_method_status_t th_env_trait_vtable_plan(
-    th_ctx *ctx, core_string_t trait_name, th_type *concrete_type,
-    th_env_vtable_slot_t *slots, size_t capacity, size_t *required_count,
-    th_env_vtable_plan_t *out_plan) {
-  if (required_count) *required_count = 0;
-  if (out_plan) *out_plan = (th_env_vtable_plan_t){0};
-  if (!ctx || !ctx->environment || !ctx->environment->frozen ||
-      !trait_name.data || !concrete_type)
-    return TH_ENV_METHOD_NOT_FOUND;
-  const th_env_trait_t *trait = visible_trait(ctx, trait_name);
-  if (!trait)
-    return TH_ENV_METHOD_NOT_FOUND;
-  size_t count = contract_len(trait->contracts);
-  th_env_vtable_slot_t *plan =
-      core_alloc_array(th_env_vtable_slot_t, count);
-  for (size_t i = 0; i < count; i++) {
-    const th_member *requirement = contract_method(trait->contracts, i);
-    th_env_method_status_t status = th_env_method_resolve(
-        ctx, concrete_type, trait_name, requirement->name,
-        &plan[i].implementation);
-    if (status != TH_ENV_METHOD_FOUND) {
-      core_free(plan);
-      return status;
-    }
-    plan[i].method_name = requirement->name;
-  }
-  if (required_count) *required_count = count;
-  if (out_plan) {
-    size_t copied = slots ? (capacity < count ? capacity : count) : 0;
-    *out_plan = (th_env_vtable_plan_t){
-        .trait_name = trait->name,
-        .concrete_type = concrete_type,
-        .concrete_type_hash = th_hash(ctx, concrete_type),
-        .slots = slots,
-        .slot_count = copied,
-        .required_slot_count = count,
+    methods[i] = (th_env_method_t){
+        .qualified_name = function->qualified_name,
+        .root_name = function->root_name,
+        .module = function->module,
+        .package = function->package,
+        .contract = function->contract,
     };
   }
-  if (slots) {
-    size_t copied = capacity < count ? capacity : count;
-    memcpy(slots, plan, copied * sizeof(*slots));
-  }
-  core_free(plan);
-  return TH_ENV_METHOD_FOUND;
+  size_t count = candidates.len;
+  core_list_free(candidates);
+  return count;
 }
 
 size_t th_env_method_requirements(

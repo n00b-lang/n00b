@@ -1,0 +1,7 @@
+func some_count(n: u32) -> u32? {
+    return n
+}
+
+require some_count(5) == 5
+let tested: u32? = some_count(2)
+require tested != nil and tested == 2

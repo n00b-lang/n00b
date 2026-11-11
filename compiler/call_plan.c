@@ -65,18 +65,6 @@ n00bb_call_plan_free(n00bb_call_plan_t *plan)
     plan->argument_slots = nullptr;
 }
 
-th_type *
-n00bb_call_plan_parameter_type(const n00bb_call_plan_t *plan, size_t index)
-{
-    if (index < plan->parameter_count) {
-        const th_param *parameter = th_func_param(plan->signature, index);
-        return parameter ? parameter->type : nullptr;
-    }
-    const th_kwparam *keyword = th_func_kw(plan->signature,
-                                           index - plan->parameter_count);
-    return keyword ? keyword->type : nullptr;
-}
-
 size_t
 n00bb_call_plan_argument_count(const n00bb_call_plan_t *plan)
 {
@@ -101,15 +89,7 @@ n00bb_call_plan_parameter_argument(const n00bb_call_plan_t *plan, size_t index)
         && index < plan->slot_count ? plan->slots[index].argument : nullptr;
 }
 
-th_type *
-n00bb_call_plan_formal_type(const n00bb_call_plan_t *plan, size_t index)
-{
-    if (index != SIZE_MAX) return n00bb_call_plan_parameter_type(plan, index);
-    const th_param *rest = th_func_rest(plan->signature);
-    return rest ? rest->type : nullptr;
-}
-
-bool
+static bool
 n00bb_call_plan_optional(const n00bb_call_plan_t *plan, size_t index)
 {
     return index >= plan->parameter_count || plan->optional[index];
@@ -130,7 +110,7 @@ n00bb_call_plan_parameter_name(const n00bb_call_plan_t *plan, size_t index)
     return name;
 }
 
-core_string_t
+static core_string_t
 n00bb_call_plan_rest_name(const n00bb_call_plan_t *plan)
 {
     if (!th_func_rest(plan->signature) || !plan->callee) return (core_string_t){0};

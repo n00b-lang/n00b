@@ -1,0 +1,10 @@
+tests/diagnostics/lower/const_reads_runtime_var.n:9:7: warning N00B-N0024: `DIRECT` is never used
+  help: remove it
+tests/diagnostics/lower/const_reads_runtime_var.n:9:16: error N00B-S0049: this `const` reads `count`, which is set only when the program runs
+  tests/diagnostics/lower/const_reads_runtime_var.n:1:5: note: `count` is declared here
+  help: give `count` its value before the `const`, or compute the `const` from other consts
+tests/diagnostics/lower/const_reads_runtime_var.n:10:7: warning N00B-N0024: `THROUGH` is never used
+  help: remove it
+tests/diagnostics/lower/const_reads_runtime_var.n:10:7: error N00B-S0049: this `const` reads `later`, which is set only when the program runs
+  tests/diagnostics/lower/const_reads_runtime_var.n:2:5: note: `later` is declared here
+  help: give `later` its value before the `const`, or compute the `const` from other consts

@@ -107,7 +107,7 @@ func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
         return 1
     }
 
-    let at: u32 = off.get()
+    let at: u32 = off
     let count: i32 = cast[i32] generated.script_extensions.script_ext_data(at)
     var n: i32 = max_scripts
     if count < max_scripts {

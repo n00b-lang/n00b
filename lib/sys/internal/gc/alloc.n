@@ -9,7 +9,6 @@ import internal.gc.mark
 import internal.gc.mutator
 import internal.gc.registry
 import internal.gc.roots
-import internal.gc.sync
 import internal.threads
 import internal.memory
 
@@ -50,7 +49,7 @@ func attach_runtime_mutator() -> Ref[internal.gc.core.Mutator]? {
     }
     __atomic_store(ref runtime_heap_lock, 0)
     if heap != nil {
-        let created: Ref[internal.gc.core.Mutator]? = internal.gc.mutator.create(heap.get())
+        let created: Ref[internal.gc.core.Mutator]? = internal.gc.mutator.create(heap)
         runtime_mutator = created
         runtime_barrier_active = prior_barrier
         return created
@@ -64,7 +63,7 @@ func barrier_runtime(address: Ref[byte], type_index: u32) {
     if heap == nil {
         return
     }
-    let active: Ref[internal.gc.core.Heap] = heap.get()
+    let active: Ref[internal.gc.core.Heap] = heap
     if !__atomic_load(ref active.__value.marking) {
         return
     }
@@ -74,7 +73,7 @@ func barrier_runtime(address: Ref[byte], type_index: u32) {
     runtime_barrier_active = true
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     if mutator != nil {
-        internal.gc.mark.barrier_value(mutator.get(), address, type_index)
+        internal.gc.mark.barrier_value(mutator, address, type_index)
         runtime_barrier_active = false
         return
     }
@@ -89,7 +88,7 @@ func barrier_pointer_runtime(value: Ref[byte]?) {
     if heap == nil {
         return
     }
-    let active: Ref[internal.gc.core.Heap] = heap.get()
+    let active: Ref[internal.gc.core.Heap] = heap
     if !__atomic_load(ref active.__value.marking) {
         return
     }
@@ -99,7 +98,7 @@ func barrier_pointer_runtime(value: Ref[byte]?) {
     runtime_barrier_active = true
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     if mutator != nil {
-        internal.gc.mark.barrier_pointer(mutator.get(), value)
+        internal.gc.mark.barrier_pointer(mutator, value)
         runtime_barrier_active = false
         return
     }
@@ -109,17 +108,17 @@ func barrier_pointer_runtime(value: Ref[byte]?) {
 func block_release(heap: Ref[internal.gc.core.Heap], blk: Ref[internal.gc.core.Block_Metadata]) {
     let previous: Ref[internal.gc.core.Block_Metadata]? = blk.__value.all_prev
     if previous != nil {
-        previous.get().__value.all_next = blk.__value.all_next
+        previous.__value.all_next = blk.__value.all_next
     } else {
         heap.__value.all_blocks = blk.__value.all_next
     }
     let next: Ref[internal.gc.core.Block_Metadata]? = blk.__value.all_next
     if next != nil {
-        next.get().__value.all_prev = blk.__value.all_prev
+        next.__value.all_prev = blk.__value.all_prev
     }
     let cursor: Ref[internal.gc.core.Block_Metadata]? = heap.__value.sweep_cursor
     if cursor != nil {
-        if cursor.get() == blk {
+        if cursor == blk {
             heap.__value.sweep_cursor = blk.__value.all_next
         }
     }
@@ -171,7 +170,7 @@ func bump_release(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.B
     let empty:   Ref[internal.gc.core.Block_Metadata]? = nil
     var current: Ref[internal.gc.core.Block_Metadata]? = __atomic_exchange(ref bump.__value.cache, empty)
     while current != nil {
-        let blk:  Ref[internal.gc.core.Block_Metadata]  = current.get()
+        let blk:  Ref[internal.gc.core.Block_Metadata]  = current
         let next: Ref[internal.gc.core.Block_Metadata]? = blk.__value.next
         return_to_lists(heap, blk)
         current = next
@@ -179,7 +178,7 @@ func bump_release(heap: Ref[internal.gc.core.Heap], bump: Ref[internal.gc.core.B
 
     let attached: Ref[internal.gc.core.Block_Metadata]? = bump.__value.blk
     if attached != nil {
-        internal.gc.core.set_block_state(heap, attached.get(), internal.gc.core.Block_State.retired)
+        internal.gc.core.set_block_state(heap, attached, internal.gc.core.Block_State.retired)
     }
     bump.__value.cursor = nil
     bump.__value.limit = nil
@@ -196,7 +195,7 @@ inline func allocate_reserved_validated(mutator: Ref[internal.gc.core.Mutator],
     let granule:   uint       = internal.gc.core.granule_bytes
     let candidate: Ref[byte]? = bump.__value.cursor
     if candidate != nil {
-        let memory:  Ref[byte]                      = candidate.get()
+        let memory:  Ref[byte]                      = candidate
         let block:   Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_of_bytes(memory)
         let address: uint                           = __abi_ref_address(memory)
         let base:    uint                           = __abi_ref_address(block)
@@ -207,7 +206,7 @@ inline func allocate_reserved_validated(mutator: Ref[internal.gc.core.Mutator],
             header_bytes)
         if backing != nil {
             require internal.gc.core.initialize_array_backing(payload,
-                payload_bytes, backing.get())
+                payload_bytes, backing)
         }
         header.__value.type_index = type_index
         var flags: u32 = 0
@@ -235,7 +234,7 @@ inline func allocate_reserved_validated(mutator: Ref[internal.gc.core.Mutator],
         if slot != nil {
             internal.gc.mark.write_barrier(mutator, payload)
             let published: Ref[byte]? = payload
-            slot.get().__value = published
+            slot.__value = published
             mutator.__value.last_alloc = nil
         } else {
             mutator.__value.last_alloc = payload
@@ -293,7 +292,7 @@ func grow_batch(heap: Ref[internal.gc.core.Heap], mutator: Ref[internal.gc.core.
     let bytes:   uint       = count * internal.gc.core.block_bytes
     let mapping: Ref[byte]? = internal.memory.map_zeroed(bytes, internal.gc.core.block_bytes)
     if mapping != nil {
-        let start: Ref[byte] = mapping.get()
+        let start: Ref[byte] = mapping
         let end:   Ref[byte] = __gc_byte_offset(start, bytes)
         if !internal.gc.registry.region_add(heap, start, end) {
             internal.memory.unmap(start, bytes)
@@ -329,8 +328,12 @@ func refill_locked(heap: Ref[internal.gc.core.Heap],
             break
         }
     }
-    var blocks: Ref[internal.gc.core.Block_Metadata]? = internal.gc.core.take_batch(
-        heap, mutator, prefer_free)
+    var blocks: Ref[internal.gc.core.Block_Metadata]? = nil
+    if prefer_free {
+        blocks = internal.gc.core.take_free_batch(heap, mutator)
+    } else {
+        blocks = internal.gc.core.take_batch(heap, mutator, false)
+    }
     if blocks == nil {
         blocks = grow_batch(heap, mutator)
     }
@@ -339,6 +342,9 @@ func refill_locked(heap: Ref[internal.gc.core.Heap],
         internal.gc.collect.collect_full_locked(heap)
         internal.gc.collect.sweep_all(heap)
         blocks = internal.gc.core.take_batch(heap, mutator, prefer_free)
+    }
+    if blocks == nil and prefer_free {
+        blocks = internal.gc.core.take_batch(heap, mutator, true)
     }
     return blocks
 }
@@ -350,11 +356,11 @@ func refill(mutator: Ref[internal.gc.core.Mutator], bump: Ref[internal.gc.core.B
         return cached
     }
     let heap: Ref[internal.gc.core.Heap] = mutator.__value.heap
-    internal.gc.sync.ticket_lock(ref heap.__value.lock)
+    internal.gc.heap.lock(heap)
     let blocks: Ref[internal.gc.core.Block_Metadata]? = refill_locked(
         heap, mutator, prefer_free)
     if blocks != nil {
-        __atomic_store(ref bump.__value.cache, blocks.get().__value.next)
+        __atomic_store(ref bump.__value.cache, blocks.__value.next)
     }
     internal.gc.heap.unlock(heap)
     mutator.__value.locked_refills += 1
@@ -383,7 +389,7 @@ func allocate_in_blocks_slow(mutator: Ref[internal.gc.core.Mutator],
         }
         let previous: Ref[internal.gc.core.Block_Metadata]? = bump.__value.blk
         if previous != nil {
-            internal.gc.core.set_block_state(heap, previous.get(),
+            internal.gc.core.set_block_state(heap, previous,
                 internal.gc.core.Block_State.retired)
             bump.__value.blk = nil
         }
@@ -397,7 +403,7 @@ func allocate_in_blocks_slow(mutator: Ref[internal.gc.core.Mutator],
             continue
         }
         if next != nil {
-            assert next.get().__value.state == cast[u8](internal.gc.core.Block_State.owned)
+            assert next.__value.state == cast[u8](internal.gc.core.Block_State.owned)
         }
         internal.gc.core.bump_attach(mutator, bump, next)
         if next == nil {
@@ -450,7 +456,7 @@ func allocate_large(mutator: Ref[internal.gc.core.Mutator],
     while true {
         internal.gc.handshake.safepoint(mutator)
         internal.gc.finalize.backpressure(mutator)
-        internal.gc.sync.ticket_lock(ref heap.__value.lock)
+        internal.gc.heap.lock(heap)
         let before: u64 = heap.__value.collections
         if internal.gc.core.over_max(heap, request) {
             internal.gc.los.cache_drain(heap)
@@ -476,7 +482,7 @@ func allocate_large(mutator: Ref[internal.gc.core.Mutator],
                 internal.gc.collect.sweep_all(heap)
             }
         }
-        let result: Ref[byte]? = internal.gc.los.allocate_locked(
+        result = internal.gc.los.allocate_locked(
             heap, mutator, type_index, payload_bytes, alignment, finalizable,
             backing = backing, slot = slot)
         internal.gc.heap.unlock(heap)
@@ -537,9 +543,9 @@ func allocate_array_on_mutator(mutator: Ref[internal.gc.core.Mutator],
     if resolved == nil {
         return nil
     }
-    var backing: internal.gc.core.Array_Backing = resolved.get()
+    var backing: internal.gc.core.Array_Backing = resolved
     return allocate_runtime_known_on_mutator_into(mutator, type_index,
-        byte_size, alignment, row.get().__value.finalizer_function_index != 0,
+        byte_size, alignment, row.__value.finalizer_function_index != 0,
         ref backing, nil)
 }
 
@@ -552,22 +558,22 @@ func allocate_runtime_checked(type_index: u32, byte_size: u64,
     if type_index == 0 or row == nil or active == nil {
         return nil
     }
-    let finalizable: bool = row.get().__value.finalizer_function_index != 0
+    let finalizable: bool = row.__value.finalizer_function_index != 0
     if instance_descriptor == nil {
-        return allocate_runtime_known_on_mutator_into(active.get(), type_index,
+        return allocate_runtime_known_on_mutator_into(active, type_index,
             byte_size, alignment, finalizable, nil, slot)
     }
-    if row.get().__value.kind != cast[u32](internal.abi.Type_Kind.array_type) {
+    if row.__value.kind != cast[u32](internal.abi.Type_Kind.array_type) {
         return nil
     }
     let resolved: internal.gc.core.Array_Backing? =
         internal.gc.core.resolve_array_backing(type_index,
-            instance_descriptor.get())
+            instance_descriptor)
     if resolved == nil {
         return nil
     }
-    var backing: internal.gc.core.Array_Backing = resolved.get()
-    return allocate_runtime_known_on_mutator_into(active.get(), type_index,
+    var backing: internal.gc.core.Array_Backing = resolved
+    return allocate_runtime_known_on_mutator_into(active, type_index,
         byte_size, alignment, finalizable, ref backing, slot)
 }
 
@@ -594,7 +600,7 @@ func mutator_for_native() -> Ref[internal.gc.core.Mutator]? {
 func enter_blocking_from(caller: Ref[internal.threads.Thread_Context]) {
     let found: Ref[internal.gc.core.Mutator]? = active_mutator()
     if found != nil {
-        let mutator: Ref[internal.gc.core.Mutator] = found.get()
+        let mutator: Ref[internal.gc.core.Mutator] = found
         mutator.__value.captured.sp = caller.__value.sp
         mutator.__value.captured.fp = caller.__value.fp
         mutator.__value.captured.nregs = caller.__value.nregs
@@ -611,7 +617,7 @@ func enter_blocking_from(caller: Ref[internal.threads.Thread_Context]) {
 func leave_blocking_runtime() {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     if mutator != nil {
-        internal.gc.handshake.leave_blocking(mutator.get())
+        internal.gc.handshake.leave_blocking(mutator)
     }
 }
 
@@ -622,14 +628,14 @@ func attached_mutator() -> Ref[internal.gc.core.Mutator]? {
 func attached_leave_blocking() {
     let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
     if mutator != nil {
-        internal.gc.handshake.leave_blocking(mutator.get())
+        internal.gc.handshake.leave_blocking(mutator)
     }
 }
 
 func detach_runtime_mutator() {
     let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
     if mutator != nil {
-        internal.gc.mutator.destroy(mutator.get())
+        internal.gc.mutator.destroy(mutator)
         runtime_mutator = nil
     }
 }
@@ -637,17 +643,60 @@ func detach_runtime_mutator() {
 func native_root_depth() -> uint {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     require mutator != nil
-    return internal.gc.roots.depth(mutator.get())
+    return internal.gc.roots.depth(mutator)
 }
 
 func native_root_push(slot: Ref[Ref[byte]?]) {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     require mutator != nil
-    require internal.gc.roots.push(mutator.get(), slot)
+    require internal.gc.roots.push(mutator, slot)
 }
 
 func native_root_pop(depth: uint) {
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
     require mutator != nil
-    internal.gc.roots.pop(mutator.get(), depth)
+    internal.gc.roots.pop(mutator, depth)
+}
+
+func object_header_at(address: uint) -> Ref[internal.gc.core.Object_Header]? {
+    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if mutator == nil {
+        return nil
+    }
+    let heap: Ref[internal.gc.core.Heap] = mutator.__value.heap
+    internal.gc.registry.registry_read_lock(heap)
+    let header: Ref[internal.gc.core.Object_Header]? =
+        internal.gc.registry.find_object(heap, address)
+    internal.gc.registry.registry_read_unlock(heap)
+    return header
+}
+
+func object_payload_at(address: uint) -> uint {
+    let header: Ref[internal.gc.core.Object_Header]? = object_header_at(address)
+    if header == nil {
+        return 0
+    }
+    return __abi_ref_address(internal.gc.core.payload_of(header))
+}
+
+func object_bytes_at(address: uint) -> uint {
+    let header: Ref[internal.gc.core.Object_Header]? = object_header_at(address)
+    if header == nil {
+        return 0
+    }
+    return internal.gc.core.meta_payload_bytes(header.__value.meta)
+}
+
+func object_type_at(address: uint) -> u32 {
+    let header: Ref[internal.gc.core.Object_Header]? = object_header_at(address)
+    if header == nil {
+        return 0
+    }
+    return header.__value.type_index
+}
+
+func object_is_array_backing_at(address: uint) -> bool {
+    let header: Ref[internal.gc.core.Object_Header]? = object_header_at(address)
+    return header != nil
+        and (header.__value.meta & internal.gc.core.obj_array_backing) != 0
 }

@@ -5,6 +5,7 @@ tests/diagnostics/lower/analysis_checks.n:7:5: error N00B-S0015: this `assert` c
 tests/diagnostics/lower/analysis_checks.n:15:1: error N00B-S0015: this `assert` condition has a side effect: it calls `fill`; `fill` writes through its argument 1; argument 1 is the address of the caller's own storage
   tests/diagnostics/lower/analysis_checks.n:15:8: note: the side effect starts here
   help: `assert` conditions do not run in release builds; compute the value before the `assert`
+tests/diagnostics/lower/analysis_checks.n:19:5: warning N00B-N0021: field `count` of `Counter_1` is set but never read
 tests/diagnostics/lower/analysis_checks.n:26:10: error N00B-S0003: `c` is used here after it may have been consumed
   tests/diagnostics/lower/analysis_checks.n:25:10: note: `c` is consumed here
   help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
@@ -24,11 +25,17 @@ tests/diagnostics/lower/analysis_checks.n:54:6: error N00B-S0012: `f_4` can reac
 tests/diagnostics/lower/analysis_checks.n:65:12: error N00B-S0013: this `switch` has no case for `Color.Blue`, so `name` can reach its end without returning a value
   tests/diagnostics/lower/analysis_checks.n:64:6: note: `name` returns `int`
   help: add the missing cases, an `else`, or a `return` after the `switch`
+tests/diagnostics/lower/analysis_checks.n:79:5: warning N00B-N0021: field `count` of `Counter_5` is set but never read
 tests/diagnostics/lower/analysis_checks.n:88:1: error N00B-S0010: this call may write memory reachable from constant `FIXED`, which must not change
   tests/diagnostics/lower/analysis_checks.n:82:7: note: `FIXED` is declared here
   help: write to a copy of the constant instead
 tests/diagnostics/lower/analysis_checks.n:90:12: error N00B-S0009: `x` may be nil here
   help: use its value only where a test such as `x != nil` proves it, with no assignment to it in between
+tests/diagnostics/lower/analysis_checks.n:97:6: warning N00B-N0019: function `clear` is never called
+  help: call it or delete it
 tests/diagnostics/lower/analysis_checks.n:105:16: error N00B-S0009: `copy.value` may be nil here
   tests/diagnostics/lower/analysis_checks.n:104:9: note: `copy.value` is assigned here, after the test
   help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between
+tests/diagnostics/lower/analysis_checks.n:117:1: error N00B-S0015: this `assert` condition has a side effect: it calls `loud`; `loud` may produce output
+  tests/diagnostics/lower/analysis_checks.n:117:8: note: the side effect starts here
+  help: `assert` conditions do not run in release builds; compute the value before the `assert`

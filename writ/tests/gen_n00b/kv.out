@@ -590,12 +590,12 @@ func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
 
 func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
     var prefix_value = prefix
-    var result: uint = 0
+    var returned: uint = 0
     if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_new")
         fail failure
     }
-    let outcome = __kv_iter_new(self.__value.raw, ref prefix_value, ref result)
+    let outcome = __kv_iter_new(self.__value.raw, ref prefix_value, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
@@ -604,21 +604,21 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
     }
-    return __iter_cell_with_db(result, self)
+    return __iter_cell_with_db(returned, self)
 }
 
 func next(self: Iter) -> Entry? fail: Error {
-    var result: Ffi_Bytes = (data = 0, length = 0)
+    var returned: Ffi_Bytes = (data = 0, length = 0)
     if self.__value.raw == 0 {
         let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_next")
         fail failure
     }
-    let outcome = __kv_iter_next(self.__value.raw, ref result)
+    let outcome = __kv_iter_next(self.__value.raw, ref returned)
     if outcome < 0 {
         let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
         fail failure
     }
-    return __ffi_take_optional_kv_entry(ref result)
+    return __ffi_take_optional_kv_entry(ref returned)
 }
 7	tests/gen_n00b/../bind/kv.writ:10:1	Db
 18	tests/gen_n00b/../bind/kv.writ:11:1	Iter

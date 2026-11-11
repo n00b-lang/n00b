@@ -1,5 +1,6 @@
 import containers.tree
 import containers.traits
+import sys.threads
 
 var values: Dict[int, int] = new[Dict[int, int]]()
 require values.len() == 0
@@ -9,14 +10,14 @@ require values.add(7, 11)
 require !values.add(7, 99)
 require values.replace(7, 12)
 let replaced: int? = values.get(7)
-if replaced != nil { require replaced.get() == 12 } else { require false }
+if replaced != nil { require replaced == 12 } else { require false }
 require values.len() == 1
 let dict_first: int? = values.get(7)
-if dict_first != nil { require dict_first.get() == 12 } else { require false }
+if dict_first != nil { require dict_first == 12 } else { require false }
 let prior: int? = values.put(7, 13)
-if prior != nil { require prior.get() == 12 } else { require false }
+if prior != nil { require prior == 12 } else { require false }
 let updated: int? = values.get(7)
-if updated != nil { require updated.get() == 13 } else { require false }
+if updated != nil { require updated == 13 } else { require false }
 require values.remove(7)
 require values.get(7) == nil
 require values.len() == 0
@@ -61,13 +62,13 @@ require containers.tree.leaf(root) == nil
 containers.tree.set_node(root, 7)
 let node_value: Ref[int]? = containers.tree.node(root)
 if node_value != nil {
-    node_value.get().__value = 9
+    node_value.__value = 9
 } else {
     require false
 }
 let changed: Ref[int]? = containers.tree.node(root)
 if changed != nil {
-    require changed.get().__value == 9
+    require changed.__value == 9
 } else {
     require false
 }
@@ -77,7 +78,7 @@ require containers.tree.is_leaf(first)
 require containers.tree.node(first) == nil
 let first_value: Ref[string]? = containers.tree.leaf(first)
 if first_value != nil {
-    require first_value.get().__value == "first"
+    require first_value.__value == "first"
 } else {
     require false
 }
@@ -93,14 +94,14 @@ require containers.tree.child_count(root) == 3
 let middle: containers.tree.Tree[int, string]? =
     containers.tree.child(root, 1)
 if middle != nil {
-    require middle.get() == third
+    require middle == third
 } else {
     require false
 }
 let last: containers.tree.Tree[int, string]? =
     containers.tree.child(root, -1)
 if last != nil {
-    require last.get() == second
+    require last == second
 } else {
     require false
 }
@@ -115,7 +116,7 @@ require !containers.tree.insert_child(root, 4, root)
 let removed: containers.tree.Tree[int, string]? =
     containers.tree.remove_child(root, 1)
 if removed != nil {
-    require removed.get() == third
+    require removed == third
 } else {
     require false
 }
@@ -286,13 +287,24 @@ var g: Buffer = buffer_from_string("hello world this is long")
 var keep: Ref[Fin]? = nil
 var on_main: Atomic[bool] = false
 var finalized: Atomic[uint] = 0
+var appended: Atomic[bool] = false
+var seed: byte = 0
 
 func __finalize(consume self: Ref[Fin]) {
     if __os_thread_is_main() != 0 {
         __atomic_store(ref on_main, true)
     }
-    g += "z"
     __atomic_fetch_add(ref finalized, 1)
+}
+
+func appender(argument: Ref[byte]) -> Ref[byte] {
+    var i: int = 0
+    while i < 1000 {
+        g += "z"
+        i += 1
+    }
+    __atomic_store(ref appended, true)
+    return argument
 }
 
 func churn(n: int) {
@@ -302,16 +314,20 @@ func churn(n: int) {
         keep = ref f
         i += 1
     }
-    require keep != nil and keep.get().__value.v == n - 1
+    require keep != nil and keep.__value.v == n - 1
 }
 
-func borrowed() -> uint {
+func sliced() -> bool {
     let s: string = g
+    require sys.threads.thread_start(ref appender, ref seed)
     churn(3000000)
-    return byte_len(s)
+    while !__atomic_load(ref appended) {
+        sys.threads.thread_yield()
+    }
+    return byte_len(s) == 24 and s == "hello world this is long"
 }
 
-require borrowed() == 24
+require sliced()
 let deadline: u64 = __os_now_ns() + 30_000_000_000
 while __atomic_load(ref finalized) == 0 {
     require __os_now_ns() < deadline
@@ -325,5 +341,5 @@ func current_len() -> uint {
 }
 
 require !__atomic_load(ref on_main)
-require current_len() > 24
+require current_len() == 1024
 __fd_write(2, "ok")

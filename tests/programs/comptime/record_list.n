@@ -1,0 +1,25 @@
+record Entry {
+    name: string
+    weight: int
+}
+
+var entries: List[Entry]?
+
+if comptime() {
+    var built: List[Entry] = new[List[Entry]]()
+    built.append((name = "first", weight = 1))
+    built.append((name = "second entry with a heap name", weight = 2))
+    entries = built
+}
+
+func start() {
+    if entries != nil {
+        let list: List[Entry] = entries
+        if list.len() == 2 and list[1].weight == 2 {
+            __fd_write(2, list[1].name)
+            __fd_write(2, "\n")
+        }
+        list.append((name = "third", weight = 3))
+        if list.len() == 3 { __fd_write(2, "mutable at runtime\n") }
+    }
+}

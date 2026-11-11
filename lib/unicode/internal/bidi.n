@@ -524,7 +524,7 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
             continue
         }
 
-        let base: u32 = off.get()
+        let base: u32 = off
 
         if generated.bidi_brackets.bidi_bracket_data(base) < 2 {
             k += 1
@@ -986,7 +986,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
     }
 
     if para_level != nil {
-        p.para_level = para_level.get()
+        p.para_level = para_level
     }
     else {
         p.para_level = determine_para_level(p.types, p.len)

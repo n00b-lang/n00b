@@ -1,0 +1,27 @@
+func twice(n: int) -> int {
+    return n * 2
+}
+
+func bare() -> int {
+    let f = twice
+    return 1
+}
+
+func imported() -> int {
+    let g = buffer_from_string
+    return 1
+}
+
+func inlined() -> uint {
+    let h = ref byte_len
+    return h.call("abc")
+}
+
+func through_type_name() -> uint {
+    return string.nothing("abc")
+}
+
+func referenced() -> int {
+    let r = ref twice
+    return r.call(3)
+}

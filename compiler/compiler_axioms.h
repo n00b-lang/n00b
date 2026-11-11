@@ -49,8 +49,12 @@ const n00bb_axiom_t *n00bb_axiom_of_symbol(parse_sym_entry_t *symbol);
 bool                 n00bb_axiom_function_has(const ir_func_t *function,
                                               uint8_t role);
 void                 n00bb_axiom_note_pure_native(core_string_t symbol);
-void                 n00bb_axiom_note_foreign_native(core_string_t symbol);
+void                 n00bb_axiom_note_foreign_native(core_string_t symbol,
+                                                     core_string_t name,
+                                                     uint32_t effects);
 bool                 n00bb_axiom_pure_native(const ir_func_t *function);
-bool                 n00bb_axiom_foreign_native(const ir_func_t *function);
+bool                 n00bb_axiom_foreign_native(const ir_func_t *function,
+                                                uint32_t *effects);
+core_string_t        n00bb_axiom_foreign_name(const ir_func_t *function);
 
 #endif

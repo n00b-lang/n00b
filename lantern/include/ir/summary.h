@@ -107,6 +107,14 @@ typedef struct {
     bool (*global_reachable)(void *context, const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
                             const ir_summary_t *summary);
+    bool (*inherits_effect)(void *context, const ir_func_t *caller,
+                            const ir_func_t *callee, core_string_t effect);
+    void (*callee_effects)(void *context, const ir_func_t *callee,
+                           ir_summary_t *caller);
+    uint32_t (*call_flags)(void *context, const ir_instr_t *call);
+    bool (*call_finalizers)(void *context, const ir_instr_t *call,
+                            const ir_func_t *target, ir_summary_target_fn add,
+                            void *sink);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
@@ -128,6 +136,9 @@ core_string_t ir_summary_effect_at(const ir_summary_t *summary,
                                    uint32_t index);
 bool          ir_summary_has_effect(const ir_summary_t *summary,
                                     core_string_t name);
+ir_summary_t *ir_summary_bounded(ir_summaries_t *summaries,
+                                 const ir_func_t *function,
+                                 uint64_t forbidden);
 ir_summary_t *ir_summary_conservative(ir_summaries_t *summaries,
                                       const ir_func_t *function);
 
@@ -195,6 +206,9 @@ bool         ir_summary_call_callees(ir_summaries_t *summaries,
                                      void *context);
 bool         ir_summary_call_pure(ir_summaries_t *summaries,
                                   const ir_instr_t *call);
+bool         ir_summary_call_adds_effects(ir_summaries_t *summaries,
+                                          const ir_func_t *caller,
+                                          const ir_func_t *callee);
 bool         ir_summary_call_writes(ir_summaries_t *summaries,
                                     const ir_func_t *f, ir_places_t *places,
                                     const ir_instr_t *call, uint32_t place);
@@ -349,6 +363,16 @@ uint8_t ir_summary_effect(const ir_summary_t *summary,
 uint8_t ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                                 const ir_splace_t *place, uint8_t entry,
                                 const ir_instr_t *in);
+
+typedef struct ir_summary_state_query_t ir_summary_state_query_t;
+
+ir_summary_state_query_t *ir_summary_state_query(ir_summaries_t *summaries,
+                                                 ir_func_t *f,
+                                                 const ir_splace_t *place,
+                                                 uint8_t entry);
+uint8_t ir_summary_state_query_at(ir_summary_state_query_t *query,
+                                  const ir_instr_t *in);
+void    ir_summary_state_query_free(ir_summary_state_query_t *query);
 
 typedef enum {
     IR_PT_FRESH_NONE,

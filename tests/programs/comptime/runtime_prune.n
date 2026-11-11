@@ -1,0 +1,35 @@
+func square_sum(n: int) -> int {
+    var total = 0
+    var i = 0
+    while i < n {
+        total = total + i * i
+        i = i + 1
+    }
+    return total
+}
+
+func phase() -> int {
+    if comptime() { return 1 }
+    return 2
+}
+
+func fresh() -> List[int] {
+    return new[List[int]]()
+}
+
+var bumped = square_sum(3)
+var seen = phase()
+var items = fresh()
+var kept = square_sum(4)
+
+if comptime() {
+    bumped = bumped + 1
+    items.append(9)
+}
+
+func start() {
+    if bumped == 5 { __fd_write(2, "bumped recomputed\n") }
+    if seen == 2 { __fd_write(2, "phase recomputed\n") }
+    if items.len() == 0 { __fd_write(2, "items recomputed\n") }
+    if kept == 14 { __fd_write(2, "kept\n") }
+}

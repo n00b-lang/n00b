@@ -508,7 +508,9 @@ build_tls_metadata(n00bb_abi_storage_rows_t *storage,
     for (size_t i = 0; i < storage->relocation_count; i++) {
         const n00bb_abi_storage_relocation_t *reloc =
             &storage->relocations[i];
-        if (reloc->source_kind != N00B_ABI_STORAGE_TLS) continue;
+        if (reloc->source_kind != N00B_ABI_STORAGE_TLS
+            || reloc->target_kind == N00B_ABI_STORAGE_READ_ONLY
+            || reloc->target_kind == N00B_ABI_STORAGE_WRITABLE) continue;
         if (reloc->target_kind == N00BB_ABI_RELOC_AGGREGATE)
             aggregate_pool = true;
         else if (reloc->target_kind != N00BB_ABI_RELOC_STRING_POOL)
@@ -619,6 +621,8 @@ build_tls_metadata(n00bb_abi_storage_rows_t *storage,
             const n00bb_abi_storage_relocation_t *source =
                 &storage->relocations[j];
             if (source->source_kind != N00B_ABI_STORAGE_TLS
+                || source->target_kind == N00B_ABI_STORAGE_READ_ONLY
+                || source->target_kind == N00B_ABI_STORAGE_WRITABLE
                 || source->byte_offset < row->byte_offset
                 || source->byte_offset - row->byte_offset > row->byte_length
                 || sizeof(void *) > row->byte_length
@@ -925,6 +929,19 @@ native_global_name(core_string_t package, core_string_t module,
     memcpy(name + at, symbol.data, symbol.u8_bytes);
     name[size] = 0;
     return (core_string_t){.data = name, .u8_bytes = size};
+}
+
+core_string_t
+n00bb_abi_baked_node_symbol(core_string_t package, core_string_t module,
+                            size_t ordinal,
+                            core_target_object_format_t format)
+{
+    core_buffer_t *symbol = core_buffer_empty();
+    core_buffer_printf(symbol, "__n00bb_baked_%zu", ordinal);
+    core_string_t name = native_global_name(package, module,
+        core_buffer_string(symbol), true, format);
+    core_buffer_free(symbol);
+    return name;
 }
 
 void
@@ -1297,17 +1314,7 @@ append_imported_type_requirements(
         if (!owner || (!owner->decl_node && !owner->owner_unit)) continue;
         uint32_t declaration_index;
         if (!owner->type || !n00bb_abi_type_index_find(index, owner->type,
-                &declaration_index)) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "imported type declaration '%.*s' is absent from the ABI type catalog",
-                (int)owner->name.u8_bytes, owner->name.data);
-            abi_unit_error((core_translation_unit_t *)unit,
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
-            return false;
-        }
-        if (declaration_index != i) continue;
+                &declaration_index) || declaration_index != i) continue;
         const core_translation_unit_t *declaring_unit = owner->owner_unit;
         parse_token_stream_t *declaring_tokens = nullptr;
         if ((owner->decl_node
@@ -1315,10 +1322,10 @@ append_imported_type_requirements(
                         &declaring_unit, &declaring_tokens)
                     || !declaring_tokens))
             || !declaring_unit || !owner->name.data
-            || !owner->name.u8_bytes || !owner->phases) {
+            || !owner->name.u8_bytes) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "imported type '%.*s' has no source owner (owner=%.*s, current=%.*s, declaration=%s, phases=%u)",
+                "imported type '%.*s' has no source owner (owner=%.*s, current=%.*s, declaration=%s)",
                 (int)owner->name.u8_bytes,
                 owner->name.data ? owner->name.data : "",
                 declaring_unit
@@ -1327,8 +1334,7 @@ append_imported_type_requirements(
                     ? declaring_unit->module.identifier.data : "",
                 (int)unit->module.identifier.u8_bytes,
                 unit->module.identifier.data,
-                owner->decl_node ? "present" : "missing",
-                (unsigned)owner->phases);
+                owner->decl_node ? "present" : "missing");
             abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
@@ -1500,63 +1506,67 @@ collect_environment_traits(ir_module_t *module,
 }
 
 static bool
-collect_constrained_traits(const th_env *environment,
-                           n00bb_abi_type_index_t *index, th_type *type,
-                           unsigned depth)
+add_bound_trait(const th_env *environment, n00bb_abi_type_index_t *index,
+                core_string_t trait)
 {
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || depth > 64) return true;
-    switch (th_kind_of(type)) {
-    case TH_VAR:
-        for (size_t i = 0; i < th_var_constraint_count(type); i++) {
-            th_constraint constraint;
-            if (!th_var_constraint_at(type, i, &constraint)) return false;
-            if (constraint.kind != TH_CON_IMPLEMENTS || !constraint.iface.data)
-                continue;
-            for (size_t d = 0; d < th_env_declaration_count(environment);
-                 d++) {
-                th_env_declaration_view_t declaration;
-                if (!th_env_declaration_at(environment, d, &declaration))
-                    return false;
-                if (declaration.kind == TH_ENV_DECLARATION_TRAIT
-                    && declaration.qualified_name.data && declaration.contract
-                    && core_string_eq(declaration.qualified_name,
-                                      constraint.iface)
-                    && th_kind_of(th_resolve(declaration.contract))
-                        == TH_TRAIT
-                    && !n00bb_abi_type_index_add_imported_trait(index,
-                        declaration.contract)) return false;
-            }
-        }
+    for (size_t d = 0; environment && d < th_env_declaration_count(environment);
+         d++) {
+        th_env_declaration_view_t declaration;
+        if (!th_env_declaration_at(environment, d, &declaration))
+            return false;
+        if (declaration.kind == TH_ENV_DECLARATION_TRAIT
+            && declaration.qualified_name.data && declaration.contract
+            && core_string_eq(declaration.qualified_name, trait)
+            && th_kind_of(th_resolve(declaration.contract)) == TH_TRAIT
+            && !n00bb_abi_type_index_add_imported_trait(index,
+                declaration.contract)) return false;
+    }
+    return true;
+}
+
+static bool
+add_bound_types(const th_env *environment, n00bb_abi_type_index_t *index,
+                const th_trait_requirement *bound)
+{
+    th_type *target = bound->target ? th_resolve(bound->target) : nullptr;
+    switch (bound->kind) {
+    case TH_CON_IMPLEMENTS:
+        return add_bound_trait(environment, index, bound->iface);
+    case TH_CON_ONE_OF:
+        for (size_t i = 0; target && i < th_sum_len(target); i++)
+            if (!n00bb_abi_type_index_add(index, th_sum_arm(target, i),
+                                          nullptr)) return false;
         return true;
-    case TH_NAMED:
-        for (size_t i = 0; i < th_named_nargs(type); i++) {
-            const th_arg *argument = th_named_arg(type, i);
-            if (argument && argument->kind == TH_ARG_TYPE
-                && !collect_constrained_traits(environment, index,
-                    argument->type, depth + 1)) return false;
-        }
-        return true;
-    case TH_SEQUENCE:
-        return collect_constrained_traits(environment, index,
-            th_seq_elem(type), depth + 1);
-    case TH_INDIRECTION:
-        return collect_constrained_traits(environment, index,
-            th_ind_referent(type), depth + 1);
+    case TH_CON_METHOD:
+        return !target
+            || (n00bb_abi_type_index_add(index, target, nullptr)
+                && n00bb_abi_type_index_add(index, th_func_ret(target),
+                                            nullptr));
     default:
-        return true;
+        return !target || n00bb_abi_type_index_add(index, target, nullptr);
     }
 }
 
 static bool
-collect_module_constraint_traits(ir_module_t *module,
-                                 n00bb_abi_type_index_t *index)
+collect_declared_bound_types(ir_module_t *module,
+                             const n00bb_abi_decl_index_t *declarations,
+                             n00bb_abi_type_index_t *index)
 {
     const th_env *environment = th_ctx_environment(ir_module_types(module));
-    for (size_t i = 0; environment && i < ir_type_count(module); i++)
-        if (!collect_constrained_traits(environment, index,
-                ir_type_at(module, i), 0)) return false;
-    return true;
+    bool ok = true;
+    for (size_t i = 1; ok && i < n00bb_abi_decl_symbol_count(declarations);
+         i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+                                                               (uint32_t)i);
+        if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) continue;
+        core_list_t(th_trait_requirement) bounds =
+            n00bb_declared_bounds(symbol);
+        for (size_t b = 0; ok && b < bounds.len; b++)
+            ok = !th_occurs(nullptr, bounds.data[b].subject, symbol->type)
+                || add_bound_types(environment, index, &bounds.data[b]);
+        core_list_free(bounds);
+    }
+    return ok;
 }
 
 static bool
@@ -1612,7 +1622,7 @@ append_imported_symbol_requirements(core_link_unit_t *link,
         uint32_t type_index;
         core_string_t module = core_link_declaration_module(target);
         if (!type || !symbol->name.data || !symbol->name.u8_bytes
-            || !symbol->phases || !module.data || !module.u8_bytes
+            || !module.data || !module.u8_bytes
             || !n00bb_abi_type_index_find(index, type, &type_index)
             || type_index >= types->count
             || (kind == N00B_ABI_SYMBOL_FUNCTION
@@ -2018,8 +2028,8 @@ n00bb_abi_emit_unit(
             collect_environment_traits((ir_module_t *)runtime_ir,
                                        type_index))
         && ABI_STAGE("constraint trait collection",
-            collect_module_constraint_traits((ir_module_t *)runtime_ir,
-                                             type_index))
+            collect_declared_bound_types((ir_module_t *)runtime_ir,
+                                         declarations, type_index))
         && ABI_STAGE("imported nominal declarations",
             collect_imported_nominal_declarations(type_index, type_owner,
                 type_owner_context))
@@ -2223,6 +2233,32 @@ n00bb_abi_emit_unit(
                 N00B_ABI_TABLE_NATIVE_BINDING, (uint32_t)index_binding,
                 offsetof(n00b_abi_native_binding_v1, native_name),
                 &native_bindings.rows[index_binding].native_name);
+    }
+    size_t baked_binding_first = native_bindings.count;
+    size_t baked_bindings = storage_rows.baked_node_count > 1
+        ? storage_rows.baked_node_count - 1 : 0;
+    if (valid && baked_bindings) {
+        failed_stage = CORE_STRING_STATIC("baked node bindings");
+        native_bindings.count += baked_bindings;
+        native_bindings.rows = core_realloc(native_bindings.rows,
+            native_bindings.count * sizeof(*native_bindings.rows));
+        native_bindings.names = core_realloc(native_bindings.names,
+            native_bindings.count * sizeof(*native_bindings.names));
+        for (size_t i = 0; valid && i < baked_bindings; i++) {
+            size_t at = baked_binding_first + i;
+            native_bindings.rows[at] = (n00b_abi_native_binding_v1){
+                .kind = N00B_ABI_NATIVE_SECTION_OFFSET,
+                .offset = (int64_t)storage_rows.baked_nodes[i + 1].byte_offset,
+            };
+            native_bindings.names[at] = n00bb_abi_baked_node_symbol(
+                package_id, unit->module.identifier, i + 1,
+                target->object_format);
+            valid = native_bindings.names[at].data
+                && n00bb_abi_name_pool_encode(pool, native_bindings.names[at],
+                    N00B_ABI_TABLE_NATIVE_BINDING, (uint32_t)at,
+                    offsetof(n00b_abi_native_binding_v1, native_name),
+                    &native_bindings.rows[at].native_name);
+        }
     }
     if (valid) {
         failed_stage = CORE_STRING_STATIC("TLS metadata");
@@ -2433,6 +2469,9 @@ n00bb_abi_emit_unit(
             ? storage_input_indexes[row->segment_kind] : 0;
         valid = input && core_object_emit_native_section_index(target,
             1 + extra_sections.len, input, &row->segment_index);
+        if (valid && baked_bindings)
+            native_bindings.rows[baked_binding_first + i - 1].section_index =
+                row->segment_index;
     }
     for (uint32_t i = 0; valid && i < tls_metadata.string_storage_count; i++)
         valid = has_pool && core_object_emit_native_section_index(target,
@@ -2646,6 +2685,7 @@ n00bb_abi_emit_unit(
                             .section_index = section,
                             .section_offset = source->byte_offset,
                             .symbol_index = (uint32_t)(native_first + found),
+                            .addend_bits = source->target_offset,
                         };
                     if (!section) {
                         object_failure = CORE_STRING_STATIC(

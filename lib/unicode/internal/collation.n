@@ -52,7 +52,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
     var best_ci: u32 = 0
     var best_pos: Array[u32][4] = new[Array[u32][4]]()
 
-    var ci: u32 = start.get()
+    var ci: u32 = start
     while ci < generated.collation.contraction_count and
         generated.collation.contr_keys(ci, 0) == cast[u32] cps[ix] {
         let klen: u32 = generated.collation.contr_key_lens(ci)
@@ -317,7 +317,7 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
         let range: u32? = implicit_range(cp)
 
         if range != nil {
-            let r: u32 = range.get()
+            let r: u32 = range
             let base: u32 = generated.collation.implicit_ranges(r, 2)
             let lo_min: u32 = implicit_range_lo_min(base)
 

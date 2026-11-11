@@ -1,0 +1,12 @@
+tests/diagnostics/lower/function_values.n:1:6: warning N00B-N0019: function `twice` is never called
+  help: call it or delete it
+tests/diagnostics/lower/function_values.n:6:13: error N00B-S0086: `twice` is a function, so it can only be called or referenced with `ref`
+  help: write `ref twice` to use the function as a value
+tests/diagnostics/lower/function_values.n:11:13: error N00B-S0086: `buffer_from_string` is a function, so it can only be called or referenced with `ref`
+  help: write `ref buffer_from_string` to use the function as a value
+tests/diagnostics/lower/function_values.n:16:13: error N00B-S0087: `byte_len` is an `inline func`, so it has no reference
+  help: remove `inline` from `byte_len`, or call it directly
+tests/diagnostics/lower/function_values.n:21:12: error N00B-S0086: `string` is a function, so it can only be called or referenced with `ref`
+  help: write `ref string` to use the function as a value
+tests/diagnostics/lower/function_values.n:24:6: warning N00B-N0019: function `referenced` is never called
+  help: call it or delete it

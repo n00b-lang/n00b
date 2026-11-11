@@ -21,6 +21,12 @@ typedef struct {
 } flow_node_key_t;
 
 typedef struct {
+    flow_node_key_t       key;
+    uint32_t              site;
+    core_list_t(uint32_t) filled;
+} flow_node_t;
+
+typedef struct {
     const ir_instr_t   *call;
     const ir_summary_t *callee;
     ir_sflow_table_t    table;
@@ -701,8 +707,8 @@ mapped_sources_init(mapped_sources_t *mapped, const ir_instr_t *call,
                                  .flows = &callee->flows[table]};
 }
 
-static const pt_set_t *
-source_items(pt_t *pt, mapped_sources_t *mapped, uint32_t source,
+static mapped_entry_t *
+source_entry(pt_t *pt, mapped_sources_t *mapped, uint32_t source,
              map_mode_t mode)
 {
     mapped_key_t    probe = {mapped->call, mapped->callee,
@@ -722,29 +728,52 @@ source_items(pt_t *pt, mapped_sources_t *mapped, uint32_t source,
         uint64_t        since = growth_only_stale(pt, &entry->memo)
             ? entry->memo.generation : 0;
         memo_begin(pt, &entry->memo, &frame);
-        if (since) pt->delta_since = since;
+        entry->added.len = 0;
+        if (since) {
+            pt->delta_since = since;
+            for (size_t i = 0; i < entry->items.len; i++)
+                core_list_push(entry->added, entry->items.data[i]);
+        }
         else entry->items.len = 0;
         map_location(pt, mapped->call, mapped->callee,
                      mapped->flows->sources.data[source], mode,
                      &entry->items);
         memo_end(pt, &entry->memo, &frame);
+        if (since) set_difference(&entry->items, &entry->added);
+        entry->grew = since != 0;
+        entry->version++;
     }
     memo_use(pt, &entry->memo);
     pt->at         = at;
     pt->positional = positional;
-    return &entry->items;
+    return entry;
+}
+
+static const pt_set_t *
+source_items(pt_t *pt, mapped_sources_t *mapped, uint32_t source,
+             map_mode_t mode)
+{
+    return &source_entry(pt, mapped, source, mode)->items;
 }
 
 static void
-fill_flow_node(pt_t *pt, uint32_t site, mapped_sources_t *mapped,
+fill_flow_node(pt_t *pt, flow_node_t *node, mapped_sources_t *mapped,
                const flow_dest_t *dest)
 {
     const flow_table_t *flows = mapped->flows;
+    uint32_t            site  = node->site;
+    while (node->filled.len < flows->sources.len)
+        core_list_push(node->filled, 0);
     for (uint32_t s = 0; s < flows->sources.len; s++) {
         bool data    = bit_has(&dest->data, s);
         bool control = !data && bit_has(&dest->control, s);
         if (!data && !control) continue;
-        const pt_set_t *items = source_items(pt, mapped, s, MAP_DERIVED);
+        mapped_entry_t *entry = source_entry(pt, mapped, s, MAP_DERIVED);
+        if (node->filled.data[s] == entry->version) continue;
+        const pt_set_t *items = entry->grew
+                && node->filled.data[s] + 1 == entry->version
+            ? &entry->added : &entry->items;
+        node->filled.data[s] = entry->version;
         for (size_t i = 0; i < items->len; i++) {
             pt_item_t item = items->data[i];
             pt_flow_kind_t flow = data ? PT_DERIVED : PT_CONTROL;
@@ -765,21 +794,20 @@ flow_node_item(pt_t *pt, mapped_sources_t *mapped, uint32_t group,
     ir_sflow_table_t    table  = mapped->table;
     flow_node_key_t probe = {call, callee, table, group};
     bool            found = false;
-    uintptr_t       site  = (uintptr_t)core_dict_get(&pt->flow_nodes, &probe,
-                                                     &found);
+    flow_node_t    *node  = core_dict_get(&pt->flow_nodes, &probe, &found);
     if (!found) {
-        flow_node_key_t *key = core_alloc(flow_node_key_t);
-        *key = probe;
+        node = core_alloc(flow_node_t);
+        node->key = probe;
         pt->nodes++;
-        site = site_of(pt, (const void *)(uintptr_t)(2 * pt->nodes + 1),
-                       nullptr, false, 0);
-        pt->sites.data[site].node = true;
-        core_dict_put(&pt->flow_nodes, key, (void *)site);
+        node->site = (uint32_t)site_of(pt,
+            (const void *)(uintptr_t)(2 * pt->nodes + 1), nullptr, false, 0);
+        pt->sites.data[node->site].node = true;
+        core_dict_put(&pt->flow_nodes, &node->key, node);
     }
     if (group == dest)
-        fill_flow_node(pt, (uint32_t)site, mapped,
+        fill_flow_node(pt, node, mapped,
                        &callee->flows[table].dests.data[dest]);
-    pt_item_t item = contents_item(site_loc((uint32_t)site));
+    pt_item_t item = contents_item(site_loc(node->site));
     item.flow = PT_DERIVED;
     return item;
 }
