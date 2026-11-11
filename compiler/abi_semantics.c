@@ -48,7 +48,8 @@ same_string(n00bb_abi_string_view_t value, core_string_t text)
 
 static bool
 add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
-             core_list_t(receiver_t) *receivers, th_type *type)
+             core_list_t(receiver_t) *receivers, core_dict_t *seen,
+             th_type *type)
 {
     if (!type || !th_is_closed(ctx, type)) return true;
     uint32_t index = type_index(types, th_hash(ctx, type));
@@ -56,11 +57,11 @@ add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
     const n00b_abi_type_v1 *row = (const void *)(types->records
         + (size_t)index * types->record_bytes);
     if ((row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-        || row->kind == N00B_ABI_TYPE_TRAIT) return true;
-    for (size_t i = 0; i < receivers->len; i++)
-        if (receivers->data[i].index == index) return true;
+        || row->kind == N00B_ABI_TYPE_TRAIT
+        || core_dict_contains(seen, (void *)(uintptr_t)index)) return true;
     th_type *copy = th_type_clone(ctx, type);
     if (!copy) return false;
+    core_dict_put(seen, (void *)(uintptr_t)index, (void *)(uintptr_t)index);
     core_list_push(*receivers, ((receiver_t){copy, index}));
     return true;
 }
@@ -400,6 +401,8 @@ n00bb_abi_link_semantic_rows(
         || types->record_bytes != sizeof(n00b_abi_type_v1)) return false;
     th_ctx *ctx = th_ctx_new();
     core_list_t(receiver_t) receivers = {0};
+    core_dict_t seen_receivers;
+    core_dict_init(&seen_receivers, nullptr, nullptr);
     core_list_t(specialization_t) specializations = {0};
     core_list_t(n00b_abi_dispatch_v1) dispatch = {0};
     core_list_t(n00b_abi_dispatch_entry_v1) entries = {0};
@@ -426,15 +429,16 @@ n00bb_abi_link_semantic_rows(
         th_env_declaration_view_t declaration;
         valid = th_env_declaration_at(facts->environment, i, &declaration);
         if (!valid || declaration.kind != TH_ENV_DECLARATION_TYPE) continue;
-        valid = add_receiver(ctx, types, &receivers,
+        valid = add_receiver(ctx, types, &receivers, &seen_receivers,
             th_name(ctx, declaration.qualified_name));
     }
     for (size_t m = 0; valid && m < facts->module_count; m++) {
         ir_module_t *module = (ir_module_t *)facts->modules[m];
         for (size_t i = 0; valid && i < ir_type_count(module); i++)
-            valid = add_receiver(ctx, types, &receivers,
+            valid = add_receiver(ctx, types, &receivers, &seen_receivers,
                 ir_type_at(module, i));
     }
+    core_dict_free(&seen_receivers);
     for (size_t r = 0; valid && r < receivers.len; r++) {
         th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
         uint32_t parent = head ? type_index(types, th_hash(ctx, head)) : 0;
