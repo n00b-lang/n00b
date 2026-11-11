@@ -18,3 +18,7 @@ func add(a: int, b: int) -> int {
 
 let x = ad(1, 2)
 require x == 3
+func lookup(key: string) -> int fail: string {
+    let found: int = lookp(key)!
+    return found
+}

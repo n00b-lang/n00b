@@ -9,3 +9,5 @@ tests/diagnostics/link/names.n:15:6: warning N00B-N0019: function `add` is never
   help: call it or delete it
 tests/diagnostics/link/names.n:19:9: error N00B-N0001: cannot find `ad` in this scope
   help: did you mean `add`?
+tests/diagnostics/link/names.n:22:22: error N00B-N0001: cannot find `lookp` in this scope
+  help: did you mean `lookup`?

@@ -37,3 +37,10 @@ tests/diagnostics/link/names.n:19:9: error: cannot find `ad` in this scope
        |         ^^ not found in this scope
 
   help: did you mean `add`?
+
+tests/diagnostics/link/names.n:22:22: error: cannot find `lookp` in this scope
+
+    22 |     let found: int = lookp(key)!
+       |                      ^^^^^ not found in this scope
+
+  help: did you mean `lookup`?
