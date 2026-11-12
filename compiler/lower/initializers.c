@@ -49,7 +49,8 @@ reachable_function_body(ir_func_t *function, void *raw);
 static bool
 walk_reachable_functions(const n00bb_link_analysis_t *analysis,
                          core_list_t(n00bb_ir_func_ptr_t) *roots,
-                         core_list_t(n00bb_ir_func_ptr_t) *reachable);
+                         core_list_t(n00bb_ir_func_ptr_t) *reachable,
+                         core_list_t(n00bb_ir_func_ptr_t) *cached);
 static bool
 function_has_body(ir_func_t *function);
 static void
@@ -497,6 +498,8 @@ collect_phase_reachable_function(ir_func_t *function, void *raw)
     reachable_collection_t *collection = raw;
     if (!n00bb_cache_owns(collection->cache, function->owner))
         core_list_push(*collection->functions, function);
+    else if (collection->cached && function->n_blocks)
+        core_list_push(*collection->cached, function);
     return true;
 }
 
@@ -510,10 +513,12 @@ reachable_function_body(ir_func_t *function, void *raw)
 static bool
 walk_reachable_functions(const n00bb_link_analysis_t *analysis,
                          core_list_t(n00bb_ir_func_ptr_t) *roots,
-                         core_list_t(n00bb_ir_func_ptr_t) *reachable)
+                         core_list_t(n00bb_ir_func_ptr_t) *reachable,
+                         core_list_t(n00bb_ir_func_ptr_t) *cached)
 {
     reachable->len = 0;
-    reachable_collection_t collection = {reachable, analysis->cache};
+    if (cached) cached->len = 0;
+    reachable_collection_t collection = {reachable, cached, analysis->cache};
     return ir_walk_reachable_functions(roots->data, roots->len,
         collect_phase_reachable_function, reachable_function_body,
         &collection);
@@ -705,7 +710,8 @@ build_reachable_functions(
     if (!collect_program_roots(analysis, initializer_order, diagnostics,
                                &roots)) return false;
     bool ok = walk_reachable_functions(analysis, &roots,
-                                       &analysis->reachable_functions);
+                                       &analysis->reachable_functions,
+                                       nullptr);
     core_list_free(roots);
     return ok && build_emitted_functions(analysis);
 }
@@ -842,7 +848,8 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_list_push(roots, analysis->reachable_functions.data[i]);
     collect_emission_roots(analysis, &roots);
     bool ok = walk_reachable_functions(analysis, &roots,
-                                       &analysis->emitted_functions);
+                                       &analysis->emitted_functions,
+                                       &analysis->cached_functions);
     core_list_free(roots);
     return ok;
 }

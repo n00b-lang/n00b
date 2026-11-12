@@ -244,6 +244,18 @@ handler_listed(n00bb_link_analysis_t *analysis, const ir_func_t *handler,
     return false;
 }
 
+static core_list_t(n00bb_ir_func_ptr_t)
+program_functions(const n00bb_link_analysis_t *analysis)
+{
+    core_list_t(n00bb_ir_func_ptr_t) functions =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t f = 0; f < analysis->emitted_functions.len; f++)
+        core_list_push(functions, analysis->emitted_functions.data[f]);
+    for (size_t f = 0; f < analysis->cached_functions.len; f++)
+        core_list_push(functions, analysis->cached_functions.data[f]);
+    return functions;
+}
+
 void
 collect_callback_handlers(n00bb_link_analysis_t *analysis)
 {
@@ -254,8 +266,9 @@ collect_callback_handlers(n00bb_link_analysis_t *analysis)
     core_dict_t known, referenced;
     core_dict_init(&known, nullptr, nullptr);
     core_dict_init(&referenced, nullptr, nullptr);
-    for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
-        ir_func_t *function = analysis->emitted_functions.data[f];
+    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    for (size_t f = 0; f < program.len; f++) {
+        ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *creation = function->blocks[b]->instrs[i];
@@ -284,6 +297,7 @@ collect_callback_handlers(n00bb_link_analysis_t *analysis)
                 core_list_push(analysis->callback_handler_types, type);
             }
     }
+    core_list_free(program);
     core_dict_free(&known);
     core_dict_free(&referenced);
 }
@@ -706,16 +720,17 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
     if (analysis->entry_ready[slot]) return analysis->entry_summaries[slot];
     analysis->entry_ready[slot] = true;
     bool complete = true;
+    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
     core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
-        ? thread_entries(&analysis->emitted_functions, &complete, nullptr)
+        ? thread_entries(&program, &complete, nullptr)
         : core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t f = 0; slot == 0 && f < analysis->emitted_functions.len; f++)
-        if (finalizer_function(analysis->emitted_functions.data[f]))
-            core_list_push(entries, analysis->emitted_functions.data[f]);
+    for (size_t f = 0; slot == 0 && f < program.len; f++)
+        if (finalizer_function(program.data[f]))
+            core_list_push(entries, program.data[f]);
     for (size_t f = 0; slot == 2 && f < analysis->callback_handlers.len; f++)
         core_list_push(entries, analysis->callback_handlers.data[f]);
-    if (!complete)
-        add_address_taken_functions(&analysis->emitted_functions, &entries);
+    if (!complete) add_address_taken_functions(&program, &entries);
+    core_list_free(program);
     ir_summary_t *merged = ir_summary_new(summaries, nullptr);
     bool merged_all = true;
     for (size_t f = 0; merged_all && f < entries.len; f++)
@@ -737,8 +752,9 @@ collect_escaped_globals(n00bb_link_analysis_t *analysis)
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     core_dict_init(&analysis->escaped_globals, nullptr, nullptr);
     analysis->escaped_owner = analysis->escapes;
-    for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
-        ir_func_t *function = analysis->emitted_functions.data[f];
+    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    for (size_t f = 0; f < program.len; f++) {
+        ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
@@ -755,6 +771,7 @@ collect_escaped_globals(n00bb_link_analysis_t *analysis)
                               (void *)global);
             }
     }
+    core_list_free(program);
 }
 
 bool

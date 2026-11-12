@@ -1540,6 +1540,7 @@ lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 
 typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) *functions;
+    core_list_t(n00bb_ir_func_ptr_t) *cached;
     const n00bb_cache_t *cache;
 } reachable_collection_t;
 

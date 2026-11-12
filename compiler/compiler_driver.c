@@ -4485,6 +4485,8 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(callers, analysis->emitted_functions.data[i]);
+    for (size_t i = 0; i < analysis->cached_functions.len; i++)
+        core_list_push(callers, analysis->cached_functions.data[i]);
     core_dict_t visited;
     core_dict_init(&visited, nullptr, nullptr);
     bool ok = true;
@@ -4511,6 +4513,11 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
             if (!core_dict_contains(&visited, function))
                 core_list_push(callers, function);
         }
+        for (size_t i = 0; ok && i < analysis->cached_functions.len; i++) {
+            ir_func_t *function = analysis->cached_functions.data[i];
+            if (!core_dict_contains(&visited, function))
+                core_list_push(callers, function);
+        }
     }
     core_dict_free(&visited);
     core_dict_free(&binder_state.found);
@@ -4521,8 +4528,11 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
 static void
 optimize_range_checks(n00bb_link_analysis_t *analysis)
 {
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
-        ir_func_t *function = analysis->emitted_functions.data[i];
+    size_t emitted = analysis->emitted_functions.len;
+    for (size_t i = 0; i < emitted + analysis->cached_functions.len; i++) {
+        ir_func_t *function = i < emitted
+            ? analysis->emitted_functions.data[i]
+            : analysis->cached_functions.data[i - emitted];
         if (!function || !function->n_blocks) continue;
         size_t scope = ir_analysis_scope_begin();
         (void)ir_abcd_fold(function);

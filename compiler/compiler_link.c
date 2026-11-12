@@ -3718,6 +3718,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     th_env_free(analysis->interface_environment);
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
+    core_list_free(analysis->cached_functions);
     core_list_free(analysis->callback_handlers);
     core_list_free(analysis->callback_handler_types);
     core_list_free(analysis->referenced_functions);

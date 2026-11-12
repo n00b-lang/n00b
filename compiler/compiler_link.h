@@ -310,6 +310,7 @@ typedef struct n00bb_link_analysis_t {
     bool members_bound;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
+    core_list_t(n00bb_ir_func_ptr_t) cached_functions;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
     core_list_t(th_type_ptr_t) callback_handler_types;
     core_list_t(n00bb_ir_func_ptr_t) referenced_functions;

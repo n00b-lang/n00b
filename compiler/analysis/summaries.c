@@ -423,6 +423,8 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(roots, analysis->emitted_functions.data[i]);
+    for (size_t i = 0; i < analysis->cached_functions.len; i++)
+        core_list_push(roots, analysis->cached_functions.data[i]);
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, initializers->data[i]);
     for (size_t i = 0; i < entries->len; i++)
