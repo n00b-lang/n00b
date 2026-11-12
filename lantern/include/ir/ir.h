@@ -496,6 +496,7 @@ struct ir_func_t {
     ir_module_t  *owner;
     struct ir_func_analyses_t *analyses;
     struct ir_uses_t *uses;
+    ir_func_t    *definition;
 };
 
 ir_ctx_t *ir_ctx_new(void);

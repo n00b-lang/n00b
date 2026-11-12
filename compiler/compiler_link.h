@@ -258,6 +258,12 @@ core_list_decl(n00bb_record_request_site_t);
 
 typedef struct n00bb_interface_summaries_t n00bb_interface_summaries_t;
 
+enum {
+    N00BB_PHASE_ESCAPES = 1,
+    N00BB_PHASE_MAIN    = 2,
+    N00BB_PHASE_FINAL   = 3,
+};
+
 typedef struct {
     core_translation_unit_t *unit;
     parse_tree_t *statement;
@@ -306,8 +312,11 @@ typedef struct n00bb_link_analysis_t {
     bool unit_of_module_ready;
     bool effect_checks_failed;
     bool lowered_with_errors;
+    bool defer_program_analysis;
+    bool members_bound;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
+    core_list_t(n00bb_ir_func_ptr_t) cached_functions;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
     core_list_t(th_type_ptr_t) callback_handler_types;
     core_list_t(n00bb_ir_func_ptr_t) referenced_functions;
@@ -318,6 +327,11 @@ typedef struct n00bb_link_analysis_t {
     bool entry_ready[3];
     core_dict_t global_symbols;
     bool global_symbols_ready;
+    core_dict_t cached_globals;
+    bool cached_globals_ready;
+    core_dict_t visibility_units;
+    core_dict_t import_closures;
+    bool visibility_ready;
     core_dict_t escaped_globals;
     ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;
@@ -353,6 +367,15 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_failed_region_t) dead_regions;
     core_list_t(n00bb_assert_site_t) assert_sites;
     n00bb_interface_summaries_t *interface_summaries;
+    n00bb_interface_summaries_t *stored_summaries[N00BB_PHASE_FINAL];
+    uint8_t summary_phase;
+    core_dict_t module_names;
+    size_t module_units_seen;
+    size_t module_specializations_seen;
+    bool module_names_ready;
+    core_dict_t cached_bodies;
+    bool cached_bodies_ready;
+    bool boxes_rewritten;
     core_list_t(core_translation_unit_ptr_t) initializer_order;
     bool dump_ranges;
     core_string_t effects_of;
@@ -363,6 +386,7 @@ typedef struct n00bb_link_analysis_t {
     core_string_t effects_not_in;
     bool effects_why;
     th_env *environment;
+    th_ctx *link_types;
     th_env *export_environment;
     th_env *interface_environment;
     const th_env *const *linked_interfaces;

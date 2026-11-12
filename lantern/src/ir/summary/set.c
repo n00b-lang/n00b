@@ -547,7 +547,11 @@ static pt_loc_t
 location_of(const pt_t *pt, const pt_item_t *address)
 {
     pt_loc_t loc = address->loc;
-    if (address->kind != PT_CONTENTS || loc.site != PT_EXTERNAL) return loc;
+    if (address->kind != PT_CONTENTS) return loc;
+    if (loc.site != PT_EXTERNAL) {
+        if (owned_slot(pt, &loc)) loc_push(pt, &loc, value_step);
+        return loc;
+    }
     if (loc_deep(&loc)) {
         loc.path.flags &= (uint8_t)~SPATH_INLINE;
         return loc;

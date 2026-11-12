@@ -1982,6 +1982,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
         return false;
     }
+    if (!complete && ir_diags_failed(context->diagnostics)) return false;
     if (!complete)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "failure propagation has no complete call outcome");

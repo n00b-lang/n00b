@@ -1953,6 +1953,27 @@ static bool intrinsic_type_matches(th_ctx *ctx, const th_env_trait_t *trait,
   return query.matched;
 }
 
+static bool receiver_cannot_match(const th_env_function_t *function,
+                                  th_type *receiver) {
+  if (function->requirement_count) return false;
+  th_type *contract = function->contract ? th_resolve(function->contract)
+                                         : nullptr;
+  if (contract && th_kind_of(contract) == TH_BINDER)
+    contract = th_resolve(th_binder_body(contract));
+  th_type *declared = contract && th_kind_of(contract) == TH_FUNCTION
+      ? first_parameter(contract) : nullptr;
+  th_type *expected = declared ? th_resolve(declared) : nullptr;
+  th_type *actual = receiver ? th_resolve(receiver) : nullptr;
+  if (!expected || !actual) return false;
+  th_kind kind = th_kind_of(expected);
+  if (kind == TH_VAR || kind == TH_BOUND
+      || (kind == TH_BITINT && th_kind_of(actual) == TH_BITINT))
+    return false;
+  if (kind != th_kind_of(actual)) return true;
+  return kind == TH_NAMED
+      && !core_string_eq(expected->named.name, actual->named.name);
+}
+
 static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                                 const th_env_trait_t *trait,
                                 th_type *methods, size_t ordinal) {
@@ -1964,6 +1985,7 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
   bool matched = false;
   for (size_t i = 0; !matched && i < candidates.len; i++) {
     const th_env_function_t *function = candidates.data[i];
+    if (receiver_cannot_match(function, receiver)) continue;
     th_type *attempt = fresh_pattern(ctx, methods);
     th_type *required = contract_lookup(attempt, method->name);
     th_type *required_signature = nullptr, *required_error = nullptr;
@@ -2156,8 +2178,9 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
       candidate_functions(ctx, trait, method_name);
   for (size_t i = 0; i < candidates.len; i++) {
     const th_env_function_t *function = candidates.data[i];
-    if (!function_matches_with_promotion(ctx, receiver, trait, function,
-                                         method_name))
+    if (receiver_cannot_match(function, receiver)
+        || !function_matches_with_promotion(ctx, receiver, trait, function,
+                                            method_name))
       continue;
     th_type *signature = nullptr;
     th_env_signature_channels(ctx, fresh_pattern(ctx, function->contract),

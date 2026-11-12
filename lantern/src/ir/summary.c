@@ -15,3 +15,4 @@
 #include "summary/points_to.c"
 #include "summary/solve.c"
 #include "summary/codec.c"
+#include "summary/inputs.c"

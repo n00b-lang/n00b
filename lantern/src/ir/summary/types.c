@@ -20,6 +20,7 @@ typedef struct {
     th_type   *slot;
     bool       maybe_pointer;
     bool       pointer;
+    bool       owned;
 } slot_info_t;
 
 static bool is_call(const ir_instr_t *in);
@@ -273,8 +274,14 @@ slot_info(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
     if (found) return info;
     ir_module_t *module = pt->f->owner;
     th_type     *raw    = root;
-    for (uint32_t s = 0; raw && s < depth; s++)
-        raw = step_through(pt, module, raw, loc->path.steps[s]);
+    th_type     *owner  = nullptr;
+    for (uint32_t s = 0; raw && s < depth; s++) {
+        owner = raw;
+        raw   = step_through(pt, module, raw, loc->path.steps[s]);
+    }
+    if (owner && th_kind_of(owner) == TH_INDIRECTION)
+        owner = th_ind_referent(owner);
+    const ir_summary_hooks_t *hooks = pt->summaries->hooks;
     th_type *slot = memo_defined(pt, raw);
     info  = core_alloc(slot_info_t);
     *info = (slot_info_t){
@@ -284,6 +291,9 @@ slot_info(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
         .maybe_pointer = !raw || pointer_class(module, raw)
                       || generic_type(raw),
         .pointer       = slot && pointer_class(module, slot),
+        .owned         = raw && owner && hooks && hooks->owned_field
+                      && hooks->owned_field(hooks->context, owner,
+                                            loc->path.steps[depth - 1]),
     };
     core_dict_put(&pt->types->slots, &info->key, info);
     return info;
@@ -396,6 +406,14 @@ step_fits(const pt_t *pt, th_type *type, core_string_t step)
     if (step_eq(step, element_step) || step_eq(step, length_step))
         return kind == TH_SEQUENCE;
     return kind == TH_RECORD && field_type(pt, type, step);
+}
+
+static bool
+owned_slot(const pt_t *pt, const pt_loc_t *loc)
+{
+    return (loc->site == PT_EXTERNAL || loc->site < pt->sites.len)
+        && loc->path.depth && !(loc->path.flags & IR_SPATH_DEEP)
+        && slot_info(pt, loc, loc->path.depth)->owned;
 }
 
 static bool

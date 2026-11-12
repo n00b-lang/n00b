@@ -298,9 +298,8 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
         set_add(pt, into, from->data[0]);
         return;
     }
-    bool    *dropped = core_alloc_array(bool, into->len);
+    bool    *dropped = nullptr;
     pt_set_t added   = (pt_set_t){0};
-    for (size_t i = 0; i < into->len; i++) dropped[i] = false;
     size_t same = 0;
     for (size_t f = 0; f < from->len; f++) {
         const pt_item_t *item = &from->data[f];
@@ -310,6 +309,10 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
             && item_covers(&into->data[same], item)) continue;
         size_t low = 0, high = 0;
         if (set_lookup(into, item, &low, &high)) continue;
+        if (!dropped) {
+            dropped = core_alloc_array(bool, into->len);
+            for (size_t i = 0; i < into->len; i++) dropped[i] = false;
+        }
         for (size_t i = low; i < high; i++)
             if (!dropped[i] && item_covers(item, &into->data[i]))
                 dropped[i] = true;
@@ -333,7 +336,7 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
         *into = merged;
     }
     core_list_free(added);
-    core_free(dropped);
+    if (dropped) core_free(dropped);
 }
 
 static void
@@ -706,53 +709,74 @@ note_external_write(pt_t *pt, const pt_loc_t *at, const pt_set_t *values)
 }
 
 static void
-aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
-           const pt_loc_t *loc, pt_set_t *into)
+visible_aliases(pt_t *pt, const uint32_t *sites, size_t count,
+                const pt_loc_t *loc, core_list_t(uint64_t) *visible)
 {
-    const ir_spath_t         *read   = &loc->path;
-    core_list_t(pt_set_ptr_t) merged = core_list_new(pt_set_ptr_t);
+    const ir_spath_t *read = &loc->path;
     for (size_t e = 0; e < count; e++) {
         uint32_t site = sites[e];
         for (size_t a = 0; a < pt->sites.data[site].aliases.len; a++) {
             const pt_alias_t *entry = &pt->sites.data[site].aliases.data[a];
-            const pt_item_t   alias = entry->item;
-            const ir_spath_t *at    = &alias.loc.path;
-            if (!same_path_root(at, read) || !alias_visible(pt, entry))
-                continue;
-            int32_t under = path_within(read, at);
-            int32_t over  = path_within(at, read);
-            if (under < 0 && over < 0) continue;
-            pt_item_t target = item_at(site_loc(site));
-            loc_extend(pt, &target.loc, alias.steps, alias.depth, alias.deep);
-            bool loose = loc_deep(&alias.loc);
-            if (under >= 0) {
-                if (!loc_deep(loc)
-                    && crosses(pt, &alias.loc, (uint32_t)under, at->depth))
-                    continue;
-                set_add(pt, into, item_under(at->steps + under,
-                                         at->depth - (uint32_t)under, loose,
-                                         target));
-                if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
-                    target.loc.path.flags |= IR_SPATH_DEEP;
-                    content_below(pt, &target.loc, into, &merged);
-                }
-                continue;
-            }
-            const core_string_t *rest  = read->steps + over;
-            uint32_t             remaining = read->depth - (uint32_t)over;
-            if (!loose && remaining && !step_eq(rest[0], value_step)) {
-                set_add(pt, into, item_under(nullptr, 0, true, target));
-                continue;
-            }
-            if (!loose) extend_through(pt, &target.loc, rest, remaining, false);
-            else {
-                set_add(pt, into, item_under(nullptr, 0, true, target));
-                target.loc.path.flags |= IR_SPATH_DEEP;
-            }
-            content_at(pt, &target.loc, into);
+            const ir_spath_t *at    = &entry->item.loc.path;
+            if (same_path_root(at, read)
+                && (path_within(read, at) >= 0 || path_within(at, read) >= 0)
+                && alias_visible(pt, entry))
+                core_list_push(*visible, (uint64_t)site << 32 | a);
         }
     }
+}
+
+static void
+aliased_from(pt_t *pt, const core_list_t(uint64_t) *visible,
+             const pt_loc_t *loc, pt_set_t *into)
+{
+    const ir_spath_t         *read   = &loc->path;
+    core_list_t(pt_set_ptr_t) merged = core_list_new(pt_set_ptr_t);
+    for (size_t v = 0; v < visible->len; v++) {
+        uint32_t          site  = (uint32_t)(visible->data[v] >> 32);
+        const pt_alias_t *entry = &pt->sites.data[site].aliases
+                                       .data[(uint32_t)visible->data[v]];
+        const pt_item_t   alias = entry->item;
+        const ir_spath_t *at    = &alias.loc.path;
+        int32_t           under = path_within(read, at);
+        int32_t           over  = path_within(at, read);
+        pt_item_t         target = item_at(site_loc(site));
+        loc_extend(pt, &target.loc, alias.steps, alias.depth, alias.deep);
+        bool loose = loc_deep(&alias.loc);
+        if (under >= 0) {
+            if (!loc_deep(loc)
+                && crosses(pt, &alias.loc, (uint32_t)under, at->depth))
+                continue;
+            set_add(pt, into, item_under(at->steps + under,
+                                     at->depth - (uint32_t)under, loose,
+                                     target));
+            if (loc_deep(loc) && !(read->flags & SPATH_INLINE)) {
+                target.loc.path.flags |= IR_SPATH_DEEP;
+                content_below(pt, &target.loc, into, &merged);
+            }
+            continue;
+        }
+        const core_string_t *rest      = read->steps + over;
+        uint32_t             remaining = read->depth - (uint32_t)over;
+        if (!loose && remaining && !step_eq(rest[0], value_step)) {
+            set_add(pt, into, item_under(nullptr, 0, true, target));
+            continue;
+        }
+        if (!loose) extend_through(pt, &target.loc, rest, remaining, false);
+        else {
+            set_add(pt, into, item_under(nullptr, 0, true, target));
+            target.loc.path.flags |= IR_SPATH_DEEP;
+        }
+        content_at(pt, &target.loc, into);
+    }
     core_list_free(merged);
+}
+
+static bool
+same_visible(const core_list_t(uint64_t) *a, const core_list_t(uint64_t) *b)
+{
+    return a->len == b->len
+        && (!a->len || !memcmp(a->data, b->data, a->len * sizeof(*a->data)));
 }
 
 static void
@@ -764,7 +788,41 @@ external_aliased(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     bool                   found = false;
     core_list_t(uint32_t) *sites = core_dict_get(&pt->alias_roots,
                                                  (void *)root, &found);
-    if (sites) aliased_at(pt, sites->data, sites->len, loc, into);
+    if (!sites) return;
+    core_list_t(uint64_t) visible = core_list_new(uint64_t);
+    visible_aliases(pt, sites->data, sites->len, loc, &visible);
+    aliased_key_t   probe = {
+        *loc, core_xxh3_64bits_raw(visible.data ? (const void *)visible.data
+                                                : "",
+                                   visible.len * sizeof(*visible.data))};
+    aliased_memo_t *entry = !visible.len || pt->reading.len
+            || pt->delta_since
+        ? nullptr : core_dict_get(&pt->aliased_memo, &probe, &found);
+    if (visible.len && !pt->reading.len && !pt->delta_since && !entry) {
+        entry  = core_alloc(aliased_memo_t);
+        *entry = (aliased_memo_t){.key = probe, .visible = visible};
+        core_dict_put(&pt->aliased_memo, &entry->key, entry);
+        visible = core_list_new(uint64_t);
+    }
+    else if (entry && !same_visible(&entry->visible, &visible)) entry = nullptr;
+    if (!entry) {
+        aliased_from(pt, &visible, loc, into);
+        core_list_free(visible);
+        return;
+    }
+    core_list_free(visible);
+    if (memo_stale(pt, &entry->memo)) {
+        pt_memo_frame_t frame;
+        entry->items.len = 0;
+        memo_begin(pt, &entry->memo, &frame);
+        for (size_t v = 0; v < entry->visible.len; v++)
+            pt_depend(pt, aliases_key((uint32_t)(entry->visible.data[v]
+                                                 >> 32)));
+        aliased_from(pt, &entry->visible, loc, &entry->items);
+        memo_end(pt, &entry->memo, &frame);
+    }
+    memo_use(pt, &entry->memo);
+    set_merge(pt, into, &entry->items);
 }
 
 static void
@@ -773,11 +831,14 @@ pt_load(pt_t *pt, const pt_set_t *addresses, pt_set_t *into)
     for (size_t i = 0; i < addresses->len; i++) {
         const pt_item_t *address = &addresses->data[i];
         if (!is_address(address)) continue;
-        if (address->loc.site != PT_EXTERNAL) {
-            content_at(pt, &address->loc, into);
+        pt_loc_t at = location_of(pt, address);
+        if (address->kind != PT_CONTENTS && at.site != PT_EXTERNAL
+            && owned_slot(pt, &at))
+            set_add(pt, into, contents_item(at));
+        if (at.site != PT_EXTERNAL) {
+            content_at(pt, &at, into);
             continue;
         }
-        pt_loc_t at = location_of(pt, address);
         set_add(pt, into, contents_item(at));
         external_written(pt, &at, into);
         external_aliased(pt, &at, into);
@@ -904,6 +965,46 @@ pt_publish(pt_t *pt, const pt_set_t *values, const pt_loc_t *at)
     }
 }
 
+static void pt_store(pt_t *pt, const pt_set_t *addresses,
+                     const pt_set_t *values, bool must);
+
+static const pt_set_t *
+owned_values(pt_t *pt, const pt_loc_t *at, const pt_set_t *values,
+             pt_set_t *kept)
+{
+    pt_set_t copies = (pt_set_t){0};
+    for (size_t v = 0; v < values->len; v++) {
+        const pt_item_t *value = &values->data[v];
+        bool copy = value->flow == PT_SAME && value->loc.site != PT_EXTERNAL
+            && !value->depth && !value->deep;
+        set_add(pt, copy ? &copies : kept, *value);
+    }
+    pt_loc_t pointee = location_of(pt, &(pt_item_t){.kind = PT_CONTENTS,
+                                                    .loc  = *at});
+    pt_set_t copied  = (pt_set_t){0};
+    pt_load(pt, &copies, &copied);
+    for (size_t c = 0; c < copied.len; c++) {
+        pt_item_t value = copied.data[c];
+        pt_loc_t  to    = pointee;
+        if (to.site == PT_EXTERNAL) {
+            loc_extend(pt, &to, value.steps, value.depth, value.deep);
+            value.steps = nullptr;
+            value.depth = 0;
+            value.deep  = false;
+        }
+        pt_set_t target = (pt_set_t){0};
+        pt_set_t stored = (pt_set_t){0};
+        set_add(pt, &target, item_at(to));
+        set_add(pt, &stored, value);
+        pt_store(pt, &target, &stored, false);
+        core_list_free(target);
+        core_list_free(stored);
+    }
+    core_list_free(copied);
+    core_list_free(copies);
+    return kept;
+}
+
 static void
 pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
          bool must)
@@ -912,19 +1013,24 @@ pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
     for (size_t i = 0; i < addresses->len; i++) {
         pt_loc_t at = location_of(pt, &addresses->data[i]);
         if (!is_address(&addresses->data[i])) continue;
+        pt_set_t        kept   = (pt_set_t){0};
+        const pt_set_t *stored = owned_slot(pt, &at)
+            ? owned_values(pt, &at, values, &kept) : values;
         if (at.site == PT_EXTERNAL) {
-            pt_publish(pt, values, &at);
-            note_external_write(pt, &at, values);
-            continue;
+            pt_publish(pt, stored, &at);
+            note_external_write(pt, &at, stored);
         }
-        note_target(pt, pt->at, at.site, &at, weak);
-        for (size_t v = 0; v < values->len; v++) {
-            pt_item_t item = item_under(at.path.steps, at.path.depth,
-                                        loc_deep(&at), values->data[v]);
-            pt_add(pt, &pt->sites.data[at.site].contents,
-                   contents_key(at.site), item);
-            note_write(pt, at.site, &at, weak, item);
+        else {
+            note_target(pt, pt->at, at.site, &at, weak);
+            for (size_t v = 0; v < stored->len; v++) {
+                pt_item_t item = item_under(at.path.steps, at.path.depth,
+                                            loc_deep(&at), stored->data[v]);
+                pt_add(pt, &pt->sites.data[at.site].contents,
+                       contents_key(at.site), item);
+                note_write(pt, at.site, &at, weak, item);
+            }
         }
+        core_list_free(kept);
     }
 }
 

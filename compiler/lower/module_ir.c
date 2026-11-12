@@ -1145,6 +1145,15 @@ bind_cached_global_identities(ir_ctx_t *ir_context,
             if (canonical && canonical != global
                 && !ir_global_set_identity(ir_context, global, canonical))
                 return false;
+            if (canonical && canonical != global && !global->is_extern) {
+                if (!analysis->cached_globals_ready) {
+                    core_dict_init(&analysis->cached_globals, nullptr,
+                                   nullptr);
+                    analysis->cached_globals_ready = true;
+                }
+                core_dict_put(&analysis->cached_globals,
+                              ir_global_identity(canonical), global);
+            }
         }
     }
     return true;
@@ -1453,6 +1462,7 @@ bool
 attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
 {
     ir_value_t *address = body ? ir_func_address(body->owner, body) : nullptr;
+    if (body) function->definition = body;
     return !body || (address && ir_annot_set(ir_context, &function->annots,
         (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.cached_body"), .kind = IR_ANNOT_VALUE,
                      .v = address}));

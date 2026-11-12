@@ -216,6 +216,11 @@ bool th_is_closed(th_ctx *ctx, th_type *t)
     closed_frame_t *frames = local;
     size_t depth = 0, capacity = 64;
     frames[depth++] = (closed_frame_t){t, 0};
+    th_type *seen_local[32];
+    size_t seen = 0;
+    core_dict_t seen_index;
+    bool indexed = false;
+    seen_local[seen++] = t;
     bool closed = true;
     while (closed && depth) {
         closed_frame_t *frame = &frames[depth - 1];
@@ -228,10 +233,22 @@ bool th_is_closed(th_ctx *ctx, th_type *t)
             closed = !child || child->kind != TH_VAR;
             continue;
         }
-        bool cycle = false;
-        for (size_t i = 0; i < depth && !cycle; i++)
-            cycle = frames[i].type == child;
-        if (cycle) continue;
+        bool visited = false;
+        if (indexed) (void)core_dict_get(&seen_index, child, &visited);
+        for (size_t i = 0; !indexed && i < seen && !visited; i++)
+            visited = seen_local[i] == child;
+        if (visited) continue;
+        if (!indexed && seen < sizeof(seen_local) / sizeof(*seen_local))
+            seen_local[seen++] = child;
+        else {
+            if (!indexed) {
+                core_dict_init(&seen_index, nullptr, nullptr);
+                for (size_t i = 0; i < seen; i++)
+                    core_dict_put(&seen_index, seen_local[i], 1);
+                indexed = true;
+            }
+            core_dict_put(&seen_index, child, 1);
+        }
         if (depth == capacity) {
             closed_frame_t *grown = core_alloc_array(closed_frame_t,
                                                      capacity * 2);
@@ -243,6 +260,7 @@ bool th_is_closed(th_ctx *ctx, th_type *t)
         frames[depth++] = (closed_frame_t){child, 0};
     }
     if (frames != local) core_free(frames);
+    if (indexed) core_dict_free(&seen_index);
     return closed;
 }
 

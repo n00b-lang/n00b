@@ -1,0 +1,33 @@
+# ../../../../lantern/grammars/ruby.bnf ../lex/ruby.lex ../../../../lantern/tests/samples/s.rb
+class                  2:1  class
+CONSTANT               2:7  Foo
+NEWLINE                3:1
+CVAR                   3:3  @@count
+=                      3:11  =
+INTEGER                3:13  0
+NEWLINE                4:1
+def                    4:3  def
+IDENTIFIER             4:7  initialize
+(                      4:17  (
+IDENTIFIER             4:18  n
+)                      4:19  )
+NEWLINE                5:1
+IVAR                   5:5  @name
+=                      5:11  =
+IDENTIFIER             5:13  n
+NEWLINE                6:1
+GVAR                   6:5  $global
+=                      6:13  =
+INTEGER                6:15  1
+NEWLINE                7:1
+end                    7:3  end
+NEWLINE                8:1
+def                    8:3  def
+IDENTIFIER             8:7  to_s
+NEWLINE                9:1
+STRING                 9:5  "name=#{@name}"
+NEWLINE                10:1
+end                    10:3  end
+NEWLINE                11:1
+end                    11:1  end
+NEWLINE                12:1

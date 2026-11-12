@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "compiler_cache.h"
 #include "compiler_tu.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -53,9 +54,70 @@ put_u32(core_buffer_t *out, uint32_t value)
     core_buffer_append(out, (const char *)bytes, 4);
 }
 
+enum { BODY_AS_CACHED = 1 };
+
+void
+n00bb_note_cached_bodies(n00bb_link_analysis_t *analysis)
+{
+    if (!analysis) return;
+    if (!analysis->cached_bodies_ready) {
+        core_dict_init(&analysis->cached_bodies, nullptr, nullptr);
+        analysis->cached_bodies_ready = true;
+    }
+    const core_list_t(n00bb_ir_func_ptr_t) *lists[] = {
+        &analysis->emitted_functions, &analysis->cached_functions,
+    };
+    for (size_t l = 0; l < sizeof(lists) / sizeof(*lists); l++)
+        for (size_t f = 0; f < lists[l]->len; f++) {
+            ir_func_t *function = lists[l]->data[f];
+            if (function && function->n_blocks)
+                core_dict_put(&analysis->cached_bodies, function,
+                              (void *)(uintptr_t)ir_func_identity(function));
+        }
+}
+
 static bool
-module_summaries(ir_summaries_t *summaries, ir_module_t *module,
-                 core_buffer_t *out)
+body_as_cached(n00bb_link_analysis_t *analysis, const ir_func_t *function)
+{
+    bool found = false;
+    uintptr_t identity = analysis && analysis->cached_bodies_ready
+        ? (uintptr_t)core_dict_get(&analysis->cached_bodies,
+                                   (void *)function, &found)
+        : 0;
+    return found && identity == (uintptr_t)ir_func_identity(function);
+}
+
+static uint64_t
+printed_body(const ir_func_t *function)
+{
+    core_string_t text = ir_func_print((ir_func_t *)function);
+    uint64_t hash = core_xxh3_64bits_raw(text.data ? text.data : "",
+                                         text.u8_bytes) | 2;
+    core_free(text.data);
+    return hash;
+}
+
+static uint64_t
+body_marker(n00bb_link_analysis_t *analysis, const ir_func_t *function,
+            uint8_t phase)
+{
+    return phase == N00BB_PHASE_ESCAPES || body_as_cached(analysis, function)
+        ? BODY_AS_CACHED : printed_body(function);
+}
+
+static bool
+body_matches(void *context, const ir_func_t *function, uint64_t body)
+{
+    n00bb_link_analysis_t *analysis = context;
+    if (analysis->summary_phase == N00BB_PHASE_ESCAPES
+        || body_as_cached(analysis, function))
+        return body == BODY_AS_CACHED;
+    return body != BODY_AS_CACHED && printed_body(function) == body;
+}
+
+static bool
+module_summaries(n00bb_link_analysis_t *analysis, ir_summaries_t *summaries,
+                 ir_module_t *module, uint8_t phase, core_buffer_t *out)
 {
     core_buffer_t encoded = {0};
     uint32_t count = 0;
@@ -66,7 +128,10 @@ module_summaries(ir_summaries_t *summaries, ir_module_t *module,
             ? ir_summary_of(summaries, function) : nullptr;
         if (!summary) continue;
         core_buffer_t bytes = {0};
-        ok = ir_summary_encode(summary, &bytes);
+        ok = phase
+            ? ir_summary_encode_stored(summaries, function,
+                  body_marker(analysis, function, phase), &bytes)
+            : ir_summary_encode(summary, &bytes);
         put_u32(&encoded, (uint32_t)function->name.u8_bytes);
         core_buffer_append(&encoded, function->name.data,
                            function->name.u8_bytes);
@@ -141,7 +206,7 @@ static bool
 encode_summaries(void *context, ir_module_t *module, core_buffer_t *out)
 {
     n00bb_link_analysis_t *analysis = context;
-    return module_summaries(analysis->summaries, module, out);
+    return module_summaries(analysis, analysis->summaries, module, 0, out);
 }
 
 bool
@@ -224,30 +289,71 @@ interface_index(n00bb_link_analysis_t *analysis)
 }
 
 static ir_module_t *
-unit_module_named(n00bb_link_analysis_t *analysis, core_string_t module)
+cached_module_named(n00bb_link_analysis_t *analysis, core_string_t module)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *candidate = state ? state->ir_module : nullptr;
-        if (candidate && core_string_eq(ir_module_name(candidate), module))
-            return candidate;
+    return analysis->cache ? n00bb_cache_module(analysis->cache, module)
+                           : nullptr;
+}
+
+static void
+index_module_name(n00bb_link_analysis_t *analysis, ir_module_t *module)
+{
+    core_string_t name = module ? ir_module_name(module) : (core_string_t){0};
+    if (!name.u8_bytes
+        || core_dict_contains(&analysis->module_names, &name)) return;
+    core_dict_put(&analysis->module_names, core_dict_string_key_copy(name),
+                  module);
+}
+
+static ir_module_t *
+module_named(n00bb_link_analysis_t *analysis, core_string_t module)
+{
+    if (!analysis->module_names_ready) {
+        core_dict_init_string(&analysis->module_names);
+        analysis->module_names_ready = true;
     }
-    return nullptr;
+    for (; analysis->module_units_seen < analysis->units.len;
+         analysis->module_units_seen++) {
+        n00bb_tu_state_t *state = tu_state(
+            analysis->units.data[analysis->module_units_seen]);
+        index_module_name(analysis, state ? state->ir_module : nullptr);
+    }
+    for (; analysis->module_specializations_seen
+           < analysis->specializations.len;
+         analysis->module_specializations_seen++) {
+        ir_func_t *instance = analysis->specializations.data[
+            analysis->module_specializations_seen].instance;
+        index_module_name(analysis, instance ? instance->owner : nullptr);
+    }
+    return core_dict_get(&analysis->module_names, &module, nullptr);
+}
+
+static const ir_module_t *
+resolve_module(void *context, core_string_t module)
+{
+    ir_module_t *found = module_named(context, module);
+    return found ? found : cached_module_named(context, module);
 }
 
 static const ir_global_t *
 resolve_global(void *context, core_string_t module, core_string_t name)
 {
-    ir_module_t *owner = unit_module_named(context, module);
+    ir_module_t *owner = module_named(context, module);
     ir_global_t *global = owner ? ir_global_find(owner, name) : nullptr;
+    ir_module_t *cached = global ? nullptr
+                                 : cached_module_named(context, module);
+    if (cached) global = ir_global_find(cached, name);
     return global ? ir_global_identity(global) : nullptr;
 }
 
 static ir_func_t *
 resolve_function(void *context, core_string_t module, core_string_t name)
 {
-    ir_module_t *owner = unit_module_named(context, module);
-    return owner ? ir_func_find(owner, name) : nullptr;
+    ir_module_t *owner = module_named(context, module);
+    ir_func_t *function = owner ? ir_func_find(owner, name) : nullptr;
+    ir_module_t *cached = function ? nullptr
+                                   : cached_module_named(context, module);
+    return cached ? ir_func_find(cached, name) : function;
 }
 
 ir_summary_t *
@@ -272,6 +378,72 @@ n00bb_interface_summary(n00bb_link_analysis_t *analysis,
     };
     return found ? ir_summary_decode(summaries, function, entry->data,
                                      entry->size, &resolver)
+                 : nullptr;
+}
+
+bool
+n00bb_encode_stored_summaries(n00bb_link_analysis_t *analysis,
+                              ir_summaries_t *summaries, ir_module_t *module,
+                              uint8_t phase, core_buffer_t *out)
+{
+    return summaries && phase
+        && module_summaries(analysis, summaries, module, phase, out);
+}
+
+static const core_string_t stored_sections[] = {
+    CORE_STRING_STATIC("escapes"),
+    CORE_STRING_STATIC("summaries"),
+    CORE_STRING_STATIC("final"),
+};
+
+static n00bb_interface_summaries_t *
+stored_index(n00bb_link_analysis_t *analysis, uint8_t phase)
+{
+    n00bb_interface_summaries_t **slot =
+        &analysis->stored_summaries[phase - 1];
+    if (*slot) return *slot;
+    n00bb_interface_summaries_t *index =
+        core_alloc(n00bb_interface_summaries_t);
+    core_dict_init(&index->by_function, summary_hash, summary_equal);
+    index->owned = core_list_new(interface_summary_ptr_t);
+    for (size_t u = 0; analysis->cache && u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        const uint8_t *data = nullptr;
+        size_t size = 0;
+        if (state && state->ir_module && state->interface_module
+            && n00bb_cache_module_summaries(analysis->cache,
+                   unit->module.identifier, stored_sections[phase - 1],
+                   &data, &size))
+            index_module(index, ir_module_name(state->ir_module), data,
+                         size);
+    }
+    *slot = index;
+    return index;
+}
+
+ir_summary_t *
+n00bb_stored_summary(void *context, ir_summaries_t *summaries,
+                     const ir_func_t *function)
+{
+    n00bb_link_analysis_t *analysis = context;
+    uint8_t phase = analysis ? analysis->summary_phase : 0;
+    if (!phase || phase > 3 || !analysis->cache || !function
+        || !function->n_blocks || !function->owner)
+        return nullptr;
+    interface_summary_t probe = {
+        .module = ir_module_name(function->owner), .function = function->name,
+    };
+    bool found = false;
+    interface_summary_t *entry = core_dict_get(
+        &stored_index(analysis, phase)->by_function, &probe, &found);
+    ir_summary_resolver_t resolver = {
+        .global = resolve_global, .function = resolve_function,
+        .context = analysis,
+    };
+    return found ? ir_summary_decode_stored(summaries, function, entry->data,
+                                            entry->size, &resolver,
+                                            resolve_module, body_matches)
                  : nullptr;
 }
 

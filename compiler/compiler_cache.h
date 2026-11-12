@@ -53,6 +53,9 @@ bool n00bb_cache_declaration_sites(const n00bb_cache_t *cache,
                                    core_string_t module, core_buffer_t *out);
 bool n00bb_cache_unused_facts(const n00bb_cache_t *cache,
                               core_string_t module, core_buffer_t *out);
+bool n00bb_cache_module_summaries(const n00bb_cache_t *cache,
+                                  core_string_t module, core_string_t kind,
+                                  const uint8_t **data, size_t *length);
 bool n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
                                  const core_translation_unit_t *unit,
                                  core_diagnostics_t *into);
@@ -102,7 +105,11 @@ void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
 bool n00bb_cache_instance_object(n00bb_cache_t *cache,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     const n00bb_specialization_t *item, n00bb_cache_module_object_t *object);
-bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link);
+bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
+                          n00bb_link_analysis_t *analysis);
+void n00bb_cache_capture_summaries(n00bb_cache_t *cache,
+                                   n00bb_link_analysis_t *analysis,
+                                   uint8_t phase);
 void n00bb_cache_set_check_only(bool check_only);
 bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,

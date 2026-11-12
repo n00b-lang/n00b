@@ -1,0 +1,9 @@
+# JSON (RFC 8259). Strings and numbers come from json.lex.
+tokens: %STRING, %NUMBER
+start: <json>
+
+<json>   ::= <value>
+<value>  ::= <object> | <array> | %STRING | %NUMBER | "true" | "false" | "null"
+<object> ::= "{" (<member> ("," <member>)*)? "}"
+<member> ::= %STRING ":" <value>
+<array>  ::= "[" (<value> ("," <value>)*)? "]"

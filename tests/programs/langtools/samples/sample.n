@@ -1,0 +1,17 @@
+#[setup#
+import sys.env
+#]setup#
+
+record Point {
+    x: int
+    y: int
+}
+
+func describe(p: Point) -> string {
+    let grammar = [-- spec text --]'bnf
+    let typed = "text"'T + 0x1F
+    let café = 'c'
+    if p.x > 0:
+        return "positive\x41"
+    return "other"
+}

@@ -3711,12 +3711,23 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     ir_group_pdg_free(analysis->program);
     core_list_free(analysis->assert_sites);
     n00bb_interface_summaries_free(analysis->interface_summaries);
+    for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
+        n00bb_interface_summaries_free(analysis->stored_summaries[p]);
+    if (analysis->module_names_ready) {
+        core_dict_foreach(&analysis->module_names, item)
+            core_dict_string_key_free(item->key);
+        core_dict_free(&analysis->module_names);
+    }
+    if (analysis->cached_bodies_ready)
+        core_dict_free(&analysis->cached_bodies);
     core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
+    th_ctx_free(analysis->link_types);
     th_env_free(analysis->export_environment);
     th_env_free(analysis->interface_environment);
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
+    core_list_free(analysis->cached_functions);
     core_list_free(analysis->callback_handlers);
     core_list_free(analysis->callback_handler_types);
     core_list_free(analysis->referenced_functions);
@@ -3725,6 +3736,16 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_dict_free(&analysis->unit_of_module);
     if (analysis->global_symbols_ready)
         core_dict_free(&analysis->global_symbols);
+    if (analysis->cached_globals_ready)
+        core_dict_free(&analysis->cached_globals);
+    if (analysis->visibility_ready) {
+        core_dict_foreach(&analysis->import_closures, item) {
+            core_dict_free(item->value);
+            core_free(item->value);
+        }
+        core_dict_free(&analysis->import_closures);
+        core_dict_free(&analysis->visibility_units);
+    }
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     if (analysis->bounded_targets_ready)
         core_dict_free(&analysis->bounded_targets);

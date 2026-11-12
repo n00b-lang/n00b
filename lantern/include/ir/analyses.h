@@ -14,6 +14,7 @@ ir_pdg_t    *ir_func_pdg(ir_func_t *f);
 ir_pdg_t    *ir_func_control(ir_func_t *f);
 void         ir_func_release_analyses(ir_func_t *f);
 uint64_t     ir_func_shape(const ir_func_t *f);
+uint64_t     ir_func_identity(const ir_func_t *f);
 void         ir_module_release_analyses(ir_module_t *m);
 
 size_t       ir_analysis_scope_begin(void);

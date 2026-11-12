@@ -1511,7 +1511,7 @@ bool
 n00bb_recompute_summaries(n00bb_link_analysis_t *analysis)
 {
     core_list_t(n00bb_ir_func_ptr_t) none = {0};
-    return build_function_summaries(analysis, &none, &none, true);
+    return build_function_summaries(analysis, &none, &none);
 }
 
 static uint8_t

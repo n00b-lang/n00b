@@ -2928,10 +2928,12 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         }
         modules[i] = state->ir_module;
     }
+    if (!analysis->link_types) analysis->link_types = th_ctx_new();
     n00bb_abi_semantics_t semantics = {
         .environment = analysis->environment,
         .modules = modules,
         .module_count = count,
+        .types = analysis->link_types,
     };
     core_string_t failure_stage = {};
     n00bb_abi_index_plan_failure_t plan_failure = {0};

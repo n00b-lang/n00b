@@ -3,6 +3,7 @@
 #include "abi_container.h"
 #include "abi_emit_strings.h"
 #include "n00b-abi-v1.h"
+#include "lib/dict.h"
 #include "lib/indexed_table.h"
 #include "lib/link_unit.h"
 #include "lib/object_emit.h"
@@ -25,7 +26,13 @@ typedef struct {
     core_object_absolute64_relocation_t *relocations;
     uint32_t relocation_count;
     bool relocations_valid;
+    core_dict_t symbol_names;
+    core_dict_t function_roots;
+    n00bb_abi_string_view_t module_name;
+    bool names_indexed;
 } n00bb_abi_object_view_t;
+
+typedef core_list_t(uint32_t) n00bb_abi_rows_t;
 
 typedef struct {
     core_string_t module;
@@ -49,6 +56,13 @@ bool n00bb_abi_object_open(const core_target_desc_t *target,
                            const uint8_t *object, size_t object_bytes,
                            n00bb_abi_object_view_t *out);
 void n00bb_abi_object_close(n00bb_abi_object_view_t *view);
+bool n00bb_abi_object_index_names(n00bb_abi_object_view_t *view);
+bool n00bb_abi_object_module_name(n00bb_abi_object_view_t *view,
+                                  n00bb_abi_string_view_t *out);
+const n00bb_abi_rows_t *n00bb_abi_symbols_named(
+    const n00bb_abi_object_view_t *view, n00bb_abi_string_view_t name);
+const n00bb_abi_rows_t *n00bb_abi_functions_rooted(
+    const n00bb_abi_object_view_t *view, core_string_t root);
 const n00bb_abi_directory_entry_t *n00bb_abi_object_table(
     const n00bb_abi_object_view_t *view, uint32_t kind);
 const void *n00bb_abi_object_row(const n00bb_abi_object_view_t *view,

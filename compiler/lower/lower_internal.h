@@ -1540,6 +1540,7 @@ lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 
 typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) *functions;
+    core_list_t(n00bb_ir_func_ptr_t) *cached;
     const n00bb_cache_t *cache;
 } reachable_collection_t;
 
@@ -1725,6 +1726,10 @@ const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
                       uint32_t flag);
 
+void
+n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
+                         core_list_t(n00bb_ir_func_ptr_t) *roots);
+
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global);
 
@@ -1844,13 +1849,19 @@ runtime_reaches(n00bb_runtime_init_analysis_t *runtime,
 bool
 report_bookkeeping_writes(n00bb_link_analysis_t *analysis);
 
+bool
+lease_storage_record(th_type *record);
+
+bool
+check_lease_storage(n00bb_link_analysis_t *analysis);
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs);
 
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
-    const core_list_t(n00bb_ir_func_ptr_t) *entries, bool prove_traps);
+    const core_list_t(n00bb_ir_func_ptr_t) *entries);
 
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);

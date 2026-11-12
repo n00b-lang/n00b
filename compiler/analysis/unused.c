@@ -711,8 +711,12 @@ static core_list_t(n00bb_ir_func_ptr_t)
 used_field_readers(n00bb_link_analysis_t *analysis)
 {
     core_string_t helper = CORE_STRING_STATIC("n00bb.generated-value-method");
-    core_dict_t listed;
+    core_dict_t listed, instances;
     core_dict_init(&listed, nullptr, nullptr);
+    core_dict_init(&instances, nullptr, nullptr);
+    for (size_t s = 0; s < analysis->specializations.len; s++)
+        core_dict_add(&instances, analysis->specializations.data[s].instance,
+                      1);
     core_list_t(n00bb_ir_func_ptr_t) used = core_list_new(n00bb_ir_func_ptr_t);
     core_list_t(n00bb_ir_func_ptr_t) initializers =
         initializer_bodies(analysis);
@@ -722,6 +726,7 @@ used_field_readers(n00bb_link_analysis_t *analysis)
             ? analysis->emitted_functions.data[f]
             : initializers.data[f - analysis->emitted_functions.len];
         if (!annotated_true(function, helper)
+            && !core_dict_contains(&instances, function)
             && core_dict_add(&listed, function, 1))
             core_list_push(used, function);
     }
@@ -732,12 +737,15 @@ used_field_readers(n00bb_link_analysis_t *analysis)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
                 ir_func_t *target = ir_call_function(in);
-                if (target && annotated_true(target, helper)
-                    && !narrowed_argument(in)
-                    && core_dict_add(&listed, target, 1))
+                bool reached = target
+                    && (core_dict_contains(&instances, target)
+                        || (annotated_true(target, helper)
+                            && !narrowed_argument(in)));
+                if (reached && core_dict_add(&listed, target, 1))
                     core_list_push(used, target);
             }
     }
+    core_dict_free(&instances);
     core_dict_free(&listed);
     return used;
 }
@@ -812,11 +820,35 @@ expose_type(th_ctx *types, th_type *type, core_dict_t *exposed,
     }
 }
 
-static bool
-foreign_call(const ir_instr_t *in)
+static ir_func_t *
+foreign_target(const ir_instr_t *in)
 {
-    ir_func_t *target = n00bb_direct_call_target(in);
-    return target && (target->linkage == IR_LINK_EXTERN || !target->n_blocks);
+    ir_func_t *target = n00bb_cached_body(n00bb_direct_call_target(in));
+    return target && (target->linkage == IR_LINK_EXTERN || !target->n_blocks)
+        ? target : nullptr;
+}
+
+static const n00bb_axiom_t *
+native_axiom(const ir_func_t *target)
+{
+    const n00bb_axiom_t *axiom = n00bb_axiom_of_function(target);
+    return axiom && axiom->key == N00BB_AXIOM_NATIVE ? axiom : nullptr;
+}
+
+static bool
+foreign_result(const ir_func_t *target)
+{
+    const n00bb_axiom_t *axiom = native_axiom(target);
+    return !axiom || axiom->returns == IR_SRETURN_FRESH_EXTERNAL;
+}
+
+static bool
+foreign_argument(const ir_func_t *target, uint32_t param)
+{
+    const n00bb_axiom_t *axiom = native_axiom(target);
+    return !axiom
+        || (param < 8
+            && ((axiom->reads | axiom->writes) & N00BB_AXIOM_PARAM(param)));
 }
 
 static void
@@ -843,11 +875,14 @@ exposed_records(n00bb_link_analysis_t *analysis, core_dict_t *exposed)
         for (uint32_t b = 0; b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
-                if (!foreign_call(in)) continue;
-                if (in->dest) expose_type(types, in->dest->type, exposed, 0);
+                ir_func_t *target = foreign_target(in);
+                if (!target) continue;
+                if (in->dest && foreign_result(target))
+                    expose_type(types, in->dest->type, exposed, 0);
                 for (uint32_t o = 1; o < in->n_operands; o++) {
                     ir_value_t *argument = ir_operand_value(&in->operands[o]);
-                    if (!argument) continue;
+                    if (!argument || !foreign_argument(target, o - 1))
+                        continue;
                     if (argument->kind == IR_VAL_FUNC && argument->owner)
                         expose_callback(types,
                             n00bb_cached_body(argument->owner), exposed);

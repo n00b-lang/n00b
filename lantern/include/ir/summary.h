@@ -115,17 +115,26 @@ typedef struct {
     bool (*call_finalizers)(void *context, const ir_instr_t *call,
                             const ir_func_t *target, ir_summary_target_fn add,
                             void *sink);
+    bool (*owned_field)(void *context, th_type *record, core_string_t field);
+    ir_summary_t *(*stored)(void *context, ir_summaries_t *summaries,
+                            const ir_func_t *function);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
 ir_summaries_t *ir_summaries_compute(ir_func_t *const *functions,
                                      size_t count,
                                      const ir_summary_hooks_t *hooks);
+ir_summaries_t *ir_summaries_recompute(ir_func_t *const *functions,
+                                       size_t count,
+                                       const ir_summary_hooks_t *hooks,
+                                       ir_summaries_t *previous);
 ir_summaries_t *ir_escapes_compute(ir_func_t *const *functions, size_t count,
                                    const ir_summary_hooks_t *hooks);
 void            ir_summaries_free(ir_summaries_t *summaries);
 ir_summary_t   *ir_summary_of(ir_summaries_t *summaries,
                               const ir_func_t *function);
+bool            ir_summary_known(ir_summaries_t *summaries,
+                                 const ir_func_t *function);
 
 ir_summary_t *ir_summary_new(ir_summaries_t *summaries,
                              const ir_func_t *function);
@@ -181,6 +190,19 @@ ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
                                 const ir_func_t *function,
                                 const uint8_t *data, size_t size,
                                 const ir_summary_resolver_t *resolver);
+typedef const ir_module_t *(*ir_summary_module_fn)(void *context,
+                                                   core_string_t name);
+typedef bool (*ir_summary_body_fn)(void *context, const ir_func_t *function,
+                                   uint64_t body);
+bool          ir_summary_encode_stored(ir_summaries_t *summaries,
+                                       const ir_func_t *function,
+                                       uint64_t body, core_buffer_t *out);
+ir_summary_t *ir_summary_decode_stored(ir_summaries_t *summaries,
+                                       const ir_func_t *function,
+                                       const uint8_t *data, size_t size,
+                                       const ir_summary_resolver_t *resolver,
+                                       ir_summary_module_fn module_named,
+                                       ir_summary_body_fn body_matches);
 typedef struct {
     uint32_t (*intern)(void *context, core_string_t text);
     core_string_t (*lookup)(void *context, uint32_t reference);

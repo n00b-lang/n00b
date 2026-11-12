@@ -237,9 +237,101 @@ typedef struct {
     uint32_t function;
 } requirement_match_t;
 
+typedef struct {
+    core_dict_t      modules;
+    n00bb_abi_rows_t candidates;
+    bool             open;
+    bool             valid;
+} provider_index_t;
+
+static void
+provider_index_open(provider_index_t *index,
+                    const n00bb_abi_selected_objects_t *selected,
+                    const n00bb_abi_index_plan_t *plan)
+{
+    if (index->open) return;
+    *index = (provider_index_t){
+        .open       = true,
+        .candidates = core_list_new(uint32_t),
+    };
+    core_dict_init_string(&index->modules);
+    if (selected->count > UINT32_MAX) return;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00b_abi_module_v1 *module = n00bb_abi_object_row(
+            &selected->views[input], N00B_ABI_TABLE_MODULE, 1);
+        n00bb_abi_string_view_t name;
+        uint32_t package;
+        if (!module
+            || !n00bb_abi_object_module_name(&selected->views[input], &name)
+            || !n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_PACKAGE,
+                                         module->package_index, &package))
+            return;
+        core_string_t key = core_string_borrow((const char *)name.bytes,
+                                               name.length);
+        bool              found  = false;
+        n00bb_abi_rows_t *inputs = core_dict_get(&index->modules, &key,
+                                                 &found);
+        if (!inputs) {
+            core_string_t *kept = core_alloc(core_string_t);
+            *kept = key;
+            inputs = core_alloc(n00bb_abi_rows_t);
+            *inputs = core_list_new(uint32_t);
+            core_dict_put(&index->modules, kept, inputs);
+        }
+        core_list_push(*inputs, (uint32_t)input);
+    }
+    index->valid = true;
+}
+
+static void
+provider_index_close(provider_index_t *index)
+{
+    if (!index->open) return;
+    index->open = false;
+    core_dict_foreach(&index->modules, entry) {
+        n00bb_abi_rows_t *inputs = entry->value;
+        core_list_free(*inputs);
+        core_free(inputs);
+        core_free(entry->key);
+    }
+    core_dict_free(&index->modules);
+    core_list_free(index->candidates);
+}
+
+static int
+provider_order(const void *left, const void *right)
+{
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return a < b ? -1 : a > b;
+}
+
+static void
+provider_candidates(provider_index_t *index, n00bb_abi_string_view_t wanted)
+{
+    size_t modules = 0;
+    index->candidates.len = 0;
+    for (size_t dot = 0; dot + 1 < wanted.length; dot++) {
+        if (wanted.bytes[dot] != '.') continue;
+        core_string_t module = core_string_borrow((const char *)wanted.bytes,
+                                                  dot);
+        bool                    found  = false;
+        const n00bb_abi_rows_t *inputs = core_dict_get(&index->modules,
+                                                       &module, &found);
+        if (!inputs) continue;
+        for (size_t i = 0; i < inputs->len; i++)
+            core_list_push(index->candidates, inputs->data[i]);
+        modules++;
+    }
+    if (modules > 1)
+        qsort(index->candidates.data, index->candidates.len,
+              sizeof(*index->candidates.data), provider_order);
+}
+
 static int
 requirement_target(const n00bb_abi_selected_objects_t *selected,
-                   const n00bb_abi_index_plan_t *plan, size_t input,
+                   const n00bb_abi_index_plan_t *plan,
+                   provider_index_t *providers, size_t input,
                    uint32_t row, n00bb_abi_string_view_t *wanted,
                    requirement_match_t *found, core_string_t *mismatch)
 {
@@ -270,16 +362,19 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
     const n00b_abi_type_v1 *contract = n00bb_abi_object_row(requester,
         N00B_ABI_TABLE_TYPE, request->contract_type_index);
     if (!contract || !contract->typehash) return -1;
+    provider_index_open(providers, selected, plan);
+    if (!providers->valid) return -1;
     int matches = 0;
-    for (size_t provider_input = 0; provider_input < selected->count;
-         provider_input++) {
+    provider_candidates(providers, *wanted);
+    for (size_t at = 0; at < providers->candidates.len; at++) {
+        size_t provider_input = providers->candidates.data[at];
         const n00bb_abi_object_view_t *provider =
             &selected->views[provider_input];
         const n00b_abi_module_v1 *module = n00bb_abi_object_row(provider,
             N00B_ABI_TABLE_MODULE, 1);
         n00bb_abi_string_view_t module_name;
-        if (!module || !n00bb_abi_object_string(provider, &module->full_path,
-                &module_name)) return -1;
+        if (!module || !n00bb_abi_object_module_name(
+                &selected->views[provider_input], &module_name)) return -1;
         uint32_t provider_package;
         if (!n00bb_abi_index_plan_map(plan, provider_input,
                 N00B_ABI_TABLE_PACKAGE, module->package_index,
@@ -289,8 +384,16 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
             || wanted->bytes[module_name.length] != '.') continue;
         const n00bb_abi_directory_entry_t *symbols =
             n00bb_abi_object_table(provider, N00B_ABI_TABLE_SYMBOL);
-        if (!symbols) return -1;
-        for (uint32_t j = 1; j < symbols->record_count; j++) {
+        if (!symbols
+            || !n00bb_abi_object_index_names(&selected->views[provider_input]))
+            return -1;
+        const n00bb_abi_rows_t *named = n00bb_abi_symbols_named(provider,
+            (n00bb_abi_string_view_t){
+                .bytes  = wanted->bytes + module_name.length + 1,
+                .length = wanted->length - module_name.length - 1,
+            });
+        for (size_t r = 0; named && r < named->len; r++) {
+            uint32_t j = named->data[r];
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(provider,
                 N00B_ABI_TABLE_SYMBOL, j);
             if (!symbol || symbol->kind != request->symbol_kind
@@ -409,6 +512,7 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
 static bool
 typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
                             const n00bb_abi_index_plan_t *plan,
+                            provider_index_t *providers,
                             n00bb_abi_index_plan_failure_t *failure)
 {
     for (size_t input = 0; input < selected->count; input++) {
@@ -425,8 +529,9 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
             n00bb_abi_string_view_t wanted = {0};
             requirement_match_t found;
             core_string_t mismatch = {};
-            int matches = requirement_target(selected, plan, input, i,
-                                             &wanted, &found, &mismatch);
+            int matches = requirement_target(selected, plan, providers,
+                                             input, i, &wanted, &found,
+                                             &mismatch);
             if (matches < 0) return false;
             if (matches != 1) {
                 if (failure) *failure = (n00bb_abi_index_plan_failure_t){
@@ -449,6 +554,7 @@ typed_requirements_resolved(const n00bb_abi_selected_objects_t *selected,
 static bool
 baked_requirement_remap(const n00bb_abi_selected_objects_t *selected,
                         const n00bb_abi_index_plan_t *plan,
+                        provider_index_t *providers,
                         const n00bb_abi_merged_rows_t *merged, size_t input,
                         core_index_remap_t **out)
 {
@@ -475,8 +581,8 @@ baked_requirement_remap(const n00bb_abi_selected_objects_t *selected,
         requirement_match_t found;
         core_string_t mismatch = {};
         uint32_t final_index;
-        if (requirement_target(selected, plan, input, i, &wanted, &found,
-                &mismatch) != 1
+        if (requirement_target(selected, plan, providers, input, i, &wanted,
+                &found, &mismatch) != 1
             || !n00bb_abi_index_plan_map(plan, found.provider,
                 N00B_ABI_TABLE_FUNCTION, found.function, &final_index)
             || !core_index_remap_set(*out, i, final_index)) return false;
@@ -675,10 +781,11 @@ specialization_patch_remap(const n00bb_abi_selected_objects_t *selected,
     return remap;
 }
 
-bool
-n00bb_abi_apply_link_patches(
+static bool
+apply_link_patches(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_index_plan_t *plan,
+    provider_index_t *providers,
     const n00bb_abi_merged_rows_t *merged,
     n00bb_abi_native_sections_t *sections)
 {
@@ -704,8 +811,8 @@ n00bb_abi_apply_link_patches(
         n00bb_abi_patch_table_t *patch_tables = core_alloc_array(
             n00bb_abi_patch_table_t, merged->table_count + 1);
         core_index_remap_t *requirement_remap = nullptr;
-        if (!baked_requirement_remap(selected, plan, merged, input,
-                &requirement_remap)) {
+        if (!baked_requirement_remap(selected, plan, providers, merged,
+                input, &requirement_remap)) {
             core_index_remap_free(requirement_remap);
             core_free(patch_sections);
             core_free(patch_tables);
@@ -781,6 +888,20 @@ n00bb_abi_apply_link_patches(
     return true;
 }
 
+bool
+n00bb_abi_apply_link_patches(
+    const n00bb_abi_selected_objects_t *selected,
+    const n00bb_abi_index_plan_t *plan,
+    const n00bb_abi_merged_rows_t *merged,
+    n00bb_abi_native_sections_t *sections)
+{
+    provider_index_t providers = {0};
+    bool valid = apply_link_patches(selected, plan, &providers, merged,
+                                    sections);
+    provider_index_close(&providers);
+    return valid;
+}
+
 static void
 strip_summaries(n00bb_abi_merged_rows_t *merged)
 {
@@ -831,10 +952,12 @@ link_selected_objects(
     uint8_t *section_bases = nullptr;
     uint8_t *object = nullptr;
     size_t object_bytes = 0;
+    provider_index_t providers = {0};
     bool valid = plan != nullptr;
     if (valid) {
         stage = CORE_STRING_STATIC("typed requirements");
-        valid = typed_requirements_resolved(selected, plan, plan_failure);
+        valid = typed_requirements_resolved(selected, plan, &providers,
+                                            plan_failure);
     }
     if (valid) {
         stage = CORE_STRING_STATIC("table merge");
@@ -856,8 +979,8 @@ link_selected_objects(
     }
     if (valid) {
         stage = CORE_STRING_STATIC("index patches");
-        valid = n00bb_abi_apply_link_patches(selected, plan, &merged,
-                                             &sections);
+        valid = apply_link_patches(selected, plan, &providers, &merged,
+                                   &sections);
     }
     if (valid) {
         stage = CORE_STRING_STATIC("native relocations");
@@ -1112,6 +1235,7 @@ link_selected_objects(
     n00bb_abi_native_relocations_release(&native);
     n00bb_abi_native_sections_release(&sections);
     n00bb_abi_merged_rows_release(&merged);
+    provider_index_close(&providers);
     n00bb_abi_index_plan_free(plan);
     if (!valid) {
         if (failure_stage) *failure_stage = stage;

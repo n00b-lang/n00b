@@ -1,0 +1,25 @@
+# ../../../../lantern/grammars/php.bnf ../lex/php.lex ../samples/edge.php
+INLINE_HTML            1:1  <html><body>
+
+OPEN_TAG               2:1  <?php
+VARIABLE               3:1  $a
+=                      3:4  =
+HEREDOC                3:6  <<<EOT
+;                      6:6  ;
+VARIABLE               7:1  $b
+=                      7:4  =
+HEREDOC                7:6  <<<'RAW'
+;                      9:4  ;
+echo                   10:1  echo
+VARIABLE               10:6  $a
+.                      10:9  .
+VARIABLE               10:11  $b
+;                      10:13  ;
+CLOSE_TAG              10:15  ?>
+INLINE_HTML            10:17  
+<p>tail</p>
+
+OPEN_TAG               12:1  <?php
+echo                   12:7  echo
+INTEGER                12:12  1
+;                      12:13  ;

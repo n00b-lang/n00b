@@ -455,7 +455,6 @@ bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
 
 th_type *th_resolve(th_type *type);
 th_type *th_var_ref(const th_type *var);
-uint64_t th_var_revision(const th_type *var);
 bool     th_var_bind(th_type *var, th_type *to);
 bool     th_var_rebind(th_type *var, th_type *to);
 size_t   th_child_count(const th_type *type);

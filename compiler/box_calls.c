@@ -1949,6 +1949,7 @@ n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
         .floating = n00bb_linked_unit_module(analysis,
             CORE_STRING_STATIC("builtin.floating")),
     };
+    analysis->boxes_rewritten = true;
     if (!calls.runtime && !calls.floating) return true;
     core_dict_init(&calls.emitted, nullptr, nullptr);
     core_dict_init(&calls.type_indices, nullptr, nullptr);

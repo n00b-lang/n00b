@@ -67,8 +67,21 @@ void               ir_reinterpretations_open(ir_ctx_t *ctx);
 bool               ir_reinterpretations_note_function(ir_ctx_t *ctx,
                                                       const ir_func_t *f);
 const ir_instr_t  *ir_reinterpretation_site(const ir_func_t *f);
-void               ir_reinterpretations_note_unseen(ir_ctx_t *ctx);
+void               ir_reinterpretations_note_unseen(ir_ctx_t *ctx,
+                                                    const ir_module_t *module);
+typedef bool (*ir_module_sees_fn)(void *context, const ir_module_t *viewer,
+                                  const ir_module_t *other);
+void               ir_reinterpretations_set_visibility(ir_ctx_t *ctx,
+                                                       ir_module_sees_fn sees,
+                                                       void *context);
 void               ir_reinterpretations_seal(ir_ctx_t *ctx);
+typedef void (*ir_registry_observer_fn)(void *context,
+                                        const ir_module_t *viewer,
+                                        th_type *a, th_type *b, bool answer);
+void               ir_reinterpretations_observe(ir_registry_observer_fn fn,
+                                                void *context);
+bool               ir_places_type_reinterpreted(ir_module_t *module,
+                                                th_type *type);
 bool               ir_places_types_overlap(ir_module_t *module, th_type *a,
                                            th_type *b);
 #endif

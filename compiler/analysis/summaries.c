@@ -378,20 +378,85 @@ n00bb_summary_callee_effects(void *context, const ir_func_t *callee,
     }
 }
 
+static bool
+n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
+{
+    (void)context;
+    return core_string_eq(field, CORE_STRING_STATIC("storage"))
+        && lease_storage_record(record);
+}
+
+static core_translation_unit_t *
+visibility_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+{
+    bool found = false;
+    core_translation_unit_t *unit = core_dict_get(&analysis->visibility_units,
+                                                  (void *)module, &found);
+    if (found) return unit;
+    core_string_t name = ir_module_name((ir_module_t *)module);
+    int64_t cut = core_string_find(name, CORE_STRING_STATIC("$spec$"));
+    if (cut >= 0) name = core_string_slice(name, 0, (size_t)cut);
+    unit = n00bb_unit_named(analysis, name);
+    core_dict_put(&analysis->visibility_units, (void *)module, unit);
+    return unit;
+}
+
+static core_dict_t *
+import_closure(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
+{
+    core_dict_t *closure = core_dict_get(&analysis->import_closures, unit,
+                                         nullptr);
+    if (closure) return closure;
+    closure = core_alloc(core_dict_t);
+    core_dict_init(closure, nullptr, nullptr);
+    core_list_t(core_translation_unit_ptr_t) pending =
+        core_list_new(core_translation_unit_ptr_t);
+    core_list_push(pending, unit);
+    while (pending.len) {
+        core_translation_unit_t *next = pending.data[--pending.len];
+        if (!core_dict_add(closure, next, next)) continue;
+        for (size_t i = 0; i < core_translation_unit_import_count(next); i++)
+            core_list_push(pending, core_translation_unit_import(next, i));
+    }
+    core_list_free(pending);
+    core_dict_put(&analysis->import_closures, unit, closure);
+    return closure;
+}
+
+static bool
+n00bb_module_sees(void *context, const ir_module_t *viewer,
+                  const ir_module_t *other)
+{
+    n00bb_link_analysis_t *analysis = context;
+    core_translation_unit_t *from = visibility_unit(analysis, viewer);
+    core_translation_unit_t *to   = visibility_unit(analysis, other);
+    return !from || !to || from == to
+        || core_dict_contains(import_closure(analysis, from), to);
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
+    if (!analysis->visibility_ready) {
+        core_dict_init(&analysis->visibility_units, nullptr, nullptr);
+        core_dict_init(&analysis->import_closures, nullptr, nullptr);
+        analysis->visibility_ready = true;
+    }
+    ir_reinterpretations_set_visibility(analysis->ir_context,
+                                        n00bb_module_sees, analysis);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
         .call_flags = n00bb_summary_call_flags,
         .call_finalizers = n00bb_summary_call_finalizers,
+        .owned_field = n00bb_summary_owned_field,
         .axiom = n00bb_summary_axiom,
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
+        .stored = n00bb_stored_summary,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);
@@ -408,16 +473,17 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
-    const core_list_t(n00bb_ir_func_ptr_t) *entries, bool prove_traps)
+    const core_list_t(n00bb_ir_func_ptr_t) *entries)
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots, analysis->emitted_functions.data[i]);
+        core_list_push(roots,
+                       n00bb_cached_body(analysis->emitted_functions.data[i]));
     for (size_t i = 0; i < initializers->len; i++)
-        core_list_push(roots, initializers->data[i]);
+        core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)
-        core_list_push(roots, entries->data[i]);
+        core_list_push(roots, n00bb_cached_body(entries->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         if (!state || !state->ir_module || state->interface_module) continue;
@@ -432,10 +498,18 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     push_effect_query_subjects(analysis, &roots);
     push_effect_check_subjects(analysis, &roots);
     push_effects_of_roots(analysis, &roots);
-    bind_summary_hooks(analysis, !prove_traps);
-    ir_summaries_free(analysis->summaries);
-    analysis->summaries = ir_summaries_compute(roots.data, roots.len,
-                                               &analysis->summary_hooks);
+    bind_summary_hooks(analysis, false);
+    n00bb_push_summary_roots(analysis, &roots);
+    ir_summaries_t *previous = analysis->summaries;
+    if (previous && ir_analysis_summaries() == previous)
+        ir_analysis_bind_summaries(nullptr);
+    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
+                                                        : N00BB_PHASE_MAIN;
+    analysis->summaries = ir_summaries_recompute(roots.data, roots.len,
+                                                 &analysis->summary_hooks,
+                                                 previous);
+    analysis->summary_phase = 0;
+    ir_summaries_free(previous);
     ir_analysis_bind_summaries(analysis->summaries);
     core_list_free(roots);
     return analysis->summaries != nullptr;

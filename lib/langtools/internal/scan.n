@@ -1,0 +1,334 @@
+import unicode
+import internal.diag
+
+const max_errors: uint = 100
+
+record Mark {
+    byte: uint
+    line: u32
+    col:  u32
+}
+
+object Scanner {
+    src:    string
+    n:      uint
+    pos:    uint
+    line:   u32
+    col:    u32
+    domain: string
+    diags:  List[internal.diag.Diagnostic]
+    halted: bool
+}
+
+func __init(self: Scanner, text: string, domain: string) {
+    self.src = text
+    self.n = byte_len(text)
+    self.pos = 0
+    self.line = 1
+    self.col = 1
+    self.domain = domain
+    self.diags = []
+    self.halted = false
+}
+
+func diagnostic(sc: Scanner, code: string, message: string,
+                span: internal.diag.Span) -> internal.diag.Diagnostic {
+    return new[internal.diag.Diagnostic](sc.domain + "/" + code, message,
+                                         span)
+}
+
+func report(sc: Scanner, d: internal.diag.Diagnostic) {
+    if sc.halted {
+        return
+    }
+    if sc.diags.len() == max_errors {
+        sc.diags.append(diagnostic(sc, "too-many-errors",
+            "too many errors; stopping after " + decimal(max_errors),
+            d.span))
+        sc.halted = true
+        return
+    }
+    sc.diags.append(d)
+}
+
+func fix(message: string, span: internal.diag.Span, replacement: string)
+    -> internal.diag.Fix {
+    return (message = message, span = span, replacement = replacement)
+}
+
+func mark(sc: Scanner) -> Mark {
+    return (byte = sc.pos, line = sc.line, col = sc.col)
+}
+
+func reset(sc: Scanner, back: Mark) {
+    sc.pos = back.byte
+    sc.line = back.line
+    sc.col = back.col
+}
+
+func span_from(sc: Scanner, from: Mark) -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = from.byte, end_byte = sc.pos,
+        start_line = from.line, start_col = from.col, end_line = sc.line,
+        end_col = sc.col)
+}
+
+func point(sc: Scanner) -> internal.diag.Span {
+    return span_from(sc, mark(sc))
+}
+
+func join_spans(first: internal.diag.Span, last: internal.diag.Span)
+    -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = first.start_byte,
+        end_byte = last.end_byte, start_line = first.start_line,
+        start_col = first.start_col, end_line = last.end_line,
+        end_col = last.end_col)
+}
+
+func end_point(span: internal.diag.Span) -> internal.diag.Span {
+    return new[internal.diag.Span](start_byte = span.end_byte,
+        end_byte = span.end_byte, start_line = span.end_line,
+        start_col = span.end_col, end_line = span.end_line,
+        end_col = span.end_col)
+}
+
+func peek(sc: Scanner, ahead: uint = 0) -> char {
+    if sc.pos + ahead >= sc.n {
+        return cast[char] 0
+    }
+    return cast[char] byte_at(sc.src, sc.pos + ahead)
+}
+
+func at_end(sc: Scanner) -> bool {
+    return sc.pos >= sc.n
+}
+
+func step(sc: Scanner) {
+    let b: u8 = byte_at(sc.src, sc.pos)
+    sc.pos += 1
+    if b == 0x0a {
+        sc.line += 1
+        sc.col = 1
+    }
+    elif (b & 0xc0) != 0x80 {
+        sc.col += 1
+    }
+}
+
+func step_char(sc: Scanner) {
+    step(sc)
+    while !at_end(sc) and (byte_at(sc.src, sc.pos) & 0xc0) == 0x80 {
+        step(sc)
+    }
+}
+
+func advance(sc: Scanner, bytes: uint) {
+    for k: uint from 0 until bytes {
+        step(sc)
+    }
+}
+
+func matches_at(src: string, at: uint, text: string) -> bool {
+    let n: uint = byte_len(text)
+    if n == 0 or at + n > byte_len(src) {
+        return false
+    }
+    for i: uint from 0 until n {
+        if byte_at(src, at + i) != byte_at(text, i) {
+            return false
+        }
+    }
+    return true
+}
+
+func at_text(sc: Scanner, text: string, at: uint = 0) -> bool {
+    return matches_at(sc.src, sc.pos + at, text)
+}
+
+func skip_blanks_at(src: string, at: uint) -> uint {
+    var end: uint = at
+    while end < byte_len(src) and
+        (byte_at(src, end) == 0x20 or byte_at(src, end) == 0x09) {
+        end += 1
+    }
+    return end
+}
+
+func line_end_width(src: string, at: uint) -> uint {
+    if at >= byte_len(src) {
+        return 0
+    }
+    let b: u8 = byte_at(src, at)
+    if b == 0x0a {
+        return 1
+    }
+    if b == 0x0d {
+        if at + 1 < byte_len(src) and byte_at(src, at + 1) == 0x0a {
+            return 2
+        }
+        return 1
+    }
+    return 0
+}
+
+func continuation_end(src: string, at: uint, mark: string) -> uint? {
+    if !matches_at(src, at, mark) {
+        return nil
+    }
+    let after: uint = skip_blanks_at(src, at + byte_len(mark))
+    let width: uint = line_end_width(src, after)
+    if width == 0 {
+        return nil
+    }
+    return after + width
+}
+
+func decode_at(text: string, at: uint) -> char {
+    if at >= byte_len(text) {
+        return cast[char] 0
+    }
+    let b: u8 = byte_at(text, at)
+    if b < 0x80 {
+        return cast[char] b
+    }
+    var pos: u32 = cast[u32] at
+    try {
+        return unicode.utf8_decode(text, pos)!
+    } fail(err) {
+        return cast[char] 0xfffd
+    }
+}
+
+func char_width(text: string, at: uint) -> uint {
+    var end: uint = at + 1
+    while end < byte_len(text) and (byte_at(text, end) & 0xc0) == 0x80 {
+        end += 1
+    }
+    return end - at
+}
+
+func is_name_char(c: char) -> bool {
+    return is_word_char(c) or c == '-'
+}
+
+func is_word_start(c: char) -> bool {
+    return is_ascii_letter(c) or c == '_'
+}
+
+func is_word_char(c: char) -> bool {
+    return is_word_start(c) or is_ascii_digit(c)
+}
+
+func is_blank(c: char) -> bool {
+    return c == ' ' or c == '\t' or c == '\r'
+}
+
+func skip_blanks(sc: Scanner) {
+    while !at_end(sc) and is_blank(peek(sc)) {
+        step(sc)
+    }
+}
+
+func skip_comment(sc: Scanner) {
+    while !at_end(sc) and peek(sc) != '\n' {
+        step(sc)
+    }
+}
+
+func slice(sc: Scanner, from: uint) -> string {
+    return byte_slice(sc.src, from, sc.pos)
+}
+
+private func bad_escape(sc: Scanner, from: Mark) {
+    var d: internal.diag.Diagnostic = diagnostic(sc, "bad-escape",
+        "unknown escape sequence", span_from(sc, from))
+    d.help = "valid escapes are \\\\ \\\" \\' \\n \\r \\t \\0 and \\u{hex}"
+    report(sc, d)
+}
+
+private func unicode_escape(sc: Scanner, from: Mark) -> string? {
+    if peek(sc) != '{' {
+        bad_escape(sc, from)
+        return nil
+    }
+    step(sc)
+    var value: u32 = 0
+    var digits: uint = 0
+    while !at_end(sc) and peek(sc) != '}' and peek(sc) != '\n' {
+        let digit: u32? = hex_digit_value(peek(sc))
+        if digit == nil or digits == 6 {
+            break
+        }
+        value = (value << 4) | digit
+        digits += 1
+        step(sc)
+    }
+    if peek(sc) != '}' or digits == 0 {
+        bad_escape(sc, from)
+        return nil
+    }
+    step(sc)
+    if value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff) {
+        report(sc, diagnostic(sc, "bad-escape",
+            "\\u{...} must name a Unicode scalar value", span_from(sc, from)))
+        return nil
+    }
+    return from_char(cast[char] value)
+}
+
+func literal(sc: Scanner, start: Mark) -> string {
+    let quote: char = peek(sc)
+    step(sc)
+    var pieces: List[string] = []
+    var run: uint = sc.pos
+    while true {
+        if at_end(sc) or peek(sc) == '\n' {
+            pieces.append(slice(sc, run))
+            var d: internal.diag.Diagnostic = diagnostic(sc,
+                "unterminated-literal", "this literal has no closing quote",
+                span_from(sc, start))
+            d.fixes.append(fix("close the literal", point(sc),
+                               from_char(quote)))
+            report(sc, d)
+            break
+        }
+        let c: char = peek(sc)
+        if c == quote {
+            pieces.append(slice(sc, run))
+            step(sc)
+            break
+        }
+        if c != '\\' {
+            step(sc)
+            continue
+        }
+        pieces.append(slice(sc, run))
+        let escape: Mark = mark(sc)
+        step(sc)
+        let e: char = peek(sc)
+        if at_end(sc) or e == '\n' {
+            bad_escape(sc, escape)
+            run = sc.pos
+            continue
+        }
+        step(sc)
+        switch e {
+            case 'n' { pieces.append("\n") }
+            case 'r' { pieces.append("\r") }
+            case 't' { pieces.append("\t") }
+            case '0' { pieces.append(from_char(cast[char] 0)) }
+            case '\\', '"', '\'' { pieces.append(from_char(e)) }
+            case 'u' {
+                let decoded: string? = unicode_escape(sc, escape)
+                if decoded != nil {
+                    pieces.append(decoded)
+                }
+            }
+            else {
+                bad_escape(sc, escape)
+                pieces.append(from_char(e))
+            }
+        }
+        run = sc.pos
+    }
+    return join(pieces, "")
+}

@@ -29,7 +29,7 @@ builtin.containers.list.append: (List['T], 'T, bool) -> nil
   detail          may_collect allocates_direct finalizes_params
 builtin.containers.list.pop: (List['T], bool) -> 'T?
   allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
-  panics          here (183:23)
+  panics          here (187:32)
   param self      writer, lends
   param front     untouched
   detail          may_collect allocates_direct finalizes_params
@@ -50,7 +50,7 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
 sys.internal.env.args: () -> List[string]
   env             sys.internal.env.n00b_os_arg_count (34:24)
   allocates       here (33:29)
-  panics          here (34:5)
+  panics          here (37:33)
   detail          may_collect allocates_direct reinterprets
 sys.internal.env.exit: (int) -> nil
   output          sys.internal.env.n00b_os_exit (44:5)
@@ -70,7 +70,7 @@ sys.internal.random.fill: (modify 'T) -> nil fail: int
   random          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:18)
   blocks          sys.internal.random.fill (15:5) -> sys.internal.random.n00b_os_random_bytes (6:18)
   allocates       here (14:28)
-  panics          here (14:28)
+  panics          here (19:17)
   param value     untouched
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil

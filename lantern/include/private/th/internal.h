@@ -112,7 +112,6 @@ struct th_type {
   th_kind kind;
   uint8_t ground;
   bool hashed;
-  uint64_t revision;
   uint64_t hash;
   th_normalizer hash_norm;
   union {

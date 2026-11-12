@@ -910,7 +910,7 @@ length_origin(const ir_instr_t *length, sequence_origin_t *origin)
     if (length->op != IR_OP_CALL) return false;
     const ir_value_t *callee = ir_value_operand(length, 0);
     ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-        ? callee->owner : nullptr;
+        ? ir_func_definition(callee->owner) : nullptr;
     if (!target || !pure_call(length)) return false;
     const ir_value_t *source = nullptr;
     bool returned = false;
@@ -1218,7 +1218,7 @@ instruction_edges(query_t *q, const ir_instr_t *in, const ir_instr_t *at,
     case IR_OP_CALL: {
         const ir_value_t *callee = left;
         ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-            ? callee->owner : nullptr;
+            ? ir_func_definition(callee->owner) : nullptr;
         if (q->propagating || !target || !q->upper || !pure_call(in)) break;
         for (uint32_t p = 0; p < target->n_params; p++) {
             ir_int_t offset = 0;

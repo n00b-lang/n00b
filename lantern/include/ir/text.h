@@ -6,6 +6,7 @@
 #include "lib/string.h"
 
 core_string_t ir_module_print(ir_module_t *m);
+core_string_t ir_func_print(ir_func_t *f);
 core_string_t ir_text_format(core_string_t text, int32_t width);
 core_string_t ir_type_text(ir_module_t *m, th_type *t);
 core_string_t ir_types_text(th_ctx *types, th_type *t);

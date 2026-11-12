@@ -1,0 +1,16 @@
+# ../../../../lantern/grammars/c_ncc.bnf ../lex/c_ncc.lex ../samples/edge.c
+int                    5:1  int
+IDENTIFIER             5:5  main
+(                      5:9  (
+void                   5:10  void
+)                      5:14  )
+{                      5:16  {
+return                 5:18  return
+IDENTIFIER             5:25  MAX
+(                      5:28  (
+INTEGER                5:29  1
+,                      5:30  ,
+INTEGER                5:32  2
+)                      5:33  )
+;                      5:34  ;
+}                      5:36  }

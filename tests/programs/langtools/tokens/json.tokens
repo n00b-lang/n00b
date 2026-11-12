@@ -1,0 +1,22 @@
+# ../grammars/json.bnf ../lex/json.lex ../../../../lantern/tests/samples/s.json
+{                      1:1  {
+STRING                 2:3  "name"
+:                      2:9  :
+STRING                 2:11  "Lantern"
+,                      2:20  ,
+STRING                 3:3  "values"
+:                      3:11  :
+[                      3:13  [
+NUMBER                 3:14  12
+,                      3:16  ,
+NUMBER                 3:18  -20.5e+2
+,                      3:26  ,
+true                   3:28  true
+,                      3:32  ,
+null                   3:34  null
+]                      3:38  ]
+,                      3:39  ,
+STRING                 4:3  "text"
+:                      4:9  :
+STRING                 4:11  "line feed"
+}                      5:1  }

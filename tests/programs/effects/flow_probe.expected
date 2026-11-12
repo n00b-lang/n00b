@@ -13,7 +13,7 @@ flow_probe.via_local: (int, int) -> int
   output result data[x] control[]
 flow_probe.via_array: (int) -> int
   effects may_trap may_allocate may_collect allocates_direct
-  traps bounds arithmetic
+  traps bounds
   output result data[x] control[]
 flow_probe.split: (modify Pair, int, int) -> int
   effects none
@@ -28,11 +28,11 @@ flow_probe.set_a: (modify Pair, int) -> nil
   output result 1 data[p.b x] control[]
 flow_probe.heap_fields: (int, int) -> int
   effects may_trap may_allocate may_collect allocates_direct
-  traps bounds arithmetic
+  traps bounds
   output result data[x] control[]
 flow_probe.heap_overwrite: (int, int) -> int
   effects may_trap may_allocate may_collect allocates_direct
-  traps bounds arithmetic
+  traps bounds
   output result data[x y] control[]
 flow_probe.param_fields: (modify Array[Pair], int, int) -> int
   effects may_trap
@@ -55,7 +55,7 @@ flow_probe.put: (modify Array[int], int) -> nil
   output arr.__value[] data[x] control[]
 flow_probe.caller: (int) -> int
   effects may_trap may_allocate may_collect allocates_direct
-  traps bounds arithmetic
+  traps bounds
   output result data[x] control[]
 flow_probe.get_a: (Pair) -> int
   effects none

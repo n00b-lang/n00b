@@ -1,0 +1,29 @@
+# ../../../../lantern/grammars/csharp.bnf ../lex/csharp.lex ../../../../lantern/tests/samples/s.cs
+namespace              2:1  namespace
+IDENTIFIER             2:11  N
+;                      2:12  ;
+public                 3:1  public
+class                  3:8  class
+IDENTIFIER             3:14  A
+{                      3:16  {
+const                  4:5  const
+ulong                  4:11  ulong
+IDENTIFIER             4:17  N
+=                      4:19  =
+INTEGER                4:21  1_000UL
+;                      4:28  ;
+string                 5:5  string
+IDENTIFIER             5:12  V
+=                      5:14  =
+VERBATIM_STRING        5:16  @"c:\path"
+;                      5:26  ;
+string                 6:5  string
+IDENTIFIER             6:12  I
+(                      6:13  (
+string                 6:14  string
+IDENTIFIER             6:21  s
+)                      6:22  )
+=>                     6:24  =>
+INTERPOLATED_STRING    6:27  $"hi {s}"
+;                      6:36  ;
+}                      7:1  }
