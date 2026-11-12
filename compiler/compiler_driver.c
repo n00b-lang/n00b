@@ -4602,9 +4602,33 @@ specialize_quietly(n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+typedef struct {
+    parse_grammar_t  *grammar;
+    core_link_unit_t *link;
+    bool              dump_control_flow;
+    bool              dump_pdg;
+    bool              dump_summaries;
+} deferred_analysis_t;
+
+static void
+record_cache_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
+                       n00bb_link_analysis_t *analysis, bool optimistic,
+                       char **argv, core_string_t argv0)
+{
+    bool recorded = n00bb_cache_record_summaries(cache, link, analysis);
+    if (optimistic && !recorded) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "cached summary assumptions do not hold"));
+        restart_with_strict_cache(argv, argv0);
+    }
+    if (optimistic && !n00bb_cache_summary_assumptions_hold(cache))
+        restart_with_summaries(argv, argv0, cache);
+}
+
 static bool
 specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
-                 core_diagnostics_t *diagnostics)
+                 core_diagnostics_t *diagnostics,
+                 const deferred_analysis_t *deferred)
 {
     n00bb_specialization_failure_t failure = {0};
     core_list_t(n00bb_specialization_seed_t) seeds =
@@ -4613,8 +4637,16 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                       n00bb_source_unit_module, analysis, &seeds);
     bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
                                  diagnostics);
+    if (ok && deferred
+        && !n00bb_analyze_program(deferred->grammar, deferred->link, analysis,
+                                  deferred->dump_control_flow,
+                                  deferred->dump_pdg,
+                                  deferred->dump_summaries)) {
+        core_list_free(seeds);
+        return false;
+    }
     if (ok && !check_only
-        && !(n00bb_recompute_summaries(analysis)
+        && !((deferred || n00bb_recompute_summaries(analysis))
              && check_post_specialization(analysis))) {
         core_list_free(seeds);
         return false;
@@ -5128,6 +5160,20 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         link_analysis->effects_why = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--effects-why"));
     }
+    bool defer_analysis = (build_command || check_command)
+        && !library_command
+        && !parse_cmdr_flag_present(args,
+               CORE_STRING_STATIC("--no-specialize"));
+    if (link_analysis) link_analysis->defer_program_analysis = defer_analysis;
+    deferred_analysis_t deferred = {
+        .grammar = grammar, .link = link,
+        .dump_control_flow = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--dump-control-flow")),
+        .dump_pdg = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--dump-pdg")),
+        .dump_summaries = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--dump-summaries")),
+    };
     if (located && (lower_command || build_command || compile_command
                     || library_command || normalize_fmt))
         located = lower_requests_to_ir(grammar, link,
@@ -5151,18 +5197,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
     if (located && normalize_fmt)
         located = n00bb_format_units(grammar, queue, &requests, args);
-    if (located && cache && !check_command) {
-        bool recorded = n00bb_cache_record_summaries(cache, link,
-                                                     link_analysis);
-        if (optimistic_cache && !recorded) {
-            n00bb_cache_log_restart(CORE_STRING_STATIC(
-                "cached summary assumptions do not hold"));
-            restart_with_strict_cache(argv, argv0);
-        }
-        if (optimistic_cache
-            && !n00bb_cache_summary_assumptions_hold(cache))
-            restart_with_summaries(argv, argv0, cache);
-    }
+    if (located && cache && !check_command && !defer_analysis)
+        record_cache_summaries(cache, link, link_analysis, optimistic_cache,
+                               argv, argv0);
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (located && header_output.data
@@ -5220,9 +5257,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool emit_program = located && build_command;
     if (located && emit_program && cache)
         (void)n00bb_cache_snapshot(cache, link);
-    if (located && check_command && cache
-        && !link_analysis->effect_checks_failed
-        && n00bb_cache_snapshot(cache, link))
+    bool check_snapshot = located && check_command && cache
+        && (defer_analysis || !link_analysis->effect_checks_failed)
+        && n00bb_cache_snapshot(cache, link);
+    if (check_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (!located && link_analysis && link_analysis->lowered_with_errors
         && specialize && (build_command || check_command)
@@ -5231,14 +5269,23 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         (void)check_post_specialization(link_analysis);
     bool specializing = (emit_program || (located && check_command))
         && specialize;
+    bool analyzed_late = specializing && defer_analysis;
     if (specializing)
         located = specialize_calls(link_analysis, !emit_program,
-                                   cli_diagnostics);
+                                   cli_diagnostics,
+                                   analyzed_late ? &deferred : nullptr);
     else if (located && emit_program)
         located = report_boxed_operators(link_analysis);
+    if (located && analyzed_late && cache && !check_command)
+        record_cache_summaries(cache, link, link_analysis, optimistic_cache,
+                               argv, argv0);
+    if (check_snapshot && analyzed_late && located
+        && !link_analysis->effect_checks_failed)
+        (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (located && specializing) warn_dead_type_arms(link_analysis);
     if (located && !emit_program && link_analysis)
-        located = (!specializing || n00bb_recompute_summaries(link_analysis))
+        located = (!specializing || analyzed_late
+                   || n00bb_recompute_summaries(link_analysis))
             && check_post_specialization(link_analysis);
     if (located && emit_program && specialize
         && parse_cmdr_flag_present(args,

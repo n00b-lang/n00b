@@ -306,6 +306,8 @@ typedef struct n00bb_link_analysis_t {
     bool unit_of_module_ready;
     bool effect_checks_failed;
     bool lowered_with_errors;
+    bool defer_program_analysis;
+    bool members_bound;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;

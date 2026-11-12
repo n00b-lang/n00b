@@ -250,6 +250,32 @@ reintern_unit_types(core_list_t(core_translation_unit_ptr_t) *units)
     return ok;
 }
 
+static bool finish_deferred_lowering(
+    core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+    core_list_t(core_translation_unit_ptr_t) *units, bool ok);
+static bool analyze_lowered_program(
+    parse_grammar_t *grammar, core_link_unit_t *link,
+    n00bb_link_analysis_t *analysis,
+    core_list_t(core_translation_unit_ptr_t) *unit_list, bool ok,
+    bool dump_control_flow, bool dump_pdg, bool dump_summaries,
+    double profile_start);
+
+bool
+n00bb_analyze_program(parse_grammar_t *grammar, core_link_unit_t *link,
+                      n00bb_link_analysis_t *analysis, bool dump_control_flow,
+                      bool dump_pdg, bool dump_summaries)
+{
+    core_list_t(core_translation_unit_ptr_t) units =
+        core_list_new(core_translation_unit_ptr_t);
+    for (size_t i = 0; link && i < core_link_unit_translation_unit_count(link);
+         i++)
+        core_list_push(units, core_link_unit_translation_unit(link, i));
+    return analyze_lowered_program(grammar, link, analysis, &units,
+                                   units.len != 0, dump_control_flow,
+                                   dump_pdg, dump_summaries,
+                                   n00bb_profile_seconds());
+}
+
 bool
 lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      n00bb_link_analysis_t *analysis,
@@ -683,6 +709,45 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             }
         }
     }
+    core_list_free(init_order);
+    analysis->members_bound = members_bound;
+    if (analysis->defer_program_analysis)
+        return finish_deferred_lowering(link, analysis, &units, ok);
+    return analyze_lowered_program(grammar, link, analysis, &units, ok,
+                                   dump_control_flow, dump_pdg,
+                                   dump_summaries, profile_start);
+}
+
+static bool
+finish_deferred_lowering(core_link_unit_t *link,
+                         n00bb_link_analysis_t *analysis,
+                         core_list_t(core_translation_unit_ptr_t) *units,
+                         bool ok)
+{
+    bool lowered = ok;
+    for (size_t i = 0; i < units->len; i++)
+        if (core_diagnostics_failed(
+                core_translation_unit_diagnostics(units->data[i])))
+            ok = false;
+    if (link && core_link_unit_has_fatal_diagnostics(link)) ok = false;
+    analysis->lowered_with_errors = lowered && !ok;
+    for (size_t i = 0; i < units->len; i++)
+        ir_module_release_analyses(tu_state(units->data[i])->ir_module);
+    core_list_free(*units);
+    return ok;
+}
+
+static bool
+analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
+                        n00bb_link_analysis_t *analysis,
+                        core_list_t(core_translation_unit_ptr_t) *unit_list,
+                        bool ok, bool dump_control_flow, bool dump_pdg,
+                        bool dump_summaries, double profile_start)
+{
+    core_list_t(core_translation_unit_ptr_t) units = *unit_list;
+    core_list_t(core_translation_unit_ptr_t) init_order =
+        core_list_new(core_translation_unit_ptr_t);
+    bool members_bound = analysis->members_bound;
     n00bb_runtime_init_analysis_t runtime_init = {0};
     bool analyze_runtime_init = ok;
     if (analyze_runtime_init)
