@@ -386,9 +386,64 @@ n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
         && lease_storage_record(record);
 }
 
+static core_translation_unit_t *
+visibility_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+{
+    bool found = false;
+    core_translation_unit_t *unit = core_dict_get(&analysis->visibility_units,
+                                                  (void *)module, &found);
+    if (found) return unit;
+    core_string_t name = ir_module_name((ir_module_t *)module);
+    int64_t cut = core_string_find(name, CORE_STRING_STATIC("$spec$"));
+    if (cut >= 0) name = core_string_slice(name, 0, (size_t)cut);
+    unit = n00bb_unit_named(analysis, name);
+    core_dict_put(&analysis->visibility_units, (void *)module, unit);
+    return unit;
+}
+
+static core_dict_t *
+import_closure(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
+{
+    core_dict_t *closure = core_dict_get(&analysis->import_closures, unit,
+                                         nullptr);
+    if (closure) return closure;
+    closure = core_alloc(core_dict_t);
+    core_dict_init(closure, nullptr, nullptr);
+    core_list_t(core_translation_unit_ptr_t) pending =
+        core_list_new(core_translation_unit_ptr_t);
+    core_list_push(pending, unit);
+    while (pending.len) {
+        core_translation_unit_t *next = pending.data[--pending.len];
+        if (!core_dict_add(closure, next, next)) continue;
+        for (size_t i = 0; i < core_translation_unit_import_count(next); i++)
+            core_list_push(pending, core_translation_unit_import(next, i));
+    }
+    core_list_free(pending);
+    core_dict_put(&analysis->import_closures, unit, closure);
+    return closure;
+}
+
+static bool
+n00bb_module_sees(void *context, const ir_module_t *viewer,
+                  const ir_module_t *other)
+{
+    n00bb_link_analysis_t *analysis = context;
+    core_translation_unit_t *from = visibility_unit(analysis, viewer);
+    core_translation_unit_t *to   = visibility_unit(analysis, other);
+    return !from || !to || from == to
+        || core_dict_contains(import_closure(analysis, from), to);
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
+    if (!analysis->visibility_ready) {
+        core_dict_init(&analysis->visibility_units, nullptr, nullptr);
+        core_dict_init(&analysis->import_closures, nullptr, nullptr);
+        analysis->visibility_ready = true;
+    }
+    ir_reinterpretations_set_visibility(analysis->ir_context,
+                                        n00bb_module_sees, analysis);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,

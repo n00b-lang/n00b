@@ -119,19 +119,50 @@ typedef struct {
 } registry_fact_t;
 core_list_decl(registry_fact_t);
 
-struct ir_reinterpretations_t {
+typedef enum : uint8_t {
+    NOTE_PAIR,
+    NOTE_UNIVERSAL,
+    NOTE_UNSEEN,
+} registry_note_kind_t;
+
+typedef struct {
+    const ir_module_t   *module;
+    th_type             *from;
+    th_type             *to;
+    registry_note_kind_t kind;
+} registry_note_t;
+core_list_decl(registry_note_t);
+
+typedef struct {
     core_list_t(place_type_ptr_t) members;
     core_list_t(uint32_t)         components;
     core_list_t(place_type_ptr_t) universal;
-    core_list_t(registry_fact_t)  facts;
-    core_list_t(registry_fact_t)  previous_facts;
     core_dict_t                   answers;
     core_dict_t                   reach;
-    core_dict_t                   hashes;
-    bool                          sealed;
     bool                          unseen;
-    bool                          previous_unseen;
-    bool                          changed;
+} registry_view_t;
+
+typedef registry_view_t *registry_view_ptr_t;
+core_list_decl(registry_view_ptr_t);
+
+typedef const ir_module_t *registry_module_ptr_t;
+core_list_decl(registry_module_ptr_t);
+
+struct ir_reinterpretations_t {
+    core_list_t(registry_note_t)       notes;
+    core_list_t(registry_module_ptr_t) noting;
+    registry_view_t                    whole;
+    core_list_t(registry_view_ptr_t)   scoped;
+    core_dict_t                        by_key;
+    core_dict_t                        by_viewer;
+    core_list_t(registry_fact_t)       facts;
+    core_list_t(registry_fact_t)       previous_facts;
+    core_dict_t                        hashes;
+    ir_module_sees_fn                  sees;
+    void                              *sees_context;
+    bool                               sealed;
+    bool                               previous_unseen;
+    bool                               changed;
 };
 
 typedef struct {
@@ -222,40 +253,61 @@ types_overlap(ir_module_t *module, th_type *a, th_type *b)
 }
 
 static void
-clear_answers(ir_reinterpretations_t *registry)
+view_init(registry_view_t *view)
 {
-    core_dict_foreach(&registry->answers, item) {
-        core_dict_free(item->value);
-        core_free(item->value);
-    }
-    core_dict_free(&registry->answers);
-    core_dict_init(&registry->answers, nullptr, nullptr);
+    view->members    = core_list_new(place_type_ptr_t);
+    view->components = core_list_new(uint32_t);
+    view->universal  = core_list_new(place_type_ptr_t);
+    core_dict_init(&view->answers, nullptr, nullptr);
+    core_dict_init(&view->reach, nullptr, nullptr);
+    view->unseen = false;
 }
 
 static void
-clear_reach(ir_reinterpretations_t *registry)
+view_release(registry_view_t *view)
 {
-    core_dict_foreach(&registry->reach, item) {
+    core_dict_foreach(&view->answers, item) {
+        core_dict_free(item->value);
+        core_free(item->value);
+    }
+    core_dict_free(&view->answers);
+    core_dict_foreach(&view->reach, item) {
         type_reach_t *reach = item->value;
         core_list_free(reach->components);
         core_free(reach);
     }
-    core_dict_free(&registry->reach);
-    core_dict_init(&registry->reach, nullptr, nullptr);
+    core_dict_free(&view->reach);
+    core_list_free(view->members);
+    core_list_free(view->components);
+    core_list_free(view->universal);
+}
+
+static void
+release_scoped(ir_reinterpretations_t *registry)
+{
+    for (size_t i = 0; i < registry->scoped.len; i++) {
+        view_release(registry->scoped.data[i]);
+        core_free(registry->scoped.data[i]);
+    }
+    registry->scoped.len = 0;
+    core_dict_free(&registry->by_key);
+    core_dict_free(&registry->by_viewer);
+    core_dict_init(&registry->by_key, nullptr, nullptr);
+    core_dict_init(&registry->by_viewer, nullptr, nullptr);
 }
 
 static void
 free_reinterpretations(void *pointer)
 {
     ir_reinterpretations_t *registry = pointer;
-    clear_answers(registry);
-    clear_reach(registry);
-    core_dict_free(&registry->answers);
-    core_dict_free(&registry->reach);
+    release_scoped(registry);
+    core_dict_free(&registry->by_key);
+    core_dict_free(&registry->by_viewer);
+    core_list_free(registry->scoped);
+    view_release(&registry->whole);
     core_dict_free(&registry->hashes);
-    core_list_free(registry->members);
-    core_list_free(registry->components);
-    core_list_free(registry->universal);
+    core_list_free(registry->notes);
+    core_list_free(registry->noting);
     core_list_free(registry->facts);
     core_list_free(registry->previous_facts);
     core_free(registry);
@@ -266,13 +318,14 @@ reinterpretations(ir_ctx_t *ctx)
 {
     if (!ctx->reinterpretations) {
         ir_reinterpretations_t *registry = core_alloc(ir_reinterpretations_t);
-        registry->members             = core_list_new(place_type_ptr_t);
-        registry->components          = core_list_new(uint32_t);
-        registry->universal           = core_list_new(place_type_ptr_t);
-        registry->facts               = core_list_new(registry_fact_t);
-        registry->previous_facts      = core_list_new(registry_fact_t);
-        core_dict_init(&registry->answers, nullptr, nullptr);
-        core_dict_init(&registry->reach, nullptr, nullptr);
+        registry->notes          = core_list_new(registry_note_t);
+        registry->noting         = core_list_new(registry_module_ptr_t);
+        registry->scoped         = core_list_new(registry_view_ptr_t);
+        registry->facts          = core_list_new(registry_fact_t);
+        registry->previous_facts = core_list_new(registry_fact_t);
+        view_init(&registry->whole);
+        core_dict_init(&registry->by_key, nullptr, nullptr);
+        core_dict_init(&registry->by_viewer, nullptr, nullptr);
         core_dict_init(&registry->hashes, nullptr, nullptr);
         ctx->reinterpretations = registry;
         ir_ctx_on_free(ctx, free_reinterpretations, registry);
@@ -281,20 +334,29 @@ reinterpretations(ir_ctx_t *ctx)
 }
 
 void
-ir_reinterpretations_open(ir_ctx_t *ctx)
+ir_reinterpretations_set_visibility(ir_ctx_t *ctx, ir_module_sees_fn sees,
+                                    void *context)
 {
+    if (!ctx) return;
     ir_reinterpretations_t *registry = reinterpretations(ctx);
-    registry->members.len    = 0;
-    registry->components.len = 0;
-    registry->universal.len  = 0;
-    registry->sealed         = false;
-    registry->unseen         = false;
+    registry->sees         = sees;
+    registry->sees_context = context;
+    release_scoped(registry);
 }
 
 void
-ir_reinterpretations_note_unseen(ir_ctx_t *ctx)
+ir_reinterpretations_open(ir_ctx_t *ctx)
 {
-    reinterpretations(ctx)->unseen = true;
+    ir_reinterpretations_t *registry = reinterpretations(ctx);
+    registry->notes.len = 0;
+    registry->sealed    = false;
+}
+
+void
+ir_reinterpretations_note_unseen(ir_ctx_t *ctx, const ir_module_t *module)
+{
+    core_list_push(reinterpretations(ctx)->notes, ((registry_note_t){
+        .module = module, .kind = NOTE_UNSEEN}));
 }
 
 static uint64_t
@@ -319,26 +381,97 @@ fact_order(const void *left, const void *right)
     return 0;
 }
 
+static uint32_t
+member_component(registry_view_t *view, ir_module_t *module, th_type *type)
+{
+    for (size_t i = 0; i < view->members.len; i++)
+        if (same_type(module, view->members.data[i], type))
+            return view->components.data[i];
+    uint32_t component = (uint32_t)view->members.len;
+    core_list_push(view->members, type);
+    core_list_push(view->components, component);
+    return component;
+}
+
+static void
+apply_note(registry_view_t *view, const registry_note_t *note)
+{
+    if (note->kind == NOTE_UNSEEN) {
+        view->unseen = true;
+        return;
+    }
+    if (note->kind == NOTE_UNIVERSAL) {
+        core_list_push(view->universal, note->from);
+        return;
+    }
+    ir_module_t *module = (ir_module_t *)note->module;
+    uint32_t left  = member_component(view, module, note->from);
+    uint32_t right = member_component(view, module, note->to);
+    for (size_t i = 0; left != right && i < view->components.len; i++)
+        if (view->components.data[i] == right)
+            view->components.data[i] = left;
+}
+
+static registry_view_t *
+registry_view(ir_reinterpretations_t *registry, const ir_module_t *viewer)
+{
+    if (!registry->sees || !viewer) return &registry->whole;
+    registry_view_t *view = core_dict_get(&registry->by_viewer,
+                                          (void *)viewer, nullptr);
+    if (view) return view;
+    bool *visible = core_alloc_array(bool, registry->noting.len + 1);
+    bool all = true;
+    uint64_t key = 1469598103934665603ULL;
+    for (size_t m = 0; m < registry->noting.len; m++) {
+        const ir_module_t *module = registry->noting.data[m];
+        visible[m] = !module || module == viewer
+            || registry->sees(registry->sees_context, viewer, module);
+        all = all && visible[m];
+        key = (key ^ (visible[m] ? m + 1 : 0)) * 1099511628211ULL;
+    }
+    if (all) view = &registry->whole;
+    if (!view) view = core_dict_get(&registry->by_key, (void *)(uintptr_t)key,
+                                    nullptr);
+    if (!view) {
+        view = core_alloc(registry_view_t);
+        view_init(view);
+        for (size_t n = 0; n < registry->notes.len; n++) {
+            const registry_note_t *note = &registry->notes.data[n];
+            size_t m = 0;
+            while (m < registry->noting.len
+                   && registry->noting.data[m] != note->module) m++;
+            if (m < registry->noting.len && visible[m])
+                apply_note(view, note);
+        }
+        core_list_push(registry->scoped, view);
+        core_dict_put(&registry->by_key, (void *)(uintptr_t)key, view);
+    }
+    core_free(visible);
+    core_dict_put(&registry->by_viewer, (void *)viewer, view);
+    return view;
+}
+
 static void
 collect_facts(ir_ctx_t *ctx, ir_reinterpretations_t *registry)
 {
+    const registry_view_t *view = &registry->whole;
     registry->facts.len = 0;
-    for (size_t i = 0; i < registry->members.len; i++) {
+    for (size_t i = 0; i < view->members.len; i++) {
         registry_fact_t fact = {
-            .type = type_identity(registry, ctx, registry->members.data[i])};
+            .type = type_identity(registry, ctx, view->members.data[i])};
         core_list_push(registry->facts, fact);
     }
-    for (size_t i = 0; i < registry->members.len; i++) {
+    for (size_t i = 0; i < view->members.len; i++) {
         uint64_t least = registry->facts.data[i].type;
-        for (size_t j = 0; j < registry->members.len; j++)
-            if (registry->components.data[j] == registry->components.data[i]
+        for (size_t j = 0; j < view->members.len; j++)
+            if (view->components.data[j] == view->components.data[i]
                 && registry->facts.data[j].type < least)
                 least = registry->facts.data[j].type;
         registry->facts.data[i].component = least;
     }
-    for (size_t i = 0; i < registry->universal.len; i++) {
+    for (size_t i = 0; i < view->universal.len; i++) {
         registry_fact_t fact = {
-            .type = type_identity(registry, ctx, registry->universal.data[i])};
+            .type = type_identity(registry, ctx, view->universal.data[i])};
         core_list_push(registry->facts, fact);
     }
     if (!registry->facts.len) return;
@@ -357,20 +490,30 @@ ir_reinterpretations_seal(ir_ctx_t *ctx)
 {
     ir_reinterpretations_t *registry = reinterpretations(ctx);
     registry->sealed = true;
+    release_scoped(registry);
+    view_release(&registry->whole);
+    view_init(&registry->whole);
+    registry->noting.len = 0;
+    for (size_t n = 0; n < registry->notes.len; n++) {
+        const registry_note_t *note = &registry->notes.data[n];
+        apply_note(&registry->whole, note);
+        bool known = false;
+        for (size_t m = 0; !known && m < registry->noting.len; m++)
+            known = registry->noting.data[m] == note->module;
+        if (!known) core_list_push(registry->noting, note->module);
+    }
     collect_facts(ctx, registry);
-    bool same = registry->unseen == registry->previous_unseen
+    bool same = registry->whole.unseen == registry->previous_unseen
         && registry->facts.len == registry->previous_facts.len;
     for (size_t i = 0; same && i < registry->facts.len; i++)
         same = !fact_order(&registry->facts.data[i],
                            &registry->previous_facts.data[i]);
     registry->changed = !same;
-    clear_reach(registry);
     if (same) return;
-    clear_answers(registry);
     core_list_t(registry_fact_t) facts = registry->previous_facts;
     registry->previous_facts  = registry->facts;
     registry->facts           = facts;
-    registry->previous_unseen = registry->unseen;
+    registry->previous_unseen = registry->whole.unseen;
 }
 
 bool
@@ -379,36 +522,19 @@ ir_reinterpretations_changed(ir_ctx_t *ctx)
     return !ctx || reinterpretations(ctx)->changed;
 }
 
-static uint32_t
-member_component(ir_reinterpretations_t *registry, ir_module_t *module,
-                 th_type *type)
-{
-    for (size_t i = 0; i < registry->members.len; i++)
-        if (same_type(module, registry->members.data[i], type))
-            return registry->components.data[i];
-    uint32_t component = (uint32_t)registry->members.len;
-    core_list_push(registry->members, type);
-    core_list_push(registry->components, component);
-    return component;
-}
-
 static void
 note_pair(ir_reinterpretations_t *registry, ir_module_t *module, th_type *a,
           th_type *b)
 {
-    if (open_type(a) && open_type(b)) {
-        registry->unseen = true;
-        return;
-    }
-    if (open_type(a) || open_type(b)) {
-        core_list_push(registry->universal, open_type(a) ? b : a);
-        return;
-    }
-    uint32_t left  = member_component(registry, module, a);
-    uint32_t right = member_component(registry, module, b);
-    for (size_t i = 0; left != right && i < registry->components.len; i++)
-        if (registry->components.data[i] == right)
-            registry->components.data[i] = left;
+    registry_note_t note = {.module = module, .from = a, .to = b,
+                            .kind = NOTE_PAIR};
+    if (open_type(a) && open_type(b))
+        note = (registry_note_t){.module = module, .kind = NOTE_UNSEEN};
+    else if (open_type(a) || open_type(b))
+        note = (registry_note_t){.module = module,
+                                 .from = open_type(a) ? b : a,
+                                 .kind = NOTE_UNIVERSAL};
+    core_list_push(registry->notes, note);
 }
 
 static th_type *
@@ -466,36 +592,36 @@ ir_reinterpretation_site(const ir_func_t *f)
 }
 
 static const type_reach_t *
-type_reach(ir_reinterpretations_t *registry, ir_module_t *module,
-           th_type *type)
+type_reach(ir_reinterpretations_t *registry, registry_view_t *view,
+           ir_module_t *module, th_type *type)
 {
     void *key = (void *)(uintptr_t)type_identity(registry, module->ctx, type);
-    type_reach_t *reach = core_dict_get(&registry->reach, key, nullptr);
+    type_reach_t *reach = core_dict_get(&view->reach, key, nullptr);
     if (reach) return reach;
     reach = core_alloc(type_reach_t);
     reach->components = core_list_new(uint32_t);
-    for (size_t i = 0; !reach->universal && i < registry->universal.len; i++)
+    for (size_t i = 0; !reach->universal && i < view->universal.len; i++)
         reach->universal = types_overlap(module, type,
-                                         registry->universal.data[i]);
-    for (size_t i = 0; !reach->universal && i < registry->members.len; i++) {
-        uint32_t component = registry->components.data[i];
+                                         view->universal.data[i]);
+    for (size_t i = 0; !reach->universal && i < view->members.len; i++) {
+        uint32_t component = view->components.data[i];
         bool     known     = false;
         for (size_t j = 0; !known && j < reach->components.len; j++)
             known = reach->components.data[j] == component;
-        if (!known && types_overlap(module, type, registry->members.data[i]))
+        if (!known && types_overlap(module, type, view->members.data[i]))
             core_list_push(reach->components, component);
     }
-    core_dict_put(&registry->reach, key, reach);
+    core_dict_put(&view->reach, key, reach);
     return reach;
 }
 
 static bool
-computed_overlap(ir_reinterpretations_t *registry, ir_module_t *module,
-                 th_type *a, th_type *b)
+computed_overlap(ir_reinterpretations_t *registry, registry_view_t *view,
+                 ir_module_t *module, th_type *a, th_type *b)
 {
     if (types_overlap(module, a, b)) return true;
-    const type_reach_t *left  = type_reach(registry, module, a);
-    const type_reach_t *right = type_reach(registry, module, b);
+    const type_reach_t *left  = type_reach(registry, view, module, a);
+    const type_reach_t *right = type_reach(registry, view, module, b);
     if (left->universal || right->universal) return true;
     for (size_t i = 0; i < left->components.len; i++)
         for (size_t j = 0; j < right->components.len; j++)
@@ -517,7 +643,9 @@ registered_overlap(ir_module_t *module, th_type *a, th_type *b)
 {
     registry_queries++;
     ir_reinterpretations_t *registry = module->ctx->reinterpretations;
-    if (!registry || !registry->sealed || registry->unseen) return true;
+    if (!registry || !registry->sealed) return true;
+    registry_view_t *view = registry_view(registry, module);
+    if (view->unseen) return true;
     a = a ? th_resolve(a) : nullptr;
     b = b ? th_resolve(b) : nullptr;
     if (open_type(a) || open_type(b)) return true;
@@ -533,17 +661,17 @@ registered_overlap(ir_module_t *module, th_type *a, th_type *b)
         a = b;
         b = other;
     }
-    core_dict_t *inner = core_dict_get(&registry->answers,
+    core_dict_t *inner = core_dict_get(&view->answers,
                                        (void *)(uintptr_t)left, nullptr);
     if (!inner) {
         inner = core_alloc(core_dict_t);
         core_dict_init(inner, nullptr, nullptr);
-        core_dict_put(&registry->answers, (void *)(uintptr_t)left, inner);
+        core_dict_put(&view->answers, (void *)(uintptr_t)left, inner);
     }
     void     *key   = (void *)(uintptr_t)right;
     uintptr_t known = (uintptr_t)core_dict_get(inner, key, nullptr);
     if (known) return known == 2;
-    bool overlap = computed_overlap(registry, module, a, b);
+    bool overlap = computed_overlap(registry, view, module, a, b);
     core_dict_put(inner, key, (void *)(uintptr_t)(overlap ? 2 : 1));
     return overlap;
 }
@@ -1157,10 +1285,12 @@ reinterpreted(ir_module_t *module, th_type *type)
 {
     registry_queries++;
     ir_reinterpretations_t *registry = module->ctx->reinterpretations;
-    if (!registry || !registry->sealed || registry->unseen) return true;
+    if (!registry || !registry->sealed) return true;
+    registry_view_t *view = registry_view(registry, module);
+    if (view->unseen) return true;
     type = type ? th_resolve(type) : nullptr;
     if (open_type(type)) return true;
-    const type_reach_t *reach = type_reach(registry, module, type);
+    const type_reach_t *reach = type_reach(registry, view, module, type);
     return reach->universal || reach->components.len;
 }
 

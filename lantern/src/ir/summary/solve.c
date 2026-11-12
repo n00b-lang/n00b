@@ -622,7 +622,7 @@ collect_reinterpretations(ir_summaries_t *summaries,
         if (!f || !core_dict_add(&seen, f, f)) continue;
         if (!f->n_blocks) {
             if (target_summary(summaries, f)->flags & IR_SUMMARY_REINTERPRETS)
-                ir_reinterpretations_note_unseen(ctx);
+                ir_reinterpretations_note_unseen(ctx, f->owner);
             continue;
         }
         ir_reinterpretations_note_function(ctx, f);
