@@ -250,6 +250,7 @@ static uint64_t
 summary_content(ir_summary_t *summary)
 {
     if (summary->hashed) return summary->content;
+    if (summary->stored) return summary->stable;
     core_buffer_t out = {0};
     (void)ir_summary_encode(summary, &out);
     uint64_t scalars[] = {
@@ -277,7 +278,7 @@ stamp_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
 {
     for (size_t i = 0; i < count; i++) {
-        ir_summary_t *summary = ir_summary_of(summaries, members[i]);
+        ir_summary_t *summary = summary_shell(summaries, members[i]);
         summary->identity = ir_func_identity(members[i]);
         for (size_t d = 0; d < summary->deps.len; d++) {
             summary_dep_t *dep = &summary->deps.data[d];
@@ -285,8 +286,8 @@ stamp_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 dep->content = dep->points_to = 0;
                 continue;
             }
-            ir_summary_t *callee = target_summary(summaries,
-                                                  (ir_func_t *)dep->function);
+            ir_summary_t *callee = dep_summary(summaries,
+                                               (ir_func_t *)dep->function);
             dep->content   = summary_content(callee);
             dep->points_to = points_to_content(callee);
         }
@@ -305,7 +306,7 @@ static ir_summary_t *
 previous_summary(ir_summaries_t *summaries, ir_func_t *function)
 {
     if (!summaries->reusable || !summaries->previous) return nullptr;
-    ir_summary_t *old = ir_summary_of(summaries->previous, function);
+    ir_summary_t *old = summary_shell(summaries->previous, function);
     if (!old || !old->identity
         || core_dict_contains(&summaries->previous->adopted, old)
         || old->identity != ir_func_identity(function)
@@ -338,7 +339,7 @@ reusable_member(ir_summaries_t *summaries, ir_func_t *const *members,
     for (size_t d = 0; d < old->deps.len; d++) {
         const summary_dep_t *dep = &old->deps.data[d];
         if (member_index(members, count, dep->function) < count) continue;
-        if (summary_content(target_summary(summaries,
+        if (summary_content(dep_summary(summaries,
                 (ir_func_t *)dep->function)) != dep->content)
             return false;
     }
@@ -354,7 +355,7 @@ reusable_paths(ir_summaries_t *summaries, ir_func_t *const *members,
     if (!old || old->bookkept) return nullptr;
     for (size_t d = 0; d < old->deps.len; d++) {
         const summary_dep_t *dep = &old->deps.data[d];
-        if (points_to_content(target_summary(summaries,
+        if (points_to_content(dep_summary(summaries,
                 (ir_func_t *)dep->function)) != dep->points_to)
             return nullptr;
     }
@@ -391,7 +392,7 @@ adopt_component(ir_summaries_t *summaries, ir_func_t *const *members,
     for (size_t i = 0; i < count; i++)
         if (!reusable_member(summaries, members, count, i)) return false;
     for (size_t i = 0; i < count; i++) {
-        ir_summary_t *old = ir_summary_of(summaries->previous, members[i]);
+        ir_summary_t *old = summary_shell(summaries->previous, members[i]);
         core_dict_put(&summaries->previous->adopted, old, old);
         core_list_push(summaries->owned, old);
         core_dict_put(&summaries->by_function, members[i], old);

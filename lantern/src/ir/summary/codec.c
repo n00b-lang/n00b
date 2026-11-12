@@ -287,6 +287,7 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
 static uint64_t
 points_to_content(const ir_summary_t *summary)
 {
+    if (summary->stored) return summary->stable;
     th_ctx *types = summary->function && summary->function->owner
         ? ir_module_types(summary->function->owner) : nullptr;
     core_buffer_t out = {0};

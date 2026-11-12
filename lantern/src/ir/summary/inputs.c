@@ -340,7 +340,7 @@ stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
     for (size_t d = 0; holds && d < summary->deps.len; d++) {
         const summary_dep_t *dep = &summary->deps.data[d];
         if (member_index(members, count, dep->function) < count) continue;
-        holds = stable_content(target_summary(summaries,
+        holds = stable_content(dep_summary(summaries,
                     (ir_func_t *)dep->function)) == dep->stable;
     }
     summaries->recording = recording;
@@ -399,6 +399,7 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
     core_buffer_release(&codec);
     put_u8(out, (uint8_t)(summary->proof_free | summary->bookkept << 1));
     put_u64(out, body);
+    put_u64(out, stable_content(summary));
     put_u32(out, (uint32_t)summary->deps.len);
     for (size_t d = 0; d < summary->deps.len; d++) {
         const ir_func_t *dep = summary->deps.data[d].function;
@@ -438,10 +439,12 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
 {
     summary_reader_t r = {.data = data, .size = size, .resolver = resolver};
     uint32_t codec = get_u32(&r);
-    if (r.failed || codec > size - r.at) return nullptr;
-    ir_summary_t *summary = decode_summary(nullptr, function, data + r.at,
-                                           codec, resolver, nullptr);
-    if (!summary) return nullptr;
+    if (r.failed || codec > size - r.at || !resolver) return nullptr;
+    ir_summary_t *summary = ir_summary_new(nullptr, function);
+    summary->stored       = true;
+    summary->encoded      = data + r.at;
+    summary->encoded_size = codec;
+    summary->resolver     = *resolver;
     r.at += codec;
     uint8_t extras = get_u8(&r);
     summary->proof_free = extras & 1;
@@ -449,9 +452,9 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
     uint64_t body = get_u64(&r);
     if (!r.failed
         && (!body_matches
-            || !body_matches(resolver ? resolver->context : nullptr,
-                             function, body)))
+            || !body_matches(resolver->context, function, body)))
         r.failed = true;
+    summary->stable = get_u64(&r);
     uint32_t deps = get_u32(&r);
     for (uint32_t d = 0; !r.failed && d < deps; d++) {
         summary_dep_t dep = {0};
@@ -505,10 +508,38 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         if (input.kind > SUMMARY_INPUT_REINTERPRETED) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
-    if (r.failed || r.at != r.size) {
+    if (r.failed || r.at != r.size || !summary->stable) {
         summary_free(summary);
         return nullptr;
     }
     if (summaries) core_list_push(summaries->owned, summary);
     return summary;
+}
+
+static void
+decode_stored_body(ir_summary_t *summary)
+{
+    const ir_func_t *function = summary->function;
+    ir_summary_t *decoded = decode_summary(nullptr, function,
+        summary->encoded, summary->encoded_size, &summary->resolver, nullptr);
+    summary->encoded = nullptr;
+    if (!decoded)
+        decoded = ir_summary_conservative(nullptr, (ir_func_t *)function);
+    ir_summary_t shell = *summary;
+    *summary            = *decoded;
+    core_list_free(summary->deps);
+    core_list_free(summary->inputs);
+    summary->deps       = shell.deps;
+    summary->inputs     = shell.inputs;
+    summary->identity   = shell.identity;
+    summary->content    = shell.content;
+    summary->stable     = shell.stable;
+    summary->hashed     = shell.hashed;
+    summary->stored     = true;
+    summary->proof_free = shell.proof_free;
+    summary->bookkept   = shell.bookkept;
+    *decoded        = shell;
+    decoded->deps   = core_list_new(summary_dep_t);
+    decoded->inputs = core_list_new(summary_input_t);
+    summary_free(decoded);
 }

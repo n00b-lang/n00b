@@ -529,6 +529,22 @@ add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
 ir_summary_t *
 ir_summary_of(ir_summaries_t *summaries, const ir_func_t *function)
 {
+    ir_summary_t *summary = summary_shell(summaries, function);
+    if (summary && summary->encoded) decode_stored_body(summary);
+    return summary;
+}
+
+static ir_summary_t *
+dep_summary(ir_summaries_t *summaries, ir_func_t *target)
+{
+    ir_summary_t *shell = summary_shell(summaries,
+                                        ir_func_definition(target));
+    return shell ? shell : target_summary(summaries, target);
+}
+
+static ir_summary_t *
+summary_shell(ir_summaries_t *summaries, const ir_func_t *function)
+{
     bool found = false;
     void *summary = summaries
         ? core_dict_get(&summaries->by_function, (void *)function, &found)

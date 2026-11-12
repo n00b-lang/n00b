@@ -109,7 +109,11 @@ struct ir_summary_t {
     uint64_t                   identity;
     uint64_t                   content;
     uint64_t                   stable;
+    const uint8_t             *encoded;
+    size_t                     encoded_size;
+    ir_summary_resolver_t      resolver;
     bool                       hashed;
+    bool                       stored;
     bool                       proof_free;
     bool                       bookkept;
     bool                       explained;
@@ -540,6 +544,13 @@ static void merge_inputs(core_list_t(summary_input_t) *into,
                          const core_list_t(summary_input_t) *from);
 static bool inputs_hold(ir_summaries_t *summaries,
                         const core_list_t(summary_input_t) *inputs);
+static ir_summary_t *summary_shell(ir_summaries_t *summaries,
+                                   const ir_func_t *function);
+static void decode_stored_body(ir_summary_t *summary);
+static ir_summary_t *dep_summary(ir_summaries_t *summaries,
+                                 ir_func_t *target);
+static ir_summary_t *target_summary(ir_summaries_t *summaries,
+                                    ir_func_t *target);
 static bool stored_deps_hold(ir_summaries_t *summaries,
                              const ir_summary_t *summary,
                              ir_func_t *const *members, size_t count);
