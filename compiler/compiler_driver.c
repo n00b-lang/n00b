@@ -5266,17 +5266,23 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         CORE_STRING_STATIC("--no-specialize"));
     bool emit_program = located && build_command;
     if (located && emit_program && cache)
-        (void)n00bb_cache_snapshot(cache, link);
+        (void)n00bb_cache_snapshot(cache, link, link_analysis);
     bool check_snapshot = located && check_command && cache
         && (defer_analysis || !link_analysis->effect_checks_failed)
-        && n00bb_cache_snapshot(cache, link);
+        && n00bb_cache_snapshot(cache, link, link_analysis);
     if (check_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (!located && link_analysis && link_analysis->lowered_with_errors
-        && specialize && (build_command || check_command)
-        && specialize_quietly(link_analysis, cli_diagnostics)
-        && n00bb_recompute_summaries(link_analysis))
-        (void)check_post_specialization(link_analysis);
+        && specialize && (build_command || check_command)) {
+        if (defer_analysis)
+            (void)n00bb_analyze_program(grammar, link, link_analysis,
+                                        deferred.dump_control_flow,
+                                        deferred.dump_pdg,
+                                        deferred.dump_summaries);
+        if (specialize_quietly(link_analysis, cli_diagnostics)
+            && n00bb_recompute_summaries(link_analysis))
+            (void)check_post_specialization(link_analysis);
+    }
     bool specializing = (emit_program || (located && check_command))
         && specialize;
     bool analyzed_late = specializing && defer_analysis;
@@ -5286,6 +5292,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                                    analyzed_late ? &deferred : nullptr);
     else if (located && emit_program)
         located = report_boxed_operators(link_analysis);
+    if (located && analyzed_late && cache)
+        n00bb_cache_capture_summaries(cache, link_analysis, N00BB_PHASE_MAIN);
     if (located && analyzed_late && cache && !check_command)
         record_cache_summaries(cache, link, link_analysis, optimistic_cache,
                                argv, argv0);
@@ -5313,6 +5321,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         optimize_range_checks(link_analysis);
         located = n00bb_recompute_summaries(link_analysis)
             && !link_analysis->effect_checks_failed;
+        if (located && cache)
+            n00bb_cache_capture_summaries(cache, link_analysis,
+                                          N00BB_PHASE_FINAL);
     }
     if (located && emit_program && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--verify-analyses")))

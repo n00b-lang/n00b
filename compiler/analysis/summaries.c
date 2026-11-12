@@ -456,6 +456,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .global_reachable = n00bb_summary_global_reachable,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
+        .stored = n00bb_stored_summary,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);
@@ -502,9 +503,11 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     ir_summaries_t *previous = analysis->summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
+    analysis->summary_phase = previous ? N00BB_PHASE_FINAL : N00BB_PHASE_MAIN;
     analysis->summaries = ir_summaries_recompute(roots.data, roots.len,
                                                  &analysis->summary_hooks,
                                                  previous);
+    analysis->summary_phase = 0;
     ir_summaries_free(previous);
     ir_analysis_bind_summaries(analysis->summaries);
     core_list_free(roots);

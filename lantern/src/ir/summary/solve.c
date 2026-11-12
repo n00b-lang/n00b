@@ -399,11 +399,84 @@ adopt_component(ir_summaries_t *summaries, ir_func_t *const *members,
     return true;
 }
 
+static bool
+stored_component(ir_summaries_t *summaries, ir_func_t *const *members,
+                 size_t count)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (!hooks || !hooks->stored) return false;
+    ir_summary_t **found = core_alloc_array(ir_summary_t *, count);
+    bool           all   = true;
+    for (size_t i = 0; all && i < count; i++) {
+        found[i] = hooks->stored(hooks->context, summaries, members[i]);
+        all      = found[i] != nullptr;
+    }
+    for (size_t i = 0; all && i < count; i++)
+        core_dict_put(&summaries->by_function, members[i], found[i]);
+    core_free(found);
+    return all;
+}
+
+static _Thread_local ir_summaries_t *solving;
+
+void
+ir_summaries_pin_recording(void)
+{
+    if (solving && solving->recording) solving->recording->pinned = true;
+}
+
+bool
+ir_summary_portable(ir_summaries_t *summaries, const ir_func_t *function)
+{
+    if (!summaries || !function) return false;
+    if (!summaries->portable_ready) {
+        core_dict_init(&summaries->unportable, nullptr, nullptr);
+        summaries->portable_ready = true;
+        core_list_t(summary_func_ptr_t) pending =
+            core_list_new(summary_func_ptr_t);
+        core_dict_t dependents;
+        core_dict_init(&dependents, nullptr, nullptr);
+        core_dict_foreach(&summaries->by_function, entry) {
+            ir_func_t    *f = (ir_func_t *)entry->key;
+            ir_summary_t *s = entry->value;
+            for (size_t d = 0; d < s->deps.len; d++) {
+                const ir_func_t *g = s->deps.data[d].function;
+                core_list_t(summary_func_ptr_t) *users =
+                    core_dict_get(&dependents, (void *)g, nullptr);
+                if (!users) {
+                    users  = core_alloc(core_list_t(summary_func_ptr_t));
+                    *users = core_list_new(summary_func_ptr_t);
+                    core_dict_put(&dependents, (void *)g, users);
+                }
+                core_list_push(*users, f);
+            }
+            if (s->pinned) core_list_push(pending, f);
+        }
+        while (pending.len) {
+            ir_func_t *f = pending.data[--pending.len];
+            if (!core_dict_add(&summaries->unportable, f, f)) continue;
+            core_list_t(summary_func_ptr_t) *users =
+                core_dict_get(&dependents, f, nullptr);
+            for (size_t u = 0; users && u < users->len; u++)
+                core_list_push(pending, users->data[u]);
+        }
+        core_dict_foreach(&dependents, entry) {
+            core_list_free(*(core_list_t(summary_func_ptr_t) *)entry->value);
+            core_free(entry->value);
+        }
+        core_dict_free(&dependents);
+        core_list_free(pending);
+    }
+    return ir_summary_of(summaries, function)
+        && !core_dict_contains(&summaries->unportable, (void *)function);
+}
+
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
 {
     if (adopt_component(summaries, members, count)) return;
+    if (stored_component(summaries, members, count)) return;
     uint64_t queries = ir_reinterpretation_queries();
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
@@ -655,7 +728,7 @@ same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
         && a->callee_effects == b->callee_effects
         && a->call_flags == b->call_flags
         && a->call_finalizers == b->call_finalizers
-        && a->owned_field == b->owned_field;
+        && a->owned_field == b->owned_field && a->stored == b->stored;
 }
 
 static ir_summaries_t *
@@ -687,6 +760,8 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     core_dict_init(&t.index, nullptr, nullptr);
     core_dict_init(&t.lowlink, nullptr, nullptr);
     core_dict_init(&t.on_stack, nullptr, nullptr);
+    ir_summaries_t *outer = solving;
+    solving = summaries;
     ir_analysis_read_only_begin();
     for (size_t i = 0; i < count; i++) {
         bool found = false;
@@ -694,6 +769,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
         if (!found && functions[i]->n_blocks) strongconnect(&t, functions[i]);
     }
     ir_analysis_read_only_end();
+    solving = outer;
     core_dict_free(&t.index);
     core_dict_free(&t.lowlink);
     core_dict_free(&t.on_stack);
@@ -734,6 +810,7 @@ ir_summaries_free(ir_summaries_t *summaries)
             summary_free(summaries->owned.data[i]);
     core_list_free(summaries->owned);
     core_dict_free(&summaries->adopted);
+    if (summaries->portable_ready) core_dict_free(&summaries->unportable);
     core_dict_free(&summaries->by_function);
     type_memos_free(&summaries->type_memos);
     core_dict_foreach(&summaries->engines, entry) {

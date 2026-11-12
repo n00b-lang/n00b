@@ -258,6 +258,12 @@ core_list_decl(n00bb_record_request_site_t);
 
 typedef struct n00bb_interface_summaries_t n00bb_interface_summaries_t;
 
+enum {
+    N00BB_PHASE_ESCAPES = 1,
+    N00BB_PHASE_MAIN    = 2,
+    N00BB_PHASE_FINAL   = 3,
+};
+
 typedef struct {
     core_translation_unit_t *unit;
     parse_tree_t *statement;
@@ -361,6 +367,8 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_failed_region_t) dead_regions;
     core_list_t(n00bb_assert_site_t) assert_sites;
     n00bb_interface_summaries_t *interface_summaries;
+    n00bb_interface_summaries_t *stored_summaries[N00BB_PHASE_FINAL];
+    uint8_t summary_phase;
     core_list_t(core_translation_unit_ptr_t) initializer_order;
     bool dump_ranges;
     core_string_t effects_of;

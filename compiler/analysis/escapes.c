@@ -32,8 +32,10 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
         core_list_push(roots, analysis->cached_functions.data[f]);
     bind_summary_hooks(analysis, true);
     ir_summaries_free(analysis->escapes);
+    analysis->summary_phase = N00BB_PHASE_ESCAPES;
     analysis->escapes = ir_escapes_compute(roots.data, roots.len,
                                            &analysis->summary_hooks);
+    analysis->summary_phase = 0;
     ir_analysis_bind_summaries(analysis->escapes);
     core_list_free(roots);
     return analysis->escapes != nullptr;

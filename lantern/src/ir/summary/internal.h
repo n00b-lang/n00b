@@ -101,6 +101,8 @@ struct ir_summaries_t {
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;
+    core_dict_t               unportable;
+    bool                      portable_ready;
 };
 
 typedef ir_spath_list_t path_list_t;

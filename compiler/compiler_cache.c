@@ -18,6 +18,7 @@
 #include "builtin_types.h"
 #include "n00bb_version.h"
 #include "cached_body.h"
+#include "interface_summaries.h"
 #include "ir/analyses.h"
 #include "ir/archive.h"
 #include "ir/summary.h"
@@ -615,11 +616,24 @@ typedef struct {
 } cache_entry_t;
 core_list_decl(cache_entry_t);
 
+typedef ir_module_t *cache_module_ptr_t;
+core_list_decl(cache_module_ptr_t);
+
+static const core_string_t summary_sections[N00BB_PHASE_FINAL] = {
+    CORE_STRING_STATIC("escapes"),
+    CORE_STRING_STATIC("summaries"),
+    CORE_STRING_STATIC("final"),
+};
+
 typedef struct {
     core_string_t module;
     core_buffer_t ir;
     core_buffer_t references;
     core_list_t(core_string_t) inlined;
+    core_list_t(cache_module_ptr_t) modules;
+    core_list_t(core_string_t) names;
+    core_buffer_t summaries[N00BB_PHASE_FINAL];
+    bool captured[N00BB_PHASE_FINAL];
 } cache_snapshot_t;
 core_list_decl(cache_snapshot_t);
 
@@ -632,6 +646,31 @@ snapshot_release(cache_snapshot_t *snapshot)
     for (size_t i = 0; i < snapshot->inlined.len; i++)
         core_free(snapshot->inlined.data[i].data);
     core_list_free(snapshot->inlined);
+    for (size_t i = 0; i < snapshot->names.len; i++)
+        core_free(snapshot->names.data[i].data);
+    core_list_free(snapshot->names);
+    core_list_free(snapshot->modules);
+    for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
+        core_buffer_release(&snapshot->summaries[p]);
+}
+
+static void
+capture_snapshot(cache_snapshot_t *snapshot, ir_summaries_t *summaries,
+                 uint8_t phase)
+{
+    core_buffer_t *out = &snapshot->summaries[phase - 1];
+    out->byte_len = 0;
+    snapshot->captured[phase - 1] = summaries != nullptr;
+    for (size_t m = 0; summaries && m < snapshot->modules.len; m++) {
+        core_buffer_t encoded = {0};
+        if (n00bb_encode_portable_summaries(summaries,
+                                            snapshot->modules.data[m],
+                                            &encoded)) {
+            put_text(out, snapshot->names.data[m]);
+            put_bytes(out, encoded.data, encoded.byte_len);
+        }
+        core_buffer_release(&encoded);
+    }
 }
 
 typedef struct {
@@ -1572,6 +1611,21 @@ n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
 }
 
 bool
+n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
+                             core_string_t kind, const uint8_t **data,
+                             size_t *length)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = loaded_member(cache, module, &entry);
+    const cache_section_t *section = member
+        ? phase_section(entry, kind, member->name) : nullptr;
+    if (!section) return false;
+    *data   = section->data;
+    *length = section->length;
+    return true;
+}
+
+bool
 n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
                             const core_translation_unit_t *unit,
                             core_diagnostics_t *into)
@@ -2156,8 +2210,21 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
     core_list_free(closure);
 }
 
+void
+n00bb_cache_capture_summaries(n00bb_cache_t *cache,
+                              n00bb_link_analysis_t *analysis, uint8_t phase)
+{
+    ir_summaries_t *summaries = !analysis ? nullptr
+        : phase == N00BB_PHASE_ESCAPES ? analysis->escapes
+                                       : analysis->summaries;
+    for (size_t i = 0; cache && phase && phase <= N00BB_PHASE_FINAL
+         && i < cache->snapshots.len; i++)
+        capture_snapshot(&cache->snapshots.data[i], summaries, phase);
+}
+
 bool
-n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
+n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
+                     n00bb_link_analysis_t *analysis)
 {
     if (!cache || !link) return false;
     core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
@@ -2173,7 +2240,21 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
             .module = core_string_dup(
                 scc->members.data[0]->module.identifier),
             .inlined = core_list_new(core_string_t),
+            .modules = core_list_new(cache_module_ptr_t),
+            .names   = core_list_new(core_string_t),
         };
+        for (size_t m = 0; m < scc->members.len; m++) {
+            core_list_push(snapshot.modules, modules[m]);
+            core_list_push(snapshot.names, core_string_dup(
+                scc->members.data[m]->module.identifier));
+        }
+        if (analysis) {
+            capture_snapshot(&snapshot, analysis->escapes,
+                             N00BB_PHASE_ESCAPES);
+            if (analysis->summaries)
+                capture_snapshot(&snapshot, analysis->summaries,
+                                 N00BB_PHASE_MAIN);
+        }
         for (size_t i = 0; i < scc->inlined.len; i++)
             core_list_push(snapshot.inlined, core_string_dup(
                 sccs.data[scc->inlined.data[i]].members.data[0]
@@ -2346,6 +2427,33 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 }
 
 static bool
+snapshot_summaries(const cache_snapshot_t *snapshot, uint8_t phase,
+                   core_string_t module, const uint8_t **data, size_t *length)
+{
+    if (!snapshot || !snapshot->captured[phase]) return false;
+    manifest_reader_t r = {
+        .data   = (const uint8_t *)snapshot->summaries[phase].data,
+        .length = snapshot->summaries[phase].byte_len,
+    };
+    while (r.data && !r.failed && r.at < r.length) {
+        uint64_t name_bytes = read_u64(&r);
+        if (r.failed || name_bytes > r.length - r.at) return false;
+        core_string_t name = core_string_borrow((const char *)r.data + r.at,
+                                                (size_t)name_bytes);
+        r.at += (size_t)name_bytes;
+        uint64_t bytes = read_u64(&r);
+        if (r.failed || bytes > r.length - r.at) return false;
+        if (core_string_eq(name, module)) {
+            *data   = r.data + r.at;
+            *length = (size_t)bytes;
+            return true;
+        }
+        r.at += (size_t)bytes;
+    }
+    return false;
+}
+
+static bool
 store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
           const core_list_t(cache_scc_t) *sccs,
           const cache_scc_t *scc, const cache_snapshot_t *snapshot,
@@ -2485,6 +2593,18 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                 sites->data ? (const uint8_t *)sites->data
                                             : (const uint8_t *)"",
                                 sites->byte_len);
+        for (uint8_t p = 0; ok && p < N00BB_PHASE_FINAL; p++) {
+            const uint8_t *stored = nullptr;
+            size_t stored_bytes = 0;
+            module_section_name(&name, summary_sections[p], module);
+            if (snapshot_summaries(snapshot, p, module, &stored,
+                                   &stored_bytes))
+                ok = sections_set(&sections, core_buffer_string(&name),
+                                  stored_bytes ? stored
+                                               : (const uint8_t *)"",
+                                  stored_bytes);
+            else sections_remove(&sections, core_buffer_string(&name));
+        }
     }
     core_buffer_release(&name);
     core_buffer_t serialized = {0};

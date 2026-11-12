@@ -3711,6 +3711,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     ir_group_pdg_free(analysis->program);
     core_list_free(analysis->assert_sites);
     n00bb_interface_summaries_free(analysis->interface_summaries);
+    for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
+        n00bb_interface_summaries_free(analysis->stored_summaries[p]);
     core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
     th_ctx_free(analysis->link_types);
