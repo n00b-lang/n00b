@@ -133,6 +133,8 @@ struct ir_summaries_t {
     ir_summary_t             *recording;
     core_dict_t               adopted;
     core_list_t(summary_input_t) *sink;
+    core_dict_t               sink_index;
+    core_dict_t               sites;
     ir_func_t *const         *members;
     size_t                    member_count;
 };
@@ -540,8 +542,8 @@ static void note_effects(ir_summaries_t *summaries, const ir_func_t *caller,
                          const ir_func_t *callee);
 static void observe_view(void *context, const ir_module_t *viewer,
                          th_type *a, th_type *b, bool answer);
-static void merge_inputs(core_list_t(summary_input_t) *into,
-                         const core_list_t(summary_input_t) *from);
+static void record_inputs(ir_summaries_t *summaries,
+                          const core_list_t(summary_input_t) *from);
 static bool inputs_hold(ir_summaries_t *summaries,
                         const core_list_t(summary_input_t) *inputs);
 static ir_summary_t *summary_shell(ir_summaries_t *summaries,

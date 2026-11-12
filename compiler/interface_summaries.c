@@ -289,56 +289,43 @@ interface_index(n00bb_link_analysis_t *analysis)
 }
 
 static ir_module_t *
-unit_module_named(n00bb_link_analysis_t *analysis, core_string_t module)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        ir_module_t *candidate = state ? state->ir_module : nullptr;
-        if (candidate && core_string_eq(ir_module_name(candidate), module))
-            return candidate;
-    }
-    return nullptr;
-}
-
-static ir_module_t *
 cached_module_named(n00bb_link_analysis_t *analysis, core_string_t module)
 {
     return analysis->cache ? n00bb_cache_module(analysis->cache, module)
                            : nullptr;
 }
 
-static ir_module_t *
-specialization_module_named(n00bb_link_analysis_t *analysis,
-                            core_string_t module)
+static void
+index_module_name(n00bb_link_analysis_t *analysis, ir_module_t *module)
 {
-    if (!analysis->specialization_modules_ready) {
-        core_dict_init(&analysis->specialization_modules, nullptr, nullptr);
-        analysis->specialization_modules_ready = true;
-    }
-    for (; analysis->specialization_modules_seen
-           < analysis->specializations.len;
-         analysis->specialization_modules_seen++) {
-        ir_func_t *instance = analysis->specializations.data[
-            analysis->specialization_modules_seen].instance;
-        if (!instance || !instance->owner) continue;
-        core_dict_put(&analysis->specialization_modules,
-            (void *)(uintptr_t)core_string_hash(
-                ir_module_name(instance->owner)),
-            instance->owner);
-    }
-    ir_module_t *found = core_dict_get(&analysis->specialization_modules,
-        (void *)(uintptr_t)core_string_hash(module), nullptr);
-    return found && core_string_eq(ir_module_name(found), module) ? found
-                                                                  : nullptr;
+    core_string_t name = module ? ir_module_name(module) : (core_string_t){0};
+    if (!name.u8_bytes
+        || core_dict_contains(&analysis->module_names, &name)) return;
+    core_dict_put(&analysis->module_names, core_dict_string_key_copy(name),
+                  module);
 }
 
 static ir_module_t *
 module_named(n00bb_link_analysis_t *analysis, core_string_t module)
 {
-    ir_module_t *found = unit_module_named(analysis, module);
-    if (!found && n00bb_specialization_module(module))
-        found = specialization_module_named(analysis, module);
-    return found;
+    if (!analysis->module_names_ready) {
+        core_dict_init_string(&analysis->module_names);
+        analysis->module_names_ready = true;
+    }
+    for (; analysis->module_units_seen < analysis->units.len;
+         analysis->module_units_seen++) {
+        n00bb_tu_state_t *state = tu_state(
+            analysis->units.data[analysis->module_units_seen]);
+        index_module_name(analysis, state ? state->ir_module : nullptr);
+    }
+    for (; analysis->module_specializations_seen
+           < analysis->specializations.len;
+         analysis->module_specializations_seen++) {
+        ir_func_t *instance = analysis->specializations.data[
+            analysis->module_specializations_seen].instance;
+        index_module_name(analysis, instance ? instance->owner : nullptr);
+    }
+    return core_dict_get(&analysis->module_names, &module, nullptr);
 }
 
 static const ir_module_t *

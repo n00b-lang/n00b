@@ -67,10 +67,28 @@ same_input(const summary_input_t *a, const summary_input_t *b)
         && core_string_eq(a->effect, b->effect);
 }
 
+static uint64_t
+input_key(const summary_input_t *input)
+{
+    uint64_t words[] = {
+        input->kind, input->site, (uint64_t)(uintptr_t)input->caller,
+        (uint64_t)(uintptr_t)input->function,
+        (uint64_t)(uintptr_t)input->global,
+        (uint64_t)(uintptr_t)input->module, (uint64_t)(uintptr_t)input->from,
+        (uint64_t)(uintptr_t)input->to, core_string_hash(input->effect),
+    };
+    return core_xxh3_64bits_raw(words, sizeof(words)) | 1;
+}
+
 static bool
 input_wanted(ir_summaries_t *summaries, const summary_input_t *probe)
 {
     if (!summaries || !summaries->sink) return false;
+    bool found = false;
+    uintptr_t at = (uintptr_t)core_dict_get(&summaries->sink_index,
+        (void *)(uintptr_t)input_key(probe), &found);
+    if (!found) return true;
+    if (same_input(&summaries->sink->data[at], probe)) return false;
     for (size_t i = 0; i < summaries->sink->len; i++)
         if (same_input(&summaries->sink->data[i], probe)) return false;
     return true;
@@ -83,6 +101,10 @@ record_input(ir_summaries_t *summaries, summary_input_t input)
     const ir_func_t *owner = input.caller ? input.caller : input.function;
     if (input.effect.u8_bytes && owner && owner->owner)
         input.effect = ir_strdup(owner->owner->ctx, input.effect);
+    void *key = (void *)(uintptr_t)input_key(&input);
+    if (!core_dict_contains(&summaries->sink_index, key))
+        core_dict_put(&summaries->sink_index, key,
+                      (void *)(uintptr_t)summaries->sink->len);
     core_list_push(*summaries->sink, input);
 }
 
@@ -101,14 +123,20 @@ call_owner(const ir_instr_t *call)
 }
 
 static uint32_t
-call_site(const ir_instr_t *call)
+call_site(ir_summaries_t *summaries, const ir_instr_t *call)
 {
+    bool found = false;
+    uintptr_t site = (uintptr_t)core_dict_get(&summaries->sites,
+                                              (void *)call, &found);
+    if (found) return (uint32_t)site;
     const ir_func_t *f = call_owner(call);
     uint32_t at = 0;
     for (uint32_t b = 0; f && b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++, at++)
-            if (f->blocks[b]->instrs[i] == call) return at;
-    return UINT32_MAX;
+            core_dict_put(&summaries->sites, f->blocks[b]->instrs[i],
+                          (void *)(uintptr_t)at);
+    site = (uintptr_t)core_dict_get(&summaries->sites, (void *)call, &found);
+    return found ? (uint32_t)site : UINT32_MAX;
 }
 
 static const ir_instr_t *
@@ -149,7 +177,7 @@ note_targets(ir_summaries_t *summaries, const ir_instr_t *call,
         || plain_call(call, targets, hooked))
         return;
     summary_input_t input = {.kind = SUMMARY_INPUT_TARGETS, .caller = owner,
-                             .site = call_site(call)};
+                             .site = call_site(summaries, call)};
     if (!input_wanted(summaries, &input)) return;
     input.answer = targets_answer(targets, hooked);
     record_input(summaries, input);
@@ -171,7 +199,7 @@ note_finalizers(ir_summaries_t *summaries, const ir_instr_t *call,
     if (!summaries->sink || !solving_member(summaries, owner)) return;
     record_input(summaries, (summary_input_t){
         .kind = SUMMARY_INPUT_FINALIZERS, .caller = owner,
-        .site = call_site(call), .function = target,
+        .site = call_site(summaries, call), .function = target,
         .answer = finalizers_answer(finalizers, bound)});
 }
 
@@ -255,15 +283,11 @@ observe_view(void *context, const ir_module_t *viewer, th_type *a,
 }
 
 static void
-merge_inputs(core_list_t(summary_input_t) *into,
-             const core_list_t(summary_input_t) *from)
+record_inputs(ir_summaries_t *summaries,
+              const core_list_t(summary_input_t) *from)
 {
-    for (size_t i = 0; i < from->len; i++) {
-        bool known = false;
-        for (size_t j = 0; !known && j < into->len; j++)
-            known = same_input(&into->data[j], &from->data[i]);
-        if (!known) core_list_push(*into, from->data[i]);
-    }
+    for (size_t i = 0; i < from->len; i++)
+        record_input(summaries, from->data[i]);
 }
 
 static uint64_t

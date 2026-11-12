@@ -430,7 +430,8 @@ attach_inputs(ir_summaries_t *summaries, ir_func_t *const *members,
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_of(summaries, members[i]);
         summary->inputs.len = 0;
-        merge_inputs(&summary->inputs, inputs);
+        for (size_t j = 0; j < inputs->len; j++)
+            core_list_push(summary->inputs, inputs->data[j]);
     }
 }
 
@@ -444,6 +445,8 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     summaries->sink         = &inputs;
     summaries->members      = members;
     summaries->member_count = count;
+    core_dict_init(&summaries->sink_index, nullptr, nullptr);
+    core_dict_init(&summaries->sites, nullptr, nullptr);
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
@@ -454,7 +457,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     bool cyclic = count > 1 || callers[0].len;
     const ir_summary_t *reused = reusable_paths(summaries, members, count,
                                                 cyclic);
-    if (reused) merge_inputs(&inputs, &reused->inputs);
+    if (reused) record_inputs(summaries, &reused->inputs);
     uint32_t  shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
     uint32_t *settled   = core_alloc_array(uint32_t, count);
     for (size_t i = 0; i < count; i++) settled[i] = shrinking;
@@ -548,6 +551,8 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     summaries->sink         = nullptr;
     summaries->members      = nullptr;
     summaries->member_count = 0;
+    core_dict_free(&summaries->sink_index);
+    core_dict_free(&summaries->sites);
     attach_inputs(summaries, members, count, &inputs);
     core_list_free(inputs);
     stamp_component(summaries, members, count);

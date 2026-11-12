@@ -680,6 +680,7 @@ typedef struct {
 core_list_decl(cache_instance_t);
 
 struct n00bb_cache_t {
+    core_dict_t loaded_members;
     core_string_t directory;
     core_string_t shared;
     core_string_t stdlib_root;
@@ -1352,11 +1353,17 @@ scc_directory(const n00bb_cache_t *cache, const cache_scc_t *scc)
     return scc_in_stdlib(cache, scc) ? cache->shared : cache->directory;
 }
 
+typedef struct {
+    core_dict_t by_module;
+    core_dict_t visited;
+    core_dict_t read;
+    uintptr_t  *next;
+} entry_walk_t;
+
 static cache_entry_t *
-read_entry(n00bb_cache_t *cache, uint64_t key)
+walk_entry(n00bb_cache_t *cache, entry_walk_t *walk, uint64_t key)
 {
-    for (size_t e = 0; e < cache->entries.len; e++)
-        if (cache->entries.data[e].key == key) return nullptr;
+    if (!core_dict_add(&walk->read, key, 1)) return nullptr;
     core_buffer_t path = {0};
     object_path(cache, key, &path);
     uint8_t *bytes = nullptr;
@@ -1372,13 +1379,6 @@ read_entry(n00bb_cache_t *cache, uint64_t key)
     }
     core_list_push(cache->entries, entry);
     return &cache->entries.data[cache->entries.len - 1];
-}
-
-static void
-read_entries(n00bb_cache_t *cache)
-{
-    for (size_t i = 0; i < cache->module_keys.len; i++)
-        (void)read_entry(cache, cache->module_keys.data[i].value);
 }
 
 static bool
@@ -1464,23 +1464,23 @@ queue_entry_links(const cache_entry_t *entry,
 }
 
 static bool
-read_module_entries(n00bb_cache_t *cache, core_string_t name,
-                    core_list_t(core_string_t) *pending)
+read_module_entries(n00bb_cache_t *cache, entry_walk_t *walk,
+                    core_string_t name, core_list_t(core_string_t) *pending)
 {
     core_buffer_t package = {0};
     core_buffer_append_string(&package, name);
     core_buffer_puts(&package, ".__init");
+    core_string_t names[2] = {name, core_buffer_string(&package)};
     bool found = false;
-    for (size_t i = 0; i < cache->module_keys.len; i++) {
-        core_string_t listed = cache->module_keys.data[i].name;
-        if (!core_string_eq(listed, name)
-            && !core_string_eq(listed, core_buffer_string(&package)))
-            continue;
-        found = true;
-        const cache_entry_t *entry = read_entry(cache,
-            cache->module_keys.data[i].value);
-        if (entry) queue_entry_links(entry, pending);
-    }
+    for (int n = 0; n < 2; n++)
+        for (uintptr_t i = (uintptr_t)core_dict_get(&walk->by_module,
+                 &names[n], nullptr);
+             i; i = walk->next[i - 1]) {
+            found = true;
+            const cache_entry_t *entry = walk_entry(cache, walk,
+                cache->module_keys.data[i - 1].value);
+            if (entry) queue_entry_links(entry, pending);
+        }
     core_buffer_release(&package);
     return found || library_module_name(cache, name);
 }
@@ -1488,8 +1488,19 @@ read_module_entries(n00bb_cache_t *cache, core_string_t name,
 static void
 read_reachable_entries(n00bb_cache_t *cache)
 {
+    entry_walk_t walk = {
+        .next = core_alloc_array(uintptr_t, cache->module_keys.len + 1),
+    };
+    core_dict_init_string(&walk.by_module);
+    core_dict_init_string(&walk.visited);
+    core_dict_init(&walk.read, nullptr, nullptr);
+    for (size_t i = cache->module_keys.len; i > 0; i--) {
+        core_string_t *name = &cache->module_keys.data[i - 1].name;
+        walk.next[i - 1] = (uintptr_t)core_dict_get(&walk.by_module, name,
+                                                    nullptr);
+        core_dict_put(&walk.by_module, name, (void *)i);
+    }
     core_list_t(core_string_t) pending = core_list_new(core_string_t);
-    core_list_t(core_string_t) visited = core_list_new(core_string_t);
     scan_root_imports(cache->root_path, &pending);
     push_module_name(&pending, CORE_STRING_STATIC("builtin"));
     if (!cache_check_only) {
@@ -1500,26 +1511,29 @@ read_reachable_entries(n00bb_cache_t *cache)
     bool complete = true;
     while (complete && pending.len) {
         core_string_t name = pending.data[--pending.len];
-        bool seen = false;
-        for (size_t v = 0; !seen && v < visited.len; v++)
-            seen = core_string_eq(visited.data[v], name);
-        if (seen) {
+        if (core_dict_contains(&walk.visited, &name)) {
             core_free(name.data);
             continue;
         }
-        core_list_push(visited, name);
-        complete = read_module_entries(cache, name, &pending);
+        complete = read_module_entries(cache, &walk, name, &pending);
         core_string_t phase = phase_name();
         if (!complete)
             cache_log("%.*s load all: %.*s is not cached",
                       (int)phase.u8_bytes, phase.data,
                       (int)name.u8_bytes, name.data);
+        core_dict_put(&walk.visited, core_dict_string_key_copy(name), 1);
+        core_free(name.data);
     }
+    for (size_t i = 0; !complete && i < cache->module_keys.len; i++)
+        (void)walk_entry(cache, &walk, cache->module_keys.data[i].value);
     for (size_t i = 0; i < pending.len; i++) core_free(pending.data[i].data);
-    for (size_t i = 0; i < visited.len; i++) core_free(visited.data[i].data);
     core_list_free(pending);
-    core_list_free(visited);
-    if (!complete) read_entries(cache);
+    core_dict_foreach(&walk.visited, item)
+        core_dict_string_key_free(item->key);
+    core_dict_free(&walk.visited);
+    core_dict_free(&walk.by_module);
+    core_dict_free(&walk.read);
+    core_free(walk.next);
 }
 
 static void
@@ -1543,6 +1557,7 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
         return nullptr;
     n00bb_cache_t *cache = core_alloc(n00bb_cache_t);
     if (!cache) return nullptr;
+    core_dict_init_string(&cache->loaded_members);
     cache->root_path = canonical_path(root_path);
     int64_t slash = cache->root_path.data
         ? core_string_rfind_byte(cache->root_path, '/') : -1;
@@ -1552,6 +1567,7 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                                 slash ? (size_t)slash : 1))
         : (core_string_t){0};
     if (!cache->directory.data) {
+        core_dict_free(&cache->loaded_members);
         core_free(cache->root_path.data);
         core_free(cache);
         return nullptr;
@@ -1629,6 +1645,15 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                           members.data ? members.data : "");
                 core_buffer_release(&members);
             }
+    for (size_t e = 0; e < cache->entries.len; e++) {
+        cache_entry_t *entry = &cache->entries.data[e];
+        for (size_t m = 0; entry->load == ENTRY_VALID
+             && m < entry->members.len; m++)
+            if (!core_dict_contains(&cache->loaded_members,
+                                    &entry->members.data[m].name))
+                core_dict_put(&cache->loaded_members,
+                              &entry->members.data[m].name, e + 1);
+    }
     return cache;
 }
 
@@ -1636,6 +1661,7 @@ void
 n00bb_cache_free(n00bb_cache_t *cache)
 {
     if (!cache) return;
+    core_dict_free(&cache->loaded_members);
     for (size_t e = 0; e < cache->entries.len; e++)
         entry_release(&cache->entries.data[e]);
     core_list_free(cache->entries);
@@ -1696,15 +1722,16 @@ static const cache_member_t *
 loaded_member(const n00bb_cache_t *cache, core_string_t module,
               const cache_entry_t **owner)
 {
-    for (size_t e = 0; cache && module.data && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t m = 0; m < entry->members.len; m++) {
-            const cache_member_t *member = &entry->members.data[m];
-            if (core_string_eq(member->name, module)) {
-                if (owner) *owner = entry;
-                return member;
-            }
+    uintptr_t at = cache && module.data
+        ? (uintptr_t)core_dict_get((core_dict_t *)&cache->loaded_members,
+                                   &module, nullptr)
+        : 0;
+    const cache_entry_t *entry = at ? &cache->entries.data[at - 1] : nullptr;
+    for (size_t m = 0; entry && m < entry->members.len; m++) {
+        const cache_member_t *member = &entry->members.data[m];
+        if (core_string_eq(member->name, module)) {
+            if (owner) *owner = entry;
+            return member;
         }
     }
     return nullptr;

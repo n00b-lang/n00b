@@ -3713,8 +3713,11 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     n00bb_interface_summaries_free(analysis->interface_summaries);
     for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
         n00bb_interface_summaries_free(analysis->stored_summaries[p]);
-    if (analysis->specialization_modules_ready)
-        core_dict_free(&analysis->specialization_modules);
+    if (analysis->module_names_ready) {
+        core_dict_foreach(&analysis->module_names, item)
+            core_dict_string_key_free(item->key);
+        core_dict_free(&analysis->module_names);
+    }
     if (analysis->cached_bodies_ready)
         core_dict_free(&analysis->cached_bodies);
     core_list_free(analysis->initializer_order);
