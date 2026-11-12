@@ -44,6 +44,13 @@ ir_call_function(const ir_instr_t *call)
     return callee && callee->kind == IR_VAL_FUNC ? callee->owner : nullptr;
 }
 
+ir_func_t *
+ir_func_definition(ir_func_t *function)
+{
+    return function && !function->n_blocks && function->definition
+        && function->definition->n_blocks ? function->definition : function;
+}
+
 uint32_t
 ir_call_argument_count(const ir_instr_t *call)
 {

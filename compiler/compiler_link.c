@@ -3727,6 +3727,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_dict_free(&analysis->unit_of_module);
     if (analysis->global_symbols_ready)
         core_dict_free(&analysis->global_symbols);
+    if (analysis->cached_globals_ready)
+        core_dict_free(&analysis->cached_globals);
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     if (analysis->bounded_targets_ready)
         core_dict_free(&analysis->bounded_targets);

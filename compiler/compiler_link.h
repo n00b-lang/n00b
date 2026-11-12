@@ -321,6 +321,8 @@ typedef struct n00bb_link_analysis_t {
     bool entry_ready[3];
     core_dict_t global_symbols;
     bool global_symbols_ready;
+    core_dict_t cached_globals;
+    bool cached_globals_ready;
     core_dict_t escaped_globals;
     ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;

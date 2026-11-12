@@ -787,9 +787,12 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
     bool found = false;
     parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
                                               (void *)global, &found);
-    if (!found || !symbol || symbol_exported_by_default(symbol)
-        || parse_sym_binding(symbol,
-               CORE_STRING_STATIC("n00bb.external-export")))
+    bool cached_private = !found && analysis->cached_globals_ready
+        && core_dict_contains(&analysis->cached_globals, (void *)global);
+    if (!cached_private
+        && (!found || !symbol || symbol_exported_by_default(symbol)
+            || parse_sym_binding(symbol,
+                   CORE_STRING_STATIC("n00bb.external-export"))))
         return true;
     collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
