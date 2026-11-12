@@ -5294,13 +5294,12 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                                    analyzed_late ? &deferred : nullptr);
     else if (located && emit_program)
         located = report_boxed_operators(link_analysis);
-    if (located && analyzed_late && cache)
+    if (analyzed_late && cache && link_analysis->summaries)
         n00bb_cache_capture_summaries(cache, link_analysis, N00BB_PHASE_MAIN);
     if (located && analyzed_late && cache && !check_command)
         record_cache_summaries(cache, link, link_analysis, optimistic_cache,
                                argv, argv0);
-    if (check_snapshot && analyzed_late && located
-        && !link_analysis->effect_checks_failed)
+    if (check_snapshot && analyzed_late)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (located && specializing) warn_dead_type_arms(link_analysis);
     if (located && !emit_program && link_analysis)
