@@ -28,15 +28,91 @@ table(n00bb_abi_merged_rows_t *rows, uint32_t kind)
     return (n00bb_abi_merged_table_t *)n00bb_abi_merged_table(rows, kind);
 }
 
-static uint32_t
-type_index(const n00bb_abi_merged_table_t *types, uint64_t hash)
+typedef struct {
+    const n00bb_abi_selected_objects_t *selected;
+    const n00bb_abi_merged_table_t     *types;
+    core_dict_t                         type_rows;
+    core_dict_t                         module_inputs;
+    bool                                modules_indexed;
+    bool                                modules_valid;
+} link_index_t;
+
+static void
+link_index_open(link_index_t *index,
+                const n00bb_abi_selected_objects_t *selected,
+                const n00bb_abi_merged_table_t *types)
 {
+    *index = (link_index_t){.selected = selected, .types = types};
+    core_dict_init(&index->type_rows, nullptr, nullptr);
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *row = (const void *)(types->records
             + (size_t)i * types->record_bytes);
-        if (row->typehash == hash) return i;
+        void *key = (void *)(uintptr_t)row->typehash;
+        if (row->typehash && !core_dict_contains(&index->type_rows, key))
+            core_dict_put(&index->type_rows, key, (void *)(uintptr_t)i);
+    }
+}
+
+static void
+link_index_close(link_index_t *index)
+{
+    core_dict_free(&index->type_rows);
+    if (!index->modules_indexed) return;
+    core_dict_foreach(&index->module_inputs, entry) {
+        n00bb_abi_rows_t *inputs = entry->value;
+        core_list_free(*inputs);
+        core_free(inputs);
+        core_free(entry->key);
+    }
+    core_dict_free(&index->module_inputs);
+}
+
+static uint32_t
+type_index(link_index_t *index, uint64_t hash)
+{
+    const n00bb_abi_merged_table_t *types = index->types;
+    if (hash) {
+        bool found = false;
+        void *row = core_dict_get(&index->type_rows,
+                                  (void *)(uintptr_t)hash, &found);
+        return found ? (uint32_t)(uintptr_t)row : 0;
+    }
+    for (uint32_t i = 1; i < types->record_count; i++) {
+        const n00b_abi_type_v1 *row = (const void *)(types->records
+            + (size_t)i * types->record_bytes);
+        if (!row->typehash) return i;
     }
     return 0;
+}
+
+static bool
+index_modules(link_index_t *index)
+{
+    if (index->modules_indexed) return index->modules_valid;
+    const n00bb_abi_selected_objects_t *selected = index->selected;
+    index->modules_indexed = true;
+    core_dict_init_string(&index->module_inputs);
+    if (selected->count > UINT32_MAX) return false;
+    for (size_t input = 0; input < selected->count; input++) {
+        n00bb_abi_string_view_t name;
+        if (!n00bb_abi_object_module_name(&selected->views[input], &name))
+            return false;
+        core_string_t module = core_string_borrow((const char *)name.bytes,
+                                                  name.length);
+        bool              found  = false;
+        n00bb_abi_rows_t *inputs = core_dict_get(&index->module_inputs,
+                                                 &module, &found);
+        if (!inputs) {
+            core_string_t *key = core_alloc(core_string_t);
+            *key = module;
+            inputs = core_alloc(n00bb_abi_rows_t);
+            *inputs = core_list_new(uint32_t);
+            core_dict_put(&index->module_inputs, key, inputs);
+        }
+        core_list_push(*inputs, (uint32_t)input);
+    }
+    index->modules_valid = true;
+    return true;
 }
 
 static bool
@@ -47,12 +123,13 @@ same_string(n00bb_abi_string_view_t value, core_string_t text)
 }
 
 static bool
-add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
+add_receiver(th_ctx *ctx, link_index_t *link,
              core_list_t(receiver_t) *receivers, core_dict_t *seen,
              th_type *type)
 {
+    const n00bb_abi_merged_table_t *types = link->types;
     if (!type || !th_is_closed(ctx, type)) return true;
-    uint32_t index = type_index(types, th_hash(ctx, type));
+    uint32_t index = type_index(link, th_hash(ctx, type));
     if (!index) return true;
     const n00b_abi_type_v1 *row = (const void *)(types->records
         + (size_t)index * types->record_bytes);
@@ -101,26 +178,28 @@ sort_rows(n00bb_abi_rows_t *rows)
 }
 
 static bool
-function_index_for_method(th_ctx *ctx,
-                          const n00bb_abi_selected_objects_t *selected,
+function_index_for_method(th_ctx *ctx, link_index_t *link,
                           const n00bb_abi_index_plan_t *plan,
                           const th_env_method_t *method, bool direct,
                           uint32_t *out)
 {
+    const n00bb_abi_selected_objects_t *selected = link->selected;
     uint64_t hash = th_hash(ctx, method->contract);
     uint32_t found = 0;
     uint32_t adapter = 0;
     core_buffer_t adapter_name = {0};
     n00bb_dispatch_adapter_name(&adapter_name, method->qualified_name);
-    for (size_t input = 0; input < selected->count; input++) {
+    if (!index_modules(link)) {
+        core_buffer_release(&adapter_name);
+        return false;
+    }
+    bool                    listed = false;
+    core_string_t           wanted = method->module;
+    const n00bb_abi_rows_t *inputs = wanted.data
+        ? core_dict_get(&link->module_inputs, &wanted, &listed) : nullptr;
+    for (size_t at = 0; inputs && at < inputs->len; at++) {
+        size_t input = inputs->data[at];
         const n00bb_abi_object_view_t *view = &selected->views[input];
-        n00bb_abi_string_view_t module_name;
-        if (!n00bb_abi_object_module_name(&selected->views[input],
-                                          &module_name)) {
-            core_buffer_release(&adapter_name);
-            return false;
-        }
-        if (!same_string(module_name, method->module)) continue;
         const n00bb_abi_directory_entry_t *functions = n00bb_abi_object_table(
             view, N00B_ABI_TABLE_FUNCTION);
         if (!functions
@@ -400,6 +479,8 @@ n00bb_abi_link_semantic_rows(
     if (!facts || !facts->environment || !selected || !plan || !types
         || types->record_bytes != sizeof(n00b_abi_type_v1)) return false;
     th_ctx *ctx = th_ctx_new();
+    link_index_t link;
+    link_index_open(&link, selected, types);
     core_list_t(receiver_t) receivers = {0};
     core_dict_t seen_receivers;
     core_dict_init(&seen_receivers, nullptr, nullptr);
@@ -429,19 +510,19 @@ n00bb_abi_link_semantic_rows(
         th_env_declaration_view_t declaration;
         valid = th_env_declaration_at(facts->environment, i, &declaration);
         if (!valid || declaration.kind != TH_ENV_DECLARATION_TYPE) continue;
-        valid = add_receiver(ctx, types, &receivers, &seen_receivers,
+        valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
             th_name(ctx, declaration.qualified_name));
     }
     for (size_t m = 0; valid && m < facts->module_count; m++) {
         ir_module_t *module = (ir_module_t *)facts->modules[m];
         for (size_t i = 0; valid && i < ir_type_count(module); i++)
-            valid = add_receiver(ctx, types, &receivers, &seen_receivers,
+            valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
                 ir_type_at(module, i));
     }
     core_dict_free(&seen_receivers);
     for (size_t r = 0; valid && r < receivers.len; r++) {
         th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
-        uint32_t parent = head ? type_index(types, th_hash(ctx, head)) : 0;
+        uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
         if (parent && parent != receivers.data[r].index)
             core_list_push(specializations, ((specialization_t){
                 receivers.data[r].index, parent,
@@ -456,7 +537,7 @@ n00bb_abi_link_semantic_rows(
         if (!valid || trait.kind != TH_ENV_DECLARATION_TRAIT) continue;
         if (!trait.contract || th_kind_of(trait.contract) != TH_TRAIT)
             continue;
-        uint32_t trait_index = type_index(types,
+        uint32_t trait_index = type_index(&link,
             th_hash(ctx, trait.contract));
         if (!trait_index) continue;
         const n00b_abi_type_v1 *trait_row = (const void *)(types->records
@@ -502,7 +583,7 @@ n00bb_abi_link_semantic_rows(
                 if (chosen.module.data && core_string_eq(chosen.module,
                         CORE_STRING_STATIC("builtins")))
                     continue;
-                valid = function_index_for_method(ctx, selected, plan,
+                valid = function_index_for_method(ctx, &link, plan,
                     &chosen, false, &function_index)
                     && entries.len < UINT32_MAX;
                 if (valid && function_index) core_list_push(entries,
@@ -523,7 +604,7 @@ n00bb_abi_link_semantic_rows(
         uint32_t owner = row->owner_module_index;
         th_type *head = owner ? nullptr
             : n00bb_generic_head(ctx, receiver.type);
-        uint32_t parent = head ? type_index(types, th_hash(ctx, head)) : 0;
+        uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
         if (parent && parent != receiver.index)
             owner = ((const n00b_abi_type_v1 *)(types->records
                 + (size_t)parent * types->record_bytes))->owner_module_index;
@@ -547,7 +628,7 @@ n00bb_abi_link_semantic_rows(
             continue;
         uint32_t function_index = 0;
         valid = status == TH_ENV_METHOD_FOUND
-            && function_index_for_method(ctx, selected, plan, &method, true,
+            && function_index_for_method(ctx, &link, plan, &method, true,
                                          &function_index);
         if (valid) row->finalizer_function_index = function_index;
     }
@@ -558,6 +639,7 @@ n00bb_abi_link_semantic_rows(
     core_list_free(specializations);
     core_list_free(receivers);
     core_free(matches);
+    link_index_close(&link);
     th_ctx_free(ctx);
     return valid;
 }
