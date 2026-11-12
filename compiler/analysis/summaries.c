@@ -503,7 +503,8 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     ir_summaries_t *previous = analysis->summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
-    analysis->summary_phase = previous ? N00BB_PHASE_FINAL : N00BB_PHASE_MAIN;
+    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
+                                                        : N00BB_PHASE_MAIN;
     analysis->summaries = ir_summaries_recompute(roots.data, roots.len,
                                                  &analysis->summary_hooks,
                                                  previous);

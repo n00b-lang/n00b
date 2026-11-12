@@ -412,6 +412,7 @@ substitute_finalizers(ir_summaries_t *summaries, ir_summary_t *summary,
         core_list_new(summary_func_ptr_t);
     bool bound = hooks->call_finalizers(hooks->context, call, target,
                                         add_finalizer, &finalizers);
+    note_finalizers(summaries, call, target, &finalizers, bound);
     for (size_t i = 0; bound && i < finalizers.len; i++)
         compose_target(summaries, summary, call, finalizers.data[i],
                        observes, depth + 1);
@@ -476,11 +477,15 @@ compose_target(ir_summaries_t *summaries, ir_summary_t *summary,
         flags &= ~(uint32_t)IR_SUMMARY_FINALIZES_PARAMS;
     if (flags) add_flags(summary, flags, call, target, (core_string_t){0});
     const ir_summary_hooks_t *hooks = summaries->hooks;
-    for (size_t e = 0; e < callee->effects.len; e++)
-        if (!hooks || !hooks->inherits_effect
-            || hooks->inherits_effect(hooks->context, summary->function,
-                                      target, callee->effects.data[e]))
-            (void)ir_summary_add_effect(summary, callee->effects.data[e]);
+    for (size_t e = 0; e < callee->effects.len; e++) {
+        core_string_t effect = callee->effects.data[e];
+        bool inherits = inherits_answer(summaries, summary->function, target,
+                                        effect);
+        note_inherits(summaries, summary->function, target, effect,
+                      inherits);
+        if (inherits) (void)ir_summary_add_effect(summary, effect);
+    }
+    note_effects(summaries, summary->function, target);
     if (hooks && hooks->callee_effects) {
         uint32_t before = summary->flags;
         hooks->callee_effects(hooks->context, target, summary);

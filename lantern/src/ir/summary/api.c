@@ -69,6 +69,7 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->effects     = core_list_new(core_string_t);
     summary->paths       = core_list_new(ir_spath_t);
     summary->deps        = core_list_new(summary_dep_t);
+    summary->inputs      = core_list_new(summary_input_t);
     flow_table_init(&summary->flows[IR_SFLOW_RESULTS], function);
     flow_table_init(&summary->flows[IR_SFLOW_STORES], function);
     if (summaries) core_list_push(summaries->owned, summary);
@@ -89,6 +90,7 @@ summary_free(ir_summary_t *summary)
     core_list_free(summary->trap_sites);
     core_list_free(summary->fields);
     core_list_free(summary->deps);
+    core_list_free(summary->inputs);
     core_free(summary);
 }
 
@@ -602,8 +604,8 @@ collect_target(void *sink, ir_func_t *target)
 }
 
 static bool
-resolve_targets(ir_summaries_t *summaries, const ir_instr_t *call,
-                call_targets_t *out)
+resolve_targets_hooked(ir_summaries_t *summaries, const ir_instr_t *call,
+                       call_targets_t *out)
 {
     out->summaries = summaries;
     out->targets   = core_list_new(summary_func_ptr_t);
@@ -614,11 +616,18 @@ resolve_targets(ir_summaries_t *summaries, const ir_instr_t *call,
         return true;
     ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands
         ? ir_operand_value(&call->operands[0]) : nullptr;
-    if (callee && callee->kind == IR_VAL_FUNC && callee->owner) {
+    if (callee && callee->kind == IR_VAL_FUNC && callee->owner)
         core_list_push(out->targets, callee->owner);
-        return true;
-    }
-    out->unknown = true;
+    else out->unknown = true;
+    return false;
+}
+
+static bool
+resolve_targets(ir_summaries_t *summaries, const ir_instr_t *call,
+                call_targets_t *out)
+{
+    bool hooked = resolve_targets_hooked(summaries, call, out);
+    note_targets(summaries, call, out, hooked);
     return true;
 }
 
@@ -810,9 +819,10 @@ const ir_summary_t *
 ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
 {
     const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
-    if (summaries && summaries->recording) summaries->recording->pinned = true;
-    return hooks && hooks->entries
+    const ir_summary_t *entry = hooks && hooks->entries
         ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+    note_entries(summaries, flag, entry);
+    return entry;
 }
 
 static bool
@@ -823,8 +833,10 @@ unseen_reaches(ir_summaries_t *summaries, const ir_splace_t *place)
     const ir_global_t *global = place->global
         ? ir_global_identity(place->global) : nullptr;
     const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
-    return !global || !hooks || !hooks->global_reachable
-        || hooks->global_reachable(hooks->context, global);
+    if (!global || !hooks || !hooks->global_reachable) return true;
+    bool reachable = hooks->global_reachable(hooks->context, global);
+    note_global(summaries, global, reachable);
+    return reachable;
 }
 
 static bool

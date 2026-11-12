@@ -655,17 +655,17 @@ snapshot_release(cache_snapshot_t *snapshot)
 }
 
 static void
-capture_snapshot(cache_snapshot_t *snapshot, ir_summaries_t *summaries,
-                 uint8_t phase)
+capture_snapshot(cache_snapshot_t *snapshot, n00bb_link_analysis_t *analysis,
+                 ir_summaries_t *summaries, uint8_t phase)
 {
     core_buffer_t *out = &snapshot->summaries[phase - 1];
     out->byte_len = 0;
     snapshot->captured[phase - 1] = summaries != nullptr;
     for (size_t m = 0; summaries && m < snapshot->modules.len; m++) {
         core_buffer_t encoded = {0};
-        if (n00bb_encode_portable_summaries(summaries,
-                                            snapshot->modules.data[m],
-                                            &encoded)) {
+        if (n00bb_encode_stored_summaries(analysis, summaries,
+                                          snapshot->modules.data[m], phase,
+                                          &encoded)) {
             put_text(out, snapshot->names.data[m]);
             put_bytes(out, encoded.data, encoded.byte_len);
         }
@@ -2219,7 +2219,8 @@ n00bb_cache_capture_summaries(n00bb_cache_t *cache,
                                        : analysis->summaries;
     for (size_t i = 0; cache && phase && phase <= N00BB_PHASE_FINAL
          && i < cache->snapshots.len; i++)
-        capture_snapshot(&cache->snapshots.data[i], summaries, phase);
+        capture_snapshot(&cache->snapshots.data[i], analysis, summaries,
+                         phase);
 }
 
 bool
@@ -2249,10 +2250,10 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
                 scc->members.data[m]->module.identifier));
         }
         if (analysis) {
-            capture_snapshot(&snapshot, analysis->escapes,
+            capture_snapshot(&snapshot, analysis, analysis->escapes,
                              N00BB_PHASE_ESCAPES);
             if (analysis->summaries)
-                capture_snapshot(&snapshot, analysis->summaries,
+                capture_snapshot(&snapshot, analysis, analysis->summaries,
                                  N00BB_PHASE_MAIN);
         }
         for (size_t i = 0; i < scc->inlined.len; i++)

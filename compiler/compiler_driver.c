@@ -29,6 +29,7 @@ double n00bb_profile_seconds(void);
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "compiler_cache.h"
+#include "interface_summaries.h"
 #include "compiler_layout.h"
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
@@ -5265,6 +5266,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool specialize = !parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--no-specialize"));
     bool emit_program = located && build_command;
+    if (cache && link_analysis) n00bb_note_cached_bodies(link_analysis);
     if (located && emit_program && cache)
         (void)n00bb_cache_snapshot(cache, link, link_analysis);
     bool check_snapshot = located && check_command && cache

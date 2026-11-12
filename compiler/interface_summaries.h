@@ -24,8 +24,11 @@ bool n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis);
 ir_summary_t *n00bb_interface_summary(n00bb_link_analysis_t *analysis,
                                       ir_summaries_t *summaries,
                                       const ir_func_t *function);
-bool n00bb_encode_portable_summaries(ir_summaries_t *summaries,
-                                     ir_module_t *module, core_buffer_t *out);
+void n00bb_note_cached_bodies(n00bb_link_analysis_t *analysis);
+bool n00bb_encode_stored_summaries(n00bb_link_analysis_t *analysis,
+                                   ir_summaries_t *summaries,
+                                   ir_module_t *module, uint8_t phase,
+                                   core_buffer_t *out);
 ir_summary_t *n00bb_stored_summary(void *context, ir_summaries_t *summaries,
                                    const ir_func_t *function);
 void n00bb_interface_summaries_free(n00bb_interface_summaries_t *index);

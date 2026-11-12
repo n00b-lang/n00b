@@ -10,11 +10,13 @@
 #include "ir/layout.h"
 #include "ir/operands.h"
 #include "ir/pdg_memory.h"
+#include "ir/places.h"
 #include "ir/summary.h"
 #include "ir/text.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
+#include "lib/hash.h"
 #include "lib/list.h"
 
 core_list_decl(ir_sfield_t);
@@ -55,8 +57,31 @@ typedef struct {
     const ir_func_t *function;
     uint64_t         content;
     uint64_t         points_to;
+    uint64_t         stable;
 } summary_dep_t;
 core_list_decl(summary_dep_t);
+
+typedef enum : uint8_t {
+    SUMMARY_INPUT_TARGETS,
+    SUMMARY_INPUT_FINALIZERS,
+    SUMMARY_INPUT_ENTRIES,
+    SUMMARY_INPUT_GLOBAL,
+    SUMMARY_INPUT_INHERITS,
+    SUMMARY_INPUT_EFFECTS,
+    SUMMARY_INPUT_VIEW,
+} summary_input_kind_t;
+
+typedef struct {
+    summary_input_kind_t kind;
+    uint32_t             site;
+    const ir_func_t     *caller;
+    const ir_func_t     *function;
+    const ir_global_t   *global;
+    const ir_module_t   *module;
+    core_string_t        effect;
+    uint64_t             answer;
+} summary_input_t;
+core_list_decl(summary_input_t);
 
 struct ir_summary_t {
     const ir_func_t           *function;
@@ -77,11 +102,11 @@ struct ir_summary_t {
     core_list_t(core_string_t) effects;
     core_list_t(ir_spath_t)    paths;
     core_list_t(summary_dep_t) deps;
+    core_list_t(summary_input_t) inputs;
     uint64_t                   identity;
     uint64_t                   content;
+    uint64_t                   stable;
     bool                       hashed;
-    bool                       pinned;
-    bool                       reads_registry;
     bool                       proof_free;
     bool                       bookkept;
     bool                       explained;
@@ -96,13 +121,13 @@ struct ir_summaries_t {
     core_dict_t               engines;
     bool                      escapes_only;
     bool                      reusable;
-    bool                      registry_changed;
     bool                      proofs_changed;
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;
-    core_dict_t               unportable;
-    bool                      portable_ready;
+    core_list_t(summary_input_t) *sink;
+    ir_func_t *const         *members;
+    size_t                    member_count;
 };
 
 typedef ir_spath_list_t path_list_t;
@@ -487,5 +512,32 @@ static pt_t *function_engine(ir_summaries_t *summaries, ir_func_t *f);
 static const flow_bits_t *crossings(pt_t *pt, const pt_loc_t *loc);
 static bool engine_escapes(ir_summaries_t *summaries, const ir_func_t *f,
                            const ir_value_t *address);
+
+static void note_targets(ir_summaries_t *summaries, const ir_instr_t *call,
+                         const call_targets_t *targets, bool hooked);
+static void note_finalizers(ir_summaries_t *summaries,
+                            const ir_instr_t *call, const ir_func_t *target,
+                            const core_list_t(summary_func_ptr_t) *finalizers,
+                            bool bound);
+static void note_entries(ir_summaries_t *summaries, uint32_t flag,
+                         const ir_summary_t *entry);
+static void note_global(ir_summaries_t *summaries, const ir_global_t *global,
+                        bool reachable);
+static bool inherits_answer(ir_summaries_t *summaries,
+                            const ir_func_t *caller, const ir_func_t *callee,
+                            core_string_t effect);
+static void note_inherits(ir_summaries_t *summaries, const ir_func_t *caller,
+                          const ir_func_t *callee, core_string_t effect,
+                          bool inherits);
+static void note_effects(ir_summaries_t *summaries, const ir_func_t *caller,
+                         const ir_func_t *callee);
+static void observe_view(void *context, const ir_module_t *viewer);
+static void merge_inputs(core_list_t(summary_input_t) *into,
+                         const core_list_t(summary_input_t) *from);
+static bool inputs_hold(ir_summaries_t *summaries,
+                        const core_list_t(summary_input_t) *inputs);
+static bool stored_deps_hold(ir_summaries_t *summaries,
+                             const ir_summary_t *summary,
+                             ir_func_t *const *members, size_t count);
 
 #endif

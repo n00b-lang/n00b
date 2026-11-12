@@ -369,6 +369,12 @@ typedef struct n00bb_link_analysis_t {
     n00bb_interface_summaries_t *interface_summaries;
     n00bb_interface_summaries_t *stored_summaries[N00BB_PHASE_FINAL];
     uint8_t summary_phase;
+    core_dict_t specialization_modules;
+    size_t specialization_modules_seen;
+    bool specialization_modules_ready;
+    core_dict_t cached_bodies;
+    bool cached_bodies_ready;
+    bool boxes_rewritten;
     core_list_t(core_translation_unit_ptr_t) initializer_order;
     bool dump_ranges;
     core_string_t effects_of;

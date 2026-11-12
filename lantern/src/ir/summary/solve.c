@@ -306,10 +306,10 @@ previous_summary(ir_summaries_t *summaries, ir_func_t *function)
 {
     if (!summaries->reusable || !summaries->previous) return nullptr;
     ir_summary_t *old = ir_summary_of(summaries->previous, function);
-    if (!old || old->pinned || !old->identity
-        || (summaries->registry_changed && old->reads_registry)
+    if (!old || !old->identity
         || core_dict_contains(&summaries->previous->adopted, old)
-        || old->identity != ir_func_identity(function))
+        || old->identity != ir_func_identity(function)
+        || !inputs_hold(summaries, &old->inputs))
         return nullptr;
     return old;
 }
@@ -412,63 +412,25 @@ stored_component(ir_summaries_t *summaries, ir_func_t *const *members,
         all      = found[i] != nullptr;
     }
     for (size_t i = 0; all && i < count; i++)
+        all = stored_deps_hold(summaries, found[i], members, count)
+            && covers_callees(summaries, members, count, i, found[i])
+            && inputs_hold(summaries, &found[i]->inputs);
+    for (size_t i = 0; all && i < count; i++)
         core_dict_put(&summaries->by_function, members[i], found[i]);
+    if (all) stamp_component(summaries, members, count);
     core_free(found);
     return all;
 }
 
-static _Thread_local ir_summaries_t *solving;
-
-void
-ir_summaries_pin_recording(void)
+static void
+attach_inputs(ir_summaries_t *summaries, ir_func_t *const *members,
+              size_t count, const core_list_t(summary_input_t) *inputs)
 {
-    if (solving && solving->recording) solving->recording->pinned = true;
-}
-
-bool
-ir_summary_portable(ir_summaries_t *summaries, const ir_func_t *function)
-{
-    if (!summaries || !function) return false;
-    if (!summaries->portable_ready) {
-        core_dict_init(&summaries->unportable, nullptr, nullptr);
-        summaries->portable_ready = true;
-        core_list_t(summary_func_ptr_t) pending =
-            core_list_new(summary_func_ptr_t);
-        core_dict_t dependents;
-        core_dict_init(&dependents, nullptr, nullptr);
-        core_dict_foreach(&summaries->by_function, entry) {
-            ir_func_t    *f = (ir_func_t *)entry->key;
-            ir_summary_t *s = entry->value;
-            for (size_t d = 0; d < s->deps.len; d++) {
-                const ir_func_t *g = s->deps.data[d].function;
-                core_list_t(summary_func_ptr_t) *users =
-                    core_dict_get(&dependents, (void *)g, nullptr);
-                if (!users) {
-                    users  = core_alloc(core_list_t(summary_func_ptr_t));
-                    *users = core_list_new(summary_func_ptr_t);
-                    core_dict_put(&dependents, (void *)g, users);
-                }
-                core_list_push(*users, f);
-            }
-            if (s->pinned) core_list_push(pending, f);
-        }
-        while (pending.len) {
-            ir_func_t *f = pending.data[--pending.len];
-            if (!core_dict_add(&summaries->unportable, f, f)) continue;
-            core_list_t(summary_func_ptr_t) *users =
-                core_dict_get(&dependents, f, nullptr);
-            for (size_t u = 0; users && u < users->len; u++)
-                core_list_push(pending, users->data[u]);
-        }
-        core_dict_foreach(&dependents, entry) {
-            core_list_free(*(core_list_t(summary_func_ptr_t) *)entry->value);
-            core_free(entry->value);
-        }
-        core_dict_free(&dependents);
-        core_list_free(pending);
+    for (size_t i = 0; i < count; i++) {
+        ir_summary_t *summary = ir_summary_of(summaries, members[i]);
+        summary->inputs.len = 0;
+        merge_inputs(&summary->inputs, inputs);
     }
-    return ir_summary_of(summaries, function)
-        && !core_dict_contains(&summaries->unportable, (void *)function);
 }
 
 static void
@@ -477,7 +439,10 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
 {
     if (adopt_component(summaries, members, count)) return;
     if (stored_component(summaries, members, count)) return;
-    uint64_t queries = ir_reinterpretation_queries();
+    core_list_t(summary_input_t) inputs = core_list_new(summary_input_t);
+    summaries->sink         = &inputs;
+    summaries->members      = members;
+    summaries->member_count = count;
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
@@ -488,6 +453,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     bool cyclic = count > 1 || callers[0].len;
     const ir_summary_t *reused = reusable_paths(summaries, members, count,
                                                 cyclic);
+    if (reused) merge_inputs(&inputs, &reused->inputs);
     uint32_t  shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
     uint32_t *settled   = core_alloc_array(uint32_t, count);
     for (size_t i = 0; i < count; i++) settled[i] = shrinking;
@@ -578,10 +544,11 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         ir_analysis_scope_end(scope);
     }
     if (!summaries->escapes_only) ground_witnesses(summaries, members, count);
-    bool reads_registry = ir_reinterpretation_queries() != queries
-        || (reused && reused->reads_registry);
-    for (size_t i = 0; reads_registry && i < count; i++)
-        ir_summary_of(summaries, members[i])->reads_registry = true;
+    summaries->sink         = nullptr;
+    summaries->members      = nullptr;
+    summaries->member_count = 0;
+    attach_inputs(summaries, members, count, &inputs);
+    core_list_free(inputs);
     stamp_component(summaries, members, count);
 }
 
@@ -750,8 +717,6 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->reusable = previous && hooks && count && !escapes_only
         && !previous->escapes_only
         && same_hooks(&previous->hook_values, hooks);
-    summaries->registry_changed = !count
-        || ir_reinterpretations_changed(functions[0]->owner->ctx);
     summaries->proofs_changed = summaries->reusable
         && previous->hook_values.defer_trap_proofs
                != hooks->defer_trap_proofs;
@@ -760,8 +725,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     core_dict_init(&t.index, nullptr, nullptr);
     core_dict_init(&t.lowlink, nullptr, nullptr);
     core_dict_init(&t.on_stack, nullptr, nullptr);
-    ir_summaries_t *outer = solving;
-    solving = summaries;
+    ir_reinterpretations_observe(observe_view, summaries);
     ir_analysis_read_only_begin();
     for (size_t i = 0; i < count; i++) {
         bool found = false;
@@ -769,7 +733,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
         if (!found && functions[i]->n_blocks) strongconnect(&t, functions[i]);
     }
     ir_analysis_read_only_end();
-    solving = outer;
+    ir_reinterpretations_observe(nullptr, nullptr);
     core_dict_free(&t.index);
     core_dict_free(&t.lowlink);
     core_dict_free(&t.on_stack);
@@ -810,7 +774,6 @@ ir_summaries_free(ir_summaries_t *summaries)
             summary_free(summaries->owned.data[i]);
     core_list_free(summaries->owned);
     core_dict_free(&summaries->adopted);
-    if (summaries->portable_ready) core_dict_free(&summaries->unportable);
     core_dict_free(&summaries->by_function);
     type_memos_free(&summaries->type_memos);
     core_dict_foreach(&summaries->engines, entry) {

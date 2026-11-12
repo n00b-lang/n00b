@@ -331,13 +331,14 @@ static void test_fields_are_separate_places(void)
     ir_ctx_free(ctx);
 }
 
-static bool registry_changes(ir_ctx_t *ctx, ir_func_t *first, ir_func_t *second)
+static uint64_t registry_fingerprint(ir_ctx_t *ctx, ir_module_t *viewer,
+                                     ir_func_t *first, ir_func_t *second)
 {
     ir_reinterpretations_open(ctx);
     ir_reinterpretations_note_function(ctx, first);
     if (second) ir_reinterpretations_note_function(ctx, second);
     ir_reinterpretations_seal(ctx);
-    return ir_reinterpretations_changed(ctx);
+    return ir_reinterpretations_fingerprint(viewer);
 }
 
 static void test_reinterpretations_compare_by_content(void)
@@ -363,13 +364,16 @@ static void test_reinterpretations_compare_by_content(void)
     check("a pointer cast between records is a reinterpretation",
           ir_reinterpretation_site(f) != nullptr
               && ir_reinterpretation_site(g) != nullptr);
-    check("the first registry is a change", registry_changes(ctx, f, g));
-    check("the same casts seen in another order are not a change",
-          !registry_changes(ctx, g, f));
-    check("losing a cast is a change", registry_changes(ctx, f, nullptr));
-    check("and seeing the smaller registry again is not",
-          !registry_changes(ctx, f, nullptr));
-    check("gaining the cast back is a change", registry_changes(ctx, g, f));
+    uint64_t both = registry_fingerprint(ctx, m, f, g);
+    check("a sealed registry has a fingerprint", both != 0);
+    check("the same casts seen in another order have the same fingerprint",
+          registry_fingerprint(ctx, m, g, f) == both);
+    uint64_t smaller = registry_fingerprint(ctx, m, f, nullptr);
+    check("losing a cast changes the fingerprint", smaller != both);
+    check("and seeing the smaller registry again does not",
+          registry_fingerprint(ctx, m, f, nullptr) == smaller);
+    check("gaining the cast back restores the fingerprint",
+          registry_fingerprint(ctx, m, g, f) == both);
     ir_ctx_free(ctx);
 }
 

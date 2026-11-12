@@ -995,6 +995,27 @@ core_string_t ir_module_print(ir_module_t *m)
     return core_buffer_take_string(b);
 }
 
+core_string_t ir_func_print(ir_func_t *f)
+{
+    if (!f) {
+        return (core_string_t){};
+    }
+
+    core_buffer_t *b = core_buffer_empty();
+    ir_walk_t *w = ir_walk_new(b);
+
+    ir_walk_on_func(w, on_func_pre, on_func_post, nullptr);
+    ir_walk_on_local(w, on_local, nullptr);
+    ir_walk_on_block(w, on_block_pre, nullptr, nullptr);
+    ir_walk_on_instr(w, on_instr_pre, on_instr_post, nullptr);
+    ir_walk_on_operand(w, on_operand, nullptr);
+
+    ir_walk_run_func(w, f);
+    ir_walk_free(w);
+
+    return core_buffer_take_string(b);
+}
+
 core_string_t ir_text_format(core_string_t text, int32_t width)
 {
     parse_grammar_t *g = text.data ? ir_grammar() : nullptr;

@@ -75,8 +75,11 @@ void               ir_reinterpretations_set_visibility(ir_ctx_t *ctx,
                                                        ir_module_sees_fn sees,
                                                        void *context);
 void               ir_reinterpretations_seal(ir_ctx_t *ctx);
-bool               ir_reinterpretations_changed(ir_ctx_t *ctx);
-uint64_t           ir_reinterpretation_queries(void);
+typedef void (*ir_registry_observer_fn)(void *context,
+                                        const ir_module_t *viewer);
+void               ir_reinterpretations_observe(ir_registry_observer_fn fn,
+                                                void *context);
+uint64_t           ir_reinterpretations_fingerprint(ir_module_t *viewer);
 bool               ir_places_types_overlap(ir_module_t *module, th_type *a,
                                            th_type *b);
 #endif

@@ -478,30 +478,18 @@ bool
 n00bb_summary_call_targets(void *context, const ir_instr_t *call,
                            ir_summary_target_fn add, void *sink)
 {
-    if (call->op == IR_OP_CALLBACK_INVOKE) {
-        if (bounded_call_target(context, call, add, sink)) return true;
-        if (!callback_targets(context, call, add, sink)) return false;
-        ir_summaries_pin_recording();
-        return true;
-    }
+    if (call->op == IR_OP_CALLBACK_INVOKE)
+        return bounded_call_target(context, call, add, sink)
+            || callback_targets(context, call, add, sink);
     ir_func_t *target = n00bb_direct_call_target(call);
     core_string_t trait = {0}, method = {0};
-    if (target && n00bb_open_hook(call, &trait, &method)) {
-        if (!hook_targets(context, target, trait, method, add, sink))
-            return bounded_call_target(context, call, add, sink);
-        ir_summaries_pin_recording();
-        return true;
-    }
-    if (!target) {
-        if (trait_targets(context, call, add, sink)) {
-            ir_summaries_pin_recording();
-            return true;
-        }
-        if (bounded_call_target(context, call, add, sink)) return true;
-        if (!function_value_targets(context, call, add, sink)) return false;
-        ir_summaries_pin_recording();
-        return true;
-    }
+    if (target && n00bb_open_hook(call, &trait, &method))
+        return hook_targets(context, target, trait, method, add, sink)
+            || bounded_call_target(context, call, add, sink);
+    if (!target)
+        return trait_targets(context, call, add, sink)
+            || bounded_call_target(context, call, add, sink)
+            || function_value_targets(context, call, add, sink);
     add(sink, target);
     return true;
 }
