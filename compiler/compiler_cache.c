@@ -1846,11 +1846,14 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
     bool ok = collect_sccs(link, &sccs, false);
     for (size_t s = 0; ok && s < sccs.len; s++)
         if (!sccs.data[s].cached) scc_function_roots(&sccs.data[s], &roots);
-    ir_summary_hooks_t proven = analysis->summary_hooks;
-    proven.defer_trap_proofs = false;
+    size_t missing = 0;
+    for (size_t r = 0; r < roots.len; r++)
+        if (!ir_summary_of(analysis->summaries, roots.data[r]))
+            roots.data[missing++] = roots.data[r];
+    roots.len = missing;
     ir_summaries_t *summaries = ok && roots.len
-        ? ir_summaries_recompute(roots.data, roots.len, &proven,
-                                 analysis->summaries)
+        ? ir_summaries_recompute(roots.data, roots.len,
+                                 &analysis->summary_hooks, nullptr)
         : nullptr;
     ok = ok && (summaries || !roots.len);
     cache->summary_identities.len = 0;
@@ -1865,8 +1868,10 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         for (size_t f = 0; ok && f < functions.len; f++) {
             put_text(&input, ir_module_name(functions.data[f]->owner));
             put_text(&input, functions.data[f]->name);
-            ok = ir_summary_encode_identity(
-                ir_summary_of(summaries, functions.data[f]), &input);
+            ir_summary_t *summary = ir_summary_of(analysis->summaries,
+                                                  functions.data[f]);
+            ok = ir_summary_encode_identity(summary ? summary
+                : ir_summary_of(summaries, functions.data[f]), &input);
         }
         core_list_push(cache->summary_identities, ((cache_link_t){
             .name = scc->members.data[0]->module.identifier,
@@ -1875,8 +1880,7 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         core_buffer_release(&input);
         core_list_free(functions);
     }
-    ir_summaries_free(analysis->proven);
-    analysis->proven = summaries;
+    ir_summaries_free(summaries);
     core_list_free(roots);
     sccs_release(&sccs);
     return ok;

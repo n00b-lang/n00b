@@ -1856,7 +1856,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs);
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
-    const core_list_t(n00bb_ir_func_ptr_t) *entries, bool prove_traps);
+    const core_list_t(n00bb_ir_func_ptr_t) *entries);
 
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);

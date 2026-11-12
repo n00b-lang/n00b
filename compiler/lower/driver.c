@@ -696,8 +696,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         if (initializer) core_list_push(initializer_functions, initializer);
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,
-                                          &runtime_init.entry_functions,
-                                          false)
+                                          &runtime_init.entry_functions)
         && fold_function_effects(analysis);
     if (ok) {
         bool marks = check_marks(analysis);
