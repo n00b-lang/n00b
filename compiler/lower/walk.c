@@ -961,9 +961,7 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     ir_value_t *value = expression
         ? core_dict_get(&state->values, expression, &found) : nullptr;
     th_type *type = found && value ? value->type : nullptr;
-    if (!expression || (type && th_is_nil(th_resolve(type)))
-        || lower_literal_handler_call(expression))
-        return true;
+    if (!expression || lower_literal_handler_call(expression)) return true;
     if (rule && parse_rule_find_annot(visit->grammar, rule,
                                       PARSE_ANNOT_CALL)) {
         ir_instr_t *call  = found && value && value->kind == IR_VAL_INSTR
@@ -977,6 +975,7 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
                              .b    = true});
         return true;
     }
+    if (type && th_is_nil(th_resolve(type))) return true;
     ir_diag_t *diagnostic = ir_diag_begin(state->context->diagnostics,
         IR_DIAG_UNUSED_RESULT, span_of_tree(state->context, expression),
         IR_NO_LABEL);

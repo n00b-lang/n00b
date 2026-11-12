@@ -711,7 +711,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     core_list_free(init_order);
     analysis->members_bound = members_bound;
-    if (analysis->defer_program_analysis)
+    if (ok && analysis->defer_program_analysis)
         return finish_deferred_lowering(link, analysis, &units, ok);
     return analyze_lowered_program(grammar, link, analysis, &units, ok,
                                    dump_control_flow, dump_pdg,
