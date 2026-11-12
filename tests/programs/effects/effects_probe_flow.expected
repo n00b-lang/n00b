@@ -142,7 +142,6 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.__value.items
   reads spans.__value.items.__value.storage
   reads spans.__value.items.__value.storage.__value[]
-  reads spans.__value.items.__value.storage.__value[].tag...
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
@@ -156,7 +155,7 @@ unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values.__value[]
   reads unicode.generated.categories.gc_stage2.__value[]
-  traps explicit bounds arithmetic
+  traps explicit bounds
   output result data[] control[cp]
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
@@ -164,7 +163,6 @@ unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   writes self.cap
   reads+writes self.data
   writes self.len
-  escapes self referent
   traps bounds arithmetic
   output result data[] control[]
   output result 1 data[(new in unicode.internal.runebuf.push:22:31) cp... self self.cap self.cap... self.data.__value[]... self.len] control[self.data self.len]

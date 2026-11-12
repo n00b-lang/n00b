@@ -89,7 +89,6 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.__value.items
   reads spans.__value.items.__value.storage
   reads spans.__value.items.__value.storage.__value[]
-  reads spans.__value.items.__value.storage.__value[].tag...
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
@@ -97,12 +96,11 @@ unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values.__value[]
   reads unicode.generated.categories.gc_stage2.__value[]
-  traps explicit bounds arithmetic
+  traps explicit bounds
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
   reads+writes self.data.__value[]
   writes self.cap
   reads+writes self.data
   writes self.len
-  escapes self referent
   traps bounds arithmetic

@@ -847,6 +847,17 @@ steps_text(core_buffer_t *out, const ir_spath_t *path)
 }
 
 static void
+callee_text(const ir_switness_t *witness, core_buffer_t *out)
+{
+    ir_switness_t source = *witness;
+    int64_t cut = core_string_find(source.module,
+                                   CORE_STRING_STATIC("$spec$"));
+    if (cut >= 0) source.module = core_string_slice(source.module, 0,
+                                                    (size_t)cut);
+    ir_switness_callee_text(&source, out);
+}
+
+static void
 heap_text(core_buffer_t *out, const ir_summary_t *summary, uint32_t origin)
 {
     const ir_sheap_t *heap = ir_summary_heap_for(summary, origin);
@@ -856,7 +867,7 @@ heap_text(core_buffer_t *out, const ir_summary_t *summary, uint32_t origin)
     }
     ir_switness_t named = {.module = heap->module, .name = heap->name};
     core_buffer_puts(out, "(new in ");
-    ir_switness_callee_text(&named, out);
+    callee_text(&named, out);
     core_buffer_printf(out, ":%u:%u)", heap->line, heap->column);
 }
 
@@ -1365,7 +1376,7 @@ witness_text(const ir_switness_t *witness, core_buffer_t *out)
     }
     ir_annot_t *bound = n00bb_callback_bound(witness->callee);
     if (!bound || bound->kind != IR_ANNOT_STR) {
-        ir_switness_callee_text(witness, out);
+        callee_text(witness, out);
         return;
     }
     if (!bound->s.u8_bytes) {
@@ -1614,7 +1625,7 @@ json_why(core_buffer_t *out, n00bb_link_analysis_t *analysis,
             if (d) core_buffer_putc(out, ',');
             core_buffer_puts(out, "{\"callee\":");
             core_buffer_t callee = {0};
-            ir_switness_callee_text(chain[d], &callee);
+            callee_text(chain[d], &callee);
             if (callee.byte_len)
                 core_buffer_append_quoted(out, core_buffer_string(&callee));
             else
