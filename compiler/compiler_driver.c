@@ -4534,7 +4534,10 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
         ir_func_t *function = i < emitted
             ? analysis->emitted_functions.data[i]
             : analysis->cached_functions.data[i - emitted];
-        if (!function || !function->n_blocks) continue;
+        if (!function || !function->n_blocks
+            || (i >= emitted
+                && !ir_summary_known(analysis->summaries, function)))
+            continue;
         size_t scope = ir_analysis_scope_begin();
         (void)ir_abcd_fold(function);
         (void)ir_abcd_hoist(function);

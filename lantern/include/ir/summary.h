@@ -133,6 +133,8 @@ ir_summaries_t *ir_escapes_compute(ir_func_t *const *functions, size_t count,
 void            ir_summaries_free(ir_summaries_t *summaries);
 ir_summary_t   *ir_summary_of(ir_summaries_t *summaries,
                               const ir_func_t *function);
+bool            ir_summary_known(ir_summaries_t *summaries,
+                                 const ir_func_t *function);
 
 ir_summary_t *ir_summary_new(ir_summaries_t *summaries,
                              const ir_func_t *function);

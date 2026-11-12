@@ -534,6 +534,12 @@ ir_summary_of(ir_summaries_t *summaries, const ir_func_t *function)
     return summary;
 }
 
+bool
+ir_summary_known(ir_summaries_t *summaries, const ir_func_t *function)
+{
+    return summary_shell(summaries, function) != nullptr;
+}
+
 static ir_summary_t *
 dep_summary(ir_summaries_t *summaries, ir_func_t *target)
 {
