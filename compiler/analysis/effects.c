@@ -474,22 +474,37 @@ n00bb_trait_targets_free(n00bb_link_analysis_t *analysis)
     analysis->trait_targets_ready = false;
 }
 
+typedef struct {
+    ir_summary_target_fn add;
+    void                *sink;
+} body_targets_t;
+
+static void
+add_body_target(void *context, ir_func_t *target)
+{
+    body_targets_t *targets = context;
+    targets->add(targets->sink, n00bb_cached_body(target));
+}
+
 bool
 n00bb_summary_call_targets(void *context, const ir_instr_t *call,
                            ir_summary_target_fn add, void *sink)
 {
+    body_targets_t bodies = {.add = add, .sink = sink};
     if (call->op == IR_OP_CALLBACK_INVOKE)
-        return bounded_call_target(context, call, add, sink)
-            || callback_targets(context, call, add, sink);
+        return bounded_call_target(context, call, add_body_target, &bodies)
+            || callback_targets(context, call, add_body_target, &bodies);
     ir_func_t *target = n00bb_direct_call_target(call);
     core_string_t trait = {0}, method = {0};
     if (target && n00bb_open_hook(call, &trait, &method))
-        return hook_targets(context, target, trait, method, add, sink)
-            || bounded_call_target(context, call, add, sink);
+        return hook_targets(context, target, trait, method, add_body_target,
+                            &bodies)
+            || bounded_call_target(context, call, add_body_target, &bodies);
     if (!target)
-        return trait_targets(context, call, add, sink)
-            || bounded_call_target(context, call, add, sink)
-            || function_value_targets(context, call, add, sink);
+        return trait_targets(context, call, add_body_target, &bodies)
+            || bounded_call_target(context, call, add_body_target, &bodies)
+            || function_value_targets(context, call, add_body_target,
+                                      &bodies);
     add(sink, target);
     return true;
 }

@@ -478,11 +478,12 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots, analysis->emitted_functions.data[i]);
+        core_list_push(roots,
+                       n00bb_cached_body(analysis->emitted_functions.data[i]));
     for (size_t i = 0; i < initializers->len; i++)
-        core_list_push(roots, initializers->data[i]);
+        core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)
-        core_list_push(roots, entries->data[i]);
+        core_list_push(roots, n00bb_cached_body(entries->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         if (!state || !state->ir_module || state->interface_module) continue;

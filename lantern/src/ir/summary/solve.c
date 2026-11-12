@@ -566,14 +566,15 @@ direct_callees(ir_summaries_t *summaries, ir_func_t *f,
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = f->blocks[b]->instrs[i];
             ir_func_t *handler = in->op == IR_OP_CALLBACK_CREATE && in->dest
-                ? created_handler(in->dest) : nullptr;
-            if (handler) core_list_push(*out, handler);
+                ? ir_func_definition(created_handler(in->dest)) : nullptr;
+            if (handler && handler->n_blocks) core_list_push(*out, handler);
             if (!is_call(in)) continue;
             call_targets_t targets;
             resolve_targets(summaries, in, &targets);
-            for (size_t t = 0; t < targets.targets.len; t++)
-                if (targets.targets.data[t]->n_blocks)
-                    core_list_push(*out, targets.targets.data[t]);
+            for (size_t t = 0; t < targets.targets.len; t++) {
+                ir_func_t *body = ir_func_definition(targets.targets.data[t]);
+                if (body && body->n_blocks) core_list_push(*out, body);
+            }
             core_list_free(targets.targets);
         }
 }
