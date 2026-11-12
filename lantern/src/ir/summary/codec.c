@@ -136,21 +136,94 @@ put_bits(core_buffer_t *out, const flow_bits_t *bits)
     }
 }
 
+typedef struct {
+    core_buffer_t bytes;
+    size_t        index;
+} encoded_item_t;
+
+static int
+compare_encoded(const void *left, const void *right)
+{
+    const encoded_item_t *a = left, *b = right;
+    size_t shorter = a->bytes.byte_len < b->bytes.byte_len
+        ? a->bytes.byte_len : b->bytes.byte_len;
+    int order = shorter ? memcmp(a->bytes.data, b->bytes.data, shorter) : 0;
+    if (order) return order;
+    return (a->bytes.byte_len > b->bytes.byte_len)
+        - (a->bytes.byte_len < b->bytes.byte_len);
+}
+
+static void
+put_ranked_bits(core_buffer_t *out, const flow_bits_t *bits,
+                const uint32_t *rank, size_t count)
+{
+    flow_bits_t ranked = core_list_new(uint64_t);
+    for (size_t s = 0; s < count; s++)
+        if (bit_has(bits, (uint32_t)s)) (void)bit_set(&ranked, rank[s]);
+    put_bits(out, &ranked);
+    core_list_free(ranked);
+}
+
+static bool
+dest_flows(const flow_dest_t *dest)
+{
+    return bit_count(&dest->data) || bit_count(&dest->control)
+        || bit_count(&dest->alias) || bit_count(&dest->copy);
+}
+
 static void
 put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
           const flow_table_t *flows)
 {
-    put_u32(out, (uint32_t)flows->sources.len);
-    for (size_t s = 0; s < flows->sources.len; s++)
-        put_path(out, texts, types, flows->sources.data[s]);
-    put_u32(out, (uint32_t)flows->dests.len);
-    for (size_t d = 0; d < flows->dests.len; d++) {
-        put_path(out, texts, types, flows->dests.data[d].to);
-        put_bits(out, &flows->dests.data[d].data);
-        put_bits(out, &flows->dests.data[d].control);
-        put_bits(out, &flows->dests.data[d].alias);
-        put_bits(out, &flows->dests.data[d].copy);
+    size_t          count   = flows->sources.len;
+    encoded_item_t *sources = core_alloc_array(encoded_item_t, count + 1);
+    uint32_t       *rank    = core_alloc_array(uint32_t, count + 1);
+    size_t          used    = 0;
+    for (size_t s = 0; s < count; s++) {
+        bool referenced = false;
+        for (size_t d = 0; !referenced && d < flows->dests.len; d++) {
+            const flow_dest_t *dest = &flows->dests.data[d];
+            referenced = bit_has(&dest->data, (uint32_t)s)
+                || bit_has(&dest->control, (uint32_t)s)
+                || bit_has(&dest->alias, (uint32_t)s)
+                || bit_has(&dest->copy, (uint32_t)s);
+        }
+        if (!referenced) continue;
+        sources[used].index = s;
+        put_path(&sources[used].bytes, texts, types, flows->sources.data[s]);
+        used++;
     }
+    if (used > 1)
+        qsort(sources, used, sizeof(encoded_item_t), compare_encoded);
+    put_u32(out, (uint32_t)used);
+    for (size_t k = 0; k < used; k++) {
+        rank[sources[k].index] = (uint32_t)k;
+        core_buffer_append(out, sources[k].bytes.data,
+                           sources[k].bytes.byte_len);
+    }
+    encoded_item_t *dests = core_alloc_array(encoded_item_t,
+                                             flows->dests.len + 1);
+    size_t          kept  = 0;
+    for (size_t d = 0; d < flows->dests.len; d++) {
+        const flow_dest_t *dest = &flows->dests.data[d];
+        if (!dest_flows(dest)) continue;
+        core_buffer_t *bytes = &dests[kept].bytes;
+        put_path(bytes, texts, types, dest->to);
+        put_ranked_bits(bytes, &dest->data, rank, count);
+        put_ranked_bits(bytes, &dest->control, rank, count);
+        put_ranked_bits(bytes, &dest->alias, rank, count);
+        put_ranked_bits(bytes, &dest->copy, rank, count);
+        dests[kept++].index = d;
+    }
+    if (kept > 1) qsort(dests, kept, sizeof(encoded_item_t), compare_encoded);
+    put_u32(out, (uint32_t)kept);
+    for (size_t k = 0; k < kept; k++)
+        core_buffer_append(out, dests[k].bytes.data, dests[k].bytes.byte_len);
+    for (size_t k = 0; k < used; k++) core_buffer_release(&sources[k].bytes);
+    for (size_t k = 0; k < kept; k++) core_buffer_release(&dests[k].bytes);
+    core_free(sources);
+    core_free(dests);
+    core_free(rank);
 }
 
 static bool
