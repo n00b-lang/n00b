@@ -161,7 +161,8 @@ same_path_root(const ir_spath_t *a, const ir_spath_t *b)
 static bool
 same_type(th_type *a, th_type *b)
 {
-    return a == b || (a && b && th_resolve(a) == th_resolve(b));
+    return a == b
+        || (a && b && (th_resolve(a) == th_resolve(b) || th_same_type(a, b)));
 }
 
 static th_type *
