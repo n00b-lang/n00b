@@ -8,6 +8,7 @@ typedef struct {
     const th_env *environment;
     const ir_module_t *const *modules;
     size_t module_count;
+    th_ctx *types;
 } n00bb_abi_semantics_t;
 
 bool n00bb_abi_link_semantic_rows(

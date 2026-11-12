@@ -478,7 +478,7 @@ n00bb_abi_link_semantic_rows(
     n00bb_abi_merged_table_t *types = table(merged, N00B_ABI_TABLE_TYPE);
     if (!facts || !facts->environment || !selected || !plan || !types
         || types->record_bytes != sizeof(n00b_abi_type_v1)) return false;
-    th_ctx *ctx = th_ctx_new();
+    th_ctx *ctx = facts->types ? facts->types : th_ctx_new();
     link_index_t link;
     link_index_open(&link, selected, types);
     core_list_t(receiver_t) receivers = {0};
@@ -504,8 +504,12 @@ n00bb_abi_link_semantic_rows(
             break;
         }
     }
-    if (valid) valid = th_ctx_set_environment(ctx, facts->environment,
-        initial_module, initial_package);
+    if (valid) valid = th_ctx_environment(ctx)
+        ? th_ctx_environment(ctx) == facts->environment
+            && th_ctx_set_environment_scope(ctx, initial_module,
+                                            initial_package)
+        : th_ctx_set_environment(ctx, facts->environment,
+            initial_module, initial_package);
     for (size_t i = 0; valid && i < declarations; i++) {
         th_env_declaration_view_t declaration;
         valid = th_env_declaration_at(facts->environment, i, &declaration);
@@ -640,6 +644,6 @@ n00bb_abi_link_semantic_rows(
     core_list_free(receivers);
     core_free(matches);
     link_index_close(&link);
-    th_ctx_free(ctx);
+    if (!facts->types) th_ctx_free(ctx);
     return valid;
 }

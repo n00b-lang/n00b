@@ -3714,6 +3714,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     n00bb_interface_summaries_free(analysis->interface_summaries);
     core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
+    th_ctx_free(analysis->link_types);
     th_env_free(analysis->export_environment);
     th_env_free(analysis->interface_environment);
     core_list_free(analysis->reachable_functions);

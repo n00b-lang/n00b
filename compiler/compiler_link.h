@@ -364,6 +364,7 @@ typedef struct n00bb_link_analysis_t {
     core_string_t effects_not_in;
     bool effects_why;
     th_env *environment;
+    th_ctx *link_types;
     th_env *export_environment;
     th_env *interface_environment;
     const th_env *const *linked_interfaces;
