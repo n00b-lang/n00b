@@ -116,6 +116,7 @@ typedef struct {
                             const ir_func_t *target, ir_summary_target_fn add,
                             void *sink);
     bool (*owned_field)(void *context, th_type *record, core_string_t field);
+    ir_func_t *(*body)(void *context, ir_func_t *function);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 

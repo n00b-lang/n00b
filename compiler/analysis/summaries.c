@@ -386,6 +386,13 @@ n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
         && lease_storage_record(record);
 }
 
+static ir_func_t *
+n00bb_summary_body(void *context, ir_func_t *function)
+{
+    (void)context;
+    return n00bb_cached_body(function);
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
@@ -401,6 +408,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .global_reachable = n00bb_summary_global_reachable,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
+        .body = n00bb_summary_body,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);

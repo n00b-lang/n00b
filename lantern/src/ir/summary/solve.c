@@ -618,7 +618,8 @@ collect_reinterpretations(ir_summaries_t *summaries,
     core_dict_init(&seen, nullptr, nullptr);
     for (size_t i = 0; i < count; i++) core_list_push(pending, functions[i]);
     while (pending.len) {
-        ir_func_t *f = pending.data[--pending.len];
+        ir_func_t *f = function_body(summaries,
+                                     pending.data[--pending.len]);
         if (!f || !core_dict_add(&seen, f, f)) continue;
         if (!f->n_blocks) {
             if (target_summary(summaries, f)->flags & IR_SUMMARY_REINTERPRETS)
@@ -655,7 +656,7 @@ same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
         && a->callee_effects == b->callee_effects
         && a->call_flags == b->call_flags
         && a->call_finalizers == b->call_finalizers
-        && a->owned_field == b->owned_field;
+        && a->owned_field == b->owned_field && a->body == b->body;
 }
 
 static ir_summaries_t *

@@ -645,9 +645,24 @@ adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
             }));
 }
 
+static ir_func_t *
+function_body(ir_summaries_t *summaries, ir_func_t *function)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    ir_func_t *body = function && !function->n_blocks && hooks && hooks->body
+        ? hooks->body(hooks->context, function) : nullptr;
+    return body && body->n_blocks ? body : function;
+}
+
 static ir_summary_t *
 target_summary(ir_summaries_t *summaries, ir_func_t *target)
 {
+    ir_func_t *body = function_body(summaries, target);
+    if (body != target) {
+        ir_summary_t *summary = target_summary(summaries, body);
+        core_dict_put(&summaries->by_function, target, summary);
+        return summary;
+    }
     record_dependency(summaries, target);
     ir_summary_t *summary = ir_summary_of(summaries, target);
     if (summary) return summary;
