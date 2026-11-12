@@ -706,6 +706,37 @@ merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
     return true;
 }
 
+static core_list_t(n00bb_ir_func_ptr_t)
+entry_functions(n00bb_link_analysis_t *analysis, size_t slot)
+{
+    bool complete = true;
+    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
+        ? thread_entries(&program, &complete, nullptr)
+        : core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t f = 0; slot == 0 && f < program.len; f++)
+        if (finalizer_function(program.data[f]))
+            core_list_push(entries, program.data[f]);
+    for (size_t f = 0; slot == 2 && f < analysis->callback_handlers.len; f++)
+        core_list_push(entries, analysis->callback_handlers.data[f]);
+    if (!complete) add_address_taken_functions(&program, &entries);
+    core_list_free(program);
+    return entries;
+}
+
+void
+n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
+                         core_list_t(n00bb_ir_func_ptr_t) *roots)
+{
+    for (size_t slot = 0; slot < 3; slot++) {
+        core_list_t(n00bb_ir_func_ptr_t) entries =
+            entry_functions(analysis, slot);
+        for (size_t f = 0; f < entries.len; f++)
+            core_list_push(*roots, entries.data[f]);
+        core_list_free(entries);
+    }
+}
+
 const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
                       uint32_t flag)
@@ -719,18 +750,7 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
         : flag == IR_SUMMARY_STARTS_THREADS ? 1 : 2;
     if (analysis->entry_ready[slot]) return analysis->entry_summaries[slot];
     analysis->entry_ready[slot] = true;
-    bool complete = true;
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
-    core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
-        ? thread_entries(&program, &complete, nullptr)
-        : core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t f = 0; slot == 0 && f < program.len; f++)
-        if (finalizer_function(program.data[f]))
-            core_list_push(entries, program.data[f]);
-    for (size_t f = 0; slot == 2 && f < analysis->callback_handlers.len; f++)
-        core_list_push(entries, analysis->callback_handlers.data[f]);
-    if (!complete) add_address_taken_functions(&program, &entries);
-    core_list_free(program);
+    core_list_t(n00bb_ir_func_ptr_t) entries = entry_functions(analysis, slot);
     ir_summary_t *merged = ir_summary_new(summaries, nullptr);
     bool merged_all = true;
     for (size_t f = 0; merged_all && f < entries.len; f++)

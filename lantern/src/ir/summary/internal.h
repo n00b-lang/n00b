@@ -68,7 +68,8 @@ typedef enum : uint8_t {
     SUMMARY_INPUT_GLOBAL,
     SUMMARY_INPUT_INHERITS,
     SUMMARY_INPUT_EFFECTS,
-    SUMMARY_INPUT_VIEW,
+    SUMMARY_INPUT_OVERLAP,
+    SUMMARY_INPUT_REINTERPRETED,
 } summary_input_kind_t;
 
 typedef struct {
@@ -78,6 +79,8 @@ typedef struct {
     const ir_func_t     *function;
     const ir_global_t   *global;
     const ir_module_t   *module;
+    th_type             *from;
+    th_type             *to;
     core_string_t        effect;
     uint64_t             answer;
 } summary_input_t;
@@ -531,7 +534,8 @@ static void note_inherits(ir_summaries_t *summaries, const ir_func_t *caller,
                           bool inherits);
 static void note_effects(ir_summaries_t *summaries, const ir_func_t *caller,
                          const ir_func_t *callee);
-static void observe_view(void *context, const ir_module_t *viewer);
+static void observe_view(void *context, const ir_module_t *viewer,
+                         th_type *a, th_type *b, bool answer);
 static void merge_inputs(core_list_t(summary_input_t) *into,
                          const core_list_t(summary_input_t) *from);
 static bool inputs_hold(ir_summaries_t *summaries,

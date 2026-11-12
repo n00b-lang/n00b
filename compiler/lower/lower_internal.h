@@ -1726,6 +1726,10 @@ const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
                       uint32_t flag);
 
+void
+n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
+                         core_list_t(n00bb_ir_func_ptr_t) *roots);
+
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global);
 

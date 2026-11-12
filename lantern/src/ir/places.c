@@ -4,9 +4,7 @@
 #include "private/ir/internal.h"
 #include "ir/places.h"
 #include "lib/alloc.h"
-#include "lib/buffer.h"
 #include "lib/dict.h"
-#include "lib/hash.h"
 #include "lib/list.h"
 #include "th/typehash.h"
 
@@ -115,12 +113,6 @@ prepend_step(ir_places_t *places, const place_path_t *path,
 typedef th_type *place_type_ptr_t;
 core_list_decl(place_type_ptr_t);
 
-typedef struct {
-    uint64_t type;
-    uint64_t component;
-} registry_fact_t;
-core_list_decl(registry_fact_t);
-
 typedef enum : uint8_t {
     NOTE_PAIR,
     NOTE_UNIVERSAL,
@@ -141,7 +133,6 @@ typedef struct {
     core_list_t(place_type_ptr_t) universal;
     core_dict_t                   answers;
     core_dict_t                   reach;
-    uint64_t                      fingerprint;
     bool                          unseen;
 } registry_view_t;
 
@@ -158,7 +149,6 @@ struct ir_reinterpretations_t {
     core_list_t(registry_view_ptr_t)   scoped;
     core_dict_t                        by_key;
     core_dict_t                        by_viewer;
-    core_list_t(registry_fact_t)       facts;
     core_dict_t                        hashes;
     ir_module_sees_fn                  sees;
     void                              *sees_context;
@@ -260,8 +250,7 @@ view_init(registry_view_t *view)
     view->universal  = core_list_new(place_type_ptr_t);
     core_dict_init(&view->answers, nullptr, nullptr);
     core_dict_init(&view->reach, nullptr, nullptr);
-    view->fingerprint = 0;
-    view->unseen      = false;
+    view->unseen = false;
 }
 
 static void
@@ -309,7 +298,6 @@ free_reinterpretations(void *pointer)
     core_dict_free(&registry->hashes);
     core_list_free(registry->notes);
     core_list_free(registry->noting);
-    core_list_free(registry->facts);
     core_free(registry);
 }
 
@@ -321,7 +309,6 @@ reinterpretations(ir_ctx_t *ctx)
         registry->notes          = core_list_new(registry_note_t);
         registry->noting         = core_list_new(registry_module_ptr_t);
         registry->scoped         = core_list_new(registry_view_ptr_t);
-        registry->facts          = core_list_new(registry_fact_t);
         view_init(&registry->whole);
         core_dict_init(&registry->by_key, nullptr, nullptr);
         core_dict_init(&registry->by_viewer, nullptr, nullptr);
@@ -367,17 +354,6 @@ type_identity(ir_reinterpretations_t *registry, ir_ctx_t *ctx, th_type *type)
     uint64_t hash = th_hash(ctx->types, type) | 1;
     core_dict_put(&registry->hashes, type, (void *)(uintptr_t)hash);
     return hash;
-}
-
-static int
-fact_order(const void *left, const void *right)
-{
-    const registry_fact_t *a = left;
-    const registry_fact_t *b = right;
-    if (a->type != b->type) return a->type < b->type ? -1 : 1;
-    if (a->component != b->component)
-        return a->component < b->component ? -1 : 1;
-    return 0;
 }
 
 static uint32_t
@@ -450,40 +426,6 @@ registry_view(ir_reinterpretations_t *registry, const ir_module_t *viewer)
     return view;
 }
 
-static void
-collect_facts(ir_ctx_t *ctx, ir_reinterpretations_t *registry,
-              const registry_view_t *view)
-{
-    registry->facts.len = 0;
-    for (size_t i = 0; i < view->members.len; i++) {
-        registry_fact_t fact = {
-            .type = type_identity(registry, ctx, view->members.data[i])};
-        core_list_push(registry->facts, fact);
-    }
-    for (size_t i = 0; i < view->members.len; i++) {
-        uint64_t least = registry->facts.data[i].type;
-        for (size_t j = 0; j < view->members.len; j++)
-            if (view->components.data[j] == view->components.data[i]
-                && registry->facts.data[j].type < least)
-                least = registry->facts.data[j].type;
-        registry->facts.data[i].component = least;
-    }
-    for (size_t i = 0; i < view->universal.len; i++) {
-        registry_fact_t fact = {
-            .type = type_identity(registry, ctx, view->universal.data[i])};
-        core_list_push(registry->facts, fact);
-    }
-    if (!registry->facts.len) return;
-    qsort(registry->facts.data, registry->facts.len, sizeof(registry_fact_t),
-          fact_order);
-    size_t kept = 1;
-    for (size_t i = 1; i < registry->facts.len; i++)
-        if (fact_order(&registry->facts.data[i],
-                       &registry->facts.data[kept - 1]))
-            registry->facts.data[kept++] = registry->facts.data[i];
-    registry->facts.len = kept;
-}
-
 void
 ir_reinterpretations_seal(ir_ctx_t *ctx)
 {
@@ -503,23 +445,6 @@ ir_reinterpretations_seal(ir_ctx_t *ctx)
     }
 }
 
-static uint64_t
-view_fingerprint(ir_ctx_t *ctx, ir_reinterpretations_t *registry,
-                 registry_view_t *view)
-{
-    if (view->fingerprint) return view->fingerprint;
-    collect_facts(ctx, registry, view);
-    core_buffer_t text = {0};
-    uint8_t unseen = view->unseen;
-    core_buffer_append(&text, (const char *)&unseen, 1);
-    for (size_t i = 0; i < registry->facts.len; i++)
-        core_buffer_append(&text, (const char *)&registry->facts.data[i],
-                           sizeof(registry_fact_t));
-    view->fingerprint = core_xxh3_64bits_raw(text.data, text.byte_len) | 1;
-    core_buffer_release(&text);
-    return view->fingerprint;
-}
-
 static _Thread_local ir_registry_observer_fn registry_observer;
 static _Thread_local void                  *registry_observer_context;
 
@@ -528,16 +453,6 @@ ir_reinterpretations_observe(ir_registry_observer_fn fn, void *context)
 {
     registry_observer         = fn;
     registry_observer_context = context;
-}
-
-uint64_t
-ir_reinterpretations_fingerprint(ir_module_t *viewer)
-{
-    ir_reinterpretations_t *registry = viewer && viewer->ctx
-        ? viewer->ctx->reinterpretations : nullptr;
-    if (!registry || !registry->sealed) return 0;
-    return view_fingerprint(viewer->ctx, registry,
-                            registry_view(registry, viewer));
 }
 
 static void
@@ -649,13 +564,10 @@ computed_overlap(ir_reinterpretations_t *registry, registry_view_t *view,
 }
 
 static bool
-registered_overlap(ir_module_t *module, th_type *a, th_type *b)
+view_overlap(ir_reinterpretations_t *registry, ir_module_t *module,
+             th_type *a, th_type *b)
 {
-    ir_reinterpretations_t *registry = module->ctx->reinterpretations;
-    if (!registry || !registry->sealed) return true;
     registry_view_t *view = registry_view(registry, module);
-    if (registry_observer)
-        registry_observer(registry_observer_context, module);
     if (view->unseen) return true;
     a = a ? th_resolve(a) : nullptr;
     b = b ? th_resolve(b) : nullptr;
@@ -684,6 +596,17 @@ registered_overlap(ir_module_t *module, th_type *a, th_type *b)
     if (known) return known == 2;
     bool overlap = computed_overlap(registry, view, module, a, b);
     core_dict_put(inner, key, (void *)(uintptr_t)(overlap ? 2 : 1));
+    return overlap;
+}
+
+static bool
+registered_overlap(ir_module_t *module, th_type *a, th_type *b)
+{
+    ir_reinterpretations_t *registry = module->ctx->reinterpretations;
+    if (!registry || !registry->sealed) return true;
+    bool overlap = view_overlap(registry, module, a, b);
+    if (registry_observer)
+        registry_observer(registry_observer_context, module, a, b, overlap);
     return overlap;
 }
 
@@ -1292,18 +1215,33 @@ ir_places_within(const ir_places_t *places, uint32_t outer, uint32_t inner)
 }
 
 static bool
-reinterpreted(ir_module_t *module, th_type *type)
+view_reinterpreted(ir_reinterpretations_t *registry, ir_module_t *module,
+                   th_type *type)
 {
-    ir_reinterpretations_t *registry = module->ctx->reinterpretations;
-    if (!registry || !registry->sealed) return true;
     registry_view_t *view = registry_view(registry, module);
-    if (registry_observer)
-        registry_observer(registry_observer_context, module);
     if (view->unseen) return true;
     type = type ? th_resolve(type) : nullptr;
     if (open_type(type)) return true;
     const type_reach_t *reach = type_reach(registry, view, module, type);
     return reach->universal || reach->components.len;
+}
+
+static bool
+reinterpreted(ir_module_t *module, th_type *type)
+{
+    ir_reinterpretations_t *registry = module->ctx->reinterpretations;
+    if (!registry || !registry->sealed) return true;
+    bool answer = view_reinterpreted(registry, module, type);
+    if (registry_observer)
+        registry_observer(registry_observer_context, module, type, nullptr,
+                          answer);
+    return answer;
+}
+
+bool
+ir_places_type_reinterpreted(ir_module_t *module, th_type *type)
+{
+    return !module || reinterpreted(module, type);
 }
 
 static bool

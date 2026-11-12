@@ -331,14 +331,23 @@ static void test_fields_are_separate_places(void)
     ir_ctx_free(ctx);
 }
 
-static uint64_t registry_fingerprint(ir_ctx_t *ctx, ir_module_t *viewer,
-                                     ir_func_t *first, ir_func_t *second)
+static th_type *cast_referent(const ir_value_t *value)
+{
+    th_type *type = value ? th_resolve(value->type) : nullptr;
+    return type ? th_resolve(th_ind_referent(type)) : nullptr;
+}
+
+static bool cast_overlaps(ir_ctx_t *ctx, ir_module_t *viewer,
+                          const ir_instr_t *cast, ir_func_t *first,
+                          ir_func_t *second)
 {
     ir_reinterpretations_open(ctx);
     ir_reinterpretations_note_function(ctx, first);
     if (second) ir_reinterpretations_note_function(ctx, second);
     ir_reinterpretations_seal(ctx);
-    return ir_reinterpretations_fingerprint(viewer);
+    return ir_places_types_overlap(viewer,
+        cast_referent(ir_operand_value(&cast->operands[0])),
+        cast_referent(cast->dest));
 }
 
 static void test_reinterpretations_compare_by_content(void)
@@ -364,16 +373,15 @@ static void test_reinterpretations_compare_by_content(void)
     check("a pointer cast between records is a reinterpretation",
           ir_reinterpretation_site(f) != nullptr
               && ir_reinterpretation_site(g) != nullptr);
-    uint64_t both = registry_fingerprint(ctx, m, f, g);
-    check("a sealed registry has a fingerprint", both != 0);
-    check("the same casts seen in another order have the same fingerprint",
-          registry_fingerprint(ctx, m, g, f) == both);
-    uint64_t smaller = registry_fingerprint(ctx, m, f, nullptr);
-    check("losing a cast changes the fingerprint", smaller != both);
-    check("and seeing the smaller registry again does not",
-          registry_fingerprint(ctx, m, f, nullptr) == smaller);
-    check("gaining the cast back restores the fingerprint",
-          registry_fingerprint(ctx, m, g, f) == both);
+    const ir_instr_t *cast = ir_reinterpretation_site(g);
+    check("a registered cast makes its two types overlap",
+          cast_overlaps(ctx, m, cast, f, g));
+    check("the same casts seen in another order give the same answer",
+          cast_overlaps(ctx, m, cast, g, f));
+    check("losing the cast separates its types",
+          !cast_overlaps(ctx, m, cast, f, nullptr));
+    check("gaining the cast back joins them again",
+          cast_overlaps(ctx, m, cast, g, f));
     ir_ctx_free(ctx);
 }
 

@@ -479,8 +479,6 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(roots, analysis->emitted_functions.data[i]);
-    for (size_t i = 0; i < analysis->cached_functions.len; i++)
-        core_list_push(roots, analysis->cached_functions.data[i]);
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, initializers->data[i]);
     for (size_t i = 0; i < entries->len; i++)
@@ -500,6 +498,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     push_effect_check_subjects(analysis, &roots);
     push_effects_of_roots(analysis, &roots);
     bind_summary_hooks(analysis, false);
+    n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_t *previous = analysis->summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);

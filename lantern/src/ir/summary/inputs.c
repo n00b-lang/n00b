@@ -63,7 +63,8 @@ same_input(const summary_input_t *a, const summary_input_t *b)
 {
     return a->kind == b->kind && a->site == b->site && a->caller == b->caller
         && a->function == b->function && a->global == b->global
-        && a->module == b->module && core_string_eq(a->effect, b->effect);
+        && a->module == b->module && a->from == b->from && a->to == b->to
+        && core_string_eq(a->effect, b->effect);
 }
 
 static bool
@@ -245,13 +246,12 @@ note_effects(ir_summaries_t *summaries, const ir_func_t *caller,
 }
 
 static void
-observe_view(void *context, const ir_module_t *viewer)
+observe_view(void *context, const ir_module_t *viewer, th_type *a,
+             th_type *b, bool answer)
 {
-    ir_summaries_t *summaries = context;
-    summary_input_t input = {.kind = SUMMARY_INPUT_VIEW, .module = viewer};
-    if (!input_wanted(summaries, &input)) return;
-    input.answer = ir_reinterpretations_fingerprint((ir_module_t *)viewer);
-    record_input(summaries, input);
+    record_input(context, (summary_input_t){
+        .kind = b ? SUMMARY_INPUT_OVERLAP : SUMMARY_INPUT_REINTERPRETED,
+        .module = viewer, .from = a, .to = b, .answer = answer ? 2 : 1});
 }
 
 static void
@@ -303,8 +303,12 @@ current_answer(ir_summaries_t *summaries, const summary_input_t *input)
                                input->effect) ? 2 : 1;
     case SUMMARY_INPUT_EFFECTS:
         return effects_answer(summaries, input->caller, input->function);
-    case SUMMARY_INPUT_VIEW:
-        return ir_reinterpretations_fingerprint((ir_module_t *)input->module);
+    case SUMMARY_INPUT_OVERLAP:
+        return ir_places_types_overlap((ir_module_t *)input->module,
+                                       input->from, input->to) ? 2 : 1;
+    case SUMMARY_INPUT_REINTERPRETED:
+        return ir_places_type_reinterpreted((ir_module_t *)input->module,
+                                            input->from) ? 2 : 1;
     }
     return 0;
 }
@@ -413,6 +417,12 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
         put_text(out, nullptr, input->module
             ? ir_module_name((ir_module_t *)input->module)
             : (core_string_t){0});
+        th_ctx *types = input->module
+            ? ir_module_types((ir_module_t *)input->module) : nullptr;
+        put_text(out, nullptr, types && input->from
+            ? ir_types_text(types, input->from) : (core_string_t){0});
+        put_text(out, nullptr, types && input->to
+            ? ir_types_text(types, input->to) : (core_string_t){0});
         put_text(out, nullptr, input->effect);
         put_u64(out, input->answer);
     }
@@ -478,11 +488,21 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                 : nullptr;
             if (!input.module) r.failed = true;
         }
+        th_ctx *types = input.module
+            ? ir_module_types((ir_module_t *)input.module) : nullptr;
+        core_string_t from = get_text(&r);
+        core_string_t to   = get_text(&r);
+        if (from.u8_bytes && !r.failed)
+            input.from = types ? ir_type_from_text(types, from) : nullptr;
+        if (to.u8_bytes && !r.failed)
+            input.to = types ? ir_type_from_text(types, to) : nullptr;
+        if ((from.u8_bytes && !input.from) || (to.u8_bytes && !input.to))
+            r.failed = true;
         core_string_t effect = get_text(&r);
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
         input.answer = get_u64(&r);
-        if (input.kind > SUMMARY_INPUT_VIEW) r.failed = true;
+        if (input.kind > SUMMARY_INPUT_REINTERPRETED) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
     if (r.failed || r.at != r.size) {
