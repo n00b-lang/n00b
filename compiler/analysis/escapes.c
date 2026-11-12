@@ -28,6 +28,8 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++)
             core_list_push(roots, ir_func_at(state->ir_module, f));
     }
+    for (size_t f = 0; f < analysis->cached_functions.len; f++)
+        core_list_push(roots, analysis->cached_functions.data[f]);
     bind_summary_hooks(analysis, true);
     ir_summaries_free(analysis->escapes);
     analysis->escapes = ir_escapes_compute(roots.data, roots.len,
