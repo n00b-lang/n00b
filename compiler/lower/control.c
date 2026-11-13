@@ -3268,11 +3268,29 @@ n00bb_flag_table(ir_lower_context_t *context, n00bb_switch_frame_t *frame,
     return true;
 }
 
+static ir_uint_t
+n00bb_flag_subject_mask(const ir_value_t *subject)
+{
+    const ir_instr_t *def = subject ? subject->def : nullptr;
+    while (def && def->op == IR_OP_COPY && def->n_operands
+           && ir_operand_value(&def->operands[0]))
+        def = ir_operand_value(&def->operands[0])->def;
+    for (uint32_t o = 0; def && def->op == IR_OP_BITSET_INTERSECTION
+                         && o < def->n_operands; o++) {
+        const ir_value_t *operand = ir_operand_value(&def->operands[o]);
+        const ir_instr_t *flag = operand ? operand->def : nullptr;
+        if (flag && flag->op == IR_OP_BITSET_CONST && flag->n_operands == 2
+            && flag->operands[1].kind == IR_OPD_CONST)
+            return flag->operands[1].lit.i.mag;
+    }
+    return ~(ir_uint_t)0;
+}
+
 static bool
 n00bb_flag_dispatch(ir_lower_context_t *context, n00bb_switch_frame_t *frame,
                     const n00bb_flag_test_t *tests, size_t count,
-                    const n00bb_flagset_info_t *info, ir_uint_t relevant,
-                    unsigned relevant_bits, ir_span_t span)
+                    const n00bb_flagset_info_t *info, ir_uint_t possible,
+                    ir_uint_t relevant, unsigned relevant_bits, ir_span_t span)
 {
     unsigned width = info->atomic_count <= 8 ? 8
         : info->atomic_count <= 16 ? 16 : info->atomic_count <= 32 ? 32
@@ -3293,7 +3311,7 @@ n00bb_flag_dispatch(ir_lower_context_t *context, n00bb_switch_frame_t *frame,
     if (relevant_bits <= FLAGSET_TABLE_BITS) {
         bool exact = false;
         for (size_t t = 0; t < count; t++) exact |= tests[t].pattern->exact;
-        ir_uint_t others = info->all_mask & ~relevant;
+        ir_uint_t others = possible & ~relevant;
         ir_value_t *index = n00bb_flag_masked(context, bits_type, bits,
                                               relevant, span);
         if (!index) return false;
@@ -3416,12 +3434,15 @@ n00bb_flagset_switch(ir_lower_context_t *context,
     }
     bool ok = true;
     if (valid) {
+        ir_uint_t possible = info->all_mask
+            & n00bb_flag_subject_mask(frame->subject);
         ir_uint_t relevant = 0;
         unsigned relevant_bits = 0;
         for (size_t t = 0; t < count; t++) relevant |= tests[t].pattern->mask;
+        relevant &= possible;
         for (ir_uint_t bits = relevant; bits; bits &= bits - 1)
             relevant_bits++;
-        bool others = (info->all_mask & ~relevant) != 0;
+        bool others = (possible & ~relevant) != 0;
         bool exhaustive = relevant_bits <= FLAGSET_ANALYSIS_BITS;
         if (relevant_bits <= FLAGSET_ANALYSIS_BITS) {
             for (int outside = 0; outside <= (others ? 1 : 0); outside++) {
@@ -3437,7 +3458,8 @@ n00bb_flagset_switch(ir_lower_context_t *context,
         }
         else {
             for (size_t t = 0; t < count; t++)
-                tests[t].live = !n00bb_flag_covered(tests, t);
+                tests[t].live = !(tests[t].pattern->mask & ~possible)
+                    && !n00bb_flag_covered(tests, t);
         }
         for (size_t t = 0; t < count; t++) {
             if (tests[t].live) continue;
@@ -3448,7 +3470,7 @@ n00bb_flagset_switch(ir_lower_context_t *context,
                        N00BB_NO_ARGS);
         }
         ok = n00bb_flag_dispatch(context, frame, tests, count, info,
-                                 relevant, relevant_bits, span)
+                                 possible, relevant, relevant_bits, span)
             && (!exhaustive || n00bb_flagset_never_unmatched(frame));
     }
     else {
@@ -3463,6 +3485,41 @@ n00bb_flagset_switch(ir_lower_context_t *context,
     if (!ok)
         lower_internal(context, span, "could not emit the flagset switch");
     return ok;
+}
+
+static ir_value_t *
+n00bb_switch_flag_slice(ir_lower_context_t *context,
+                        n00bb_lower_context_t *lower, ir_value_t *subject)
+{
+    const ir_instr_t *def = subject ? subject->def : nullptr;
+    while (def && def->op == IR_OP_COPY && def->n_operands
+           && ir_operand_value(&def->operands[0]))
+        def = ir_operand_value(&def->operands[0])->def;
+    ir_value_t *base = def && def->op == IR_OP_EXTRACT && def->n_operands == 2
+        && def->operands[1].kind == IR_OPD_NAME
+        ? ir_operand_value(&def->operands[0]) : nullptr;
+    parse_sym_entry_t *owner = nullptr;
+    if (!base || !n00bb_flagset_type(lower->unit, tu_state(lower->unit),
+                                     base->type, &owner)
+        || !owner->member_scope) return nullptr;
+    parse_sym_entry_t *flag = parse_symtab_lookup_in(owner->member_scope,
+                                                     def->operands[1].name);
+    const n00bb_flagset_value_t *value = n00bb_flagset_member(flag)
+        && flag->has_comptime_value ? flag->comptime_value : nullptr;
+    if (!value) return nullptr;
+    ir_instr_t *mask = ir_lower_emit_instruction(context, IR_OP_BITSET_CONST,
+                                                 def->span);
+    ir_instr_t *cut = mask && ir_lower_set_temp_dest(context, mask,
+            CORE_STRING_STATIC("__n00bb_"), base->type)
+        && ir_instr_operand_name(mask, flag->name)
+        && ir_instr_operand_uint(mask, value->mask)
+        ? ir_lower_emit_instruction(context, IR_OP_BITSET_INTERSECTION,
+                                    def->span)
+        : nullptr;
+    return cut && ir_lower_set_temp_dest(context, cut,
+            CORE_STRING_STATIC("__n00bb_"), base->type)
+        && ir_instr_operand_value(cut, base)
+        && ir_instr_operand_value(cut, mask->dest) ? cut->dest : nullptr;
 }
 
 static bool
@@ -3487,6 +3544,9 @@ n00bb_emit_case_tests(ir_lower_context_t *context,
     context->block = frame->test_block;
     if (frame->flags_dispatched) return true;
     parse_sym_entry_t *owner = nullptr;
+    ir_value_t *slice = n00bb_switch_flag_slice(context, lower,
+                                                frame->subject);
+    if (slice) frame->subject = slice;
     if (n00bb_flagset_type(lower->unit, tu_state(lower->unit),
                            frame->subject->type, &owner))
         return n00bb_flagset_switch(context, lower, frame, owner);

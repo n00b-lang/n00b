@@ -1709,17 +1709,142 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                               contract->handler->type));
 }
 
+static const ir_instr_t *
+n00bb_flags_source(const ir_value_t *value)
+{
+    const ir_instr_t *def = value ? value->def : nullptr;
+    while (def && def->op == IR_OP_COPY && def->n_operands)
+        def = ir_operand_value(&def->operands[0])
+            ? ir_operand_value(&def->operands[0])->def : nullptr;
+    return def;
+}
+
+static bool
+n00bb_flags_constant(const ir_value_t *value, ir_uint_t *mask)
+{
+    const ir_instr_t *def = n00bb_flags_source(value);
+    if (!def) return false;
+    if (def->op == IR_OP_BITSET_CONST)
+        return def->n_operands == 2 && def->operands[1].kind == IR_OPD_CONST
+            && (*mask = def->operands[1].lit.i.mag, true);
+    ir_uint_t left = 0, right = 0;
+    if (def->op == IR_OP_BITSET_COMPLEMENT)
+        return n00bb_flags_constant(ir_operand_value(&def->operands[0]), &left)
+            && (*mask = ~left, true);
+    if (def->n_operands != 2
+        || !n00bb_flags_constant(ir_operand_value(&def->operands[0]), &left)
+        || !n00bb_flags_constant(ir_operand_value(&def->operands[1]), &right))
+        return false;
+    switch (def->op) {
+    case IR_OP_BITSET_UNION: *mask = left | right; return true;
+    case IR_OP_BITSET_DIFFERENCE: *mask = left & ~right; return true;
+    case IR_OP_BITSET_INTERSECTION: *mask = left & right; return true;
+    case IR_OP_BITSET_XOR: *mask = left ^ right; return true;
+    default: return false;
+    }
+}
+
+static bool
+n00bb_flags_slice(const ir_value_t *value, ir_uint_t *mask,
+                  core_string_t *name)
+{
+    const ir_instr_t *def = n00bb_flags_source(value);
+    if (!def || def->op != IR_OP_BITSET_INTERSECTION || def->n_operands != 2)
+        return false;
+    for (uint32_t o = 0; o < 2; o++) {
+        const ir_instr_t *flag = n00bb_flags_source(
+            ir_operand_value(&def->operands[o]));
+        if (flag && flag->op == IR_OP_BITSET_CONST
+            && flag->operands[0].kind == IR_OPD_NAME
+            && n00bb_flags_constant(ir_operand_value(&def->operands[o]),
+                                    mask)) {
+            *name = flag->operands[0].name;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+n00bb_check_slice_comparison(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             ir_value_t *slice, ir_value_t *constant)
+{
+    ir_uint_t held = 0, wanted = 0;
+    core_string_t name = {0};
+    if (!n00bb_flags_slice(slice, &held, &name)
+        || !n00bb_flags_constant(constant, &wanted) || !(wanted & ~held))
+        return true;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(rewrite->unit);
+    core_string_t slice_text = n00bb_value_text(rewrite->unit, slice,
+                                                in->span);
+    core_string_t constant_text = n00bb_value_text(rewrite->unit, constant,
+                                                   in->span);
+    n00bb_report(diagnostics, rewrite->unit,
+        N00B_DIAG_FLAGSET_SLICE_COMPARISON, n00bb_span_location(in->span),
+        N00B_TEXT_FLAGSET_SLICE_NEVER_EQUAL,
+        N00BB_ARGS(ARG_TEXT(slice_text.u8_bytes ? slice_text : name),
+                   ARG_TEXT(name),
+                   ARG_TEXT(constant_text.u8_bytes
+                       ? constant_text : CORE_STRING_STATIC("this value"))));
+    n00bb_report_help(diagnostics, N00B_TEXT_FLAGSET_SLICE_COMPARE_HELP,
+                      N00BB_ARGS(ARG_TEXT(name)));
+    return false;
+}
+
 static ir_value_t *
 n00bb_rewrite_flagset(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                       core_string_t method, ir_value_t *left,
                       ir_value_t *right)
 {
+    if (core_string_eq(method, CORE_STRING_STATIC("__equal"))
+        && n00bb_check_slice_comparison(rewrite, in, left, right))
+        (void)n00bb_check_slice_comparison(rewrite, in, right, left);
     return n00bb_emit_flagset_operator(&rewrite->context, method,
                                        in->dest->type, left, right, in->span);
 }
 
 static ir_value_t *
-n00bb_rewrite_flag_test(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+n00bb_rewrite_flags_truth(n00bb_rewrite_t *rewrite, ir_value_t *flags,
+                          bool set, ir_span_t span)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    th_type *truth = th_name(ir_module_types(context->module),
+                             CORE_STRING_STATIC("bool"));
+    ir_instr_t *empty = ir_lower_emit_instruction(context,
+                                                  IR_OP_BITSET_IS_EMPTY, span);
+    if (!empty || !ir_lower_set_temp_dest(context, empty,
+            CORE_STRING_STATIC("__n00bb_"), truth)
+        || !ir_instr_operand_value(empty, flags)) return nullptr;
+    if (!set) return empty->dest;
+    ir_instr_t *negated = ir_lower_emit_instruction(context, IR_OP_NOT, span);
+    return negated && ir_lower_set_temp_dest(context, negated,
+            CORE_STRING_STATIC("__n00bb_"), truth)
+        && ir_instr_operand_value(negated, empty->dest)
+        ? negated->dest : nullptr;
+}
+
+static bool
+n00bb_other_use(const ir_instr_t *in, void *state)
+{
+    return in != state;
+}
+
+static bool
+n00bb_rewrite_flags_condition(n00bb_rewrite_t *rewrite, ir_instr_t *branch)
+{
+    ir_value_t *condition = ir_operand_value(&branch->operands[0]);
+    ir_value_t *truth = condition
+        ? n00bb_rewrite_flags_truth(rewrite, condition, true, branch->span)
+        : nullptr;
+    if (!truth || !n00bb_rewrite_splice(rewrite, branch)) return false;
+    ir_value_replace_uses(rewrite->context.function, condition, truth,
+                          n00bb_other_use, branch);
+    return true;
+}
+
+static ir_value_t *
+n00bb_rewrite_flag_slice(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                         ir_value_t *flags, parse_sym_entry_t *flag)
 {
     ir_lower_context_t *context = &rewrite->context;
@@ -1732,7 +1857,8 @@ n00bb_rewrite_flag_test(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             CORE_STRING_STATIC("__n00bb_"), flag->type)
         && ir_instr_operand_name(mask, flag->name)
         && ir_instr_operand_uint(mask, value->mask)
-        ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONTAINS, in->span)
+        ? ir_lower_emit_instruction(context, IR_OP_BITSET_INTERSECTION,
+                                    in->span)
         : nullptr;
     return test && ir_lower_set_temp_dest(context, test,
             CORE_STRING_STATIC("__n00bb_"), in->dest->type)
@@ -1909,6 +2035,13 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (in->operands[1].kind == IR_OPD_FRESH)
         receiver_type = th_resolve(th_ind_referent(receiver_type));
     n00bb_dispatch_target_t flagset = {0};
+    if (!other && th_kind_of(receiver_type) == TH_NAMED
+        && core_string_eq(method, CORE_STRING_STATIC("__not"))
+        && n00bb_dispatch_target(rewrite->dispatch, receiver_type, method,
+                                 &flagset)
+        && flagset.kind == N00BB_TARGET_FLAGSET)
+        return n00bb_rewrite_replace(rewrite, in,
+            n00bb_rewrite_flags_truth(rewrite, receiver, false, in->span));
     if (other && th_kind_of(receiver_type) == TH_NAMED
         && n00bb_dispatch_target(rewrite->dispatch, receiver_type, method,
                                  &flagset)
@@ -2335,6 +2468,17 @@ n00bb_rewrite_intrinsic(n00bb_rewrite_t *rewrite, ir_instr_t *in,
 }
 
 static bool
+n00bb_rewrite_condition(n00bb_rewrite_t *rewrite, ir_instr_t *in)
+{
+    ir_value_t *tested = in->op == IR_OP_BRANCH && in->n_operands == 3
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    return !tested || th_kind_of(th_resolve(tested->type)) != TH_NAMED
+        || !n00bb_flagset_type(rewrite->unit, tu_state(rewrite->unit),
+                               tested->type, nullptr)
+        || n00bb_rewrite_flags_condition(rewrite, in);
+}
+
+static bool
 n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
     parse_sym_entry_t *intrinsic = n00bb_rewrite_intrinsic_symbol(rewrite, in);
@@ -2372,7 +2516,7 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                              in->operands[1].name) : nullptr;
     if (flag)
         return n00bb_rewrite_replace(rewrite, in,
-            n00bb_rewrite_flag_test(rewrite, in, operand, flag));
+            n00bb_rewrite_flag_slice(rewrite, in, operand, flag));
     bool variant = false;
     parse_sym_entry_t *arm = in->op == IR_OP_EXTRACT && in->dest && operand
         && in->n_operands == 2 && in->operands[1].kind == IR_OPD_NAME
@@ -2384,6 +2528,26 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         && n00bb_reference_definition(types, operand->type))
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_object_field(rewrite, in));
+    parse_sym_entry_t *written = in->op == IR_OP_FIELD && operand
+        && in->n_operands == 2 && in->operands[1].kind == IR_OPD_NAME
+        && th_kind_of(th_resolve(operand->type)) == TH_INDIRECTION
+        ? n00bb_flagset_flag(rewrite->dispatch,
+                             th_ind_referent(th_resolve(operand->type)),
+                             in->operands[1].name)
+        : nullptr;
+    if (written) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(rewrite->unit);
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_FLAGSET_FIELD_READ_ONLY, n00bb_span_location(in->span),
+            N00B_TEXT_FLAGSET_FIELD_IS_READ_ONLY,
+            N00BB_ARGS(ARG_TEXT(written->name),
+                       ARG_TEXT(written->owner_type->name)));
+        n00bb_report_help(diagnostics, N00B_TEXT_FLAGSET_FIELD_ASSIGN_WHOLE_HELP,
+            N00BB_ARGS(ARG_TEXT(written->name),
+                       ARG_TEXT(written->owner_type->name)));
+        return true;
+    }
     if (in->op == IR_OP_FIELD && operand
         && th_kind_of(th_resolve(operand->type)) == TH_INDIRECTION
         && n00bb_reference_definition(types,
@@ -2997,6 +3161,10 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
         ok = n00bb_rewrite_sites(&rewriter,
                 &tu_state(analysis->units.data[u])->rewrite_sites,
                 n00bb_rewrite_instruction) && ok;
+    for (size_t u = 0; u < analysis->units.len; u++)
+        ok = n00bb_rewrite_sites(&rewriter,
+                &tu_state(analysis->units.data[u])->condition_sites,
+                n00bb_rewrite_condition) && ok;
     ok = n00bb_rewrite_sites(&rewriter, &typing->conversions,
                              n00bb_emit_sinks)
         && n00bb_rewrite_sites(&rewriter, &rewriter.retyped, n00bb_emit_sinks)

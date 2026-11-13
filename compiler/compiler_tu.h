@@ -550,6 +550,7 @@ typedef struct {
     parse_tree_t *flagset_scope;
     core_dict_t finalized_types;
     core_list_t(n00bb_ir_instr_ptr_t) rewrite_sites;
+    core_list_t(n00bb_ir_instr_ptr_t) condition_sites;
     core_list_t(n00bb_write_site_t) write_sites;
     core_list_t(n00bb_ir_instr_ptr_t) result_defaults;
     core_dict_t intrinsics;

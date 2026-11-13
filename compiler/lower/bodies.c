@@ -61,6 +61,12 @@ forget_detached_sites(n00bb_tu_state_t *state)
             state->rewrite_sites.data[kept++] = state->rewrite_sites.data[i];
     state->rewrite_sites.len = kept;
     kept = 0;
+    for (size_t i = 0; i < state->condition_sites.len; i++)
+        if (state->condition_sites.data[i]->block)
+            state->condition_sites.data[kept++] =
+                state->condition_sites.data[i];
+    state->condition_sites.len = kept;
+    kept = 0;
     for (size_t i = 0; i < state->write_sites.len; i++)
         if (!state->write_sites.data[i].store
             || state->write_sites.data[i].store->block)

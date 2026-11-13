@@ -788,6 +788,13 @@ n00bb_mark_condition(ir_lower_context_t *context, n00bb_text_t construct,
         ? block->instrs[block->n_instrs - 1] : nullptr;
     if (!consumer) return false;
     consumer->span = lower_span_for_tree(context, condition);
+    ir_value_t *tested = consumer->op == IR_OP_BRANCH && consumer->n_operands
+        ? ir_operand_value(&consumer->operands[0]) : nullptr;
+    th_type *truth = th_name(ir_module_types(context->module),
+                             CORE_STRING_STATIC("bool"));
+    if (tested && !ir_type_eq(context->module, tested->type, truth)
+        && lower->unit && !lower->solved)
+        core_list_push(tu_state(lower->unit)->condition_sites, consumer);
     return ir_annot_set(lower->ir_context, &consumer->annots,
         (ir_annot_t){.key = N00BB_CONDITION_KEY, .kind = IR_ANNOT_INT,
                      .i = ir_lit_of(construct)});

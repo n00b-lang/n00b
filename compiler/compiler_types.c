@@ -1333,9 +1333,7 @@ static th_type *field_signature(void *context, th_type *receiver,
         return n00bb_variant_arm_payload_type(types, receiver, arm);
     }
 
-    return n00bb_flagset_flag(index, receiver, name)
-             ? th_name(types, CORE_STRING_STATIC("bool"))
-             : nullptr;
+    return n00bb_flagset_flag(index, receiver, name) ? receiver : nullptr;
 }
 
 static th_type *flagset_operator(n00bb_link_analysis_t *analysis,
@@ -1354,6 +1352,11 @@ static th_type *flagset_operator(n00bb_link_analysis_t *analysis,
     if (core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
         return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
                         receiver, receiver);
+    }
+    if (core_string_eq(method, CORE_STRING_STATIC("__truth"))
+        || core_string_eq(method, CORE_STRING_STATIC("__not"))) {
+        return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
+                        receiver, nullptr);
     }
     for (size_t i = 0; i < sizeof(combining) / sizeof(*combining); i++) {
         if (core_string_eq(method, combining[i])) {

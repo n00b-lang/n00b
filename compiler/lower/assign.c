@@ -190,44 +190,19 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
     if (!lower || !n00bb_flagset_member(flag)
         || !n00bb_flagset_instance_access(visit->grammar, lower->unit,
                                            member, flag)) return true;
-    parse_tree_t *receiver = core_tree_child(member, 0);
     if (entering)
         return ir_lower_handle_assignment(context, visit->node)
             && ir_lower_skip_value(context, visit->node, target);
 
-    ir_span_t span = lower_span_for_tree(context, visit->node);
-    ir_value_t *assigned = source
-        ? ir_lower_node_value(context, source) : nullptr;
-    ir_value_t *address = n00bb_addressable_expression_address(
-        context, visit->grammar, lower->unit, receiver, span);
-    th_type *flagset_type = address ? th_ind_referent(address->type) : nullptr;
-    ir_value_t *current = address && flagset_type
-        ? n00bb_emit_indirect_read(context, address, flagset_type, span)
-        : nullptr;
-    n00bb_flagset_value_t *value = flag->has_comptime_value
-        ? flag->comptime_value : nullptr;
-    ir_instr_t *mask = current && value
-        ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONST, span)
-        : nullptr;
-    ir_instr_t *updated = mask
-        ? ir_lower_emit_instruction(context, IR_OP_BITSET_SET, span)
-        : nullptr;
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
-    if (!assigned || !bool_type
-        || !ir_type_eq(context->module, assigned->type, bool_type)
-        || !mask || !updated
-        || !ir_lower_set_temp_dest(context, mask, CORE_STRING_STATIC("__n00bb_"), flagset_type)
-        || !ir_instr_operand_name(mask, flag->name)
-        || !ir_instr_operand_uint(mask, value->mask)
-        || !ir_lower_set_temp_dest(context, updated, CORE_STRING_STATIC("__n00bb_"),
-                                   flagset_type)
-        || !ir_instr_operand_value(updated, current)
-        || !ir_instr_operand_value(updated, mask->dest)
-        || !ir_instr_operand_value(updated, assigned)
-        || !n00bb_emit_indirect_write(context, address, updated->dest, span)) {
-        lower_internal(context, span, "could not update this flagset member");
-        return false;
-    }
+    (void)source;
+    lower_report(context, N00B_DIAG_FLAGSET_FIELD_READ_ONLY,
+                 lower_span_for_tree(context, target),
+                 N00B_TEXT_FLAGSET_FIELD_IS_READ_ONLY,
+                 N00BB_ARGS(ARG_TEXT(flag->name),
+                            ARG_TEXT(flag->owner_type->name)));
+    lower_help(context, N00B_TEXT_FLAGSET_FIELD_ASSIGN_WHOLE_HELP,
+               N00BB_ARGS(ARG_TEXT(flag->name),
+                          ARG_TEXT(flag->owner_type->name)));
     return true;
 }
 

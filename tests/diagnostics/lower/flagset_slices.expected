@@ -1,0 +1,15 @@
+tests/diagnostics/lower/flagset_slices.n:13:14: warning N00B-S0093: this case can never match: earlier cases match every value it would
+  help: move it before the cases that cover it, or remove it
+tests/diagnostics/lower/flagset_slices.n:13:25: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/flagset_slices.n:21:5: error N00B-S0094: flag field `write` of `Perm` is a read-only slice and cannot be assigned or passed for modification
+  help: change the whole value instead, for example `x = x + Perm.write` or `x = x - Perm.write`
+tests/diagnostics/lower/flagset_slices.n:22:5: error N00B-S0094: flag field `none` of `Perm` is a read-only slice and cannot be assigned or passed for modification
+  help: change the whole value instead, for example `x = x + Perm.none` or `x = x - Perm.none`
+tests/diagnostics/lower/flagset_slices.n:24:5: error N00B-S0094: flag field `rw` of `Perm` is a read-only slice and cannot be assigned or passed for modification
+  help: change the whole value instead, for example `x = x + Perm.rw` or `x = x - Perm.rw`
+tests/diagnostics/lower/flagset_slices.n:25:11: error N00B-S0094: flag field `read` of `Perm` is a read-only slice and cannot be assigned or passed for modification
+  help: change the whole value instead, for example `x = x + Perm.read` or `x = x - Perm.read`
+tests/diagnostics/lower/flagset_slices.n:27:13: error N00B-S0095: `p.rw` only holds flags in `rw`, so it can never equal `Perm.exec`
+  help: compare it with flags in `rw`, or compare the whole value
+tests/diagnostics/lower/flagset_slices.n:28:13: error N00B-S0095: `p.rw` only holds flags in `rw`, so it can never equal `Perm.read + Perm.exec`
+  help: compare it with flags in `rw`, or compare the whole value

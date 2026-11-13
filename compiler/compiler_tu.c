@@ -7538,6 +7538,7 @@ free_tu_state(void *data)
     core_list_free(state->mark_annotations);
     core_list_free(state->assignment_patterns);
     core_list_free(state->rewrite_sites);
+    core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
     core_list_free(state->result_defaults);
     core_dict_free(&state->intrinsics);
@@ -7596,6 +7597,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->mark_annotations = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
+    state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);
     state->result_defaults = core_list_new(n00bb_ir_instr_ptr_t);
     core_dict_init(&state->intrinsics, nullptr, nullptr);

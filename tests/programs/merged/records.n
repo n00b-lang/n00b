@@ -262,6 +262,35 @@ require wide_class(Wide.w9 + Wide.w0 + Wide.w2) == 2
 require wide_class(Wide.w9) == 3
 require wide_class(Wide.w0 - Wide.w0) == 4
 require wide_class(Wide.w1) == 5
+
+func access_slice(a: Access) -> int {
+    switch a.rw {
+        case is nil { return 0 }
+        case is see { return 1 }
+        case is edit { return 2 }
+        case is rw { return 3 }
+    }
+}
+
+let some_access = Access.see + Access.run
+let read_part: Access = some_access.rw
+require read_part == Access.see
+require some_access.rw == Access.see
+require some_access.see and some_access.run
+require some_access.rw
+require !some_access.edit
+let run_only = Access.run
+require !run_only.rw
+if run_only.rw {
+    require false
+}
+let held = run_only.rw
+if held {
+    require false
+}
+require access_slice(Access.run) == 0 and access_slice(some_access) == 1
+require access_slice(Access.edit + Access.admin) == 2
+require access_slice(Access.every) == 3
 record Pair {
     lo:   char
     hi:   char
