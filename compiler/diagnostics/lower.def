@@ -258,7 +258,8 @@ N00B_DIAG(REF_NOT_ADDRESSABLE, "N00B-S0065", ERROR,
     "the value in a `var` and take a `ref` to that.")
 N00B_DIAG(SWITCH_SUBJECT_UNSUPPORTED, "N00B-S0067", ERROR,
     "a `switch` cannot match values of this type",
-    "A `switch` matches integers, characters, booleans, enums and variants.\n"
+    "A `switch` matches integers, characters, booleans, enums, flagsets and\n"
+    "variants.\n"
     "Compare other values, such as strings, floating-point numbers or\n"
     "records, with `if` and `elif`.")
 N00B_DIAG(FINALIZED_COPY, "N00B-S0068", ERROR,
@@ -292,6 +293,36 @@ N00B_DIAG(LEASE_STORAGE, "N00B-S0088", ERROR,
     "Code in the standard library that touches that array has to keep\n"
     "those rules, or the analysis of every program using lists would be\n"
     "wrong.")
+N00B_DIAG(FLAGSET_CASE_NEEDS_TEST, "N00B-S0089", ERROR,
+    "a `case` on a flagset does not say how it matches",
+    "Each `case` of a `switch` on a flagset starts with `has` or `is`.\n"
+    "`has` matches when every named flag is set, whatever else is set;\n"
+    "`is` matches only that exact set of flags:\n"
+    "    switch mode {\n"
+    "        case is nil { ... }\n"
+    "        case has read + write { ... }\n"
+    "        case is exec { ... }\n"
+    "        else { ... }\n"
+    "    }")
+N00B_DIAG(FLAGSET_CASE_NOT_FLAGSET, "N00B-S0090", ERROR,
+    "a `has` or `is` case is used on a value that is not a flagset",
+    "`case has` and `case is` match the flags of a flagset. Match other\n"
+    "values with plain `case` labels.")
+N00B_DIAG(FLAGSET_CASE_UNKNOWN_FLAG, "N00B-S0091", ERROR,
+    "a flagset case names something that is not one of its flags",
+    "The names in a `has` or `is` case are the flags and named\n"
+    "combinations of the flagset being matched.")
+N00B_DIAG(FLAGSET_CASE_HAS_NOTHING, "N00B-S0092", ERROR,
+    "a `has` case names no flags",
+    "Every value has all of no flags, so `case has nil` would match\n"
+    "everything. Use `else` to match whatever is left, or `case is nil` to\n"
+    "match a value with no flags set.")
+N00B_DIAG(FLAGSET_CASE_UNREACHABLE, "N00B-S0093", WARNING,
+    "a flagset case can never match",
+    "Cases are tried in order and the first match wins. Every value this\n"
+    "case would match is already matched by an earlier one, for example\n"
+    "`case has read` before `case has read + write`. Move it before the\n"
+    "cases that cover it, or remove it.")
 N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
     "an array parameter is kept beyond the call",
     "An array passed as an ordinary parameter is only lent for the call.\n"

@@ -2716,7 +2716,16 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
             n00bb_switch_pattern_t pattern = {0};
             parse_tree_t *separator = child_nt(grammar, current,
                 CORE_STRING_STATIC("range-sep"));
-            if (separator) {
+            parse_tree_t *flag_test = child_nt(grammar, current,
+                CORE_STRING_STATIC("case-flags-test"));
+            if (flag_test) {
+                pattern.flags = child_nt(grammar, flag_test,
+                                         CORE_STRING_STATIC("case-flags"));
+                pattern.node = pattern.flags ? flag_test : nullptr;
+                pattern.exact = core_string_eq(first_token_text(flag_test),
+                                               CORE_STRING_STATIC("is"));
+            }
+            else if (separator) {
                 pattern.is_range = true;
                 pattern.inclusive = core_string_eq(first_token_text(separator),
                                                    CORE_STRING_STATIC("to"));
@@ -3123,6 +3132,348 @@ n00bb_enter_case_patterns(ir_lower_context_t *context, parse_visit_t *visit,
     return true;
 }
 
+enum { FLAGSET_TABLE_BITS = 8, FLAGSET_ANALYSIS_BITS = 16 };
+
+typedef struct {
+    size_t case_index;
+    const n00bb_switch_pattern_t *pattern;
+    bool live;
+} n00bb_flag_test_t;
+
+static bool
+n00bb_case_flags_mask(ir_lower_context_t *context, parse_grammar_t *grammar,
+                      parse_sym_entry_t *owner, parse_tree_t *node,
+                      ir_uint_t *mask)
+{
+    if (!node || core_tree_is_leaf(node)) return false;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("nil-keyword"))) {
+        *mask = 0;
+        return true;
+    }
+    if (nt_is(grammar, node, CORE_STRING_STATIC("case-flag-name"))) {
+        core_string_t name = first_token_text(node);
+        parse_sym_entry_t *member = owner->member_scope
+            ? parse_symtab_lookup_in(owner->member_scope, name) : nullptr;
+        n00bb_flagset_value_t *value = n00bb_flagset_member(member)
+            && member->has_comptime_value ? member->comptime_value : nullptr;
+        if (!value) {
+            lower_report(context, N00B_DIAG_FLAGSET_CASE_UNKNOWN_FLAG,
+                lower_span_for_tree(context, node),
+                N00B_TEXT_FLAGSET_CASE_NOT_A_FLAG,
+                N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(owner->name)));
+            return false;
+        }
+        *mask = value->mask;
+        return true;
+    }
+    size_t count = core_tree_num_children(node);
+    if (count == 1)
+        return n00bb_case_flags_mask(context, grammar, owner,
+                                     core_tree_child(node, 0), mask);
+    if (count == 2) {
+        ir_uint_t inner = 0;
+        if (!n00bb_case_flags_mask(context, grammar, owner,
+                                   core_tree_child(node, 1), &inner))
+            return false;
+        *mask = ~inner;
+        return true;
+    }
+    if (count != 3) return false;
+    if (core_tree_is_leaf(core_tree_child(node, 0)))
+        return n00bb_case_flags_mask(context, grammar, owner,
+                                     core_tree_child(node, 1), mask);
+    ir_uint_t left = 0, right = 0;
+    bool left_ok = n00bb_case_flags_mask(context, grammar, owner,
+                                         core_tree_child(node, 0), &left);
+    bool right_ok = n00bb_case_flags_mask(context, grammar, owner,
+                                          core_tree_child(node, 2), &right);
+    if (!left_ok || !right_ok) return false;
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    if (core_string_eq(op, CORE_STRING_STATIC("+"))
+        || core_string_eq(op, CORE_STRING_STATIC("|"))) *mask = left | right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("-")))
+        *mask = left & ~right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("^"))) *mask = left ^ right;
+    else if (core_string_eq(op, CORE_STRING_STATIC("&"))) *mask = left & right;
+    else return false;
+    return true;
+}
+
+static size_t
+n00bb_flag_winner(const n00bb_flag_test_t *tests, size_t count,
+                  ir_uint_t value, bool outside)
+{
+    for (size_t t = 0; t < count; t++) {
+        ir_uint_t mask = tests[t].pattern->mask;
+        bool hit = tests[t].pattern->exact ? !outside && value == mask
+                                           : (value & mask) == mask;
+        if (hit) return t;
+    }
+    return count;
+}
+
+static bool
+n00bb_flag_covered(const n00bb_flag_test_t *tests, size_t at)
+{
+    const n00bb_switch_pattern_t *later = tests[at].pattern;
+    for (size_t t = 0; t < at; t++) {
+        const n00bb_switch_pattern_t *earlier = tests[t].pattern;
+        if (earlier->exact ? later->exact && earlier->mask == later->mask
+                           : (earlier->mask & later->mask) == earlier->mask)
+            return true;
+    }
+    return false;
+}
+
+static ir_value_t *
+n00bb_flag_constant(ir_lower_context_t *context, th_type *type,
+                    ir_uint_t value, ir_span_t span)
+{
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    return constant && ir_lower_set_temp_dest(context, constant,
+            CORE_STRING_STATIC("__n00bb_flags_"), type)
+        && ir_instr_operand_uint(constant, value) ? constant->dest : nullptr;
+}
+
+static ir_value_t *
+n00bb_flag_masked(ir_lower_context_t *context, th_type *type,
+                  ir_value_t *bits, ir_uint_t mask, ir_span_t span)
+{
+    ir_value_t *constant = n00bb_flag_constant(context, type, mask, span);
+    return constant ? n00bb_emit_binary_ir(context, IR_OP_AND, type, bits,
+                                           constant, span) : nullptr;
+}
+
+static bool
+n00bb_flag_table(ir_lower_context_t *context, n00bb_switch_frame_t *frame,
+                 const n00bb_flag_test_t *tests, size_t count,
+                 ir_value_t *index, ir_uint_t relevant, bool outside,
+                 ir_span_t span)
+{
+    ir_instr_t *table = ir_instr_add(context->block, IR_OP_SWITCH);
+    if (!table || !ir_instr_operand_value(table, index)
+        || !ir_instr_operand_default(table, frame->default_block))
+        return false;
+    table->span = span;
+    ir_uint_t value = 0;
+    do {
+        size_t winner = n00bb_flag_winner(tests, count, value, outside);
+        if (winner < count && !ir_instr_operand_switch_arm(table,
+                (ir_int_t)value,
+                frame->cases.data[tests[winner].case_index].block))
+            return false;
+        value = (value - relevant) & relevant;
+    } while (value);
+    return true;
+}
+
+static bool
+n00bb_flag_dispatch(ir_lower_context_t *context, n00bb_switch_frame_t *frame,
+                    const n00bb_flag_test_t *tests, size_t count,
+                    const n00bb_flagset_info_t *info, ir_uint_t relevant,
+                    unsigned relevant_bits, ir_span_t span)
+{
+    unsigned width = info->atomic_count <= 8 ? 8
+        : info->atomic_count <= 16 ? 16 : info->atomic_count <= 32 ? 32
+        : info->atomic_count <= 64 ? 64 : 128;
+    char type_name[8];
+    core_string_t name = n00bb_format_name(type_name, sizeof(type_name),
+                                           "u%u", width);
+    th_type *bits_type = n00bb_ir_builtin_type(context->module, name);
+    th_type *truth = n00bb_ir_builtin_type(context->module,
+                                           CORE_STRING_STATIC("bool"));
+    ir_instr_t *read = bits_type && truth
+        ? ir_lower_emit_instruction(context, IR_OP_BITSET_VALUE, span)
+        : nullptr;
+    if (!read || !ir_lower_set_temp_dest(context, read,
+            CORE_STRING_STATIC("__n00bb_flags_"), bits_type)
+        || !ir_instr_operand_value(read, frame->subject)) return false;
+    ir_value_t *bits = read->dest;
+    if (relevant_bits <= FLAGSET_TABLE_BITS) {
+        bool exact = false;
+        for (size_t t = 0; t < count; t++) exact |= tests[t].pattern->exact;
+        ir_uint_t others = info->all_mask & ~relevant;
+        ir_value_t *index = n00bb_flag_masked(context, bits_type, bits,
+                                              relevant, span);
+        if (!index) return false;
+        if (!exact || !others)
+            return n00bb_flag_table(context, frame, tests, count, index,
+                                    relevant, false, span);
+        ir_value_t *rest = n00bb_flag_masked(context, bits_type, bits,
+                                             others, span);
+        ir_value_t *zero = rest
+            ? n00bb_flag_constant(context, bits_type, 0, span) : nullptr;
+        ir_value_t *extra = zero ? n00bb_emit_binary_ir(context, IR_OP_NE,
+            truth, rest, zero, span) : nullptr;
+        ir_block_t *with = extra
+            ? n00bb_branch_block(context, context->user, "switch_flags_more")
+            : nullptr;
+        ir_block_t *without = with
+            ? n00bb_branch_block(context, context->user, "switch_flags_only")
+            : nullptr;
+        if (!without
+            || !n00bb_switch_branch(context, extra, with, without, span))
+            return false;
+        context->block = with;
+        if (!n00bb_flag_table(context, frame, tests, count, index, relevant,
+                              true, span)) return false;
+        context->block = without;
+        return n00bb_flag_table(context, frame, tests, count, index,
+                                relevant, false, span);
+    }
+    for (size_t t = 0; t < count; t++) {
+        ir_uint_t mask = tests[t].pattern->mask;
+        ir_value_t *tested = tests[t].pattern->exact ? bits
+            : n00bb_flag_masked(context, bits_type, bits, mask, span);
+        ir_value_t *wanted = tested
+            ? n00bb_flag_constant(context, bits_type, mask, span) : nullptr;
+        ir_value_t *hit = wanted ? n00bb_emit_binary_ir(context, IR_OP_EQ,
+            truth, tested, wanted, span) : nullptr;
+        ir_block_t *next = t + 1 < count
+            ? n00bb_branch_block(context, context->user, "switch_test")
+            : frame->default_block;
+        if (!hit || !next || !n00bb_switch_branch(context, hit,
+                frame->cases.data[tests[t].case_index].block, next, span))
+            return false;
+        context->block = next;
+    }
+    return true;
+}
+
+static bool
+n00bb_flagset_never_unmatched(n00bb_switch_frame_t *frame)
+{
+    ir_instr_t *jump = frame->else_body
+        ? nullptr : ir_block_terminator(frame->default_block);
+    if (!jump) return true;
+    ir_span_t span = jump->span;
+    ir_block_t *block = jump->block;
+    ir_instr_t *never = ir_instr_erase(jump)
+        ? ir_instr_add(block, IR_OP_UNREACHABLE) : nullptr;
+    if (never) never->span = span;
+    return never != nullptr;
+}
+
+static bool
+n00bb_flagset_switch(ir_lower_context_t *context,
+                     n00bb_lower_context_t *lower,
+                     n00bb_switch_frame_t *frame, parse_sym_entry_t *owner)
+{
+    ir_span_t span = lower_span_for_tree(context, frame->node);
+    const n00bb_flagset_info_t *info = owner ? parse_sym_binding(
+        canonical_symbol(owner), CORE_STRING_STATIC("n00bb.flagset-info"))
+        : nullptr;
+    n00bb_flag_test_t *tests = core_alloc_array(n00bb_flag_test_t,
+                                                frame->total ? frame->total
+                                                             : 1);
+    size_t count = 0;
+    bool valid = owner && info;
+    for (size_t c = 0; c < frame->cases.len; c++) {
+        n00bb_switch_case_t *item = &frame->cases.data[c];
+        for (size_t p = 0; p < item->patterns.len; p++) {
+            n00bb_switch_pattern_t *pattern = &item->patterns.data[p];
+            ir_span_t at = lower_span_for_tree(context, pattern->node);
+            if (!owner) {
+                if (!pattern->flags) continue;
+                core_string_t subject = lower_type_text(context,
+                                                        frame->subject->type);
+                lower_report(context, N00B_DIAG_FLAGSET_CASE_NOT_FLAGSET, at,
+                    N00B_TEXT_FLAGSET_CASE_ON_NON_FLAGSET,
+                    N00BB_ARGS(ARG_TEXT(pattern->exact
+                                   ? CORE_STRING_STATIC("is")
+                                   : CORE_STRING_STATIC("has")),
+                               ARG_TEXT(subject)));
+                core_free(subject.data);
+                continue;
+            }
+            if (!pattern->flags) {
+                lower_report(context, N00B_DIAG_FLAGSET_CASE_NEEDS_TEST, at,
+                    N00B_TEXT_FLAGSET_CASE_NEEDS_HAS_OR_IS,
+                    N00BB_ARGS(ARG_TEXT(owner->name)));
+                lower_help(context, N00B_TEXT_FLAGSET_CASE_HAS_OR_IS_HELP,
+                           N00BB_NO_ARGS);
+                valid = false;
+                continue;
+            }
+            if (!info || !n00bb_case_flags_mask(context, lower->grammar,
+                    owner, pattern->flags, &pattern->mask)) {
+                valid = false;
+                continue;
+            }
+            pattern->mask &= info->all_mask;
+            if (!pattern->exact && !pattern->mask) {
+                lower_report(context, N00B_DIAG_FLAGSET_CASE_HAS_NOTHING, at,
+                    N00B_TEXT_FLAGSET_CASE_HAS_NO_FLAGS, N00BB_NO_ARGS);
+                lower_help(context, N00B_TEXT_FLAGSET_CASE_HAS_NOTHING_HELP,
+                           N00BB_NO_ARGS);
+                valid = false;
+                continue;
+            }
+            tests[count++] = (n00bb_flag_test_t){.case_index = c,
+                                                 .pattern = pattern};
+        }
+    }
+    bool ok = true;
+    if (valid) {
+        ir_uint_t relevant = 0;
+        unsigned relevant_bits = 0;
+        for (size_t t = 0; t < count; t++) relevant |= tests[t].pattern->mask;
+        for (ir_uint_t bits = relevant; bits; bits &= bits - 1)
+            relevant_bits++;
+        bool others = (info->all_mask & ~relevant) != 0;
+        bool exhaustive = relevant_bits <= FLAGSET_ANALYSIS_BITS;
+        if (relevant_bits <= FLAGSET_ANALYSIS_BITS) {
+            for (int outside = 0; outside <= (others ? 1 : 0); outside++) {
+                ir_uint_t value = 0;
+                do {
+                    size_t winner = n00bb_flag_winner(tests, count, value,
+                                                      outside);
+                    if (winner < count) tests[winner].live = true;
+                    else exhaustive = false;
+                    value = (value - relevant) & relevant;
+                } while (value);
+            }
+        }
+        else {
+            for (size_t t = 0; t < count; t++)
+                tests[t].live = !n00bb_flag_covered(tests, t);
+        }
+        for (size_t t = 0; t < count; t++) {
+            if (tests[t].live) continue;
+            lower_report(context, N00B_DIAG_FLAGSET_CASE_UNREACHABLE,
+                lower_span_for_tree(context, tests[t].pattern->node),
+                N00B_TEXT_FLAGSET_CASE_NEVER_MATCHES, N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_FLAGSET_CASE_REORDER_HELP,
+                       N00BB_NO_ARGS);
+        }
+        ok = n00bb_flag_dispatch(context, frame, tests, count, info,
+                                 relevant, relevant_bits, span)
+            && (!exhaustive || n00bb_flagset_never_unmatched(frame));
+    }
+    else {
+        ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
+        ok = jump && ir_instr_operand_block(jump, frame->default_block);
+    }
+    core_free(tests);
+    frame->flags_dispatched = true;
+    frame->tested = frame->total;
+    frame->test_block = frame->default_block;
+    context->block = frame->default_block;
+    if (!ok)
+        lower_internal(context, span, "could not emit the flagset switch");
+    return ok;
+}
+
+static bool
+n00bb_switch_uses_flags(const n00bb_switch_frame_t *frame)
+{
+    for (size_t c = 0; c < frame->cases.len; c++)
+        for (size_t p = 0; p < frame->cases.data[c].patterns.len; p++)
+            if (frame->cases.data[c].patterns.data[p].flags) return true;
+    return false;
+}
+
 static bool
 n00bb_emit_case_tests(ir_lower_context_t *context,
                       n00bb_lower_context_t *lower,
@@ -3134,6 +3485,13 @@ n00bb_emit_case_tests(ir_lower_context_t *context,
         return false;
     }
     context->block = frame->test_block;
+    if (frame->flags_dispatched) return true;
+    parse_sym_entry_t *owner = nullptr;
+    if (n00bb_flagset_type(lower->unit, tu_state(lower->unit),
+                           frame->subject->type, &owner))
+        return n00bb_flagset_switch(context, lower, frame, owner);
+    if (n00bb_switch_uses_flags(frame))
+        return n00bb_flagset_switch(context, lower, frame, nullptr);
     bool ok = true;
     if (case_index >= frame->cases.len) {
         if (!frame->total && frame->test_block != frame->default_block) {

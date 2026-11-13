@@ -322,8 +322,11 @@ typedef struct {
     parse_tree_t *node;
     parse_tree_t *upper;
     core_string_t name;
+    parse_tree_t *flags;
+    ir_uint_t mask;
     bool is_range;
     bool inclusive;
+    bool exact;
 } n00bb_switch_pattern_t;
 
 core_list_decl(n00bb_switch_pattern_t);
@@ -356,6 +359,7 @@ typedef struct {
     bool emitted;
     bool join_reachable;
     bool active;
+    bool flags_dispatched;
 } n00bb_switch_frame_t;
 
 core_list_decl(n00bb_switch_frame_t);

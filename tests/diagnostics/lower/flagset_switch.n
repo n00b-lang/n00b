@@ -1,0 +1,62 @@
+flagset Perm { read, write, exec, rw = read + write }
+
+func bare(p: Perm) -> int {
+    switch p {
+        case read { return 1 }
+        else { return 0 }
+    }
+}
+
+func unknown(p: Perm) -> int {
+    switch p {
+        case has red { return 1 }
+        else { return 0 }
+    }
+}
+
+func nothing(p: Perm) -> int {
+    switch p {
+        case has nil { return 1 }
+        case has read - read { return 2 }
+        else { return 0 }
+    }
+}
+
+func covered(p: Perm) -> int {
+    switch p {
+        case has read { return 1 }
+        case has rw { return 2 }
+        case is read + exec { return 3 }
+        case is write, is write { return 4 }
+        else { return 0 }
+    }
+}
+
+func complete(p: Perm) -> int {
+    switch p {
+        case has read { return 1 }
+        case has write { return 2 }
+        case has exec { return 3 }
+        case is nil { return 4 }
+    }
+}
+
+func incomplete(p: Perm) -> int {
+    switch p {
+        case has read { return 1 }
+        case is nil { return 4 }
+    }
+}
+
+func not_flags(n: int) -> int {
+    switch n {
+        case is rw { return 1 }
+        else { return 0 }
+    }
+}
+
+func start() {
+    let p = Perm.read
+    let total = bare(p) + unknown(p) + nothing(p) + covered(p) + complete(p)
+    require total + incomplete(p) + not_flags(3) > 0
+}
