@@ -5,3 +5,22 @@ func circle() -> int {
 func triangle() -> int {
     return 3
 }
+
+enum Tone { warm, cool }
+enum Shade { cool_shade, warm_shade }
+flagset Side { left_side, right_side, both_sides = left_side + right_side }
+private enum Hidden_Tone { secret_tone }
+enum Light_State { idle, lit }
+enum Motor_State { idle, running }
+
+func tone_of() -> Tone {
+    return cool
+}
+
+func sides_of() -> Side {
+    return both_sides
+}
+
+func hidden_tone() -> Hidden_Tone {
+    return secret_tone
+}

@@ -684,6 +684,13 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                        N00BB_ARGS(ARG_TEXT(named->name)));
             return (ir_lower_result_t){.status = IR_LOWER_FAILED};
         }
+        if (symbol && symbol->kind == PARSE_SYM_ENUM_CONST
+            && symbol->owner_type) {
+            ir_value_t *member = n00bb_emit_enum_member(context, symbol, span);
+            return member ? (ir_lower_result_t){IR_LOWER_VALUE, member}
+                : lower_internal(context, span,
+                                 "could not emit an enum or flagset member");
+        }
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);
         if (!binding && symbol

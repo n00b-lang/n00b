@@ -10,6 +10,16 @@
 #include "diagnostics.h"
 #include "preprocessor.h"
 
+static void
+collect_member_candidates(core_translation_unit_t *consumer,
+                          core_translation_unit_t *provider,
+                          parse_scope_t *values, parse_scope_t *types,
+                          core_string_t name,
+                          core_list_t(parse_sym_entry_ptr_t) *out);
+static void
+report_ambiguous_member(core_translation_unit_t *unit, parse_tree_t *node,
+                        core_string_t name,
+                        const core_list_t(parse_sym_entry_ptr_t) *found);
 static bool
 append_link_symbol_key(parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
@@ -1376,6 +1386,22 @@ resolve_member_site(parse_grammar_t *grammar, core_translation_unit_t *unit,
         symbol = granted;
         package_export = true;
     }
+    if (!symbol && !type && !type_reference) {
+        core_list_t(parse_sym_entry_ptr_t) members =
+            core_list_new(parse_sym_entry_ptr_t);
+        collect_member_candidates(unit, imported, exposed_scope,
+                                  exposed_types, member, &members);
+        if (members.len > 1)
+            report_ambiguous_member(unit, node, member, &members);
+        parse_sym_entry_t *only = members.len == 1 ? members.data[0]
+                                                   : nullptr;
+        bool ambiguous = members.len > 1;
+        core_list_free(members);
+        if (ambiguous) return false;
+        if (only)
+            return parse_tree_set_resolution_symbol(node, only)
+                && parse_tree_mark_direct_symbol_reference(node);
+    }
     if (type_reference || (!symbol && type)) {
         bool visible = type && type->kind == PARSE_SYM_TYPEDEF
             && (package_export
@@ -1797,6 +1823,78 @@ collect_origin_candidates(core_translation_unit_t *consumer,
 }
 
 static bool
+enum_like_scope(const parse_scope_t *scope)
+{
+    return scope
+        && (core_string_eq(scope->scope_tag, CORE_STRING_STATIC("enum"))
+            || core_string_eq(scope->scope_tag,
+                              CORE_STRING_STATIC("flagset")));
+}
+
+static parse_sym_entry_t *
+visible_enum_type(core_translation_unit_t *consumer,
+                  core_translation_unit_t *provider, parse_sym_entry_t *entry)
+{
+    parse_sym_entry_t *declaration = canonical_symbol(entry);
+    return enum_like_scope(declaration->member_scope)
+        && (!consumer || n00bb_symbol_visible_to(consumer, provider,
+                                                 declaration))
+        ? declaration : nullptr;
+}
+
+static void
+collect_member_candidates(core_translation_unit_t *consumer,
+                          core_translation_unit_t *provider,
+                          parse_scope_t *values, parse_scope_t *types,
+                          core_string_t name,
+                          core_list_t(parse_sym_entry_ptr_t) *out)
+{
+    parse_scope_t *scopes[] = {values, types};
+    for (size_t s = 0; s < 2; s++)
+        for (parse_sym_entry_t *entry = scopes[s]
+                 ? scopes[s]->first_in_scope : nullptr;
+             entry; entry = entry->next_in_scope) {
+            parse_sym_entry_t *declaration = visible_enum_type(consumer,
+                                                               provider,
+                                                               entry);
+            parse_sym_entry_t *member = declaration
+                ? parse_symtab_lookup_in(declaration->member_scope, name)
+                : nullptr;
+            if (member && member->kind == PARSE_SYM_ENUM_CONST
+                && member->type
+                && !n00bb_same_declaration_listed(out, member))
+                core_list_push(*out, member);
+        }
+}
+
+static void
+report_ambiguous_member(core_translation_unit_t *unit, parse_tree_t *node,
+                        core_string_t name,
+                        const core_list_t(parse_sym_entry_ptr_t) *found)
+{
+    core_buffer_t choices = {0};
+    for (size_t i = 0; i < found->len; i++)
+        core_buffer_printf(&choices, "%s`%.*s.%.*s`",
+            i == 0 ? "" : i + 1 == found->len ? " or " : ", ",
+            (int)found->data[i]->owner_type->name.u8_bytes,
+            found->data[i]->owner_type->name.data,
+            (int)name.u8_bytes, name.data);
+    core_buffer_t first = {0};
+    core_buffer_printf(&first, "%.*s.%.*s",
+                       (int)found->data[0]->owner_type->name.u8_bytes,
+                       found->data[0]->owner_type->name.data,
+                       (int)name.u8_bytes, name.data);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_report(diagnostics, unit, N00B_DIAG_AMBIGUOUS_MEMBER_NAME,
+        n00bb_node_span(node), N00B_TEXT_MEMBER_NAME_IS_AMBIGUOUS,
+        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(core_buffer_string(&choices))));
+    n00bb_report_help(diagnostics, N00B_TEXT_QUALIFY_THE_MEMBER_NAME,
+        N00BB_ARGS(ARG_TEXT(core_buffer_string(&first))));
+    core_buffer_release(&choices);
+    core_buffer_release(&first);
+}
+
+static bool
 candidates_conflict(const core_list_t(parse_sym_entry_ptr_t) *candidates,
                     bool call)
 {
@@ -1988,6 +2086,49 @@ bring_scope_entries(bring_check_t *check, parse_scope_t *scope,
 }
 
 static bool
+bring_member_entries(bring_check_t *check, const n00bb_import_source_t *source)
+{
+    bool ok = true;
+    core_list_t(parse_sym_entry_ptr_t) seen =
+        core_list_new(parse_sym_entry_ptr_t);
+    parse_scope_t *scopes[] = {source->values, source->types};
+    for (size_t s = 0; s < 2; s++)
+        for (parse_sym_entry_t *entry = scopes[s]
+                 ? scopes[s]->first_in_scope : nullptr;
+             entry; entry = entry->next_in_scope) {
+            parse_sym_entry_t *declaration = visible_enum_type(check->unit,
+                source->provider, entry);
+            if (!declaration
+                || n00bb_same_declaration_listed(&seen, declaration))
+                continue;
+            core_list_push(seen, declaration);
+            for (parse_sym_entry_t *member =
+                     declaration->member_scope->first_in_scope;
+                 member; member = member->next_in_scope) {
+                if (member->kind != PARSE_SYM_ENUM_CONST || !member->type)
+                    continue;
+                core_list_t(parse_sym_entry_ptr_t) same =
+                    core_list_new(parse_sym_entry_ptr_t);
+                collect_origin_candidates(check->unit, source->provider,
+                                          source->values, member->name,
+                                          &same);
+                bool declared = same.len != 0;
+                same.len = 0;
+                collect_member_candidates(check->unit, source->provider,
+                                          source->values, source->types,
+                                          member->name, &same);
+                bool unique = same.len == 1;
+                core_list_free(same);
+                if (!declared && unique)
+                    ok = add_brought_entry(check, &member->name, member,
+                                           source) && ok;
+            }
+        }
+    core_list_free(seen);
+    return ok;
+}
+
+static bool
 bring_named_entries(bring_check_t *check, const n00bb_import_source_t *source)
 {
     core_translation_unit_t *unit = check->unit;
@@ -1997,6 +2138,17 @@ bring_named_entries(bring_check_t *check, const n00bb_import_source_t *source)
                               source->brought->remote, &candidates);
     collect_origin_candidates(unit, source->provider, source->types,
                               source->brought->remote, &candidates);
+    if (!candidates.len) {
+        collect_member_candidates(unit, source->provider, source->values,
+                                  source->types, source->brought->remote,
+                                  &candidates);
+        if (candidates.len > 1) {
+            report_ambiguous_member(unit, source->brought->node,
+                                    source->brought->remote, &candidates);
+            core_list_free(candidates);
+            return false;
+        }
+    }
     bool ok = candidates.len != 0;
     if (!ok) {
         core_diagnostics_t *diagnostics =
@@ -2051,6 +2203,7 @@ check_brought_names(core_translation_unit_t *unit, n00bb_tu_state_t *state)
         }
         ok = bring_scope_entries(&check, source->values, source) && ok;
         ok = bring_scope_entries(&check, source->types, source) && ok;
+        ok = bring_member_entries(&check, source) && ok;
     }
     core_dict_free(&check.names);
     core_list_free(check.entries);
@@ -2083,6 +2236,49 @@ report_unresolved_name(core_translation_unit_t *unit,
                                     N00BB_NAMES_VALUES))
         (void)n00bb_explain_hidden_name(diagnostics, unit, site->scope, name,
                                         false);
+}
+
+static bool
+resolve_module_member_name(core_translation_unit_t *unit,
+                           n00bb_tu_state_t *state,
+                           n00bb_link_use_site_t *site)
+{
+    core_string_t name = site->member_name;
+    if (!name.data) return true;
+    core_list_t(parse_sym_entry_ptr_t) found =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes; scope;
+         scope = scope->all_next) {
+        if (!core_string_eq(scope->scope_tag, CORE_STRING_STATIC("enum"))
+            && !core_string_eq(scope->scope_tag,
+                               CORE_STRING_STATIC("flagset"))) continue;
+        parse_sym_entry_t *member = parse_symtab_lookup_in(scope, name);
+        if (member && member->kind == PARSE_SYM_ENUM_CONST && member->type
+            && member->owner_type)
+            core_list_push(found, member);
+    }
+    const core_list_t(n00bb_import_source_t) *sources =
+        found.len ? nullptr : unqualified_import_sources(unit);
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        core_string_t provided = {0};
+        if (sources->data[i].brought
+            && source_provides(&sources->data[i], name, &provided))
+            collect_member_candidates(unit, sources->data[i].provider,
+                                      sources->data[i].values,
+                                      sources->data[i].types, provided,
+                                      &found);
+    }
+    bool ok = true;
+    if (found.len == 1) {
+        link_use_site_bind(site, found.data[0]);
+        ok = parse_tree_set_resolution_symbol(site->node, found.data[0]);
+    }
+    else if (found.len > 1) {
+        report_ambiguous_member(unit, site->node, name, &found);
+        site->unresolved = true;
+    }
+    core_list_free(found);
+    return ok;
 }
 
 bool
@@ -2166,6 +2362,13 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                     return false;
                 if (!site->symbol)
                     resolve_local_enum_constant(grammar, state, site);
+                if (!site->symbol
+                    && !resolve_module_member_name(unit, state, site))
+                    return false;
+                if (site->unresolved) {
+                    all_resolved = false;
+                    continue;
+                }
             }
             if (site->symbol && site->symbol->kind == PARSE_SYM_MODULE
                 && !site->dotted_path

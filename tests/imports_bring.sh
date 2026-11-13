@@ -49,3 +49,9 @@ rejects duplicate N00B-N0014 \
 rejects all_overlap N00B-N0014 'bring all from geo\nbring all from shapes\n'
 rejects local_clash N00B-N0014 \
     'bring circle from geo\nfunc circle() -> int {\n    return 5\n}\n'
+rejects member_ambiguous N00B-N0026 \
+    'enum A { x, y }\nenum B { x, z }\nrequire x == x\n'
+rejects private_member N00B-N0015 'bring secret_tone from shapes\n'
+rejects qualified_private_member 'has no member `secret_tone`' \
+    'import shapes\nrequire shapes.secret_tone == shapes.secret_tone\n'
+rejects brought_ambiguous N00B-N0026 'bring idle from shapes\n'

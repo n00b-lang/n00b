@@ -1,3 +1,8 @@
 bring all from shapes
 
 require triangle() == 3 and circle() == 9
+require tone_of() == cool and tone_of() != warm
+require Tone.warm == warm and Shade.cool_shade == cool_shade
+let wanted: Side = left_side
+require sides_of().left_side == wanted and sides_of() == both_sides
+require hidden_tone() == hidden_tone()

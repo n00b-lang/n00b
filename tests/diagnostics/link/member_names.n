@@ -1,0 +1,13 @@
+enum Phase { idle, busy }
+enum Handshake { idle, waiting }
+enum Form { nfc, nfd }
+
+func nfc() -> int {
+    return 1
+}
+
+func start() {
+    require nfc() == 1 and Form.nfc != nfd
+    require Phase.busy == busy and waiting == Handshake.waiting
+    let state = idle
+}

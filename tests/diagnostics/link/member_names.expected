@@ -1,0 +1,2 @@
+tests/diagnostics/link/member_names.n:12:17: error N00B-N0026: `idle` could be `Handshake.idle` or `Phase.idle`
+  help: write the type's name to choose one, such as `Handshake.idle`
