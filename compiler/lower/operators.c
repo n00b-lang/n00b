@@ -116,6 +116,17 @@ ir_value_t *
 n00bb_emit_enum_member(ir_lower_context_t *context, parse_sym_entry_t *member,
                        ir_span_t span)
 {
+    if (n00bb_flagset_member(member)) {
+        const n00bb_flagset_value_t *flags = member->has_comptime_value
+            ? member->comptime_value : nullptr;
+        ir_instr_t *mask = flags && member->type
+            ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONST, span)
+            : nullptr;
+        return mask && ir_lower_set_temp_dest(context, mask,
+                CORE_STRING_STATIC("__n00bb_"), member->type)
+            && ir_instr_operand_name(mask, member->name)
+            && ir_instr_operand_uint(mask, flags->mask) ? mask->dest : nullptr;
+    }
     n00bb_enum_value_t *ordinal = member && member->has_comptime_value
         ? member->comptime_value : nullptr;
     ir_instr_t *constant = ordinal && member->type

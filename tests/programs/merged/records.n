@@ -291,6 +291,11 @@ if held {
 require access_slice(Access.run) == 0 and access_slice(some_access) == 1
 require access_slice(Access.edit + Access.admin) == 2
 require access_slice(Access.every) == 3
+let bare_access: Access = see + run
+require bare_access.rw == see and bare_access.rw != rw
+require access_slice(edit) == 2 and access_slice(every) == 3
+let bare_mode: Mode = b
+require bare_mode == Mode.b and bare_mode != c
 record Pair {
     lo:   char
     hi:   char
