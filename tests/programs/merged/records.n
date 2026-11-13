@@ -192,6 +192,76 @@ let q: Packed = (name = "q", x = false, mode = Mode.a, small = 1,
                  perm = Perm.exec, maybe = true, count = 3,
                  inner = (on = false, mode = Mode.a), y = true)
 require q.y and !q.x and q.small == 1
+
+flagset Access { see, edit, run, admin, rw = see + edit, every = ~nil }
+
+func access_class(a: Access) -> int {
+    switch a {
+        case is nil { return 0 }
+        case is see { return 1 }
+        case has rw { return 2 }
+        case has run, is edit { return 3 }
+        else { return 9 }
+    }
+}
+
+func access_kind(a: Access) -> int {
+    return switch a {
+        case is every { -> 1 }
+        case has admin { -> 2 }
+        case is rw { -> 3 }
+        else { -> 4 }
+    }
+}
+
+func access_full(a: Access) -> int {
+    switch a {
+        case has see { return 1 }
+        case has edit { return 2 }
+        case has run + admin { return 3 }
+        case has run { return 4 }
+        case has admin { return 5 }
+        case is nil { return 6 }
+    }
+}
+
+flagset Wide { w0, w1, w2, w3, w4, w5, w6, w7, w8, w9 }
+
+func wide_class(w: Wide) -> int {
+    switch w {
+        case is w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 { return 1 }
+        case has w9 + w0 { return 2 }
+        case has w9 { return 3 }
+        case is nil { return 4 }
+        else { return 5 }
+    }
+}
+
+require access_class(Access.see - Access.see) == 0
+require access_class(Access.see) == 1
+require access_class(Access.see + Access.admin) == 9
+require access_class(Access.rw) == 2
+require access_class(Access.rw + Access.run) == 2
+require access_class(Access.run + Access.admin) == 3
+require access_class(Access.edit) == 3
+require access_class(Access.edit + Access.admin) == 9
+require access_class(Access.admin) == 9
+require access_kind(Access.every) == 1
+require access_kind(Access.admin + Access.see) == 2
+require access_kind(Access.rw) == 3
+require access_kind(Access.rw + Access.run) == 4
+require access_full(Access.see + Access.admin) == 1
+require access_full(Access.edit + Access.run) == 2
+require access_full(Access.run + Access.admin) == 3
+require access_full(Access.run) == 4
+require access_full(Access.admin) == 5
+require access_full(Access.see - Access.see) == 6
+require wide_class(Wide.w0 + Wide.w1 + Wide.w2 + Wide.w3 + Wide.w4 + Wide.w5
+    + Wide.w6 + Wide.w7 + Wide.w8) == 1
+require wide_class(Wide.w9 + Wide.w0 + Wide.w2) == 2
+require wide_class(Wide.w9) == 3
+require wide_class(Wide.w0 - Wide.w0) == 4
+require wide_class(Wide.w1) == 5
 record Pair {
     lo:   char
     hi:   char

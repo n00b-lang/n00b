@@ -1,0 +1,19 @@
+tests/diagnostics/lower/flagset_switch.n:5:14: error N00B-S0089: this `case` on flagset `Perm` needs `has` or `is`
+  help: write `has` to match when these flags are set, or `is` to match exactly these flags
+tests/diagnostics/lower/flagset_switch.n:12:18: error N00B-S0091: `red` is not a flag of `Perm`
+tests/diagnostics/lower/flagset_switch.n:19:14: error N00B-S0092: this `case has` names no flags, so it would match every value
+  help: use `else` to match the rest, or `case is nil` to match no flags set
+tests/diagnostics/lower/flagset_switch.n:20:14: error N00B-S0092: this `case has` names no flags, so it would match every value
+  help: use `else` to match the rest, or `case is nil` to match no flags set
+tests/diagnostics/lower/flagset_switch.n:28:14: warning N00B-S0093: this case can never match: earlier cases match every value it would
+  help: move it before the cases that cover it, or remove it
+tests/diagnostics/lower/flagset_switch.n:28:23: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/flagset_switch.n:29:14: warning N00B-S0093: this case can never match: earlier cases match every value it would
+  help: move it before the cases that cover it, or remove it
+tests/diagnostics/lower/flagset_switch.n:29:31: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/flagset_switch.n:30:24: warning N00B-S0093: this case can never match: earlier cases match every value it would
+  help: move it before the cases that cover it, or remove it
+tests/diagnostics/lower/flagset_switch.n:44:6: error N00B-S0012: `incomplete` can reach the end of its body without returning a value
+  tests/diagnostics/lower/flagset_switch.n:49:1: note: a path through the body reaches its end here
+  help: add a `return` on every path through the body
+tests/diagnostics/lower/flagset_switch.n:53:14: error N00B-S0090: `case is` only matches flagsets, but this `switch` matches `int`
