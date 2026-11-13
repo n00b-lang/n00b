@@ -323,6 +323,18 @@ N00B_DIAG(FLAGSET_CASE_UNREACHABLE, "N00B-S0093", WARNING,
     "case would match is already matched by an earlier one, for example\n"
     "`case has read` before `case has read + write`. Move it before the\n"
     "cases that cover it, or remove it.")
+N00B_DIAG(FLAGSET_FIELD_READ_ONLY, "N00B-S0094", ERROR,
+    "a flag field of a flagset is assigned",
+    "`perms.rw` is a read-only slice of `perms`: the same flagset with every\n"
+    "flag outside `rw` cleared. Change the flags by assigning the whole\n"
+    "value instead:\n"
+    "    perms = perms + Perm.write\n"
+    "    perms = perms - Perm.rw")
+N00B_DIAG(FLAGSET_SLICE_COMPARISON, "N00B-S0095", ERROR,
+    "a flag field is compared with flags it cannot hold",
+    "`perms.rw` only ever holds flags in `rw`, so comparing it with a value\n"
+    "that has other flags set can never be equal. Compare it with flags in\n"
+    "`rw`, or compare the whole value.")
 N00B_DIAG(ARRAY_KEPT, "N00B-S0072", ERROR,
     "an array parameter is kept beyond the call",
     "An array passed as an ordinary parameter is only lent for the call.\n"

@@ -127,21 +127,22 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             ir_instr_t *mask = value
                 ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONST, span)
                 : nullptr;
-            ir_instr_t *test = mask
-                ? ir_lower_emit_instruction(context, IR_OP_BITSET_CONTAINS,
-                                            span) : nullptr;
-            if (!base || !value || !mask || !test
+            ir_instr_t *slice = mask
+                ? ir_lower_emit_instruction(context,
+                                            IR_OP_BITSET_INTERSECTION, span)
+                : nullptr;
+            if (!base || !value || !mask || !slice
                 || !ir_lower_set_temp_dest(context, mask, CORE_STRING_STATIC("__n00bb_"),
                     member->type)
                 || !ir_instr_operand_name(mask, member->name)
                 || !ir_instr_operand_uint(mask, value->mask)
-                || !ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_"),
-                    result_type)
-                || !ir_instr_operand_value(test, base)
-                || !ir_instr_operand_value(test, mask->dest))
+                || !ir_lower_set_temp_dest(context, slice,
+                    CORE_STRING_STATIC("__n00bb_"), member->type)
+                || !ir_instr_operand_value(slice, base)
+                || !ir_instr_operand_value(slice, mask->dest))
                 return lower_internal(context, span,
-                                   "could not emit a flagset member test");
-            return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
+                                   "could not emit a flagset slice");
+            return (ir_lower_result_t){IR_LOWER_VALUE, slice->dest};
         }
         if (n00bb_flagset_member(member)) {
             n00bb_flagset_value_t *value = member->has_comptime_value
