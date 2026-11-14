@@ -498,6 +498,14 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     thread_area_t *area = (thread_area_t *)base;
     area->bytes = bytes;
     uintptr_t thread_pointer = n00b_linux_tls_init(base + control);
+    // The area joins the list before the thread starts, which may ask for
+    // its stack's top right away. Its tid is nonzero until the kernel clears
+    // it, so it isn't taken for a finished thread's meanwhile.
+    atomic_store_explicit(&area->tid, -1, memory_order_relaxed);
+    lock_threads();
+    area->next = threads;
+    threads = area;
+    unlock_threads();
     unsigned long flags = LINUX_CLONE_VM | LINUX_CLONE_FS | LINUX_CLONE_FILES
         | LINUX_CLONE_SIGHAND | LINUX_CLONE_THREAD | LINUX_CLONE_SYSVSEM
         | LINUX_CLONE_SETTLS | LINUX_CLONE_PARENT_SETTID
@@ -505,14 +513,17 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     long child = n00b_linux_clone(flags, top, &area->tid, thread_pointer,
                                   entry, argument);
     if (child < 0) {
+        lock_threads();
+        for (thread_area_t **link = &threads; *link; link = &(*link)->next)
+            if (*link == area) {
+                *link = area->next;
+                break;
+            }
+        unlock_threads();
         (void)n00b_linux_syscall6(__NR_munmap, mapped, (long)bytes, 0, 0, 0,
                                   0);
         return -1;
     }
-    lock_threads();
-    area->next = threads;
-    threads = area;
-    unlock_threads();
     return 0;
 }
 
