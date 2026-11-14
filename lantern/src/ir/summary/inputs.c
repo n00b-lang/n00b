@@ -386,13 +386,14 @@ get_u64(summary_reader_t *r)
 }
 
 static void
-put_function(core_buffer_t *out, const ir_func_t *function)
+put_function(core_buffer_t *out, const ir_summary_texts_t *texts,
+             const ir_func_t *function)
 {
     const ir_func_t *body = function
         ? ir_func_definition((ir_func_t *)function) : nullptr;
-    put_text(out, nullptr, body && body->owner
+    put_text(out, texts, body && body->owner
         ? ir_module_name((ir_module_t *)body->owner) : (core_string_t){0});
-    put_text(out, nullptr, body ? body->name : (core_string_t){0});
+    put_text(out, texts, body ? body->name : (core_string_t){0});
 }
 
 static bool
@@ -412,12 +413,12 @@ get_function(summary_reader_t *r, const ir_func_t **out)
 bool
 ir_summary_encode_stored(ir_summaries_t *summaries,
                          const ir_func_t *function, uint64_t body,
-                         core_buffer_t *out)
+                         const ir_summary_texts_t *texts, core_buffer_t *out)
 {
     ir_summary_t *summary = ir_summary_of(summaries, function);
     if (!summary) return false;
     core_buffer_t codec = {0};
-    bool ok = ir_summary_encode(summary, &codec);
+    bool ok = encode_summary(summary, &codec, texts, true);
     put_u32(out, (uint32_t)codec.byte_len);
     core_buffer_append(out, codec.data, codec.byte_len);
     core_buffer_release(&codec);
@@ -427,7 +428,7 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
     put_u32(out, (uint32_t)summary->deps.len);
     for (size_t d = 0; d < summary->deps.len; d++) {
         const ir_func_t *dep = summary->deps.data[d].function;
-        put_function(out, dep);
+        put_function(out, texts, dep);
         put_u64(out, stable_content(target_summary(summaries,
                                                    (ir_func_t *)dep)));
     }
@@ -436,19 +437,19 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
         const summary_input_t *input = &summary->inputs.data[i];
         put_u8(out, input->kind);
         put_u32(out, input->site);
-        put_function(out, input->caller);
-        put_function(out, input->function);
-        put_global(out, nullptr, input->global);
-        put_text(out, nullptr, input->module
+        put_function(out, texts, input->caller);
+        put_function(out, texts, input->function);
+        put_global(out, texts, input->global);
+        put_text(out, texts, input->module
             ? ir_module_name((ir_module_t *)input->module)
             : (core_string_t){0});
         th_ctx *types = input->module
             ? ir_module_types((ir_module_t *)input->module) : nullptr;
-        put_text(out, nullptr, types && input->from
+        put_text(out, texts, types && input->from
             ? ir_types_text(types, input->from) : (core_string_t){0});
-        put_text(out, nullptr, types && input->to
+        put_text(out, texts, types && input->to
             ? ir_types_text(types, input->to) : (core_string_t){0});
-        put_text(out, nullptr, input->effect);
+        put_text(out, texts, input->effect);
         put_u64(out, input->answer);
     }
     return ok;
@@ -461,7 +462,8 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                          ir_summary_module_fn module_named,
                          ir_summary_body_fn body_matches)
 {
-    summary_reader_t r = {.data = data, .size = size, .resolver = resolver};
+    summary_reader_t r = {.data = data, .size = size, .resolver = resolver,
+                          .texts = resolver ? resolver->texts : nullptr};
     uint32_t codec = get_u32(&r);
     if (r.failed || codec > size - r.at || !resolver) return nullptr;
     ir_summary_t *summary = ir_summary_new(nullptr, function);
@@ -545,7 +547,8 @@ decode_stored_body(ir_summary_t *summary)
 {
     const ir_func_t *function = summary->function;
     ir_summary_t *decoded = decode_summary(nullptr, function,
-        summary->encoded, summary->encoded_size, &summary->resolver, nullptr);
+        summary->encoded, summary->encoded_size, &summary->resolver,
+        summary->resolver.texts);
     summary->encoded = nullptr;
     if (!decoded)
         decoded = ir_summary_conservative(nullptr, (ir_func_t *)function);

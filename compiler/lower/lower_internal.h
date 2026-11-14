@@ -1732,6 +1732,12 @@ n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
 
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global);
+bool
+n00bb_summary_global_named(void *context, const ir_func_t *function,
+                           const ir_global_t *global);
+core_translation_unit_t *
+n00bb_visibility_unit(n00bb_link_analysis_t *analysis,
+                      const ir_module_t *module);
 
 typedef core_list_t(core_string_t) text_list_t;
 

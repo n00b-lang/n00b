@@ -833,6 +833,29 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 
+bool
+n00bb_summary_global_named(void *context, const ir_func_t *function,
+                           const ir_global_t *global)
+{
+    n00bb_link_analysis_t *analysis = context;
+    if (!analysis->global_symbols_ready) {
+        core_dict_init(&analysis->global_symbols, nullptr, nullptr);
+        index_module_globals(analysis, &analysis->global_symbols);
+        analysis->global_symbols_ready = true;
+    }
+    bool found = false;
+    parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
+                                              (void *)global, &found);
+    if (!found || !symbol || symbol_exported_by_default(symbol)
+        || parse_sym_binding(symbol,
+               CORE_STRING_STATIC("n00bb.external-export")))
+        return true;
+    core_translation_unit_t *owner = canonical_symbol(symbol)->owner_unit;
+    core_translation_unit_t *viewer = function && function->owner
+        ? n00bb_visibility_unit(analysis, function->owner) : nullptr;
+    return !owner || !viewer || owner == viewer;
+}
+
 void
 param_text(core_buffer_t *out, const ir_func_t *function, uint32_t p)
 {

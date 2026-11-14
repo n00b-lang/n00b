@@ -116,7 +116,7 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
             path.flags &= (uint8_t)~IR_SPATH_WRITE;
             if (!(path.flags & IR_SPATH_READ)) continue;
         }
-        if (!constant_read(&path)) add_function_path(summary, pt->f, &path);
+        if (!constant_read(&path)) add_function_path(pt->summaries, summary, pt->f, &path);
     }
     core_list_free(names);
 }

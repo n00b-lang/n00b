@@ -786,8 +786,8 @@ add_unknown_path(ir_summary_t *summary, uint8_t flags)
 }
 
 static void
-add_function_path(ir_summary_t *summary, const ir_func_t *f,
-                  ir_spath_t *path)
+add_function_path(ir_summaries_t *summaries, ir_summary_t *summary,
+                  const ir_func_t *f, ir_spath_t *path)
 {
     th_type *type = path->root == IR_SPLACE_PARAM && path->param < f->n_params
             && f->params[path->param]->type
@@ -797,6 +797,18 @@ add_function_path(ir_summary_t *summary, const ir_func_t *f,
         || kind == TH_TRAIT) {
         path->depth  = 0;
         path->flags |= IR_SPATH_DEEP;
+    }
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    if ((path->root == IR_SPLACE_GLOBAL || path->root == IR_SPLACE_THREAD)
+        && path->depth && path->global && hooks && hooks->global_named
+        && !hooks->global_named(hooks->context, f,
+                                ir_global_identity(path->global))) {
+        // Writing one part isn't writing all of it.
+        path->depth  = 0;
+        path->steps  = nullptr;
+        path->flags  = (uint8_t)((path->flags & ~IR_SPATH_MUST)
+                                 | IR_SPATH_DEEP);
+        path->type   = ir_global_identity(path->global)->type;
     }
     add_path(summary, path);
 }

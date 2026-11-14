@@ -394,8 +394,9 @@ n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
         && lease_storage_record(record);
 }
 
-static core_translation_unit_t *
-visibility_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+core_translation_unit_t *
+n00bb_visibility_unit(n00bb_link_analysis_t *analysis,
+                      const ir_module_t *module)
 {
     bool found = false;
     core_translation_unit_t *unit = core_dict_get(&analysis->visibility_units,
@@ -436,8 +437,8 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
                   const ir_module_t *other)
 {
     n00bb_link_analysis_t *analysis = context;
-    core_translation_unit_t *from = visibility_unit(analysis, viewer);
-    core_translation_unit_t *to   = visibility_unit(analysis, other);
+    core_translation_unit_t *from = n00bb_visibility_unit(analysis, viewer);
+    core_translation_unit_t *to   = n00bb_visibility_unit(analysis, other);
     return !from || !to || from == to
         || core_dict_contains(import_closure(analysis, from), to);
 }
@@ -462,6 +463,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
+        .global_named = n00bb_summary_global_named,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,

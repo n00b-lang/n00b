@@ -105,6 +105,11 @@ typedef struct {
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
     bool (*global_reachable)(void *context, const ir_global_t *global);
+    // Whether code in `function`'s module can name `global`. Paths under a
+    // global it can't name are kept as the global's deep path: the module
+    // has no use for the detail, and it would grow every summary it reaches.
+    bool (*global_named)(void *context, const ir_func_t *function,
+                         const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
                             const ir_summary_t *summary);
     bool (*inherits_effect)(void *context, const ir_func_t *caller,
@@ -175,12 +180,16 @@ ir_sreturn_t ir_summary_return(const ir_summary_t *summary);
 bool         ir_summary_returns_fresh(const ir_summary_t *summary);
 void         ir_summary_set_return(ir_summary_t *summary,
                                    ir_sreturn_t returned);
+typedef struct ir_summary_texts_t ir_summary_texts_t;
 typedef struct {
     const ir_global_t *(*global)(void *context, core_string_t module,
                                  core_string_t name);
     ir_func_t *(*function)(void *context, core_string_t module,
                            core_string_t name);
     void *context;
+    // The table a stored summary's texts are numbered in, or null when
+    // they're written out in full.
+    const ir_summary_texts_t *texts;
 } ir_summary_resolver_t;
 bool          ir_summary_encode(const ir_summary_t *summary,
                                 core_buffer_t *out);
@@ -196,18 +205,20 @@ typedef bool (*ir_summary_body_fn)(void *context, const ir_func_t *function,
                                    uint64_t body);
 bool          ir_summary_encode_stored(ir_summaries_t *summaries,
                                        const ir_func_t *function,
-                                       uint64_t body, core_buffer_t *out);
+                                       uint64_t body,
+                                       const ir_summary_texts_t *texts,
+                                       core_buffer_t *out);
 ir_summary_t *ir_summary_decode_stored(ir_summaries_t *summaries,
                                        const ir_func_t *function,
                                        const uint8_t *data, size_t size,
                                        const ir_summary_resolver_t *resolver,
                                        ir_summary_module_fn module_named,
                                        ir_summary_body_fn body_matches);
-typedef struct {
+struct ir_summary_texts_t {
     uint32_t (*intern)(void *context, core_string_t text);
     core_string_t (*lookup)(void *context, uint32_t reference);
     void *context;
-} ir_summary_texts_t;
+};
 bool          ir_summary_encode_with(const ir_summary_t *summary,
                                      core_buffer_t *out,
                                      const ir_summary_texts_t *texts);
