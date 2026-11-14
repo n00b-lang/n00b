@@ -36,7 +36,8 @@ func wake(heap: Ref[internal.gc.core.Heap]) {
         __atomic_fetch_sub(ref heap.__value.fin_live, 1)
         return
     }
-    if !internal.threads.thread_start(ref thread_main, unsafe_cast[Ref[byte]] heap) {
+    if !internal.threads.collector_thread_start(ref thread_main,
+                                                unsafe_cast[Ref[byte]] heap) {
         __atomic_store(ref heap.__value.fin_thread, thread_idle)
         __atomic_fetch_sub(ref heap.__value.fin_live, 1)
     }
@@ -49,6 +50,8 @@ func release_live(heap: Ref[internal.gc.core.Heap]) {
     }
 }
 
+# The finalizer thread. The runtime detaches it from the collector when it
+# returns.
 func thread_main(argument: Ref[byte]) -> Ref[byte] {
     let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] argument
     finalizer_thread = true
@@ -59,7 +62,6 @@ func thread_main(argument: Ref[byte]) -> Ref[byte] {
         park(heap)
     }
     release_live(heap)
-    internal.gc.alloc.detach_runtime_mutator()
     return argument
 }
 

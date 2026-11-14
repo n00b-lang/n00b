@@ -1,22 +1,21 @@
-sys.internal.fs.read_file: (string) -> Array[u8] fail: int
+sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno
   effects may_fail may_trap may_allocate may_block may_io may_collect allocates_direct reinterprets may_input
   reads path.data.__value...
   traps explicit bounds unwrap arithmetic
   returns fresh
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
+  reads ?...
   traps explicit bounds unwrap arithmetic
-  returns fresh
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
-sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
-  effects may_fail may_trap may_block may_collect reinterprets reads_random
-  writes buffer.__value[]...
-  reads buffer
-  traps bounds
-sys.internal.random.fill: (modify 'T) -> nil fail: int
-  effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
-  traps bounds arithmetic
+sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
+  effects may_fail may_trap may_io may_collect reinterprets may_input reads_random
+  reads+writes buffer.__value[]...
+  traps explicit bounds arithmetic
+sys.internal.random.fill: (modify 'T) -> nil fail: Errno
+  effects may_fail may_trap may_allocate may_io may_collect allocates_direct reinterprets may_input reads_random
+  traps explicit bounds arithmetic
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
@@ -96,7 +95,7 @@ unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values.__value[]
   reads unicode.generated.categories.gc_stage2.__value[]
-  traps explicit bounds
+  traps bounds
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
   reads+writes self.data.__value[]

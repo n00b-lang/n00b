@@ -59,6 +59,10 @@ edits() {
     grep -q '^program runtime object ' "$tmp/log" \
         || fail "unchanged rebuild: no cached runtime-only object was used"
 
+    build work main_literal.n
+    build work main_literal.n
+    expect_stored "unchanged rebuild with module literals" ""
+
     sed 's/return 41/return 40 + 1/' "$tmp/work/leaf.n" >"$tmp/leaf.n"
     mv "$tmp/leaf.n" "$tmp/work/leaf.n"
     build work main.n

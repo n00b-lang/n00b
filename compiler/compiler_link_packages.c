@@ -183,6 +183,7 @@ register_unit_array_shape_metadata(parse_grammar_t *grammar,
     for (size_t i = 0; ok && i < values.len; i++)
         for (parse_sym_entry_t *symbol = values.data[i]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             ok = register_array_shape_for_symbol(grammar, unit, environment,
                                                   symbol, false);
             if (!ok)
@@ -195,7 +196,8 @@ register_unit_array_shape_metadata(parse_grammar_t *grammar,
     for (size_t i = 0; ok && i < types.len; i++)
         for (parse_sym_entry_t *symbol = types.data[i]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope)
-            if (is_named_type_declaration(grammar, symbol)) {
+            if (is_named_type_declaration(grammar, symbol)
+                && !n00bb_injected_member(symbol)) {
                 ok = register_array_shape_for_symbol(grammar, unit,
                     environment, symbol, true);
                 if (!ok)
@@ -562,9 +564,23 @@ register_enum_values_metadata(parse_grammar_t *grammar,
         return false;
     }
 
+    const n00bb_enum_range_t *range = parse_sym_binding(type_symbol,
+        CORE_STRING_STATIC("n00bb.enum-range"));
+    if (!range) {
+        core_list_free(items);
+        return false;
+    }
     core_buffer_t data = {0};
-    core_buffer_append(&data, "N0EV", 4);
-    bool ok = append_u32_le(&data, (uint32_t)count);
+    core_buffer_append(&data, "N0E2", 4);
+    char storage_flags[4] = {
+        range->is_open ? 1 : 0,
+        range->explicit_storage ? 1 : 0,
+        range->storage_signed ? 1 : 0,
+        0,
+    };
+    core_buffer_append(&data, storage_flags, sizeof(storage_flags));
+    bool ok = append_u32_le(&data, range->storage_bits)
+        && append_u32_le(&data, (uint32_t)count);
     for (size_t index = items.len; ok && index > 0; index--) {
         parse_sym_entry_t *item = items.data[index - 1];
         if (!item->has_comptime_value || !item->comptime_value) {
@@ -660,6 +676,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
         for (parse_sym_entry_t *symbol = type_module_scopes.data[s]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
             if (!is_named_type_declaration(grammar, symbol)
+                || n00bb_injected_member(symbol)
                 || nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("trait-decl"))) continue;
             core_buffer_t qualified = {0};
             append_module_type_name(unit, symbol->name, &qualified);
@@ -830,6 +847,9 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
     for (size_t s = 0; ok && s < module_level_scopes.len; s++) {
         for (parse_sym_entry_t *symbol = module_level_scopes.data[s]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
+            // The generated module exports the declarations its members
+            // stand for.
+            if (n00bb_injected_member(symbol)) continue;
             if (context_symbol(grammar, symbol) && symbol->type
                 && symbol->decl_node) {
                 core_buffer_t qualified = {0};
@@ -1704,6 +1724,38 @@ register_package_module_metadata(n00bb_link_analysis_t *analysis)
                     CORE_STRING_STATIC("n00b.module-import-aliases"), 1, aliases.data,
                     aliases.byte_len);
             core_buffer_release(&aliases);
+            // Where each module literal is, so a cached build generates
+            // its module again: modifier, name, module, span and position.
+            core_buffer_t literals = {0};
+            uint32_t literal_count = 0;
+            for (size_t i = 0; i < state->import_aliases.len; i++)
+                if (state->import_aliases.data[i].literal_modifier.data)
+                    literal_count++;
+            if (registered && literal_count)
+                registered = append_u32_le(&literals, literal_count);
+            for (size_t i = 0; registered && literal_count
+                 && i < state->import_aliases.len; i++) {
+                n00bb_import_alias_t *alias = &state->import_aliases.data[i];
+                if (!alias->literal_modifier.data) continue;
+                registered = alias->literal_end <= UINT32_MAX
+                    && append_text_le(&literals, alias->literal_modifier)
+                    && append_text_le(&literals, alias->name)
+                    && append_text_le(&literals,
+                                      alias->unit->module.identifier)
+                    && append_u32_le(&literals, alias->injected)
+                    && append_u32_le(&literals,
+                                     (uint32_t)alias->literal_start)
+                    && append_u32_le(&literals,
+                                     (uint32_t)alias->literal_end)
+                    && append_u32_le(&literals, alias->literal_line)
+                    && append_u32_le(&literals, alias->literal_column);
+            }
+            if (registered && literal_count)
+                registered = th_env_register_metadata(environment,
+                    TH_ENV_METADATA_ENVIRONMENT, module_name,
+                    CORE_STRING_STATIC("n00b.module-literals"), 1,
+                    literals.data, literals.byte_len);
+            core_buffer_release(&literals);
             core_buffer_t litmods = {0};
             uint32_t litmod_count = 0;
             for (size_t i = 0; registered
@@ -2083,7 +2135,7 @@ existing_export_binding(parse_scope_t *scope, core_string_t name,
     return nullptr;
 }
 
-static void
+void
 copy_export_binding_facts(parse_sym_entry_t *binding,
                           parse_sym_entry_t *origin)
 {
@@ -2273,6 +2325,10 @@ interface_module_declares(core_translation_unit_t *unit,
                           parse_sym_entry_t *symbol)
 {
     n00bb_tu_state_t *state = tu_state(unit);
+    // A module literal's names are members of the module it's in, though
+    // they're declared in the module it generated.
+    if (state && state->interface_module && n00bb_injected_member(symbol))
+        return true;
     n00bb_export_origin_t *origin = state && state->interface_module
         ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.export-origin"))
         : nullptr;

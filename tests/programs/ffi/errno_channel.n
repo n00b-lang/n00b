@@ -1,0 +1,45 @@
+# The FFI manual's errno and variadic examples (ffi-doc.md §5.1, §10):
+# errno through a declared error channel, and a return value that a
+# `ret == -1` check leaves as the result.
+
+[-
+library c
+link "c"
+header <errno.h>
+header <fcntl.h>
+
+fn errno_location() -> *c_int static per thread
+  source "errno" macro
+  symbol "__errno_location" when libc == glibc
+  symbol "__error"          when os == macos
+
+error_channel errno per thread {
+    value errno_location()
+}
+
+fn open(path: *cstr, flags: c_int, ... of c_uint) -> c_int
+  error ret == -1 via errno
+
+const F_GETFD: c_int = 1
+const F_SETFD: c_int = 2
+const FD_CLOEXEC: c_int = 1
+
+fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
+  error ret == -1 via errno
+-]'ffi
+
+try {
+    _ = open("/nonexistent/doc", 0, [])!
+    require false
+} fail(failure) {
+    require failure.code == 2
+}
+try {
+    let fd: i32 = open("/dev/null", 0, [])!
+    require fd >= 0
+    _ = fcntl(fd, F_SETFD, [FD_CLOEXEC])!
+    let flags = fcntl(fd, F_GETFD, [])!
+    require flags == FD_CLOEXEC
+} fail(failure) {
+    require false
+}

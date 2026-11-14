@@ -11,8 +11,58 @@ record Thread_Context layout(c) {
     pc:        Ref[byte]?
 }
 
+# The runtime's thread queries, as direct calls. The collector uses these
+# where no mutator may be needed, so this literal has no shims and no
+# state of its own.
+[-
+library n00b
+
+fn n00b_os_thread_yield()
+  effects none
+fn n00b_os_thread_id() -> u64
+  effects none
+fn n00b_os_thread_is_main() -> u64
+  effects none
+
+binding {
+    raw "n00b_os_thread_*"
+}
+-]'ffi
+
+# Starting a thread. The runtime attaches the new thread to the collector
+# before it runs the entry, and detaches it after.
+[-
+library n00b
+
+callback Thread_Entry = fn(argument: ?void userdata) -> ?void
+  thread any
+
+fn n00b_os_thread_start(entry: Thread_Entry once,
+                        argument: ?void userdata entry) -> c_int
+  effects threads, alloc, blocking, of entry
+-]'ffi
+
+# Starts a thread that runs `entry`; false when it can't be started. Make
+# the entry with `callback[sys.threads.Thread_Entry](ref f, ...)`, binding
+# any arguments `f` takes.
+func thread_start(entry: Thread_Entry) -> bool {
+    return n00b_os_thread_start(entry) == 0
+}
+
+# The collector's own thread start, which allocates nothing: the collector
+# starts its finalizer thread from code that may run before the thread has
+# a mutator, where a callback (an object on the heap) can't be made.
+func collector_thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]],
+                            argument: Ref[byte]) -> bool {
+    return __os_thread_start(entry, argument) == 0
+}
+
+func thread_is_main() -> bool {
+    return n00b_os_thread_is_main_raw() != 0
+}
+
 func thread_yield() {
-    __os_thread_yield()
+    n00b_os_thread_yield_raw()
 }
 
 func thread_fence() {
@@ -28,11 +78,7 @@ func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
 }
 
 func thread_id() -> uint {
-    return __os_thread_id()
-}
-
-func thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]], argument: Ref[byte]) -> bool {
-    return __os_thread_start(entry, argument) == 0
+    return n00b_os_thread_id_raw()
 }
 
 func thread_stack_high_self() -> Ref[byte]? {

@@ -1,3 +1,5 @@
+import sys.os
+
 func run(rounds: int, size: int) -> int {
     var total = 0
     var round = 0
@@ -21,5 +23,5 @@ func run(rounds: int, size: int) -> int {
     return total
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 require run(50 * scale, 200000) == 1999990000000

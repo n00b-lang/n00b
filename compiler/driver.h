@@ -20,7 +20,8 @@ bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t text,
                                   const core_translation_unit_t *owner,
                                   n00bb_native_declarations_t natives,
-                                  n00bb_line_origins_t origins);
+                                  n00bb_line_origins_t origins,
+                                  core_string_t inputs);
 void n00bb_resolver_remap_diagnostics(n00bb_resolver_t *resolver,
                                       core_diagnostics_t *diagnostics);
 n00bb_native_declarations_t n00bb_source_natives(
@@ -39,6 +40,14 @@ bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
 void n00bb_source_file_mark_interface(core_source_file_t *source,
                                       uint64_t source_hash);
 bool n00bb_source_file_is_interface(const core_source_file_t *source);
+// True for a module a module literal generated, giving the module the
+// literal is in and that module's source path.
+bool n00bb_source_file_generated_owner(const core_source_file_t *source,
+                                       core_string_t *owner,
+                                       core_string_t *owner_path);
+// The files a generated module's literal reads, one per line.
+core_string_t n00bb_source_file_generated_inputs(
+    const core_source_file_t *source);
 bool n00bb_same_package(const core_translation_unit_t *left,
                         const core_translation_unit_t *right);
 core_string_t n00bb_package_id(const core_translation_unit_t *unit);

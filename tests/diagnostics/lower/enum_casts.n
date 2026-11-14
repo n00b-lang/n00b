@@ -1,0 +1,20 @@
+enum Level {
+    low = 1,
+    high = 300,
+}
+
+func to_level(raw: i32) -> Level {
+    return cast[Level](raw)
+}
+
+func to_byte(level: Level) -> u8 {
+    return cast[u8](level)
+}
+
+func float_to_narrow(value: f64) -> u32 {
+    return unsafe_cast[u32](value)
+}
+
+require to_level(1) == Level.low
+require to_byte(Level.low) == 1
+require float_to_narrow(1.0) == 0

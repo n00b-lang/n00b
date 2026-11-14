@@ -727,7 +727,7 @@ entry_functions(n00bb_link_analysis_t *analysis, size_t slot)
     bool complete = true;
     core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
     core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
-        ? thread_entries(&program, &complete, nullptr)
+        ? thread_entries(&program, analysis->summaries, &complete, nullptr)
         : core_list_new(n00bb_ir_func_ptr_t);
     for (size_t f = 0; slot == 0 && f < program.len; f++)
         if (finalizer_function(program.data[f]))
@@ -877,6 +877,21 @@ callee_text(const ir_switness_t *witness, core_buffer_t *out)
                                    CORE_STRING_STATIC("$spec$"));
     if (cut >= 0) source.module = core_string_slice(source.module, 0,
                                                     (size_t)cut);
+    // A native is named as its contract declares it, not by its C symbol:
+    // a syscall's symbol is its number on this architecture, and a shim's
+    // carries its literal's prefix.
+    uint32_t declared = 0;
+    bool generated = core_string_starts_with(source.name,
+            CORE_STRING_STATIC("n00b.syscall."))
+        || core_string_starts_with(source.name,
+            CORE_STRING_STATIC("n00b_ffi_"));
+    if (generated && witness->callee
+        && n00bb_axiom_foreign_native(witness->callee, &declared)) {
+        core_string_t root = n00bb_axiom_foreign_name(witness->callee);
+        if (core_string_starts_with(root, CORE_STRING_STATIC("__")))
+            root = core_string_slice(root, 2, root.u8_bytes - 2);
+        if (root.u8_bytes) source.name = root;
+    }
     ir_switness_callee_text(&source, out);
 }
 

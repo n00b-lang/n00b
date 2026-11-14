@@ -130,11 +130,6 @@ uint8_t unions_n00b_cell_flag(const void *cell, uint64_t raw) {
     return writ_n00b_value;
 }
 
-record Error {
-    code: i64
-    text: string?
-    fn: string
-}
 
 record Raw {
     private storage: Array[u8]
@@ -196,7 +191,7 @@ func set_flag(modify self: Cell, value: u8) {
     __ffi_write_u8(ref self.storage, 8, value)
 }
 
-enum Value_Kind {
+open enum Value_Kind: i32 {
     VK_INT = 1,
     VK_REAL = 2,
     VK_TEXT = 3,
@@ -213,12 +208,12 @@ func cell_flag(cell: Cell, raw: uint) -> u8 {
     let returned = __cell_flag(ref cell.storage, raw)
     return returned
 }
-7	tests/gen_n00b/unions.writ:6:1	Raw
-40	tests/gen_n00b/unions.writ:8:1	Value
-50	tests/gen_n00b/unions.writ:18:1	Cell
-67	tests/gen_n00b/unions.writ:4:1	ValueKind
-75	tests/gen_n00b/unions.writ:23:1	value_kind
-80	tests/gen_n00b/unions.writ:24:1	cell_flag
+2	tests/gen_n00b/unions.writ:6:1	Raw
+35	tests/gen_n00b/unions.writ:8:1	Value
+45	tests/gen_n00b/unions.writ:18:1	Cell
+62	tests/gen_n00b/unions.writ:4:1	ValueKind
+70	tests/gen_n00b/unions.writ:23:1	value_kind
+75	tests/gen_n00b/unions.writ:24:1	cell_flag
 library unions
 load static
 extern __value_kind unions_n00b_value_kind (ref[Value]) -> i32 fail: nil

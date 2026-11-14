@@ -10,6 +10,7 @@ import sys.gc.registry
 import sys.gc.roots
 import sys.locks
 import sys.memory
+import sys.os
 import sys.random
 import sys.threads
 
@@ -88,7 +89,7 @@ func spread(n: uint) -> int {
 }
 
 func operand_widening_main() {
-    let n: uint = 70000 + cast[uint](__os_arg_count())
+    let n: uint = 70000 + sys.os.arg_count()
     assert spread(n) > 0
 }
 
@@ -164,7 +165,6 @@ require !__string_from_utf8(ref invalid, ref text)
 var overlong: Array[u8] = [192, 175]
 require !__string_from_utf8(ref overlong, ref text)
 
-var seed: byte = 0
 var guard: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
                                nesting = 0, collector = false)
 var table: sys.locks.Rw_Lock
@@ -176,15 +176,14 @@ var ready: Atomic[int] = 0
 var locked_total: int = 0
 var locks_finished: Atomic[int] = 0
 
-func signaller(argument: Ref[byte]) -> Ref[byte] {
+func signaller() {
     sys.locks.condition_lock(ref signal)
     __atomic_store(ref ready, 1)
     sys.locks.condition_notify(ref signal, all = true, unlock = true)
     __atomic_fetch_add(ref locks_finished, 1)
-    return argument
 }
 
-func worker(argument: Ref[byte]) -> Ref[byte] {
+func worker() {
     var round: int = 0
     while round < 1000 {
         sys.locks.mutex_lock(ref guard)
@@ -197,12 +196,11 @@ func worker(argument: Ref[byte]) -> Ref[byte] {
     sys.locks.rw_unlock(ref table)
     sys.locks.rw_unlock(ref table)
     __atomic_fetch_add(ref locks_finished, 1)
-    return argument
 }
 
 sys.locks.rw_lock_init(ref table)
-require sys.threads.thread_start(ref worker, ref seed)
-require sys.threads.thread_start(ref worker, ref seed)
+require sys.threads.thread_start(callback[sys.threads.Thread_Entry](ref worker))
+require sys.threads.thread_start(callback[sys.threads.Thread_Entry](ref worker))
 while __atomic_load(ref locks_finished) < 2 {
     sys.threads.thread_yield()
 }
@@ -214,7 +212,8 @@ sys.locks.mutex_unlock(ref guard)
 require sys.locks.mutex_try_lock(ref guard)
 sys.locks.mutex_unlock(ref guard)
 sys.locks.condition_lock(ref signal)
-require sys.threads.thread_start(ref signaller, ref seed)
+require sys.threads.thread_start(
+    callback[sys.threads.Thread_Entry](ref signaller))
 while __atomic_load(ref ready) == 0 {
     require sys.locks.condition_wait(ref signal, timeout_ns = 5_000_000_000,
                                      unlock = false)
@@ -238,21 +237,19 @@ var written: Atomic[int] = 0
 var seen: Atomic[uint] = 0
 var storage_finished: Atomic[int] = 0
 
-func writer(argument: Ref[byte]) -> Ref[byte] {
+func writer() {
     held.cells[1] = 70
     grid[1][0] = 30
     __atomic_store(ref written, 1)
     __atomic_fetch_add(ref storage_finished, 1)
-    return argument
 }
 
-func reader(argument: Ref[byte]) -> Ref[byte] {
+func reader() {
     while __atomic_load(ref written) == 0 {
         sys.threads.thread_yield()
     }
     __atomic_store(ref seen, held.cells[1] * 100 + grid[1][0])
     __atomic_fetch_add(ref storage_finished, 1)
-    return argument
 }
 
 func copied_cells(h: Holder) -> Array[uint] {
@@ -265,8 +262,10 @@ func thread_storage_main() {
     require held.cells[2] == 7
     require grid[0][1] == 2
     require names[1] == "a fairly long string value two"
-    require sys.threads.thread_start(ref writer, ref seed)
-    require sys.threads.thread_start(ref reader, ref seed)
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref writer))
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref reader))
     while __atomic_load(ref storage_finished) < 2 {
         sys.threads.thread_yield()
     }
@@ -435,7 +434,7 @@ func gc_collect_main() {
     } else { require false }
 }
 
-func random_bytes_filled(n: int) -> bool fail: int {
+func random_bytes_filled(n: int) -> bool fail: sys.os.Errno {
     var buffer: Array[u8] = new[Array[u8]](n)
     sys.random.fill(buffer)!
     if n < 64 {
@@ -452,7 +451,7 @@ func random_bytes_filled(n: int) -> bool fail: int {
     return nonzero > __array_length(buffer) / 2
 }
 
-func random_integers_filled() -> bool fail: int {
+func random_integers_filled() -> bool fail: sys.os.Errno {
     var small: u8 = 0
     var signed: i16 = 0
     var wide: u128 = 0
@@ -563,8 +562,45 @@ func atomics_main() -> bool {
         and __atomic_load(ref atomic_pair).held.n == 2
 }
 
+# A module-level `when` branch holds module declarations, and the chosen
+# branch's declarations belong to the module. Every branch may declare the
+# same names.
+when target_os() == "nowhere" {
+    open enum When_Pick: i32 {
+        chosen = 1,
+    }
+    func when_which() -> int {
+        return 1
+    }
+} else when target_alu() > 0 {
+    open enum When_Pick: i32 {
+        chosen = 2,
+    }
+    record When_Point {
+        x: int
+    }
+    func when_which() -> int {
+        return 2
+    }
+    const when_answer: int = 42
+} else {
+    open enum When_Pick: i32 {
+        chosen = 3,
+    }
+    func when_which() -> int {
+        return 3
+    }
+}
+
+func when_main() -> bool {
+    let point: When_Point = (x = 5)
+    return cast[i32](When_Pick.chosen) == 2 and when_which() == 2
+        and point.x == 5 and when_answer == 42
+}
+
 gc_collect_main()
 require random_main()
 require options_main()
 require atomics_main()
+require when_main()
 __fd_write(2, "ok")

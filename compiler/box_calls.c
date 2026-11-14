@@ -1785,15 +1785,24 @@ static bool
 rewrite_emitted(box_calls_t *calls)
 {
     n00bb_link_analysis_t *analysis = calls->analysis;
-    size_t count = analysis->emitted_functions.len;
+    // The reached functions' bodies, cached ones among them: a cached body
+    // reached only through other cached bodies is lowered too (an inline
+    // function is lowered into each module that calls it).
+    size_t emitted = analysis->emitted_functions.len;
+    size_t count = emitted + analysis->cached_functions.len;
+    core_dict_t rewritten_bodies;
+    core_dict_init(&rewritten_bodies, nullptr, nullptr);
     for (size_t f = 0; f < count; f++) {
-        ir_func_t *function = n00bb_cached_body(
-            analysis->emitted_functions.data[f]);
+        ir_func_t *function = n00bb_cached_body(f < emitted
+            ? analysis->emitted_functions.data[f]
+            : analysis->cached_functions.data[f - emitted]);
         if (!function || !function->n_blocks
-            || runtime_module(calls,function->owner)) continue;
+            || runtime_module(calls,function->owner)
+            || !core_dict_add(&rewritten_bodies, function, 1)) continue;
         if (!expand_primitive_dispatches(calls, function)) {
             report_unrewritten(calls, function, nullptr,
                                "add primitive arms to");
+            core_dict_free(&rewritten_bodies);
             return false;
         }
         for (uint32_t b = 0; b < function->n_blocks; b++) {
@@ -1803,11 +1812,13 @@ rewrite_emitted(box_calls_t *calls)
                 if (!own_sequence_operands(calls,function, instruction)) {
                     report_unrewritten(calls, function, instruction,
                                        "own the sequence operands of");
+                    core_dict_free(&rewritten_bodies);
                     return false;
                 }
                 if (!box_raw_arguments(calls,function, instruction)) {
                     report_unrewritten(calls, function, instruction,
                                        "box the raw arguments of");
+                    core_dict_free(&rewritten_bodies);
                     return false;
                 }
                 bool rewritten = true;
@@ -1902,11 +1913,12 @@ rewrite_emitted(box_calls_t *calls)
                 if (!rewritten) {
                     report_unrewritten(calls, function, instruction,
                                        "rewrite");
+                    core_dict_free(&rewritten_bodies);
                     return false;
                 }
             }
-        }
-    }
+        }    }
+    core_dict_free(&rewritten_bodies);
     return true;
 }
 

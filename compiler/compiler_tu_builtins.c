@@ -104,6 +104,13 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         if (effects & IR_SUMMARY_MAY_TRAP)
             ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
     }
+    // Foreign code writes through the references it is given. A raw
+    // pointer (a reference to a scalar, such as Ref[byte]) is a buffer the
+    // C side or the kernel may write past the first element of, so it is a
+    // deep write. A reference to an n00b value is the generated shim's
+    // argument slot: the contract's modes say what the shim writes, and it
+    // never writes through an `in` argument's storage.
+    uint32_t written = 0;
     for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
         ir_summary_add_path(summary, &(ir_spath_t){
             .root = IR_SPLACE_PARAM, .param = p,
@@ -112,14 +119,27 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         const th_param *formal = th_func_param(function->type, p);
         th_type *type = formal && formal->type ? th_resolve(formal->type)
                                                : nullptr;
-        if (foreign && type && th_kind_of(type) == TH_INDIRECTION)
+        if (foreign && type && th_kind_of(type) == TH_INDIRECTION) {
+            // Scalars such as byte are named builtin types, not bare
+            // bit integers, so they count as raw by their scalar.
+            th_type *referent = th_ind_referent(type);
+            const th_builtin_type_t *builtin = referent
+                ? th_builtin_of(referent) : nullptr;
+            bool raw = referent
+                && (th_kind_of(th_resolve(referent)) == TH_BITINT
+                    || (builtin && builtin->scalar));
             ir_summary_add_path(summary, &(ir_spath_t){
                 .root = IR_SPLACE_PARAM, .param = p,
-                .flags = IR_SPATH_WRITE | IR_SPATH_ROOT});
+                .flags = IR_SPATH_WRITE | IR_SPATH_ROOT
+                    | (raw ? IR_SPATH_DEEP : 0)});
+            if (raw && p < 8) written |= N00BB_AXIOM_PARAM(p);
+        }
     }
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
-    native_flows(summary, function, 0, UINT32_MAX, 0);
+    // What it returns or writes comes from the sources its declared effects
+    // observe, such as the environment or the system's randomness.
+    native_flows(summary, function, effects, UINT32_MAX, written);
     return summary;
 }
 
@@ -340,13 +360,21 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
         if (!symbol || !parse_sym_set_binding(symbol,
                 CORE_STRING_STATIC("n00bb.generated-extern"), symbol))
             return false;
+    }
+    n00bb_note_native_axioms(natives);
+    return true;
+}
+
+void
+n00bb_note_native_axioms(n00bb_native_declarations_t natives)
+{
+    for (size_t i = 0; i < natives.count; i++) {
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
         else n00bb_axiom_note_foreign_native(natives.items[i].symbol,
                                              natives.items[i].name,
                                              natives.items[i].effects);
     }
-    return true;
 }
 
 static bool
@@ -374,11 +402,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
     th_type *write_args[] = {i32, byte_reference, u32};
-    th_type *integer = th_name(types, CORE_STRING_STATIC("int"));
-    th_type *open_args[] = {byte_reference, integer, u32};
-    th_type *read_args[] = {integer, byte_reference, uint};
-    th_type *random_args[] = {byte_reference, uint};
-    th_type *close_args[] = {integer};
     th_type *wait_item = th_var(types);
     th_type *wake_item = th_var(types);
     th_type *futex_wait_args[] = {
@@ -387,12 +410,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *futex_wake_args[] = {
         wake_item ? th_ind(types, 0, wake_item) : nullptr,
     };
-    th_type *seek_args[] = {integer, integer, i32};
-    th_type *u16_reference = th_ind(types, 0, th_name(types, CORE_STRING_STATIC("u16")));
-    th_type *integer_reference = th_ind(types, 0, integer);
-    th_type *env_at_args[] = {uint};
-    th_type *terminal_size_args[] = {integer, u16_reference, u16_reference};
-    th_type *pipe_args[] = {integer_reference, integer_reference};
     th_type *entry_item = th_var(types);
     th_type *argument_item = th_var(types);
     th_type *thread_start_args[] = {
@@ -425,52 +442,18 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_leave_blocking"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_env_count"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_env_at"), optional_reference,
-            env_at_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_arg_count"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_physical_memory"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_arg_at"), optional_reference,
-            env_at_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_fd_is_tty"), integer, close_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_terminal_size"), integer,
-            terminal_size_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_pipe"), integer, pipe_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_open"), integer, open_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_read"), integer, read_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_random_bytes"), integer, random_args,
-            2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_close"), integer, close_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_exit"), nil_type, close_args, 1)
+            CORE_STRING_STATIC("__os_errno"), i32, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_futex_wait"), i32, futex_wait_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_futex_wake_all"), i32,
             futex_wake_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_seek"), integer, seek_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__write_bytes"), i32, write_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_yield"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_fence"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_id"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_is_main"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_start"), i32,
             thread_start_args, 2)

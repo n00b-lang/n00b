@@ -3,6 +3,7 @@ import containers.lease
 import string.core
 import string.style
 import ascii
+import sys.threads
 
 object Buffer {
     private lock:      Atomic[u32]
@@ -28,7 +29,7 @@ private func spin_wait(modify attempt: u32) {
         return
     }
     __gc_enter_blocking()
-    __os_thread_yield()
+    sys.threads.thread_yield()
     __gc_leave_blocking()
     attempt = 0
 }

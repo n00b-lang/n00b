@@ -385,8 +385,10 @@ N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "    if n != 0 {")
 N00B_DIAG(UNSAFE_CAST_OPERANDS, "N00B-T1004", ERROR,
     "`unsafe_cast` is used between types it cannot convert",
-    "`unsafe_cast` reinterprets integers and plain references. Use `cast`\n"
-    "for other conversions.")
+    "`unsafe_cast` reinterprets the bits of a value as another type with a\n"
+    "compatible size: integers, enums, distinct types, floats and integers of\n"
+    "the same width, and plain references. Use `cast` for conversions that\n"
+    "change the value's representation.")
 N00B_DIAG(CAST_NOT_DEFINED, "N00B-T1005", ERROR,
     "a cast is used between types with no conversion",
     "No conversion is defined between these types. Convert in steps, or\n"
@@ -470,6 +472,23 @@ N00B_DIAG(LITERAL_ELEMENTS_UNDECIDED, "N00B-T1041", ERROR,
     "unannotated variable has neither, so its types are unknown. Declare\n"
     "the type where it is stored, as in `let counts: Dict[string, int] = {}`,\n"
     "or use the literal where its type is already known.")
+N00B_DIAG(ENUM_INTEGER_TOO_NARROW, "N00B-T1042", ERROR,
+    "an integer type is too narrow for an enum",
+    "`cast` from an enum to an integer must keep every member's value, so\n"
+    "the integer needs at least as many bits as the enum. Cast to a wider\n"
+    "integer type, or use `unsafe_cast` to keep only the low bits.")
+N00B_DIAG(INTEGER_TO_ENUM_CAST, "N00B-T1043", ERROR,
+    "`cast` cannot turn an integer into an enum",
+    "An integer is not necessarily a member of the enum, so `cast` cannot\n"
+    "convert it safely. When the value is known to be a member, write\n"
+    "`unsafe_cast[E](value)`.")
+N00B_DIAG(SYSCALL_ERRNO_TYPE, "N00B-T1044", ERROR,
+    "a syscall's failure type cannot hold every errno",
+    "The `error * -> \"Type\"` item of an 'ffi literal chooses the type that\n"
+    "syscall failures arrive as. The kernel can return errnos newer than any\n"
+    "list, so the type must hold them all: an open enum, or a distinct\n"
+    "integer type:\n"
+    "    open enum Errno: i32 { EPERM = 1, ENOENT = 2 }")
 N00B_DIAG(UNKNOWN_JUMP_LABEL, "N00B-N1002", ERROR,
     "`break` or `continue` names a label that does not enclose it",
     "The label must belong to an enclosing loop, or for `break`, an\n"

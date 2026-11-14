@@ -1,4 +1,5 @@
 import sys.abi
+import sys.threads
 
 enum Palette_Ix {
     background = 0,
@@ -485,7 +486,7 @@ private func themes_spin_wait(modify attempt: u32) {
         return
     }
     __gc_enter_blocking()
-    __os_thread_yield()
+    sys.threads.thread_yield()
     __gc_leave_blocking()
     attempt = 0
 }

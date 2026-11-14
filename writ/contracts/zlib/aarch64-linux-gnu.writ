@@ -1,5 +1,6 @@
 library zlib
 link "z"
+link "c"
 header <zlib.h>
 
 opaque internal_state source "struct internal_state"

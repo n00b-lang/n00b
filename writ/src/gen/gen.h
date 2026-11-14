@@ -87,7 +87,13 @@ writ_bound_fn_t       writ_binding_fn(const writ_binding_t *b, size_t fn);
 writ_str_t            writ_binding_slot_repr(const writ_binding_t *b, size_t fn, writ_str_t slot);
 writ_str_t            writ_binding_slot_provide(const writ_binding_t *b, size_t fn, writ_str_t slot);
 writ_str_t            writ_binding_implementation(const writ_binding_t *b, writ_str_t handle);
+writ_str_t            writ_binding_error_for(const writ_binding_t *b, writ_str_t name, writ_span_t *at);
 writ_str_t            writ_binding_type(const writ_binding_t *b, writ_str_t contract);
+// A contract constant's name in the bound API; `*hidden` says `hide` left
+// it out.
+writ_str_t            writ_binding_const(const writ_binding_t *b, writ_str_t contract, bool *hidden);
+// A syscall's name in the bound API; `*hidden` says `hide` left it out.
+writ_str_t            writ_binding_syscall(const writ_binding_t *b, writ_str_t contract, bool *hidden);
 size_t                writ_binding_library_count(const writ_binding_t *b);
 writ_str_t            writ_binding_library_at(const writ_binding_t *b, size_t index);
 size_t                writ_binding_search_path_count(const writ_binding_t *b);
@@ -103,6 +109,10 @@ typedef struct {
     writ_str_t          upper;
     bool                normalized;
 } writ_c_context_t;
+
+// The prefix for the generated C's macros: `prefix` in upper case. Every
+// generator uses it, so a shim names the macros its header defines.
+writ_str_t writ_c_upper_prefix(writ_session_t *session, writ_str_t prefix);
 
 bool writ_c_by_pointer(const writ_c_context_t *c, const writ_plan_item_view_t *item);
 

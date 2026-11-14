@@ -1,41 +1,40 @@
-sys.internal.fs.read_file: (string) -> Array[u8] fail: int
+sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno
   effects may_fail may_trap may_allocate may_block may_io may_collect allocates_direct reinterprets may_input
   reads path.data.__value...
   traps explicit bounds unwrap arithmetic
   returns fresh
-  output result data[(may_input) (new in sys.internal.fs.read_file:76:27) path.data path.data.__value... path.selector path[]] control[path.data path.selector]
-  output failure data[(may_input) path.data path.data.__value... path.selector path[]] control[path.data path.selector]
-  output (new in sys.internal.fs.read_file:76:27).__len data[(may_input) path.data path.data.__value... path.selector path[]] control[]
-  output (new in sys.internal.fs.read_file:76:27)[]... data[(may_input) path.data path.data.__value... path.selector path[]] control[]
+  output result data[(may_input) (new in sys.internal.fs.read_file:30:31) ?... path.data path.data.__value... path.selector path[]] control[path.data path.selector]
+  output failure data[(may_input) ?... path.data path.data.__value... path.selector path[]] control[path.data path.selector]
+  output (new in sys.internal.fs.read_file:30:31).__len data[(may_input) ?... path.data path.data.__value... path.selector path[]] control[]
+  output (new in sys.internal.fs.read_file:30:31)[]... data[(may_input) ?... path.data path.data.__value... path.selector path[]] control[]
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
+  reads ?...
   traps explicit bounds unwrap arithmetic
-  returns fresh
-  output result data[(new in sys.internal.env.args:33:29)] control[]
+  output result data[(new in sys.internal.env.args:15:29)] control[]
   output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
-  output (new in builtin.containers.list.__init:15:18).storage... data[(new in builtin.string.core.long_bytes:189:12)... (new in sys.internal.env.c_string:14:28)... (new in sys.internal.env.c_string:14:9)... (reads_env)] control[]
-  output (new in builtin.string.core.long_bytes:189:12)[]... data[(reads_env)] control[]
-  output (new in sys.internal.env.args:33:29).items data[(new in builtin.containers.list.__init:15:18)] control[]
-  output (new in sys.internal.env.c_string:14:28)[] data[(reads_env)] control[]
-  output (new in sys.internal.env.c_string:14:9) data[(new in sys.internal.env.c_string:14:28)] control[]
+  output (new in builtin.containers.list.__init:15:18).storage... data[(new in builtin.string.core.long_bytes:189:12)... (new in sys.internal.os.c_string:659:28)... (new in sys.internal.os.c_string:659:9)... (reads_env) ?...] control[]
+  output (new in builtin.string.core.long_bytes:189:12)[]... data[?...] control[]
+  output (new in sys.internal.env.args:15:29).items data[(new in builtin.containers.list.__init:15:18)] control[]
+  output (new in sys.internal.os.c_string:659:28)[]... data[?...] control[]
+  output (new in sys.internal.os.c_string:659:9) data[(new in sys.internal.os.c_string:659:28)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
   output result data[(reads_clock)] control[]
-sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
-  effects may_fail may_trap may_block may_collect reinterprets reads_random
-  writes buffer.__value[]...
-  reads buffer
-  traps bounds
+sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
+  effects may_fail may_trap may_io may_collect reinterprets may_input reads_random
+  reads+writes buffer.__value[]...
+  traps explicit bounds arithmetic
   output result data[] control[]
-  output result 1 data[buffer] control[(reads_random) buffer buffer.__value.__len]
-  output failure data[(reads_random) buffer buffer.__value.__len] control[]
-  output buffer.__value[]... data[(reads_random) buffer buffer.__value.__len] control[]
-sys.internal.random.fill: (modify 'T) -> nil fail: int
-  effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
-  traps bounds arithmetic
+  output result 1 data[buffer] control[(reads_random) ?... buffer buffer.__value.__len... buffer.__value[]...]
+  output failure data[(reads_random) buffer buffer.__value.__len... buffer.__value[]...] control[?...]
+  output buffer.__value[]... data[(reads_random) buffer buffer.__value.__len... buffer.__value[]...] control[]
+sys.internal.random.fill: (modify 'T) -> nil fail: Errno
+  effects may_fail may_trap may_allocate may_io may_collect allocates_direct reinterprets may_input reads_random
+  traps explicit bounds arithmetic
   output result data[] control[]
-  output result 1 data[(reads_random)] control[]
-  output failure data[(reads_random)] control[]
+  output result 1 data[(reads_random)] control[?...]
+  output failure data[(reads_random)] control[?...]
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
@@ -155,7 +154,7 @@ unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values.__value[]
   reads unicode.generated.categories.gc_stage2.__value[]
-  traps explicit bounds
+  traps bounds
   output result data[] control[cp]
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct

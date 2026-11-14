@@ -2,7 +2,9 @@ import sys.abi
 import sys.clock
 import sys.env
 import sys.fs
+import sys.os
 import sys.random
+import sys.threads
 import sys.gc.core
 import sys.gc.alloc
 import sys.gc.heap
@@ -140,10 +142,10 @@ func nominal_hard(fields: Nominal_Fields) -> bool {
 }
 
 func nominal_field_check() {
-    let id: Wide_Id = cast[Wide_Id] cast[u128] 0x110000
+    let id: Wide_Id = cast[Wide_Id] 0x110000
     let fields: Nominal_Fields = (name = cast[Text] "kw", id = id,
                                   hard = true, marked = cast[Flag] true,
-                                  word = cast[Word] cast[u64] 9)
+                                  word = cast[Word] 9)
     require nominal_hard(fields)
     require fields.id == id
     require cast[u64](fields.word) == 9
@@ -491,7 +493,7 @@ func unsafe_arithmetic_check() {
 }
 
 func die(code: int) {
-    __os_exit(code)
+    sys.os.exit(cast[i32](code))
 }
 
 func pick(flag: bool) -> int {
@@ -505,7 +507,7 @@ func direct(flag: bool) -> int {
     if flag {
         return 1
     }
-    __os_exit(2)
+    sys.os.exit(2)
 }
 
 func diverging_choose(flag: bool) -> int {
@@ -563,7 +565,7 @@ func function_effects_check() {
     forbids_effect(effects_square, output)
 }
 
-func effects_random(modify buffer: Array[u8]) -> nil fail: int {
+func effects_random(modify buffer: Array[u8]) fail: sys.os.Errno {
     sys.random.fill(buffer)!
 }
 
@@ -572,9 +574,8 @@ func effects_allocate(n: int) -> uint {
     return __array_length(values)
 }
 
-func effects_spawn(entry: Ref[(Ref[byte]) -> Ref[byte]],
-                   argument: Ref[byte]) -> bool {
-    return __os_thread_start(entry, argument) == 0
+func effects_spawn(entry: sys.threads.Thread_Entry) -> bool {
+    return sys.os.thread_start(entry)
 }
 
 func dict_size(table: Dict[string, int]) -> uint {
@@ -2191,6 +2192,10 @@ func local_reference_store_check() {
     items[1] = 9
     let list: List[int] = list_from_items(items, 2)
     require list.len() == 2 and list[1] == 9
+    # A literal keyword argument to an imported constructor takes the
+    # parameter's type: `items` is an Array, not the List being built.
+    let literal: List[int] = new[List[int]](items = [4, 5, 6])
+    require literal.len() == 3 and literal[2] == 6
 }
 
 func start() -> nil {

@@ -1,4 +1,4 @@
-const res = [-
+[-
 library res
 
 opaque res_state

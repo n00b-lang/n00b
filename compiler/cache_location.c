@@ -1,5 +1,15 @@
 #include "cache_location.h"
 
+#include <fcntl.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <io.h>
+#include <windows.h>
+#else
+#include <sys/file.h>
+#include <unistd.h>
+#endif
+
 #include "lib/alloc.h"
 #include "lib/os.h"
 #include "lib/buffer.h"
@@ -127,4 +137,46 @@ n00bb_make_directories(core_string_t directory)
                                    0700);
     core_os_make_directory(directory, 0700);
     return core_os_is_directory(directory);
+}
+
+int
+n00bb_open_lock_file(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    if (!native) return -1;
+#ifdef _WIN32
+    int fd = open(native, O_CREAT | O_RDWR | O_NOINHERIT, 0644);
+#else
+    int fd = open(native, O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+#endif
+    core_free(native);
+    return fd;
+}
+
+bool
+n00bb_lock_file(int fd, bool wait)
+{
+#ifdef _WIN32
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    OVERLAPPED at = {0};
+    DWORD flags = LOCKFILE_EXCLUSIVE_LOCK
+        | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY);
+    return handle != INVALID_HANDLE_VALUE
+        && LockFileEx(handle, flags, 0, MAXDWORD, MAXDWORD, &at);
+#else
+    return flock(fd, LOCK_EX | (wait ? 0 : LOCK_NB)) == 0;
+#endif
+}
+
+void
+n00bb_unlock_file(int fd)
+{
+#ifdef _WIN32
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    OVERLAPPED at = {0};
+    if (handle != INVALID_HANDLE_VALUE)
+        (void)UnlockFileEx(handle, 0, MAXDWORD, MAXDWORD, &at);
+#else
+    (void)flock(fd, LOCK_UN);
+#endif
 }

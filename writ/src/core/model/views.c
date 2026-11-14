@@ -210,6 +210,9 @@ build_fns(writ_model_t *model)
             .declared_at        = writ_loc_span(session, record->loc),
             .keywords_slot      = record->keywords_slot,
             .effects            = record->effects,
+            .has_syscall_number = record->has_syscall_number,
+            .syscall_number     = record->syscall_number,
+            .infallible         = record->infallible,
         };
     }
 }
@@ -405,6 +408,18 @@ const writ_fn_view_t *
 writ_model_callback_named(const writ_model_t *model, writ_str_t name)
 {
     return fn_named_of(model, WRIT_FN_CALLBACK, name);
+}
+
+size_t
+writ_model_syscall_count(const writ_model_t *model)
+{
+    return fn_count_of(model, WRIT_FN_SYSCALL);
+}
+
+const writ_fn_view_t *
+writ_model_syscall_at(const writ_model_t *model, size_t index)
+{
+    return fn_at_of(model, WRIT_FN_SYSCALL, index);
 }
 
 uint32_t

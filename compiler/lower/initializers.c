@@ -717,7 +717,8 @@ build_reachable_functions(
 }
 
 static void collect_emission_roots(n00bb_link_analysis_t *analysis,
-                                   core_list_t(n00bb_ir_func_ptr_t) *roots);
+                                   core_list_t(n00bb_ir_func_ptr_t) *roots,
+                                   bool generated_whole);
 
 static bool
 collect_any_function(ir_func_t *function, void *raw)
@@ -736,7 +737,7 @@ n00bb_runtime_functions(n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_ir_func_ptr_t) roots = {0};
     if (!collect_program_roots(analysis, &analysis->initializer_order,
                                nullptr, &roots)) return false;
-    collect_emission_roots(analysis, &roots);
+    collect_emission_roots(analysis, &roots, false);
     n00bb_comptime_function_roots(analysis, &roots);
     *out = core_list_new(n00bb_ir_func_ptr_t);
     bool ok = ir_walk_reachable_functions(roots.data, roots.len,
@@ -791,7 +792,8 @@ polymorphic_backup_lowerable(ir_module_t *module, ir_func_t *function)
 
 static void
 collect_emission_roots(n00bb_link_analysis_t *analysis,
-                       core_list_t(n00bb_ir_func_ptr_t) *roots)
+                       core_list_t(n00bb_ir_func_ptr_t) *roots,
+                       bool generated_whole)
 {
     for (size_t i = 0; i < analysis->specializations.len; i++)
         core_list_push(*roots, analysis->specializations.data[i].instance);
@@ -813,12 +815,21 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
             && unit == core_link_unit_root(state->link, 0);
         ir_module_t *module = unit_module(state);
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
-            ir_func_t *function = ir_func_at(module, j);
+            // A cached module's functions have their bodies in the cache:
+            // its value methods are the program's as much as a compiled
+            // module's are, or boxed dispatch can't find them.
+            ir_func_t *declared = ir_func_at(module, j);
+            ir_func_t *function = declared ? n00bb_cached_body(declared)
+                                           : nullptr;
             ir_annot_t *value_method = function ? ir_annot_get(
                 &function->annots,
                 CORE_STRING_STATIC("n00bb.generated-value-method")) : nullptr;
+            if (!value_method && declared)
+                value_method = ir_annot_get(&declared->annots,
+                    CORE_STRING_STATIC("n00bb.generated-value-method"));
             if (function && function->n_blocks && value_method
-                && th_is_closed(ir_module_types(module), function->type))
+                && th_is_closed(ir_module_types(function->owner),
+                                function->type))
                 core_list_push(*roots, function);
             else if (function && function->n_blocks && value_method
                 && !analysis->closed_world
@@ -826,7 +837,11 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
                        CORE_STRING_STATIC("__n00bb_dispatch_")))
                 core_list_push(*roots, function);
         }
-        if (generated || root) continue;
+        // A literal's generated module is whole in the object the program's
+        // compile-time code runs with, so its cached copy serves any later
+        // build. At run time only what the program calls is kept, so a
+        // library it binds is linked only when something calls it.
+        if (root || (generated && !generated_whole)) continue;
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
             ir_func_t *body = function ? n00bb_cached_body(function) : nullptr;
@@ -846,7 +861,7 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->reachable_functions.len; i++)
         core_list_push(roots, analysis->reachable_functions.data[i]);
-    collect_emission_roots(analysis, &roots);
+    collect_emission_roots(analysis, &roots, true);
     bool ok = walk_reachable_functions(analysis, &roots,
                                        &analysis->emitted_functions,
                                        &analysis->cached_functions);

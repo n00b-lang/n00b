@@ -2,7 +2,7 @@ func trip(depth: i32) -> i32 {
     return depth
 }
 
-const tripx = [-
+[-
 library trip
 
 fn trip_open(depth: c_int) -> c_int

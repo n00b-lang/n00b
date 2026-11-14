@@ -25,6 +25,7 @@ double n00bb_profile_seconds(void);
 #include "toolchain_commands.h"
 #include "compiler_native_roots.h"
 #include "compiler_tu.h"
+#include "cached_body.h"
 #include "compiler_link.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
@@ -1481,6 +1482,33 @@ record_import_alias(core_translation_unit_t *importer, core_string_t name,
     return true;
 }
 
+// Keeps where module literal `name` is, so a cached build can generate its
+// module again without compiling the module it's in.
+static bool
+note_literal_alias(core_translation_unit_t *importer, core_string_t name,
+                   core_string_t modifier, n00bb_literal_origin_t origin,
+                   size_t end)
+{
+    n00bb_tu_state_t *state = tu_state(importer);
+    for (size_t i = 0; state && i < state->import_aliases.len; i++) {
+        n00bb_import_alias_t *alias = &state->import_aliases.data[i];
+        if (!core_string_eq(alias->name, name)) continue;
+        char *stored = core_arena_alloc(&state->semantic_values,
+                                        modifier.u8_bytes + 1);
+        if (!stored) return false;
+        memcpy(stored, modifier.data, modifier.u8_bytes);
+        stored[modifier.u8_bytes] = '\0';
+        alias->literal_modifier = core_string_borrow(stored,
+                                                     modifier.u8_bytes);
+        alias->literal_start = origin.byte;
+        alias->literal_end = end;
+        alias->literal_line = origin.line;
+        alias->literal_column = origin.column;
+        return true;
+    }
+    return false;
+}
+
 static bool
 record_import_rename(core_translation_unit_t *importer, core_string_t name,
                      core_translation_unit_t *unit)
@@ -2159,6 +2187,258 @@ restore_interface_import_aliases(import_driver_t *driver,
     return at == size;
 }
 
+// The shims and native libraries a program links, chosen from the C
+// symbols its code calls. Strings are copies: a later choice replaces the
+// FFI's own lists.
+typedef struct {
+    core_list_t(core_buffer_t) bitcode;
+    core_list_t(core_string_t) archives;
+    core_list_t(core_string_t) libraries;
+    core_list_t(core_string_t) frameworks;
+    core_list_t(core_string_t) search_paths;
+    n00bb_native_inputs_t inputs;
+} native_selection_t;
+
+static void
+native_strings_release(core_list_t(core_string_t) *list)
+{
+    for (size_t i = 0; i < list->len; i++) core_free(list->data[i].data);
+    core_list_free(*list);
+}
+
+static void
+native_selection_release(native_selection_t *selection)
+{
+    for (size_t i = 0; i < selection->bitcode.len; i++)
+        core_buffer_release(&selection->bitcode.data[i]);
+    if (selection->bitcode.data) core_list_free(selection->bitcode);
+    if (selection->archives.data) native_strings_release(&selection->archives);
+    if (selection->libraries.data)
+        native_strings_release(&selection->libraries);
+    if (selection->frameworks.data)
+        native_strings_release(&selection->frameworks);
+    if (selection->search_paths.data)
+        native_strings_release(&selection->search_paths);
+    *selection = (native_selection_t){0};
+}
+
+// Compiles the shims of the FFI's current choice and copies its libraries.
+static bool
+fill_native_selection(n00bb_ffi_t *ffi, core_string_t triple,
+                      core_string_t executable,
+                      core_diagnostics_t *diagnostics,
+                      native_selection_t *out)
+{
+    native_selection_release(out);
+    out->bitcode = core_list_new(core_buffer_t);
+    out->archives = core_list_new(core_string_t);
+    out->libraries = core_list_new(core_string_t);
+    out->frameworks = core_list_new(core_string_t);
+    out->search_paths = core_list_new(core_string_t);
+    bool ok = true;
+    if (n00bb_ffi_shim_count(ffi)) {
+        char *shim_triple = n00bb_llvm_target_triple(triple);
+        core_string_t shim_text = core_string_from_cstr(shim_triple);
+        core_free(shim_triple);
+        ok = shim_text.data && n00bb_ffi_compile_shims(ffi, shim_text,
+            executable, &out->bitcode, diagnostics);
+        core_free(shim_text.data);
+    }
+    for (size_t i = 0; i < n00bb_ffi_archive_count(ffi); i++)
+        core_list_push(out->archives,
+                       core_string_dup(n00bb_ffi_archive_at(ffi, i)));
+    for (size_t i = 0; i < n00bb_ffi_library_count(ffi); i++)
+        core_list_push(out->libraries,
+                       core_string_dup(n00bb_ffi_library_at(ffi, i)));
+    for (size_t i = 0; i < n00bb_ffi_framework_count(ffi); i++)
+        core_list_push(out->frameworks,
+                       core_string_dup(n00bb_ffi_framework_at(ffi, i)));
+    for (size_t i = 0; i < n00bb_ffi_search_path_count(ffi); i++)
+        core_list_push(out->search_paths,
+                       core_string_dup(n00bb_ffi_search_path_at(ffi, i)));
+    out->inputs = (n00bb_native_inputs_t){
+        .bitcode = out->bitcode.data,
+        .bitcode_count = out->bitcode.len,
+        .exports = n00bb_ffi_has_exports(ffi),
+        .archives = out->archives.data,
+        .archive_count = out->archives.len,
+        .libraries = out->libraries.data,
+        .library_count = out->libraries.len,
+        .frameworks = out->frameworks.data,
+        .framework_count = out->frameworks.len,
+        .search_paths = out->search_paths.data,
+        .search_path_count = out->search_paths.len,
+    };
+    return ok;
+}
+
+typedef struct {
+    n00bb_ffi_t *ffi;
+    core_string_t triple;
+    core_string_t executable;
+    core_diagnostics_t *diagnostics;
+    native_selection_t *selection;
+    bool libc;
+} runtime_selection_t;
+
+// Chooses the shims and libraries for the runtime program, from the C
+// symbols its runtime code calls.
+static bool
+select_runtime_natives(void *context, const core_string_t *symbols,
+                       size_t count, n00bb_native_inputs_t *out)
+{
+    runtime_selection_t *runtime = context;
+    n00bb_ffi_select(runtime->ffi, symbols, count);
+    bool ok = fill_native_selection(runtime->ffi, runtime->triple,
+        runtime->executable, runtime->diagnostics, runtime->selection);
+    // Linking the C library is the whole program's choice, made with its
+    // compile-time code: the runtime it was built for needs the C library
+    // whether or not runtime code calls a literal that asked for it.
+    bool libc = false;
+    for (size_t i = 0; i < runtime->selection->libraries.len; i++)
+        libc |= core_string_eq(runtime->selection->libraries.data[i],
+                               CORE_STRING_STATIC("c"));
+    if (ok && runtime->libc && !libc) {
+        core_list_push(runtime->selection->libraries,
+                       core_string_dup(CORE_STRING_STATIC("c")));
+        runtime->selection->inputs.libraries =
+            runtime->selection->libraries.data;
+        runtime->selection->inputs.library_count =
+            runtime->selection->libraries.len;
+    }
+    *out = runtime->selection->inputs;
+    return ok;
+}
+
+typedef struct {
+    core_string_t modifier;
+    core_string_t name;
+    core_string_t module;
+    bool injected;
+    uint32_t start;
+    uint32_t end;
+    uint32_t line;
+    uint32_t column;
+} cached_literal_t;
+
+static bool generate_module_literal(import_driver_t *driver,
+                                    core_translation_unit_t *importer,
+                                    core_string_t modifier,
+                                    core_string_t name, core_string_t text,
+                                    n00bb_literal_origin_t origin,
+                                    core_buffer_t *identifier);
+
+// Reads the next of a cached module's module literals.
+static bool
+read_cached_literal(const uint8_t *data, size_t size, size_t *at,
+                    cached_literal_t *out)
+{
+    uint32_t fields[5];
+    if (!read_alias_text(data, size, at, &out->modifier)
+        || !read_alias_text(data, size, at, &out->name)
+        || !read_alias_text(data, size, at, &out->module)) return false;
+    for (size_t f = 0; f < 5; f++) {
+        if (size - *at < 4) return false;
+        fields[f] = read_u32_le(data + *at);
+        *at += 4;
+    }
+    out->injected = fields[0] != 0;
+    out->start = fields[1];
+    out->end = fields[2];
+    out->line = fields[3];
+    out->column = fields[4];
+    return out->start <= out->end;
+}
+
+static const uint8_t *
+cached_literals(import_driver_t *driver, core_translation_unit_t *unit,
+                size_t *size, uint32_t *count)
+{
+    core_string_t module = unit->module.identifier;
+    const uint8_t *data = module.data
+        ? interface_owned_metadata(&driver->loader->interfaces,
+            TH_ENV_METADATA_ENVIRONMENT, module,
+            CORE_STRING_STATIC("n00b.module-literals"), 1, size)
+        : nullptr;
+    if (!data || *size < 4) return nullptr;
+    *count = read_u32_le(data);
+    return data;
+}
+
+// A cached module's module literals generate their modules again, from its
+// source, which the cache checked is unchanged: the generated module may be
+// compiled, and either way its natives and C shims are needed.
+static bool
+restore_interface_literals(import_driver_t *driver,
+                           core_translation_unit_t *unit)
+{
+    size_t size = 0;
+    uint32_t count = 0;
+    const uint8_t *data = cached_literals(driver, unit, &size, &count);
+    core_string_t path = {0};
+    uint64_t hash = 0;
+    if (!data || !n00bb_cache_module_source(driver->loader->cache,
+            unit->module.identifier, &path, &hash)) return true;
+    char *contents = nullptr;
+    size_t bytes = 0;
+    bool ok = core_os_read_file(path, &contents, &bytes)
+        && core_xxh3_64bits_raw(contents ? contents : "", bytes) == hash;
+    size_t at = 4;
+    for (uint32_t i = 0; ok && i < count; i++) {
+        cached_literal_t literal = {0};
+        ok = read_cached_literal(data, size, &at, &literal)
+            && literal.end <= bytes;
+        if (!ok) break;
+        core_buffer_t identifier = {0};
+        n00bb_literal_origin_t origin = {
+            .host_path = path,
+            .line = literal.line,
+            .column = literal.column,
+            .byte = literal.start,
+        };
+        ok = generate_module_literal(driver, unit, literal.modifier,
+                literal.name,
+                core_string_borrow(contents + literal.start,
+                                   literal.end - literal.start),
+                origin, &identifier)
+            && core_string_eq(core_buffer_string(&identifier),
+                              literal.module);
+        core_buffer_release(&identifier);
+    }
+    core_free(contents);
+    if (!ok)
+        import_internal(unit, nullptr,
+            "a cached module's module literals could not be generated again");
+    return ok;
+}
+
+// Marks the aliases a cached module's module literals made.
+static bool
+restore_interface_literal_aliases(import_driver_t *driver,
+                                  core_translation_unit_t *unit)
+{
+    size_t size = 0;
+    uint32_t count = 0;
+    const uint8_t *data = cached_literals(driver, unit, &size, &count);
+    size_t at = 4;
+    for (uint32_t i = 0; data && i < count; i++) {
+        cached_literal_t literal = {0};
+        if (!read_cached_literal(data, size, &at, &literal)) return false;
+        n00bb_tu_state_t *state = tu_state(unit);
+        for (size_t a = 0; a < state->import_aliases.len; a++) {
+            n00bb_import_alias_t *alias = &state->import_aliases.data[a];
+            if (!core_string_eq(alias->name, literal.name)) continue;
+            alias->injected = literal.injected;
+            if (!note_literal_alias(unit, literal.name, literal.modifier,
+                    (n00bb_literal_origin_t){
+                        .line = literal.line, .column = literal.column,
+                        .byte = literal.start,
+                    }, literal.end)) return false;
+        }
+    }
+    return true;
+}
+
 static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit)
@@ -2198,6 +2478,7 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                         "a cached module interface has no import graph");
         return false;
     }
+    if (!restore_interface_literals(driver, unit)) return false;
     size_t offset = 4;
     uint32_t count = read_u32_le(data);
     for (uint32_t i = 0; i < count; i++) {
@@ -2218,10 +2499,12 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
         if (!ok) return false;
         offset += length;
         if (i + 1 == count && offset == size)
-            return restore_interface_import_aliases(driver, unit);
+            return restore_interface_import_aliases(driver, unit)
+                && restore_interface_literal_aliases(driver, unit);
     }
     if (!count && offset == size)
-        return restore_interface_import_aliases(driver, unit);
+        return restore_interface_import_aliases(driver, unit)
+            && restore_interface_literal_aliases(driver, unit);
     import_internal(unit, nullptr,
                     "a cached module interface has a malformed import graph");
     return false;
@@ -2262,24 +2545,73 @@ module_literal_identifier(core_buffer_t *out, core_string_t importer,
         (int)name.u8_bytes, name.data);
 }
 
+// Prints the module generated for the literal at `site`, written MODULE:LINE
+// with LINE the line its `[-` is on.
 static bool
 show_module_literal(n00bb_resolver_t *resolver, core_string_t modifier,
-                    core_string_t qualified)
+                    core_string_t site)
 {
-    size_t split = qualified.u8_bytes;
-    while (split && qualified.data[split - 1] != '.') split--;
-    if (split < 2 || split == qualified.u8_bytes) return false;
+    int64_t colon = site.data ? core_string_find_byte(site, ':') : -1;
+    if (colon <= 0 || (size_t)colon + 1 >= site.u8_bytes) return false;
+    for (size_t i = (size_t)colon + 1; i < site.u8_bytes; i++)
+        if (site.data[i] < '0' || site.data[i] > '9') return false;
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__%.*s_literal_%.*s",
+        (int)modifier.u8_bytes, modifier.data,
+        (int)(site.u8_bytes - (size_t)colon - 1), site.data + colon + 1);
     core_buffer_t identifier = {0};
     module_literal_identifier(&identifier,
-        core_string_borrow(qualified.data, split - 1), modifier,
-        core_string_borrow(qualified.data + split,
-                           qualified.u8_bytes - split));
+        core_string_borrow(site.data, (size_t)colon), modifier,
+        core_buffer_string(&name));
+    core_buffer_release(&name);
     core_string_t text = {0};
     bool found = n00bb_resolver_generated_text(resolver,
         core_string_borrow(identifier.data, identifier.byte_len), &text);
     if (found) fwrite(text.data, 1, text.u8_bytes, stdout);
     core_buffer_release(&identifier);
     return found;
+}
+
+// Generates the module for module literal `name` in `importer` and makes it
+// available to import, naming it in `identifier`. When the cache has that
+// module, its natives' facts are noted here, since it won't be compiled.
+static bool
+generate_module_literal(import_driver_t *driver,
+                        core_translation_unit_t *importer,
+                        core_string_t modifier, core_string_t name,
+                        core_string_t text, n00bb_literal_origin_t origin,
+                        core_buffer_t *identifier)
+{
+    const n00bb_module_generator_t *generator = nullptr;
+    for (size_t i = 0; driver->generators && i < driver->generators->count; i++)
+        if (core_string_eq(driver->generators->items[i].modifier, modifier))
+            generator = &driver->generators->items[i];
+    if (!generator) return false;
+    module_literal_identifier(identifier, importer->module.identifier,
+                              modifier, name);
+    core_string_t id = core_buffer_string(identifier);
+    core_buffer_t source = {0};
+    n00bb_native_declarations_t natives = {0};
+    n00bb_line_origins_t origins = {0};
+    if (!generator->generate(generator->context, importer, name, id, origin,
+            text, &source, &natives, &origins)) {
+        n00bb_native_declarations_release(&natives);
+        n00bb_line_origins_release(&origins);
+        core_buffer_release(&source);
+        return false;
+    }
+    if (n00bb_cache_has_module(driver->loader->cache, id))
+        n00bb_note_native_axioms(natives);
+    core_buffer_t inputs = {0};
+    if (generator->inputs)
+        generator->inputs(generator->context, id, &inputs);
+    bool ok = n00bb_resolver_add_generated(driver->resolver, id,
+        core_string_borrow(source.data ? source.data : "", source.byte_len),
+        importer, natives, origins,
+        core_string_borrow(inputs.data ? inputs.data : "", inputs.byte_len));
+    core_buffer_release(&inputs);
+    core_buffer_release(&source);
+    return ok;
 }
 
 static bool
@@ -2290,12 +2622,8 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
                     parse_tree_t **tree_out)
 {
     import_driver_t *driver = opaque;
-    const n00bb_module_generator_t *generator = nullptr;
-    for (size_t i = 0; driver->generators && i < driver->generators->count; i++)
-        if (core_string_eq(driver->generators->items[i].modifier, modifier))
-            generator = &driver->generators->items[i];
     parse_token_info_t *token = parse_node_token(literal);
-    if (!generator || !token) return false;
+    if (!token) return false;
     const char *contents = core_source_file_contents(&importer->source).data;
     size_t content_start = 0;
     size_t content_end = 0;
@@ -2303,33 +2631,18 @@ load_module_literal(void *opaque, parse_grammar_t *grammar,
     core_string_t text = core_string_borrow(contents + content_start,
         content_end - content_start);
     core_buffer_t identifier = {0};
-    module_literal_identifier(&identifier, importer->module.identifier,
-                              modifier, name);
-    core_string_t id = core_string_borrow(identifier.data, identifier.byte_len);
-    core_buffer_t source = {0};
-    n00bb_native_declarations_t natives = {0};
-    n00bb_line_origins_t origins = {0};
-    if (!generator->generate(generator->context, importer, name, id,
-            literal_origin(importer, token), text, &source, &natives,
-            &origins)) {
-        n00bb_native_declarations_release(&natives);
-        n00bb_line_origins_release(&origins);
-        core_buffer_release(&source);
-        core_buffer_release(&identifier);
-        return false;
-    }
+    n00bb_literal_origin_t origin = literal_origin(importer, token);
     core_module_spec_t module = {0};
-    bool ok = n00bb_resolver_add_generated(driver->resolver, id,
-                  core_string_borrow(source.data ? source.data : "", source.byte_len),
-                  importer, natives, origins)
-        && core_module_spec_init(&module, id)
+    bool ok = generate_module_literal(driver, importer, modifier, name, text,
+                                      origin, &identifier)
+        && core_module_spec_init(&module, core_buffer_string(&identifier))
         && load_import_module(driver, grammar, literal, importer, &module,
                core_buffer_string(&identifier), (core_string_t){0},
                module_out, tree_out)
-        && record_import_alias(importer, name, *module_out);
+        && record_import_alias(importer, name, *module_out)
+        && note_literal_alias(importer, name, modifier, origin, content_end);
     core_module_spec_release(&module);
     core_buffer_release(&identifier);
-    core_buffer_release(&source);
     return ok;
 }
 
@@ -2666,7 +2979,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                         && load_runtime_module(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.marshal"))
                         && load_runtime_module(&import_driver, grammar,
-                            unit, CORE_STRING_STATIC("sys.box"));
+                            unit, CORE_STRING_STATIC("sys.box"))
+                        && load_runtime_module(&import_driver, grammar,
+                            unit, CORE_STRING_STATIC("sys.pool"));
                     runtime_support_loaded = job_ok;
                 }
                 if (job_ok) job_ok = !core_diagnostics_failed(
@@ -4229,7 +4544,9 @@ check_each_input(int argc, char **argv, core_string_t argv0,
     char *compiler = core_string_to_cstr(compiler_path);
     core_free(compiler_path.data);
     if (!compiler) return 1;
-    int32_t limit = core_os_cpu_count();
+    // Each input is checked by its own compiler, at most `jobs` at a time.
+    int64_t jobs = n00bb_setting_int(N00BB_KEY_BUILD_JOBS);
+    int32_t limit = jobs > 128 ? 128 : jobs > 0 ? (int32_t)jobs : 1;
     core_process_t *running = core_alloc_array(core_process_t,
                                                (size_t)input_count);
     int *outputs = core_alloc_array(int, (size_t)input_count);
@@ -4880,8 +5197,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && core_string_eq(command, CORE_STRING_STATIC("build"));
     bool library_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("library"));
-    bool compile_command = !show_ffi
-        && core_string_eq(command, CORE_STRING_STATIC("compile"));
     bool emit_interface = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--emit-interface"));
     core_string_t interface_output = emit_interface
@@ -4998,12 +5313,15 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     for (size_t i = 0; i < syntax_preference_count; i++)
         syntax_preferences[i] = n00bb_setting_at(preferences_key, i);
     n00bb_ffi_t *ffi = n00bb_ffi_new();
+    core_target_desc_t ffi_target;
+    if (ffi && n00bb_output_target_profile(&ffi_target))
+        n00bb_ffi_set_target(ffi, ffi_target.triple);
     n00bb_setting_id_t contract_dirs_key = N00BB_KEY_PATHS_CONTRACT_DIRS;
     for (size_t i = 0; i < n00bb_setting_count(contract_dirs_key); i++)
         n00bb_ffi_add_contract_dir(ffi,
                                    n00bb_setting_at(contract_dirs_key, i));
     const n00bb_module_generator_t generator_items[] = {
-        {CORE_STRING_STATIC("ffi"), n00bb_ffi_generate, ffi},
+        {CORE_STRING_STATIC("ffi"), n00bb_ffi_generate, ffi, n00bb_ffi_inputs},
     };
     const n00bb_module_generators_t generators = {
         generator_items, sizeof(generator_items) / sizeof(generator_items[0]),
@@ -5109,9 +5427,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         !locate_only && !lex_command, show_tree,
         needs_packages,
         show_preprocessed, show_symbols,
-        lower_command || build_command || library_command || compile_command
+        lower_command || build_command || library_command
             || normalize_fmt,
-        library_command || compile_command,
+        library_command,
         build_command,
         native_roots, (size_t)native_root_count,
         linked_interfaces, linked_count, cache, &warnings,
@@ -5147,6 +5465,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_report(cli_diagnostics, nullptr, N00B_DIAG_FFI_LITERAL_NOT_FOUND,
             (core_diag_location_t){}, N00B_TEXT_NO_FFI_LITERAL_IS_NAMED,
             N00BB_ARGS(ARG_TEXT(requested)));
+        n00bb_report_help(cli_diagnostics, N00B_TEXT_NAME_AN_FFI_LITERAL_BY_ITS,
+            N00BB_NO_ARGS);
         located = false;
     }
     if (located && fmt_command && !normalize_fmt)
@@ -5188,7 +5508,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         .dump_summaries = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-summaries")),
     };
-    if (located && (lower_command || build_command || compile_command
+    if (located && (lower_command || build_command
                     || library_command || normalize_fmt))
         located = lower_requests_to_ir(grammar, link,
             link_analysis, ir_context, cli_diagnostics,
@@ -5235,7 +5555,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             ? core_link_unit_root(link, 0) : nullptr;
         located = interface_environment && library_root
             && n00bb_emit_abi_artifacts(link, link_analysis,
-                   !preprocessor_options.release_mode, false)
+                   !preprocessor_options.release_mode)
             && n00bb_register_library_abi(link, link_analysis)
             && register_library_ir(link_analysis,
                                    library_root->module.identifier)
@@ -5271,11 +5591,22 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool emit_program = located && build_command;
     if (cache && link_analysis) n00bb_note_cached_bodies(link_analysis);
     if (located && emit_program && cache)
-        (void)n00bb_cache_snapshot(cache, link, link_analysis);
+        (void)n00bb_cache_snapshot(cache, link, link_analysis, false);
     bool check_snapshot = located && check_command && cache
         && (defer_analysis || !link_analysis->effect_checks_failed)
-        && n00bb_cache_snapshot(cache, link, link_analysis);
+        && n00bb_cache_snapshot(cache, link, link_analysis, false);
     if (check_snapshot && !defer_analysis)
+        (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
+    // The modules that checked clean in a broken program are as good as
+    // in a clean check: store them, or every check of a broken program
+    // redoes them. As for a clean check, the IR is taken before
+    // specializing, which binds library calls to this program's instances.
+    bool failed_check = !located && check_command && cache && link_analysis
+        && link_analysis->lowered_with_errors && specialize;
+    bool failed_snapshot = failed_check
+        && (defer_analysis || !link_analysis->effect_checks_failed)
+        && n00bb_cache_snapshot(cache, link, link_analysis, true);
+    if (failed_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (!located && link_analysis && link_analysis->lowered_with_errors
         && specialize && (build_command || check_command)) {
@@ -5284,9 +5615,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                                         deferred.dump_control_flow,
                                         deferred.dump_pdg,
                                         deferred.dump_summaries);
-        if (specialize_quietly(link_analysis, cli_diagnostics)
-            && n00bb_recompute_summaries(link_analysis))
-            (void)check_post_specialization(link_analysis);
+        bool analyzed = specialize_quietly(link_analysis, cli_diagnostics)
+            && n00bb_recompute_summaries(link_analysis);
+        if (analyzed) (void)check_post_specialization(link_analysis);
+        if (analyzed && failed_snapshot && defer_analysis) {
+            n00bb_cache_capture_summaries(cache, link_analysis,
+                                          N00BB_PHASE_MAIN);
+            (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
+        }
     }
     bool specializing = (emit_program || (located && check_command))
         && specialize;
@@ -5344,95 +5680,88 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     }
     if (located && emit_program) {
         located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, false);
+            !preprocessor_options.release_mode);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE abi %.3f\n", now - profile_tick);
             profile_tick = now;
         }
-        core_list_t(core_buffer_t) shim_bitcode =
-            core_list_new(core_buffer_t);
         core_string_t compiler_executable = located
             ? core_os_executable_path(argv0) : (core_string_t){0};
         if (located) {
             core_list_t(n00bb_ir_func_ptr_t) *reachable =
                 &link_analysis->emitted_functions;
-            core_string_t *externs = core_alloc_array(core_string_t,
-                reachable->len + 1);
-            size_t extern_count = 0;
-            for (size_t i = 0; externs && i < reachable->len; i++)
-                if (!reachable->data[i]->n_blocks
-                    && reachable->data[i]->name.data)
-                    externs[extern_count++] = reachable->data[i]->name;
-            n00bb_ffi_select(ffi, externs, extern_count);
-            core_free(externs);
+            core_list_t(core_string_t) externs = core_list_new(core_string_t);
+            size_t emitted = reachable->len;
+            for (size_t i = 0; i < emitted
+                 + link_analysis->cached_functions.len; i++) {
+                ir_func_t *function = i < emitted ? reachable->data[i]
+                    : link_analysis->cached_functions.data[i - emitted];
+                if (!function->n_blocks && function->name.data)
+                    core_list_push(externs, function->name);
+                // A cached function's body is kept apart: the natives it
+                // calls are reached through it.
+                ir_func_t *body = n00bb_cached_body(function);
+                for (uint32_t b = 0; body && b < body->n_blocks; b++) {
+                    ir_block_t *block = body->blocks[b];
+                    for (uint32_t n = 0; n < block->n_instrs; n++) {
+                        ir_instr_t *in = block->instrs[n];
+                        for (uint32_t k = 0; k < in->n_operands; k++) {
+                            ir_value_t *value =
+                                in->operands[k].kind == IR_OPD_VALUE
+                                    ? in->operands[k].value : nullptr;
+                            if (value && value->kind == IR_VAL_FUNC
+                                && value->owner && !value->owner->n_blocks
+                                && value->owner->name.data)
+                                core_list_push(externs, value->owner->name);
+                        }
+                    }
+                }
+            }
+            n00bb_ffi_select(ffi, externs.data, externs.len);
+            core_list_free(externs);
         }
-        if (located && n00bb_ffi_shim_count(ffi)) {
-            char *shim_triple = n00bb_llvm_target_triple(
-                link_analysis->target.triple);
-            core_string_t shim_text = core_string_from_cstr(shim_triple);
-            core_free(shim_triple);
-            located = shim_text.data && n00bb_ffi_compile_shims(ffi,
-                shim_text, compiler_executable, &shim_bitcode,
-                cli_diagnostics);
-            core_free(shim_text.data);
-        }
-        core_free(compiler_executable.data);
-        core_list_t(core_string_t) archives = core_list_new(core_string_t);
-        core_list_t(core_string_t) libraries = core_list_new(core_string_t);
-        core_list_t(core_string_t) frameworks = core_list_new(core_string_t);
-        core_list_t(core_string_t) search_paths =
-            core_list_new(core_string_t);
-        for (size_t i = 0; i < n00bb_ffi_archive_count(ffi); i++)
-            core_list_push(archives, n00bb_ffi_archive_at(ffi, i));
-        for (size_t i = 0; i < n00bb_ffi_library_count(ffi); i++)
-            core_list_push(libraries, n00bb_ffi_library_at(ffi, i));
-        for (size_t i = 0; i < n00bb_ffi_framework_count(ffi); i++)
-            core_list_push(frameworks, n00bb_ffi_framework_at(ffi, i));
-        for (size_t i = 0; i < n00bb_ffi_search_path_count(ffi); i++)
-            core_list_push(search_paths, n00bb_ffi_search_path_at(ffi, i));
-        n00bb_native_inputs_t native_inputs = {
-            .bitcode = shim_bitcode.data,
-            .bitcode_count = shim_bitcode.len,
-            .exports = n00bb_ffi_has_exports(ffi),
-            .archives = archives.data,
-            .archive_count = archives.len,
-            .libraries = libraries.data,
-            .library_count = libraries.len,
-            .frameworks = frameworks.data,
-            .framework_count = frameworks.len,
-            .search_paths = search_paths.data,
-            .search_path_count = search_paths.len,
+        native_selection_t comptime_natives = {0};
+        native_selection_t runtime_natives = {0};
+        runtime_selection_t runtime_selection = {
+            .ffi = ffi,
+            .triple = link_analysis->target.triple,
+            .executable = compiler_executable,
+            .diagnostics = cli_diagnostics,
+            .selection = &runtime_natives,
         };
+        if (located)
+            located = fill_native_selection(ffi, link_analysis->target.triple,
+                compiler_executable, cli_diagnostics, &comptime_natives);
+        for (size_t i = 0; i < comptime_natives.libraries.len; i++)
+            runtime_selection.libc |= core_string_eq(
+                comptime_natives.libraries.data[i], CORE_STRING_STATIC("c"));
+        comptime_natives.inputs.select_runtime = select_runtime_natives;
+        comptime_natives.inputs.select_context = &runtime_selection;
         if (located)
             located = n00bb_build_executable(link, link_analysis, args,
                 !preprocessor_options.release_mode, native_cpu,
-                &native_inputs, cli_diagnostics);
-        for (size_t i = 0; i < shim_bitcode.len; i++)
-            core_buffer_release(&shim_bitcode.data[i]);
-        core_list_free(shim_bitcode);
-        core_list_free(archives);
-        core_list_free(libraries);
-        core_list_free(frameworks);
-        core_list_free(search_paths);
+                &comptime_natives.inputs, cli_diagnostics);
+        core_free(compiler_executable.data);
+        native_selection_release(&comptime_natives);
+        native_selection_release(&runtime_natives);
         if (profile_compile) {
             double now = n00bb_profile_seconds();
             fprintf(stderr, "PROFILE native %.3f\n", now - profile_tick);
             profile_tick = now;
         }
     }
-    if (located && compile_command) {
-        located = n00bb_emit_abi_artifacts(link, link_analysis,
-            !preprocessor_options.release_mode, true);
-        if (located)
-            abi_emitted = located = n00bb_write_compile_abi_artifact(
-                link, args, cli_diagnostics);
-    }
     if (located && library_command
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--output"))) {
         if (!emit_interface)
             located = n00bb_emit_abi_artifacts(link, link_analysis,
-                !preprocessor_options.release_mode, false);
+                !preprocessor_options.release_mode);
+        if (located && !emit_interface && parse_cmdr_flag_present(args,
+                CORE_STRING_STATIC("--dev-module-abi")))
+            located = n00bb_write_module_abi_artifacts(link,
+                parse_cmdr_flag_str(args,
+                    CORE_STRING_STATIC("--dev-module-abi")),
+                cli_diagnostics);
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);
@@ -5452,7 +5781,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     }
 
     bool diagnostics_deferred = lower_command || build_command
-        || library_command || compile_command;
+        || library_command;
     if (diagnostics_deferred) {
         if (link_analysis) {
             core_translation_unit_t *root = link_analysis->units.len

@@ -1,5 +1,7 @@
+import sys.os
+
 var level: int = 1
 if comptime() {
     level = 5
-    __os_exit(0)
+    sys.os.exit(0)
 }

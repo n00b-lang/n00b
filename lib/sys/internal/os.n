@@ -1,0 +1,696 @@
+# Operating system calls, with failures reported as `Errno`.
+#
+# Effects: only reads and writes of data are `input` and `output`. Calls
+# that manage descriptors or ask about them (open, close, seek, pipe, the
+# terminal queries) are `input`, since they change nothing a program
+# writes to.
+#
+# Linux enters the kernel directly, through writ `syscall` declarations: no
+# libc and no C shim. macOS calls libSystem, which is its only stable
+# kernel interface, through raw bindings, and reads errno right after a
+# failure. Windows calls the C runtime's descriptor functions the same way,
+# and Win32 for what they don't cover (the console, randomness).
+
+import internal.errno
+import internal.threads
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall read(fd: c_int, buf: *u8, count: usize) -> isize
+      number 0 when arch == x86_64
+      number 63 when arch == aarch64
+      effects input, blocking
+
+    syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+      number 1 when arch == x86_64
+      number 64 when arch == aarch64
+      effects output, blocking
+
+    syscall close(fd: c_int) -> c_int
+      number 3 when arch == x86_64
+      number 57 when arch == aarch64
+      effects input
+
+    syscall lseek(fd: c_int, offset: isize, whence: c_int) -> isize
+      number 8 when arch == x86_64
+      number 62 when arch == aarch64
+      effects input
+
+    syscall pipe2(fds: *c_int, flags: c_int) -> c_int
+      number 293 when arch == x86_64
+      number 59 when arch == aarch64
+      effects input
+
+    # Opening a FIFO waits for the other end, so open can block.
+    syscall openat(dirfd: c_int, path: *u8, flags: c_int, mode: c_uint) -> c_int
+      number 257 when arch == x86_64
+      number 56 when arch == aarch64
+      effects input, blocking
+
+    syscall ioctl(fd: c_int, request: c_ulong, arg: *u8) -> c_int
+      number 16 when arch == x86_64
+      number 29 when arch == aarch64
+      effects input
+
+    # Blocks only until the kernel's entropy pool is first initialized.
+    syscall getrandom(buf: *u8, count: usize, flags: c_uint) -> isize
+      number 318 when arch == x86_64
+      number 278 when arch == aarch64
+      effects random, blocking
+
+    # The runtime's exit, which also ends evaluation at compile time.
+    fn n00b_os_exit(code: i64)
+      effects noreturn, output
+
+    binding {
+        error * -> "internal.errno.Errno"
+        # This module's own read, write and close are the API.
+        name read "syscall_read"
+        name write "syscall_write"
+        name close "syscall_close"
+        raw "n00b_os_exit"
+    }
+    -]'ffi
+
+    # ioctl requests, the same on x86_64 and aarch64.
+    private const get_terminal_attributes: u64 = 0x5401
+    private const get_window_size: u64 = 0x5413
+
+    # Open flags, the same on x86_64 and aarch64.
+    private const close_on_exec: u32 = 0x80000
+    private const open_create: u32 = 0x40
+    private const open_exclusive: u32 = 0x80
+    private const open_truncate: u32 = 0x200
+    private const open_append: u32 = 0x400
+    # AT_FDCWD: paths are relative to the working directory.
+    private const at_working_directory: i32 = -100
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn read(fd: c_int, buf: *u8, count: usize) -> isize
+      effects input, blocking
+    fn write(fd: c_int, buf: *u8, count: usize) -> isize
+      effects output, blocking
+    fn close(fd: c_int) -> c_int
+      effects input
+    fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
+      effects input
+    # macOS has no pipe2: the ends are marked close-on-exec with fcntl.
+    fn pipe(fds: *c_int) -> c_int
+      effects input
+    fn isatty(fd: c_int) -> c_int
+      effects input
+
+    # The variadic calls go through generated shims, since a variadic C
+    # call's arguments aren't passed like a fixed one's. Their failures
+    # carry the errno.
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+    fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+    fn open(path: *cstr, flags: c_int, ... of c_uint) -> c_int
+      error ret == -1 via errno
+      effects input, blocking
+    fn ioctl(fd: c_int, request: c_ulong, ... of *u8) -> c_int
+      error ret == -1 via errno
+      effects input
+    # At most 256 bytes a call.
+    fn getentropy(buf: *u8, count: usize) -> c_int
+      effects random
+    # The runtime's exit, which also ends evaluation at compile time.
+    fn n00b_os_exit(code: i64)
+      effects noreturn, output
+
+    binding {
+        raw "read"
+        raw "write"
+        raw "close"
+        raw "lseek"
+        raw "pipe"
+        raw "isatty"
+        raw "getentropy"
+        raw "n00b_os_exit"
+        pack fcntl.args as array
+        pack open.args as array
+        pack ioctl.args as array
+        # This module's own open is the API.
+        name open "open_variadic"
+    }
+    -]'ffi
+
+    private const set_descriptor_flags: i32 = 2
+    private const descriptor_close_on_exec: i32 = 1
+    private const get_window_size: u64 = 0x40087468
+
+    # The errno a shimmed call's failure carries.
+    private func errno_of(failure: Ffi_Error) -> internal.errno.Errno {
+        return cast[internal.errno.Errno](failure.code)
+    }
+
+    # Open flags.
+    private const close_on_exec: u32 = 0x1000000
+    private const open_create: u32 = 0x200
+    private const open_exclusive: u32 = 0x800
+    private const open_truncate: u32 = 0x400
+    private const open_append: u32 = 0x8
+} else when target_os() == "windows" {
+    # The C runtime's descriptor calls, which set errno, and the Win32 calls
+    # it has no counterpart for.
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+    link "bcrypt"
+
+    fn _read(fd: c_int, buf: *u8, count: c_uint) -> c_int
+      effects input, blocking
+    fn _write(fd: c_int, buf: *u8, count: c_uint) -> c_int
+      effects output, blocking
+    fn _close(fd: c_int) -> c_int
+      effects input
+    fn _lseeki64(fd: c_int, offset: i64, origin: c_int) -> i64
+      effects input
+    fn _pipe(fds: *c_int, size: c_uint, mode: c_int) -> c_int
+      effects input
+    # Returns the errno itself; the path is UTF-16.
+    fn _wsopen_s(fd: *c_int, path: *u16, flags: c_int, share: c_int,
+                 mode: c_int) -> c_int
+      effects input, blocking
+    fn _isatty(fd: c_int) -> c_int
+      effects input
+    fn _get_osfhandle(fd: c_int) -> isize
+      effects input
+    fn GetConsoleScreenBufferInfo(console: isize, info: *u8) -> c_int
+      effects input
+    fn GetFileType(handle: isize) -> c_uint
+      effects input
+    fn BCryptGenRandom(algorithm: isize, buf: *u8, count: c_ulong,
+                       flags: c_ulong) -> c_long
+      effects random
+    # The runtime's exit, which also ends evaluation at compile time.
+    fn n00b_os_exit(code: i64)
+      effects noreturn, output
+
+    binding {
+        name GetConsoleScreenBufferInfo "console_buffer_info"
+        name GetFileType "file_type"
+        name BCryptGenRandom "gen_random"
+        raw "_*"
+        raw "GetConsoleScreenBufferInfo"
+        raw "GetFileType"
+        raw "BCryptGenRandom"
+        raw "n00b_os_exit"
+    }
+    -]'ffi
+
+    # _O_* open flags; _O_NOINHERIT keeps a descriptor from child processes.
+    private const close_on_exec: u32 = 0x80
+    private const open_create: u32 = 0x100
+    private const open_exclusive: u32 = 0x400
+    private const open_truncate: u32 = 0x200
+    private const open_append: u32 = 0x8
+    private const open_binary: u32 = 0x8000
+    # _SH_DENYNO: other opens of the file are allowed.
+    private const share_any: i32 = 0x40
+    # _S_IREAD and _S_IWRITE.
+    private const permit_read: u32 = 0x100
+    private const permit_write: u32 = 0x80
+    # BCRYPT_USE_SYSTEM_PREFERRED_RNG.
+    private const system_rng: u32 = 2
+    # FILE_TYPE_DISK: the only kind of file a seek moves through.
+    private const file_type_disk: u32 = 1
+    # Each call moves at most this many bytes, which a c_uint count holds.
+    private const chunk_limit: uint = 0x40000000
+
+    private func chunk(count: uint) -> uint {
+        if count > chunk_limit {
+            return chunk_limit
+        }
+        return count
+    }
+}
+
+# The process's arguments and environment, which the runtime saved when the
+# program started, on every platform.
+[-
+library n00b
+
+fn n00b_os_arg_count() -> u64
+  effects env
+fn n00b_os_arg_at(index: u64) -> ?u8 static
+  effects env
+fn n00b_os_env_count() -> u64
+  effects env
+fn n00b_os_env_at(index: u64) -> ?u8 static
+  effects env
+
+binding {
+    raw "n00b_os_*"
+}
+-]'ffi
+
+# How a file is opened. The values are the same on every platform.
+enum Access {
+    read_only = 0,
+    write_only = 1,
+    read_write = 2,
+}
+
+enum Whence {
+    start = 0,
+    current = 1,
+    end = 2,
+}
+
+record Pipe {
+    read: i32
+    write: i32
+}
+
+# The errno a failed libSystem call left on this thread.
+private func last_errno() -> internal.errno.Errno {
+    return cast[internal.errno.Errno](__os_errno())
+}
+
+# Reads into `buffer[start:end]`; returns the number of bytes read, which
+# is 0 at end of file. An interrupted read is retried.
+func read(fd: i32, buffer: Array[u8], start: uint, end: uint) -> uint
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(buffer)
+    if start == end {
+        return 0
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref buffer[start]
+    while true {
+        try {
+            when target_os() == "linux" {
+                return cast[uint](syscall_read(fd, at, end - start)!)
+            } else when target_os() == "macos" {
+                let got: int = read_raw(fd, at, end - start)
+                if got < 0 {
+                    fail last_errno()
+                }
+                return cast[uint](got)
+            } else when target_os() == "windows" {
+                let got: i32 = read_raw(fd, at,
+                    cast[u32](chunk(end - start)))
+                if got < 0 {
+                    fail last_errno()
+                }
+                return cast[uint](got)
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}
+
+# Writes `data[start:end]`; returns the number of bytes written, which may
+# be fewer than asked. An interrupted write is retried.
+func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(data)
+    if start == end {
+        return 0
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref data[start]
+    while true {
+        try {
+            when target_os() == "linux" {
+                return cast[uint](syscall_write(fd, at, end - start)!)
+            } else when target_os() == "macos" {
+                let wrote: int = write_raw(fd, at, end - start)
+                if wrote < 0 {
+                    fail last_errno()
+                }
+                return cast[uint](wrote)
+            } else when target_os() == "windows" {
+                let wrote: i32 = write_raw(fd, at,
+                    cast[u32](chunk(end - start)))
+                if wrote < 0 {
+                    fail last_errno()
+                }
+                return cast[uint](wrote)
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}
+
+# Closes `fd`. Not retried on EINTR: the descriptor is released even when
+# the call is interrupted, and a retry could close a reused one.
+func close(fd: i32) fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        syscall_close(fd)!
+    } else when target_os() == "macos" {
+        if close_raw(fd) < 0 {
+            fail last_errno()
+        }
+    } else when target_os() == "windows" {
+        if close_raw(fd) < 0 {
+            fail last_errno()
+        }
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}
+
+# Moves `fd`'s offset; returns the new offset from the start of the file.
+func seek(fd: i32, offset: int, whence: Whence) -> uint
+    fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+    } else when target_os() == "macos" {
+        let position: int = lseek_raw(fd, offset, cast[i32](whence))
+        if position < 0 {
+            fail last_errno()
+        }
+        return cast[uint](position)
+    } else when target_os() == "windows" {
+        # The C runtime's seek on a pipe or console is undefined rather than
+        # an error, so those fail here as they do elsewhere.
+        let handle: int = get_osfhandle_raw(fd)
+        if handle == -1 {
+            fail internal.errno.Errno.EBADF
+        }
+        if file_type_raw(handle) != file_type_disk {
+            fail internal.errno.Errno.ESPIPE
+        }
+        let position: i64 = lseeki64_raw(fd, offset,
+                                                 cast[i32](whence))
+        if position < 0 {
+            fail last_errno()
+        }
+        return cast[uint](position)
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}
+
+# Creates a pipe whose descriptors are closed on exec.
+func pipe() -> Pipe fail: internal.errno.Errno {
+    let fds: Array[i32] = new[Array[i32]](2)
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref fds[0]
+    when target_os() == "linux" {
+        pipe2(at, cast[i32](close_on_exec))!
+    } else when target_os() == "macos" {
+        if pipe_raw(at) != 0 {
+            fail last_errno()
+        }
+        let flags: Array[i32] = [descriptor_close_on_exec]
+        try {
+            fcntl(fds[0], set_descriptor_flags, flags)!
+            fcntl(fds[1], set_descriptor_flags, flags)!
+        } fail(failure) {
+            _ = close_raw(fds[0])
+            _ = close_raw(fds[1])
+            fail errno_of(failure)
+        }
+    } else when target_os() == "windows" {
+        if pipe_raw(at, 0x10000,
+                cast[i32](open_binary | close_on_exec)) != 0 {
+            fail last_errno()
+        }
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+    return (read = fds[0], write = fds[1])
+}
+
+# Opens `path`, relative to the working directory, and returns its file
+# descriptor, which is closed on exec. `create` makes the file with `mode`
+# (0o644 by default) if it doesn't exist; with `exclusive`, an existing
+# file is EEXIST. An interrupted open is retried.
+func open(path: string, access: Access, create: bool = false,
+          truncate: bool = false, append: bool = false,
+          exclusive: bool = false, mode: u32 = 0x1a4) -> i32
+    fail: internal.errno.Errno {
+    var bytes: Array[u8] = new[Array[u8]](1)
+    try {
+        bytes = to_cstring(path, copy = true,
+            buf = new[Array[u8]](cast[int](byte_len(path)) + 1))!
+    } fail(failure) {
+        # The path holds a NUL byte, which C can't see past.
+        fail internal.errno.Errno.EINVAL
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref bytes[0]
+    var flags: u32 = cast[u32](access)
+    when target_os() == "windows" {
+        flags = flags | open_binary
+    }
+    when target_os() == "linux" or target_os() == "macos"
+            or target_os() == "windows" {
+        flags = flags | close_on_exec
+        if create {
+            flags = flags | open_create
+        }
+        if truncate {
+            flags = flags | open_truncate
+        }
+        if append {
+            flags = flags | open_append
+        }
+        if exclusive {
+            flags = flags | open_exclusive
+        }
+    }
+    while true {
+        try {
+            when target_os() == "linux" {
+                return openat(at_working_directory, at,
+                                     cast[i32](flags), mode)!
+            } else when target_os() == "macos" {
+                let modes: Array[u32] = [mode]
+                try {
+                    return open_variadic(path, cast[i32](flags), modes)!
+                } fail(failure) {
+                    fail errno_of(failure)
+                }
+            } else when target_os() == "windows" {
+                var wide: Array[u16] = []
+                try {
+                    wide = utf16_units(path, terminated = true)!
+                } fail(failure) {
+                    fail internal.errno.Errno.EINVAL
+                }
+                # Windows has only read and write permission bits.
+                var permission: u32 = permit_read
+                if mode & 0x80 != 0 {
+                    permission = permission | permit_write
+                }
+                let fds: Array[i32] = [-1]
+                let status: i32 = wsopen_s_raw(
+                    unsafe_cast[Ref[byte]] ref fds[0],
+                    unsafe_cast[Ref[byte]] ref wide[0], cast[i32](flags),
+                    share_any, cast[i32](permission))
+                if status != 0 {
+                    fail cast[internal.errno.Errno](status)
+                }
+                return fds[0]
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}
+
+record Terminal_Size {
+    rows: u16
+    columns: u16
+}
+
+# True when `fd` is a terminal.
+func is_terminal(fd: i32) -> bool fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        let attributes: Array[u8] = new[Array[u8]](64)
+        try {
+            _ = ioctl(fd, get_terminal_attributes,
+                unsafe_cast[Ref[byte]] ref attributes[0])!
+            return true
+        } fail(e) {
+            if e == internal.errno.Errno.ENOTTY {
+                return false
+            }
+            fail e
+        }
+    } else when target_os() == "macos" {
+        if isatty_raw(fd) == 1 {
+            return true
+        }
+        let e: internal.errno.Errno = last_errno()
+        if e == internal.errno.Errno.ENOTTY {
+            return false
+        }
+        fail e
+    } else when target_os() == "windows" {
+        # A console or other character device.
+        return isatty_raw(fd) != 0
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}
+
+# The size of the terminal `fd` refers to.
+func terminal_size(fd: i32) -> Terminal_Size fail: internal.errno.Errno {
+    # rows, columns, then the pixel sizes Linux also reports.
+    let size: Array[u16] = new[Array[u16]](4)
+    when target_os() == "linux" {
+        _ = ioctl(fd, get_window_size,
+            unsafe_cast[Ref[byte]] ref size[0])!
+    } else when target_os() == "macos" {
+        let window: Array[uint] = [
+            __abi_ref_address(unsafe_cast[Ref[byte]] ref size[0])]
+        try {
+            ioctl(fd, get_window_size, window)!
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else when target_os() == "windows" {
+        # CONSOLE_SCREEN_BUFFER_INFO, as 16-bit units: the visible window's
+        # left, top, right and bottom are units 5 through 8.
+        let info: Array[u16] = new[Array[u16]](11)
+        let console: int = get_osfhandle_raw(fd)
+        if console == -1 or console_buffer_info_raw(console,
+                unsafe_cast[Ref[byte]] ref info[0]) == 0 {
+            fail internal.errno.Errno.ENOTTY
+        }
+        size[0] = info[8] - info[6] + 1
+        size[1] = info[7] - info[5] + 1
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+    return (rows = size[0], columns = size[1])
+}
+
+# Fills `buffer[start:end]` with random bytes from the operating
+# system.
+func random_bytes(buffer: Array[u8], start: uint, end: uint)
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(buffer)
+    var at: uint = start
+    while at < end {
+        let into: Ref[byte] = unsafe_cast[Ref[byte]] ref buffer[at]
+        when target_os() == "linux" {
+            try {
+                let got: int = getrandom(into, end - at, 0)!
+                if got <= 0 {
+                    fail internal.errno.Errno.EIO
+                }
+                at += cast[uint](got)
+            } fail(e) {
+                if e != internal.errno.Errno.EINTR {
+                    fail e
+                }
+            }
+        } else when target_os() == "macos" {
+            var chunk: uint = end - at
+            if chunk > 256 {
+                chunk = 256
+            }
+            if getentropy_raw(into, chunk) != 0 {
+                fail last_errno()
+            }
+            at += chunk
+        } else when target_os() == "windows" {
+            let count: uint = chunk(end - at)
+            if gen_random_raw(0, into, cast[u32](count),
+                                          system_rng) != 0 {
+                fail internal.errno.Errno.EIO
+            }
+            at += count
+        } else {
+            fail internal.errno.Errno.ENOSYS
+        }
+    }
+}
+
+# Starts a thread that runs `entry`; false when it can't be started. Make
+# the entry with `callback[sys.threads.Thread_Entry](ref f, ...)`, binding
+# any arguments `f` takes.
+func thread_start(entry: internal.threads.Thread_Entry) -> bool {
+    return internal.threads.thread_start(entry)
+}
+
+# The calling thread's id, unique among running threads.
+func thread_id() -> uint {
+    return internal.threads.thread_id()
+}
+
+# True on the thread that started the program.
+func thread_is_main() -> bool {
+    return internal.threads.thread_is_main()
+}
+
+# Lets other threads run.
+func thread_yield() {
+    internal.threads.thread_yield()
+}
+
+# A copy of the NUL-terminated C string at `address`, which is not 0.
+private func c_string(address: uint) -> string {
+    let base: Ref[byte] =
+        unsafe_cast[Ref[byte]](unsafe_cast[Foreign[byte]](address))
+    var length: uint = 0
+    while __gc_byte_offset(base, cast[int](length)).__value != 0 {
+        length += 1
+    }
+    var bytes: Array[u8] = new[Array[u8]](length)
+    if length > 0 {
+        __gc_memcpy(unsafe_cast[Ref[byte]] ref bytes[0], base, length)
+    }
+    return from_raw(ref bytes, cast[int](length), copy = false)
+}
+
+private func c_string_or_nil(address: uint) -> string? {
+    if address == 0 {
+        return nil
+    }
+    return c_string(address)
+}
+
+# The number of command-line arguments, the program's name included.
+func arg_count() -> uint {
+    return n00b_os_arg_count_raw()
+}
+
+# Argument `index`, or nil past the last.
+func arg_at(index: uint) -> string? {
+    return c_string_or_nil(n00b_os_arg_at_raw(index))
+}
+
+# The number of `NAME=value` environment entries.
+func env_count() -> uint {
+    return n00b_os_env_count_raw()
+}
+
+# Environment entry `index`, as `NAME=value`, or nil past the last.
+func env_at(index: uint) -> string? {
+    return c_string_or_nil(n00b_os_env_at_raw(index))
+}
+
+# Ends the process with `code`. At compile time, ends the evaluation instead.
+func exit(code: i32) {
+    n00b_os_exit_raw(cast[int](code))
+}

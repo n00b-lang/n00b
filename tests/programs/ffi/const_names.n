@@ -1,0 +1,20 @@
+const LIMIT: int = 1
+
+[-
+library c
+link "c"
+header <stdlib.h>
+const LIMIT: c_int = 40
+const OTHER: c_int = 2
+fn abs(x: c_int) -> c_int
+  effects none
+binding {
+    name LIMIT "C_LIMIT"
+    hide "OTHER"
+}
+-]'ffi
+
+func start() {
+    require C_LIMIT == 40
+    require LIMIT == 1
+}

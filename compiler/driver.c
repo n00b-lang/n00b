@@ -43,6 +43,11 @@ typedef struct {
     bool interface_module;
     bool open_module;
     n00bb_native_declarations_t natives;
+    // For a module a module literal generated: the module the literal is
+    // in, and that module's source file.
+    core_string_t generated_owner;
+    core_string_t generated_owner_path;
+    core_string_t generated_inputs;
 } n00bb_source_origin_t;
 
 typedef struct {
@@ -67,6 +72,9 @@ typedef struct {
     bool is_default_package;
     n00bb_native_declarations_t natives;
     n00bb_line_origins_t origins;
+    core_string_t owner;
+    core_string_t owner_path;
+    core_string_t inputs;
 } n00bb_generated_module_t;
 core_list_decl(n00bb_generated_module_t);
 
@@ -233,6 +241,9 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_free(resolver->generated.data[i].text.data);
         core_free(resolver->generated.data[i].package.data);
         core_free(resolver->generated.data[i].package_namespace.data);
+        core_free(resolver->generated.data[i].owner.data);
+        core_free(resolver->generated.data[i].owner_path.data);
+        core_free(resolver->generated.data[i].inputs.data);
         n00bb_native_declarations_release(&resolver->generated.data[i].natives);
         n00bb_line_origins_release(&resolver->generated.data[i].origins);
     }
@@ -280,7 +291,8 @@ bool
 n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifier, core_string_t text,
                              const core_translation_unit_t *owner,
                              n00bb_native_declarations_t natives,
-                             n00bb_line_origins_t origins)
+                             n00bb_line_origins_t origins,
+                             core_string_t inputs)
 {
     const n00bb_source_origin_t *origin = owner
         ? core_source_file_user_data(&owner->source) : nullptr;
@@ -298,6 +310,9 @@ n00bb_resolver_add_generated(n00bb_resolver_t *resolver, core_string_t identifie
         .is_default_package = origin->is_default_package,
         .natives = natives,
         .origins = origins,
+        .owner = core_string_dup(owner->module.identifier),
+        .owner_path = core_string_dup(core_source_file_path(&owner->source)),
+        .inputs = core_string_dup(inputs),
     }));
     pthread_mutex_unlock(&resolver->generated_lock);
     return true;
@@ -452,7 +467,12 @@ read_generated_source(n00bb_resolver_t *resolver, core_string_t operand, core_so
                                   module->is_default_package);
         n00bb_source_origin_t *origin = ok
             ? (n00bb_source_origin_t *)core_source_file_user_data(source_out) : nullptr;
-        if (origin) origin->natives = module->natives;
+        if (origin) {
+            origin->natives = module->natives;
+            origin->generated_owner = core_string_dup(module->owner);
+            origin->generated_owner_path = core_string_dup(module->owner_path);
+            origin->generated_inputs = core_string_dup(module->inputs);
+        }
         status = ok ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
         break;
     }
@@ -620,6 +640,9 @@ free_source_origin(void *data)
     if (!origin) return;
     core_free(origin->package_id.data);
     core_free(origin->package_namespace.data);
+    core_free(origin->generated_owner.data);
+    core_free(origin->generated_owner_path.data);
+    core_free(origin->generated_inputs.data);
     core_free(origin);
 }
 
@@ -746,6 +769,27 @@ n00bb_source_file_mark_interface(core_source_file_t *source,
     if (!origin) return;
     origin->interface_module = true;
     core_source_file_set_identity(source, source_hash);
+}
+
+core_string_t
+n00bb_source_file_generated_inputs(const core_source_file_t *source)
+{
+    const n00bb_source_origin_t *origin = source
+        ? core_source_file_user_data(source) : nullptr;
+    return origin ? origin->generated_inputs : (core_string_t){0};
+}
+
+bool
+n00bb_source_file_generated_owner(const core_source_file_t *source,
+                                  core_string_t *owner,
+                                  core_string_t *owner_path)
+{
+    const n00bb_source_origin_t *origin = source
+        ? core_source_file_user_data(source) : nullptr;
+    if (!origin || !origin->generated_owner.data) return false;
+    *owner = origin->generated_owner;
+    *owner_path = origin->generated_owner_path;
+    return true;
 }
 
 bool

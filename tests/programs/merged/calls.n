@@ -1,4 +1,5 @@
 import sys.env
+import sys.os
 import sys.term
 
 func take(cache_kb: u32?) -> u32 {
@@ -388,9 +389,13 @@ while i < sys.env.count() {
 }
 require sys.env.at(sys.env.count()) == nil
 
-var read_fd: int = -1
-var write_fd: int = -1
-require __os_pipe(ref read_fd, ref write_fd) == 0
+var ends: sys.os.Pipe = (read = -1, write = -1)
+try {
+    ends = sys.os.pipe()!
+} fail(failure) {
+    require false
+}
+let read_fd: int = cast[int](ends.read)
 try {
     require !sys.term.fd_is_tty(read_fd)!
 } fail(failure) {
@@ -402,8 +407,12 @@ try {
     sys.term.terminal_size(read_fd, rows, cols)!
     require false
 } fail(failure) {
-    require failure < 0
+    require failure == sys.os.Errno.ENOTTY
 }
-require __os_close(read_fd) == 0
-require __os_close(write_fd) == 0
+try {
+    sys.os.close(ends.read)!
+    sys.os.close(ends.write)!
+} fail(failure) {
+    require false
+}
 __fd_write(2, "ok")

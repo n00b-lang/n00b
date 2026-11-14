@@ -1,0 +1,5 @@
+open enum Not_Integer: f64 {
+    a = 1,
+}
+
+require cast[i32](Not_Integer.a) == 1

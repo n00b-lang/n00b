@@ -734,6 +734,91 @@ union_tags(writ_model_t *model)
     }
 }
 
+// A `syscall` argument or result fills one register: an integer no wider
+// than a pointer, or a plain pointer with no shape, mode or ownership
+// (dsl.md §7.7).
+static bool
+syscall_register(const writ_model_t *model, const writ_slot_rec_t *slot)
+{
+    const writ_type_rec_t *type = writ_type(model, slot->type);
+    bool plain = slot->mode == WRIT_MODE_IN && slot->extent_kind == WRIT_EXTENT_NONE && !slot->own
+                 && !slot->release && !slot->alloc && !slot->userdata && !slot->span_node && !slot->null_if_empty;
+    if (!plain) {
+        return false;
+    }
+    // Both architectures with a kernel entry are 64-bit.
+    if (type->key.kind == WRIT_TYPE_INT) {
+        return type->size <= 8;
+    }
+    return type->key.kind == WRIT_TYPE_POINTER
+           && writ_type(model, type->key.target)->key.kind != WRIT_TYPE_ARRAY
+           && writ_type(model, type->key.target)->key.kind != WRIT_TYPE_CSTR;
+}
+
+static bool
+syscall_clause_allowed(writ_node_kind_t kind)
+{
+    switch (kind) {
+    case WRIT_N_PARAM:
+    case WRIT_N_RESULT:
+    case WRIT_N_EFFECTS:
+    case WRIT_N_NOTE:
+    case WRIT_N_SYSCALL_NUMBER:
+    case WRIT_N_INFALLIBLE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void
+syscalls(writ_model_t *model)
+{
+    const writ_platform_t *platform = model->platform;
+    bool kernel_entry = platform && writ_is_text(model, platform->os, "linux")
+                        && (writ_is_text(model, platform->arch, "x86_64")
+                            || writ_is_text(model, platform->arch, "aarch64"));
+    for (uint32_t f = 0; f < model->fns.len; f++) {
+        const writ_fn_rec_t *fn = &model->fns.data[f];
+        if (fn->kind != WRIT_FN_SYSCALL) {
+            continue;
+        }
+        if (!kernel_entry) {
+            writ_report(model->session, WRIT_D_SYSCALL_PLATFORM, fn->loc, WRIT_NO_DETAIL);
+            continue;
+        }
+        const writ_node_t *node = writ_node(model->unit, fn->node);
+        for (uint32_t i = 0; i < node->child_count; i++) {
+            const writ_node_t *part = writ_node(model->unit, writ_node_child(model->unit, fn->node, i));
+            if (part->kind == WRIT_N_VARARGS || part->kind == WRIT_N_SELF_PARAM) {
+                writ_report(model->session, WRIT_D_SYSCALL_SLOT, part->loc, WRIT_NO_DETAIL);
+            } else if (!syscall_clause_allowed(part->kind)) {
+                writ_report(model->session, WRIT_D_SYSCALL_CLAUSE, part->loc, WRIT_NO_DETAIL);
+            }
+        }
+        if (fn->slot_count > 6) {
+            writ_report(model->session, WRIT_D_SYSCALL_SLOT, fn->loc, WRIT_NO_DETAIL);
+        }
+        uint32_t slots = fn->slot_count + (fn->has_result ? 1 : 0);
+        for (uint32_t s = 0; s < slots; s++) {
+            const writ_slot_rec_t *slot = &model->slots.data[fn->first_slot + s];
+            if (!syscall_register(model, slot)) {
+                writ_report(model->session, WRIT_D_SYSCALL_SLOT, slot->loc, WRIT_NO_DETAIL);
+            }
+        }
+        if (!fn->has_result && !(fn->effects & WRIT_EFFECTS_NORETURN)) {
+            writ_report(model->session, WRIT_D_SYSCALL_SLOT, fn->loc, WRIT_NO_DETAIL);
+        }
+        if (!(fn->effects & WRIT_EFFECTS_DECLARED) || (fn->effects & (WRIT_EFFECTS_OTHER | WRIT_EFFECTS_CALLBACKS))) {
+            writ_report(model->session, WRIT_D_SYSCALL_EFFECTS, fn->loc, WRIT_NO_DETAIL);
+        }
+        if (!fn->has_syscall_number) {
+            writ_loc_t at = fn->syscall_number_node ? writ_node(model->unit, fn->syscall_number_node)->loc : fn->loc;
+            writ_report(model->session, WRIT_D_SYSCALL_NUMBER, at, WRIT_NO_DETAIL);
+        }
+    }
+}
+
 static void (*const checks[])(writ_model_t *model) = {
 #define WRIT_CHECK(name, section) name,
 #include "checks.def"

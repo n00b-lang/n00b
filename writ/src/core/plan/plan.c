@@ -675,14 +675,70 @@ plan_inputs(builder_t *b)
     }
 }
 
+// Whether `expr` is `ret OP v`, or `v OP ret`, where `v` doesn't mention
+// the result.
+static bool
+compares_result(const builder_t *b, uint32_t expr, const char *op)
+{
+    const writ_node_t *node = expr ? writ_node(b->model->unit, expr) : nullptr;
+    if (!node || node->kind != WRIT_N_EXPR_BINARY || node->child_count != 2
+        || !writ_str_eq(writ_sym_str(b->model->session, node->payload), writ_cstr(op))) {
+        return false;
+    }
+    for (uint32_t side = 0; side < 2; side++) {
+        uint32_t ret = writ_node_child(b->model->unit, expr, side);
+        uint32_t other = writ_node_child(b->model->unit, expr, 1 - side);
+        writ_ref_t ref = writ_expr_ref(b->model, ret);
+        if (ref.kind == WRIT_REF_RESULT && ref.index == b->fn
+            && !writ_expr_mentions(b->model, other, WRIT_REF_RESULT, b->fn)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The return value is no result of its own when it is a status: an enum
+// the outcomes test (`-> c_int as kv_status`), or a value every success
+// pins to one value (`error ret != Z_OK`, `success when ret == K`). A
+// value the outcomes only test, as `error ret == -1` does, is still the
+// call's result.
+static bool
+status_only(const builder_t *b)
+{
+    const writ_slot_rec_t *ret = contract_slot(b, b->record->slot_count);
+    const writ_type_rec_t *type = writ_type(b->model, ret->type);
+    writ_type_id named = type->key.kind == WRIT_TYPE_VIEW ? writ_type_named(b->model, type->key.name) : 0;
+    bool enumerated = type->key.kind == WRIT_TYPE_ENUM
+                   || (named && writ_type(b->model, named)->key.kind == WRIT_TYPE_ENUM);
+    bool tested = false;
+    bool pinned_by_failure = false;
+    bool success_seen = false;
+    for (uint32_t i = 0; i < b->record->outcome_count; i++) {
+        const writ_outcome_rec_t *outcome = &b->model->outcomes.data[b->record->first_outcome + i];
+        tested = tested || writ_expr_mentions(b->model, outcome->when_expr, WRIT_REF_RESULT, b->fn);
+        if (enumerated) {
+            continue;
+        }
+        if (outcome->kind == WRIT_OUTCOME_FAILURE) {
+            pinned_by_failure = pinned_by_failure || compares_result(b, outcome->when_expr, "!=");
+            continue;
+        }
+        success_seen = true;
+        bool pinned = outcome->when_expr ? compares_result(b, outcome->when_expr, "==") : pinned_by_failure;
+        if (!pinned) {
+            return false;
+        }
+    }
+    // With no success outcome written, the implicit one is what the
+    // failures leave.
+    return tested && (enumerated || success_seen || pinned_by_failure);
+}
+
 static bool
 result_consumed(const builder_t *b)
 {
-    for (uint32_t i = 0; i < b->record->outcome_count; i++) {
-        const writ_outcome_rec_t *outcome = &b->model->outcomes.data[b->record->first_outcome + i];
-        if (writ_expr_mentions(b->model, outcome->when_expr, WRIT_REF_RESULT, b->fn)) {
-            return true;
-        }
+    if (status_only(b)) {
+        return true;
     }
     for (uint32_t i = 0; i < b->record->slot_count; i++) {
         if (writ_expr_mentions(b->model, contract_slot(b, i)->len_expr, WRIT_REF_RESULT, b->fn)) {

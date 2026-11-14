@@ -1,0 +1,32 @@
+open enum Signal: i32 {
+    hup = 1,
+    term = 2,
+}
+
+enum Closed_Signal {
+    hup = 1,
+    term = 2,
+}
+
+# Naming every item of a closed enum covers the subject.
+func closed_code(signal: Closed_Signal) -> int {
+    switch signal {
+        case hup:
+            return 1
+        case term:
+            return 2
+    }
+}
+
+# An open enum can hold other values, so this can reach its end.
+func open_code(signal: Signal) -> int {
+    switch signal {
+        case hup:
+            return 1
+        case term:
+            return 2
+    }
+}
+
+require closed_code(Closed_Signal.term) == 2
+require open_code(Signal.term) == 2

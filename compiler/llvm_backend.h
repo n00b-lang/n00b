@@ -83,6 +83,11 @@ bool n00bb_llvm_backend_bind_reachable_functions(
 bool n00bb_llvm_backend_restrict_functions(n00bb_llvm_backend_t *backend,
                                            ir_func_t *const *functions,
                                            size_t count);
+// The cached bodies this build reached: their code is in the cached
+// objects linked with the program.
+bool n00bb_llvm_backend_bind_cached_functions(n00bb_llvm_backend_t *backend,
+                                              ir_func_t *const *functions,
+                                              size_t count);
 bool n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
 bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);

@@ -1,76 +1,76 @@
-tests/diagnostics/lower/value_checks.n:3:16: error N00B-S0055: the divisor is always invalid: 0
-tests/diagnostics/lower/value_checks.n:8:12: error N00B-S0053: this operation always overflows: 127 and 1
-tests/diagnostics/lower/value_checks.n:15:9: warning N00B-S0005: this code can never run: no path reaches it
-tests/diagnostics/lower/value_checks.n:24:9: warning N00B-S0005: this code can never run: no path reaches it
-tests/diagnostics/lower/value_checks.n:30:5: warning N00B-S0005: this code can never run: no path reaches it
-tests/diagnostics/lower/value_checks.n:35:9: warning N00B-S0005: this code can never run: it calls `die`; `die` never returns
-  tests/diagnostics/lower/value_checks.n:34:5: note: this call never returns
-tests/diagnostics/lower/value_checks.n:41:33: warning N00B-S0005: this code can never run: it calls `after_require`; `after_require` never returns
-  tests/diagnostics/lower/value_checks.n:41:13: note: this call never returns
-tests/diagnostics/lower/value_checks.n:59:8: warning N00B-S0059: this condition is always true, so the other branch never runs
-tests/diagnostics/lower/value_checks.n:67:16: warning N00B-S0054: this operation may overflow: [-9223372036854775808, 9223372036854775807] and [-9223372036854775808, 4]
-tests/diagnostics/lower/value_checks.n:67:16: warning N00B-S0056: the divisor may be invalid: [-9223372036854775808, 4]
-tests/diagnostics/lower/value_checks.n:74:16: warning N00B-S0058: the shift amount may be invalid: [0, 39]
-tests/diagnostics/lower/value_checks.n:80:12: warning N00B-S0054: this operation may overflow: [0, 99] and 200
-tests/diagnostics/lower/value_checks.n:104:1: warning N00B-S0062: this call has no effect and its result is ignored: `square` changes nothing the caller can see and has no other effect; its result depends on argument 1
-tests/diagnostics/lower/value_checks.n:112:9: warning N00B-S0006: the value assigned to `b` here is never read
-tests/diagnostics/lower/value_checks.n:113:5: warning N00B-S0006: the value assigned to `b` here is never read
-tests/diagnostics/lower/value_checks.n:118:9: warning N00B-S0006: the value assigned to `a` here is never read
-tests/diagnostics/lower/value_checks.n:120:9: warning N00B-S0006: the value assigned to `never` here is never read
-tests/diagnostics/lower/value_checks.n:121:9: warning N00B-S0006: the value assigned to `total` here is never read
-tests/diagnostics/lower/value_checks.n:124:5: warning N00B-S0006: this stored value is overwritten or discarded before it is read
-tests/diagnostics/lower/value_checks.n:133:12: warning N00B-S0008: `spin` calls itself on every path, so a call to it never returns
-tests/diagnostics/lower/value_checks.n:135:20: warning N00B-S0005: this code can never run: it calls `spin`; `spin` never returns
-  tests/diagnostics/lower/value_checks.n:135:9: note: this call never returns
-tests/diagnostics/lower/value_checks.n:136:8: warning N00B-N0023: type `Point` is never used
+tests/diagnostics/lower/value_checks.n:5:16: error N00B-S0055: the divisor is always invalid: 0
+tests/diagnostics/lower/value_checks.n:10:12: error N00B-S0053: this operation always overflows: 127 and 1
+tests/diagnostics/lower/value_checks.n:17:9: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:26:9: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:32:5: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:37:9: warning N00B-S0005: this code can never run: it calls `die`; `die` never returns
+  tests/diagnostics/lower/value_checks.n:36:5: note: this call never returns
+tests/diagnostics/lower/value_checks.n:43:33: warning N00B-S0005: this code can never run: it calls `after_require`; `after_require` never returns
+  tests/diagnostics/lower/value_checks.n:43:13: note: this call never returns
+tests/diagnostics/lower/value_checks.n:61:8: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/lower/value_checks.n:69:16: warning N00B-S0054: this operation may overflow: [-9223372036854775808, 9223372036854775807] and [-9223372036854775808, 4]
+tests/diagnostics/lower/value_checks.n:69:16: warning N00B-S0056: the divisor may be invalid: [-9223372036854775808, 4]
+tests/diagnostics/lower/value_checks.n:76:16: warning N00B-S0058: the shift amount may be invalid: [0, 39]
+tests/diagnostics/lower/value_checks.n:82:12: warning N00B-S0054: this operation may overflow: [0, 99] and 200
+tests/diagnostics/lower/value_checks.n:106:1: warning N00B-S0062: this call has no effect and its result is ignored: `square` changes nothing the caller can see and has no other effect; its result depends on argument 1
+tests/diagnostics/lower/value_checks.n:114:9: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/lower/value_checks.n:115:5: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/lower/value_checks.n:120:9: warning N00B-S0006: the value assigned to `a` here is never read
+tests/diagnostics/lower/value_checks.n:122:9: warning N00B-S0006: the value assigned to `never` here is never read
+tests/diagnostics/lower/value_checks.n:123:9: warning N00B-S0006: the value assigned to `total` here is never read
+tests/diagnostics/lower/value_checks.n:126:5: warning N00B-S0006: this stored value is overwritten or discarded before it is read
+tests/diagnostics/lower/value_checks.n:135:12: warning N00B-S0008: `spin` calls itself on every path, so a call to it never returns
+tests/diagnostics/lower/value_checks.n:137:20: warning N00B-S0005: this code can never run: it calls `spin`; `spin` never returns
+  tests/diagnostics/lower/value_checks.n:137:9: note: this call never returns
+tests/diagnostics/lower/value_checks.n:138:8: warning N00B-N0023: type `Point` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:140:8: warning N00B-N0023: type `Counter` is never used
+tests/diagnostics/lower/value_checks.n:142:8: warning N00B-N0023: type `Counter` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:144:6: warning N00B-N0019: function `poke` is never called
+tests/diagnostics/lower/value_checks.n:146:6: warning N00B-N0019: function `poke` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:148:6: warning N00B-N0019: function `same` is never called
+tests/diagnostics/lower/value_checks.n:150:6: warning N00B-N0019: function `same` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:152:6: warning N00B-N0019: function `sneaky` is never called
+tests/diagnostics/lower/value_checks.n:154:6: warning N00B-N0019: function `sneaky` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:154:5: error N00B-S0010: this call may write memory reachable from view parameter `c`, which must not change
+tests/diagnostics/lower/value_checks.n:156:5: error N00B-S0010: this call may write memory reachable from view parameter `c`, which must not change
   help: take the parameter as `modify` if the function must change it
-tests/diagnostics/lower/value_checks.n:156:8: warning N00B-N0023: type `Point_1` is never used
+tests/diagnostics/lower/value_checks.n:158:8: warning N00B-N0023: type `Point_1` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:161:5: warning N00B-N0022: field `count` of `Counter_1` is never used
-tests/diagnostics/lower/value_checks.n:165:5: warning N00B-N0022: field `n` of `Leaf` is never used
-tests/diagnostics/lower/value_checks.n:168:8: warning N00B-N0023: type `Foo` is never used
+tests/diagnostics/lower/value_checks.n:163:5: warning N00B-N0022: field `count` of `Counter_1` is never used
+tests/diagnostics/lower/value_checks.n:167:5: warning N00B-N0022: field `n` of `Leaf` is never used
+tests/diagnostics/lower/value_checks.n:170:8: warning N00B-N0023: type `Foo` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:172:8: warning N00B-N0023: type `Outer` is never used
+tests/diagnostics/lower/value_checks.n:174:8: warning N00B-N0023: type `Outer` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:179:6: warning N00B-N0019: function `leak` is never called
+tests/diagnostics/lower/value_checks.n:181:6: warning N00B-N0019: function `leak` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:180:5: error N00B-S0011: this stores a reference reachable from view parameter `c` where it outlives the call
-  tests/diagnostics/lower/value_checks.n:176:5: note: `kept` outlives the call
+tests/diagnostics/lower/value_checks.n:182:5: error N00B-S0011: this stores a reference reachable from view parameter `c` where it outlives the call
+  tests/diagnostics/lower/value_checks.n:178:5: note: `kept` outlives the call
   help: store a copy, or return the reference instead of keeping it
-tests/diagnostics/lower/value_checks.n:183:6: warning N00B-N0019: function `leak_nested` is never called
+tests/diagnostics/lower/value_checks.n:185:6: warning N00B-N0019: function `leak_nested` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:184:5: error N00B-S0011: this stores a reference reachable from view parameter `o` where it outlives the call
-  tests/diagnostics/lower/value_checks.n:177:5: note: `kept_leaf` outlives the call
+tests/diagnostics/lower/value_checks.n:186:5: error N00B-S0011: this stores a reference reachable from view parameter `o` where it outlives the call
+  tests/diagnostics/lower/value_checks.n:179:5: note: `kept_leaf` outlives the call
   help: store a copy, or return the reference instead of keeping it
-tests/diagnostics/lower/value_checks.n:191:12: error N00B-S0004: `x` is read on a path where it has no value
-  tests/diagnostics/lower/value_checks.n:187:9: note: `x` is declared here
-tests/diagnostics/lower/value_checks.n:196:12: error N00B-S0004: `value` is read on a path where it has no value
-  tests/diagnostics/lower/value_checks.n:195:9: note: `value` is declared here
-tests/diagnostics/lower/value_checks.n:206:9: error N00B-S0026: `abs` cannot fail, so this `!` has nothing to propagate
-  tests/diagnostics/lower/value_checks.n:202:1: note: `abs` is declared here
+tests/diagnostics/lower/value_checks.n:193:12: error N00B-S0004: `x` is read on a path where it has no value
+  tests/diagnostics/lower/value_checks.n:189:9: note: `x` is declared here
+tests/diagnostics/lower/value_checks.n:198:12: error N00B-S0004: `value` is read on a path where it has no value
+  tests/diagnostics/lower/value_checks.n:197:9: note: `value` is declared here
+tests/diagnostics/lower/value_checks.n:208:9: error N00B-S0026: `abs` cannot fail, so this `!` has nothing to propagate
+  tests/diagnostics/lower/value_checks.n:204:1: note: `abs` is declared here
   help: remove the `!`
-tests/diagnostics/lower/value_checks.n:208:8: warning N00B-N0023: type `Tuple_Target` is never used
+tests/diagnostics/lower/value_checks.n:210:8: warning N00B-N0023: type `Tuple_Target` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:212:8: warning N00B-N0023: type `Tuple_Built` is never used
+tests/diagnostics/lower/value_checks.n:214:8: warning N00B-N0023: type `Tuple_Built` is never used
   help: remove it
-tests/diagnostics/lower/value_checks.n:216:6: warning N00B-N0019: function `__init` is never called
+tests/diagnostics/lower/value_checks.n:218:6: warning N00B-N0019: function `__init` is never called
   help: call it or delete it
-tests/diagnostics/lower/value_checks.n:221:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
+tests/diagnostics/lower/value_checks.n:223:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
   help: use a field tuple, which names each field: `(name = value, ...)`
-tests/diagnostics/lower/value_checks.n:226:21: error N00B-T0585: cannot cast `Tuple[y: u8]` to `Tuple_Target`: field `y` does not match
-tests/diagnostics/lower/value_checks.n:231:21: error N00B-T1034: `cast` cannot build `Tuple_Built` from a field tuple, because `Tuple_Built` has an `__init`
+tests/diagnostics/lower/value_checks.n:228:21: error N00B-T0585: cannot cast `Tuple[y: u8]` to `Tuple_Target`: field `y` does not match
+tests/diagnostics/lower/value_checks.n:233:21: error N00B-T1034: `cast` cannot build `Tuple_Built` from a field tuple, because `Tuple_Built` has an `__init`
   help: call its constructor, or write `unsafe_cast[Tuple_Built](...)` to build it without running the constructor
-tests/diagnostics/lower/value_checks.n:236:30: error N00B-T1034: `Tuple_Built` has an `__init`, so a field tuple cannot build it
+tests/diagnostics/lower/value_checks.n:238:30: error N00B-T1034: `Tuple_Built` has an `__init`, so a field tuple cannot build it
   help: call its constructor, or write `unsafe_cast[Tuple_Built](...)` to build it without running the constructor
-tests/diagnostics/lower/value_checks.n:240:6: warning N00B-N0019: function `append_unread` is never called
+tests/diagnostics/lower/value_checks.n:242:6: warning N00B-N0019: function `append_unread` is never called
   help: call it or delete it

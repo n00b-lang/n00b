@@ -199,12 +199,13 @@ void keywords_take_bytes(keywords_bytes_t *bytes, void *out) {
 int32_t keywords_n00b_db_open(const void *path, const void *opts, void *result) {
     size_t path_length = 0;
     const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
-    uint8_t *path_data = malloc(path_length + 1);
-    if (path_data && path_length) {
-        memcpy(path_data, path_borrowed, path_length);
+    size_t path_bytes = path_length * sizeof(*(const char *)0);
+    uint8_t *path_data = malloc(path_bytes + 1);
+    if (path_data && path_bytes) {
+        memcpy(path_data, path_borrowed, path_bytes);
     }
     if (path_data) {
-        path_data[path_length] = 0;
+        path_data[path_bytes] = 0;
     }
     n00b_ffi_release((void *)path);
     if (!path_data) {
@@ -236,13 +237,8 @@ int32_t keywords_n00b_db_close(uint64_t db) {
     return writ_n00b_value;
 }
 
-record Error {
-    code: i64
-    text: string?
-    fn: string
-}
 
-record Db_Cell {
+private record Db_Cell {
     raw: uint
 }
 
@@ -281,7 +277,7 @@ record Plain layout(c) {
     depth: i32
 }
 
-func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_kb: u32? = nil) -> Db fail: Error {
+func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_kb: u32? = nil) -> Db fail: Ffi_Error {
     var opts_record: Open_Opts = (present = 0, timeout_ms = 0, readonly = false, cache_kb = 0)
     if timeout_ms != nil {
         opts_record.timeout_ms = timeout_ms
@@ -303,7 +299,7 @@ func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_
     var returned: uint = 0
     let outcome = __db_open(ref path_value, ref opts_record, ref returned)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_open")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "db_open")
         fail failure
     }
     return __db_cell(returned)
@@ -356,24 +352,24 @@ func db_depth(db: Db, depth: i32 = 3) -> i32 {
     return returned
 }
 
-func close(modify self: Db) fail: Error {
+func close(modify self: Db) fail: Ffi_Error {
     let outcome = __db_close(self.__value.raw)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_close")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "db_close")
         fail failure
     }
     self.__value.raw = 0
 }
-7	tests/gen_n00b/../keywords/keywords.writ:4:1	Db
-25	tests/gen_n00b/../keywords/keywords.writ:6:1	OpenOpts
-32	tests/gen_n00b/../keywords/keywords.writ:13:1	Limits
-37	tests/gen_n00b/../keywords/keywords.writ:18:1	Sized
-42	tests/gen_n00b/../keywords/keywords.writ:23:1	Plain
-46	tests/gen_n00b/../keywords/keywords.writ:27:1	db_open
-79	tests/gen_n00b/../keywords/keywords.writ:30:1	db_limit
-100	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
-111	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
-121	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
+2	tests/gen_n00b/../keywords/keywords.writ:4:1	Db
+20	tests/gen_n00b/../keywords/keywords.writ:6:1	OpenOpts
+27	tests/gen_n00b/../keywords/keywords.writ:13:1	Limits
+32	tests/gen_n00b/../keywords/keywords.writ:18:1	Sized
+37	tests/gen_n00b/../keywords/keywords.writ:23:1	Plain
+41	tests/gen_n00b/../keywords/keywords.writ:27:1	db_open
+74	tests/gen_n00b/../keywords/keywords.writ:30:1	db_limit
+95	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
+106	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
+116	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
 load static
 extern __db_open keywords_n00b_db_open (ref[array[u8]], ref[Open_Opts], ref[uint]) -> i32 fail: nil
 extern __db_limit keywords_n00b_db_limit (uint, ref[Limits]) -> int fail: nil

@@ -39,7 +39,7 @@
                    "fn", "function", "not", "null", "None",
                    "elseif", "effect", "handled_by", "mark",
                    "cleared_by", "rejected_by", "carries",
-                   "rejects", "scope")
+                   "rejects", "scope", "open")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

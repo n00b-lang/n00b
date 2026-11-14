@@ -287,12 +287,13 @@ int64_t writ_bake_n00b_bake_multiply(int64_t left, int64_t right) {
 int32_t writ_bake_n00b_bake_build(const void *spec, void *result) {
     size_t spec_length = 0;
     const void *spec_borrowed = n00b_ffi_borrow((void *)spec, &spec_length, 0);
-    uint8_t *spec_data = malloc(spec_length + 1);
-    if (spec_data && spec_length) {
-        memcpy(spec_data, spec_borrowed, spec_length);
+    size_t spec_bytes = spec_length * sizeof(*(const char *)0);
+    uint8_t *spec_data = malloc(spec_bytes + 1);
+    if (spec_data && spec_bytes) {
+        memcpy(spec_data, spec_borrowed, spec_bytes);
     }
     if (spec_data) {
-        spec_data[spec_length] = 0;
+        spec_data[spec_bytes] = 0;
     }
     n00b_ffi_release((void *)spec);
     if (!spec_data) {
@@ -317,12 +318,13 @@ int32_t writ_bake_n00b_bake_reopen(uint64_t root) {
 int32_t writ_bake_n00b_bake_open(const void *path, void *result) {
     size_t path_length = 0;
     const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
-    uint8_t *path_data = malloc(path_length + 1);
-    if (path_data && path_length) {
-        memcpy(path_data, path_borrowed, path_length);
+    size_t path_bytes = path_length * sizeof(*(const char *)0);
+    uint8_t *path_data = malloc(path_bytes + 1);
+    if (path_data && path_bytes) {
+        memcpy(path_data, path_borrowed, path_bytes);
     }
     if (path_data) {
-        path_data[path_length] = 0;
+        path_data[path_bytes] = 0;
     }
     n00b_ffi_release((void *)path);
     if (!path_data) {
@@ -337,22 +339,24 @@ int32_t writ_bake_n00b_bake_open(const void *path, void *result) {
 int32_t writ_bake_n00b_bake_touch(const void *path, const void *text, void *result) {
     size_t path_length = 0;
     const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
-    uint8_t *path_data = malloc(path_length + 1);
-    if (path_data && path_length) {
-        memcpy(path_data, path_borrowed, path_length);
+    size_t path_bytes = path_length * sizeof(*(const char *)0);
+    uint8_t *path_data = malloc(path_bytes + 1);
+    if (path_data && path_bytes) {
+        memcpy(path_data, path_borrowed, path_bytes);
     }
     if (path_data) {
-        path_data[path_length] = 0;
+        path_data[path_bytes] = 0;
     }
     n00b_ffi_release((void *)path);
     size_t text_length = 0;
     const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
-    uint8_t *text_data = malloc(text_length + 1);
-    if (text_data && text_length) {
-        memcpy(text_data, text_borrowed, text_length);
+    size_t text_bytes = text_length * sizeof(*(const char *)0);
+    uint8_t *text_data = malloc(text_bytes + 1);
+    if (text_data && text_bytes) {
+        memcpy(text_data, text_borrowed, text_bytes);
     }
     if (text_data) {
-        text_data[text_length] = 0;
+        text_data[text_bytes] = 0;
     }
     n00b_ffi_release((void *)text);
     if (!path_data || !text_data) {
@@ -371,11 +375,6 @@ int32_t writ_bake_n00b_bake_free(uint64_t root) {
     return writ_n00b_value;
 }
 
-record Error {
-    code: i64
-    text: string?
-    fn: string
-}
 
 record Bake_Item_T layout(c) {
     key: i32
@@ -422,7 +421,7 @@ record Bake_Root_T layout(c) {
     path: Foreign[i8]? until 0
 }
 
-record Bake_Root_Cell {
+private record Bake_Root_Cell {
     raw: Foreign[Bake_Root_T]?
 }
 
@@ -440,7 +439,7 @@ func __finalize(consume self: Ref[Bake_Root_Cell]) {
     }
 }
 
-enum Bake_Kind {
+enum Bake_Kind: i32 {
     BAKE_NUMBER = 1,
     BAKE_TEXT = 2
 }
@@ -466,12 +465,12 @@ func bake_multiply(left: i64, right: i64) -> i64 {
     return returned
 }
 
-func bake_build(spec: string) -> Bake_Root fail: Error {
+func bake_build(spec: string) -> Bake_Root fail: Ffi_Error {
     var spec_value: Array[u8] = __text_byte_array(spec)
     var returned: uint = 0
     let outcome = __bake_build(ref spec_value, ref returned)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_build")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_build")
         fail failure
     }
     return __bake_root_cell(returned)
@@ -489,92 +488,92 @@ func bake_query(root: Bake_Root, key: i32) -> i64 {
     return returned
 }
 
-func bake_reopen(root: Bake_Root) fail: Error {
+func bake_reopen(root: Bake_Root) fail: Ffi_Error {
     if root.__value.raw == nil {
-        let failure: Error = (code = -1, text = "handle is closed", fn = "bake_reopen")
+        let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "bake_reopen")
         fail failure
     }
     let __fixup_root: string? = __ffi_fixup(root.__value.raw)
     if __fixup_root != nil {
-        let failure: Error = (code = -1, text = __fixup_root, fn = "bake_reopen")
+        let failure: Ffi_Error = (code = -1, text = __fixup_root, fn = "bake_reopen")
         fail failure
     }
     let outcome = __bake_reopen(unsafe_cast[uint] root.__value.raw)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_reopen")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_reopen")
         fail failure
     }
     if outcome == 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_reopen")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_reopen")
         fail failure
     }
 }
 
-func bake_open(path: string) -> i32 fail: Error {
+func bake_open(path: string) -> i32 fail: Ffi_Error {
     var path_value: Array[u8] = __text_byte_array(path)
     var returned: i32 = 0
     let outcome = __bake_open(ref path_value, ref returned)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_open")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_open")
         fail failure
     }
     return returned
 }
 
-func bake_touch(path: string, text: string) -> i32 fail: Error {
+func bake_touch(path: string, text: string) -> i32 fail: Ffi_Error {
     var path_value: Array[u8] = __text_byte_array(path)
     var text_value: Array[u8] = __text_byte_array(text)
     var returned: i32 = 0
     let outcome = __bake_touch(ref path_value, ref text_value, ref returned)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_touch")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_touch")
         fail failure
     }
     return returned
 }
 
-func close(modify self: Bake_Root) fail: Error {
+func close(modify self: Bake_Root) fail: Ffi_Error {
     if self.__value.raw == nil {
-        let failure: Error = (code = -1, text = "handle is closed", fn = "bake_free")
+        let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "bake_free")
         fail failure
     }
     if __abi_baked_address(unsafe_cast[uint] self.__value.raw) {
-        let failure: Error = (code = -1, text = "a baked object cannot be released", fn = "bake_free")
+        let failure: Ffi_Error = (code = -1, text = "a baked object cannot be released", fn = "bake_free")
         fail failure
     }
     let outcome = __bake_free(unsafe_cast[uint] self.__value.raw)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bake_free")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_free")
         fail failure
     }
     self.__value.raw = nil
 }
-7	tests/gen_n00b/bake.writ:6:1	bake_item_t
-14	tests/gen_n00b/bake.writ:13:1	bake_items_t
-20	tests/gen_n00b/bake.writ:19:1	bake_variant_t
-28	tests/gen_n00b/bake.writ:29:1	bake_slot_t
-34	tests/gen_n00b/bake.writ:35:1	bake_table_t
-39	tests/gen_n00b/bake.writ:40:1	bake_root_t
-52	tests/gen_n00b/bake.writ:40:1	bake_root
-70	tests/gen_n00b/bake.writ:4:1	bake_kind
-75	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
-76	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
-77	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
-78	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
-79	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
-80	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
-81	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
-82	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
-83	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
-84	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
-86	tests/gen_n00b/bake.writ:64:1	bake_add
-91	tests/gen_n00b/bake.writ:65:1	bake_multiply
-96	tests/gen_n00b/bake.writ:66:1	bake_build
-107	tests/gen_n00b/bake.writ:67:1	bake_query
-119	tests/gen_n00b/bake.writ:68:1	bake_reopen
-140	tests/gen_n00b/bake.writ:70:1	bake_open
-151	tests/gen_n00b/bake.writ:71:1	bake_touch
-163	tests/gen_n00b/bake.writ:72:1	bake_free
+2	tests/gen_n00b/bake.writ:6:1	bake_item_t
+9	tests/gen_n00b/bake.writ:13:1	bake_items_t
+15	tests/gen_n00b/bake.writ:19:1	bake_variant_t
+23	tests/gen_n00b/bake.writ:29:1	bake_slot_t
+29	tests/gen_n00b/bake.writ:35:1	bake_table_t
+34	tests/gen_n00b/bake.writ:40:1	bake_root_t
+47	tests/gen_n00b/bake.writ:40:1	bake_root
+65	tests/gen_n00b/bake.writ:4:1	bake_kind
+70	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
+71	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
+72	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
+73	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
+74	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
+75	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
+76	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
+77	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
+78	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
+79	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
+81	tests/gen_n00b/bake.writ:64:1	bake_add
+86	tests/gen_n00b/bake.writ:65:1	bake_multiply
+91	tests/gen_n00b/bake.writ:66:1	bake_build
+102	tests/gen_n00b/bake.writ:67:1	bake_query
+114	tests/gen_n00b/bake.writ:68:1	bake_reopen
+135	tests/gen_n00b/bake.writ:70:1	bake_open
+146	tests/gen_n00b/bake.writ:71:1	bake_touch
+158	tests/gen_n00b/bake.writ:72:1	bake_free
 load static
 extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
 extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil

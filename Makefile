@@ -62,7 +62,14 @@ LANTERN_LIB := $(BUILD)/lantern/libir.a
 WRIT_LIB := $(BUILD)/writ/libwrit.a
 RUNTIME_LIB := $(BUILD)/libn00b-abi-runtime.a
 RUNTIME_BITCODE := $(BUILD)/libn00b-abi-runtime.bc
+# The runtime built against libc. On Linux, programs' own runtime links no
+# libc (compiler/n00b.mk), so this is a separate build: the compiler and the
+# C tests link it, and so do programs whose FFI contracts say `link "c"`.
+# Elsewhere it is the one runtime.
+LIBC_RUNTIME_LIB := $(if $(filter Linux,$(UNAME)),$(BUILD)/libn00b-abi-runtime-libc.a,$(RUNTIME_LIB))
+LIBC_RUNTIME_BITCODE := $(if $(filter Linux,$(UNAME)),$(BUILD)/libn00b-abi-runtime-libc.bc,$(RUNTIME_BITCODE))
 COMPTIME_RUNTIME := $(BUILD)/n00b-comptime.o
+LIBC_COMPTIME_RUNTIME := $(if $(filter Linux,$(UNAME)),$(BUILD)/n00b-comptime-libc.o,$(COMPTIME_RUNTIME))
 N00B := $(BUILD)/n00b
 
 include lantern/lantern.mk
@@ -75,7 +82,7 @@ include tests/tests.mk
 .PHONY: all clean compdb FORCE
 FORCE:
 
-all: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES) compdb
+all: $(N00B) $(RUNTIME_LIB) $(RUNTIME_BITCODE) $(LIBC_RUNTIME_LIB) $(LIBC_RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(LIBC_COMPTIME_RUNTIME) $(CROSS_RUNTIMES) compdb
 
 compdb: $(BUILD)/compile_commands.json
 
@@ -86,7 +93,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: install uninstall regen-unicode
-install: $(N00B) $(RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(CROSS_RUNTIMES)
+install: $(N00B) $(RUNTIME_LIB) $(RUNTIME_BITCODE) $(LIBC_RUNTIME_LIB) $(LIBC_RUNTIME_BITCODE) $(COMPTIME_RUNTIME) $(LIBC_COMPTIME_RUNTIME) $(CROSS_RUNTIMES)
 	@tools/install.sh --build $(BUILD) $(if $(PREFIX),--prefix $(PREFIX)) $(INSTALL_FLAGS)
 
 uninstall:

@@ -64,6 +64,7 @@ static const construct_name_t constructs[] = {
     CONSTRUCT("for-stmt", FOR_LOOP),
     CONSTRUCT("while-stmt", WHILE_LOOP),
     CONSTRUCT("when-stmt", WHEN_STATEMENT),
+    CONSTRUCT("top-when-stmt", WHEN_STATEMENT),
     CONSTRUCT("switch-stmt", SWITCH_STATEMENT),
     CONSTRUCT("switch-value-expr", SWITCH_EXPRESSION),
     CONSTRUCT("typecase-stmt", TYPECASE_STATEMENT),

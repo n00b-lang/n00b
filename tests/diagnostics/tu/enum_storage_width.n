@@ -1,0 +1,6 @@
+enum Too_Narrow: u8 {
+    small = 1,
+    large = 300,
+}
+
+require cast[i32](Too_Narrow.small) == 1

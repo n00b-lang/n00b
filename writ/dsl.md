@@ -43,7 +43,7 @@ construct moves to the core tier when a library being bound needs it.
 
 | Tier | Sections |
 |---|---|
-| **Core** | §3; §4.1–§4.4 (without refcounted handles); §4.6–§4.8; §5.1–§5.5, §5.7, §5.9; §6.1–§6.4; variadic functions and rest packs, including `va_list` and `format printf` (§6.6); thread constraints and handle thread rules (§4.3, §6.5); §7.1–§7.3; `var` with `const`/`mut` (§7.4); §7.5–§7.6; §8.9; §9.1–§9.3; §9.5 for Meson and Cargo; §10–§12 |
+| **Core** | §3; §4.1–§4.4 (without refcounted handles); §4.6–§4.8; §5.1–§5.5, §5.7, §5.9; §6.1–§6.4; variadic functions and rest packs, including `va_list` and `format printf` (§6.6); thread constraints and handle thread rules (§4.3, §6.5); §7.1–§7.3; `var` with `const`/`mut` (§7.4); §7.5–§7.7, including the `effects` clause on a `syscall`; §8.9; §9.1–§9.3; §9.5 for Meson and Cargo; §10–§12 |
 | **Extended** | Unions (§4.5); bit-level layout (§4.9); refcounted handles (§4.3); policy parameters (§5.6); `identity`, `live` and overlap (§5.8); effects (§6.5); keyword packs (§6.6); labels (§6.7); `var` attributes beyond `const`/`mut` (§7.4); C++ (§8.1–§8.8); other ABI families (§9.4); other build integrations (§9.5) |
 
 ---
@@ -121,7 +121,7 @@ lang    c                        # source language: c (default) or c++ (§8)
 import <sqlite3.h> raw           # optional: pull in raw declarations (see §10.2)
 
 # declarations: const, type, opaque, handle, struct, union, enum, flags,
-#               keywords, callback, fn, var, interface, refine
+#               keywords, callback, fn, syscall, var, interface, refine
 ```
 
 Comments start with `#`. Identifiers are C identifiers, used verbatim.
@@ -1354,6 +1354,10 @@ generators. Anyone can declare more:
 #   noreturn   never returns
 #   alloc      may allocate
 #   none       no effects at all (with `pure`, also deterministic)
+#   env        reads the process environment or arguments
+#   clock      reads a clock
+#   random     reads a source of randomness
+#   threads    starts threads
 
 # user-declared: carried through to the lowered form and to bindings
 effect input                     # reads from the outside world
@@ -1786,6 +1790,189 @@ Derived symbols are never trusted until checked, because the details matter.
 One example is libstdc++'s `[abi:cxx11]` tag (`B5cxx11` in the mangled
 name), which appears on functions that return `std::string`. A mismatch is
 reported with all four names side by side.
+
+### 7.7 System calls
+
+*Status: designed, not yet implemented.*
+
+Some entry points have no symbol at all. A Linux program that doesn't
+link libc reaches the kernel through one instruction, with the call
+number and arguments in fixed registers. `syscall` declares such an entry
+point.
+
+A `syscall` is a minimal proxy for the kernel ABI. It passes integers
+and addresses, executes one instruction, and splits the result into a
+success value or an errno. It has no shapes, modes, ownership, handles,
+copies, retries or outcomes. Code that needs those builds them on top, in
+the target language.
+
+```writ
+library kernel
+platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+  number 1 when arch == x86_64
+  number 64 when arch == aarch64
+  effects output, blocking
+
+syscall read(fd: c_int, buf: *u8, count: usize) -> isize
+  number 0 when arch == x86_64
+  number 63 when arch == aarch64
+  effects input, blocking
+
+syscall openat(dirfd: c_int, path: *u8, flags: c_int, mode: c_uint) -> c_int
+  number 257 when arch == x86_64
+  number 56 when arch == aarch64
+  effects input
+
+syscall mmap(addr: *void, len: usize, prot: c_int, flags: c_int,
+             fd: c_int, offset: isize) -> *void
+  number 9 when arch == x86_64
+  number 222 when arch == aarch64
+  effects none
+
+syscall getpid() -> c_int
+  number 39 when arch == x86_64
+  number 172 when arch == aarch64
+  infallible
+  effects none
+
+syscall exit_group(status: c_int)
+  number 231 when arch == x86_64
+  number 94 when arch == aarch64
+  effects noreturn
+```
+
+**The call number.** Every syscall is identified by a number, and each
+architecture has its own table: `write` is 1 on x86_64 and 64 on aarch64.
+Some calls exist only on some architectures (aarch64 has no `open`,
+`stat`, `pipe` or `dup2`).
+
+- `number EXPR` gives the call number. EXPR is an integer constant
+  expression; it may name a `const` the contract declares.
+- `number` is required. Numbers that differ per architecture use a
+  `when` suffix: `number 1 when arch == x86_64`,
+  `number 64 when arch == aarch64`.
+- A `syscall` with no number on some listed platform, or whose number
+  isn't a non-negative integer constant, is E0230.
+- Numbers are written out rather than read from the kernel headers. The
+  headers aren't available when cross-compiling, and the numbers are a
+  stable ABI that never changes, so a contract states them once.
+
+**Scope.** A `syscall` declaration is valid only where every platform in
+scope has `os == linux`. That means a contract whose `platforms` are all
+Linux, or a declaration inside `when os == linux` (§4.7). In a contract
+with `platforms any`, a `syscall` outside such a `when` is E0226. Linux is
+the only kernel whose syscall ABI is a stable interface. macOS and Windows
+reach their kernels through system libraries, which are ordinary `fn`s.
+The `abi` and `libc` facts (glibc, musl, Android) don't matter: the kernel
+ABI depends only on `arch`.
+
+**Kernel entry.** Generators enter the kernel directly, using this table:
+
+| `arch` | Instruction | Number | Arguments, in order | Result | Clobbered |
+|---|---|---|---|---|---|
+| `x86_64` | `syscall` | `rax` | `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` | `rax` | `rcx`, `r11`, memory |
+| `aarch64` | `svc #0` | `x8` | `x0`–`x5` | `x0` | memory |
+
+A platform whose `arch` isn't in the table can't hold a `syscall`
+declaration (E0226). Supporting another architecture means adding a row
+here, plus a `number` for that architecture on each declaration.
+
+**Parameters and result.**
+
+- A `syscall` takes at most six parameters (E0227). Each one is either an
+  integer no wider than a pointer (including aliases of one), or a
+  pointer `*T` / `?T` (E0227 otherwise).
+- A pointer's `T` is documentation only. Every pointer argument passes
+  just an address: no shape, extent, mode, span or ownership. Writing any
+  of those (array extents, `cstr`, `out`/`inout`/`consume`/`keep`/`moved`,
+  `own`, slot attributes) on a `syscall` is E0227. Strings must be
+  NUL-terminated by the caller; buffers are the caller's to size.
+- Floating-point values, records or unions passed by value, enums, flags,
+  handles, callbacks, variadics and packs are E0227. Code that wants typed
+  views of these values wraps the `syscall`.
+- Each argument is widened to register width: signed integers are
+  sign-extended, unsigned integers are zero-extended.
+- The result is likewise an integer no wider than a pointer, or a pointer.
+  A `syscall` with no result must be `effects noreturn` (`exit_group`);
+  otherwise it is E0227, since it couldn't report failure.
+
+**Errors.** The kernel returns failure in-band: a register value from
+-4095 to -1 is the negated errno. Every `syscall` with a result checks
+for that, as if it had the clause
+
+```writ-fragment
+error ret >= -4095 and ret < 0 via -ret
+```
+
+- In that check, `ret` is the raw register, a signed pointer-width
+  integer. It is converted to the declared result type only after the
+  check passes. The range test matters for calls whose successful results
+  can be large, such as `mmap` addresses.
+- `infallible` turns the check off, for calls that can't fail (`getpid`).
+- That is the only error control a `syscall` has. Explicit `error`
+  predicates, `via`, `outcome`, `retry` and `error_channel` are E0228.
+  `errno` is never involved: the kernel doesn't write it, libc does.
+
+**Other clauses.** Besides `number` and `infallible`, a `syscall` accepts
+only `effects` and `note`. Every other `fn` clause is E0228: a `syscall`
+has no symbol, so `source`, `symbol`, `expands`, `static`, `weak`, `since`
+and `removed` have nothing to act on, and the rest (`sizing`, `format`,
+`pack`, `keys`, `thread`, and so on) describe behavior a proxy doesn't
+have. The contract's `link` and `load` settings don't affect a `syscall`.
+A contract made only of `syscall`s needs no `link`.
+
+**Effects are required.** A `syscall` without an `effects` clause is
+E0229, and so is one that names an effect other than the built-in ones
+(`none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`,
+`threads`) or `input`, `output` and `io`.
+Unknown effects would make every caller unanalyzable, and whoever writes
+the declaration knows what the call does. The `effects` clause on a
+`syscall` is part of the core tier.
+
+`blocking` matters most. Bindings to managed runtimes act on it (for n00b,
+see `ffi-spec.md` §7.1). Leaving it off a call that can block is a
+contract bug that tools can't detect. In a runtime with stop-the-world
+collection, it can stall every collection until the call returns. A
+`write` to a pipe or terminal can block, so `write` is `blocking`.
+
+**No vDSO.** A `syscall` always enters the kernel. Calls the kernel also
+exports through the vDSO (`clock_gettime`, `gettimeofday`, `getcpu`) are
+faster through that page. Binding the vDSO is out of scope here.
+
+**Generators.**
+
+- n00b: the compiler emits the instruction at the call site
+  (`ffi-spec.md` §7.1).
+- C: the generated header defines a `static inline` function with the
+  instruction in an `asm` statement. It returns the raw register value
+  and leaves the errno check to the caller, as C system interfaces do.
+- Rust: `core::arch::asm!` in the generated module, returning
+  `Result<T, Errno>`.
+- Any other language: a C shim containing that inline function, with
+  the error check expressed as the language's failure form (§6.4).
+
+**In the lowered form**, which is produced per platform, a `syscall`'s
+function entry has `"kind": "syscall"`, the number for that platform, and
+whether the errno check is off:
+
+```json
+"has_syscall_number": true,
+"syscall_number": 1,
+"infallible": false
+```
+
+**Verification** checks that every listed platform has a number. It checks
+no symbols.
+
+| Code | Rejects |
+|---|---|
+| E0226 | A `syscall` where some platform in scope isn't Linux, or has an `arch` with no kernel-entry row |
+| E0227 | A `syscall` with more than six parameters; a parameter or result that isn't a pointer-width-or-narrower integer or a pointer; a shape, mode, ownership or slot attribute; or no result without `noreturn` |
+| E0228 | A `syscall` with any `fn` clause other than `effects` and `note`, including every error clause (`infallible` is the only error control) |
+| E0229 | A `syscall` with no `effects` clause, or with an effect outside `none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`, `threads`, `input`, `output`, `io` |
+| E0230 | A `syscall` with no `number` on some listed platform, or whose number isn't a non-negative integer constant |
 
 ---
 
@@ -2960,7 +3147,7 @@ directive   = "library" ID | "link" STRING | "header" HEADER | "encoding" ID
             | "bit_order" bit_storage ;
 
 decl        = const | alias | opaque | handle | record | union | enum | flags
-            | callback | fn | refine | allocator | when | var | class
+            | callback | fn | syscall | refine | allocator | when | var | class
             | keywords | interface | effect | label | link_symbol
             | conventions | error_channel | rust_impl | rust_error ;
 
@@ -3014,6 +3201,10 @@ enum        = "enum" ID ":" type "{" { ID "=" expr "," } "}" [ "closed" ] ;
 flags       = "flags" ID ":" type "{" { ID "=" expr "," } "}" ;
 callback    = "callback" ID "=" fn_sig { cb_attr } ;
 fn          = "fn" ID fn_sig { fn_clause } ;
+syscall     = "syscall" ID fn_sig { syscall_clause } ;
+syscall_clause = "number" expr [ "when" cond ] | "infallible" | fn_clause ;
+              (* fn_clause parses here so that E0227–E0229 can name the clause;
+                 §7.7 says which fn_clauses a syscall accepts *)
 refine      = "refine" ID "{" { slot_refine | fn_clause } "}" ;
 when        = "when" cond "{" { decl } "}" [ "else" "{" { decl } "}" ] ;
 cond        = expr | "feature" ID | cond ( "and" | "or" ) cond | "not" cond ;

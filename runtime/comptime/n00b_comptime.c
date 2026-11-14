@@ -10,6 +10,18 @@
 #define O_BINARY 0
 #endif
 
+// Linux programs, compile-time ones included, link no libc.
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+#include "linux_start.h"
+#define calloc n00b_linux_calloc
+#define realloc n00b_linux_realloc
+#define free n00b_linux_free
+#define open n00b_linux_open
+#define close n00b_linux_close
+#define write n00b_linux_write
+#define _exit n00b_linux_exit
+#endif
+
 enum {
     COMPTIME_NO_TARGET = 70,
     COMPTIME_TARGET_NOT_REACHED = 71,

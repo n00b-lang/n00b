@@ -209,7 +209,7 @@ struct writ_outcome_view_t @size(40) @align(8) {
     via_expr: u32 @32
     retry: bool @36
 }
-struct writ_fn_view_t @size(216) @align(8) {
+struct writ_fn_view_t @size(240) @align(8) {
     struct_size: usize @0
     contract_name: writ_str_t @8
     source_name: writ_str_t @24
@@ -235,6 +235,9 @@ struct writ_fn_view_t @size(216) @align(8) {
     declared_at: writ_span_t @176
     keywords_slot: u32 @208
     effects: writ_effects_t @212
+    has_syscall_number: bool @216
+    syscall_number: i64 @224
+    infallible: bool @232
 }
 struct writ_union_arm_view_t @size(72) @align(8) {
     struct_size: usize @0
@@ -478,6 +481,10 @@ const WRIT_EFFECTS_INPUT: c_int = 16
 const WRIT_EFFECTS_OUTPUT: c_int = 32
 const WRIT_EFFECTS_CALLBACKS: c_int = 64
 const WRIT_EFFECTS_OTHER: c_int = 128
+const WRIT_EFFECTS_ENV: c_int = 256
+const WRIT_EFFECTS_CLOCK: c_int = 512
+const WRIT_EFFECTS_RANDOM: c_int = 1024
+const WRIT_EFFECTS_THREADS: c_int = 2048
 const WRIT_TYPE_VOID: c_int = 0
 const WRIT_TYPE_INT: c_int = 1
 const WRIT_TYPE_FLOAT: c_int = 2
@@ -527,6 +534,7 @@ const WRIT_ON_NOT_CONSUMED: c_int = 3
 const WRIT_ON_SPAN: c_int = 4
 const WRIT_FN_FUNCTION: c_int = 0
 const WRIT_FN_CALLBACK: c_int = 1
+const WRIT_FN_SYSCALL: c_int = 2
 const WRIT_SIZING_NONE: c_int = 0
 const WRIT_SIZING_NEEDS: c_int = 1
 const WRIT_SIZING_QUERY: c_int = 2
@@ -654,6 +662,8 @@ fn writ_model_fn_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_fn_view_
 fn writ_model_callback_count(model: ?writ_model_t) -> usize
 fn writ_model_callback_at(model: ?writ_model_t, index: usize) -> ?writ_fn_view_t unknown
 fn writ_model_callback_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_fn_view_t unknown
+fn writ_model_syscall_count(model: ?writ_model_t) -> usize
+fn writ_model_syscall_at(model: ?writ_model_t, index: usize) -> ?writ_fn_view_t unknown
 fn writ_model_const_count(model: ?writ_model_t) -> usize
 fn writ_model_const_at(model: ?writ_model_t, index: usize) -> ?writ_const_view_t unknown
 fn writ_model_const_named(model: ?writ_model_t, name: writ_str_t) -> ?writ_const_view_t unknown

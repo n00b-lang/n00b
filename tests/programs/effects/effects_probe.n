@@ -1,11 +1,12 @@
 import sys.clock
 import sys.env
 import sys.fs
+import sys.os
 import sys.random
 import text
 import unicode
 
-func probe() -> uint fail: int {
+func probe() -> uint fail: sys.os.Errno {
     var seen: uint = 0
     if __array_length(sys.fs.read_file("probe")!) != 0 {
         seen += 1

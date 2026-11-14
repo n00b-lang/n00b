@@ -1,0 +1,30 @@
+library kernel
+platforms x86_64-linux-gnu
+
+syscall bad_slot(buf: *[u8; n], n: usize, path: *cstr, x: f64) -> isize
+  number 1
+  effects output
+
+syscall bad_clause(fd: c_int) -> c_int
+  number 3
+  symbol "close"
+  error ret < 0 via -ret
+  effects none
+
+syscall no_effects(fd: c_int) -> c_int
+  number 3
+
+syscall user_effect(fd: c_int) -> c_int
+  number 3
+  effects network
+
+syscall no_number(fd: c_int) -> c_int
+  effects none
+
+syscall no_result(status: c_int)
+  number 60
+  effects none
+
+syscall seven(a: c_long, b: c_long, c: c_long, d: c_long, e: c_long, f: c_long, g: c_long) -> c_long
+  number 10
+  effects none

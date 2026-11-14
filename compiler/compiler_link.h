@@ -118,6 +118,10 @@ core_translation_unit_t *unit_for_ir_module(n00bb_link_analysis_t *analysis,
                                             ir_module_t *module);
 core_translation_unit_t *n00bb_unit_named(n00bb_link_analysis_t *analysis,
                                           core_string_t name);
+// Gives `binding`, a name that stands for `origin` elsewhere, the facts
+// lookups read from it: its type, kind and members.
+void copy_export_binding_facts(parse_sym_entry_t *binding,
+                               parse_sym_entry_t *origin);
 
 typedef struct {
     parse_tree_t *site;
@@ -216,6 +220,17 @@ typedef struct {
 } n00bb_call_lookup_t;
 #define N00BB_MODULE_VIEW_NAMESPACE "module-view"
 #define N00BB_MODULE_VIEW_KEY "n00bb.package-module-view"
+// On a member a module literal put into its module: the declaration it
+// stands for, which belongs to the literal's generated module. Passes over a
+// module's own declarations skip these; lookups and exports see them.
+#define N00BB_INJECTED_MEMBER_KEY "n00bb.injected-member"
+
+static inline bool
+n00bb_injected_member(parse_sym_entry_t *symbol)
+{
+    return symbol && parse_sym_binding(symbol,
+        CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY)) != nullptr;
+}
 typedef struct {
     parse_scope_t *package_scope;
     core_string_t module;

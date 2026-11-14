@@ -1,0 +1,4 @@
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> tests/check/syscall.writ:4:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> tests/check/syscall.writ:9:1

@@ -31,6 +31,16 @@ reported() {
 case $part in
 basics)
     builds_and_runs ffi_basics
+    builds_and_runs const_names
+    builds_and_runs error_type
+    builds_and_runs raw_link
+    case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *)
+        builds_and_runs variadic
+        builds_and_runs errno_channel
+        ;;
+    esac
     for marker in marker-literal-5be1 marker-contract-5be1; do
         if grep -q -a "$marker" "$tmp/ffi_basics"; then
             echo "ffi_basics contains $marker" >&2
@@ -61,9 +71,9 @@ basics)
     reported malformed.n:5:30 error
     reported binding_error.n:5:5 'N00B-F1501'
     for name in local not_const; do
-        reported "$name.n" 'N00B-P0030: a module literal must initialize exactly one `const`'
+        reported "$name.n" "N00B-P0030: a module literal declares its names into this module, so it stands alone: it can't initialize a variable"
     done
-    reported expression.n 'N00B-P0030: a module literal can only initialize a module-level `const`'
+    reported expression.n 'N00B-P0030: a module literal can only stand alone at module level'
     for name in shadow shadow_alias; do
         reported "$name.n:" "literal modifier \`'ffi\` for fence literals is already declared in module \`builtin.ffi\`"
     done
@@ -129,11 +139,11 @@ edit)
     cp contracts/limits.writ "$tmp/source/limits.writ"
     cd "$tmp/source"
     cat >edit.n <<'EOF'
-const limits = [-
+[-
 use <limits.writ>
 -]'ffi
 
-require limits.LIMIT == 40
+require LIMIT == 40
 EOF
     builds_and_runs edit --contract-dir .
     printf 'library limits\nconst LIMIT: c_int = 41\n' > limits.writ

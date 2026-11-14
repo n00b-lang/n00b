@@ -418,12 +418,12 @@ var blocked: Atomic[bool] = false
 
 func __finalize(consume self: Ref[Sample]) {
     require self.__value.value == 0
-    if __os_thread_is_main() == 0 {
+    if !sys.threads.thread_is_main() {
         __atomic_fetch_add(ref off_main, 1)
     }
     while __atomic_load(ref gate_closed) {
         __atomic_store(ref blocked, true)
-        __os_thread_yield()
+        sys.threads.thread_yield()
     }
     __atomic_fetch_add(ref finalized, 1)
 }
@@ -432,7 +432,7 @@ func wait_finalized(count: uint) {
     let deadline: u64 = __os_now_ns() + 30_000_000_000
     while __atomic_load(ref finalized) < count {
         require __os_now_ns() < deadline
-        __os_thread_yield()
+        sys.threads.thread_yield()
     }
 }
 
@@ -440,7 +440,7 @@ func wait_blocked() {
     let deadline: u64 = __os_now_ns() + 30_000_000_000
     while !__atomic_load(ref blocked) {
         require __os_now_ns() < deadline
-        __os_thread_yield()
+        sys.threads.thread_yield()
     }
 }
 
@@ -2856,7 +2856,7 @@ func gc_option_tag() {
             watched(false)
         }
         __gc_enter_blocking()
-        __os_thread_yield()
+        sys.threads.thread_yield()
         __gc_leave_blocking()
     }
     require __atomic_load(ref watched_live) == 0

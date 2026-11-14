@@ -1,6 +1,16 @@
 import abi
 import containers.list
 import string.core
+import sys.locks
+import sys.threads
+
+# The failure of a function an 'ffi literal binds, unless the binding
+# chooses its own error type.
+record Ffi_Error {
+    code: i64        # the contract's `via` value, or the status itself
+    text: string?    # the error channel's text, when there is one
+    fn:   string     # the contract function that failed
+}
 
 record Ffi_Bytes layout(c) {
     data: uint
@@ -138,7 +148,29 @@ func ffi_table_grow(modify table: Ffi_Table['T]) {
     table.next_free = next_free
 }
 
+# The calling thread, for the thread rules generated bindings check.
+func __ffi_thread_id() -> uint {
+    return sys.threads.thread_id()
+}
+
+func __ffi_on_main_thread() -> bool {
+    return sys.threads.thread_is_main()
+}
+
+# Guards every callback table and the holds: a callback C may call on any
+# thread is registered on one thread and dispatched or freed on another.
+# Recursive, since a release run under it can free a table entry.
+var ffi_lock: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
+                                 nesting = 0, collector = false)
+
 func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
+    sys.locks.mutex_lock(ref ffi_lock)
+    let handle: u64 = ffi_table_insert(table, value)
+    sys.locks.mutex_unlock(ref ffi_lock)
+    return handle
+}
+
+func ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
     var index: uint = table.count
     if table.free_head != 0 {
         index = table.free_head - 1
@@ -150,46 +182,66 @@ func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
         table.count += 1
     }
     table.slots[index] = value
-    table.owners[index] = __os_thread_id()
+    table.owners[index] = sys.threads.thread_id()
     return cast[u64](index + 1)
 }
 
 func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
-    if handle == 0 or handle > cast[u64]table.count {
-        return 0
+    sys.locks.mutex_lock(ref ffi_lock)
+    var owner: uint = 0
+    if handle != 0 and handle <= cast[u64]table.count {
+        owner = table.owners[cast[uint](handle - 1)]
     }
-    return table.owners[cast[uint](handle - 1)]
+    sys.locks.mutex_unlock(ref ffi_lock)
+    return owner
+}
+
+# A thread_affine handle is used only on the thread that made it. Checked in
+# debug builds; reading the owner takes the table's lock, so it's read
+# before the assertion rather than in it.
+func __ffi_check_owner(table: Ffi_Table['T], handle: u64) {
+    when debug_enabled() {
+        let owner: uint = __ffi_table_owner(table, handle)
+        assert owner == __ffi_thread_id()
+    }
 }
 
 func __ffi_table_get(table: Ffi_Table['T], handle: u64) -> 'T? {
-    if handle == 0 or handle > cast[u64]table.count {
-        return nil
+    sys.locks.mutex_lock(ref ffi_lock)
+    var found: 'T? = nil
+    if handle != 0 and handle <= cast[u64]table.count {
+        found = table.slots[cast[uint](handle - 1)]
     }
-    return table.slots[cast[uint](handle - 1)]
+    sys.locks.mutex_unlock(ref ffi_lock)
+    return found
 }
 
 func __ffi_table_free(modify table: Ffi_Table['T], handle: u64) {
-    if handle == 0 or handle > cast[u64]table.count {
-        return
+    sys.locks.mutex_lock(ref ffi_lock)
+    if handle != 0 and handle <= cast[u64]table.count {
+        let index = cast[uint](handle - 1)
+        if table.slots[index] != nil {
+            table.slots[index] = nil
+            table.next_free[index] = table.free_head
+            table.free_head = index + 1
+        }
     }
-    let index = cast[uint](handle - 1)
-    if table.slots[index] == nil {
-        return
-    }
-    table.slots[index] = nil
-    table.next_free[index] = table.free_head
-    table.free_head = index + 1
+    sys.locks.mutex_unlock(ref ffi_lock)
 }
 
 func __ffi_hold_group() -> u64 {
+    sys.locks.mutex_lock(ref ffi_lock)
     ffi_hold_groups += 1
-    return ffi_hold_groups
+    let group: u64 = ffi_hold_groups
+    sys.locks.mutex_unlock(ref ffi_lock)
+    return group
 }
 
 func __ffi_hold(group: u64, token: u64, release: Ref[(u64) -> nil], event: string,
                 consume keys: Array[u64], thread_id: uint) {
     let hold: Ffi_Hold = (group = group, token = token, release = release, event = event,
                           keys = keys, thread_id = thread_id)
+    sys.locks.mutex_lock(ref ffi_lock)
     if ffi_hold_count == __array_length(ffi_holds) {
         var grown: Array[Ffi_Hold] = new[Array[Ffi_Hold]](cast[int](ffi_hold_count * 2 + 8))
         var position: uint = 0
@@ -201,6 +253,7 @@ func __ffi_hold(group: u64, token: u64, release: Ref[(u64) -> nil], event: strin
     }
     ffi_holds[ffi_hold_count] = hold
     ffi_hold_count += 1
+    sys.locks.mutex_unlock(ref ffi_lock)
 }
 
 func ffi_drop_group(group: u64) {
@@ -238,6 +291,13 @@ func ffi_keys_match(expected: Array[u64], actual: Array[u64]) -> bool {
 }
 
 func ffi_release_holds(event: string, keys: Array[u64]?, key: u64, thread_id: uint) {
+    sys.locks.mutex_lock(ref ffi_lock)
+    ffi_release_holds_locked(event, keys, key, thread_id)
+    sys.locks.mutex_unlock(ref ffi_lock)
+}
+
+func ffi_release_holds_locked(event: string, keys: Array[u64]?, key: u64,
+                              thread_id: uint) {
     var position: uint = 0
     while position < ffi_hold_count {
         let hold = ffi_holds[position]

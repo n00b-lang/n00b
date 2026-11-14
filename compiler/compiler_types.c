@@ -1840,7 +1840,21 @@ static parse_sym_entry_t *module_function(const n00bb_dispatch_index_t *index,
         int  bounds  = accepts ? receiver_bounds(types, symbol, self->type,
                                                  receiver)
                                : 0;
+        // An optional parameter takes its item type, as a call with one
+        // candidate does. Such a candidate ranks below any that take the
+        // receiver as it is.
+        th_type *item    = accepts || coerced
+            ? nullptr : th_option_item(th_resolve(self->type));
+        bool     wrapped = item && th_env_type_pattern_subsumes(item, receiver)
+            && receiver_bounds(types, symbol, item, receiver) >= 0;
 
+        if (wrapped) {
+            if (!fallback) {
+                fallback      = symbol;
+                fallback_rank = 0;
+            }
+            continue;
+        }
         if ((!accepts && !coerced) || bounds < 0) {
             continue;
         }
@@ -4217,7 +4231,24 @@ static core_string_t parameter_name(void *context, th_type *receiver,
             ? parse_tree_sym(facts->params[index].node)
             : nullptr;
 
-    return formal ? formal->name : (core_string_t){0};
+    if (formal) {
+        return formal->name;
+    }
+
+    // A function from an interface (an imported module's cached build) has
+    // no parse tree; its parameter names come from the interface.
+    n00bb_dispatch_index_t *dispatch = context;
+    core_string_t           name     = {0};
+
+    if (target.function && dispatch && dispatch->analysis) {
+        parse_grammar_t *grammar = dispatch->analysis->grammar;
+
+        (void)function_parameter_info(grammar, target.function,
+            callable_formal_parameters(grammar, target.function), index,
+            nullptr, &name, nullptr, nullptr);
+    }
+
+    return name;
 }
 
 static bool coerces(void *context, th_type *to, th_type *from)
@@ -5100,13 +5131,22 @@ static bool switch_fits(const n00bb_dispatch_index_t *index,
                            (int)owner->name.u8_bytes, owner->name.data,
                            (int)member->name.u8_bytes, member->name.data);
     }
+    // An open enum holds values none of its items name, so naming every
+    // item never covers the subject.
+    const n00bb_enum_range_t *enum_range = variant ? nullptr
+        : parse_sym_binding(owner, CORE_STRING_STATIC("n00bb.enum-range"));
+    bool open_enum = enum_range && enum_range->is_open;
+    if (open_enum)
+        core_buffer_printf(&listed, "%sother values of `%.*s`",
+                           listed.byte_len ? ", " : "",
+                           (int)owner->name.u8_bytes, owner->name.data);
 
     ir_annot_t *expression = ir_annot_get(&jump->annots,
                                           N00BB_SWITCH_EXPRESSION_KEY);
     ir_annot_t *subject_text = ir_annot_get(&jump->annots,
                                             N00BB_SWITCH_SUBJECT_KEY);
 
-    if (!missing.len) {
+    if (!missing.len && !open_enum) {
         ir_block_t *block = jump->block;
         ir_span_t   span  = jump->span;
         ir_instr_t *never = ir_instr_erase(jump)
@@ -5118,7 +5158,7 @@ static bool switch_fits(const n00bb_dispatch_index_t *index,
             never->span = span;
         }
     }
-    else if (variant || (expression && expression->b)) {
+    else if (variant || (missing.len && expression && expression->b)) {
         core_string_t text = subject_text && subject_text->kind == IR_ANNOT_STR
                                ? subject_text->s
                                : (core_string_t){0};

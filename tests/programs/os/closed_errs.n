@@ -1,0 +1,3 @@
+enum Closed_Errno {
+    EBADF = 9,
+}

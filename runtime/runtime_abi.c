@@ -46,6 +46,10 @@ static bool host_native_atomic128(void)
 #elif defined(__linux__) && defined(__aarch64__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
+#if defined(N00B_LIBC_FREE)
+#include "linux_start.h"
+#define getauxval(type) n00b_linux_auxv(type)
+#endif
 
 static bool host_native_atomic128(void)
 {
