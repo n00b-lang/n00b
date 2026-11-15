@@ -67,6 +67,13 @@ test "$(grep -c 'declared size is' "$tmp/fields.log")" = 3
 }
 "$tmp/references"
 
+"$compiler" build --output "$tmp/inline_tables" inline_tables.n \
+    >"$tmp/inline_tables.log" 2>&1 || {
+    cat "$tmp/inline_tables.log" >&2
+    exit 1
+}
+"$tmp/inline_tables"
+
 rejected reference_errors
 reported reference_errors "reference_errors.n:18:12:.*\`table\` is declared with size 4, so it can only be passed by reference to a parameter declared with that size"
 reported reference_errors "reference_errors.n:20:10:.*works on an array of size 4 in place, but \`loose\` isn't declared with that size"

@@ -1,0 +1,56 @@
+# Module variables declared as fixed-size arrays of numbers keep their
+# elements inline in their own storage: given by a literal, computed at
+# comptime by a function or by writes to the elements, or left zeroed, and
+# in `const` tables. The module addresses them directly; stores copy into
+# them and sized `modify` parameters are given them.
+func squares() -> Array[u64] {
+    let out = new[Array[u64][5]]()
+    var i: uint = 0
+    while i < 5 {
+        out[i] = cast[u64](i * i)
+        i += 1
+    }
+    return out
+}
+
+var computed: Array[u64][5] = squares()
+const hex: Array[byte][4] = [0x30, 0x31, 0x41, 0x46]
+var weights: Array[f64][3] = [0.5, 1.5, 2.5]
+var zeros: Array[i16][6]
+var counted: Array[u32][3]
+
+func count_at_comptime() -> nil {
+    var i: uint = 0
+    while i < 3 {
+        counted[i] = counted[i] + cast[u32](i + 1)
+        i += 1
+    }
+}
+count_at_comptime()
+
+func total(words: Array[u64]) -> u64 {
+    var sum: u64 = 0
+    for w in words {
+        sum += w
+    }
+    return sum
+}
+
+func scale(modify values: Array[f64][3]) -> nil {
+    values[0] = values[0] * 2.0
+}
+
+func main() -> nil {
+    require computed[4] == 16 and total(computed) == 30
+    require hex[2] == 0x41
+    require weights[2] == 2.5
+    scale(weights)
+    require weights[0] == 1.0
+    require zeros[5] == 0
+    zeros[5] = -3
+    require zeros[5] == -3
+    require counted[0] == 1 and counted[2] == 3
+    let copy = computed
+    computed = [9, 9, 9, 9, 9]
+    require copy[4] == 16 and computed[4] == 9
+}

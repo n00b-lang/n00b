@@ -2,6 +2,7 @@
 #include "cached_body.h"
 #include "compiler_axioms.h"
 #include "sequence_transfer.h"
+#include "inline_globals.h"
 
 #include "ir/layout.h"
 #include "ir/analyses.h"
@@ -1600,6 +1601,46 @@ frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
     }
 }
 
+// The elements of a module variable this module defines whose fixed-size
+// array is stored inline (n00bb_inline_global_count): they follow its array
+// value, 16 bytes into its storage. Returns their address and count, or
+// nullptr for any other variable. Other modules reach the elements through
+// the array value, which always points at them.
+static LLVMValueRef
+inline_global_elements(lower_state_t *state, const ir_global_t *global,
+                       uint64_t *count)
+{
+    uint64_t elements = global
+        ? n00bb_inline_global_count(state->function->owner, global) : 0;
+    LLVMValueRef storage = elements ? global_ref(state->module, global,
+        state->global_bindings, state->global_binding_count) : nullptr;
+    if (!storage) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef offset = LLVMConstInt(LLVMInt64TypeInContext(context),
+                                       16, false);
+    *count = elements;
+    return LLVMConstInBoundsGEP2(LLVMInt8TypeInContext(context), storage,
+                                 &offset, 1);
+}
+
+static LLVMValueRef array_descriptor(lower_state_t *state, uint64_t count);
+
+// The inline global `address` takes the address of (`address.of @g`), if
+// any.
+static const ir_global_t *
+addressed_inline_global(lower_state_t *state, const ir_value_t *address)
+{
+    const ir_instr_t *taken = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    const ir_value_t *operand = taken && taken->op == IR_OP_ADDRESS_OF
+        && taken->n_operands == 1 && taken->operands[0].kind == IR_OPD_VALUE
+        ? taken->operands[0].value : nullptr;
+    const ir_global_t *global = operand && operand->kind == IR_VAL_GLOBAL
+        ? operand->global : nullptr;
+    return global && n00bb_inline_global_count(state->function->owner,
+                                               global) ? global : nullptr;
+}
+
 static uint64_t
 pointer_key_hash(void *key)
 {
@@ -1714,6 +1755,22 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
     if (value->kind == IR_VAL_GLOBAL && value->global) {
         LLVMValueRef frozen = frozen_scalar_global(state, value->global);
         if (frozen) return frozen;
+        // An inline array's value never changes, so it is a constant.
+        uint64_t count = 0;
+        LLVMValueRef elements = inline_global_elements(state, value->global,
+                                                       &count);
+        LLVMTypeRef array = elements ? value_type(state->function->owner,
+            value->global->type, LLVMGetModuleContext(state->module))
+            : nullptr;
+        if (array && LLVMGetTypeKind(array) == LLVMStructTypeKind) {
+            LLVMValueRef fields[] = {
+                elements, array_descriptor(state, count),
+            };
+            return LLVMIsLiteralStruct(array)
+                ? LLVMConstStructInContext(LLVMGetModuleContext(state->module),
+                                           fields, 2, false)
+                : LLVMConstNamedStruct(array, fields, 2);
+        }
         LLVMValueRef global = global_ref(state->module, value->global,
             state->global_bindings, state->global_binding_count);
         if (!global) return nullptr;
@@ -6728,6 +6785,13 @@ by_reference_argument(lower_state_t *state, const ir_value_t *operand,
     // declared with the parameter's size.
     if (fixed_count && operand) {
         uint64_t inline_count = 0;
+        const ir_global_t *inline_global = addressed_inline_global(state,
+                                                                   operand);
+        if (inline_global) {
+            LLVMValueRef elements = inline_global_elements(state,
+                inline_global, &inline_count);
+            return inline_count == fixed_count ? elements : nullptr;
+        }
         LLVMValueRef place = lowered_value(state, operand);
         if (!place || LLVMGetTypeKind(LLVMTypeOf(place))
                 != LLVMPointerTypeKind) return nullptr;
@@ -8613,6 +8677,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMTypeRef array = value_read ? nullptr
             : inline_index_base_type(state, operands[0].value, &extent);
         LLVMValueRef base = lowered_value(state, operands[0].value);
+        // An inline global's elements are indexed where they are.
+        const ir_global_t *inline_global = value_read || array ? nullptr
+            : addressed_inline_global(state, operands[0].value);
+        if (inline_global) {
+            th_type *element = th_seq_elem(th_resolve(inline_global->type));
+            LLVMTypeRef native_element = value_type(state->function->owner,
+                element, LLVMGetModuleContext(state->module));
+            base = native_element ? inline_global_elements(state,
+                inline_global, &extent) : nullptr;
+            array = base ? LLVMArrayType2(native_element, extent) : nullptr;
+            if (!array) break;
+        }
         LLVMValueRef index = lowered_value(state, operands[1].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);
         bool boxed_reference = !value_read && base
@@ -9423,7 +9499,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[1].value);
         if (!global || !value
             || LLVMGlobalGetValueType(global) != LLVMTypeOf(value)) break;
-        if (n00bb_fixed_array_store(instruction)
+        // An inline global's storage is its elements, so every store, its
+        // declaration's too, copies into them.
+        if ((n00bb_fixed_array_store(instruction)
+             || n00bb_inline_global_count(state->function->owner,
+                    operands[0].value->global))
             && th_kind_of(th_resolve(operands[0].value->global->type))
                 == TH_SEQUENCE) {
             if (!copy_rectangular_row(state, global, value,
