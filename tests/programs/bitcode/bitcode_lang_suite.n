@@ -572,6 +572,28 @@ func heap_literal() -> Array[u64] {
     return words
 }
 
+# A function's frame arrays share 2048 bytes: one array can use all of it,
+# but past it arrays are allocated, alone or together with others.
+func frame_at_budget() -> u64 {
+    var words: Array[u64][256]
+    words[255] = 3
+    return words[255] + words[0]
+}
+
+func frame_past_budget() -> u64 {
+    var words: Array[u64][257]
+    words[256] = 4
+    return words[256] + words[0]
+}
+
+func frame_shared_budget() -> u64 {
+    var first: Array[u64][200]
+    var second: Array[u64][200]
+    first[199] = 5
+    second[199] = 6
+    return first[199] + second[199]
+}
+
 const square_is_quiet: bool = forbids_effect(effects_square, input) and
     forbids_effect(effects_square, output)
 
@@ -590,6 +612,10 @@ forbids_effect(frame_literal, allocates) and forbids_effect(frame_zeroed, alloca
 forbids_effect(frame_field, allocates) and may_effect(heap_literal, allocates)
 require frame_literal(5) == 18 and frame_zeroed() == 9 and frame_field(1) == 4
 require heap_literal()[2] == 9
+forbids_effect(frame_at_budget, allocates)
+may_effect(frame_past_budget, allocates) and may_effect(frame_shared_budget, allocates)
+require frame_at_budget() == 3 and frame_past_budget() == 4
+require frame_shared_budget() == 11
 
 func function_effects_check() {
     require square_is_quiet

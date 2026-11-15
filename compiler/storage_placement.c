@@ -322,12 +322,20 @@ block_in_cycle(ir_block_t *block)
     return cycle;
 }
 
+// The arrays a function keeps in its frame share this many bytes. That is
+// well under the smallest guard page a thread stack gets (4 KiB), so keeping
+// arrays in the frame neither lets an overflow step over the guard nor
+// makes deep recursion run out of stack noticeably sooner than it would with
+// the arrays on the heap. Arrays past the budget are allocated.
+enum { FRAME_ARRAY_BUDGET = 2048 };
+
 // A bounded array of plain scalars (integers, floats, bools, bytes), made
 // whole by one instruction: zeroed (`array.new`) or from its elements (an
 // array literal). Its storage holds no references, so it can live in the
-// frame when it doesn't outlive the call.
-static bool
-frame_array(const ir_instr_t *in)
+// frame when it doesn't outlive the call. Returns the bytes its elements
+// take there, or 0 when it isn't such an array or alone exceeds the budget.
+static uint64_t
+frame_array(ir_module_t *module, const ir_instr_t *in)
 {
     th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
     th_type *element = type && th_kind_of(type) == TH_SEQUENCE
@@ -336,26 +344,32 @@ frame_array(const ir_instr_t *in)
                                                : nullptr;
     bool scalar = element && (th_kind_of(element) == TH_BITINT
                               || (builtin && builtin->scalar));
-    if (!scalar) return false;
-    // A scalar is at most 16 bytes, so this keeps a frame array within
-    // 16 KiB.
-    enum { FRAME_ELEMENTS = 1024 };
+    if (!scalar) return 0;
+    // An element's width rounded up to a power of two bytes is never less
+    // than the stride the backend gives it.
+    uint32_t bits = ir_machine_of(module, element).width;
+    uint64_t stride = 1;
+    while (stride * 8 < bits) stride *= 2;
+    uint64_t count = 0;
     if (in->op == IR_OP_AGGREGATE) {
         ir_aggregate_form_t form;
-        return in->n_operands <= FRAME_ELEMENTS
-            && (!ir_instr_aggregate_form(in, &form)
-                || form == IR_AGGREGATE_ELEMENTS);
+        if (ir_instr_aggregate_form(in, &form)
+            && form != IR_AGGREGATE_ELEMENTS) return 0;
+        count = in->n_operands;
+    } else {
+        ir_array_init_t init;
+        ir_shape_extent_t extent;
+        ir_shape_t *shape = in->op == IR_OP_ARRAY_NEW
+            ? ir_value_shape(in->dest) : nullptr;
+        if (!shape || ir_shape_rank(shape) != 1
+            || !ir_shape_extent(shape, 0, &extent)
+            || extent.kind != IR_SHAPE_EXTENT_STATIC
+            || !ir_instr_array_init(in, &init)
+            || init != IR_ARRAY_INIT_LANGUAGE_ZERO) return 0;
+        count = extent.static_value;
     }
-    ir_array_init_t init;
-    ir_shape_extent_t extent;
-    ir_shape_t *shape = in->op == IR_OP_ARRAY_NEW ? ir_value_shape(in->dest)
-                                                  : nullptr;
-    return shape && ir_shape_rank(shape) == 1
-        && ir_shape_extent(shape, 0, &extent)
-        && extent.kind == IR_SHAPE_EXTENT_STATIC
-        && extent.static_value <= FRAME_ELEMENTS
-        && ir_instr_array_init(in, &init)
-        && init == IR_ARRAY_INIT_LANGUAGE_ZERO;
+    if (count > FRAME_ARRAY_BUDGET / stride) return 0;
+    return count ? count * stride : 1;
 }
 
 typedef const ir_value_t *placed_value_ptr_t;
@@ -517,29 +531,32 @@ array_stays(ir_func_t *function, core_dict_t *uses, const ir_value_t *array)
 
 static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
-                     ir_func_t *function)
+                     ir_module_t *module, ir_func_t *function)
 {
     core_list_t(placed_alloc_t) found = core_list_new(placed_alloc_t);
     core_dict_t uses;
     bool indexed = false;
+    uint64_t budget = FRAME_ARRAY_BUDGET;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *allocation = block->instrs[i];
             bool required = false;
-            bool array = frame_array(allocation);
+            uint64_t array = frame_array(module, allocation);
             if ((allocation->op != IR_OP_ALLOC && !array) || !allocation->dest
                 || (!array
                     && (ir_instr_storage_class(allocation, &required).data
                         || required))) continue;
+            bool local = !block_in_cycle(block)
+                && (array ? array <= budget
+                            && array_stays(function,
+                                   indexed_uses(function, &uses, &indexed),
+                                   allocation->dest)
+                          : !ir_address_escapes(summaries, function,
+                                                allocation->dest));
+            if (local && array) budget -= array;
             core_list_push(found, ((placed_alloc_t){
-                .allocation = allocation,
-                .local      = (array ? array_stays(function,
-                                       indexed_uses(function, &uses, &indexed),
-                                       allocation->dest)
-                               : !ir_address_escapes(summaries, function,
-                                                     allocation->dest))
-                    && !block_in_cycle(block)}));
+                .allocation = allocation, .local = local}));
         }
     }
     if (indexed) free_uses(&uses);
@@ -586,7 +603,7 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         }
         core_free(moved);
         if (!ok) return false;
-        if (!annotate_allocations(context, summaries, function)
+        if (!annotate_allocations(context, summaries, module, function)
             || !retire_scope_finalizers(context, function))
             return false;
     }
