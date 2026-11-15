@@ -1,4 +1,5 @@
 #include "lower_internal.h"
+#include "sequence_transfer.h"
 
 static bool
 n00bb_lower_shaped_assignment(ir_lower_context_t *context,
@@ -70,6 +71,26 @@ n00bb_shape_has_constraints(ir_shape_t *shape)
     return false;
 }
 
+// Stores `value` into the fixed-size array at `target` (an address, or a
+// global): the elements are copied into its storage.
+static bool
+n00bb_emit_fixed_array_store(ir_lower_context_t *context, ir_value_t *target,
+                             ir_value_t *value, bool initializes,
+                             ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    bool global = target->kind == IR_VAL_GLOBAL;
+    ir_instr_t *store = ir_lower_emit_instruction(context,
+        global ? IR_OP_GLOBAL_STORE : IR_OP_STORE, span);
+    return store
+        && ir_instr_set_binding_initialization(store, initializes)
+        && ir_instr_operand_value(store, target)
+        && ir_instr_operand_value(store, value)
+        && ir_annot_set(lower->ir_context, &store->annots,
+               (ir_annot_t){.key = N00BB_FIXED_ARRAY_STORE_KEY,
+                            .kind = IR_ANNOT_BOOL, .b = true});
+}
+
 static bool
 n00bb_lower_shaped_assignment(ir_lower_context_t *context,
                               parse_visit_t *visit, parse_tree_t *target,
@@ -95,23 +116,23 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
     if (!value || !n00bb_attach_expression_shape(context, visit->grammar,
             source, value))
         return false;
-    if (local) return n00bb_emit_local_write(context, local, value, span);
+    // A local that isn't addressed holds its array by value, so rebinding
+    // it can't be told from copying into it.
+    ir_value_t *local_address = local
+        ? ir_lower_local_address(context, local) : nullptr;
+    if (local && !local_address)
+        return n00bb_emit_local_write(context, local, value, span);
     if (!n00bb_emit_sequence_shape_check(context, value, required, span))
         return false;
-    if (address)
-        return n00bb_emit_indirect_write(context, address, value, span);
+    if (local_address || address)
+        return n00bb_emit_fixed_array_store(context,
+            local_address ? local_address : address, value, true, span);
     // Types are solved after lowering: the store's constraint is what gives
     // the value (an array literal, say) the global's declared type, so the
     // value's type can still be open here.
-    if (binding && binding->kind == IR_VAL_GLOBAL && binding->global) {
-        ir_instr_t *store = ir_lower_emit_instruction(context,
-            IR_OP_GLOBAL_STORE, span);
-        if (!store || !ir_instr_set_binding_initialization(store,
-                binding->global->mutability != IR_MUT_MUTABLE)
-            || !ir_instr_operand_value(store, binding)
-            || !ir_instr_operand_value(store, value)) return false;
-        return true;
-    }
+    if (binding && binding->kind == IR_VAL_GLOBAL && binding->global)
+        return n00bb_emit_fixed_array_store(context, binding, value,
+            binding->global->mutability != IR_MUT_MUTABLE, span);
     lower_internal(context, span,
                    "shaped assignment target has no writable storage");
     return false;

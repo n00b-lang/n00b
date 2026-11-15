@@ -1,0 +1,22 @@
+# A fixed-size array and the `modify` or `out` parameter it is passed to
+# must be declared with the same size.
+var table: Array[u32][4]
+
+func refill(modify words: Array[u32]) -> nil {
+    words = [5, 6, 7, 8]
+}
+
+func fill(out words: Array[u32][4]) -> nil {
+    words = [1, 2, 3, 4]
+}
+
+func three(modify words: Array[u32][3]) -> nil {
+    words[0] = 1
+}
+
+func main() -> nil {
+    refill(table)
+    var loose: Array[u32] = [1, 2, 3, 4]
+    fill(loose)
+    three(table)
+}

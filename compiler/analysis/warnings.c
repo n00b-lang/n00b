@@ -1,5 +1,6 @@
 #include "comptime.h"
 #include "lower/lower_internal.h"
+#include "sequence_transfer.h"
 #include "static_branches.h"
 
 static uint64_t
@@ -1627,6 +1628,60 @@ field_literal_fits(n00bb_link_analysis_t *analysis,
     return false;
 }
 
+// A fixed-size array field passed to a `modify` or `out` parameter must go
+// to a parameter declared with its size, and a parameter declared with a
+// size only takes such a field: the parameter works on the elements in
+// place. Lowering checks the other arguments; a field's record isn't known
+// to it.
+static bool
+field_references_fit(n00bb_link_analysis_t *analysis,
+                     core_translation_unit_t *unit, const ir_instr_t *call)
+{
+    ir_func_t *target = ir_call_function(call);
+    bool ok = true;
+    for (uint32_t p = 0; target && p + 1 < call->n_operands
+         && p < th_func_nparams(target->type); p++) {
+        const th_param *formal = th_func_param(target->type, p);
+        ir_value_t *address = formal && th_mode_by_reference(formal->mode)
+            ? ir_operand_value(&call->operands[p + 1]) : nullptr;
+        const ir_instr_t *field = address && address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        ir_value_t *base = field && field->op == IR_OP_FIELD
+            && field->n_operands == 2
+            && field->operands[1].kind == IR_OPD_NAME
+            ? ir_operand_value(&field->operands[0]) : nullptr;
+        if (!base) continue;
+        uint64_t declared = 0;
+        (void)field_declared_length(analysis,
+            th_ind_referent(th_resolve(base->type)),
+            field->operands[1].name, &declared);
+        uint64_t parameter = n00bb_fixed_reference_count(target, p);
+        if (declared == parameter) continue;
+        core_string_t name = field->operands[1].name;
+        if (!parameter)
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_FIXED_ARRAY_REFERENCE,
+                n00bb_span_location(call->span),
+                N00B_TEXT_FIXED_ARRAY_TO_UNSIZED_REFERENCE,
+                N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(declared)));
+        else if (!declared)
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_FIXED_ARRAY_REFERENCE,
+                n00bb_span_location(call->span),
+                N00B_TEXT_UNSIZED_ARRAY_TO_FIXED_REFERENCE,
+                N00BB_ARGS(ARG_NUMBER(parameter), ARG_TEXT(name)));
+        else
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_FIXED_ARRAY_REFERENCE,
+                n00bb_span_location(call->span),
+                N00B_TEXT_FIXED_ARRAY_REFERENCE_SIZES_DIFFER,
+                N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(declared),
+                           ARG_NUMBER(parameter)));
+        ok = false;
+    }
+    return ok;
+}
+
 // Array literals stored into fixed-size array fields, by a field
 // assignment or in a record literal, must have the field's length. Lowering
 // can't tell which field a write reaches before types are solved, so this
@@ -1647,6 +1702,28 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                 ir_block_t *block = function->blocks[b];
                 for (uint32_t i = 0; i < block->n_instrs; i++) {
                     ir_instr_t *in = block->instrs[i];
+                    if (in->op == IR_OP_CALL) {
+                        ok &= field_references_fit(analysis, unit, in);
+                        continue;
+                    }
+                    // A function given the caller's elements can't be a
+                    // value: a function value's type can't say so.
+                    ir_value_t *function_value = in->op == IR_OP_RETAIN_REF
+                        && in->n_operands
+                        ? ir_operand_value(&in->operands[0]) : nullptr;
+                    if (function_value && function_value->kind == IR_VAL_FUNC
+                        && function_value->owner
+                        && ir_annot_get(&function_value->owner->annots,
+                               N00BB_FIXED_REFERENCES_KEY)) {
+                        n00bb_report(core_translation_unit_diagnostics(unit),
+                            unit, N00B_DIAG_FIXED_REFERENCE_FUNCTION_VALUE,
+                            n00bb_span_location(in->span),
+                            N00B_TEXT_FIXED_REFERENCE_FUNCTION_VALUE,
+                            N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(
+                                function_value->owner->name))));
+                        ok = false;
+                        continue;
+                    }
                     if (in->op == IR_OP_STORE && in->n_operands == 2) {
                         ir_value_t *address = ir_operand_value(
                             &in->operands[0]);

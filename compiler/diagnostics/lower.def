@@ -422,6 +422,23 @@ N00B_DIAG(ARRAY_LENGTH_DIFFERS, "N00B-T1045", ERROR,
     "A variable, field or parameter declared with a fixed size, like\n"
     "`Array[u32][4]`, only holds arrays of exactly that size. Give the array\n"
     "that many elements, or leave the size off the declaration.")
+N00B_DIAG(FIXED_ARRAY_REFERENCE, "N00B-T1046", ERROR,
+    "a fixed-size array and the `modify` or `out` parameter it is passed to "
+    "have different sizes",
+    "A `modify` or `out` parameter declared with a size, like\n"
+    "`modify words: Array[u32][4]`, works on the caller's elements in place,\n"
+    "so it can't replace them with a different array. Only an array\n"
+    "declared with that same size can be passed to it, and an array\n"
+    "declared with a size can only be passed by reference to such a\n"
+    "parameter. Declare both with the same size, or pass a copy to a\n"
+    "parameter without one.")
+N00B_DIAG(FIXED_REFERENCE_FUNCTION_VALUE, "N00B-T1047", ERROR,
+    "a function with a fixed-size `modify` or `out` parameter is used as a "
+    "value",
+    "Such a parameter is given the caller's elements rather than an array,\n"
+    "which a function value's type can't say, so the function can only be\n"
+    "called directly. Call it from a function without the sized parameter\n"
+    "and use that one as the value.")
 N00B_DIAG(BUILTIN_ARGUMENTS, "N00B-T1026", ERROR,
     "a builtin function is given arguments it does not take",
     "The message says what the builtin takes.")

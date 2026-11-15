@@ -3,6 +3,48 @@
 
 #include "ir/ir.h"
 
+// A whole-array store into a fixed-size array (a variable, field or
+// parameter declared with a size): it copies the elements into the
+// existing storage after checking the shape, and never rebinds it.
+#define N00BB_FIXED_ARRAY_STORE_KEY CORE_STRING_STATIC("n00bb.fixed-array-store")
+
+static inline bool
+n00bb_fixed_array_store(const ir_instr_t *store)
+{
+    return store && ir_annot_get((ir_annots_t *)&store->annots,
+                                 N00BB_FIXED_ARRAY_STORE_KEY);
+}
+
+// A `modify` or `out` parameter declared as a fixed-size array is passed as
+// the caller's elements, not as a reference to an array value: the callee
+// writes into that storage and can't rebind it. A function lists such
+// parameters as "index:count" pairs, separated by commas.
+#define N00BB_FIXED_REFERENCES_KEY CORE_STRING_STATIC("n00bb.fixed-references")
+
+// The element count of parameter `index` of `function` when it is passed
+// as its elements, else 0.
+static inline uint64_t
+n00bb_fixed_reference_count(const ir_func_t *function, uint32_t index)
+{
+    ir_annot_t *list = function ? ir_annot_get(
+        (ir_annots_t *)&function->annots, N00BB_FIXED_REFERENCES_KEY)
+        : nullptr;
+    if (!list || list->kind != IR_ANNOT_STR) return 0;
+    const char *at = list->s.data;
+    const char *end = at + list->s.u8_bytes;
+    while (at < end) {
+        uint64_t parameter = 0, count = 0;
+        while (at < end && *at >= '0' && *at <= '9')
+            parameter = parameter * 10 + (uint64_t)(*at++ - '0');
+        if (at >= end || *at++ != ':') return 0;
+        while (at < end && *at >= '0' && *at <= '9')
+            count = count * 10 + (uint64_t)(*at++ - '0');
+        if (parameter == index) return count;
+        if (at < end && *at++ != ',') return 0;
+    }
+    return 0;
+}
+
 static inline bool
 n00bb_sequence_transfers_storage(const ir_value_t *source)
 {

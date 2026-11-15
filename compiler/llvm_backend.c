@@ -396,6 +396,9 @@ typedef struct {
     LLVMBasicBlockRef *block_tails;
     LLVMValueRef *locals;
     LLVMValueRef *param_addresses;
+    // By formal index: the array a fixed-size parameter passed as its
+    // elements is used as, built at entry (see fixed_reference_count).
+    LLVMValueRef *fixed_reference_views;
     LLVMValueRef mutator;
     const pointer_set_t *mutator_functions;
     lowered_value_t *values;
@@ -1679,6 +1682,9 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
             return LLVMBuildLoad2(state->builder, type, field,
                                   "optional.value");
         }
+        if (state->fixed_reference_views
+            && state->fixed_reference_views[formal_index])
+            return state->fixed_reference_views[formal_index];
         unsigned native_position = state->parameter_base
             + (unsigned)(formal_index - optional_index);
         if (native_position >= LLVMCountParams(state->target_function))
@@ -4516,7 +4522,7 @@ copy_present_sequence(lower_state_t *state, LLVMValueRef value, th_type *type)
 
 static bool
 copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
-                     LLVMValueRef value, th_type *type)
+                     LLVMValueRef value, th_type *type, core_string_t text)
 {
     ir_module_t *module = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
@@ -4603,9 +4609,7 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
         unsigned_operand(count), unsigned_operand(source_count),
     };
     emit_failure_if(state, invalid, &(failure_t){
-        .kind = N00BB_FAILURE_SHAPE,
-        .text = CORE_STRING_STATIC(
-            "the assigned row has a different shape than the row it replaces"),
+        .kind = N00BB_FAILURE_SHAPE, .text = text,
         .operands = row_counts, .operand_count = 2,
     });
     if (packed_width) {
@@ -6683,13 +6687,59 @@ typedef struct {
     th_type *type;
 } by_reference_writeback_t;
 
+// The element count of parameter `index` of `function` when it is passed as
+// the caller's elements (n00bb_fixed_reference_count), else 0. Caller and
+// callee both decide from the callee's declared parameter, so they agree:
+// arrays of packed bits or of open element types keep the ordinary
+// convention.
+static uint64_t
+fixed_reference_count(lower_state_t *state, const ir_func_t *function,
+                      size_t index)
+{
+    uint64_t count = n00bb_fixed_reference_count(function, (uint32_t)index);
+    const th_param *formal = count
+        ? th_func_param(function->type, index) : nullptr;
+    th_type *array = formal && th_mode_by_reference(formal->mode)
+        ? th_resolve(formal->type) : nullptr;
+    th_type *element = array && th_kind_of(array) == TH_SEQUENCE
+        ? th_resolve(th_seq_elem(array)) : nullptr;
+    ir_module_t *module = function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = array ? value_type(module, array, context)
+                               : nullptr;
+    if (!element || th_kind_of(element) == TH_SEQUENCE
+        || !th_is_closed(ir_module_types(module), array)
+        || packed_array_width(module, element)
+        || !native || native == box_llvm_type(context)
+        || LLVMGetTypeKind(native) != LLVMStructTypeKind) return 0;
+    return count;
+}
+
 static LLVMValueRef
 by_reference_argument(lower_state_t *state, const ir_value_t *operand,
-                      th_type *formal_type,
+                      th_type *formal_type, uint64_t fixed_count,
                       by_reference_writeback_t *writeback)
 {
     ir_module_t *owner = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
+    // A fixed-size array parameter is given the caller's elements. A field
+    // that holds its array inline is those elements already; otherwise the
+    // place holds an array whose data they are. Lowering only passes arrays
+    // declared with the parameter's size.
+    if (fixed_count && operand) {
+        uint64_t inline_count = 0;
+        LLVMValueRef place = lowered_value(state, operand);
+        if (!place || LLVMGetTypeKind(LLVMTypeOf(place))
+                != LLVMPointerTypeKind) return nullptr;
+        if (inline_index_base_type(state, operand, &inline_count))
+            return inline_count == fixed_count ? place : nullptr;
+        LLVMTypeRef array = value_type(owner, formal_type, context);
+        if (!array) return nullptr;
+        LLVMValueRef value = LLVMBuildLoad2(state->builder, array, place,
+                                            "fixed.reference.array");
+        return LLVMBuildExtractValue(state->builder, value, 0,
+                                     "fixed.reference.elements");
+    }
     th_type *reference = operand && formal_type
         ? th_ind(ir_module_types(owner), 0, formal_type) : nullptr;
     LLVMTypeRef type = reference ? value_type(owner, reference, context)
@@ -9373,6 +9423,19 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[1].value);
         if (!global || !value
             || LLVMGlobalGetValueType(global) != LLVMTypeOf(value)) break;
+        if (n00bb_fixed_array_store(instruction)
+            && th_kind_of(th_resolve(operands[0].value->global->type))
+                == TH_SEQUENCE) {
+            if (!copy_rectangular_row(state, global, value,
+                    operands[0].value->global->type,
+                    CORE_STRING_STATIC("the assigned array has a different "
+                        "length than the fixed-size array"))) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy into a fixed-size array");
+                return false;
+            }
+            return true;
+        }
         if (th_kind_of(th_resolve(operands[0].value->global->type))
                 == TH_SEQUENCE
             && !n00bb_sequence_transfers_storage(operands[1].value)) {
@@ -9554,6 +9617,17 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMBuildStore(state->builder, items, address);
             return true;
         }
+        if (n00bb_fixed_array_store(instruction)
+            && th_kind_of(th_resolve(storage)) == TH_SEQUENCE) {
+            if (!copy_rectangular_row(state, address, value, storage,
+                    CORE_STRING_STATIC("the assigned array has a different "
+                        "length than the fixed-size array"))) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy into a fixed-size array");
+                return false;
+            }
+            return true;
+        }
         LLVMBasicBlockRef row_done = nullptr;
         ir_instr_t *indexed = operands[0].value->def;
         if (indexed && indexed->op == IR_OP_INDEX
@@ -9592,7 +9666,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 function, "array.row.done");
             LLVMBuildCondBr(state->builder, rectangular, flat, ragged);
             LLVMPositionBuilderAtEnd(state->builder, flat);
-            if (!copy_rectangular_row(state, address, value, storage)) {
+            if (!copy_rectangular_row(state, address, value, storage,
+                    CORE_STRING_STATIC("the assigned row has a different "
+                        "shape than the row it replaces"))) {
                 state->failure_detail =
                     FAILURE_DETAIL("could not copy a rectangular array row");
                 return false;
@@ -11030,7 +11106,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 if (formal && th_mode_by_reference(formal->mode))
                     value = operands[j].kind == IR_OPD_VALUE
                         ? by_reference_argument(state, operands[j].value,
-                              formal->type, &direct_writebacks[j - 1])
+                              formal->type, 0, &direct_writebacks[j - 1])
                         : nullptr;
                 else {
                     value = operands[j].kind == IR_OPD_VALUE
@@ -11127,7 +11203,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (formal && th_mode_by_reference(formal->mode)) {
                 arguments[ordinal] = operands[i].kind == IR_OPD_VALUE
                     ? by_reference_argument(state, operands[i].value,
-                          formal->type, &writebacks[ordinal])
+                          formal->type, 0, &writebacks[ordinal])
                     : nullptr;
                 valid = arguments[ordinal] != nullptr;
                 continue;
@@ -11498,6 +11574,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 // directly.
                 arguments[native_index] = by_reference_argument(state,
                     operands[i].value, formal->type,
+                    shape ? fixed_reference_count(state, shape, i - 1) : 0,
                     &writebacks[native_index]);
                 valid = arguments[native_index] != nullptr;
             } else {
@@ -12376,6 +12453,51 @@ prepare_frame_map(lower_state_t *state)
     return call != nullptr;
 }
 
+// A fixed-size array parameter passed as the caller's elements is used in
+// the body as an array whose data is those elements and whose descriptor is
+// a constant: a local the parameter's value addresses. Whole stores into it
+// are marked fixed and copy into the data, so the caller's storage is the
+// only storage, and the callee can't rebind it.
+static bool
+prepare_fixed_references(lower_state_t *state)
+{
+    ir_func_t *function = state->function;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    size_t count = th_func_nparams(function->type);
+    size_t optional_before = 0;
+    for (size_t p = 0; p < count; p++) {
+        if (ir_func_parameter_is_optional(function, p)) {
+            optional_before++;
+            continue;
+        }
+        uint64_t elements = fixed_reference_count(state, function, p);
+        if (!elements) continue;
+        if (!state->fixed_reference_views) {
+            state->fixed_reference_views = calloc(count,
+                sizeof(*state->fixed_reference_views));
+            if (!state->fixed_reference_views) return false;
+        }
+        unsigned position = state->parameter_base
+            + (unsigned)(p - optional_before);
+        if (position >= LLVMCountParams(state->target_function)) return false;
+        LLVMTypeRef array = value_type(function->owner,
+            th_func_param(function->type, p)->type, context);
+        LLVMValueRef view = array
+            ? LLVMBuildAlloca(state->builder, array, "fixed.reference")
+            : nullptr;
+        if (!view) return false;
+        LLVMValueRef value = LLVMBuildInsertValue(state->builder,
+            LLVMGetUndef(array), LLVMGetParam(state->target_function, position),
+            0, "fixed.reference.data");
+        value = LLVMBuildInsertValue(state->builder, value,
+            array_descriptor(state, elements), 1,
+            "fixed.reference.descriptor");
+        LLVMBuildStore(state->builder, value, view);
+        state->fixed_reference_views[p] = view;
+    }
+    return true;
+}
+
 static bool
 prepare_parameter_addresses(lower_state_t *state)
 {
@@ -12392,7 +12514,7 @@ prepare_parameter_addresses(lower_state_t *state)
                 || value->owner != function || value->index >= function->n_params)
                 continue;
             if (state->param_addresses[value->index]) continue;
-            size_t input_index = 0, native_index = 0;
+            size_t input_index = 0, native_index = 0, formal_index = 0;
             const th_param *formal = nullptr;
             size_t parameter_count = th_func_nparams(function->type);
             for (size_t p = 0; p < parameter_count; p++) {
@@ -12402,6 +12524,7 @@ prepare_parameter_addresses(lower_state_t *state)
                     if (optional) return backend_error(state->diagnostics,
                         "address of an optional parameter is not lowered yet");
                     formal = candidate;
+                    formal_index = p;
                     break;
                 }
                 if (!optional) native_index++;
@@ -12410,7 +12533,10 @@ prepare_parameter_addresses(lower_state_t *state)
                 + (unsigned)native_index;
             if (!formal || position >= LLVMCountParams(state->target_function))
                 return false;
-            LLVMValueRef native = th_mode_by_reference(formal->mode)
+            LLVMValueRef view = state->fixed_reference_views
+                ? state->fixed_reference_views[formal_index] : nullptr;
+            LLVMValueRef native = view ? view
+                : th_mode_by_reference(formal->mode)
                 ? by_reference_parameter(state, value->type, formal->type,
                       LLVMGetParam(state->target_function, position))
                 : LLVMGetParam(state->target_function, position);
@@ -12580,6 +12706,9 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
         if (ok && emit_frame_maps && !prepare_frame_map(&state))
             ok = backend_error(diagnostics,
                 "LLVM backend could not prepare a function frame map");
+        if (ok && !prepare_fixed_references(&state))
+            ok = backend_error(diagnostics,
+                "LLVM backend could not prepare fixed-size array parameters");
         if (ok && !prepare_parameter_addresses(&state))
             ok = backend_error(diagnostics,
                 "LLVM backend could not prepare parameter addresses");
@@ -12658,6 +12787,7 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
     free(feasible_blocks);
     free(state.locals);
     free(state.param_addresses);
+    free(state.fixed_reference_views);
     free(state.values);
     ir_analysis_scope_end(state.analysis_scope);
     core_indexed_table_free(state.frame_roots);

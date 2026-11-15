@@ -1,0 +1,56 @@
+# A `modify` or `out` parameter declared with a size works on the caller's
+# elements in place: whole assignments to it copy into them, so the caller's
+# storage is the only storage. Globals, locals and inline record fields are
+# passed this way.
+var table: Array[u32][4]
+
+func refill(modify words: Array[u32][4]) -> nil {
+    words = [5, 6, 7, 8]
+}
+
+func fill(out words: Array[u32][4]) -> nil {
+    words = [1, 2, 3, 4]
+}
+
+func bump(modify words: Array[u32][3], at: int) -> nil {
+    words[at] = words[at] + 100
+    words = [words[0], words[1], 30]
+}
+
+# Passes its parameter on to another of the same size.
+func refill_twice(modify words: Array[u32][4]) -> nil {
+    refill(words)
+    words[0] = words[0] + 1
+}
+
+record Slots {
+    tag: u8
+    values: Array[u32][3]
+    after: u64
+}
+
+var held: Slots = (tag = 7, values = [1, 2, 3], after = 99)
+
+func main() -> nil {
+    let before = table
+    refill(table)
+    require table[3] == 8 and before[3] == 0
+    fill(table)
+    require table[0] == 1 and table[3] == 4
+    refill_twice(table)
+    require table[0] == 6 and table[1] == 6
+
+    var local: Array[u32][4]
+    refill(local)
+    require local[0] == 5
+    fill(local)
+    require local[2] == 3
+
+    var slots: Slots = (tag = 1, values = [1, 2, 3], after = 2)
+    bump(slots.values, 1)
+    require slots.values[1] == 102 and slots.values[2] == 30
+    require slots.tag == 1 and slots.after == 2
+    bump(held.values, 0)
+    require held.values[0] == 101 and held.values[2] == 30
+    require held.tag == 7 and held.after == 99
+}

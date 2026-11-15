@@ -64,6 +64,56 @@ n00bb_element_has_address(ir_lower_context_t *context,
     return !inner || n00bb_element_has_address(context, grammar, inner);
 }
 
+// The static length of a rank-1 shape, or 0.
+static uint64_t
+static_array_length(ir_shape_t *shape)
+{
+    ir_shape_extent_t extent;
+    return shape && ir_shape_rank(shape) == 1
+        && ir_shape_extent(shape, 0, &extent)
+        && extent.kind == IR_SHAPE_EXTENT_STATIC ? extent.static_value : 0;
+}
+
+// A `modify` or `out` parameter declared with a size works on the caller's
+// elements in place, so it and the array passed to it must be declared with
+// the same size. Reports and returns false when they aren't. A field whose
+// record isn't known yet is checked once types are solved.
+static bool
+fixed_reference_sizes_match(ir_lower_context_t *context,
+                            const n00bb_out_location_t *location,
+                            ir_shape_t *required_shape, parse_tree_t *argument,
+                            ir_span_t span)
+{
+    if (th_kind_of(th_resolve(location->type)) != TH_SEQUENCE) return true;
+    ir_shape_t *declared = location->local ? ir_local_shape(location->local)
+                                           : nullptr;
+    if (!declared && location->symbol)
+        declared = parse_sym_binding(location->symbol,
+                                     CORE_STRING_STATIC("ir.array-shape"));
+    uint64_t argument_size = static_array_length(declared);
+    uint64_t parameter_size = static_array_length(required_shape);
+    bool unresolved_field = !location->symbol && !location->local
+        && !location->index_target;
+    if (argument_size == parameter_size
+        || (!argument_size && unresolved_field)) return true;
+    core_string_t name = location->symbol ? location->symbol->name
+        : first_token_text(argument);
+    if (!parameter_size)
+        lower_report(context, N00B_DIAG_FIXED_ARRAY_REFERENCE, span,
+            N00B_TEXT_FIXED_ARRAY_TO_UNSIZED_REFERENCE,
+            N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(argument_size)));
+    else if (!argument_size)
+        lower_report(context, N00B_DIAG_FIXED_ARRAY_REFERENCE, span,
+            N00B_TEXT_UNSIZED_ARRAY_TO_FIXED_REFERENCE,
+            N00BB_ARGS(ARG_NUMBER(parameter_size), ARG_TEXT(name)));
+    else
+        lower_report(context, N00B_DIAG_FIXED_ARRAY_REFERENCE, span,
+            N00B_TEXT_FIXED_ARRAY_REFERENCE_SIZES_DIFFER,
+            N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(argument_size),
+                       ARG_NUMBER(parameter_size)));
+    return false;
+}
+
 // Lowers the place `argument` names for an `out` or `modify` parameter and
 // returns its address, which the call passes. A place with no address is
 // passed through a temporary that n00bb_write_back_references stores back.
@@ -86,6 +136,11 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
                                  callee, parameter_name);
         return nullptr;
     }
+    if (!fixed_reference_sizes_match(context, &location, required_shape,
+                                     argument, span)) return nullptr;
+    // A parameter declared with the argument's size needs no shape check:
+    // the sizes matched above.
+    if (static_array_length(required_shape)) required_shape = nullptr;
     for (size_t previous = 0; location.symbol && location.lvalue
             && previous < places->len; previous++) {
         n00bb_reference_argument_t *prior = &places->data[previous];

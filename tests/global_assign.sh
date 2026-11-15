@@ -57,3 +57,22 @@ for at in 7:50:.*length\ is\ 2 8:20:.*length\ is\ 4 9:27:.*length\ is\ 1; do
     reported fields "fields.n:$at, but it is stored where the declared size is 3"
 done
 test "$(grep -c 'declared size is' "$tmp/fields.log")" = 3
+
+# A `modify` or `out` parameter declared with a size works on the caller's
+# elements in place.
+"$compiler" build --output "$tmp/references" references.n \
+    >"$tmp/references.log" 2>&1 || {
+    cat "$tmp/references.log" >&2
+    exit 1
+}
+"$tmp/references"
+
+rejected reference_errors
+reported reference_errors "reference_errors.n:18:12:.*\`table\` is declared with size 4, so it can only be passed by reference to a parameter declared with that size"
+reported reference_errors "reference_errors.n:20:10:.*works on an array of size 4 in place, but \`loose\` isn't declared with that size"
+reported reference_errors "reference_errors.n:21:11:.*\`table\` is declared with size 4, but the parameter it is passed to by reference has size 3"
+
+rejected reference_fields
+reported reference_fields "reference_fields.n:28:5:.*\`values\` is declared with size 3, so it can only be passed by reference"
+reported reference_fields "reference_fields.n:29:5:.*\`values\` is declared with size 3, but the parameter it is passed to by reference has size 4"
+reported reference_fields "reference_fields.n:30:43:.*\`fixed\` takes a fixed-size array by reference, so it can only be called directly"
