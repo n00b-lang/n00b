@@ -1,0 +1,8 @@
+# Literals whose elements can't take the declared types.
+var table: Array[u32][4]
+var names: Dict[string, u32]
+
+func main() -> nil {
+    table = ["a", "b", "c", "d"]
+    names = {"a": "x"}
+}

@@ -100,11 +100,14 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
         return false;
     if (address)
         return n00bb_emit_indirect_write(context, address, value, span);
-    if (binding && binding->kind == IR_VAL_GLOBAL
-        && ir_type_eq(context->module, binding->type, value->type)) {
+    // Types are solved after lowering: the store's constraint is what gives
+    // the value (an array literal, say) the global's declared type, so the
+    // value's type can still be open here.
+    if (binding && binding->kind == IR_VAL_GLOBAL && binding->global) {
         ir_instr_t *store = ir_lower_emit_instruction(context,
             IR_OP_GLOBAL_STORE, span);
-        if (!store || !ir_instr_set_binding_initialization(store, true)
+        if (!store || !ir_instr_set_binding_initialization(store,
+                binding->global->mutability != IR_MUT_MUTABLE)
             || !ir_instr_operand_value(store, binding)
             || !ir_instr_operand_value(store, value)) return false;
         return true;

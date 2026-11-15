@@ -1,0 +1,18 @@
+# Reassigning another module's variables from literals: a bounded array, a
+# dict and an unbounded array.
+import holder
+
+func main() -> nil {
+    holder.reset()
+    let b = holder.names["b"]
+    require holder.table[0] == 4000000000 and holder.table[3] == 9
+    require b != nil and b == 4000000000
+    require holder.plain[1] == 8
+    holder.table = [1, 2, 3, 4000000000]
+    holder.names = {"c": 4000000000}
+    holder.plain = [5]
+    let c = holder.names["c"]
+    require holder.table[0] == 1 and holder.table[3] == 4000000000
+    require c != nil and c == 4000000000
+    require holder.plain[0] == 5
+}

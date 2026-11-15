@@ -50,7 +50,7 @@ comptime-imports	pr	20	sh "$SRC/tests/comptime.sh" "$BUILD/n00b" "$SRC/tests/pro
 comptime-start	pr	20	sh "$SRC/tests/comptime.sh" "$BUILD/n00b" "$SRC/tests/programs/comptime" start
 name-resolution	pr	9	sh "$SRC/tests/name_resolution.sh" "$BUILD/n00b" "$SRC/tests/programs/name_resolution"
 diagnostics	pr	35	sh "$SRC/tests/diagnostics.sh" "$BUILD/n00b" "$SRC"
-imports-bring	pr	18	sh "$SRC/tests/imports_bring.sh" "$BUILD/n00b" "$SRC/tests/programs/imports_bring"
+imports-bring	pr	18	sh "$SRC/tests/imports_bring.sh" "$BUILD/n00b" "$SRC/tests/programs/imports_bring" && sh "$SRC/tests/global_assign.sh" "$BUILD/n00b" "$SRC/tests/programs/global_assign"
 overload-resolution	pr	17	N00B_PATH="$SRC/tests/programs/features" sh "$SRC/tests/overload_resolution.sh" "$BUILD/n00b" "$SRC/tests/programs/features/overload_specificity.n"
 library-module-n00b	pr	4	sh "$SRC/tests/library_module.sh" "$BUILD/n00b" "$SRC/tests/programs/import_cycles/declared" shape && sh "$SRC/tests/library_module.sh" "$BUILD/n00b" "$SRC/tests/programs/compile_mode" fallible_index_read
 program-args	pr	3	sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/program_args.n" alpha 'two words'
