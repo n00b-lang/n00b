@@ -9528,6 +9528,32 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (!store_packed_bitptr(state, address, value, storage)) break;
             return true;
         }
+        // A field that holds its array inline is the elements, not an array
+        // value: the stored array's elements are copied in, after checking
+        // its length, as a record literal's are.
+        ir_instr_t *field = operands[0].value->def;
+        LLVMTypeRef record_native = nullptr;
+        record_slot_t field_slot = {0};
+        if (field && field->op == IR_OP_FIELD && field->n_operands == 2
+            && field->operands[0].kind == IR_OPD_VALUE
+            && field->operands[1].kind == IR_OPD_NAME
+            && th_kind_of(th_resolve(storage)) == TH_SEQUENCE
+            && record_member_slot(state,
+                   th_ind_referent(field->operands[0].value->type),
+                   field->operands[1].name, &record_native, &field_slot)
+            && !field_slot.overlay && !field_slot.packed
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(record_native,
+                   field_slot.element)) == LLVMArrayTypeKind) {
+            LLVMValueRef items = inline_array_from_value(state, value,
+                LLVMStructGetTypeAtIndex(record_native, field_slot.element));
+            if (!items) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy an array into an inline field");
+                break;
+            }
+            LLVMBuildStore(state->builder, items, address);
+            return true;
+        }
         LLVMBasicBlockRef row_done = nullptr;
         ir_instr_t *indexed = operands[0].value->def;
         if (indexed && indexed->op == IR_OP_INDEX

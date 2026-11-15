@@ -4,6 +4,15 @@ var table: Array[u32][4]
 var names: Dict[string, u32]
 var plain: Array[u32]
 
+# A record whose array field is stored inline, between two other fields.
+record Slots {
+    tag: u8
+    values: Array[u32][3]
+    after: u64
+}
+
+var slots: Slots = (tag = 7, values = [1, 2, 3], after = 99)
+
 func reset() -> nil {
     table = [4000000000, 9, 9, 9]
     names = {"a": 1, "b": 4000000000}

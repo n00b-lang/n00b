@@ -1,5 +1,5 @@
 # Reassigning another module's variables from literals: a bounded array, a
-# dict and an unbounded array.
+# dict, an unbounded array and a record's inline array field.
 import holder
 
 func main() -> nil {
@@ -15,4 +15,14 @@ func main() -> nil {
     require holder.table[0] == 1 and holder.table[3] == 4000000000
     require c != nil and c == 4000000000
     require holder.plain[0] == 5
+
+    # Assigning an inline field copies the elements in place and leaves
+    # the fields around it alone.
+    holder.slots.values = [4000000000, 5, 6]
+    require holder.slots.values[0] == 4000000000
+    require holder.slots.values[2] == 6
+    require holder.slots.tag == 7 and holder.slots.after == 99
+    var local: holder.Slots = (tag = 1, values = [1, 2, 3], after = 2)
+    local.values = [7, 8, 9]
+    require local.values[1] == 8 and local.tag == 1 and local.after == 2
 }
