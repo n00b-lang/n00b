@@ -4579,11 +4579,17 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
         + (uint64_t)(rank - 1) * sizeof(uint64_t);
     uint64_t value_bytes = sizeof(n00b_abi_array_value_v1);
     LLVMValueRef wrapper = nullptr;
+    LLVMValueRef suffix = nullptr;
     if (local) {
-        // Words, so the view is aligned for its pointers and counts.
-        wrapper = entry_alloca(state, LLVMArrayType2(i64,
-            (value_bytes + descriptor_bytes + 7) / 8));
-        if (!wrapper) return nullptr;
+        // In the frame, the array value and its descriptor are apart: the
+        // value pointing into its own slot would keep LLVM from promoting
+        // either once the loads through them are forwarded. The descriptor
+        // is words, aligned for its counts.
+        LLVMTypeRef child_value = value_type(module, child, context);
+        wrapper = child_value ? entry_alloca(state, child_value) : nullptr;
+        suffix = entry_alloca(state, LLVMArrayType2(i64,
+            (descriptor_bytes + 7) / 8));
+        if (!wrapper || !suffix) return nullptr;
     } else {
         LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
         LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5,
@@ -4604,9 +4610,12 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
         wrapper = LLVMBuildCall2(state->builder, signature,
             allocator, arguments, 5, "array.suffix.storage");
     }
-    LLVMValueRef descriptor_offset = LLVMConstInt(i64, value_bytes, false);
-    LLVMValueRef suffix = LLVMBuildGEP2(state->builder, i8, wrapper,
-        &descriptor_offset, 1, "array.suffix.descriptor");
+    if (!suffix) {
+        LLVMValueRef descriptor_offset = LLVMConstInt(i64, value_bytes,
+                                                      false);
+        suffix = LLVMBuildGEP2(state->builder, i8, wrapper,
+            &descriptor_offset, 1, "array.suffix.descriptor");
+    }
     LLVMValueRef slot = LLVMBuildStructGEP2(state->builder, header, suffix,
         0, "array.suffix.total.slot");
     LLVMBuildStore(state->builder, row_count, slot);
