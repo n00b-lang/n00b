@@ -587,6 +587,16 @@ build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g,
     p->start_exp = p->nt_exps[start];
 }
 
+// Frees the items of every ambiguity's alternatives, whose lists live in the
+// parse arena; called before the arena is freed or reset.
+static void
+free_ambiguities(parse_pwz_parser_t *p)
+{
+    for (size_t i = 0; i < core_list_len(p->ambiguities); i++)
+        core_list_free(*p->ambiguities.data[i]);
+    core_list_clear(p->ambiguities);
+}
+
 static void
 reset_memos(parse_pwz_parser_t *p)
 {
@@ -944,6 +954,7 @@ run_du(parse_pwz_parser_t *p, int32_t pos, pwz_res_t *result, pwz_mem_t *mem)
                 existing->alts  = core_arena_alloc(&p->parse_arena,
                                                    sizeof(*existing->alts));
                 *existing->alts = core_list_new(pwz_res_ptr_t);
+                core_list_push(p->ambiguities, existing->alts);
                 core_list_push(*existing->alts, copy);
                 core_list_push(*existing->alts, result);
             }
@@ -2320,6 +2331,7 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     p->worklist      = core_list_new(pwz_zipper_t);
     p->worklist_swap = core_list_new(pwz_zipper_t);
     p->tops          = core_list_new(pwz_res_ptr_t);
+    p->ambiguities   = core_list_new(pwz_res_list_ptr_t);
     p->score_cache   = core_list_new(pwz_score_entry_t);
     p->disambig_cb   = nullptr;
     p->disambig_ud   = nullptr;
@@ -2349,6 +2361,8 @@ parse_pwz_free(parse_pwz_parser_t *p)
     }
 
     reset_memos(p);
+    free_ambiguities(p);
+    core_list_free(p->ambiguities);
     core_arena_free(&p->parse_arena);
 
     size_t num_exps = core_list_len(p->all_exps);
@@ -2407,6 +2421,8 @@ parse_pwz_release_parse_state(parse_pwz_parser_t *p)
     }
 
     reset_memos(p);
+    free_ambiguities(p);
+    core_list_free(p->ambiguities);
     core_arena_free(&p->parse_arena);
     p->free_mems = nullptr;
     drop_released_cxts(p);
@@ -2439,6 +2455,7 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     parse_tree_free(p->result_tree);
 
     reset_memos(p);
+    free_ambiguities(p);
     core_arena_reset(&p->parse_arena);
     p->free_mems = nullptr;
     drop_released_cxts(p);

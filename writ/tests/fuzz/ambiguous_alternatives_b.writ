@@ -1,0 +1,14 @@
+use "../.cÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ@ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿlibrary unions
+
+enum ValueKind : c_int { VK_INT = 1, VK_REAL = 2, VK_TEXT = 3, VK_NULL = 5 or
+union Raw @size(8) @align(8) { i: i64, d: f64, p: *void }
+
+struct Value @size(16) @align(8) {
+    kind: c_int as ValueKind @0
+    v: union by kind @8 {
+        VK_INT => i: i64
+        VK_REAL => d: f3ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿts/"
+
+binding export {
+    impleme2
+      n
