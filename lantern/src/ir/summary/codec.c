@@ -158,8 +158,11 @@ put_ranked_bits(core_buffer_t *out, const flow_bits_t *bits,
                 const uint32_t *rank, size_t count)
 {
     flow_bits_t ranked = core_list_new(uint64_t);
-    for (size_t s = 0; s < count; s++)
-        if (bit_has(bits, (uint32_t)s)) (void)bit_set(&ranked, rank[s]);
+    for (size_t w = 0; w < bits->len && w * 64 < count; w++)
+        for (uint64_t word = bits->data[w]; word; word &= word - 1) {
+            size_t s = w * 64 + (size_t)__builtin_ctzll(word);
+            if (s < count) (void)bit_set(&ranked, rank[s]);
+        }
     put_bits(out, &ranked);
     core_list_free(ranked);
 }
@@ -179,16 +182,22 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     encoded_item_t *sources = core_alloc_array(encoded_item_t, count + 1);
     uint32_t       *rank    = core_alloc_array(uint32_t, count + 1);
     size_t          used    = 0;
-    for (size_t s = 0; s < count; s++) {
-        bool referenced = false;
-        for (size_t d = 0; !referenced && d < flows->dests.len; d++) {
-            const flow_dest_t *dest = &flows->dests.data[d];
-            referenced = bit_has(&dest->data, (uint32_t)s)
-                || bit_has(&dest->control, (uint32_t)s)
-                || bit_has(&dest->alias, (uint32_t)s)
-                || bit_has(&dest->copy, (uint32_t)s);
+    // The sources some destination draws on: every kind of flow into every
+    // destination, in one set.
+    flow_bits_t referenced = core_list_new(uint64_t);
+    for (size_t d = 0; d < flows->dests.len; d++) {
+        const flow_dest_t *dest  = &flows->dests.data[d];
+        const flow_bits_t *kinds[] = {&dest->data, &dest->control,
+                                      &dest->alias, &dest->copy};
+        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+            while (referenced.len < kinds[k]->len)
+                core_list_push(referenced, UINT64_C(0));
+            for (size_t w = 0; w < kinds[k]->len; w++)
+                referenced.data[w] |= kinds[k]->data[w];
         }
-        if (!referenced) continue;
+    }
+    for (size_t s = 0; s < count; s++) {
+        if (!bit_has(&referenced, (uint32_t)s)) continue;
         sources[used].index = s;
         put_path(&sources[used].bytes, texts, types, flows->sources.data[s]);
         used++;
@@ -221,6 +230,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         core_buffer_append(out, dests[k].bytes.data, dests[k].bytes.byte_len);
     for (size_t k = 0; k < used; k++) core_buffer_release(&sources[k].bytes);
     for (size_t k = 0; k < kept; k++) core_buffer_release(&dests[k].bytes);
+    core_list_free(referenced);
     core_free(sources);
     core_free(dests);
     core_free(rank);

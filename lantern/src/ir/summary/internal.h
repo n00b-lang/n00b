@@ -112,7 +112,11 @@ struct ir_summary_t {
     const uint8_t             *encoded;
     size_t                     encoded_size;
     ir_summary_resolver_t      resolver;
+    // points_to_content's answer once the summary is final (see
+    // stamp_component).
+    uint64_t                   points_to;
     bool                       hashed;
+    bool                       points_hashed;
     bool                       stored;
     bool                       proof_free;
     bool                       bookkept;

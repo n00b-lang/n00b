@@ -168,7 +168,7 @@ entry_cell(pt_entry_t *entry, ir_spath_t path)
     path.flags = 0;
     size_t cell = 0;
     while (cell < entry->cells.len
-           && compare_paths(&entry->cells.data[cell], &path))
+           && !same_spath(&entry->cells.data[cell], &path))
         cell++;
     if (cell == entry->cells.len) core_list_push(entry->cells, path);
     return cell;

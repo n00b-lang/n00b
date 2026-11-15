@@ -690,7 +690,7 @@ note_external_write(pt_t *pt, const pt_loc_t *at, const pt_set_t *values)
             pt_external_writes_t *writes = external_writes_of(pt, key, true);
             for (size_t w = 0; site == UINT32_MAX && w < writes->len; w++)
                 if (same_object(&writes->data[w].at, at)
-                    && !compare_paths(&writes->data[w].at.path, &at->path))
+                    && same_spath(&writes->data[w].at.path, &at->path))
                     site = writes->data[w].site;
             if (site == UINT32_MAX) {
                 pt->nodes++;
@@ -957,7 +957,10 @@ pt_publish(pt_t *pt, const pt_set_t *values, const pt_loc_t *at)
     for (size_t i = 0; i < values->len; i++) {
         const pt_item_t *value = &values->data[i];
         if (value->flow != PT_SAME) continue;
-        set_add(pt, &pt->published, *value);
+        // Adding an item the set already holds changes nothing; most stores
+        // publish the same values again, so skip the canonical add for them.
+        if (!set_holds(&pt->published, value))
+            set_add(pt, &pt->published, *value);
         if (value->loc.site == PT_EXTERNAL) continue;
         pt_loc_t alias = *at;
         loc_extend(pt, &alias, value->steps, value->depth, value->deep);

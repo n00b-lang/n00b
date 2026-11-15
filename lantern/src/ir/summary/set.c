@@ -285,12 +285,75 @@ step_bound(const pt_set_t *set, size_t low, size_t high, uint32_t at,
     return low;
 }
 
+// Whether step `at` of `item`'s place is past `step` (or at it, unless
+// `upper`): the predicate step_bound searches for.
 static bool
-set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
-           size_t *high)
+step_past(const pt_item_t *item, uint32_t at, core_string_t step, bool upper)
+{
+    int order = step_order(item->loc.path.steps[at], step);
+    return order > 0 || (!upper && !order);
+}
+
+// step_bound for a bound expected near `low`: gallop up from it.
+static size_t
+step_bound_near_low(const pt_set_t *set, size_t low, size_t high,
+                    uint32_t at, core_string_t step, bool upper)
+{
+    size_t span = 1;
+    while (low + span <= high
+           && !step_past(&set->data[low + span - 1], at, step, upper)) {
+        low  += span;
+        span *= 2;
+    }
+    return step_bound(set, low, low + span <= high ? low + span - 1 : high,
+                      at, step, upper);
+}
+
+// step_bound for a bound expected near `high`: gallop down from it.
+static size_t
+step_bound_near_high(const pt_set_t *set, size_t low, size_t high,
+                     uint32_t at, core_string_t step, bool upper)
+{
+    size_t span = 1;
+    while (high - low >= span
+           && step_past(&set->data[high - span], at, step, upper)) {
+        high -= span;
+        span *= 2;
+    }
+    return step_bound(set, high - low >= span ? high - span + 1 : low, high,
+                      at, step, upper);
+}
+
+// The end of the run of items on `loc`'s object that starts at `start`:
+// object runs are mostly short, so gallop rather than search the whole set.
+static size_t
+object_end(const pt_set_t *set, const pt_loc_t *loc, size_t start)
+{
+    size_t low = start, step = 1;
+    while (low + step <= set->len
+           && !object_order(&set->data[low + step - 1].loc, loc)) {
+        low  += step;
+        step *= 2;
+    }
+    size_t high = low + step <= set->len ? low + step - 1 : set->len;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (!object_order(&set->data[middle].loc, loc)) low = middle + 1;
+        else high = middle;
+    }
+    return low;
+}
+
+// Finds whether `set` covers `item`; if not, [low, high) bounds the items
+// `item` may cover, and [first, last) the items on `item`'s object.
+static bool
+set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
+              size_t *high, size_t *first, size_t *last)
 {
     size_t start = object_bound(set, &item->loc, false);
-    size_t end   = object_bound(set, &item->loc, true);
+    size_t end   = object_end(set, &item->loc, start);
+    *first = start;
+    *last  = end;
     *low  = start;
     *high = end;
     if (end - start <= SET_SCAN) {
@@ -317,9 +380,10 @@ set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
                  && step_eq(set->data[i].loc.path.steps[k], value_step); i++)
                 if (item_covers(&set->data[i], item)) return true;
         }
-        from = step_bound(set, exact, to, k, path->steps[k], false);
-        to   = step_bound(set, from, to, k, path->steps[k], true);
-    }
+        // The items sharing this step are most of the range, so its ends
+        // are near the range's.
+        from = step_bound_near_low(set, exact, to, k, path->steps[k], false);
+        to   = step_bound_near_high(set, from, to, k, path->steps[k], true);    }
     bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);
     bool full = from < to && set->data[from].loc.path.depth >= path->depth;
     bool pointee = wide && k == path->depth && k
@@ -327,6 +391,14 @@ set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
     *low  = pointee ? below : from;
     *high = pointee ? outer : !full ? from : wide ? to : exact;
     return false;
+}
+
+static bool
+set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
+           size_t *high)
+{
+    size_t first = 0, last = 0;
+    return set_lookup_at(set, item, low, high, &first, &last);
 }
 
 static int
@@ -368,8 +440,8 @@ drop_covered(pt_set_t *set, const pt_item_t *item, size_t low, size_t high)
 static bool
 insert_item(pt_set_t *set, const pt_item_t *item)
 {
-    size_t low = 0, high = 0;
-    if (set_lookup(set, item, &low, &high)) return false;
+    size_t low = 0, high = 0, first = 0, last = 0;
+    if (set_lookup_at(set, item, &low, &high, &first, &last)) return false;
     bool same = item->flow == PT_SAME;
     if (same && item->kind == PT_ADDRESS) {
         pt_item_t reach = *item;
@@ -387,13 +459,14 @@ insert_item(pt_set_t *set, const pt_item_t *item)
         size_t from = 0, to = 0;
         set_lookup(set, &address, &from, &to);
         drop_covered(set, item, from, to);
-        set_lookup(set, item, &low, &high);
+        set_lookup_at(set, item, &low, &high, &first, &last);
     }
+    size_t before = set->len;
     drop_covered(set, item, low, high);
-    size_t at = 0, top = set->len;
+    size_t at = first, top = last - (before - set->len);
     while (at < top) {
         size_t middle = at + (top - at) / 2;
-        if (set_order(&set->data[middle], item) < 0) at = middle + 1;
+        if (item_order(&set->data[middle], item) < 0) at = middle + 1;
         else top = middle;
     }
     core_list_push(*set, *item);

@@ -141,7 +141,7 @@ static bool
 resolved_eq(const void *a, const void *b)
 {
     const pt_loc_t *x = a, *y = b;
-    return x->site == y->site && !compare_paths(&x->path, &y->path);
+    return x->site == y->site && same_spath(&x->path, &y->path);
 }
 
 static core_hash_value_t

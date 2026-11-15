@@ -6,6 +6,7 @@ typedef struct {
 } step_run_t;
 
 static int  compare_paths(const ir_spath_t *a, const ir_spath_t *b);
+static bool same_spath(const ir_spath_t *a, const ir_spath_t *b);
 
 static const core_string_t element_step = CORE_STRING_STATIC("[]");
 static const core_string_t value_step   = CORE_STRING_STATIC("__value");
@@ -402,6 +403,22 @@ compare_paths(const ir_spath_t *a, const ir_spath_t *b)
     return a->flags == b->flags ? 0 : a->flags < b->flags ? -1 : 1;
 }
 
+// Whether compare_paths(a, b) == 0, without ordering the steps' text.
+static bool
+same_spath(const ir_spath_t *a, const ir_spath_t *b)
+{
+    if (a->depth != b->depth || a->flags != b->flags
+        || compare_path_roots(a, b))
+        return false;
+    if (a->steps == b->steps) return true;
+    for (uint32_t s = 0; s < a->depth; s++)
+        if ((a->steps[s].data != b->steps[s].data
+             || a->steps[s].u8_bytes != b->steps[s].u8_bytes)
+            && !core_string_eq(a->steps[s], b->steps[s]))
+            return false;
+    return true;
+}
+
 static bool
 spath_covers(const ir_spath_t *a, const ir_spath_t *b)
 {
@@ -438,7 +455,7 @@ spath_hash(void *key)
 static bool
 spath_eq(const void *a, const void *b)
 {
-    return !compare_paths(a, b);
+    return same_spath(a, b);
 }
 
 int
