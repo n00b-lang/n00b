@@ -1,0 +1,17 @@
+# The bare basics of sys.os: writing bytes, the clock, address waits and
+# the calling thread. builtin imports it, so everything it brings in is
+# compiled with builtin: keep it to what builtin already needs.
+
+import internal.errno
+import internal.os.write
+import internal.os.clock
+import internal.os.futex
+import internal.os.thread
+
+package sys.os.kernel {
+    export internal.errno
+    export internal.os.write
+    export internal.os.clock
+    export internal.os.futex
+    export internal.os.thread
+}

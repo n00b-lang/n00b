@@ -125,6 +125,14 @@ let packed = compress(data, 6)
   (`Ref[byte]?` when nullable), so the GC keeps the object alive through
   the call; a pointer result is its address as `uint`. A declaration whose
   facts include `unknown` can only be bound this way.
+- The compiler assumes a raw binding (or a `syscall`) both reads and
+  writes through each pointer argument. A mode written in the contract
+  narrows that: `in` means the callee only reads (`write`'s buffer), and
+  `out` means it only fills the memory without reading it (`read`'s
+  buffer, a `timespec` result). Passing `ref x` to an `out` pointer, even
+  through `unsafe_cast`, sets all of `x`, so `x` need not be set before
+  the call; any other pointer argument is a read of `x`, and `x` must be
+  fully set first.
 - A declaration that reaches an `unknown` fact and is neither hidden nor
   raw is E0508, and the compile fails.
 
@@ -309,10 +317,16 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: Ffi_Error
   binaries started by the runtime, and the n00b pool allocator
   (`sys.pool`) serves C's `malloc` family for shims. A contract whose C
   code needs libc says `link "c"`, as does a contract for any system
-  library built against glibc. The program is then an ordinary libc
-  program, linked against the n00b runtime built for libc, and so is its
-  compile-time runner. On other platforms the C library is always linked,
-  so `link "c"` changes nothing.
+  library built against glibc. The program then links libc dynamically,
+  but it is still started by the runtime, with the same runtime: the
+  dynamic loader sets libc up before the runtime's `_start`, and the
+  runtime's `malloc` family stands in for libc's. Threads the runtime
+  starts have no libc thread state, so a shim or `raw` binding of such a
+  contract fails with a runtime error when called from one; call it from
+  the main thread or from a thread C code started. When a program that
+  links libc exits from such a thread, it exits through libc's `exit`, so
+  C code's buffered output is flushed. On other platforms the C library is
+  always linked, so `link "c"` changes nothing.
 
 ### 7.1 System calls
 

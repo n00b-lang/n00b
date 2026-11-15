@@ -2855,6 +2855,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         .lex = lex,
         .parse = parse,
     };
+    n00bb_interface_metadata_index_build(&loader.interfaces);
     pthread_t *worker_threads = worker_limit
         ? core_alloc_array(pthread_t, worker_limit) : nullptr;
     size_t worker_count = 0;
@@ -3011,7 +3012,11 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 core_translation_unit_t *unit = core_work_job_result(
                     queue, requests->ordered.data[i].job);
                 if (!semantic_annotate_closure(grammar, types, unit,
-                        finish_semantic_unit, &loader.interfaces))
+                        &(n00bb_semantic_hooks_t){
+                            .restore = restore_semantic_unit,
+                            .finish = finish_semantic_unit,
+                            .context = &loader.interfaces,
+                        }))
                     success = false;
             }
         }
@@ -3045,6 +3050,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         pthread_join(worker_threads[i], nullptr);
     core_free(worker_threads);
     pthread_mutex_destroy(&requests_lock);
+    n00bb_interface_metadata_index_free(&loader.interfaces);
 
     for (size_t i = 0; i < requests->ordered.len; i++) {
         core_translation_unit_t *unit = core_work_job_result(
@@ -5811,7 +5817,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     n00bb_cache_refreeze_modules(cache, &refreeze);
     if (refreeze.byte_len) {
         n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_start changes the state of cached modules"));
+            "comptime_main changes the state of cached modules"));
         restart_excluding_cached(argv, argv0, &refreeze);
     }
     core_buffer_release(&refreeze);

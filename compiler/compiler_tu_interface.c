@@ -49,6 +49,73 @@ read_u128_le(const uint8_t *data)
     return value;
 }
 
+struct n00bb_metadata_index {
+    core_dict_t entries;
+};
+
+typedef struct {
+    const uint8_t *data;
+    size_t size;
+} metadata_found_t;
+
+static void
+metadata_index_key(core_buffer_t *key, th_env_metadata_owner_t owner_kind,
+                   core_string_t owner_name, core_string_t name,
+                   uint32_t version)
+{
+    core_buffer_printf(key, "%u:%u:%zu:", (unsigned)owner_kind,
+                       (unsigned)version, (size_t)owner_name.u8_bytes);
+    core_buffer_append_string(key, owner_name);
+    core_buffer_putc(key, ':');
+    core_buffer_append_string(key, name);
+}
+
+void
+n00bb_interface_metadata_index_build(n00bb_interface_context_t *loader)
+{
+    if (!loader || loader->metadata_index) return;
+    n00bb_metadata_index_t *index = core_alloc(n00bb_metadata_index_t);
+    core_dict_init_string(&index->entries);
+    for (size_t e = 0; e < loader->linked_interface_count; e++) {
+        const th_env *environment = loader->linked_interfaces[e];
+        for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, i, &metadata)) continue;
+            core_buffer_t key = {0};
+            metadata_index_key(&key, metadata.owner_kind,
+                               metadata.owner_name, metadata.key,
+                               metadata.version);
+            core_string_t text = core_buffer_string(&key);
+            // The first interface that has an entry wins, as in a scan.
+            if (core_dict_contains(&index->entries, &text)) {
+                core_buffer_release(&key);
+                continue;
+            }
+            metadata_found_t *found = core_alloc(metadata_found_t);
+            *found = (metadata_found_t){.data = metadata.data,
+                                        .size = metadata.size};
+            core_dict_put(&index->entries, core_dict_string_key_copy(text),
+                          found);
+            core_buffer_release(&key);
+        }
+    }
+    loader->metadata_index = index;
+}
+
+void
+n00bb_interface_metadata_index_free(n00bb_interface_context_t *loader)
+{
+    n00bb_metadata_index_t *index = loader ? loader->metadata_index : nullptr;
+    if (!index) return;
+    core_dict_foreach(&index->entries, entry) {
+        core_dict_string_key_free(entry->key);
+        core_free(entry->value);
+    }
+    core_dict_free(&index->entries);
+    core_free(index);
+    loader->metadata_index = nullptr;
+}
+
 const uint8_t *
 interface_owned_metadata(const n00bb_interface_context_t *loader,
                          th_env_metadata_owner_t owner_kind,
@@ -56,6 +123,17 @@ interface_owned_metadata(const n00bb_interface_context_t *loader,
                          uint32_t version, size_t *size)
 {
     if (size) *size = 0;
+    if (loader && loader->metadata_index) {
+        core_buffer_t probe = {0};
+        metadata_index_key(&probe, owner_kind, owner_name, key, version);
+        core_string_t text = core_buffer_string(&probe);
+        metadata_found_t *found = core_dict_get(
+            &loader->metadata_index->entries, &text, nullptr);
+        core_buffer_release(&probe);
+        if (!found) return nullptr;
+        if (size) *size = found->size;
+        return found->data;
+    }
     for (size_t e = 0; loader && e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
         for (size_t i = 0; i < th_env_metadata_count(environment); i++) {
@@ -2080,13 +2158,24 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     CORE_STRING_STATIC("n00b.record-layout"), 1,
                     &layout_size);
                 if (layout) {
-                    n00bb_record_layout_request_t *request = layout_size == 1
-                        && layout[0] <= N00BB_RECORD_C
+                    // The policy, then for `align(N)` N in 4 little-endian
+                    // bytes.
+                    uint32_t alignment = layout_size == 5
+                        ? (uint32_t)layout[1] | (uint32_t)layout[2] << 8
+                            | (uint32_t)layout[3] << 16
+                            | (uint32_t)layout[4] << 24
+                        : 0;
+                    bool well_formed = layout[0] <= N00BB_RECORD_C
+                        && (layout_size == 1
+                            || (layout_size == 5 && alignment
+                                && !(alignment & (alignment - 1))));
+                    n00bb_record_layout_request_t *request = well_formed
                         ? core_arena_alloc(&state->semantic_values,
                                            sizeof(*request)) : nullptr;
                     if (request)
                         *request = (n00bb_record_layout_request_t){
                             .policy = (n00bb_record_policy_t)layout[0],
+                            .alignment_bytes = alignment,
                         };
                     if (!request || !parse_sym_set_binding(symbol,
                             CORE_STRING_STATIC("n00bb.record-layout-request"),
@@ -2279,8 +2368,11 @@ restore_interface_litmod_aliases(n00bb_interface_context_t *loader,
     return at == size;
 }
 
+// Declares a cached module's symbols from its interface. Every module of an
+// import cycle is restored before any of them resolves its package exports,
+// since a package can export a whole module from later in the cycle.
 bool
-finish_semantic_unit(void *context, core_translation_unit_t *unit)
+restore_semantic_unit(void *context, core_translation_unit_t *unit)
 {
     n00bb_interface_context_t *loader = context;
     n00bb_tu_state_t *state = tu_state(unit);
@@ -2313,6 +2405,14 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
             return false;
         }
     }
+    return true;
+}
+
+bool
+finish_semantic_unit(void *context, core_translation_unit_t *unit)
+{
+    (void)context;
+    n00bb_tu_state_t *state = tu_state(unit);
     if (!initialize_unit_package_interfaces(unit)
         || ((!state->interface_module || state->package_manifest_restored)
             && !populate_unit_package_interfaces(unit)))

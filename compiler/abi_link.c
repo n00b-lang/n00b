@@ -4477,6 +4477,44 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                 n00bb_abi_object_table(view, table->kind);
             if (!source_table) continue;
             valid = source_table->record_bytes == table->record_bytes;
+            if (valid && link_kind_is_stream(table->kind)
+                && table->kind != N00B_ABI_TABLE_U32_STREAM) {
+                // A stream's rows land in runs of consecutive final rows:
+                // each run is copied at once.
+                const uint8_t *rows = source_table->record_count
+                    ? n00bb_abi_object_row(view, table->kind, 0) : nullptr;
+                size_t width = table->record_bytes;
+                for (uint32_t local = 0; valid
+                     && local < source_table->record_count;) {
+                    uint32_t final;
+                    valid = n00bb_abi_index_plan_map(plan, input,
+                        table->kind, local, &final)
+                        && final < table->record_count && rows;
+                    if (!valid) break;
+                    uint32_t run = 0;
+                    for (uint32_t next = final; valid
+                         && local + run < source_table->record_count;
+                         run++, next++) {
+                        uint32_t mapped;
+                        if (!n00bb_abi_index_plan_map(plan, input,
+                                table->kind, local + run, &mapped)
+                            || mapped != next) break;
+                        valid = next < table->record_count
+                            && !origins[ti][next].present;
+                        if (valid)
+                            origins[ti][next] = (n00bb_abi_row_origin_t){
+                                input, local + run, true};
+                    }
+                    if (!valid || !run) {
+                        valid = false;
+                        break;
+                    }
+                    memcpy(table->records + (size_t)final * width,
+                           rows + (size_t)local * width, (size_t)run * width);
+                    local += run;
+                }
+                continue;
+            }
             for (uint32_t local = 0; valid
                  && local < source_table->record_count; local++) {
                 uint32_t final;
@@ -4511,6 +4549,10 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                         table->kind, local), table->record_bytes);
                 }
                 else {
+                    // Only a type row can replace an earlier input's copy;
+                    // any other row already placed is kept as it is.
+                    if (origin->present && table->kind != N00B_ABI_TABLE_TYPE)
+                        continue;
                     valid = n00bb_abi_remap_row(selected, plan, input,
                         table->kind, local, scratch, table->record_bytes,
                         &stream);

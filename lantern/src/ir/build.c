@@ -2352,14 +2352,6 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
                           "argument"));
             return;
         }
-        if (want == IR_OPD_ARG && o->text.data
-            && core_string_eq(o->text, CORE_STRING_STATIC("out"))) {
-            if (!ir_instr_operand_out(in))
-                bfail(b, o->span,
-                      CORE_STRING_STATIC(
-                          "out is only valid as a call argument"));
-            return;
-        }
         if (want == IR_OPD_TYPE) {
             th_type *t = ir_type_parse(b->m, o->text);
 
@@ -2548,9 +2540,12 @@ static void *r_func(parse_reduce_t *r)
                 return nullptr;
             }
         } else if (p && !p->neg && p->refkind == IR_VAL_INSTR && p->type) {
-            if ((th_mode)p->uval != TH_OUT) {
-                ir_param_add(f, p->text, p->type);
-            }
+            // An `out` or `inout` parameter's value is a reference to the
+            // caller's place; the signature keeps the referent type.
+            ir_param_add(f, p->text,
+                         th_mode_by_reference((th_mode)p->uval)
+                             ? th_ind(ir_module_types(b->m), 0, p->type)
+                             : p->type);
         } else if (p && !p->neg && p->refkind == IR_VAL_GLOBAL && p->type) {
             if (!ir_kwparam_add(f, p->text, p->type)) {
                 bfail(b, p->span,
@@ -2564,14 +2559,6 @@ static void *r_func(parse_reduce_t *r)
     for (size_t i = 0; i < pv.len; i++) {
         ib_node *p = pv.data[i];
         if (!p || !p->text.data || !p->l1) continue;
-        if (!p->neg && p->refkind == IR_VAL_INSTR
-            && (th_mode)p->uval == TH_OUT) {
-            if (!p->l1->n) continue;
-            bfail(b, p->span,
-                  CORE_STRING_STATIC(
-                      "an out parameter has no value to annotate"));
-            return nullptr;
-        }
         ir_value_t *value = ir_value_find(f, p->text);
         if (!value) {
             bfail(b, p->span,

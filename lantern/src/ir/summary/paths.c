@@ -6,6 +6,7 @@ typedef struct {
 } step_run_t;
 
 static int  compare_paths(const ir_spath_t *a, const ir_spath_t *b);
+static bool same_spath(const ir_spath_t *a, const ir_spath_t *b);
 
 static const core_string_t element_step = CORE_STRING_STATIC("[]");
 static const core_string_t value_step   = CORE_STRING_STATIC("__value");
@@ -128,6 +129,17 @@ step_eq(core_string_t a, core_string_t b)
     if (a.data == b.data) return a.u8_bytes == b.u8_bytes;
     return a.u8_bytes == b.u8_bytes && a.u8_bytes
         && a.data[0] == b.data[0] && !memcmp(a.data, b.data, a.u8_bytes);
+}
+
+// How deep `path` reaches below the place it names. A pointer parameter's
+// place is the object it refers to, so the step through the pointer to that
+// object is not below it.
+static uint32_t
+object_depth(const ir_spath_t *path)
+{
+    return path->root == IR_SPLACE_PARAM && path->depth
+            && step_eq(path->steps[0], value_step)
+        ? path->depth - 1 : path->depth;
 }
 
 static bool
@@ -391,6 +403,22 @@ compare_paths(const ir_spath_t *a, const ir_spath_t *b)
     return a->flags == b->flags ? 0 : a->flags < b->flags ? -1 : 1;
 }
 
+// Whether compare_paths(a, b) == 0, without ordering the steps' text.
+static bool
+same_spath(const ir_spath_t *a, const ir_spath_t *b)
+{
+    if (a->depth != b->depth || a->flags != b->flags
+        || compare_path_roots(a, b))
+        return false;
+    if (a->steps == b->steps) return true;
+    for (uint32_t s = 0; s < a->depth; s++)
+        if ((a->steps[s].data != b->steps[s].data
+             || a->steps[s].u8_bytes != b->steps[s].u8_bytes)
+            && !core_string_eq(a->steps[s], b->steps[s]))
+            return false;
+    return true;
+}
+
 static bool
 spath_covers(const ir_spath_t *a, const ir_spath_t *b)
 {
@@ -427,7 +455,7 @@ spath_hash(void *key)
 static bool
 spath_eq(const void *a, const void *b)
 {
-    return !compare_paths(a, b);
+    return same_spath(a, b);
 }
 
 int

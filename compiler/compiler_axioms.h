@@ -51,10 +51,15 @@ bool                 n00bb_axiom_function_has(const ir_func_t *function,
 void                 n00bb_axiom_note_pure_native(core_string_t symbol);
 void                 n00bb_axiom_note_foreign_native(core_string_t symbol,
                                                      core_string_t name,
-                                                     uint32_t effects);
+                                                     uint32_t effects,
+                                                     uint16_t read_only,
+                                                     uint16_t write_only);
 bool                 n00bb_axiom_pure_native(const ir_func_t *function);
 bool                 n00bb_axiom_foreign_native(const ir_func_t *function,
                                                 uint32_t *effects);
+bool                 n00bb_axiom_foreign_access(const ir_func_t *function,
+                                                uint16_t *read_only,
+                                                uint16_t *write_only);
 core_string_t        n00bb_axiom_foreign_name(const ir_func_t *function);
 
 #endif

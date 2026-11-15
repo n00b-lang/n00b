@@ -1,0 +1,84 @@
+# The size of a memory page.
+
+when target_os() == "linux" {
+    [-
+    library n00b
+
+    # An entry of the auxiliary vector the kernel passed the program, which
+    # the runtime's start code keeps; 0 when there's none.
+    fn n00b_linux_auxv(type: usize) -> usize
+      effects none
+
+    binding {
+        raw "n00b_linux_auxv"
+    }
+    -]'ffi
+
+    # The auxiliary vector's page size entry, AT_PAGESZ.
+    private const auxv_page_size: u64 = 6
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn sysconf(name: c_int) -> c_long
+      effects env
+
+    binding {
+        raw "sysconf"
+    }
+    -]'ffi
+
+    private const sysconf_page_size: i32 = 29
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn GetSystemInfo(info: out *u8)
+      effects none
+
+    binding {
+        name GetSystemInfo "get_system_info"
+        raw "GetSystemInfo"
+    }
+    -]'ffi
+
+    # Windows' SYSTEM_INFO.
+    record Windows_System_Info layout(c) {
+        architecture:           u32
+        page_size:              u32
+        minimum_address:        u64
+        maximum_address:        u64
+        processor_mask:         u64
+        processors:             u32
+        processor_type:         u32
+        allocation_granularity: u32
+        processor_level:        u16
+        processor_revision:     u16
+    }
+
+    # GetSystemInfo fills all of it.
+    func windows_system_info() -> Windows_System_Info {
+        var info: Windows_System_Info
+        get_system_info_raw(unsafe_cast[Ref[byte]] (ref info))
+        return info
+    }
+}
+
+# The size of a memory page, or 0 if it can't be found.
+func page_size() -> uint {
+    when target_os() == "linux" {
+        return n00b_linux_auxv_raw(cast[uint](auxv_page_size))
+    } else when target_os() == "macos" {
+        let size: int = sysconf_raw(sysconf_page_size)
+        if size > 0 {
+            return cast[uint](size)
+        }
+        return 0
+    } else when target_os() == "windows" {
+        return cast[uint](windows_system_info().page_size)
+    } else {
+        return 0
+    }
+}

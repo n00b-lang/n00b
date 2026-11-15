@@ -168,16 +168,21 @@ trace_need(trace_source_t *source, uint32_t type_index)
                     ir_module_target(source->module)) : nullptr;
             th_type *definition = layout
                 ? ir_type_definition(source->module, actual) : nullptr;
-            if (!definition || th_kind_of(definition) != TH_RECORD) {
+            if (!definition || th_kind_of(definition) != TH_RECORD
+                || layout->n_members != th_record_len(definition)) {
                 result = TRACE_UNKNOWN;
                 break;
             }
             source->need[type_index] = TRACE_ACTIVE;
-            for (size_t i = 0; i < th_record_len(definition); i++) {
-                const th_member *member = th_record_member(definition, i);
-                th_type *child_type = member && member->type
-                    ? th_apply_subst(ir_module_types(source->module),
-                                     member->type) : nullptr;
+            // The owner's layout, not the declared types: an inline array's
+            // declared type is `Array[T]`, but its storage is the elements.
+            for (size_t i = 0; i < layout->n_members; i++) {
+                const ir_final_member_layout_t *member = &layout->members[i];
+                th_type *stored = member->inline_element_count
+                    ? member->inline_element_type : member->type;
+                th_type *child_type = stored
+                    ? th_apply_subst(ir_module_types(source->module), stored)
+                    : nullptr;
                 uint32_t child_index = 0;
                 trace_need_t child = child_type
                     && n00bb_abi_type_index_find(source->index, child_type,

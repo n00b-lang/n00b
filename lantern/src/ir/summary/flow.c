@@ -112,6 +112,18 @@ kind_bits(flow_dest_t *dest, ir_sflow_kind_t kind)
          : kind == IR_SFLOW_ALIAS ? &dest->alias : &dest->copy;
 }
 
+static uint64_t
+dest_word(flow_dest_t *dest, size_t w)
+{
+    // Word `w` of every kind of flow into `dest`.
+    const flow_bits_t *kinds[] = {&dest->data, &dest->control, &dest->alias,
+                                  &dest->copy};
+    uint64_t any = 0;
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++)
+        if (w < kinds[k]->len) any |= kinds[k]->data[w];
+    return any;
+}
+
 static uint32_t
 dest_count(const flow_dest_t *dest)
 {
@@ -179,16 +191,6 @@ canonical_sources(flow_table_t *table, const ir_spath_t *from,
 }
 
 static void
-flow_put(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
-         ir_sflow_kind_t kind)
-{
-    ir_spath_t   key_to = canonical_path(to);
-    uint32_t     source = flow_source(table, from);
-    flow_dest_t *dest   = flow_dest(table, &key_to);
-    bit_set(kind_bits(dest, kind), source);
-}
-
-static void
 flow_add(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
          ir_sflow_kind_t kind)
 {
@@ -219,13 +221,35 @@ same_flow_bits(const flow_table_t *a, const flow_bits_t *have,
 static void
 join_flows(flow_table_t *into, const flow_table_t *from)
 {
+    // As flow_put for each flow, in the same order, but each source and
+    // destination is looked up once rather than once per flow.
+    uint32_t  count  = (uint32_t)from->sources.len;
+    uint32_t *mapped = core_alloc_array(uint32_t, count + 1);
+    for (uint32_t s = 0; s < count; s++) mapped[s] = UINT32_MAX;
     for (size_t d = 0; d < from->dests.len; d++) {
-        flow_dest_t *dest = &from->dests.data[d];
-        for (uint32_t s = 0; s < from->sources.len; s++)
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++)
-                if (bit_has(kind_bits(dest, kind), s))
-                    flow_put(into, dest->to, from->sources.data[s], kind);
+        flow_dest_t *source = &from->dests.data[d];
+        flow_dest_t *dest   = nullptr;
+        size_t       words  = (count + 63) / 64;
+        for (size_t w = 0; w < words; w++) {
+            uint64_t any = dest_word(source, w);
+            while (any) {
+                uint32_t s = (uint32_t)(w * 64 + (uint32_t)__builtin_ctzll(any));
+                any &= any - 1;
+                if (s >= count) break;
+                for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
+                    if (!bit_has(kind_bits(source, kind), s)) continue;
+                    if (mapped[s] == UINT32_MAX)
+                        mapped[s] = flow_source(into, from->sources.data[s]);
+                    if (!dest) {
+                        ir_spath_t key = canonical_path(source->to);
+                        dest = flow_dest(into, &key);
+                    }
+                    bit_set(kind_bits(dest, kind), mapped[s]);
+                }
+            }
+        }
     }
+    core_free(mapped);
 }
 
 static void
@@ -407,20 +431,25 @@ prune_flows(flow_table_t *table)
                                 .control = core_list_new(uint64_t),
                                 .alias   = core_list_new(uint64_t),
                                 .copy    = core_list_new(uint64_t)};
-        for (uint32_t s = 0; s < source_count; s++) {
-            bool copy = bit_has(&dest->copy, s);
-            bool data = copy || bit_has(&dest->data, s);
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
-                if (!bit_has(kind_bits(dest, kind), s)
-                    || (kind == IR_SFLOW_CONTROL && data)
-                    || (kind == IR_SFLOW_DATA && copy)
-                    || flow_covered(table, dests, sources, d, s, kind)
-                    || pointer_covered(table, dests, d, s, kind))
-                    continue;
-                bit_set(kind_bits(&kept[d], kind), s);
-                used[s] = true;
+        for (size_t w = 0; w < (source_count + 63) / 64; w++)
+            for (uint64_t any = dest_word(dest, w); any; any &= any - 1) {
+                uint32_t s = (uint32_t)(w * 64
+                                        + (uint32_t)__builtin_ctzll(any));
+                if (s >= source_count) break;
+                bool copy = bit_has(&dest->copy, s);
+                bool data = copy || bit_has(&dest->data, s);
+                for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY;
+                     kind++) {
+                    if (!bit_has(kind_bits(dest, kind), s)
+                        || (kind == IR_SFLOW_CONTROL && data)
+                        || (kind == IR_SFLOW_DATA && copy)
+                        || flow_covered(table, dests, sources, d, s, kind)
+                        || pointer_covered(table, dests, d, s, kind))
+                        continue;
+                    bit_set(kind_bits(&kept[d], kind), s);
+                    used[s] = true;
+                }
             }
-        }
     }
     uint32_t     *dest_order   = sorted_paths(to, dest_count);
     uint32_t     *source_order = sorted_paths(table->sources.data,
@@ -435,11 +464,17 @@ prune_flows(flow_table_t *table)
     for (uint32_t i = 0; i < dest_count; i++) {
         uint32_t     d    = dest_order[i];
         flow_dest_t *dest = nullptr;
-        for (uint32_t s = 0; s < source_count; s++)
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
-                if (!bit_has(kind_bits(&kept[d], kind), s)) continue;
-                if (!dest) dest = flow_dest(&pruned, to[d]);
-                bit_set(kind_bits(dest, kind), renumber[s]);
+        for (size_t w = 0; w < (source_count + 63) / 64; w++)
+            for (uint64_t any = dest_word(&kept[d], w); any; any &= any - 1) {
+                uint32_t s = (uint32_t)(w * 64
+                                        + (uint32_t)__builtin_ctzll(any));
+                if (s >= source_count) break;
+                for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY;
+                     kind++) {
+                    if (!bit_has(kind_bits(&kept[d], kind), s)) continue;
+                    if (!dest) dest = flow_dest(&pruned, to[d]);
+                    bit_set(kind_bits(dest, kind), renumber[s]);
+                }
             }
     }
     for (uint32_t d = 0; d < dest_count; d++) {

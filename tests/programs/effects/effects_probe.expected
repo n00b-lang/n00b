@@ -8,13 +8,15 @@ sys.internal.env.args: () -> List[string]
   reads ?...
   traps explicit bounds unwrap arithmetic
 sys.internal.clock.now_ns: () -> uint
-  effects may_collect reads_clock
+  effects reads_clock
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
-  effects may_fail may_trap may_io may_collect reinterprets may_input reads_random
+  effects may_fail may_trap reinterprets reads_random
+  reads buffer
   reads+writes buffer.__value[]...
   traps explicit bounds arithmetic
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
-  effects may_fail may_trap may_allocate may_io may_collect allocates_direct reinterprets may_input reads_random
+  effects may_fail may_trap may_allocate may_collect allocates_direct reinterprets reads_random
+  reads+writes value
   traps explicit bounds arithmetic
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
@@ -31,7 +33,6 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads self.__value.index.slots.__value[]
   reads self.__value.entries.__value.storage.__value[]
   reads key...
-  reads builtin.hashing.secret.__value[]...
   escapes self referent
   traps explicit bounds unwrap arithmetic
   returns self.__value.entries.__value.storage.__value[].value
@@ -57,7 +58,6 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads self.__value.entries.__value.storage.__value[]...
   reads key...
   reads value...
-  reads builtin.hashing.secret.__value[]...
   escapes self referent
   escapes key address
   escapes value address
@@ -98,8 +98,8 @@ unicode.internal.properties.general_category: (char) -> Gc
   traps bounds
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
-  reads+writes self.data.__value[]
-  writes self.cap
+  reads+writes self.cap
   reads+writes self.data
-  writes self.len
+  reads+writes self.len
+  reads+writes self.data.__value[]
   traps bounds arithmetic

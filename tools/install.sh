@@ -199,12 +199,6 @@ stage_files() {
     cp "$COMPILER" "$STAGE/bin/n00b" || return 1
     cp "$BUILD/libn00b-abi-runtime.a" "$BUILD/libn00b-abi-runtime.bc" \
        "$BUILD/n00b-comptime.o" "$STAGE/lib/" || return 1
-    # Linux's runtime built against libc, for programs that link "c".
-    if [ -f "$BUILD/libn00b-abi-runtime-libc.a" ]; then
-        cp "$BUILD/libn00b-abi-runtime-libc.a" \
-           "$BUILD/libn00b-abi-runtime-libc.bc" \
-           "$BUILD/n00b-comptime-libc.o" "$STAGE/lib/" || return 1
-    fi
     for cross in "$BUILD"/*/libn00b-abi-runtime.a; do
         [ -f "$cross" ] || continue
         profile="$(basename "$(dirname "$cross")")"

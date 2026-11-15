@@ -1,0 +1,239 @@
+# Mapping and unmapping memory. The memory calls are the collector's: they
+# allocate nothing and take no locks, so they can run before a thread has
+# a mutator.
+
+bring address_at, address_ref from internal.os.support
+bring page_size from internal.os.page
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # Only a hint: the kernel doesn't touch memory at `address`.
+    syscall mmap(address: in ?u8, length: usize, protection: c_int,
+                 flags: c_int, fd: c_int, offset: isize) -> *u8
+      number 9 when arch == x86_64
+      number 222 when arch == aarch64
+      effects alloc
+    syscall munmap(address: *u8, length: usize) -> c_int
+      number 11 when arch == x86_64
+      number 215 when arch == aarch64
+      effects alloc
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    # PROT_READ | PROT_WRITE, and MAP_PRIVATE | MAP_ANONYMOUS.
+    private const map_read_write: i32 = 3
+    private const map_private_anonymous: i32 = 0x22
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    # The collector calls these, so they're raw: no shim, nothing allocated.
+    # Only a hint: nothing at `address` is touched.
+    fn mmap(address: in ?void, length: usize, protection: c_int, flags: c_int,
+            fd: c_int, offset: i64) -> own ?void release munmap
+      effects alloc
+    fn munmap(address: *void, length: usize) -> c_int
+      effects alloc
+
+    binding {
+        raw "mmap"
+        raw "munmap"
+    }
+    -]'ffi
+
+    # PROT_READ | PROT_WRITE, and MAP_PRIVATE | MAP_ANON.
+    private const map_read_write: i32 = 3
+    private const map_private_anonymous: i32 = 0x1002
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    # The collector calls these, so they're raw: no shim, nothing allocated.
+    # VirtualAlloc's address is only a hint, which it doesn't touch.
+    fn VirtualAlloc(address: in ?void, size: usize, kind: u32,
+                    protection: u32) -> own ?void release VirtualFree
+      effects alloc
+    fn VirtualFree(address: *void, size: usize, kind: u32) -> c_int
+      effects alloc
+    fn VirtualQuery(address: in *void, info: out *u8, length: usize) -> usize
+      effects none
+
+    binding {
+        name VirtualAlloc "virtual_alloc"
+        name VirtualFree "virtual_free"
+        name VirtualQuery "virtual_query"
+        raw "VirtualAlloc"
+        raw "VirtualFree"
+        raw "VirtualQuery"
+    }
+    -]'ffi
+
+    bring windows_system_info from internal.os.page
+
+    # Windows' MEMORY_BASIC_INFORMATION.
+    private record Windows_Memory_Info layout(c) {
+        base:               u64
+        allocation_base:    u64
+        allocation_protect: u32
+        partition:          u32
+        region_size:        u64
+        state:              u32
+        protection:         u32
+        kind:               u32
+        padding:            u32
+    }
+
+    # MEM_COMMIT | MEM_RESERVE, MEM_DECOMMIT, MEM_RELEASE and MEM_FREE.
+    private const memory_commit_reserve: u32 = 0x3000
+    private const memory_decommit: u32 = 0x4000
+    private const memory_release: u32 = 0x8000
+    private const memory_free: u32 = 0x10000
+    private const memory_committed: u32 = 0x1000
+    private const page_read_write: u32 = 4
+}
+
+# Maps `bytes` of zeroed, readable and writable memory; nil on failure.
+private func map_pages(bytes: uint) -> Ref[byte]? {
+    when target_os() == "linux" {
+        try {
+            return address_ref(mmap(nil, bytes, map_read_write,
+                map_private_anonymous, -1, 0)!)
+        } fail(failure) {
+            return nil
+        }
+    } else when target_os() == "macos" {
+        let address: uint = mmap_raw(nil, bytes, map_read_write,
+            map_private_anonymous, -1, 0)
+        # MAP_FAILED.
+        if address == ~cast[uint](0) {
+            return nil
+        }
+        return address_ref(address)
+    } else when target_os() == "windows" {
+        return address_ref(virtual_alloc_raw(nil, bytes,
+            memory_commit_reserve, page_read_write))
+    } else {
+        return nil
+    }
+}
+
+# Unmaps the `bytes` at `address`; 0, or -1 on failure.
+private func unmap_pages(address: Ref[byte], bytes: uint) -> i32 {
+    when target_os() == "linux" {
+        try {
+            _ = munmap(address, bytes)!
+            return 0
+        } fail(failure) {
+            return -1
+        }
+    } else when target_os() == "macos" {
+        if munmap_raw(address, bytes) != 0 {
+            return -1
+        }
+        return 0
+    } else when target_os() == "windows" {
+        # Decommits the pages, then releases the whole reservation once none
+        # of it is committed: Windows releases only whole reservations.
+        var info: Windows_Memory_Info = (base = 0, allocation_base = 0,
+            allocation_protect = 0, partition = 0, region_size = 0,
+            state = 0, protection = 0, kind = 0, padding = 0)
+        let size: uint = 48
+        if virtual_query_raw(address, unsafe_cast[Ref[byte]] (ref info),
+                size) == 0 or info.state == memory_free {
+            return -1
+        }
+        let base: uint = cast[uint](info.allocation_base)
+        if virtual_free_raw(address, bytes, memory_decommit) == 0 {
+            return -1
+        }
+        var cursor: uint = base
+        while virtual_query_raw(address_at(cursor),
+                unsafe_cast[Ref[byte]] (ref info), size) != 0
+                and cast[uint](info.allocation_base) == base {
+            if info.state == memory_committed {
+                return 0
+            }
+            cursor = cast[uint](info.base) + cast[uint](info.region_size)
+        }
+        if virtual_free_raw(address_at(base), 0, memory_release) == 0 {
+            return -1
+        }
+        return 0
+    } else {
+        return -1
+    }
+}
+
+# Maps `bytes` of zeroed memory aligned to `alignment`, a power of two or
+# 0 for page alignment; nil on failure.
+func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
+    if bytes == 0 {
+        return nil
+    }
+    if alignment == 0 {
+        return map_pages(bytes)
+    }
+    if (alignment & (alignment - 1)) != 0 {
+        return nil
+    }
+    let page: uint = page_size()
+    if page == 0 {
+        return nil
+    }
+    if alignment <= page {
+        return map_pages(bytes)
+    }
+    when target_os() == "windows" {
+        # Windows aligns every mapping to its allocation granularity.
+        if alignment > cast[uint](windows_system_info().allocation_granularity) {
+            return nil
+        }
+        return map_pages(bytes)
+    } else {
+        # Maps an extra `alignment` bytes, then unmaps what lies outside the
+        # aligned range.
+        let most: uint = ~cast[uint](0)
+        if bytes > most - alignment or bytes > most - page + 1 {
+            return nil
+        }
+        let rounded: uint = (bytes + page - 1) & ~(page - 1)
+        if rounded > most - alignment {
+            return nil
+        }
+        let mapping: Ref[byte]? = map_pages(rounded + alignment)
+        if mapping == nil {
+            return nil
+        }
+        let start: Ref[byte] = mapping
+        let base: uint = __abi_ref_address(start)
+        let aligned: uint = (base + alignment - 1) & ~(alignment - 1)
+        let head: uint = aligned - base
+        let tail: uint = alignment - head
+        if head != 0 and unmap_pages(start, head) != 0 {
+            _ = unmap_pages(start, rounded + alignment)
+            return nil
+        }
+        if tail != 0 and unmap_pages(address_at(aligned + rounded), tail) != 0 {
+            _ = unmap_pages(address_at(aligned), rounded + tail)
+            return nil
+        }
+        return address_ref(aligned)
+    }
+}
+
+# Unmaps the `bytes` at `address`, which map_zeroed returned; 0, or -1 on
+# failure.
+func unmap(address: Ref[byte], bytes: uint) -> i32 {
+    if bytes == 0 {
+        return -1
+    }
+    return unmap_pages(address, bytes)
+}

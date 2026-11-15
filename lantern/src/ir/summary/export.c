@@ -89,13 +89,7 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
 {
     if (pt->summaries->escapes_only && !(flags & IR_SPATH_WRITE)) return;
     path_list_t names = core_list_new(ir_spath_t);
-    pt_loc_t    at    = {.site = PT_EXTERNAL};
-    bool        own   = copy_in_param(pt, loc->site, &at.path);
-    if (own) {
-        loc_extend(pt, &at, loc->path.steps, loc->path.depth, loc_deep(loc));
-        add_path_to(&names, &at.path);
-    }
-    else name_loc(pt, loc, &names, nullptr);
+    name_loc(pt, loc, &names, nullptr);
     for (size_t n = 0; n < names.len; n++) {
         ir_spath_t path = names.data[n];
         path.flags &= (uint8_t)~SPATH_INLINE;
@@ -109,14 +103,13 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
             path.flags = (uint8_t)((path.flags & ~IR_SPATH_READS_ENTRY)
                                    | (entry ? IR_SPATH_READS_ENTRY : 0));
         }
-        if (own) path.flags |= IR_SPATH_ROOT;
-        else if (loc->site != PT_EXTERNAL)
+        if (loc->site != PT_EXTERNAL)
             path.flags &= (uint8_t)~IR_SPATH_ROOT;
         if ((path.flags & IR_SPATH_WRITE) && string_bytes_path(pt, &path)) {
             path.flags &= (uint8_t)~IR_SPATH_WRITE;
             if (!(path.flags & IR_SPATH_READ)) continue;
         }
-        if (!constant_read(&path)) add_function_path(summary, pt->f, &path);
+        if (!constant_read(&path)) add_function_path(pt->summaries, summary, pt->f, &path);
     }
     core_list_free(names);
 }
@@ -177,7 +170,9 @@ record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
              param++)
             if (ir_summary_param_escape(callee, param)) {
                 pt_set_t items = (pt_set_t){0};
-                argument_items(pt, call, param, &items);
+                escaping_items(pt, call, callee, param,
+                               ir_summary_param_escape(callee, param),
+                               &items);
                 for (size_t i = 0; i < items.len; i++)
                     if (items.data[i].flow == PT_SAME)
                         set_add(pt, &from, deepened(&items.data[i]));
@@ -267,7 +262,6 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
         record_callee_stores(pt, summary, call, callee);
     }
     pt->contextual = true;
-    written_outputs(pt, call, callees, nullptr, summary);
 }
 
 static void
@@ -744,23 +738,16 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
 {
     const ir_func_t *f = pt->f;
     summary->results_known = true;
-    size_t   count   = ir_call_output_count(f->type);
-    uint32_t outputs = count < IR_SOUTPUT_STATUS ? (uint32_t)count + 1
-                                                 : IR_SOUTPUT_STATUS;
-    for (uint32_t output = returns_value(f) ? 0 : 1; output < outputs;
-         output++) {
-        size_t operand = output
-            ? ir_return_output_operand(f->owner, f->type, output - 1) : 0;
+    if (returns_value(f)) {
         pt_set_t returned = (pt_set_t){0};
         for (uint32_t b = 0; b < f->n_blocks; b++)
             for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
                 const ir_instr_t *in = f->blocks[b]->instrs[i];
-                if (in->op != IR_OP_RETURN || operand >= in->n_operands)
-                    continue;
-                pt_read(pt, referenced(in, operand), &returned);
+                if (in->op != IR_OP_RETURN || !in->n_operands) continue;
+                pt_read(pt, referenced(in, 0), &returned);
                 reach_control(pt, f->blocks[b], &returned);
             }
-        summarize_output(pt, summary, &returned, (uint8_t)output);
+        summarize_output(pt, summary, &returned, 0);
         core_list_free(returned);
     }
     pt_set_t failed = (pt_set_t){0};
@@ -790,34 +777,6 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
     core_list_free(status);
 }
 
-static void
-note_copy_ins(pt_t *pt)
-{
-    const ir_func_t *f       = pt->f;
-    size_t           outputs = ir_call_output_count(f->type);
-    for (uint32_t b = 0; outputs && b < f->n_blocks; b++)
-        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
-            const ir_instr_t *in = f->blocks[b]->instrs[i];
-            if (in->op != IR_OP_RETURN) continue;
-            for (size_t o = 0; o < outputs; o++) {
-                size_t operand = ir_return_output_operand(f->owner, f->type,
-                                                          o);
-                size_t param   = ir_call_output_param(f->type, o);
-                const ir_value_t *value = operand < in->n_operands
-                    ? referenced(in, (uint32_t)operand) : nullptr;
-                const ir_instr_t *copy  = value
-                    && value->kind == IR_VAL_INSTR ? value->def : nullptr;
-                if (!copy || copy->op != IR_OP_COPY || !copy->n_operands
-                    || param >= f->n_params) continue;
-                const ir_local_t *local = ir_operand_local(&copy->operands[0]);
-                if (local)
-                    core_dict_put(&pt->copy_ins, (void *)local,
-                                  (void *)((uintptr_t)(o + 1) << 32
-                                           | (uintptr_t)param));
-            }
-        }
-}
-
 static bool
 writes_definitely(pt_t *pt, const ir_instr_t *call)
 {
@@ -828,8 +787,9 @@ writes_definitely(pt_t *pt, const ir_instr_t *call)
     if (!sole_callee(pt, call)) return false;
     const ir_summary_t *callee = callees_of(pt, call)->callees.data[0];
     const flow_table_t *flows  = &callee->flows[IR_SFLOW_STORES];
+    const bool         *must   = must_dests(pt, callee);
     for (size_t d = 0; d < flows->dests.len; d++)
-        if (must_dest(callee, flows->dests.data[d].to)) return true;
+        if (must[d]) return true;
     return false;
 }
 
@@ -847,19 +807,4 @@ note_writers(pt_t *pt)
                 && writes_definitely(pt, in)))
             core_dict_put(&pt->flow.pending, (void *)in, (void *)1);
     }
-}
-
-static bool
-copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own)
-{
-    if (site == PT_EXTERNAL || !pt->sites.data[site].local) return false;
-    bool      found = false;
-    uintptr_t entry = (uintptr_t)core_dict_get(
-        (core_dict_t *)&pt->copy_ins, (void *)pt->sites.data[site].local,
-        &found);
-    if (!found || (entry >> 32) >= UINT8_MAX) return false;
-    *own = (ir_spath_t){.root   = IR_SPLACE_PARAM,
-                        .param  = (uint32_t)entry,
-                        .output = (uint8_t)(entry >> 32)};
-    return true;
 }

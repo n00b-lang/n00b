@@ -98,14 +98,18 @@ static bool is_read(const ir_instr_t *in)
             && in->operands[1].kind == IR_OPD_NAME);
 }
 
+static bool lent_place(const ir_value_t *address);
+
 static bool same_defs(const ir_pdg_t *g, ir_instr_t *a, ir_instr_t *b)
 {
     core_list_t(ty_instr_ptr_t) left  = core_list_new(ty_instr_ptr_t);
     core_list_t(ty_instr_ptr_t) right = core_list_new(ty_instr_ptr_t);
     reaching(g, a, &left);
     reaching(g, b, &right);
+    ir_value_t *place = ir_operand_value(&a->operands[0]);
     bool same = left.len == right.len
-             && (left.len || global_of(ir_operand_value(&a->operands[0])));
+             && (left.len || global_of(place)
+                 || (place && lent_place(place)));
 
     for (size_t i = 0; same && i < left.len; i++) {
         bool found = false;
@@ -247,7 +251,7 @@ static bool controlled(const ir_pdg_t *g, ir_block_t *b, const test_t *t,
 static bool unwraps(const ir_instr_t *in)
 {
     return in->op == IR_OP_OPTION_IS_NIL || in->op == IR_OP_OPTION_GET
-        || in->op == IR_OP_OPTION_GET_OR_ELSE || in->op == IR_OP_CALL_OUTPUT;
+        || in->op == IR_OP_OPTION_GET_OR_ELSE;
 }
 
 static bool under_test(const ir_pdg_t *g, ir_block_t *b, const test_t *t)
@@ -274,17 +278,8 @@ static bool present_store(const ir_instr_t *in, const void *location)
                             : nullptr;
     ir_value_t *value   = address ? ir_operand_value(&in->operands[1])
                                   : nullptr;
-    size_t            ordinal = 0;
-    const ir_instr_t *call    = value && value->def
-                                  ? ir_call_output_source(value->def, &ordinal)
-                                  : nullptr;
-    th_type          *type    = call ? ir_call_output_type(
-                                           ir_call_function_type(call),
-                                           ordinal)
-                              : value ? value->type
-                                      : nullptr;
-
-    type = type ? th_resolve(type) : nullptr;
+    th_type    *type    = value && value->type ? th_resolve(value->type)
+                                               : nullptr;
 
     return type
         && (global_of(address) ? global_of(address) : address) == location
@@ -311,6 +306,20 @@ static bool writes_location(const ir_instr_t *in, const void *location)
         && address_location(ir_operand_value(&in->operands[0])) == location;
 }
 
+// The place an `out` or `modify` parameter refers to is lent to the callee
+// for the call, so reads through it are not shared with other writers.
+static bool lent_place(const ir_value_t *address)
+{
+    const ir_func_t *f = address->kind == IR_VAL_PARAM ? address->owner
+                                                       : nullptr;
+    th_type *type = f && f->type ? th_resolve(f->type) : nullptr;
+
+    return type && th_kind_of(type) == TH_FUNCTION
+        && address->index < th_func_nparams(type)
+        && ir_func_param_value(f, address->index) == address
+        && th_mode_by_reference(th_func_param(type, address->index)->mode);
+}
+
 static bool shared_read(const ir_instr_t *read)
 {
     ir_value_t *address = read && read->op == IR_OP_LOAD
@@ -318,7 +327,8 @@ static bool shared_read(const ir_instr_t *read)
                             ? ir_operand_value(&read->operands[0])
                             : nullptr;
 
-    return (address && !(address->def && address->def->op == IR_OP_ALLOC))
+    return (address && !(address->def && address->def->op == IR_OP_ALLOC)
+            && !lent_place(address))
         || (read && read->op == IR_OP_COPY && read->n_operands == 1
             && global_of(ir_operand_value(&read->operands[0])));
 }
@@ -414,12 +424,52 @@ static bool refined(refine_t *r, ir_instr_t *read)
     return false;
 }
 
+// The address `in` uses as a place: a field's base, or the address of the
+// place a call passes to an `out` or `modify` parameter.
+static ir_value_t *place_operand(const ir_instr_t *in)
+{
+    if (in->op == IR_OP_FIELD && in->n_operands == 2) {
+        return ir_operand_value(&in->operands[0]);
+    }
+    th_type *signature = in->op == IR_OP_CALL
+                           || in->op == IR_OP_CALLBACK_INVOKE
+                             ? ir_call_function_type(in)
+                             : nullptr;
+
+    for (uint32_t o = 1; signature && o < in->n_operands
+                         && o - 1 < th_func_nparams(signature); o++) {
+        if (in->operands[o].kind == IR_OPD_VALUE && in->operands[o].value
+            && th_mode_by_reference(th_func_param(signature, o - 1)->mode)) {
+            return in->operands[o].value;
+        }
+    }
+
+    return nullptr;
+}
+
+// What a place's address names, as tests record it: the global or local it
+// takes the address of, or the address itself.
+static const void *place_key(const ir_value_t *base)
+{
+    const ir_instr_t *def = base && base->kind == IR_VAL_INSTR ? base->def
+                                                               : nullptr;
+
+    if (def && def->op == IR_OP_ADDRESS_OF && def->n_operands == 1) {
+        const void *local = ir_operand_local(&def->operands[0]);
+
+        return local ? local : global_of(ir_operand_value(&def->operands[0]));
+    }
+
+    return global_of(base) ? global_of(base) : base;
+}
+
 static bool place_tested(refine_t *r, const ir_instr_t *in)
 {
-    ir_value_t *base = in->op == IR_OP_FIELD && in->n_operands == 2
-                         ? ir_operand_value(&in->operands[0])
-                         : nullptr;
-    const void *key  = global_of(base) ? global_of(base) : base;
+    ir_value_t *base = place_operand(in);
+    const void *key  = !base                  ? nullptr
+                     : in->op != IR_OP_FIELD  ? place_key(base)
+                     : global_of(base)        ? global_of(base)
+                                              : base;
 
     for (uint32_t i = key ? first_test(&r->by_root, key) : UINT32_MAX;
          i != UINT32_MAX; i = r->tests.data[i].next) {
@@ -467,7 +517,7 @@ static void plan_places(refine_t *r, ir_block_t *block)
             core_dict_remove(&open, (void *)read);
         }
         if (place_tested(r, in)) {
-            ir_value_t *base = ir_operand_value(&in->operands[0]);
+            ir_value_t *base = place_operand(in);
             size_t      at   = (size_t)(uintptr_t)core_dict_get(&open, base,
                                                                 nullptr);
 
@@ -481,7 +531,14 @@ static void plan_places(refine_t *r, ir_block_t *block)
             }
             core_list_push(r->places.data[at - 1].fields, in);
             r->places.data[at - 1].last = in;
-            core_dict_put(&derived, in->dest, (void *)(uintptr_t)at);
+            if (in->op != IR_OP_FIELD) {
+                // A call writing the place through its reference leaves it
+                // present: the place is stored back as `some` after it.
+                core_dict_put(&r->written, in, in);
+            }
+            else {
+                core_dict_put(&derived, in->dest, (void *)(uintptr_t)at);
+            }
             continue;
         }
 
@@ -559,8 +616,15 @@ static bool apply_place(ir_func_t *f, place_t *p, ty_unwrap_fn on_unwrap,
         return false;
     }
     for (size_t i = 0; i < p->fields.len; i++) {
-        p->fields.data[i]->operands[0].value = take->dest;
-        ir_instr_uses_changed(p->fields.data[i]);
+        ir_instr_t *user = p->fields.data[i];
+
+        for (uint32_t o = 0; o < user->n_operands; o++) {
+            if (user->operands[o].kind == IR_OPD_VALUE
+                && user->operands[o].value == p->place) {
+                user->operands[o].value = take->dest;
+            }
+        }
+        ir_instr_uses_changed(user);
     }
 
     uint32_t    after = ir_op_is_terminator(p->last->op) ? 0 : 1;

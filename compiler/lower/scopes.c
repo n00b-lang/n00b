@@ -655,8 +655,7 @@ moves_operand(const ir_instr_t *in, uint32_t operand)
                 && th_kind_of(signature) == TH_FUNCTION
                 && operand - 1 < th_func_nparams(signature)
             ? th_func_param(signature, operand - 1) : nullptr;
-        return operand && (!formal || formal->mode == TH_CONSUME
-                           || th_mode_produces_output(formal->mode));
+        return operand && (!formal || formal->mode == TH_CONSUME);
     }
     default:
         return false;

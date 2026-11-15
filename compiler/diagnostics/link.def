@@ -98,8 +98,8 @@ N00B_DIAG(OVERLAPPING_IMPORT, "N00B-N0018", WARNING,
 N00B_DIAG(UNUSED_FUNCTION, "N00B-N0019", WARNING,
     "a function is never called",
     "Nothing in the program calls this function, directly or through a\n"
-    "trait, so it is dead code. Call it or delete it. `main`, `start`,\n"
-    "`comptime_start`, native entry points and literal handlers are never\n"
+    "trait, so it is dead code. Call it or delete it. `main`,\n"
+    "`comptime_main`, native entry points and literal handlers are never\n"
     "reported.")
 N00B_DIAG(FIELD_NEVER_SET, "N00B-N0020", WARNING,
     "a field is never given a value",

@@ -58,52 +58,142 @@ named_place(const ir_splace_t *place)
 static uint8_t
 place_flags(const ir_spath_t *path)
 {
-    return path->depth ? path->flags & (uint8_t)~IR_SPATH_MUST : path->flags;
+    return object_depth(path) ? path->flags & (uint8_t)~IR_SPATH_MUST
+                              : path->flags;
+}
+
+// A place as a word, for the places a summary's named paths reach: the
+// kind in the low bits, above the global or the source parameter.
+static uint64_t
+place_key(const ir_splace_t *place)
+{
+    switch (place->kind) {
+    case IR_SPLACE_GLOBAL:
+    case IR_SPLACE_THREAD:
+        return (uint64_t)(uintptr_t)place->global << 3 | place->kind;
+    case IR_SPLACE_SOURCE:
+    case IR_SPLACE_PARAM:
+        return (uint64_t)place->param << 3 | place->kind;
+    case IR_SPLACE_HEAP:
+        return (uint64_t)(uintptr_t)(place->type ? th_resolve(place->type)
+                                                 : nullptr) << 3
+            | place->kind;
+    case IR_SPLACE_UNKNOWN:
+        break;
+    }
+    return place->kind;
+}
+
+typedef struct {
+    // place_key of a named place (not a parameter) -> the flags its paths
+    // carry, plus one so no entry is zero.
+    core_dict_t             named;
+    // Paths through a parameter, which depend on the call's arguments.
+    core_list_t(uint32_t)   params;
+    uint8_t                 unknown_flags;
+    bool                    unknown;
+} access_index_t;
+
+static access_index_t *
+access_index(flow_query_t *q, const ir_summary_t *s)
+{
+    bool found = false;
+    access_index_t *index = q->access_index
+        ? core_dict_get(q->access_index, (void *)s, &found) : nullptr;
+    if (found) return index;
+    index = core_alloc(access_index_t);
+    core_dict_init(&index->named, nullptr, nullptr);
+    index->params = core_list_new(uint32_t);
+    for (size_t i = 0; i < s->paths.len; i++) {
+        const ir_spath_t *path = &s->paths.data[i];
+        ir_splace_t       places[2];
+        uint32_t          count = query_path_places(q, s, i, places);
+        for (uint32_t p = 0; p < count; p++) {
+            const ir_splace_t *place = &places[p];
+            if (place->kind == IR_SPLACE_PARAM) {
+                if (!index->params.len
+                    || index->params.data[index->params.len - 1] != i)
+                    core_list_push(index->params, (uint32_t)i);
+            }
+            else if (place->kind == IR_SPLACE_UNKNOWN) {
+                index->unknown = true;
+                index->unknown_flags |= path->flags & IR_SPATH_ACCESS;
+            }
+            else if (named_place(place)) {
+                void     *key  = (void *)(uintptr_t)place_key(place);
+                bool      seen = false;
+                uintptr_t had  = (uintptr_t)core_dict_get(&index->named, key,
+                                                          &seen);
+                uint8_t flags = (uint8_t)(seen ? had - 1 : 0)
+                    | place_flags(path);
+                core_dict_put(&index->named, key,
+                              (void *)(uintptr_t)(flags + 1u));
+            }
+        }
+    }
+    if (q->access_index) core_dict_put(q->access_index, (void *)s, index);
+    return index;
+}
+
+static void
+access_index_free(access_index_t *index)
+{
+    core_dict_free(&index->named);
+    core_list_free(index->params);
+    core_free(index);
+}
+
+static uint8_t
+entry_access(flow_query_t *q, uint32_t flag)
+{
+    void     *key   = (void *)(uintptr_t)(place_key(q->target) << 1
+                                          | (flag == IR_SUMMARY_STARTS_THREADS)
+                                          | UINT64_C(1) << 63);
+    bool      found = false;
+    uintptr_t had   = q->entry_access
+        ? (uintptr_t)core_dict_get(q->entry_access, key, &found) : 0;
+    if (found) return (uint8_t)(had - 1);
+    uint8_t flags = entries_access(q->summaries, flag, q->target);
+    // What was asked of the entries, not their whole summary: entries grow
+    // as specialization adds functions, without changing most answers.
+    note_entry_access(q->summaries, q->f ? q->f->owner : nullptr, flag,
+                      q->target, flags);
+    if (q->entry_access)
+        core_dict_put(q->entry_access, key, (void *)(uintptr_t)(flags + 1u));
+    return flags;
 }
 
 static uint8_t
 target_access_flags(flow_query_t *q, const ir_instr_t *call,
                     const ir_summary_t *s)
 {
+    if (!q->target) return 0;
+    access_index_t *index = access_index(q, s);
     uint8_t flags = 0;
-    for (size_t i = 0; q->target && i < s->paths.len; i++) {
-        const ir_spath_t *path = &s->paths.data[i];
-        ir_splace_t       places[2];
-        uint32_t          count = query_path_places(q, s, i, places);
-        for (uint32_t p = 0; p < count; p++) {
-            const ir_splace_t *place = &places[p];
-            bool matches = place->kind == IR_SPLACE_PARAM
-                ? argument_is(q, call, path, q->target)
-                : place->kind == IR_SPLACE_UNKNOWN
-                ? unseen_reaches(q->summaries, q->target)
-                : named_place(place) && ir_splace_eq(place, q->target);
-            if (matches)
-                flags |= named_place(place) ? place_flags(path)
-                                            : path->flags & IR_SPATH_ACCESS;
-        }
+    if (named_place(q->target) && q->target->kind != IR_SPLACE_PARAM) {
+        bool      found = false;
+        uintptr_t had   = (uintptr_t)core_dict_get(&index->named,
+            (void *)(uintptr_t)place_key(q->target), &found);
+        if (found) flags |= (uint8_t)(had - 1);
     }
+    for (size_t k = 0; k < index->params.len; k++) {
+        const ir_spath_t *path = &s->paths.data[index->params.data[k]];
+        ir_splace_t       places[2];
+        uint32_t          count = query_path_places(q, s,
+                                                    index->params.data[k],
+                                                    places);
+        for (uint32_t p = 0; p < count; p++)
+            if (places[p].kind == IR_SPLACE_PARAM
+                && argument_is(q, call, path, q->target))
+                flags |= place_flags(path);
+    }
+    if (index->unknown && unseen_reaches(q->summaries, q->target))
+        flags |= index->unknown_flags;
+    if (!q->access_index) access_index_free(index);
     const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
                                 IR_SUMMARY_STARTS_THREADS};
-    for (size_t e = 0; q->target && e < sizeof(entries) / sizeof(*entries);
-         e++) {
-        if (!(s->flags & entries[e])) continue;
-        const ir_summary_t *entry = ir_summary_entries(q->summaries,
-                                                       entries[e]);
-        if (!entry) {
-            if (unseen_reaches(q->summaries, q->target))
-                flags |= IR_SPATH_ACCESS;
-            continue;
-        }
-        for (size_t i = 0; i < entry->paths.len; i++) {
-            const ir_spath_t *path = &entry->paths.data[i];
-            ir_splace_t       places[2];
-            uint32_t          count = path->root == IR_SPLACE_PARAM ? 0
-                : query_path_places(q, entry, i, places);
-            for (uint32_t p = 0; p < count; p++)
-                if (access_touches(q->summaries, &places[p], q->target))
-                    flags |= path->flags & IR_SPATH_ACCESS;
-        }
-    }
+    for (size_t e = 0; e < sizeof(entries) / sizeof(*entries); e++)
+        if (s->flags & entries[e]) flags |= entry_access(q, entries[e]);
     return flags;
 }
 
@@ -142,29 +232,58 @@ call_effect(flow_query_t *q, const ir_instr_t *call, ir_path_outcome_t outcome)
     uint8_t effect = targets.unknown || !targets.targets.len
         ? IR_PATH_UNPASSED : 0;
     for (size_t t = 0; t < targets.targets.len; t++) {
-        ir_summary_t *s = target_summary(q->summaries, targets.targets.data[t]);
+        ir_summary_t *s = call_summary(q->summaries, q->f,
+                                       targets.targets.data[t]);
         effect |= callee_effect(s, target_access_flags(q, call, s), outcome);
     }
     core_list_free(targets.targets);
     return effect;
 }
 
+static void
+leaf_effects_reset(core_dict_t *leaf_effects)
+{
+    if (!leaf_effects) return;
+    core_dict_foreach(leaf_effects, entry) {
+        core_dict_free(entry->value);
+        core_free(entry->value);
+    }
+    core_dict_free(leaf_effects);
+    core_dict_init(leaf_effects, nullptr, nullptr);
+}
+
 static uint8_t
 cached_call_effect(flow_query_t *q, const ir_instr_t *call,
                    ir_path_outcome_t outcome)
 {
-    if (!q->effects) return call_effect(q, call, outcome);
+    if (!q->effects || (q->leaf && !q->leaf_effects))
+        return call_effect(q, call, outcome);
     if (!ir_splace_eq(&q->effects_place, q->target)) {
         core_dict_free(q->effects);
         core_dict_init(q->effects, nullptr, nullptr);
+        leaf_effects_reset(q->leaf_effects);
         q->effects_place = *q->target;
+    }
+    // A call's effect on one leaf of the place isn't its effect on the
+    // place, so each leaf has its own cache. Steps are interned, so the
+    // leaf's steps name it.
+    core_dict_t *effects = q->effects;
+    if (q->leaf) {
+        bool found = false;
+        void *leaf = q->leaf->steps ? (void *)q->leaf->steps : (void *)1;
+        effects = core_dict_get(q->leaf_effects, leaf, &found);
+        if (!found) {
+            effects = core_alloc(core_dict_t);
+            core_dict_init(effects, nullptr, nullptr);
+            core_dict_put(q->leaf_effects, leaf, effects);
+        }
     }
     void     *key   = (void *)((uintptr_t)call | (uintptr_t)outcome);
     bool      found = false;
-    uintptr_t cached = (uintptr_t)core_dict_get(q->effects, key, &found);
+    uintptr_t cached = (uintptr_t)core_dict_get(effects, key, &found);
     if (found) return (uint8_t)cached;
     uint8_t effect = call_effect(q, call, outcome);
-    core_dict_put(q->effects, key, (void *)(uintptr_t)effect);
+    core_dict_put(effects, key, (void *)(uintptr_t)effect);
     return effect;
 }
 
@@ -349,7 +468,7 @@ enum {
         | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
         | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
         | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
-        | IR_SUMMARY_FINALIZES_PARAMS,
+        | IR_SUMMARY_FINALIZES_PARAMS | IR_SUMMARY_HINTS | IR_SUMMARY_SYNCS,
 };
 
 static const ir_value_t *
@@ -549,7 +668,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
 }
 
 static uint32_t
-allocation_flags(const ir_func_t *f, const ir_instr_t *in)
+instruction_flags(const ir_func_t *f, const ir_instr_t *in)
 {
     switch (in->op) {
     case IR_OP_ALLOC:
@@ -557,12 +676,31 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
             ? 0
             : IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT;
-    case IR_OP_ARRAY_NEW:
+    case IR_OP_ARRAY_NEW: {
+        // An array storage placement keeps in the frame isn't allocated.
+        ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
+            CORE_STRING_STATIC("ir.allocation_local"));
+        if (placed && placed->kind == IR_ANNOT_BOOL && placed->b) return 0;
+    }
         return in->dest && th_is_closed(ir_module_types(f->owner),
                                         in->dest->type)
             ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT
             : IR_SUMMARY_MAY_ALLOCATE;
+    case IR_OP_AGGREGATE: {
+        // An array built from its elements is allocated like `array.new`'s,
+        // unless storage placement keeps it in the frame.
+        th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
+        ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
+            CORE_STRING_STATIC("ir.allocation_local"));
+        if (!type || th_kind_of(type) != TH_SEQUENCE
+            || (placed && placed->kind == IR_ANNOT_BOOL && placed->b))
+            return 0;
+        return th_is_closed(ir_module_types(f->owner), in->dest->type)
+            ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+                | IR_SUMMARY_ALLOCATES_DIRECT
+            : IR_SUMMARY_MAY_ALLOCATE;
+    }
     case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW_USING:
     case IR_OP_BOX:
@@ -570,6 +708,11 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
     case IR_OP_BUFFER_AS_STRING:
     case IR_OP_BUFFER_SLICE_END:
         return IR_SUMMARY_MAY_COLLECT;
+    // A pause or a fence changes no value, but is there for when things
+    // happen, so the call that makes one is kept and isn't pointless.
+    case IR_OP_CPU_RELAX:
+    case IR_OP_THREAD_FENCE:
+        return IR_SUMMARY_HINTS;
     default:
         return 0;
     }
@@ -781,7 +924,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
             if (is_call(in)) compose_call(summaries, summary, in);
-            add_flags(summary, allocation_flags(f, in), in, nullptr,
+            add_flags(summary, instruction_flags(f, in), in, nullptr,
                       (core_string_t){0});
         }
     }
@@ -864,13 +1007,17 @@ static void
 summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
                  ir_summary_t *summary)
 {
-    core_dict_t  cache, stores, effects;
+    core_dict_t  cache, stores, effects, leaf_effects, indexes, entries;
+    core_dict_init(&indexes, nullptr, nullptr);
+    core_dict_init(&entries, nullptr, nullptr);
     core_dict_init(&cache, nullptr, nullptr);
     core_dict_init(&stores, nullptr, nullptr);
     core_dict_init(&effects, nullptr, nullptr);
+    core_dict_init(&leaf_effects, nullptr, nullptr);
     flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
                       .path_places = &cache, .stores = &stores,
-                      .effects = &effects};
+                      .effects = &effects, .leaf_effects = &leaf_effects,
+                      .access_index = &indexes, .entry_access = &entries};
     for (size_t i = 0; i < summary->paths.len; i++) {
         ir_splace_t targets[2];
         uint32_t    count = summary->paths.data[i].flags & IR_SPATH_WRITE
@@ -892,7 +1039,6 @@ summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
         ir_spath_t *path = &summary->paths.data[i];
         ir_splace_t targets[2];
         uint32_t    count = (path->flags & IR_SPATH_WRITE) && path->depth
-                && !(path->flags & IR_SPATH_DEEP)
                 && (path->flags & IR_SPATH_MUST) != IR_SPATH_MUST
             ? query_path_places(&q, summary, i, targets) : 0;
         for (uint32_t t = 0; t < count; t++)
@@ -904,6 +1050,11 @@ summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
         if (entry->value) core_free(entry->value);
     core_dict_free(&stores);
     core_dict_free(&effects);
+    leaf_effects_reset(&leaf_effects);
+    core_dict_free(&leaf_effects);
+    core_dict_foreach(&indexes, entry) access_index_free(entry->value);
+    core_dict_free(&indexes);
+    core_dict_free(&entries);
 }
 
 static uint8_t

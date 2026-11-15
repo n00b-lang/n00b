@@ -5,7 +5,7 @@ sequence litmod always_fail(items: Array[int]) -> Array[int] fail: string {
     fail "runtime literal failure"
 }
 
-var value: int
+var value: int = 0
 
 func make_alloc(n: uint) -> int {
     let a: Array[int] = new[Array[int]](n)

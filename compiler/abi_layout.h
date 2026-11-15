@@ -43,9 +43,12 @@ bool n00bb_abi_publish_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     n00bb_record_policy_t policy, bool structural,
     const n00bb_abi_record_member_t *members, size_t count);
+// `alignment_bytes` is a record's `align(N)`, or 0. When N is less than the
+// fields need, this fails with `*natural_bytes` set to what they need.
 bool n00bb_abi_publish_c_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
-    const n00bb_abi_record_member_t *members, size_t count);
+    const n00bb_abi_record_member_t *members, size_t count,
+    uint32_t alignment_bytes, uint32_t *natural_bytes);
 bool n00bb_abi_publish_variant_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     const n00bb_abi_variant_arm_t *arms, size_t count);

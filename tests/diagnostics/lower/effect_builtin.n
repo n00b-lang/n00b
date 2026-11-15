@@ -32,11 +32,11 @@ effect impure {
 }
 
 effect noreturn {
-    from: __os_stack_address
+    from: __abi_type
 }
 
 func stops() -> int {
-    _ = __os_stack_address()
+    _ = __abi_type(0)
     return 1
 }
 

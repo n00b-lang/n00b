@@ -67,80 +67,6 @@ static bool os_thread_is_main(void)
         == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0);
 }
 
-static bool maps_hex(char **cursor, char *end, uintptr_t *value)
-{
-    uintptr_t result = 0;
-    bool saw = false;
-    while (*cursor < end) {
-        char c = **cursor;
-        unsigned digit;
-        if (c >= '0' && c <= '9') digit = (unsigned)(c - '0');
-        else if (c >= 'a' && c <= 'f') digit = (unsigned)(c - 'a' + 10);
-        else if (c >= 'A' && c <= 'F') digit = (unsigned)(c - 'A' + 10);
-        else break;
-        if (result > (UINTPTR_MAX >> 4)) return false;
-        result = (result << 4) | digit;
-        (*cursor)++;
-        saw = true;
-    }
-    *value = result;
-    return saw;
-}
-
-static bool maps_stack_high(char *line, char *end, uintptr_t target,
-                            uintptr_t *high)
-{
-    uintptr_t low;
-    uintptr_t limit;
-    if (!maps_hex(&line, end, &low) || line >= end || *line++ != '-'
-        || !maps_hex(&line, end, &limit)) return false;
-    if (target < low || target >= limit) return false;
-    *high = limit;
-    return true;
-}
-
-static uintptr_t os_thread_stack_high_self(void)
-{
-    static const char path[] = "/proc/self/maps";
-    char anchor;
-    const uintptr_t target = (uintptr_t)&anchor;
-    long fd = n00b_linux_syscall6(__NR_openat, AT_FDCWD, (long)path,
-                                   O_RDONLY | O_CLOEXEC, 0, 0, 0);
-    if (fd < 0) return 0;
-
-    char buffer[32768];
-    size_t used = 0;
-    uintptr_t high = 0;
-    for (;;) {
-        if (used == sizeof(buffer)) break;
-        long n = n00b_linux_syscall6(__NR_read, fd,
-                                     (long)(buffer + used),
-                                     (long)(sizeof(buffer) - used), 0, 0, 0);
-        if (n < 0) break;
-        used += (size_t)n;
-        char *line = buffer;
-        char *end = buffer + used;
-        while (line < end) {
-            char *newline = line;
-            while (newline < end && *newline != '\n') newline++;
-            if (newline == end) break;
-            if (maps_stack_high(line, newline, target, &high)) break;
-            line = newline + 1;
-        }
-        if (high) break;
-        if (n == 0) {
-            if (line < end)
-                (void)maps_stack_high(line, end, target, &high);
-            break;
-        }
-        size_t remaining = (size_t)(end - line);
-        for (size_t i = 0; i < remaining; i++) buffer[i] = line[i];
-        used = remaining;
-    }
-    (void)n00b_linux_syscall6(__NR_close, fd, 0, 0, 0, 0, 0);
-    return high;
-}
-
 static uint64_t os_now_ns(void)
 {
     struct { long sec, nsec; } stamp = {0};
@@ -165,41 +91,15 @@ static int32_t os_unmap_raw(void *address, size_t bytes)
     return result < 0 ? -1 : 0;
 }
 
-static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
-{
-    long result = n00b_linux_syscall6(__NR_mprotect, (long)address, (long)bytes,
-                           protection, 0, 0, 0);
-    return result < 0 ? -1 : 0;
-}
-
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
+#if defined(N00B_LIBC_FREE)
+    n00b_linux_exit_program((int)(int32_t)code);
+#else
     for (;;)
         (void)n00b_linux_syscall6(__NR_exit_group, (long)(int32_t)code,
                                   0, 0, 0, 0, 0);
-}
-
-enum {
-    LINUX_FUTEX_WAIT_PRIVATE = 128,
-    LINUX_FUTEX_WAKE_PRIVATE = 129,
-};
-
-static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
-                                 uint64_t timeout_ns)
-{
-    struct { long tv_sec; long tv_nsec; } stamp = {
-        (long)(timeout_ns / 1000000000u), (long)(timeout_ns % 1000000000u),
-    };
-    long result = n00b_linux_syscall6(__NR_futex, (long)(uintptr_t)word,
-        LINUX_FUTEX_WAIT_PRIVATE, (long)expected,
-        timeout_ns ? (long)(uintptr_t)&stamp : 0, 0, 0);
-    return result < 0 && result >= -4095 ? (int32_t)-result : 0;
-}
-
-static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
-{
-    return (int32_t)n00b_linux_syscall6(__NR_futex, (long)(uintptr_t)word,
-        LINUX_FUTEX_WAKE_PRIVATE, 0x7fffffff, 0, 0, 0);
+#endif
 }
 
 static bool os_map_file_raw(const char *path, const uint8_t **bytes,
@@ -243,12 +143,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     return address != NULL;
 }
 
-// There is no libc errno here: a syscall returns the negated errno itself.
-static int32_t os_errno_raw(void)
-{
-    return 0;
-}
-
 #elif defined(__APPLE__)
 
 #include <mach-o/dyld.h>
@@ -279,11 +173,6 @@ static bool os_thread_is_main(void)
     return pthread_main_np() == 1;
 }
 
-static uintptr_t os_thread_stack_high_self(void)
-{
-    return (uintptr_t)pthread_get_stackaddr_np(pthread_self());
-}
-
 static uint64_t os_now_ns(void)
 {
     struct timespec stamp;
@@ -310,72 +199,10 @@ static int32_t os_unmap_raw(void *address, size_t bytes)
     return munmap(address, bytes) == 0 ? 0 : -1;
 }
 
-static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
-{
-    return mprotect(address, bytes, (int)protection) == 0 ? 0 : -1;
-}
-
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
     _exit((int)code);
 }
-
-enum {
-    APPLE_SYS_ULOCK_WAKE = 516,
-    APPLE_SYS_ULOCK_WAIT2 = 544,
-    APPLE_ULOCK_COMPARE_AND_WAIT = 1,
-    APPLE_ULOCK_WAKE_ALL = 0x100,
-};
-
-static long os_apple_syscall5(long number, long a, long b, long c, long d,
-                              long e)
-{
-#if defined(__aarch64__)
-    register long x16 __asm__("x16") = number;
-    register long x0 __asm__("x0") = a;
-    register long x1 __asm__("x1") = b;
-    register long x2 __asm__("x2") = c;
-    register long x3 __asm__("x3") = d;
-    register long x4 __asm__("x4") = e;
-    __asm__ volatile("svc #0x80"
-                     : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4)
-                     : "r"(x16)
-                     : "cc", "memory");
-    return x0;
-#elif defined(__x86_64__)
-    register long rax __asm__("rax") = 0x2000000 | number;
-    register long rdi __asm__("rdi") = a;
-    register long rsi __asm__("rsi") = b;
-    register long rdx __asm__("rdx") = c;
-    register long r10 __asm__("r10") = d;
-    register long r8 __asm__("r8") = e;
-    __asm__ volatile("syscall"
-                     : "+r"(rax)
-                     : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8)
-                     : "rcx", "r11", "cc", "memory");
-    return rax;
-#else
-#error "unsupported macOS architecture"
-#endif
-}
-
-static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
-                                 uint64_t timeout_ns)
-{
-    (void)os_apple_syscall5(APPLE_SYS_ULOCK_WAIT2,
-        APPLE_ULOCK_COMPARE_AND_WAIT, (long)(uintptr_t)word, (long)expected,
-        (long)timeout_ns, 0);
-    return 0;
-}
-
-static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
-{
-    (void)os_apple_syscall5(APPLE_SYS_ULOCK_WAKE,
-        APPLE_ULOCK_COMPARE_AND_WAIT | APPLE_ULOCK_WAKE_ALL,
-        (long)(uintptr_t)word, 0, 0, 0);
-    return 0;
-}
-
 
 static bool os_map_file_raw(const char *path, const uint8_t **bytes,
                             uint64_t *length)
@@ -418,12 +245,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     return address != NULL;
 }
 
-// libSystem's per-thread errno, which every libSystem call sets on failure.
-static int32_t os_errno_raw(void)
-{
-    return errno;
-}
-
 #elif defined(_WIN32)
 
 #define WIN32_LEAN_AND_MEAN
@@ -453,12 +274,6 @@ __attribute__((constructor)) static void os_record_main_thread(void)
 static bool os_thread_is_main(void)
 {
     return GetCurrentThreadId() == os_main_thread;
-}
-
-static uintptr_t os_thread_stack_high_self(void)
-{
-    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
-    return (uintptr_t)tib->StackBase;
 }
 
 static uint64_t os_now_ns(void)
@@ -509,41 +324,11 @@ static int32_t os_unmap_raw(void *address, size_t bytes)
     return VirtualFree(base, 0, MEM_RELEASE) ? 0 : -1;
 }
 
-static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
-{
-    DWORD old;
-    DWORD mode = protection == N00B_OS_PROT_NONE ? PAGE_NOACCESS
-        : protection == N00B_OS_PROT_READ ? PAGE_READONLY : PAGE_READWRITE;
-    return VirtualProtect(address, bytes, mode, &old) ? 0 : -1;
-}
-
 static wchar_t *os_wide(const uint8_t *path);
 
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
     ExitProcess((UINT)code);
-}
-
-#ifdef _MSC_VER
-#pragma comment(lib, "synchronization")
-#endif
-
-static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
-                                 uint64_t timeout_ns)
-{
-    DWORD milliseconds = INFINITE;
-    if (timeout_ns) {
-        uint64_t rounded = (timeout_ns + 999999u) / 1000000u;
-        milliseconds = rounded >= INFINITE ? INFINITE - 1 : (DWORD)rounded;
-    }
-    return WaitOnAddress((volatile void *)word, &expected, sizeof(expected),
-                         milliseconds) ? 0 : (int32_t)GetLastError();
-}
-
-static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
-{
-    WakeByAddressAll((void *)word);
-    return 0;
 }
 
 static wchar_t *os_wide(const uint8_t *path)
@@ -620,12 +405,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     GetCurrentThreadStackLimits(&low, &high);
     uintptr_t at = (uintptr_t)address;
     return at >= low && at < high && high - at >= bytes;
-}
-
-// The CRT's per-thread errno.
-static int32_t os_errno_raw(void)
-{
-    return errno;
 }
 
 #else
@@ -782,19 +561,6 @@ void n00b_os_exit(int64_t code)
     os_exit_raw(code);
 }
 
-int32_t n00b_os_futex_wait(uint8_t *word, uint32_t expected,
-                           uint64_t timeout_ns)
-{
-    return word ? os_futex_wait_raw((_Atomic uint32_t *)(void *)word,
-                                    expected, timeout_ns) : -14;
-}
-
-int32_t n00b_os_futex_wake_all(uint8_t *word)
-{
-    return word ? os_futex_wake_all_raw((_Atomic uint32_t *)(void *)word)
-                : -14;
-}
-
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
 #include "linux_start.h"
 #define environ n00b_linux_environ
@@ -836,24 +602,9 @@ const uint8_t *n00b_os_arg_at(uint64_t index)
         ? (const uint8_t *)saved_argv[index] : NULL;
 }
 
-int32_t n00b_os_errno(void)
-{
-    return os_errno_raw();
-}
-
-size_t n00b_os_page_size(void)
-{
-    return os_page_size();
-}
-
 void n00b_os_thread_yield(void)
 {
     os_thread_yield();
-}
-
-void n00b_os_thread_fence(void)
-{
-    atomic_thread_fence(memory_order_seq_cst);
 }
 
 uint64_t n00b_os_thread_is_main(void)
@@ -866,51 +617,9 @@ uint64_t n00b_os_thread_id(void)
     return os_thread_id();
 }
 
-void *n00b_os_thread_stack_high_self(void)
-{
-    return (void *)os_thread_stack_high_self();
-}
-
-uint64_t n00b_os_stack_address(void)
-{
-    return (uint64_t)(uintptr_t)__builtin_frame_address(0);
-}
-
-size_t n00b_os_stack_red_zone_bytes(void)
-{
-#if (defined(__x86_64__) && !defined(_WIN32)) \
-    || (defined(__APPLE__) && defined(__aarch64__))
-    return 128;
-#else
-    return 0;
-#endif
-}
-
-uint64_t n00b_os_frame_pointer_chain(void)
-{
-#if defined(_WIN32)
-    return 0;
-#else
-    return 1;
-#endif
-}
-
 uint64_t n00b_os_now_ns(void)
 {
     return os_now_ns();
-}
-
-void n00b_os_cpu_relax(void)
-{
-#if defined(_WIN32)
-    YieldProcessor();
-#elif defined(__x86_64__) || defined(__i386__)
-    __asm__ volatile("pause");
-#elif defined(__aarch64__) || defined(__arm__)
-    __asm__ volatile("yield");
-#else
-    atomic_signal_fence(memory_order_seq_cst);
-#endif
 }
 
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment)
@@ -951,12 +660,6 @@ int32_t n00b_os_unmap(void *address, size_t bytes)
     return address && bytes ? os_unmap_raw(address, bytes) : -1;
 }
 
-int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection)
-{
-    if (!address || !bytes || (protection & ~UINT32_C(3))) return -1;
-    return os_protect_raw(address, bytes, protection);
-}
-
 bool n00b_os_map_file(const char *path, const uint8_t **bytes,
                       uint64_t *length)
 {
@@ -978,3 +681,14 @@ bool n00b_os_on_stack(const void *address, uint64_t bytes)
 {
     return os_on_stack_raw(address, bytes);
 }
+
+
+#if !(defined(__linux__) && defined(N00B_LIBC_FREE))
+// Shims for contracts that link "c" call this first. Only Linux's runtime
+// starts threads without libc's thread state (runtime/linux_start.c); here
+// every thread is a libc thread.
+void
+n00b_ffi_libc_thread_check(void)
+{
+}
+#endif

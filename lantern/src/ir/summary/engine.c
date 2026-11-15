@@ -43,10 +43,10 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->source_maps, nullptr, nullptr);
     core_dict_init(&pt->flow_nodes, flow_node_hash, flow_node_eq);
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
-    core_dict_init(&pt->copy_ins, nullptr, nullptr);
     core_dict_init(&pt->escaped, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
+    core_dict_init(&pt->must_dests, nullptr, nullptr);
     core_dict_init(&pt->value_groups, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
     pt->reach     = ir_reach_new(f);
@@ -82,7 +82,6 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
         }
     pt->dirty = core_alloc_array(bool, pt->order.len ? pt->order.len : 1);
     note_load_uses(pt);
-    note_copy_ins(pt);
     note_writers(pt);
     flow_build(pt);
 }
@@ -191,7 +190,6 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_nodes);
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);
-    core_dict_free(&pt->copy_ins);
     core_dict_foreach(&pt->escaped, entry) {
         region_list_t *regions = entry->value;
         core_list_free(*regions);
@@ -202,6 +200,8 @@ pt_free(pt_t *pt)
     if (pt->entry.built) {
         core_list_free(pt->entry.cells);
         core_dict_free(&pt->entry.gens);
+        core_dict_foreach(&pt->entry.call_gens, gen) core_free(gen->value);
+        core_dict_free(&pt->entry.call_gens);
         core_free(pt->entry.in);
         core_free(pt->entry.state);
     }
@@ -236,6 +236,8 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->widened_sets);
     core_dict_foreach(&pt->flow_groups, entry) core_free(entry->value);
     core_dict_free(&pt->flow_groups);
+    core_dict_foreach(&pt->must_dests, entry) core_free(entry->value);
+    core_dict_free(&pt->must_dests);
     core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);

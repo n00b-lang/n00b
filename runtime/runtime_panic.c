@@ -550,6 +550,10 @@ put_runtime_message(const failure_record_t *failure)
     case N00BB_FAILURE_STACK_OVERFLOW:
         put(TEXT("stack overflow"));
         return;
+    case N00BB_FAILURE_LIBC_THREAD:
+        put(TEXT("a call into a C library that links \"c\" from a thread "
+                 "n00b started; such calls run on the main thread only"));
+        return;
     case N00BB_FAILURE_OUT_OF_MEMORY:
         put(TEXT("out of memory while allocating "));
         put_unsigned(failure->first);

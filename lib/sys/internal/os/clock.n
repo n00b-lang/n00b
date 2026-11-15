@@ -1,0 +1,83 @@
+# The monotonic clock.
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall clock_gettime(clock: c_int, stamp: out *u8) -> c_int
+      number 228 when arch == x86_64
+      number 113 when arch == aarch64
+      effects clock
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    bring Timespec from internal.os.support
+    private const clock_monotonic: i32 = 1
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn clock_gettime_nsec_np(clock: c_uint) -> u64
+      effects clock
+
+    binding {
+        raw "clock_gettime_nsec_np"
+    }
+    -]'ffi
+
+    private const clock_monotonic: u32 = 6
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn QueryPerformanceCounter(count: out *i64) -> c_int
+      effects clock
+    fn QueryPerformanceFrequency(frequency: out *i64) -> c_int
+      effects clock
+
+    binding {
+        name QueryPerformanceCounter "performance_counter"
+        name QueryPerformanceFrequency "performance_frequency"
+        raw "QueryPerformanceCounter"
+        raw "QueryPerformanceFrequency"
+    }
+    -]'ffi
+}
+
+# Nanoseconds on a clock that never goes back, from an arbitrary start.
+func now_ns() -> u64 {
+    when target_os() == "linux" {
+        var stamp: Timespec = (seconds = 0, nanoseconds = 0)
+        try {
+            _ = clock_gettime(clock_monotonic,
+                unsafe_cast[Ref[byte]] (ref stamp))!
+        } fail(failure) {
+            return 0
+        }
+        return cast[u64](stamp.seconds) * 1000000000 +
+            cast[u64](stamp.nanoseconds)
+    } else when target_os() == "macos" {
+        return clock_gettime_nsec_np_raw(clock_monotonic)
+    } else when target_os() == "windows" {
+        var counter: i64 = 0
+        var frequency: i64 = 0
+        if performance_counter_raw(unsafe_cast[Ref[byte]] (ref counter)) == 0
+                or performance_frequency_raw(
+                    unsafe_cast[Ref[byte]] (ref frequency)) == 0
+                or frequency <= 0 {
+            return 0
+        }
+        let ticks: u64 = cast[u64](counter)
+        let rate: u64 = cast[u64](frequency)
+        return (ticks / rate) * 1000000000 +
+            ((ticks % rate) * 1000000000) / rate
+    } else {
+        return 0
+    }
+}

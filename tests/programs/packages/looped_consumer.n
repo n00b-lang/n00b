@@ -1,0 +1,4 @@
+import looped
+
+require looped.flag == 8
+require looped.twice() == 32

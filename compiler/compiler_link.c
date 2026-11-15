@@ -655,13 +655,19 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 && resolution.target.symbol->kind != PARSE_SYM_MODULE;
             bool bound_trait = value_reference
                 && is_trait_type_symbol(grammar, resolution.target.symbol);
-            if (value_reference && !bound_trait
-                && is_named_type_symbol(grammar, resolution.target.symbol))
+            // A type the module brings in from another is bound when names
+            // resolve, after its module's own type references got their
+            // types: the reference still holds the placeholder it got then.
+            th_type *pending = parse_tree_type(reference);
+            bool brought_type = value_reference && !bound_trait
+                && is_named_type_symbol(grammar, resolution.target.symbol);
+            if (brought_type && (!resolution.target.symbol->type
+                    || (pending && th_kind_of(th_resolve(pending)) != TH_VAR)))
                 continue;
             n00bb_link_use_site_t *site = &state->link_use_sites.data[site_ix];
             parse_scope_t *scope = site->scope;
             core_string_t name = site->member_name;
-            parse_sym_entry_t *symbol = bound_trait
+            parse_sym_entry_t *symbol = bound_trait || brought_type
                 ? resolution.target.symbol
                 : lookup_named_type_reference(grammar, state, symtab, scope,
                                               name);
@@ -692,8 +698,9 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 refresh_cached_type_path(grammar, unit, reference);
                 continue;
             }
-            if (!parse_tree_set_resolution_symbol(reference, symbol)
-                || !parse_sym_add_use(symbol, reference)
+            if ((!brought_type
+                    && (!parse_tree_set_resolution_symbol(reference, symbol)
+                        || !parse_sym_add_use(symbol, reference)))
                 || !bind_array_shape_type_source(grammar, reference, symbol)
                 || !bind_array_shape_alias_source(grammar, reference,
                                                   symbol)) {
@@ -3412,6 +3419,9 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         CORE_STRING_STATIC("__ref_address_mut_boxed"),
         CORE_STRING_STATIC("__volatile_load"),
         CORE_STRING_STATIC("__gc_signal_fence"),
+        CORE_STRING_STATIC("__thread_fence"),
+        CORE_STRING_STATIC("__cpu_relax"),
+        CORE_STRING_STATIC("__stack_pointer"),
         CORE_STRING_STATIC("comptime"),
         CORE_STRING_STATIC("__gc_prefetch"),
         CORE_STRING_STATIC("__atomic_fetch_or"),

@@ -1,0 +1,2 @@
+const width: int = 12
+record Named layout(c) align(width) { x: u64 }

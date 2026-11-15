@@ -8,7 +8,6 @@ typedef struct ir_summary_facts_t ir_summary_facts_t;
 
 typedef enum : uint8_t {
     IR_SUMMARY_STEP_RULE,
-    IR_SUMMARY_STEP_OUT_ARGUMENT,
     IR_SUMMARY_STEP_DISCARDED,
     IR_SUMMARY_STEP_CALLS,
     IR_SUMMARY_STEP_CALLS_UNSEEN,

@@ -200,6 +200,17 @@ call_operand_type(ir_value_t *value, th_ctx *types)
         ? source->type : value->type;
 }
 
+// The type an argument gives its formal: a by-reference formal is passed
+// the Ref to a place of the formal's type.
+static th_type *
+formal_argument_type(const th_param *formal, th_type *argument)
+{
+    th_type *resolved = argument ? th_resolve(argument) : nullptr;
+    return formal && th_mode_by_reference(formal->mode) && resolved
+            && th_kind_of(resolved) == TH_INDIRECTION
+        ? th_ind_referent(resolved) : argument;
+}
+
 typedef ir_instr_t *selection_t;
 core_list_decl(selection_t);
 
@@ -247,8 +258,8 @@ integer_arguments_to(ir_func_t *function, ir_instr_t *call, ir_func_t *target,
         const th_param *formal = index < count
             ? th_func_param(signature, index) : nullptr;
         ir_value_t *argument = ir_operand_value(operand);
-        if (!formal || !argument || ir_type_eq(module, argument->type,
-                                               formal->type)) continue;
+        if (!formal || !argument || th_mode_by_reference(formal->mode)
+            || ir_type_eq(module, argument->type, formal->type)) continue;
         ir_class_t source = ir_machine_of(module, argument->type).class;
         ir_class_t wanted = ir_machine_of(module, formal->type).class;
         if ((source != IR_CLASS_SINT && source != IR_CLASS_UINT)
@@ -298,7 +309,8 @@ concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types,
             || operand->kind == IR_OPD_NAMED_ARG
             ? ir_operand_value(operand) : nullptr;
         matched = formal && argument && match_type(types, formal->type,
-            call_operand_type(argument, types), &bindings);
+            formal_argument_type(formal, call_operand_type(argument, types)),
+            &bindings);
     }
     if (matched && bindings.len) {
         const th_type **from = core_alloc_array(const th_type *,
@@ -456,7 +468,7 @@ call_fits_instance(ir_instr_t *call, const specialization_t *instance,
         ir_operand_t *operand = &call->operands[i + 1];
         if (operand->kind != IR_OPD_VALUE || !operand->value || !wanted)
             continue;
-        th_type *given = operand->value->type;
+        th_type *given = formal_argument_type(wanted, operand->value->type);
         if (th_is_closed(types, given)
             && th_hash(types, wanted->type) != th_hash(types, given))
             return false;

@@ -66,6 +66,9 @@ IR_OP(ATOMIC_RMW,      "atomic.rmw",      3, 3,  ANNOTATED,   "vnv", IR_MOD_ATOM
 IR_OP(ATOMIC_CAS,      "atomic.cas",      3, 3,  ANNOTATED,   "vvv", 0,                              HASRESULT | SIDEEFFECT, MEM(READ_WRITE, 0, 2, -1, false))
 IR_OP(SIGNAL_FENCE,    "signal.fence",    0, 0,  NONE,        "",    0,                              SIDEEFFECT, NOMEM)
 IR_OP(PREFETCH,        "prefetch",        1, 1,  NONE,        "v",   0,                              SIDEEFFECT, NOMEM)
+IR_OP(THREAD_FENCE,    "thread.fence",    0, 0,  NONE,        "",    0,                              SIDEEFFECT, NOMEM)
+IR_OP(CPU_RELAX,       "cpu.relax",       0, 0,  NONE,        "",    0,                              SIDEEFFECT, NOMEM)
+IR_OP(STACK_POINTER,   "stack.pointer",   0, 0,  ANNOTATED,   "",    0,                              HASRESULT, NOMEM)
 IR_OP(TYPE_TEST,       "type.test",       2, 2,  BOOL,        "vt",  0,                              HASRESULT, NOMEM)
 IR_OP(TYPE_NARROW,     "type.narrow",     2, 2,  ANNOTATED,   "vt",  0,                              HASRESULT, NOMEM)
 IR_OP(TYPE_OF,         "type.of",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
@@ -112,7 +115,6 @@ IR_OP(TRAIT_METHOD,    "trait.method",    4, 4,   ANNOTATED,   "nnvv", 0,       
 IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
 IR_OP(CALLBACK_CREATE, "callback.create", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
 IR_OP(CALLBACK_INVOKE, "callback.invoke", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
-IR_OP(CALL_OUTPUT,     "call.output",     2, 2,   CALL_OUTPUT, "vc", 0,                              HASRESULT, NOMEM)
 
 IR_OP(SIZEOF,          "sizeof",          1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)
 IR_OP(ALIGNOF,         "alignof",         1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)

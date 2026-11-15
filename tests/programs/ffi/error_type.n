@@ -9,7 +9,7 @@ binding {
 }
 -]'ffi
 
-func start() {
+func main() {
     try {
         _ = getenv("HOME")!
     } fail(e) {

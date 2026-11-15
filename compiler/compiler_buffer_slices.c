@@ -338,6 +338,19 @@ path_parameter_bit(const ir_func_t *function, const ir_spath_t *path)
         ? parameter_bit(function->params[path->param]) : UINT64_MAX;
 }
 
+// Whether `path` is rooted at an `out` or `modify` parameter: one whose
+// value is the Ref to its caller's place.
+static bool
+by_reference_path(const ir_func_t *function, const ir_spath_t *path)
+{
+    th_type *signature = function->type ? th_resolve(function->type)
+                                        : nullptr;
+    return path->root == IR_SPLACE_PARAM && signature
+        && th_kind_of(signature) == TH_FUNCTION
+        && path->param < th_func_nparams(signature)
+        && th_mode_by_reference(th_func_param(signature, path->param)->mode);
+}
+
 static void
 add_source(uint64_t *from, const ir_func_t *function, const ir_spath_t *path)
 {
@@ -421,6 +434,11 @@ derive_stores(const ir_func_t *function, const ir_summary_t *summary,
                 if (to->root == IR_SPLACE_PARAM
                     && from->root == IR_SPLACE_PARAM
                     && from->param == to->param) continue;
+                if (by_reference_path(function, to)) {
+                    add_source(out->stored, function, from);
+                    out->stored_into |= path_parameter_bit(function, to);
+                    continue;
+                }
                 add_source(out->escapes, function, from);
                 if (leak) add_source(out->leaks, function, from);
                 escaped |= from->root == IR_SPLACE_HEAP;
@@ -576,73 +594,71 @@ track(window_t *window, ir_value_t *value)
 }
 
 static bool
-output_carries_param(const ir_summary_t *summary, uint8_t output,
-                     uint32_t param)
+flow_bit(uint64_t bits, uint32_t parameter)
 {
-    static const ir_sflow_kind_t kinds[] = {
-        IR_SFLOW_DATA, IR_SFLOW_COPY, IR_SFLOW_ALIAS,
-    };
-    uint32_t flows = ir_summary_flow_count(summary, IR_SFLOW_RESULTS);
-    uint32_t sources = ir_summary_flow_source_count(summary,
-                                                    IR_SFLOW_RESULTS);
-    for (uint32_t f = 0; f < flows; f++) {
-        const ir_spath_t *to = ir_summary_flow_to(summary, IR_SFLOW_RESULTS,
-                                                  f);
-        if (!to || to->output != output) continue;
-        for (uint32_t s = 0; s < sources; s++) {
-            const ir_spath_t *from = ir_summary_flow_source(summary,
-                IR_SFLOW_RESULTS, s);
-            if (!from || from->root != IR_SPLACE_PARAM
-                || from->param != param) continue;
-            for (size_t k = 0; k < sizeof(kinds) / sizeof(*kinds); k++)
-                if (ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
-                                        kinds[k])) return true;
-        }
+    return parameter >= 64 ? bits == UINT64_MAX : (bits >> parameter) & 1;
+}
+
+// Whether `call` may store a tracked argument into a caller place passed
+// to an `out` or `modify` parameter.
+static bool
+stores_tracked_by_reference(window_t *window, const ir_instr_t *call,
+                            const n00bb_flow_t *effects)
+{
+    if (!effects || effects->opaque || !effects->stored_into) return false;
+    for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
+        uint32_t index = 0;
+        if (tracked_index(window, ir_call_argument(call, p).value, &index)
+            && flow_bit(effects->stored[N00BB_FLOW_SELF], p)) return true;
     }
     return false;
 }
 
-static bool
-output_holds_tracked(window_t *window, const ir_instr_t *output)
+// The caller local whose address is passed as by-reference argument `p`,
+// or nullptr when the place is anything else.
+static ir_local_t *
+reference_local(const ir_instr_t *call, uint32_t p)
 {
-    size_t ordinal = 0;
-    const ir_instr_t *call = ir_call_output_source(output, &ordinal);
-    callee_summary_t callee = {0};
-    if (!call || ordinal + 1 >= IR_SOUTPUT_STATUS
-        || !ir_summary_call_callees(window->analysis->summaries, call,
-                                    collect_callee_summary, &callee)
-        || !callee.summary) return false;
-    for (uint32_t o = 1; o < call->n_operands; o++) {
-        uint32_t index = 0;
-        ir_value_t *argument = operand_at(call, o);
-        if (argument && tracked_index(window, argument, &index)
-            && output_carries_param(callee.summary, (uint8_t)(ordinal + 1),
-                                    o - 1)) return true;
-    }
+    const ir_value_t *place = ir_call_argument(call, p).value;
+    if (!place || place->kind != IR_VAL_INSTR || !place->def
+        || place->def->op != IR_OP_ADDRESS_OF || !place->def->n_operands)
+        return nullptr;
+    return ir_operand_local(&place->def->operands[0]);
+}
+
+static bool
+window_has_local(const window_t *window, const ir_local_t *local)
+{
+    for (uint32_t l = 0; l < window->local_count; l++)
+        if (window->locals[l] == local) return true;
     return false;
+}
+
+// A view stored through a by-reference argument lives in the caller's
+// place: track the local it lands in, so the slice spans its uses.
+static bool
+track_reference_stores(window_t *window, const ir_instr_t *call,
+                       bool *changed)
+{
+    const n00bb_flow_t *effects = call_effects(window->analysis, call);
+    if (!stores_tracked_by_reference(window, call, effects)) return true;
+    for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
+        if (!flow_bit(effects->stored_into, p)) continue;
+        ir_local_t *local = reference_local(call, p);
+        if (!local || window_has_local(window, local)) continue;
+        if (window->local_count
+            >= sizeof(window->locals) / sizeof(*window->locals))
+            return false;
+        window->locals[window->local_count++] = local;
+        *changed = true;
+    }
+    return true;
 }
 
 static bool
 collect_tracked(window_t *window)
 {
     if (!track(window, window->conversion->dest)) return false;
-    for (uint32_t b = 0; b < window->function->n_blocks; b++) {
-        ir_block_t *block = window->function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *output = block->instrs[i];
-            uint32_t index = 0;
-            if (output->op != IR_OP_CALL_OUTPUT
-                || !tracked_index(window, output->dest, &index))
-                continue;
-            ir_value_t *source = operand_at(output, 0);
-            if (!source || !track(window, source)) return false;
-            if (source->kind == IR_VAL_INSTR && source->def
-                && source->def->op == IR_OP_VARIANT_PAYLOAD
-                && source->def->n_operands
-                && !track(window, operand_at(source->def, 0)))
-                return false;
-        }
-    }
     bool ok = true;
     for (bool changed = true; ok && changed;) {
         changed = false;
@@ -651,13 +667,8 @@ collect_tracked(window_t *window)
             for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
                 ir_instr_t *copy = block->instrs[i];
                 uint32_t index = 0;
-                if (copy->op == IR_OP_CALL_OUTPUT && copy->dest
-                    && !tracked_index(window, copy->dest, &index)
-                    && output_holds_tracked(window, copy)) {
-                    ir_value_t *source = operand_at(copy, 0);
-                    ok = track(window, copy->dest)
-                        && (!source || track(window, source));
-                    changed = true;
+                if (is_call(copy)) {
+                    ok = track_reference_stores(window, copy, &changed);
                     continue;
                 }
                 if (copy->op != IR_OP_COPY || copy->n_operands != 1) continue;
@@ -986,6 +997,11 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
             || keeps_parameter(effects->leaks, p))
             keep(walk);
     }
+    if (stores_tracked_by_reference(window, instruction, effects))
+        for (uint32_t p = 0; p < ir_call_argument_count(instruction); p++)
+            if (flow_bit(effects->stored_into, p)
+                && !window_has_local(window, reference_local(instruction, p)))
+                keep(walk);
     return true;
 }
 

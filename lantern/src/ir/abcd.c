@@ -702,7 +702,8 @@ allocation(ir_op_t op)
         || op == IR_OP_ARRAY_NEW || op == IR_OP_ARRAY_NEW_USING
         || op == IR_OP_VARIANT_NEW || op == IR_OP_VARIANT_NEW_USING
         || op == IR_OP_SEQUENCE_SHAPE_CHECK || op == IR_OP_RETAIN_REF
-        || op == IR_OP_PREFETCH || op == IR_OP_SIGNAL_FENCE;
+        || op == IR_OP_PREFETCH || op == IR_OP_SIGNAL_FENCE
+        || op == IR_OP_THREAD_FENCE || op == IR_OP_CPU_RELAX;
 }
 
 static bool

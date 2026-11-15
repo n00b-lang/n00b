@@ -1,0 +1,142 @@
+# Asking about a terminal.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # Only the terminal queries are made, which fill `arg`.
+    syscall ioctl(fd: c_int, request: c_ulong, arg: out *u8) -> c_int
+      number 16 when arch == x86_64
+      number 29 when arch == aarch64
+      effects input
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    # ioctl requests, the same on x86_64 and aarch64.
+    private const get_terminal_attributes: u64 = 0x5401
+    private const get_window_size: u64 = 0x5413
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    # 0 with ENOTTY for a descriptor that isn't a terminal.
+    fn isatty(fd: c_int) -> c_int
+      error ret == 0 via errno
+      effects input
+    # The variadic call goes through a generated shim, since a variadic C
+    # call's arguments aren't passed like a fixed one's.
+    fn ioctl(fd: c_int, request: c_ulong, ... of *u8) -> c_int
+      error ret == -1 via errno
+      effects input
+
+    binding {
+        pack ioctl.args as array
+    }
+    -]'ffi
+
+    private const get_window_size: u64 = 0x40087468
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _isatty(fd: c_int) -> c_int
+      effects input
+    fn _get_osfhandle(fd: c_int) -> isize
+      effects none
+    fn GetConsoleScreenBufferInfo(console: isize, info: out *u8) -> c_int
+      effects input
+
+    binding {
+        name GetConsoleScreenBufferInfo "console_buffer_info"
+        raw "_isatty"
+        raw "_get_osfhandle"
+        raw "GetConsoleScreenBufferInfo"
+    }
+    -]'ffi
+}
+
+record Terminal_Size {
+    rows: u16
+    columns: u16
+}
+
+# True when `fd` is a terminal.
+func is_terminal(fd: i32) -> bool fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        let attributes: Array[u8] = new[Array[u8]](64)
+        try {
+            _ = ioctl(fd, get_terminal_attributes,
+                unsafe_cast[Ref[byte]] ref attributes[0])!
+            return true
+        } fail(e) {
+            if e == internal.errno.Errno.ENOTTY {
+                return false
+            }
+            fail e
+        }
+    } else when target_os() == "macos" {
+        try {
+            _ = isatty(fd)!
+            return true
+        } fail(failure) {
+            let e: internal.errno.Errno = errno_of(failure)
+            if e == internal.errno.Errno.ENOTTY {
+                return false
+            }
+            fail e
+        }
+    } else when target_os() == "windows" {
+        # A console or other character device.
+        return isatty_raw(fd) != 0
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}
+
+# The size of the terminal `fd` refers to.
+func terminal_size(fd: i32) -> Terminal_Size fail: internal.errno.Errno {
+    # rows, columns, then the pixel sizes Linux also reports.
+    let size: Array[u16] = new[Array[u16]](4)
+    when target_os() == "linux" {
+        _ = ioctl(fd, get_window_size,
+            unsafe_cast[Ref[byte]] ref size[0])!
+    } else when target_os() == "macos" {
+        let window: Array[uint] = [
+            __abi_ref_address(unsafe_cast[Ref[byte]] ref size[0])]
+        try {
+            ioctl(fd, get_window_size, window)!
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else when target_os() == "windows" {
+        # CONSOLE_SCREEN_BUFFER_INFO, as 16-bit units: the visible window's
+        # left, top, right and bottom are units 5 through 8.
+        let info: Array[u16] = new[Array[u16]](11)
+        let console: int = get_osfhandle_raw(fd)
+        if console == -1 or console_buffer_info_raw(console,
+                unsafe_cast[Ref[byte]] ref info[0]) == 0 {
+            fail internal.errno.Errno.ENOTTY
+        }
+        size[0] = info[8] - info[6] + 1
+        size[1] = info[7] - info[5] + 1
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+    return (rows = size[0], columns = size[1])
+}

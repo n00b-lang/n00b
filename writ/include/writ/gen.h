@@ -62,10 +62,24 @@ struct writ_n00b_type_t {
     const writ_n00b_type_t *item;
 };
 
+// What the callee does through a pointer argument that goes to C or the
+// kernel as it is. It may read and write unless the contract says
+// otherwise: an explicit `in` only reads, and an explicit `out` only writes
+// (it fills the storage without reading what was there).
+typedef uint8_t writ_n00b_access_t;
+enum {
+    WRIT_N00B_ACCESS_ANY,
+    WRIT_N00B_ACCESS_READ_ONLY,
+    WRIT_N00B_ACCESS_WRITE_ONLY,
+};
+
 typedef struct {
     writ_str_t                     name;
     writ_str_t                     symbol;
     const writ_n00b_type_t *const *params;
+    // One entry per parameter, or null when every argument is
+    // WRIT_N00B_ACCESS_ANY.
+    const writ_n00b_access_t      *param_access;
     size_t                         params_count;
     const writ_n00b_type_t        *result;
     bool                           pure;

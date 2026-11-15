@@ -1,0 +1,2 @@
+tests/diagnostics/tu/record_align_too_small.n:1:25: error N00B-T0598: `align(4)` is less than record `Narrow`'s fields need, 8 bytes
+  help: use `align(8)` or more, or remove `align(...)`

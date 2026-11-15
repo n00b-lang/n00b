@@ -1,0 +1,9 @@
+import looped
+
+func double(value: uint) -> uint {
+    return value * 2
+}
+
+func looped_flag() -> uint {
+    return looped.sized
+}

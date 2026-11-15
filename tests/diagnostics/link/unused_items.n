@@ -37,7 +37,7 @@ func make() -> Used {
     never_read = 5
     return (a = 1, b = counter, c = 3)
 }
-func start() {
+func main() {
     let u = make()
     let box = new[Box](4)
     require u.a == 1

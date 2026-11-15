@@ -12,7 +12,7 @@ if comptime() {
     entries = built
 }
 
-func start() {
+func main() {
     if entries != nil {
         let list: List[Entry] = entries
         if list.len() == 2 and list[1].weight == 2 {

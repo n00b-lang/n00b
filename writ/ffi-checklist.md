@@ -397,11 +397,11 @@ enough to check off one at a time. The specs are `ffi-spec.md`,
 - [x] Build-time compile: `const` is writable; the module runs as a normal program on the real runtime and GC, linking the same shims and native inputs as the shipped build
 - [x] Each module's build-time state is saved; importers continue from it, not re-running the module
 - [x] After the run, only `const` values move into the shipped build
-- [x] Entry points: the shipped binary runs every module initializer, then the root TU's optional `func start() -> nil`; a failure or panic exits nonzero
-- [x] With `start()`, the root module's initializer runs in the build-time run like any module; optional `func comptime_start() -> nil` runs after every initializer and before consts are captured
-- [x] Without `start()`, the build-time run executes only the root module's const initializers; the rest of the root initializer runs only in the shipped binary
-- [x] Without `start()`, `comptime()` or `comptime_start()` in the root module is an error, and so is a root const initializer that reads a non-const root global
-- [x] Test: `start()` and `comptime_start()` each run exactly once, in the right build; a root without `start()` runs its top level once
+- [x] Entry points: the shipped binary runs every module initializer, then the root TU's optional `func main() -> nil`; a failure or panic exits nonzero
+- [x] With `main()`, the root module's initializer runs in the build-time run like any module; optional `func comptime_main() -> nil` runs after every initializer and before consts are captured
+- [x] Without `main()`, the build-time run executes only the root module's const initializers; the rest of the root initializer runs only in the shipped binary
+- [x] Without `main()`, `comptime()` or `comptime_main()` in the root module is an error, and so is a root const initializer that reads a non-const root global
+- [x] Test: `main()` and `comptime_main()` each run exactly once, in the right build; a root without `main()` runs its top level once
 - [x] Removed: comptime IR modules, `__n00bb_comptime_` twins, the comptime allocator, global-result producers, phase-result folding, runtime graph cloning
 - [x] Existing tests moved from `comptime {}` to `comptime()`
 - [x] Test: a `const` computed with zlib `compress2` at build time is baked into the program

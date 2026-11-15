@@ -11,7 +11,6 @@ const ir_value_t *ir_operand_referenced_value(const ir_operand_t *operand);
 typedef enum : uint8_t {
     IR_ARG_ABSENT,
     IR_ARG_VALUE,
-    IR_ARG_OUT,
     IR_ARG_FRESH,
     IR_ARG_MISSING,
     IR_ARG_UNMAPPED,

@@ -8,7 +8,7 @@ n00bb_record_assert_site(ir_lower_context_t *context,
 
 typedef struct {
     size_t loops, requires, value_blocks, tries, withs, finals, branches;
-    size_t switches, typecases, pending;
+    size_t switches, typecases;
 } frame_marks_t;
 
 static frame_marks_t
@@ -18,7 +18,6 @@ frame_marks(const n00bb_lower_context_t *lower)
         lower->loops.len, lower->requires.len, lower->value_blocks.len,
         lower->tries.len, lower->withs.len, lower->finals.len,
         lower->branches.len, lower->switches.len, lower->typecases.len,
-        lower->pending_call_copyouts.len,
     };
 }
 
@@ -34,7 +33,161 @@ restore_frames(n00bb_lower_context_t *lower, frame_marks_t marks)
     lower->branches.len = marks.branches;
     lower->switches.len = marks.switches;
     lower->typecases.len = marks.typecases;
-    lower->pending_call_copyouts.len = marks.pending;
+}
+
+// Whether `value` is `reference` or an address derived from it, or, when
+// `through_reads`, a value read through such an address.
+static bool
+n00bb_reaches_reference(const ir_value_t *value,
+                        const ir_value_t *reference, bool through_reads)
+{
+    for (size_t depth = 0; value && depth < 64; depth++) {
+        if (value == reference) return true;
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                            : nullptr;
+        bool step = def && def->n_operands
+            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
+                || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
+                || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
+                || def->op == IR_OP_NOMINAL_CAST
+                || (through_reads && def->op == IR_OP_LOAD));
+        value = step ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return false;
+}
+
+// Whether `in` writes the place an `out` parameter's Ref addresses: it
+// stores through the Ref, or hands the Ref (or, to a method resolved later,
+// the parameter's value) to a call.
+static bool
+n00bb_writes_reference(const ir_instr_t *in, const ir_value_t *reference)
+{
+    switch (in->op) {
+    case IR_OP_STORE:
+        return in->n_operands
+            && n00bb_reaches_reference(ir_operand_value(&in->operands[0]),
+                                       reference, false);
+    case IR_OP_CALL:
+    case IR_OP_CALLBACK_INVOKE:
+    case IR_OP_DISPATCH:
+        for (uint32_t o = 1; o < in->n_operands; o++)
+            if (n00bb_reaches_reference(ir_operand_value(&in->operands[o]),
+                    reference, in->op == IR_OP_DISPATCH)) return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
+// A member of a by-reference parameter is reached through the parameter's
+// address, but its base is still lowered as a read of the whole parameter,
+// which goes unused. Left in, it would read the caller's whole place (an
+// `out` place before it is set), so unused reads are dropped.
+static bool
+n00bb_erase_unused_reference_reads(ir_func_t *function)
+{
+    th_type *signature = function->type ? th_resolve(function->type)
+                                        : nullptr;
+    if (!signature || th_kind_of(signature) != TH_FUNCTION) return true;
+    core_dict_t used;
+    core_dict_init(&used, nullptr, nullptr);
+    core_list_t(n00bb_ir_instr_ptr_t) reads =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            for (uint32_t o = 0; o < in->n_operands; o++) {
+                ir_value_t *value = ir_operand_value(&in->operands[o]);
+                if (value) core_dict_put(&used, value, value);
+            }
+            const ir_value_t *address = in->op == IR_OP_LOAD
+                    && in->n_operands == 1 && !in->n_mods && in->dest
+                ? ir_operand_value(&in->operands[0]) : nullptr;
+            if (address && address->kind == IR_VAL_PARAM
+                && address->owner == function
+                && address->index < th_func_nparams(signature)
+                && th_mode_by_reference(
+                       th_func_param(signature, address->index)->mode))
+                core_list_push(reads, in);
+        }
+    bool ok = true;
+    for (size_t r = 0; ok && r < reads.len; r++)
+        if (!core_dict_contains(&used, reads.data[r]->dest))
+            ok = ir_instr_erase(reads.data[r]);
+    core_dict_free(&used);
+    core_list_free(reads);
+    return ok;
+}
+
+// An `out` parameter must be written on every path to a successful return.
+// Its writes go through its Ref, so this is a must-write flow over the
+// body's reachable blocks.
+static void
+n00bb_check_out_parameter(ir_lower_context_t *context,
+                          parse_sym_entry_t *parameter,
+                          const ir_value_t *reference)
+{
+    ir_func_t *function = context->function;
+    uint32_t count = function->n_blocks;
+    if (!count || !reference) return;
+    bool *reachable = core_alloc_array(bool, count);
+    bool *written_in = core_alloc_array(bool, count);
+    uint32_t *pending = core_alloc_array(uint32_t, count);
+    if (!reachable || !written_in || !pending) {
+        core_free(reachable);
+        core_free(written_in);
+        core_free(pending);
+        return;
+    }
+    uint32_t depth = 0;
+    reachable[0] = true;
+    pending[depth++] = 0;
+    while (depth) {
+        ir_block_t *block = function->blocks[pending[--depth]];
+        ir_instr_t *exit = ir_block_terminator(block);
+        for (uint32_t s = 0; exit && s < ir_succ_count(exit); s++) {
+            ir_block_t *next = ir_succ_at(exit, s);
+            if (!next || reachable[next->index]) continue;
+            reachable[next->index] = true;
+            pending[depth++] = next->index;
+        }
+    }
+    for (uint32_t b = 1; b < count; b++) written_in[b] = true;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < count; b++) {
+            ir_block_t *block = function->blocks[b];
+            if (!reachable[b]) continue;
+            bool written = written_in[b];
+            for (uint32_t i = 0; !written && i < block->n_instrs; i++)
+                written = n00bb_writes_reference(block->instrs[i],
+                                                 reference);
+            ir_instr_t *exit = ir_block_terminator(block);
+            for (uint32_t s = 0; exit && s < ir_succ_count(exit); s++) {
+                ir_block_t *next = ir_succ_at(exit, s);
+                if (!next || !written_in[next->index] || written) continue;
+                written_in[next->index] = false;
+                changed = true;
+            }
+        }
+    }
+    for (uint32_t b = 0; b < count; b++) {
+        ir_block_t *block = function->blocks[b];
+        ir_instr_t *exit = reachable[b] ? ir_block_terminator(block)
+                                        : nullptr;
+        if (!exit || exit->op != IR_OP_RETURN) continue;
+        bool written = written_in[b];
+        for (uint32_t i = 0; !written && i < block->n_instrs; i++)
+            written = n00bb_writes_reference(block->instrs[i], reference);
+        if (written) continue;
+        lower_report(context, N00B_DIAG_READ_BEFORE_ASSIGNMENT, exit->span,
+            N00B_TEXT_IR_UNSET_AT_RETURN, N00BB_ARGS(ARG_TEXT(parameter->name)));
+        lower_declared_secondary(context, parameter,
+            N00B_TEXT_IR_DECLARED_HERE, N00BB_ARGS(ARG_TEXT(parameter->name)));
+    }
+    core_free(reachable);
+    core_free(written_in);
+    core_free(pending);
 }
 
 static ir_block_t *
@@ -236,8 +389,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .tries = core_list_new(n00bb_try_frame_t),
         .withs = core_list_new(n00bb_with_frame_t),
         .finals = core_list_new(n00bb_final_frame_t),
-        .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
-        .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
         .default_params = core_list_new(n00bb_default_param_t),
         .branches = core_list_new(n00bb_branch_frame_t),
         .switches = core_list_new(n00bb_switch_frame_t),
@@ -372,61 +523,41 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             continue;
         }
 
-        bool mode_matches = parameter->has_mode
-            && (mode == TH_OUT || mode == TH_INOUT);
-        ir_value_t *input = mode_matches && mode == TH_INOUT
-            ? ir_param_add(function, parameter->name, parameter_type)
+        // `out` and `modify` parameters are references to the caller's
+        // place. The parameter's value is that Ref; the symbol is bound to
+        // it as address-backed storage, so reads load through it and
+        // writes store through it, visible to the caller at once.
+        bool mode_matches = parameter->has_mode && th_mode_by_reference(mode);
+        th_type *reference_type = mode_matches
+            ? th_ind(ir_module_types(module), 0, parameter_type) : nullptr;
+        ir_value_t *reference = reference_type
+            ? ir_param_add(function, parameter->name, reference_type)
             : nullptr;
         char local_buffer[48];
         core_string_t local_name = n00bb_format_name(local_buffer,
             sizeof(local_buffer), "__n00bb_param_%llu",
             (unsigned long long)context.next_value_id++);
-        ir_local_t *local = mode_matches
+        ir_local_t *local = reference
             ? ir_local_add(function, local_name, parameter_type) : nullptr;
         if (local) {
             (void)ir_local_set_source_name(function, local, parameter->name);
             local->synthetic = true;
         }
-        ir_value_t *local_value = local ? ir_local_value(function, local)
-                                        : nullptr;
         ir_span_t parameter_span = lower_span_for_tree(
             &context, parameter->decl_node);
-        if (!mode_matches || (mode == TH_INOUT && !input) || !local
-            || (input && !n00bb_set_reference_access(ir_context, input,
-                                                     parameter_type))
-            || !n00bb_set_reference_access(ir_context, local_value,
-                                           parameter_type)
+        if (local) local->span = lower_symbol_name_span(&context, parameter);
+        if (!reference || !local
+            || !n00bb_set_reference_access(ir_context, reference,
+                                           reference_type)
             || !n00bb_attach_symbol_array_shape(&context, grammar,
-                parameter, parameter_type, input, local)
-            || !n00bb_bind_local(&context, parameter, local,
-                                  parameter_span)) {
+                parameter, parameter_type, reference, local)
+            || !ir_lower_bind_local_storage(&context, parameter, local,
+                                            reference)) {
             lower_internal(&context, parameter_span,
-                "output parameter has no matching passing metadata or "
-                "local copy");
+                "a by-reference parameter could not be bound to its "
+                "caller's place");
             goto cleanup;
         }
-        if (mode == TH_INOUT) {
-            if (!n00bb_emit_local_write(&context, local, input,
-                                        parameter_span)) {
-                lower_internal(&context,
-                    lower_span_for_tree(&context, parameter->decl_node),
-                    "could not copy a modify parameter into its local storage");
-                goto cleanup;
-            }
-        }
-        size_t output_index = 0;
-        for (size_t previous = 0; previous < i; previous++) {
-            parse_sym_entry_t *prior = parameters->data[previous];
-            if (prior && prior->has_mode
-                && th_mode_produces_output(prior->mode))
-                output_index++;
-        }
-        core_list_push(lower_data.parameters_to_copy_out,
-            ((n00bb_copyout_t){.symbol = parameter,
-                               .local = local,
-                               .output_index = output_index,
-                               .required_shape = parse_sym_binding(parameter,
-                                   CORE_STRING_STATIC("ir.array-shape"))}));
     }
 
     if (rest_parameter) {
@@ -505,17 +636,17 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         ir_local_t *local = ir_lower_bound_local(&context, parameter);
         ir_value_t *parameter_value = ir_lower_bound_value(&context,
                                                            parameter);
+        ir_value_t *reference = ir_lower_bound_address(&context, parameter);
         if ((local && !ir_local_set_shape(local, bound_shape))
             || (parameter_value
-                && !ir_value_set_shape(parameter_value, bound_shape)))
+                && !ir_value_set_shape(parameter_value, bound_shape))
+            || (reference && !ir_value_set_shape(reference, bound_shape)))
             goto cleanup;
-        for (size_t c = 0; c < lower_data.parameters_to_copy_out.len; c++)
-            if (lower_data.parameters_to_copy_out.data[c].symbol == parameter)
-                lower_data.parameters_to_copy_out.data[c].required_shape =
-                    bound_shape;
         if (mode == TH_OUT) continue;
-        ir_value_t *value = local
-            ? n00bb_emit_local_read(&context, local, span)
+        ir_value_t *value = reference
+            ? n00bb_emit_indirect_read(&context, reference, local->type,
+                                       span)
+            : local ? n00bb_emit_local_read(&context, local, span)
             : parameter_value;
         if (!value || !n00bb_emit_sequence_shape_check_impl(&context,
                 value, bound_shape, span, true)) goto cleanup;
@@ -622,7 +753,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             if (!n00bb_finish_final_scope(&context, lower_data.finals.len
                         ? lower_data.finals.data[0].scope : nullptr, body)
                 || !n00bb_emit_success_return(&context, lowered.value,
-                    &lower_data.parameters_to_copy_out,
                     lower_span_for_tree(&context, body))) goto cleanup;
         }
     }
@@ -633,9 +763,19 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             goto cleanup;
         ir_span_t implicit_return = ir_module_span(module);
         implicit_return.implied = true;
-        if (!n00bb_emit_success_return(&context, nullptr,
-                &lower_data.parameters_to_copy_out, implicit_return))
+        if (!n00bb_emit_success_return(&context, nullptr, implicit_return))
             goto cleanup;
+    }
+    for (size_t i = 0; i < parameters->len; i++) {
+        parse_sym_entry_t *parameter = parameters->data[i];
+        if (parameter && parameter->has_mode && parameter->mode == TH_OUT)
+            n00bb_check_out_parameter(&context, parameter,
+                ir_lower_bound_address(&context, parameter));
+    }
+    if (!n00bb_erase_unused_reference_reads(function)) {
+        lower_internal(&context, lower_span_for_tree(&context, body),
+            "could not drop an unused read of a by-reference parameter");
+        goto cleanup;
     }
     ok = lower_failures(&context) <= failures + contained
         || lower_mark_failed(&context);
@@ -666,16 +806,12 @@ cleanup:
     }
     core_list_free(lower_data.withs);
     core_list_free(lower_data.finals);
-    for (size_t i = 0; i < lower_data.pending_call_copyouts.len; i++)
-        core_list_free(lower_data.pending_call_copyouts.data[i].items);
-    core_list_free(lower_data.pending_call_copyouts);
     core_list_free(lower_data.default_params);
     for (size_t i = 0; i < lower_data.tuple_parts.len; i++) {
         core_list_free(lower_data.tuple_parts.data[i].expressions);
         core_list_free(lower_data.tuple_parts.data[i].values);
     }
     core_list_free(lower_data.tuple_parts);
-    core_list_free(lower_data.parameters_to_copy_out);
     ir_lower_context_release(&context);
     return ok;
 }

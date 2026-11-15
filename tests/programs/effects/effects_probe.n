@@ -50,7 +50,7 @@ func probe() -> uint fail: sys.os.Errno {
     return seen
 }
 
-func start() -> nil {
+func main() -> nil {
     try {
         _ = probe()!
     } fail(code) {

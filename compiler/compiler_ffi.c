@@ -38,10 +38,24 @@ core_list_decl(n00bb_ffi_symbol_t);
 static pthread_mutex_t declared_symbols_lock = PTHREAD_MUTEX_INITIALIZER;
 static core_list_t(n00bb_ffi_symbol_t) declared_symbols;
 
-static void
-remember_declared_symbols(const writ_n00b_externs_t *externs, core_translation_unit_t *unit,
-                          core_string_t literal, n00bb_literal_origin_t origin)
+static bool
+same_native_facts(const n00bb_ffi_symbol_t *left, const n00bb_ffi_symbol_t *right)
 {
+    return left->pure == right->pure && left->effects == right->effects && left->read_only == right->read_only
+        && left->write_only == right->write_only;
+}
+
+// Records the C symbols a literal declares, for the missing-symbol report
+// and to hold every declaration of one C function to the same facts: the
+// summaries know a native by its symbol (n00bb_note_native_axioms), so two
+// differing declarations would make the analysis depend on which came
+// first. Returns false, having reported it, when a declaration differs from
+// another literal's.
+static bool
+remember_declared_symbols(const writ_n00b_externs_t *externs, const n00bb_native_declarations_t *natives,
+                          core_translation_unit_t *unit, core_string_t literal, n00bb_literal_origin_t origin)
+{
+    bool ok = true;
     pthread_mutex_lock(&declared_symbols_lock);
     if (!declared_symbols.data) {
         declared_symbols = core_list_new(n00bb_ffi_symbol_t);
@@ -54,19 +68,52 @@ remember_declared_symbols(const writ_n00b_externs_t *externs, core_translation_u
         core_buffer_t name = {0};
         core_buffer_printf(&name, "%.*s.%.*s", (int)literal.u8_bytes, literal.data, (int)function.u8_bytes,
                            function.data);
-        core_list_push(declared_symbols, ((n00bb_ffi_symbol_t){
-                                             .symbol = core_string_dup(core_string_borrow(
-                                                 externs->items[i].symbol.data, externs->items[i].symbol.length)),
-                                             .name   = core_string_dup(core_buffer_string(&name)),
-                                             .unit   = unit,
-                                             .line   = externs->items[i].declared_at.line
-                                                           ? externs->items[i].declared_at.line : origin.line,
-                                             .column = externs->items[i].declared_at.line
-                                                           ? externs->items[i].declared_at.column : origin.column,
-                                         }));
+        const n00bb_native_declaration_t *native = &natives->items[i];
+        n00bb_ffi_symbol_t entry = {
+            .symbol     = core_string_borrow(externs->items[i].symbol.data, externs->items[i].symbol.length),
+            .name       = core_buffer_string(&name),
+            .unit       = unit,
+            .line       = externs->items[i].declared_at.line ? externs->items[i].declared_at.line : origin.line,
+            .column     = externs->items[i].declared_at.line ? externs->items[i].declared_at.column : origin.column,
+            .pure       = native->pure,
+            .effects    = native->effects,
+            .read_only  = native->read_only,
+            .write_only = native->write_only,
+        };
+        n00bb_ffi_symbol_t *same = nullptr;
+        const n00bb_ffi_symbol_t *other = nullptr;
+        for (size_t d = 0; d < declared_symbols.len; d++) {
+            n00bb_ffi_symbol_t *known = &declared_symbols.data[d];
+            if (!core_string_eq(known->symbol, entry.symbol)) continue;
+            if (core_string_eq(known->name, entry.name)) same = known;
+            else if (!other && !same_native_facts(known, &entry)) other = known;
+        }
+        if (other) {
+            core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+            n00bb_report(diagnostics, unit, N00B_DIAG_NATIVE_DECLARATIONS_DIFFER,
+                (core_diag_location_t){entry.line, entry.column, entry.line, entry.column, true},
+                N00B_TEXT_FFI_NATIVE_DECLARED_DIFFERENTLY,
+                N00BB_ARGS(ARG_TEXT(entry.name), ARG_TEXT(entry.symbol), ARG_TEXT(other->name)));
+            n00bb_report_secondary(diagnostics, other->unit,
+                (core_diag_location_t){other->line, other->column, other->line, other->column, true},
+                N00B_TEXT_FFI_NATIVE_OTHER_DECLARATION, N00BB_ARGS(ARG_TEXT(other->name)));
+            ok = false;
+        }
+        // A literal generated again (in a long-running compiler) replaces
+        // what it declared before.
+        entry.symbol = core_string_dup(entry.symbol);
+        entry.name = core_string_dup(entry.name);
+        if (same) {
+            core_free((void *)same->symbol.data);
+            core_free((void *)same->name.data);
+            *same = entry;
+        } else {
+            core_list_push(declared_symbols, entry);
+        }
         core_buffer_release(&name);
     }
     pthread_mutex_unlock(&declared_symbols_lock);
+    return ok;
 }
 
 bool
@@ -100,6 +147,9 @@ typedef struct {
     core_list_t(core_string_t) search_paths;
     bool                       exports;
     bool                       used;
+    // The program calls one of the literal's shims, so they're compiled; a
+    // literal used only through its raw bindings needs just its libraries.
+    bool                       shims_used;
     // The module the literal generated.
     core_string_t              module;
     // The contract files the literal reads, so a cache can tell when it
@@ -447,7 +497,7 @@ refresh_selection(n00bb_ffi_t *ffi)
         if (!record->used) {
             continue;
         }
-        for (size_t j = 0; j < record->shims.len; j++)
+        for (size_t j = 0; record->shims_used && j < record->shims.len; j++)
             core_list_push(ffi->selected_shims, record->shims.data[j]);
         push_all(&ffi->archives, &record->archives);
         push_all(&ffi->libraries, &record->libraries);
@@ -467,13 +517,15 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     // raw bindings calls directly: either way its libraries are needed.
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
-        record->used = record->exports;
+        record->shims_used = record->exports;
         core_string_t prefix = record->prefix;
+        for (size_t j = 0; !record->shims_used && j < count; j++)
+            record->shims_used = symbols[j].u8_bytes > prefix.u8_bytes
+                && core_string_starts_with(symbols[j], prefix)
+                && symbols[j].data[prefix.u8_bytes] == '_';
+        record->used = record->shims_used;
         for (size_t j = 0; !record->used && j < count; j++)
-            record->used = (symbols[j].u8_bytes > prefix.u8_bytes
-                    && core_string_starts_with(symbols[j], prefix)
-                    && symbols[j].data[prefix.u8_bytes] == '_')
-                || contains(&record->symbols, symbols[j]);
+            record->used = contains(&record->symbols, symbols[j]);
     }
     refresh_selection(ffi);
 }
@@ -519,6 +571,8 @@ native_effects(writ_effects_t declared)
         {WRIT_EFFECTS_CLOCK, IR_SUMMARY_READS_CLOCK},
         {WRIT_EFFECTS_RANDOM, IR_SUMMARY_READS_RANDOM},
         {WRIT_EFFECTS_THREADS, IR_SUMMARY_STARTS_THREADS},
+        {WRIT_EFFECTS_HINT, IR_SUMMARY_HINTS},
+        {WRIT_EFFECTS_SYNC, IR_SUMMARY_SYNCS},
     };
     uint32_t flags = 0;
     for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)
@@ -541,8 +595,15 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
         const writ_n00b_extern_t *declared = &externs->items[i];
         n00bb_native_type_t **params = declared->params_count
             ? core_alloc_array(n00bb_native_type_t *, declared->params_count) : nullptr;
-        for (size_t p = 0; p < declared->params_count; p++)
+        uint16_t read_only = 0, write_only = 0;
+        for (size_t p = 0; p < declared->params_count; p++) {
             params[p] = keep_type(declared->params[p]);
+            writ_n00b_access_t access = declared->param_access
+                ? declared->param_access[p] : WRIT_N00B_ACCESS_ANY;
+            if (p >= 16) continue;
+            if (access == WRIT_N00B_ACCESS_READ_ONLY) read_only |= (uint16_t)(1u << p);
+            if (access == WRIT_N00B_ACCESS_WRITE_ONLY) write_only |= (uint16_t)(1u << p);
+        }
         natives->items[i] = (n00bb_native_declaration_t){
             .name        = core_string_dup(as_core(declared->name)),
             .symbol      = core_string_dup(as_core(declared->symbol)),
@@ -551,6 +612,8 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
             .result      = keep_type(declared->result),
             .pure        = declared->pure,
             .effects     = native_effects(declared->effects),
+            .read_only   = read_only,
+            .write_only  = write_only,
         };
     }
     natives->count = externs->count;
@@ -1111,6 +1174,7 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         .search_paths = core_list_new(core_string_t),
         .inputs       = core_list_new(core_string_t),
         .used         = true,
+        .shims_used   = true,
     };
     for (size_t i = 0; i < writ_unit_file_count(literal); i++) {
         push_unique(&record.inputs, writ_unit_file_at(literal, i));
@@ -1136,9 +1200,9 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         writ_output_t output = {capture_file, &capture};
         writ_n00b_externs_t externs = {0};
         ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
-          && register_exports(&externs, module);
+          && register_exports(&externs, module)
+          && remember_declared_symbols(&externs, natives, unit, name, origin);
         if (ok) {
-            remember_declared_symbols(&externs, unit, name, origin);
             for (size_t i = 0; i < externs.count; i++)
                 push_unique(&record.symbols, externs.items[i].symbol);
         }
@@ -1384,6 +1448,11 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     if (core_string_find(triple, CORE_STRING_STATIC("windows")) < 0) {
         arguments[next++] = "-fPIC";
     }
+    else {
+        // A shim declares the C runtime functions it calls, as _errno, which
+        // the runtime's headers declare dllimport; the call is the same.
+        arguments[next++] = "-Wno-inconsistent-dllimport";
+    }
     // Linux programs link no libc, so nothing provides the stack
     // protector's guard value.
     if (core_string_find(triple, CORE_STRING_STATIC("linux")) >= 0) {
@@ -1428,10 +1497,14 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, core_string_
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         append_payload_text(&payload, ffi->contract_dirs.data[i]);
     }
+    // Only the headers the shim includes: which other literals' headers a
+    // build happens to have loaded mustn't change the key.
     for (size_t i = 0; i < ffi->shims.len; i++) {
-        if (core_string_ends_with(ffi->shims.data[i].name, CORE_STRING_STATIC(".h"))) {
-            append_payload_text(&payload, ffi->shims.data[i].name);
-            append_payload_text(&payload, ffi->shims.data[i].contents);
+        const ffi_output_t *header = &ffi->shims.data[i];
+        if (core_string_ends_with(header->name, CORE_STRING_STATIC(".h"))
+            && core_string_find(shim->contents, header->name) >= 0) {
+            append_payload_text(&payload, header->name);
+            append_payload_text(&payload, header->contents);
         }
     }
     core_uint128_t key = n00bb_native_cache_key(cache, payload.data, payload.byte_len, triple,

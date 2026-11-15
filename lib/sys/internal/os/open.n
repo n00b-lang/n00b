@@ -1,0 +1,176 @@
+# Opening a file.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # Opening a FIFO waits for the other end, so open can block.
+    syscall openat(dirfd: c_int, path: in *u8, flags: c_int, mode: c_uint) -> c_int
+      number 257 when arch == x86_64
+      number 56 when arch == aarch64
+      effects input, blocking
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    # Open flags, the same on x86_64 and aarch64.
+    private const close_on_exec: u32 = 0x80000
+    private const open_create: u32 = 0x40
+    private const open_exclusive: u32 = 0x80
+    private const open_truncate: u32 = 0x200
+    private const open_append: u32 = 0x400
+    # AT_FDCWD: paths are relative to the working directory.
+    private const at_working_directory: i32 = -100
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    # Opening a FIFO waits for the other end, so open can block. The
+    # variadic call goes through a generated shim, since a variadic C
+    # call's arguments aren't passed like a fixed one's.
+    fn open(path: *cstr, flags: c_int, ... of c_uint) -> c_int
+      error ret == -1 via errno
+      effects input, blocking
+
+    binding {
+        pack open.args as array
+        # This module's own function of the name is the API.
+        name open "open_variadic"
+    }
+    -]'ffi
+
+    private const close_on_exec: u32 = 0x1000000
+    private const open_create: u32 = 0x200
+    private const open_exclusive: u32 = 0x800
+    private const open_truncate: u32 = 0x400
+    private const open_append: u32 = 0x8
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    # Returns the errno itself; the path is UTF-16.
+    fn _wsopen_s(fd: out *c_int, path: in *u16, flags: c_int, share: c_int,
+                 mode: c_int) -> c_int
+      effects input, blocking
+
+    binding {
+        raw "_wsopen_s"
+    }
+    -]'ffi
+
+    # _O_* open flags; _O_NOINHERIT keeps a descriptor from child processes.
+    private const close_on_exec: u32 = 0x80
+    private const open_create: u32 = 0x100
+    private const open_exclusive: u32 = 0x400
+    private const open_truncate: u32 = 0x200
+    private const open_append: u32 = 0x8
+    private const open_binary: u32 = 0x8000
+    # _SH_DENYNO: other opens of the file are allowed.
+    private const share_any: i32 = 0x40
+    # _S_IREAD and _S_IWRITE.
+    private const permit_read: u32 = 0x100
+    private const permit_write: u32 = 0x80
+}
+
+# How a file is opened. The values are the same on every platform.
+enum Access {
+    read_only = 0,
+    write_only = 1,
+    read_write = 2,
+}
+
+# Opens `path`, relative to the working directory, and returns its file
+# descriptor, which is closed on exec. `create` makes the file with `mode`
+# (0o644 by default) if it doesn't exist; with `exclusive`, an existing
+# file is EEXIST. An interrupted open is retried.
+func open(path: string, access: Access, create: bool = false,
+          truncate: bool = false, append: bool = false,
+          exclusive: bool = false, mode: u32 = 0x1a4) -> i32
+    fail: internal.errno.Errno {
+    var bytes: Array[u8] = new[Array[u8]](1)
+    try {
+        bytes = to_cstring(path, copy = true,
+            buf = new[Array[u8]](cast[int](byte_len(path)) + 1))!
+    } fail(failure) {
+        # The path holds a NUL byte, which C can't see past.
+        fail internal.errno.Errno.EINVAL
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref bytes[0]
+    var flags: u32 = cast[u32](access)
+    when target_os() == "windows" {
+        flags = flags | open_binary
+    }
+    when target_os() == "linux" or target_os() == "macos"
+            or target_os() == "windows" {
+        flags = flags | close_on_exec
+        if create {
+            flags = flags | open_create
+        }
+        if truncate {
+            flags = flags | open_truncate
+        }
+        if append {
+            flags = flags | open_append
+        }
+        if exclusive {
+            flags = flags | open_exclusive
+        }
+    }
+    while true {
+        try {
+            when target_os() == "linux" {
+                return openat(at_working_directory, at,
+                                     cast[i32](flags), mode)!
+            } else when target_os() == "macos" {
+                let modes: Array[u32] = [mode]
+                try {
+                    return open_variadic(path, cast[i32](flags), modes)!
+                } fail(failure) {
+                    fail errno_of(failure)
+                }
+            } else when target_os() == "windows" {
+                var wide: Array[u16] = []
+                try {
+                    wide = utf16_units(path, terminated = true)!
+                } fail(failure) {
+                    fail internal.errno.Errno.EINVAL
+                }
+                # Windows has only read and write permission bits.
+                var permission: u32 = permit_read
+                if mode & 0x80 != 0 {
+                    permission = permission | permit_write
+                }
+                let fds: Array[i32] = [-1]
+                let status: i32 = wsopen_s_raw(
+                    unsafe_cast[Ref[byte]] ref fds[0],
+                    unsafe_cast[Ref[byte]] ref wide[0], cast[i32](flags),
+                    share_any, cast[i32](permission))
+                if status != 0 {
+                    fail cast[internal.errno.Errno](status)
+                }
+                return fds[0]
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}

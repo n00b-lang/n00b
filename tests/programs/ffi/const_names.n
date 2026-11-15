@@ -14,7 +14,7 @@ binding {
 }
 -]'ffi
 
-func start() {
+func main() {
     require C_LIMIT == 40
     require LIMIT == 1
 }

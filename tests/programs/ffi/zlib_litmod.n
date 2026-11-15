@@ -13,6 +13,6 @@ sequence litmod checksum_bytes(items: Array[u8]) -> u64 fail: string {
 
 const hello: u64 = [104, 101, 108, 108, 111]'crc
 
-func start() -> nil {
+func main() -> nil {
     require hello == 907060870
 }

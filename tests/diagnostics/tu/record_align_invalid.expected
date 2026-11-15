@@ -1,0 +1,1 @@
+tests/diagnostics/tu/record_align_invalid.n:1:28: error N00B-T0597: the alignment of record `Odd` must be a constant power of two

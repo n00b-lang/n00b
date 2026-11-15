@@ -1,0 +1,98 @@
+# Reading from a file descriptor.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall read(fd: c_int, buf: out *u8, count: usize) -> isize
+      number 0 when arch == x86_64
+      number 63 when arch == aarch64
+      effects input, blocking
+
+    binding {
+        error * -> "internal.errno.Errno"
+        # This module's own function of the name is the API.
+        name read "syscall_read"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    fn read(fd: c_int, buf: *u8, count: usize) -> isize
+      error ret == -1 via errno
+      effects input, blocking
+
+    binding {
+        name read "c_read"
+    }
+    -]'ffi
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _errno() -> *c_int static per thread
+    error_channel errno per thread {
+        value _errno()
+    }
+
+    fn _read(fd: c_int, buf: *u8, count: c_uint) -> c_int
+      error ret == -1 via errno
+      effects input, blocking
+
+    binding {
+        name _read "c_read"
+    }
+    -]'ffi
+    bring chunk from internal.os.support
+}
+
+# Reads into `buffer[start:end]`; returns the number of bytes read, which
+# is 0 at end of file. An interrupted read is retried.
+func read(fd: i32, buffer: Array[u8], start: uint, end: uint) -> uint
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(buffer)
+    if start == end {
+        return 0
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref buffer[start]
+    while true {
+        try {
+            when target_os() == "linux" {
+                return cast[uint](syscall_read(fd, at, end - start)!)
+            } else when target_os() == "macos" {
+                try {
+                    return cast[uint](c_read(fd, at, end - start)!)
+                } fail(failure) {
+                    fail errno_of(failure)
+                }
+            } else when target_os() == "windows" {
+                try {
+                    return cast[uint](c_read(fd, at,
+                        cast[u32](chunk(end - start)))!)
+                } fail(failure) {
+                    fail errno_of(failure)
+                }
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}

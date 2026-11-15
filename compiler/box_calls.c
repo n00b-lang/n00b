@@ -719,7 +719,6 @@ function_binds(ir_func_t *function, th_type *variable)
     for (size_t i = 0; i < th_func_nparams(function->type); i++) {
         const th_param *formal = th_func_param(function->type, i);
         if (formal && !ir_func_parameter_is_optional(function, i)
-            && th_mode_accepts_input(formal->mode)
             && th_occurs(types, variable, formal->type)
             && n00bb_boxed_signature_position(module, formal->type))
             return true;
@@ -1262,6 +1261,37 @@ rewrite_open_reference(box_calls_t *calls, ir_func_t *caller,
                     1);
 }
 
+// An `out` or `modify` parameter of open type receives a boxed reference to
+// the caller's place. A place that is a raw slot (a local or stack
+// allocation of open type, holding its value boxed) is passed as a boxed
+// reference to the slot's value.
+static bool
+rewrite_reference_arguments(box_calls_t *calls, ir_func_t *caller,
+                            ir_instr_t *instruction)
+{
+    th_ctx *types = ir_module_types(caller->owner);
+    th_type *signature = ir_call_function_type(instruction);
+    for (uint32_t o = 1; signature && o < instruction->n_operands
+         && o - 1 < th_func_nparams(signature); o++) {
+        ir_operand_t *operand = &instruction->operands[o];
+        if ((operand->kind != IR_OPD_VALUE && operand->kind != IR_OPD_FRESH)
+            || !operand->value
+            || !th_mode_by_reference(th_func_param(signature, o - 1)->mode))
+            continue;
+        th_type *reference = th_resolve(operand->value->type);
+        if (th_kind_of(reference) != TH_INDIRECTION
+            || th_is_closed(types, reference)
+            || address_storage(caller, operand->value, 0) != ADDRESS_RAW)
+            continue;
+        ir_value_t *boxed = slot_reference(calls, caller, instruction,
+                                           operand->value);
+        if (!boxed) continue;
+        operand->value = boxed;
+        ir_instr_use_added(instruction, o);
+    }
+    return true;
+}
+
 static bool
 rewrite_native_call(box_calls_t *calls, ir_func_t *caller,
                     ir_instr_t *instruction)
@@ -1368,14 +1398,11 @@ address_storage_within(ir_func_t *caller, ir_value_t *address, unsigned depth,
                        ir_instr_t **visiting)
 {
     if (!address || depth > 16) return ADDRESS_UNKNOWN;
-    if (address->kind == IR_VAL_PARAM) {
-        const th_param *parameter = address->index
-            < th_func_nparams(caller->type)
-            ? th_func_param(caller->type, address->index) : nullptr;
-        return !parameter ? ADDRESS_UNKNOWN
-            : th_mode_is_input_only(parameter->mode) ? ADDRESS_BOXED
-                                                : ADDRESS_RAW;
-    }
+    // A parameter's Ref is a boxed reference: one passed in, or the Ref to
+    // the caller's place an `out` or `modify` parameter is.
+    if (address->kind == IR_VAL_PARAM)
+        return address->index < th_func_nparams(caller->type)
+            ? ADDRESS_BOXED : ADDRESS_UNKNOWN;
     if (address->kind != IR_VAL_INSTR) return ADDRESS_BOXED;
     ir_instr_t *definition = address->def;
     if (!definition) return ADDRESS_UNKNOWN;
@@ -1867,6 +1894,8 @@ rewrite_emitted(box_calls_t *calls)
                                                       instruction)
                         && rewrite_open_reference(calls, function,
                                                   instruction)
+                        && rewrite_reference_arguments(calls, function,
+                                                       instruction)
                         && rewrite_native_call(calls,function, instruction);
                     break;
                 case IR_OP_AGGREGATE:

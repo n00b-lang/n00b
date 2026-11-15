@@ -41,6 +41,27 @@ basics)
         builds_and_runs errno_channel
         ;;
     esac
+    # stdout is a file here, so puts buffers until the program exits.
+    builds_and_runs libc_exit_flush >"$tmp/flush.out"
+    grep -q 'flushed at exit' "$tmp/flush.out" || {
+        echo "libc_exit_flush's output was lost at exit" >&2
+        exit 1
+    }
+    for program in libc_thread libc_thread_raw; do
+        case "$(uname -s)" in
+        Linux)
+            if builds_and_runs $program 2>"$tmp/$program.err"; then
+                echo "$program called into libc from a runtime thread" >&2
+                exit 1
+            fi
+            grep -q 'main thread only' "$tmp/$program.err" || {
+                cat "$tmp/$program.err" >&2
+                exit 1
+            }
+            ;;
+        *) builds_and_runs $program ;;
+        esac
+    done
     for marker in marker-literal-5be1 marker-contract-5be1; do
         if grep -q -a "$marker" "$tmp/ffi_basics"; then
             echo "ffi_basics contains $marker" >&2
@@ -52,7 +73,7 @@ basics)
         provide_mismatch.n export_same_as.n missing.n \
         missing_library.n extern_hidden.n malformed.n \
         binding_error.n local.n not_const.n expression.n \
-        shadow.n shadow_alias.n >"$tmp/rejected.log" 2>&1; then
+        shadow.n shadow_alias.n native_conflict.n >"$tmp/rejected.log" 2>&1; then
         echo "the rejected ffi programs checked" >&2
         exit 1
     fi
@@ -70,6 +91,7 @@ basics)
     reported extern_hidden.n '`__abs_raw`'
     reported malformed.n:5:30 error
     reported binding_error.n:5:5 'N00B-F1501'
+    reported native_conflict.n:17:1 'N00B-F0007'
     for name in local not_const; do
         reported "$name.n" "N00B-P0030: a module literal declares its names into this module, so it stands alone: it can't initialize a variable"
     done

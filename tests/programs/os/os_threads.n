@@ -1,0 +1,143 @@
+import sys.memory
+import sys.os
+import sys.threads
+
+# sys.os thread control, which stops the world for the collector: a running
+# thread is suspended, its registers read, and resumed. Also the stack
+# queries the collector scans with, on the main thread and another.
+
+const timeout_ns: u64 = 2_000_000_000
+
+var worker_control: Atomic[uint] = 0
+var worker_ticks: Atomic[u64] = 0
+var worker_done: Atomic[bool] = false
+var worker_stack_ok: Atomic[bool] = false
+
+# The calling thread's stack top is above where it's running, and the
+# registers it saves name a stack, a frame and a return address.
+func stack_ok() -> bool {
+    let high: Ref[byte]? = sys.os.thread_stack_high_self()
+    if high == nil or __abi_ref_address(high) <= sys.threads.stack_address() {
+        return false
+    }
+    # A page holds a Thread_Context.
+    let bytes: uint = 4096
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(bytes, 0)
+    if mapped == nil {
+        return false
+    }
+    let snapshot: Ref[sys.threads.Thread_Context] =
+        unsafe_cast[Ref[sys.threads.Thread_Context]] mapped
+    sys.threads.thread_capture_self(snapshot)
+    let saved: bool = snapshot.__value.sp != nil
+        and snapshot.__value.fp != nil and snapshot.__value.pc != nil
+        and snapshot.__value.nregs != 0
+    sys.memory.unmap(mapped, bytes)
+    return saved
+}
+
+func worker() {
+    __atomic_store(ref worker_stack_ok, stack_ok())
+    __atomic_store(ref worker_control, sys.os.thread_control_self())
+    while !__atomic_load(ref worker_done) {
+        __atomic_fetch_add(ref worker_ticks, 1)
+    }
+}
+
+func wait_for_ticks(past: u64) {
+    let started: u64 = sys.os.now_ns()
+    while __atomic_load(ref worker_ticks) <= past {
+        require sys.os.now_ns() - started < timeout_ns
+    }
+}
+
+func check_suspend() {
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref worker))
+    let started: u64 = sys.os.now_ns()
+    while __atomic_load(ref worker_control) == 0 {
+        require sys.os.now_ns() - started < timeout_ns
+    }
+    wait_for_ticks(1000)
+    let control: uint = __atomic_load(ref worker_control)
+
+    # Only a successful suspend fills the snapshot, so it starts empty.
+    var snapshot: sys.threads.Thread_Context
+    snapshot.sp = nil
+    snapshot.fp = nil
+    snapshot.nregs = 0
+    snapshot.parked = 0
+    snapshot.handle = 0
+    snapshot.thread_id = 0
+    snapshot.pc = nil
+    require sys.os.thread_suspend(control, ref snapshot, timeout_ns) == 0
+    require snapshot.sp != nil and snapshot.pc != nil and snapshot.nregs != 0
+
+    # Suspended, the worker counts nothing.
+    let stopped: u64 = __atomic_load(ref worker_ticks)
+    let paused: u64 = sys.os.now_ns()
+    while sys.os.now_ns() - paused < 1_000_000 {
+        require sys.os.now_ns() >= paused
+    }
+    require __atomic_load(ref worker_ticks) == stopped
+
+    require sys.os.thread_resume(control, ref snapshot) == 0
+    wait_for_ticks(stopped)
+    __atomic_store(ref worker_done, true)
+    require __atomic_load(ref worker_stack_ok)
+}
+
+# Yielding, the spin-wait hint and a full fence do nothing a test can see,
+# but each must run.
+func check_hints() {
+    sys.os.thread_yield()
+    sys.threads.thread_yield()
+    sys.threads.cpu_relax()
+    sys.threads.thread_fence()
+    when target_arch() == "x86" and target_os() != "windows" {
+        require sys.threads.stack_red_zone_bytes() == 128
+    } else when target_os() == "macos" {
+        require sys.threads.stack_red_zone_bytes() == 128
+    } else {
+        require sys.threads.stack_red_zone_bytes() == 0
+    }
+}
+
+# A thread can ask for its stack's top as soon as it starts: on Linux the
+# runtime must list a new thread before it runs. Each started thread runs
+# n00b code at once, which attaches it to the collector with that query.
+const fresh_threads: u64 = 64
+var fresh_done: Atomic[u64] = 0
+var fresh_known: Atomic[u64] = 0
+
+func fresh() {
+    if sys.os.thread_stack_high_self() != nil {
+        __atomic_fetch_add(ref fresh_known, 1)
+    }
+    __atomic_fetch_add(ref fresh_done, 1)
+}
+
+func check_fresh_threads() {
+    var started: u64 = 0
+    while started < fresh_threads {
+        require sys.threads.thread_start(
+            callback[sys.threads.Thread_Entry](ref fresh))
+        started += 1
+    }
+    let began: u64 = sys.os.now_ns()
+    while __atomic_load(ref fresh_done) < fresh_threads {
+        require sys.os.now_ns() - began < timeout_ns * 5
+    }
+    require __atomic_load(ref fresh_known) == fresh_threads
+}
+
+# Stopping the world can't allocate: an allocation there would start a
+# collection inside the one that's stopping it.
+forbids_effect(sys.os.thread_suspend, allocates)
+forbids_effect(sys.os.thread_resume, allocates)
+
+require stack_ok()
+check_hints()
+check_suspend()
+check_fresh_threads()
+__fd_write(2, "ok")

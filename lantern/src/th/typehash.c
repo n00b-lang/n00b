@@ -57,6 +57,26 @@ static void free_index(core_dict_t *index)
     }
 }
 
+th_type *th_text_type(th_ctx *ctx, core_string_t text)
+{
+    return ctx && ctx->text_types
+        ? core_dict_get(ctx->text_types, &text, nullptr) : nullptr;
+}
+
+void th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type)
+{
+    if (!ctx || !type) {
+        return;
+    }
+    if (!ctx->text_types) {
+        ctx->text_types = core_alloc(core_dict_t);
+        core_dict_init_string(ctx->text_types);
+    }
+    if (!core_dict_contains(ctx->text_types, &text)) {
+        core_dict_put(ctx->text_types, core_dict_string_key_copy(text), type);
+    }
+}
+
 void th_ctx_free(th_ctx *ctx)
 {
     if (!ctx) {
@@ -70,6 +90,12 @@ void th_ctx_free(th_ctx *ctx)
     free_index(ctx->generic_type_heads);
     free_index(ctx->implements_memo);
     free_index(ctx->method_memo);
+    if (ctx->text_types) {
+        core_dict_foreach(ctx->text_types, entry)
+            core_dict_string_key_free(entry->key);
+        core_dict_free(ctx->text_types);
+        core_free(ctx->text_types);
+    }
     core_list_free(ctx->errors);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);

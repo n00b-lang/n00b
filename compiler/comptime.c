@@ -784,7 +784,7 @@ writes_only_object(void *context, const ir_func_t *target,
     const uint32_t effects = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_BLOCK
         | IR_SUMMARY_DIVERGES | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
         | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS
-        | IR_SUMMARY_OBSERVES;
+        | IR_SUMMARY_OBSERVES | IR_SUMMARY_HINTS | IR_SUMMARY_SYNCS;
     writer_check_t *check = context;
     check->pure = check->pure && summary
         && !(ir_summary_flags(summary) & effects);

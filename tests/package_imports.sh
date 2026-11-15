@@ -76,7 +76,9 @@ grep -Fq 'N00B-N0004: `hidden` is not exported to this package by module `cyclic
     exit 1
 }
 
-for consumer in nested_loop_consumer nested_round_consumer; do
+# looped_consumer: `looped` exports a whole module that is in an import
+# cycle with the manifest; its constants are exported all the same.
+for consumer in nested_loop_consumer nested_round_consumer looped_consumer; do
     "$compiler" build --output "$tmp/$consumer" "$consumer.n" \
         >"$tmp/$consumer.log" 2>&1 && "$tmp/$consumer" || {
         cat "$tmp/$consumer.log" >&2

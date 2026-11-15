@@ -3,10 +3,10 @@ fence litmod fail_fence(contents: string) -> nil fail: string {
     fail "prelude failed"
 }
 
-func comptime_start() -> nil {
+func comptime_main() -> nil {
     [- body -]'noop
     require false
 }
 
-func start() -> nil {
+func main() -> nil {
 }

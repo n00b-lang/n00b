@@ -182,7 +182,9 @@ static th_type *call_result(gen_t *g, ir_instr_t *call)
                                        ? th_func_rest(type)
                                        : nullptr;
 
-        if (operand->kind == IR_OPD_FRESH) {
+        if (operand->kind == IR_OPD_FRESH
+            || (formal && th_mode_by_reference(formal->mode)
+                && operand->kind == IR_OPD_VALUE)) {
             actual = referent(actual);
         }
         if (formal && actual) {
@@ -267,28 +269,11 @@ static void dispatch_constraints(gen_t *g, ir_instr_t *in)
 
 static void return_constraints(gen_t *g, ir_instr_t *in)
 {
-    th_type *type    = g->function->type;
-    uint32_t outputs = 0;
-
-    for (size_t i = 0; i < th_func_nparams(type); i++) {
-        const th_param *param = th_func_param(type, i);
-
-        outputs += param && th_mode_produces_output(param->mode);
-    }
-
-    uint32_t at = in->n_operands > outputs ? 1 : 0;
+    th_type *type = g->function->type;
 
     ty_unify(g->s, th_func_ret(type),
-             at ? operand_type(in, 0) : th_nil(g->types), why_of(in, 3));
-    for (size_t i = 0; i < th_func_nparams(type); i++) {
-        const th_param *param = th_func_param(type, i);
-
-        if (param && th_mode_produces_output(param->mode)
-            && at < in->n_operands) {
-            ty_unify(g->s, param->type, operand_type(in, at++),
-                     why_of(in, 3));
-        }
-    }
+             in->n_operands ? operand_type(in, 0) : th_nil(g->types),
+             why_of(in, 3));
 }
 
 static th_type *phi_result(gen_t *g, ir_instr_t *in)
@@ -607,37 +592,6 @@ static th_type *result_of(gen_t *g, ir_instr_t *in, bool *handled)
     case IR_OP_DISPATCH:
         dispatch_constraints(g, in);
         return nullptr;
-    case IR_OP_CALL_OUTPUT: {
-        ir_value_t *call = ir_operand_value(&in->operands[0]);
-
-        if (call && call->def && call->def->op == IR_OP_DISPATCH
-            && call->def->n_operands > 1) {
-            return operand_type(call->def, 1);
-        }
-
-        size_t            ordinal = 0;
-        const ir_instr_t *source  = ir_call_output_source(in, &ordinal);
-        th_type          *output  = source ? ir_call_output_type(
-                                                 ir_call_function_type(source),
-                                                 ordinal)
-                                           : nullptr;
-
-        if (output && th_is_closed(g->types, output)) {
-            return output;
-        }
-        if (output && in->dest) {
-            ty_require(g->s,
-                       (ty_pred_t){.kind       = TY_PRED_FLOW,
-                                   .name       = CORE_STRING_STATIC("flow"),
-                                   .subject    = output,
-                                   .other      = in->dest->type,
-                                   .positional = true},
-                       why_of(in, 40));
-            return nullptr;
-        }
-        skip(g, in);
-        return nullptr;
-    }
     case IR_OP_RETURN:
         return_constraints(g, in);
         return nullptr;

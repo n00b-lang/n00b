@@ -484,6 +484,8 @@ describe_flag(core_string_t flag)
         {IR_SUMMARY_MAY_INPUT, N00B_TEXT_FLAG_MAY_INPUT},
         {IR_SUMMARY_CALLS_FINALIZERS, N00B_TEXT_FLAG_CALLS_FINALIZERS},
         {IR_SUMMARY_STARTS_THREADS, N00B_TEXT_FLAG_STARTS_THREADS},
+        {IR_SUMMARY_HINTS, N00B_TEXT_FLAG_HINTS},
+        {IR_SUMMARY_SYNCS, N00B_TEXT_FLAG_SYNCS},
     };
     uint64_t bits = 0;
     if (ir_summary_effect_lookup(flag, &bits))
@@ -501,10 +503,8 @@ describe_rule_step(void *context, const ir_summary_step_t *step)
         || step->kind == IR_SUMMARY_STEP_DISCARDED
         || rule_step_seen(chain, step)) return true;
     core_string_t detail = {0};
-    n00bb_text_t clause = N00B_TEXT_CLAUSE_OUT_ARGUMENT;
+    n00bb_text_t clause = N00B_TEXT_CLAUSE_CALLS;
     switch (step->kind) {
-    case IR_SUMMARY_STEP_OUT_ARGUMENT:
-        break;
     case IR_SUMMARY_STEP_CALLS:
     case IR_SUMMARY_STEP_CALLS_UNSEEN:
         clause = chain->ignored ? N00B_TEXT_CLAUSE_CHANGES_NOTHING

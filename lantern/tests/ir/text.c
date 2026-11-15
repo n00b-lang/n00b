@@ -468,7 +468,7 @@ static void test_consume_parameters_round_trip(void)
     ir_ctx_free(ctx);
 }
 
-static void test_out_parameters_have_no_value(void)
+static void test_out_parameters_are_references(void)
 {
     ir_ctx_t     *ctx = ir_ctx_new();
     ir_diags_t   *d   = nullptr;
@@ -476,24 +476,29 @@ static void test_out_parameters_have_no_value(void)
         "module out_params {\n"
         "  profile bce\n"
         "  func @fill(out %target: i32, %seed: i32) -> void {\n"
-        "    local $target: i32\n"
         "    block entry:\n"
-        "      $target = copy %seed\n"
-        "      return $target\n"
+        "      store %target, %seed\n"
+        "      return\n"
         "  }\n"
         "}\n");
     ir_module_t *m = parse(ctx, src, &d);
     ir_func_t   *f = m ? ir_func_at(m, 0) : nullptr;
+    th_type     *referent = f && f->n_params == 2
+        ? th_ind_referent(th_resolve(f->params[0]->type)) : nullptr;
 
-    check("an out parameter gets no value, as lowering gives it none",
-          f && f->n_params == 1 && !ir_func_param_value(f, 0)
-              && ir_func_param_value(f, 1) == f->params[0]);
+    check("an out parameter's value is a reference to the caller's place",
+          f && f->n_params == 2 && ir_func_param_value(f, 0) == f->params[0]
+              && ir_func_param_value(f, 1) == f->params[1]
+              && referent
+              && th_kind_of(th_resolve(f->params[1]->type)) != TH_INDIRECTION
+              && th_same_type(th_resolve(referent),
+                              th_resolve(f->params[1]->type)));
 
     core_string_t printed = {};
     bool          ok      = round_trips(ctx, src, &printed);
 
-    check("and it prints by position, pairing the next value correctly",
-          ok && printed.data && contains(printed, S("out %arg0: i32"))
+    check("and it prints with its referent type, beside the next value",
+          ok && printed.data && contains(printed, S("out %target: i32"))
               && contains(printed, S("%seed: i32")));
     free(printed.data);
     ir_ctx_free(ctx);
@@ -1317,10 +1322,6 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             }
             break;
 
-        case IR_OPD_OUT:
-            ir_instr_operand_out(in);
-            break;
-
         case IR_OPD_FRESH:
             return;
         }
@@ -2141,7 +2142,7 @@ int main(int argc, char **argv)
     test_trait_method_round_trips();
     test_function_failure_channel_round_trips();
     test_consume_parameters_round_trip();
-    test_out_parameters_have_no_value();
+    test_out_parameters_are_references();
     test_variant_type_definition_round_trips();
     test_mutability_round_trips();
     test_global_string_initializer_round_trips();

@@ -833,6 +833,84 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 
+bool
+n00bb_summary_global_named(void *context, const ir_func_t *function,
+                           const ir_global_t *global)
+{
+    n00bb_link_analysis_t *analysis = context;
+    if (!analysis->global_symbols_ready) {
+        core_dict_init(&analysis->global_symbols, nullptr, nullptr);
+        index_module_globals(analysis, &analysis->global_symbols);
+        analysis->global_symbols_ready = true;
+    }
+    bool found = false;
+    parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
+                                              (void *)global, &found);
+    if (!found || !symbol || symbol_exported_by_default(symbol)
+        || parse_sym_binding(symbol,
+               CORE_STRING_STATIC("n00bb.external-export")))
+        return true;
+    core_translation_unit_t *owner = canonical_symbol(symbol)->owner_unit;
+    core_translation_unit_t *viewer = function && function->owner
+        ? n00bb_visibility_unit(analysis, function->owner) : nullptr;
+    return !owner || !viewer || owner == viewer;
+}
+
+// The collector's own module variables are behind an abstraction barrier
+// for code outside it: a caller sees what a collector function does to its
+// arguments and what it returns, not the collector's state.
+static bool
+collector_module(core_string_t name)
+{
+    return core_string_starts_with(name,
+                                   CORE_STRING_STATIC("sys.internal.gc."));
+}
+
+uint8_t
+n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
+                            const ir_global_t *global)
+{
+    n00bb_link_analysis_t *analysis = context;
+    const ir_module_t *owner = global ? global->owner : nullptr;
+    if (!owner || !caller || !caller->owner) return IR_SUMMARY_VISIBLE;
+    if (collector_module(ir_module_name((ir_module_t *)owner))
+        && !collector_module(ir_module_name(caller->owner)))
+        return IR_SUMMARY_HIDDEN_BARRIER;
+    // A global the caller can't name, whose address never leaves its
+    // module, can't be seen from the caller at all.
+    if (!analysis->global_symbols_ready) {
+        core_dict_init(&analysis->global_symbols, nullptr, nullptr);
+        index_module_globals(analysis, &analysis->global_symbols);
+        analysis->global_symbols_ready = true;
+    }
+    bool found = false;
+    parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
+                                              (void *)global, &found);
+    core_translation_unit_t *viewer = n00bb_visibility_unit(analysis,
+                                                            caller->owner);
+    if (!found || !symbol) {
+        // A cached module's private global has no symbol here, only its
+        // body's global; it's hidden exactly as when it's compiled, or
+        // summaries would depend on what was cached.
+        ir_global_t *cached = analysis->cached_globals_ready
+            ? core_dict_get(&analysis->cached_globals, (void *)global,
+                            nullptr) : nullptr;
+        core_translation_unit_t *owner_unit = cached && cached->owner
+            ? n00bb_visibility_unit(analysis, cached->owner) : nullptr;
+        if (!owner_unit || !viewer || owner_unit == viewer
+            || n00bb_summary_global_reachable(context, global))
+            return IR_SUMMARY_VISIBLE;
+        return IR_SUMMARY_HIDDEN_PRIVATE;
+    }
+    parse_sym_entry_t *declared = canonical_symbol(symbol);
+    core_translation_unit_t *owner_unit = declared->owner_unit;
+    if (!owner_unit || !viewer
+        || n00bb_symbol_visible_to(viewer, owner_unit, declared)
+        || n00bb_summary_global_reachable(context, global))
+        return IR_SUMMARY_VISIBLE;
+    return IR_SUMMARY_HIDDEN_PRIVATE;
+}
+
 void
 param_text(core_buffer_t *out, const ir_func_t *function, uint32_t p)
 {
@@ -858,9 +936,18 @@ dump_param(const ir_func_t *function, uint32_t p)
 }
 
 static void
+steps_text_from(core_buffer_t *out, const ir_spath_t *path, uint32_t first);
+
+static void
 steps_text(core_buffer_t *out, const ir_spath_t *path)
 {
-    for (uint32_t s = 0; s < path->depth; s++) {
+    steps_text_from(out, path, 0);
+}
+
+static void
+steps_text_from(core_buffer_t *out, const ir_spath_t *path, uint32_t first)
+{
+    for (uint32_t s = first; s < path->depth; s++) {
         core_string_t step = path->steps[s];
         if (!core_string_eq(step, CORE_STRING_STATIC("[]")))
             core_buffer_putc(out, '.');
@@ -913,8 +1000,19 @@ static void
 spath_text(core_buffer_t *out, const ir_func_t *function,
            const ir_summary_t *summary, const ir_spath_t *path)
 {
-    if (path->root == IR_SPLACE_PARAM)
+    if (path->root == IR_SPLACE_PARAM) {
         param_text(out, function, path->param);
+        // A modify or out parameter is a reference to the caller's place;
+        // its paths are shown as the place's, without that reference.
+        const th_param *formal = function && function->type
+                && path->param < th_func_nparams(function->type)
+            ? th_func_param(function->type, path->param) : nullptr;
+        if (formal && th_mode_by_reference(formal->mode) && path->depth
+            && core_string_eq(path->steps[0], CORE_STRING_STATIC("__value"))) {
+            steps_text_from(out, path, 1);
+            return;
+        }
+    }
     else if (path->root == IR_SPLACE_SOURCE) {
         core_buffer_puts(out, "(");
         core_buffer_append_string(out, ir_summary_flag_name(path->param));

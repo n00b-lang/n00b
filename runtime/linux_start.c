@@ -13,15 +13,24 @@
 //     strlen, strcmp and memchr, for FFI shims.
 //
 // It is built only into the program runtime, with N00B_LIBC_FREE defined.
+//
+// A program whose FFI contracts link "c" links libc dynamically, but still
+// starts here: the dynamic loader sets libc up, main thread included, and
+// then jumps to _start. These definitions interpose libc's, so C code
+// allocates from the n00b pool too. Threads the runtime starts carry n00b's
+// thread-local storage only, not libc's, so a shim for a contract that
+// links "c" refuses to run on one (n00b_ffi_libc_thread_check).
 
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
 
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "builtin_os_syscall.h"
 #include "linux_start.h"
+#include "runtime_panic.h"
 
 #include <elf.h>
 
@@ -205,8 +214,10 @@ set_thread_pointer(uintptr_t pointer)
 
 // ---------------------------------------------------------------------------
 // A minimal stand-in for the few libc calls the compile-time runtime
-// makes. Allocations map whole pages, with the mapping's size in front;
-// they are few and short-lived, so that is enough.
+// makes. Allocations map whole pages, with two words in front of the
+// block: the mapping's size, then where the mapping starts (an aligned
+// block need not start right after the header). They are few and
+// short-lived, so that is enough.
 
 enum { ALLOCATION_HEADER = 16 };
 
@@ -217,33 +228,53 @@ page_bytes(void)
     return page ? page : 4096;
 }
 
-void *
-n00b_linux_calloc(size_t count, size_t size)
+// `size` zeroed bytes aligned to `alignment`, a power of two of at least 16.
+static void *
+page_allocate(size_t size, size_t alignment)
 {
-    if (size && count > (SIZE_MAX - ALLOCATION_HEADER) / size) return NULL;
-    uintptr_t bytes = round_up(count * size + ALLOCATION_HEADER, page_bytes());
+    if (size > SIZE_MAX - ALLOCATION_HEADER - alignment - page_bytes())
+        return NULL;
+    uintptr_t bytes = round_up(size + ALLOCATION_HEADER + alignment - 16,
+                               page_bytes());
     long area = n00b_linux_syscall6(__NR_mmap, 0, (long)bytes,
         LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE_ANONYMOUS, -1, 0);
     if (area < 0 && area > -4096) return NULL;
-    *(uintptr_t *)area = bytes;
-    return (unsigned char *)area + ALLOCATION_HEADER;
+    uintptr_t *block = (uintptr_t *)round_up((uintptr_t)area
+                                             + ALLOCATION_HEADER, alignment);
+    block[-2] = bytes;
+    block[-1] = (uintptr_t)area;
+    return block;
+}
+
+// The bytes from `memory` to the end of its mapping.
+static uintptr_t
+page_usable(void *memory)
+{
+    uintptr_t *block = memory;
+    return block[-1] + block[-2] - (uintptr_t)memory;
+}
+
+void *
+n00b_linux_calloc(size_t count, size_t size)
+{
+    if (size && count > SIZE_MAX / size) return NULL;
+    return page_allocate(count * size, 16);
 }
 
 void
 n00b_linux_free(void *memory)
 {
     if (!memory) return;
-    unsigned char *area = (unsigned char *)memory - ALLOCATION_HEADER;
-    (void)n00b_linux_syscall6(__NR_munmap, (long)area,
-                              (long)*(uintptr_t *)area, 0, 0, 0, 0);
+    uintptr_t *block = memory;
+    (void)n00b_linux_syscall6(__NR_munmap, (long)block[-1], (long)block[-2],
+                              0, 0, 0, 0);
 }
 
 void *
 n00b_linux_realloc(void *memory, size_t size)
 {
     if (!memory) return n00b_linux_calloc(1, size);
-    unsigned char *area = (unsigned char *)memory - ALLOCATION_HEADER;
-    uintptr_t usable = *(uintptr_t *)area - ALLOCATION_HEADER;
+    uintptr_t usable = page_usable(memory);
     if (size <= usable) return memory;
     void *grown = n00b_linux_calloc(1, size);
     if (!grown) return NULL;
@@ -256,7 +287,23 @@ n00b_linux_realloc(void *memory, size_t size)
 // The C allocator, for FFI shims and C libraries linked into a program: the
 // n00b pool allocator (lib/sys/internal/pool.n), which every program links.
 // A program without it, such as a compile-time one, falls back to the page
-// allocator above.
+// allocator above, and so does a program before _start: with libc linked,
+// the loader and libc's initializers may allocate before the n00b program
+// (and the pool) is set up.
+//
+// free and realloc tell the two apart by the block's first header word: a
+// pool block's is a size class below 16 or a mapping size with its top bit
+// set; a page allocation's is its mapping size, a whole number of pages.
+
+static bool started;
+
+static bool
+page_allocated(void *memory)
+{
+    uintptr_t header = *(uintptr_t *)((unsigned char *)memory
+                                      - ALLOCATION_HEADER);
+    return header >= 4096 && !(header >> 63);
+}
 
 extern void *n00b_pool_allocate(uint64_t bytes) __attribute__((weak));
 extern void *n00b_pool_resize(void *memory, uint64_t bytes)
@@ -266,8 +313,8 @@ extern void n00b_pool_release(void *memory) __attribute__((weak));
 void *
 malloc(size_t size)
 {
-    return n00b_pool_allocate ? n00b_pool_allocate(size)
-                              : n00b_linux_calloc(1, size);
+    return n00b_pool_allocate && started ? n00b_pool_allocate(size)
+                                         : n00b_linux_calloc(1, size);
 }
 
 void *
@@ -280,15 +327,72 @@ calloc(size_t count, size_t size)
 void *
 realloc(void *memory, size_t size)
 {
-    return n00b_pool_resize ? n00b_pool_resize(memory, size)
-                            : n00b_linux_realloc(memory, size);
+    if (!memory) return malloc(size);
+    if (!n00b_pool_resize || page_allocated(memory))
+        return n00b_linux_realloc(memory, size);
+    return n00b_pool_resize(memory, size);
 }
 
 void
 free(void *memory)
 {
-    if (n00b_pool_release) n00b_pool_release(memory);
+    if (!memory) return;
+    if (n00b_pool_release && !page_allocated(memory))
+        n00b_pool_release(memory);
     else n00b_linux_free(memory);
+}
+
+// The rest of the allocator libc's own would provide, so no block from
+// libc's allocator reaches the free above. Alignments past the pool's 16
+// bytes come from the page allocator.
+
+void *
+aligned_alloc(size_t alignment, size_t size)
+{
+    if (!alignment || (alignment & (alignment - 1))) return NULL;
+    return alignment <= 16 ? malloc(size) : page_allocate(size, alignment);
+}
+
+void *
+memalign(size_t alignment, size_t size)
+{
+    return aligned_alloc(alignment, size);
+}
+
+int
+posix_memalign(void **out, size_t alignment, size_t size)
+{
+    enum { LINUX_EINVAL = 22, LINUX_ENOMEM = 12 };
+    if (alignment < sizeof(void *) || (alignment & (alignment - 1)))
+        return LINUX_EINVAL;
+    void *memory = aligned_alloc(alignment, size);
+    if (!memory) return LINUX_ENOMEM;
+    *out = memory;
+    return 0;
+}
+
+void *
+valloc(size_t size)
+{
+    return page_allocate(size, page_bytes());
+}
+
+void *
+pvalloc(size_t size)
+{
+    return page_allocate(round_up(size, page_bytes()), page_bytes());
+}
+
+size_t
+malloc_usable_size(void *memory)
+{
+    if (!memory) return 0;
+    if (page_allocated(memory)) return page_usable(memory);
+    // The pool's header (lib/sys/internal/pool.n): a size class, or a large
+    // block's mapping size with the top bit set.
+    uint64_t tag = *(uint64_t *)((unsigned char *)memory - ALLOCATION_HEADER);
+    return tag >> 63 ? (size_t)(tag & ~(1ull << 63)) - ALLOCATION_HEADER
+                     : (size_t)16 << tag;
 }
 
 __attribute__((no_builtin)) void *
@@ -333,6 +437,24 @@ n00b_linux_write(int fd, const void *bytes, size_t count)
     return written < 0 ? -1 : written;
 }
 
+// libc's, when the program links it; null otherwise.
+extern void exit(int status) __attribute__((weak));
+extern int __cxa_atexit(void (*function)(void *), void *argument,
+                        void *dso) __attribute__((weak));
+
+static bool runtime_thread_now(void);
+
+[[noreturn]] void
+n00b_linux_exit_program(int status)
+{
+    // With libc linked, exit as a C program does: libc runs its atexit
+    // handlers, the shared libraries' destructors, and flushes stdio. That
+    // takes libc's thread state, which a runtime thread lacks.
+    if (exit && !runtime_thread_now()) exit(status);
+    for (;;)
+        (void)n00b_linux_syscall6(__NR_exit_group, status, 0, 0, 0, 0, 0);
+}
+
 [[noreturn]] void
 n00b_linux_exit(int status)
 {
@@ -360,7 +482,33 @@ typedef struct thread_area {
     _Atomic int32_t tid;
     struct thread_area *next;
     uintptr_t bytes;
+    void (*entry)(void *);
+    void *argument;
 } thread_area_t;
+
+// Set on the threads n00b_linux_thread_start starts: they have no libc
+// thread state, even when the program links libc.
+static _Thread_local bool runtime_thread;
+
+static bool
+runtime_thread_now(void)
+{
+    return runtime_thread;
+}
+
+static void
+thread_begin(void *area)
+{
+    runtime_thread = true;
+    thread_area_t *thread = area;
+    thread->entry(thread->argument);
+}
+
+void
+n00b_ffi_libc_thread_check(void)
+{
+    if (runtime_thread) n00bb_runtime_fail(N00BB_FAILURE_LIBC_THREAD, 0);
+}
 
 static thread_area_t *threads;
 static atomic_flag threads_lock = ATOMIC_FLAG_INIT;
@@ -497,30 +645,88 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     }
     thread_area_t *area = (thread_area_t *)base;
     area->bytes = bytes;
+    area->entry = entry;
+    area->argument = argument;
     uintptr_t thread_pointer = n00b_linux_tls_init(base + control);
+    // The area joins the list before the thread starts, which may ask for
+    // its stack's top right away. Its tid is nonzero until the kernel clears
+    // it, so it isn't taken for a finished thread's meanwhile.
+    atomic_store_explicit(&area->tid, -1, memory_order_relaxed);
+    lock_threads();
+    area->next = threads;
+    threads = area;
+    unlock_threads();
     unsigned long flags = LINUX_CLONE_VM | LINUX_CLONE_FS | LINUX_CLONE_FILES
         | LINUX_CLONE_SIGHAND | LINUX_CLONE_THREAD | LINUX_CLONE_SYSVSEM
         | LINUX_CLONE_SETTLS | LINUX_CLONE_PARENT_SETTID
         | LINUX_CLONE_CHILD_CLEARTID;
     long child = n00b_linux_clone(flags, top, &area->tid, thread_pointer,
-                                  entry, argument);
+                                  thread_begin, area);
     if (child < 0) {
+        lock_threads();
+        for (thread_area_t **link = &threads; *link; link = &(*link)->next)
+            if (*link == area) {
+                *link = area->next;
+                break;
+            }
+        unlock_threads();
         (void)n00b_linux_syscall6(__NR_munmap, mapped, (long)bytes, 0, 0, 0,
                                   0);
         return -1;
     }
-    lock_threads();
-    area->next = threads;
-    threads = area;
-    unlock_threads();
     return 0;
+}
+
+// The address just past the top of the main thread's stack.
+static uintptr_t main_stack_high;
+
+// The kernel copies the program's file name (AT_EXECFN) to the very top of
+// the initial stack, with only a null word above it, so the stack's mapping
+// ends at the page boundary after it.
+static uintptr_t
+initial_stack_high(uintptr_t *stack)
+{
+    const char *name = (const char *)n00b_linux_auxv(31);
+    uintptr_t end = (uintptr_t)stack;
+    if (name) {
+        while (*name) name++;
+        end = (uintptr_t)name + 1 + sizeof(uintptr_t);
+    }
+    return round_up(end, page_bytes());
+}
+
+uintptr_t
+n00b_linux_stack_high(uintptr_t sp)
+{
+    // The main thread's is known without the thread list, whose lock a
+    // thread stopped for the collector may hold.
+    if (n00b_linux_syscall6(__NR_gettid, 0, 0, 0, 0, 0, 0)
+        == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0))
+        return main_stack_high;
+    uintptr_t high = 0;
+    lock_threads();
+    for (thread_area_t *area = threads; area && !high; area = area->next) {
+        uintptr_t base = (uintptr_t)area;
+        if (sp >= base && sp < base + area->bytes)
+            high = base + area->bytes - page_bytes();
+    }
+    unlock_threads();
+    return high;
 }
 
 // ---------------------------------------------------------------------------
 // Startup.
 
+static void
+call_loader_finalizer(void *finalizer)
+{
+    ((void (*)(void))finalizer)();
+}
+
+// `finalizer` is what the dynamic loader passes for atexit (zero from the
+// kernel): it runs the shared libraries' destructors.
 [[noreturn]] void
-n00b_linux_start(uintptr_t *stack)
+n00b_linux_start(uintptr_t *stack, void (*finalizer)(void))
 {
     int argc = (int)stack[0];
     char **argv = (char **)(stack + 1);
@@ -529,28 +735,37 @@ n00b_linux_start(uintptr_t *stack)
     while (*end) end++;
     n00b_linux_environ = environment;
     auxiliary_vector = (const uintptr_t *)(end + 1);
+    main_stack_high = initial_stack_high(stack);
 
     find_tls_template();
-    long area = n00b_linux_syscall6(__NR_mmap, 0,
-        (long)n00b_linux_tls_bytes(), LINUX_PROT_READ | LINUX_PROT_WRITE,
-        LINUX_MAP_PRIVATE_ANONYMOUS, -1, 0);
-    if (area < 0 && area > -4096) {
-        for (;;) (void)n00b_linux_syscall6(__NR_exit_group, 127, 0, 0, 0, 0, 0);
+    // Under the dynamic loader (AT_BASE is where it is loaded), the main
+    // thread's thread-local storage is set up already, libc's with it.
+    if (!n00b_linux_auxv(AT_BASE)) {
+        long area = n00b_linux_syscall6(__NR_mmap, 0,
+            (long)n00b_linux_tls_bytes(), LINUX_PROT_READ | LINUX_PROT_WRITE,
+            LINUX_MAP_PRIVATE_ANONYMOUS, -1, 0);
+        if (area < 0 && area > -4096) {
+            for (;;)
+                (void)n00b_linux_syscall6(__NR_exit_group, 127, 0, 0, 0, 0, 0);
+        }
+        set_thread_pointer(n00b_linux_tls_init((void *)area));
     }
-    set_thread_pointer(n00b_linux_tls_init((void *)area));
+    started = true;
+    if (finalizer && __cxa_atexit)
+        (void)__cxa_atexit(call_loader_finalizer, (void *)finalizer, NULL);
 
-    int status = main(argc, argv);
-    for (;;)
-        (void)n00b_linux_syscall6(__NR_exit_group, status, 0, 0, 0, 0, 0);
+    n00b_linux_exit_program(main(argc, argv));
 }
 
-// The kernel starts the process here, with the stack pointer at argc.
+// The kernel, or the dynamic loader, starts the process here, with the
+// stack pointer at argc and the loader's finalizer in rdx (x0).
 __attribute__((naked, noreturn)) void
 _start(void)
 {
 #if defined(__x86_64__)
     __asm__ volatile(
         "xor %%ebp, %%ebp\n\t"
+        "mov %%rdx, %%rsi\n\t"
         "mov %%rsp, %%rdi\n\t"
         "and $-16, %%rsp\n\t"
         "call n00b_linux_start\n\t"
@@ -559,6 +774,7 @@ _start(void)
     __asm__ volatile(
         "mov x29, #0\n\t"
         "mov x30, #0\n\t"
+        "mov x1, x0\n\t"
         "mov x0, sp\n\t"
         "and sp, x0, #-16\n\t"
         "bl n00b_linux_start\n\t"

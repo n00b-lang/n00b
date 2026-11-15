@@ -109,17 +109,24 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
     // C side or the kernel may write past the first element of, so it is a
     // deep write. A reference to an n00b value is the generated shim's
     // argument slot: the contract's modes say what the shim writes, and it
-    // never writes through an `in` argument's storage.
+    // never writes through an `in` argument's storage. A raw binding's
+    // contract can narrow that: an explicit `in` pointer is only read, and
+    // an explicit `out` pointer is only filled.
+    uint16_t read_only = 0, write_only = 0;
+    if (foreign) n00bb_axiom_foreign_access(function, &read_only, &write_only);
     uint32_t written = 0;
     for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
-        ir_summary_add_path(summary, &(ir_spath_t){
-            .root = IR_SPLACE_PARAM, .param = p,
-            .flags = IR_SPATH_READ | IR_SPATH_READS_ENTRY | IR_SPATH_DEEP
-                | IR_SPATH_ROOT});
+        bool reads = p >= 16 || !(write_only & (1u << p));
+        bool writes = p >= 16 || !(read_only & (1u << p));
+        if (reads)
+            ir_summary_add_path(summary, &(ir_spath_t){
+                .root = IR_SPLACE_PARAM, .param = p,
+                .flags = IR_SPATH_READ | IR_SPATH_READS_ENTRY | IR_SPATH_DEEP
+                    | IR_SPATH_ROOT});
         const th_param *formal = th_func_param(function->type, p);
         th_type *type = formal && formal->type ? th_resolve(formal->type)
                                                : nullptr;
-        if (foreign && type && th_kind_of(type) == TH_INDIRECTION) {
+        if (foreign && writes && type && th_kind_of(type) == TH_INDIRECTION) {
             // Scalars such as byte are named builtin types, not bare
             // bit integers, so they count as raw by their scalar.
             th_type *referent = th_ind_referent(type);
@@ -128,10 +135,14 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
             bool raw = referent
                 && (th_kind_of(th_resolve(referent)) == TH_BITINT
                     || (builtin && builtin->scalar));
+            // An `out` pointer is filled by the call, so whatever it points
+            // at is set afterwards.
+            bool fills = p < 16 && (write_only & (1u << p));
             ir_summary_add_path(summary, &(ir_spath_t){
                 .root = IR_SPLACE_PARAM, .param = p,
                 .flags = IR_SPATH_WRITE | IR_SPATH_ROOT
-                    | (raw ? IR_SPATH_DEEP : 0)});
+                    | (raw ? IR_SPATH_DEEP : 0)
+                    | (fills ? IR_SPATH_MUST : 0)});
             if (raw && p < 8) written |= N00BB_AXIOM_PARAM(p);
         }
     }
@@ -373,7 +384,9 @@ n00bb_note_native_axioms(n00bb_native_declarations_t natives)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
         else n00bb_axiom_note_foreign_native(natives.items[i].symbol,
                                              natives.items[i].name,
-                                             natives.items[i].effects);
+                                             natives.items[i].effects,
+                                             natives.items[i].read_only,
+                                             natives.items[i].write_only);
     }
 }
 
@@ -381,41 +394,8 @@ static bool
 register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
                             th_type *nil_type)
 {
-    th_type *byte = th_name(types, CORE_STRING_STATIC("byte"));
     th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
     th_type *u64 = th_name(types, CORE_STRING_STATIC("uint"));
-    th_type *uint = th_name(types, CORE_STRING_STATIC("uint"));
-    th_type *i32 = th_name(types, CORE_STRING_STATIC("i32"));
-    th_type *mapped_item = th_var(types);
-    th_type *reference = mapped_item ? th_ind(types, 0, mapped_item) : nullptr;
-    th_type *byte_reference = byte ? th_ind(types, 0, byte) : nullptr;
-    th_type *optional_reference = byte_reference
-        ? th_option(types, byte_reference) : nullptr;
-    th_type *map_args[] = {uint, uint};
-    th_type *unmap_args[] = {reference, uint};
-    th_type *protect_args[] = {byte_reference, uint, u32};
-    th_type *thread_context = th_name(types,
-        CORE_STRING_STATIC("sys.internal.threads.Thread_Context"));
-    th_type *thread_context_ref = thread_context
-        ? th_ind(types, 0, thread_context) : nullptr;
-    th_type *suspend_args[] = {uint, thread_context_ref, u64};
-    th_type *resume_args[] = {uint, thread_context_ref};
-    th_type *capture_args[] = {thread_context_ref};
-    th_type *write_args[] = {i32, byte_reference, u32};
-    th_type *wait_item = th_var(types);
-    th_type *wake_item = th_var(types);
-    th_type *futex_wait_args[] = {
-        wait_item ? th_ind(types, 0, wait_item) : nullptr, u32, uint,
-    };
-    th_type *futex_wake_args[] = {
-        wake_item ? th_ind(types, 0, wake_item) : nullptr,
-    };
-    th_type *entry_item = th_var(types);
-    th_type *argument_item = th_var(types);
-    th_type *thread_start_args[] = {
-        entry_item ? th_ind(types, 0, entry_item) : nullptr,
-        argument_item ? th_ind(types, 0, argument_item) : nullptr,
-    };
     th_type *failure_args[] = {
         u32, u64, u64, u64, th_name(types, CORE_STRING_STATIC("string")),
     };
@@ -436,27 +416,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *unobserved = th_var(types);
     th_type *unobserved_args[] = {unobserved};
     return register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_enter_blocking"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_leave_blocking"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_physical_memory"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_errno"), i32, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_futex_wait"), i32, futex_wait_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_futex_wake_all"), i32,
-            futex_wake_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__write_bytes"), i32, write_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_fence"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_start"), i32,
-            thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_has_effect"), boolean,
             has_effect_args, 2)
@@ -468,43 +430,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__unobserved"), unobserved,
             unobserved_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_stack_high_self"),
-            optional_reference, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_stack_address"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_stack_red_zone_bytes"),
-            uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_frame_pointer_chain"),
-            uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_control_self"),
-            uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_capture_self"),
-            nil_type, capture_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_suspend"), i32,
-            suspend_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_resume"), i32,
-            resume_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_now_ns"),
-            th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__report_failure"), nil_type,
-            failure_args, 5)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_map_zeroed"),
-            optional_reference, map_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_unmap"), i32, unmap_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_protect"), i32, protect_args, 3);
+            failure_args, 5);
 }
 
 static bool
@@ -1008,6 +935,38 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     fence->type = fence_signature;
     fence->error_type = nil_type;
     fence->callable_contract = fence_contract;
+    // Single processor instructions: a full memory fence, the spin-wait
+    // hint, and a read of the stack pointer.
+    static const struct {
+        core_string_t name;
+        bool          address;
+    } machine[] = {
+        {CORE_STRING_STATIC("__thread_fence"), false},
+        {CORE_STRING_STATIC("__cpu_relax"), false},
+        {CORE_STRING_STATIC("__stack_pointer"), true},
+    };
+    th_type *stack_type = th_name(types, CORE_STRING_STATIC("uint"));
+    th_type *stack_signature = stack_type
+        ? th_func_with_error(types, stack_type, nil_type, nullptr, 0,
+                             nullptr, nullptr, 0) : nullptr;
+    th_type *stack_contract = stack_signature
+        ? th_env_signature_contract(types, stack_signature, nil_type)
+        : nullptr;
+    for (size_t i = 0; i < sizeof(machine) / sizeof(machine[0]); i++) {
+        th_type *signature = machine[i].address ? stack_signature
+                                                : fence_signature;
+        th_type *contract = machine[i].address ? stack_contract
+                                               : fence_contract;
+        parse_sym_entry_t *instruction = contract ? parse_symtab_add(symtab,
+            CORE_STRING_STATIC("builtin"), machine[i].name,
+            PARSE_SYM_FUNCTION, nullptr) : nullptr;
+        if (!instruction || !parse_sym_set_binding(instruction,
+                CORE_STRING_STATIC("n00bb.machine"), instruction))
+            return false;
+        instruction->type = signature;
+        instruction->error_type = nil_type;
+        instruction->callable_contract = contract;
+    }
     th_type *comptime_signature = boolean
         ? th_func_with_error(types, boolean, nil_type, nullptr, 0,
                              nullptr, nullptr, 0) : nullptr;
@@ -1279,7 +1238,10 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     borrow_registered = borrow_registered
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__ffi_unwind_jump"), nil_type,
-            unwind_arguments, 1);
+            unwind_arguments, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__ffi_libc_thread_check"), nil_type,
+            nullptr, 0);
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
@@ -1971,6 +1933,7 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_gc_memory_function(symbol)
             || n00bb_builtin_volatile_load_function(symbol)
             || n00bb_builtin_signal_fence_function(symbol)
+            || n00bb_builtin_machine_function(symbol)
             || n00bb_builtin_comptime_function(symbol)
             || n00bb_builtin_prefetch_function(symbol)
             || n00bb_builtin_atomic_rmw_function(symbol)
@@ -2057,6 +2020,14 @@ n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol)
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.volatile.load"));
+}
+
+bool
+n00bb_builtin_machine_function(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        && !symbol->decl_node && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.machine"));
 }
 
 bool

@@ -24,18 +24,18 @@ N00B_DIAG(LINK_FAILED, "N00B-B0104", ERROR,
     "The linker reported an error other than a missing symbol, or stopped\n"
     "abnormally. Its output and the full link command are shown as notes.")
 N00B_DIAG(START_SIGNATURE, "N00B-B0105", ERROR,
-    "the program's `start` function has the wrong signature",
-    "An executable begins at `start` in the root module, which takes no\n"
+    "the program's `main` function has the wrong signature",
+    "An executable begins at `main` in the root module, which takes no\n"
     "parameters and returns nothing:\n"
-    "    func start() -> nil {\n"
+    "    func main() -> nil {\n"
     "    }\n"
     "Report failure by raising or panicking rather than returning a value.")
 N00B_DIAG(COMPTIME_START_SIGNATURE, "N00B-B0109", ERROR,
-    "the program's `comptime_start` function has the wrong signature",
-    "`comptime_start` in the root module runs once at build time, after the\n"
+    "the program's `comptime_main` function has the wrong signature",
+    "`comptime_main` in the root module runs once at build time, after the\n"
     "module's initializer and before the program's state is frozen. It\n"
     "takes no parameters and returns nothing:\n"
-    "    func comptime_start() -> nil {\n"
+    "    func comptime_main() -> nil {\n"
     "    }")
 N00B_DIAG(COMPTIME_RUN_FAILED, "N00B-B0110", ERROR,
     "a module's comptime run fails",
@@ -64,7 +64,7 @@ N00B_DIAG(COMPTIME_IMPORT_CHANGE_DROPPED, "N00B-B0114", WARNING,
     "An imported module's state is frozen when its own comptime finishes.\n"
     "Changes another module's comptime makes to it are seen for the rest of\n"
     "that run but are not kept in the program. Changes made from\n"
-    "`comptime_start` in the root module are kept.")
+    "`comptime_main` in the root module are kept.")
 N00B_DIAG(INTERFACE_HAS_NO_CODE, "N00B-B0115", ERROR,
     "a program cannot be built from a library interface",
     "A semantic interface from `n00b library --emit-interface` describes a\n"
@@ -129,6 +129,12 @@ N00B_DIAG(PROVIDED_FUNCTION_MISSING, "N00B-F0006", ERROR,
     "implements a callback, as `module.function`. That function must exist\n"
     "and have a body:\n"
     "    provide nth_sorted.compare = \"sorting.descending\"")
+N00B_DIAG(NATIVE_DECLARATIONS_DIFFER, "N00B-F0007", ERROR,
+    "two 'ffi literals declare the same C function differently",
+    "Every 'ffi literal that binds a C function must give it the same\n"
+    "effects, purity and pointer modes: the compiler knows one C function\n"
+    "by its symbol, so it can't keep two descriptions of it apart. Make the\n"
+    "declarations agree.")
 N00B_DIAG(NATIVE_ROOT_MISSING, "N00B-B0107", ERROR,
     "`--native-root` names a function that does not exist",
     "`--native-root NAME=module.function` exports an existing n00b\n"

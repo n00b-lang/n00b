@@ -1,4 +1,4 @@
-func start() {
+func main() {
     let label = "safe‮"
     require label != ""
 }

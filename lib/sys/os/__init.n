@@ -1,7 +1,41 @@
 import internal.errno
-import internal.os
+import internal.os.read
+import internal.os.write
+import internal.os.close
+import internal.os.seek
+import internal.os.pipe
+import internal.os.open
+import internal.os.terminal
+import internal.os.random
+import internal.os.process
+import internal.os.exit
+import internal.os.page
+import internal.os.map
+import internal.os.protect
+import internal.os.memory
+import internal.os.futex
+import internal.os.clock
+import internal.os.thread
+import internal.os.suspend
 
 package sys.os {
     export internal.errno
-    export internal.os
+    export internal.os.read
+    export internal.os.write
+    export internal.os.close
+    export internal.os.seek
+    export internal.os.pipe
+    export internal.os.open
+    export internal.os.terminal
+    export internal.os.random
+    export internal.os.process
+    export internal.os.exit
+    export internal.os.page
+    export internal.os.map
+    export internal.os.protect
+    export internal.os.memory
+    export internal.os.futex
+    export internal.os.clock
+    export internal.os.thread
+    export internal.os.suspend
 }

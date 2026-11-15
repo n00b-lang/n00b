@@ -32,7 +32,7 @@ func total(v: View[int]) -> int {
     return sum
 }
 
-func start() {
+func main() {
     require style_weight(current) == 1
     require current.__value.owner.n == 7
     let kept: View[Style]? = held.style

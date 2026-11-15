@@ -1,3 +1,4 @@
+import internal.clock
 import internal.gc.core
 import internal.gc.collect
 import internal.gc.finalize
@@ -212,7 +213,7 @@ func wait_for_cycle(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Mutator]? = mine
     while current != nil {
         let mutator: Ref[internal.gc.core.Mutator] = current
-        __os_thread_capture_self(ref mutator.__value.captured)
+        internal.threads.thread_capture_self(ref mutator.__value.captured)
         enter_blocking(mutator)
         current = mutator.__value.wait_next
     }
@@ -235,7 +236,7 @@ func any_pending(heap: Ref[internal.gc.core.Heap]) -> bool {
 }
 
 func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshake_Kind) {
-    let started: u64  = __unobserved(__os_now_ns())
+    let started: u64  = __unobserved(internal.clock.now_ns())
     var claimed: uint = 0
 
     internal.gc.heap.lock(heap)
@@ -272,7 +273,7 @@ func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshak
     let limit: u64 = cast[u64](heap.__value.cfg.handshake_timeout_us) * 1000
     internal.locks.condition_lock(ref heap.__value.hs_answered)
     while any_pending(heap) {
-        let waited: u64 = __unobserved(__os_now_ns()) - started
+        let waited: u64 = __unobserved(internal.clock.now_ns()) - started
         if waited >= limit {
             break
         }

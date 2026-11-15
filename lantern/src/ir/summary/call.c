@@ -141,7 +141,7 @@ static bool
 resolved_eq(const void *a, const void *b)
 {
     const pt_loc_t *x = a, *y = b;
-    return x->site == y->site && !compare_paths(&x->path, &y->path);
+    return x->site == y->site && same_spath(&x->path, &y->path);
 }
 
 static core_hash_value_t
@@ -309,48 +309,60 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     switch (argument.role) {
     case IR_ARG_ABSENT:
     case IR_ARG_MISSING:
-    case IR_ARG_OUT:
         return;
-    case IR_ARG_FRESH: {
-        pt_set_t address = (pt_set_t){0};
-        pt_read(pt, argument.value, &address);
-        pt_load(pt, &address, into);
-        core_list_free(address);
-        return;
-    }
     default:
+        // A fresh operand, like any by-reference one, is the address of the
+        // place the callee's parameter refers to.
         if (argument.value) pt_read(pt, argument.value, into);
         else unresolved(pt, into);
         return;
     }
 }
 
+// The items a call lets escape when its callee lets parameter `param`
+// escape. An `out` or `modify` parameter refers to the caller's place;
+// unless the callee lets that reference itself escape, only what the place
+// holds escapes, not the place.
 static void
-map_own_storage(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
-                bool inline_tail, pt_set_t *into)
+escaping_items(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+               uint32_t param, uint8_t escape, pt_set_t *into)
 {
-    ir_call_arg_t argument = ir_call_argument(call, path->param);
-    if (!ir_call_argument_writes(&argument)) return;
-    pt_set_t address = (pt_set_t){0};
-    pt_address(pt, argument.value, &address);
-    for (size_t i = 0; i < address.len; i++) {
-        if (!is_address(&address.data[i])) continue;
-        pt_loc_t loc = address.data[i].loc;
-        extend_tail(pt, &loc, path->steps, path->depth,
-                    path->flags & IR_SPATH_DEEP, inline_tail);
-        set_add(pt, into, item_at(loc));
+    th_type *signature = callee->function && callee->function->type
+        ? th_resolve(callee->function->type) : nullptr;
+    bool by_reference = signature && th_kind_of(signature) == TH_FUNCTION
+        && param < th_func_nparams(signature)
+        && th_mode_by_reference(th_func_param(signature, param)->mode);
+    if (!by_reference || (escape & IR_SESCAPE_ADDRESS)) {
+        argument_items(pt, call, param, into);
+        return;
     }
+    pt_set_t address = (pt_set_t){0};
+    argument_items(pt, call, param, &address);
+    pt_load(pt, &address, into);
     core_list_free(address);
+}
+
+// The storage a constructor fills is uninitialized when the call starts: a
+// callee path that reaches through a pointer it held then reaches nothing.
+// (The callee's own stores into what it allocated are summarized at the
+// allocations.)
+static bool
+fresh_entry_path(const ir_instr_t *call, const ir_spath_t *path)
+{
+    if (path->root != IR_SPLACE_PARAM) return false;
+    ir_call_arg_t argument = ir_call_argument(call, path->param);
+    if (argument.role != IR_ARG_FRESH) return false;
+    uint32_t skip = path->depth && step_eq(path->steps[0], value_step) ? 1
+                                                                       : 0;
+    return first_deref(path->steps + skip, path->depth - skip)
+        < path->depth - skip;
 }
 
 static void
 map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 bool inline_tail, pt_set_t *into)
 {
-    if (path->output) {
-        map_own_storage(pt, call, path, inline_tail, into);
-        return;
-    }
+    if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool deep = path->flags & IR_SPATH_DEEP;
@@ -413,8 +425,8 @@ note_callees(pt_t *pt, const ir_instr_t *call)
     resolve_targets(pt->summaries, call, &entry.targets);
     entry.known = !entry.targets.unknown;
     for (size_t t = 0; t < entry.targets.targets.len; t++) {
-        ir_summary_t *callee = target_summary(pt->summaries,
-                                              entry.targets.targets.data[t]);
+        ir_summary_t *callee = call_summary(pt->summaries, pt->f,
+                                            entry.targets.targets.data[t]);
         entry.known = entry.known && callee->results_known;
         core_list_push(entry.callees, callee);
     }
@@ -557,6 +569,7 @@ static void
 map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 bool derived, pt_set_t *into)
 {
+    if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool    deep = path->flags & IR_SPATH_DEEP;
@@ -901,23 +914,65 @@ mapped_output(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(values);
 }
 
-static bool
-must_dest(const ir_summary_t *callee, const ir_spath_t *to)
+// A write path's place, for finding the one a store destination names.
+static core_hash_value_t
+written_place_hash(void *key)
 {
-    if (to->flags & IR_SPATH_DEEP) return false;
+    const ir_spath_t *path = key;
+    uint64_t head[4] = {
+        (uint64_t)path->output << 8 | (uint64_t)path->root,
+        path->root == IR_SPLACE_PARAM || path->root == IR_SPLACE_SOURCE
+                || path->root == IR_SPLACE_HEAP ? path->param : 0,
+        named_root(path->root) ? (uint64_t)(uintptr_t)path->global : 0,
+        path->depth};
+    core_hash_value_t hash = core_hash_raw(head, sizeof(head));
+    for (uint32_t s = 0; s < path->depth; s++)
+        hash = hash * 31 + core_string_hash(path->steps[s]);
+    return hash;
+}
+
+static bool
+written_place_eq(const void *a, const void *b)
+{
+    const ir_spath_t *x = a, *y = b;
+    return same_path_root(x, y) && x->depth == y->depth
+        && steps_prefix(x->depth, x->steps, y->depth, y->steps);
+}
+
+// Whether the callee surely writes each of its store destinations: the
+// first non-deep write path to the destination's place says.
+static const bool *
+must_dests(pt_t *pt, const ir_summary_t *callee)
+{
+    const flow_table_t *flows = &callee->flows[IR_SFLOW_STORES];
+    bool  found = false;
+    bool *must  = core_dict_get(&pt->must_dests, (void *)callee, &found);
+    if (found) return must;
+    must = core_alloc_array(bool, flows->dests.len + 1);
     bool returns = !(callee->flags & (IR_SUMMARY_DIVERGES
                                       | IR_SUMMARY_NO_RETURN));
     bool fails   = callee->flags & IR_SUMMARY_MAY_FAIL;
+    core_dict_t writes;
+    core_dict_init(&writes, written_place_hash, written_place_eq);
     for (size_t p = 0; p < callee->paths.len; p++) {
         const ir_spath_t *path = &callee->paths.data[p];
-        if (!(path->flags & IR_SPATH_WRITE) || (path->flags & IR_SPATH_DEEP)
-            || !same_path_root(path, to) || path->depth != to->depth
-            || !steps_prefix(path->depth, path->steps, to->depth, to->steps))
+        if (!(path->flags & IR_SPATH_WRITE) || (path->flags & IR_SPATH_DEEP))
             continue;
-        return (!returns || (path->flags & IR_SPATH_MUST_SUCCESS))
+        bool seen = false;
+        (void)core_dict_get(&writes, (void *)path, &seen);
+        if (!seen) core_dict_put(&writes, (void *)path, (void *)path);
+    }
+    for (size_t d = 0; d < flows->dests.len; d++) {
+        const ir_spath_t *to = flows->dests.data[d].to;
+        if (to->flags & IR_SPATH_DEEP) continue;
+        bool              seen = false;
+        const ir_spath_t *path = core_dict_get(&writes, (void *)to, &seen);
+        must[d] = seen && (!returns || (path->flags & IR_SPATH_MUST_SUCCESS))
             && (!fails || (path->flags & IR_SPATH_MUST_FAILURE));
     }
-    return false;
+    core_dict_free(&writes);
+    core_dict_put(&pt->must_dests, (void *)callee, must);
+    return must;
 }
 
 static bool
@@ -946,8 +1001,7 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
-        store_pair_t pair = {.must = sole
-                                 && must_dest(callee, flows->dests.data[d].to)};
+        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d]};
         size_t source = shared[d] == d ? SIZE_MAX : paired[shared[d]];
         if (shared[d] == d) flowed_items(pt, &mapped, groups, d, &pair.from);
         for (size_t i = 0; source < pairs.len
@@ -1049,9 +1103,10 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     }
     for (uint32_t param = 0;
          written.len && param < ir_call_argument_count(call); param++) {
-        if (!ir_summary_param_escape(callee, param)) continue;
+        uint8_t escape = ir_summary_param_escape(callee, param);
+        if (!escape) continue;
         pt_set_t items = (pt_set_t){0};
-        argument_items(pt, call, param, &items);
+        escaping_items(pt, call, callee, param, escape, &items);
         for (size_t w = 0; w < written.len; w++)
             pt_publish(pt, &items, &written.data[w].loc);
         core_list_free(items);
@@ -1059,56 +1114,6 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(written);
     call_result(pt, call, callee, result);
     return true;
-}
-
-static uint8_t
-output_ordinal(const ir_instr_t *call, uint32_t param)
-{
-    th_type *signature = ir_call_function_type(call);
-    size_t   ordinal   = signature ? ir_call_param_output(signature, param)
-                                   : SIZE_MAX;
-    return ordinal + 1 < UINT8_MAX ? (uint8_t)(ordinal + 1) : 0;
-}
-
-static void
-callee_outputs(pt_t *pt, const ir_instr_t *call,
-               const pt_callees_t *callees, uint8_t output, pt_set_t *into)
-{
-    for (size_t t = 0; t < callees->callees.len; t++)
-        mapped_output(pt, call, callees->callees.data[t], output, into);
-}
-
-static bool
-written_outputs(pt_t *pt, const ir_instr_t *call,
-                const pt_callees_t *callees, const pt_set_t *reach,
-                ir_summary_t *summary)
-{
-    bool settled = true;
-    for (uint32_t param = 0; param < ir_call_argument_count(call); param++) {
-        ir_call_arg_t argument = ir_call_argument(call, param);
-        if (!ir_call_argument_writes(&argument)) continue;
-        uint8_t  output  = output_ordinal(call, param);
-        pt_set_t address = (pt_set_t){0};
-        pt_set_t values  = (pt_set_t){0};
-        pt_address(pt, argument.value, &address);
-        if (output && callees->known)
-            callee_outputs(pt, call, callees, output, &values);
-        else if (reach)
-            for (size_t r = 0; r < reach->len; r++)
-                set_add(pt, &values, reach->data[r]);
-        else
-            call_reach(pt, call, callees, &values);
-        settled = settled && address.len;
-        if (summary) {
-            record_set(pt, summary, &address, IR_SPATH_WRITE, nullptr);
-            record_stores(pt, summary, &address, &values);
-        }
-        else
-            pt_store(pt, &address, &values, strong_writer(pt, call));
-        core_list_free(address);
-        core_list_free(values);
-    }
-    return settled;
 }
 
 static void
@@ -1141,32 +1146,8 @@ pt_call(pt_t *pt, const ir_instr_t *call)
     for (size_t t = 0; t < callees->callees.len; t++)
         settled = call_escapes(pt, call, callees->callees.data[t], &reach,
                                &result) && settled;
-    settled = written_outputs(pt, call, callees, &reach, nullptr) && settled;
     if (settled) settle_writes(pt, call);
     pt_define(pt, call, &result);
     core_list_free(reach);
     core_list_free(result);
-}
-
-static void
-call_output(pt_t *pt, const ir_instr_t *output, pt_set_t *into)
-{
-    size_t            ordinal   = 0;
-    const ir_instr_t *call      = ir_call_output_source(output, &ordinal);
-    th_type          *signature = call ? ir_call_function_type(call)
-                                       : nullptr;
-    size_t param = signature ? ir_call_output_param(signature, ordinal)
-                             : SIZE_MAX;
-    const pt_callees_t *callees = param == SIZE_MAX
-        || ordinal + 1 >= IR_SOUTPUT_STATUS ? nullptr : callees_of(pt, call);
-    if (!callees) {
-        unresolved(pt, into);
-        return;
-    }
-    if (callees->known)
-        callee_outputs(pt, call, callees, (uint8_t)(ordinal + 1), into);
-    else {
-        argument_items(pt, call, (uint32_t)param, into);
-        call_reach(pt, call, callees, into);
-    }
 }

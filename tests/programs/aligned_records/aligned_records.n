@@ -1,0 +1,35 @@
+import aligned_types
+
+# Records with `align(N)`: on the stack, inside other records and in heap
+# arrays, each at an address that is a multiple of N.
+
+func low_bits(address: Ref[byte], alignment: uint) -> uint {
+    return __abi_ref_address(address) & (alignment - 1)
+}
+
+func check_stack() {
+    var pad: u8 = 1
+    var state: aligned_types.Context
+    state.head = cast[u64](pad)
+    require low_bits(unsafe_cast[Ref[byte]] (ref state), 16) == 0
+    var page: aligned_types.Page
+    page.first = pad
+    require low_bits(unsafe_cast[Ref[byte]] (ref page), 4096) == 0
+    var holder: aligned_types.Holder
+    holder.tag = pad
+    require low_bits(unsafe_cast[Ref[byte]] (ref holder.state), 16) == 0
+}
+
+func check_heap() {
+    let contexts: Array[aligned_types.Context] =
+        new[Array[aligned_types.Context]](3)
+    var i: uint = 0
+    while i < 3 {
+        require low_bits(unsafe_cast[Ref[byte]] (ref contexts[i]), 16) == 0
+        i += 1
+    }
+}
+
+check_stack()
+check_heap()
+__fd_write(2, "ok")

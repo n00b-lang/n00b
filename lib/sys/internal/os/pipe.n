@@ -1,0 +1,117 @@
+# Making a pipe.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall pipe2(fds: out *c_int, flags: c_int) -> c_int
+      number 293 when arch == x86_64
+      number 59 when arch == aarch64
+      effects input
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    private const close_on_exec: u32 = 0x80000
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    # macOS has no pipe2: the ends are marked close-on-exec with fcntl.
+    fn pipe(fds: *c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+    # The variadic call goes through a generated shim, since a variadic C
+    # call's arguments aren't passed like a fixed one's.
+    fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+
+    binding {
+        pack fcntl.args as array
+        # This module's own function of the name is the API.
+        name pipe "c_pipe"
+    }
+    -]'ffi
+
+    import internal.os.close
+    private const set_descriptor_flags: i32 = 2
+    private const descriptor_close_on_exec: i32 = 1
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _errno() -> *c_int static per thread
+    error_channel errno per thread {
+        value _errno()
+    }
+
+    fn _pipe(fds: *c_int, size: c_uint, mode: c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+
+    binding {
+        name _pipe "c_pipe"
+    }
+    -]'ffi
+
+    # _O_NOINHERIT keeps the descriptors from child processes.
+    private const close_on_exec: u32 = 0x80
+    private const open_binary: u32 = 0x8000
+}
+
+record Pipe {
+    read: i32
+    write: i32
+}
+
+# Creates a pipe whose descriptors are closed on exec.
+func pipe() -> Pipe fail: internal.errno.Errno {
+    let fds: Array[i32] = new[Array[i32]](2)
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref fds[0]
+    when target_os() == "linux" {
+        pipe2(at, cast[i32](close_on_exec))!
+    } else when target_os() == "macos" {
+        try {
+            c_pipe(at)!
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+        let flags: Array[i32] = [descriptor_close_on_exec]
+        try {
+            fcntl(fds[0], set_descriptor_flags, flags)!
+            fcntl(fds[1], set_descriptor_flags, flags)!
+        } fail(failure) {
+            try {
+                internal.os.close.close(fds[0])!
+                internal.os.close.close(fds[1])!
+            } fail(ignored) {
+            }
+            fail errno_of(failure)
+        }
+    } else when target_os() == "windows" {
+        try {
+            c_pipe(at, 0x10000, cast[i32](open_binary | close_on_exec))!
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+    return (read = fds[0], write = fds[1])
+}

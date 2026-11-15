@@ -32,6 +32,14 @@ run() {
 build os_io
 run os_io ok
 
+# sys.os memory mapping, clock and waits, which the collector runs on.
+build os_memory
+run os_memory ok
+
+# sys.os thread suspend and resume, which stop the world for the collector.
+build os_threads
+run os_threads ok
+
 # sys.os.exit: the status comes through and nothing after it runs.
 build os_exit
 status=0

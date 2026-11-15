@@ -114,26 +114,13 @@ stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
 }
 
 static bool
-named_path(pt_t *pt, const pt_loc_t *loc, ir_spath_t *path)
+definite_path(const pt_set_t *addresses, ir_spath_t *path)
 {
-    if (loc->site == PT_EXTERNAL) {
-        *path = loc->path;
-        return true;
-    }
-    pt_loc_t own = {.site = PT_EXTERNAL};
-    if (!copy_in_param(pt, loc->site, &own.path)) return false;
-    loc_extend(pt, &own, loc->path.steps, loc->path.depth, loc_deep(loc));
-    *path = own.path;
-    return true;
-}
-
-static bool
-definite_path(pt_t *pt, const pt_set_t *addresses, ir_spath_t *path)
-{
-    return addresses->len == 1 && is_address(&addresses->data[0])
-        && !loc_deep(&addresses->data[0].loc)
-        && named_path(pt, &addresses->data[0].loc, path)
-        && path->root != IR_SPLACE_UNKNOWN;
+    if (addresses->len != 1 || !is_address(&addresses->data[0])) return false;
+    const pt_loc_t *loc = &addresses->data[0].loc;
+    if (loc_deep(loc) || loc->site != PT_EXTERNAL) return false;
+    *path = loc->path;
+    return path->root != IR_SPLACE_UNKNOWN;
 }
 
 static bool
@@ -157,7 +144,7 @@ covers_place(const ir_spath_t *path, const ir_splace_t *place,
     }
     return same && (leaf ? steps_prefix(path->depth, path->steps,
                                         leaf->depth, leaf->steps)
-                         : !path->depth);
+                         : !object_depth(path));
 }
 
 static bool
@@ -169,10 +156,65 @@ definite_store(pt_t *pt, const ir_instr_t *in, ir_spath_t *path)
     pt->at = in;
     pt_set_t addresses = (pt_set_t){0};
     pt_address(pt, role_value(in, ir_op_address_operand(in->op)), &addresses);
-    bool definite = definite_path(pt, &addresses, path);
+    bool definite = definite_path(&addresses, path);
     core_list_free(addresses);
     pt->at = at;
     return definite;
+}
+
+static size_t
+entry_cell(pt_entry_t *entry, ir_spath_t path)
+{
+    path.flags = 0;
+    size_t cell = 0;
+    while (cell < entry->cells.len
+           && !same_spath(&entry->cells.data[cell], &path))
+        cell++;
+    if (cell == entry->cells.len) core_list_push(entry->cells, path);
+    return cell;
+}
+
+// The places a call sets: each whole object its sole callee must write
+// through an `out` or `modify` parameter, named as the caller's place.
+static void
+entry_call_gens(pt_t *pt, const ir_instr_t *in)
+{
+    if (!is_call(in) || !sole_callee(pt, in)) return;
+    const ir_summary_t *callee = callees_of(pt, in)->callees.data[0];
+    uint64_t            cells[64];
+    size_t              count  = 0;
+    for (size_t p = 0; p < callee->paths.len && count < 64; p++) {
+        const ir_spath_t *path = &callee->paths.data[p];
+        if (path->root != IR_SPLACE_PARAM || !(path->flags & IR_SPATH_WRITE)
+            || !(path->flags & IR_SPATH_MUST_SUCCESS) || object_depth(path))
+            continue;
+        const ir_instr_t *at    = pt->at;
+        pt_set_t          items = (pt_set_t){0};
+        pt->at = in;
+        argument_items(pt, in, path->param, &items);
+        ir_spath_t mapped;
+        bool       definite = definite_path(&items, &mapped);
+        core_list_free(items);
+        pt->at = at;
+        if (definite) cells[count++] = entry_cell(&pt->entry, mapped);
+    }
+    if (!count) return;
+    uint64_t *gens = core_alloc_array(uint64_t, count + 1);
+    gens[0] = count;
+    memcpy(gens + 1, cells, count * sizeof(*cells));
+    core_dict_put(&pt->entry.call_gens, (void *)in, gens);
+}
+
+static void
+entry_apply(pt_entry_t *entry, const ir_instr_t *in)
+{
+    uintptr_t cell = (uintptr_t)core_dict_get(&entry->gens, (void *)in,
+                                              nullptr);
+    if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
+    const uint64_t *calls = core_dict_get(&entry->call_gens, (void *)in,
+                                          nullptr);
+    for (uint64_t c = 0; calls && c < calls[0]; c++)
+        entry->state[calls[c + 1] / 64] |= 1ull << (calls[c + 1] % 64);
 }
 
 static void
@@ -183,17 +225,14 @@ entry_build(pt_t *pt)
     entry->built = true;
     entry->cells = core_list_new(ir_spath_t);
     core_dict_init(&entry->gens, nullptr, nullptr);
+    core_dict_init(&entry->call_gens, nullptr, nullptr);
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
             ir_spath_t        path;
+            entry_call_gens(pt, in);
             if (!definite_store(pt, in, &path)) continue;
-            path.flags = 0;
-            size_t cell = 0;
-            while (cell < entry->cells.len
-                   && compare_paths(&entry->cells.data[cell], &path))
-                cell++;
-            if (cell == entry->cells.len) core_list_push(entry->cells, path);
+            size_t cell = entry_cell(entry, path);
             core_dict_put(&entry->gens, (void *)in,
                           (void *)(uintptr_t)(cell + 1));
         }
@@ -210,11 +249,8 @@ entry_build(pt_t *pt)
             const ir_block_t *block = f->blocks[b];
             memcpy(entry->state, &entry->in[(size_t)b * entry->words],
                    entry->words * sizeof(uint64_t));
-            for (uint32_t i = 0; i < block->n_instrs; i++) {
-                uintptr_t cell = (uintptr_t)core_dict_get(
-                    &entry->gens, (void *)block->instrs[i], nullptr);
-                if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
-            }
+            for (uint32_t i = 0; i < block->n_instrs; i++)
+                entry_apply(entry, block->instrs[i]);
             ir_instr_t *last = block->n_instrs
                 ? block->instrs[block->n_instrs - 1] : nullptr;
             for (uint32_t s = 0; last && s < ir_succ_count(last); s++) {
@@ -241,11 +277,8 @@ written_before(pt_t *pt, const ir_instr_t *at, const ir_spath_t *read)
     if (!entry->words) return false;
     memcpy(entry->state, &entry->in[(size_t)at->block->index * entry->words],
            entry->words * sizeof(uint64_t));
-    for (uint32_t i = 0; i < at->index; i++) {
-        uintptr_t cell = (uintptr_t)core_dict_get(
-            &entry->gens, (void *)at->block->instrs[i], nullptr);
-        if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
-    }
+    for (uint32_t i = 0; i < at->index; i++)
+        entry_apply(entry, at->block->instrs[i]);
     for (size_t c = 0; c < entry->cells.len; c++) {
         const ir_spath_t *cell = &entry->cells.data[c];
         if ((entry->state[c / 64] >> (c % 64) & 1)
@@ -282,20 +315,15 @@ argument_is(flow_query_t *q, const ir_instr_t *call, const ir_spath_t *path,
     const ir_instr_t *at    = pt->at;
     pt_set_t          items = (pt_set_t){0};
     pt->at = call;
-    if (path->output) {
-        ir_spath_t own = {.root   = IR_SPLACE_PARAM, .param = path->param,
-                          .output = path->output};
-        map_own_storage(pt, call, &own, false, &items);
-    }
-    else {
-        argument_items(pt, call, path->param, &items);
-        for (size_t i = 0; i < items.len; i++)
-            if (items.data[i].flow != PT_SAME || items.data[i].depth)
-                items.len = 0;
-    }
+    argument_items(pt, call, path->param, &items);
+    for (size_t i = 0; i < items.len; i++)
+        if (items.data[i].flow != PT_SAME || items.data[i].depth)
+            items.len = 0;
+    // Asked about one leaf of the place, the argument must lead to it (a
+    // pointer parameter's referent is a leaf below the parameter itself).
     ir_spath_t mapped;
-    bool matches = definite_path(pt, &items, &mapped)
-        && covers_place(&mapped, want, nullptr);
+    bool matches = definite_path(&items, &mapped)
+        && covers_place(&mapped, want, q->leaf);
     core_list_free(items);
     pt->at = at;
     return matches;
@@ -587,9 +615,6 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
         pt_call(pt, in);
-        break;
-    case IR_OP_CALL_OUTPUT:
-        call_output(pt, in, &out);
         break;
     default: {
         if (ir_op_transfers(in->op)) {

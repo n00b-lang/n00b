@@ -158,8 +158,11 @@ put_ranked_bits(core_buffer_t *out, const flow_bits_t *bits,
                 const uint32_t *rank, size_t count)
 {
     flow_bits_t ranked = core_list_new(uint64_t);
-    for (size_t s = 0; s < count; s++)
-        if (bit_has(bits, (uint32_t)s)) (void)bit_set(&ranked, rank[s]);
+    for (size_t w = 0; w < bits->len && w * 64 < count; w++)
+        for (uint64_t word = bits->data[w]; word; word &= word - 1) {
+            size_t s = w * 64 + (size_t)__builtin_ctzll(word);
+            if (s < count) (void)bit_set(&ranked, rank[s]);
+        }
     put_bits(out, &ranked);
     core_list_free(ranked);
 }
@@ -179,16 +182,22 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     encoded_item_t *sources = core_alloc_array(encoded_item_t, count + 1);
     uint32_t       *rank    = core_alloc_array(uint32_t, count + 1);
     size_t          used    = 0;
-    for (size_t s = 0; s < count; s++) {
-        bool referenced = false;
-        for (size_t d = 0; !referenced && d < flows->dests.len; d++) {
-            const flow_dest_t *dest = &flows->dests.data[d];
-            referenced = bit_has(&dest->data, (uint32_t)s)
-                || bit_has(&dest->control, (uint32_t)s)
-                || bit_has(&dest->alias, (uint32_t)s)
-                || bit_has(&dest->copy, (uint32_t)s);
+    // The sources some destination draws on: every kind of flow into every
+    // destination, in one set.
+    flow_bits_t referenced = core_list_new(uint64_t);
+    for (size_t d = 0; d < flows->dests.len; d++) {
+        const flow_dest_t *dest  = &flows->dests.data[d];
+        const flow_bits_t *kinds[] = {&dest->data, &dest->control,
+                                      &dest->alias, &dest->copy};
+        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+            while (referenced.len < kinds[k]->len)
+                core_list_push(referenced, UINT64_C(0));
+            for (size_t w = 0; w < kinds[k]->len; w++)
+                referenced.data[w] |= kinds[k]->data[w];
         }
-        if (!referenced) continue;
+    }
+    for (size_t s = 0; s < count; s++) {
+        if (!bit_has(&referenced, (uint32_t)s)) continue;
         sources[used].index = s;
         put_path(&sources[used].bytes, texts, types, flows->sources.data[s]);
         used++;
@@ -221,6 +230,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         core_buffer_append(out, dests[k].bytes.data, dests[k].bytes.byte_len);
     for (size_t k = 0; k < used; k++) core_buffer_release(&sources[k].bytes);
     for (size_t k = 0; k < kept; k++) core_buffer_release(&dests[k].bytes);
+    core_list_free(referenced);
     core_free(sources);
     core_free(dests);
     core_free(rank);
@@ -424,18 +434,29 @@ get_paths(summary_reader_t *r, path_list_t *paths)
 }
 
 static void
-get_bits(summary_reader_t *r, flow_table_t *flows, const ir_spath_t *to,
-         const path_list_t *sources, ir_sflow_kind_t kind)
+get_bits(summary_reader_t *r, flow_table_t *flows, flow_dest_t **dest,
+         const ir_spath_t *to, const path_list_t *sources, uint32_t *mapped,
+         ir_sflow_kind_t kind)
 {
+    // As flow_put for each flow, in the same order, but each source and the
+    // destination are looked up once.
     uint32_t words = get_u32(r);
     for (uint32_t w = 0; !r->failed && w < words; w++) {
         uint64_t low  = get_u32(r);
         uint64_t word = low | (uint64_t)get_u32(r) << 32;
-        for (uint32_t b = 0; !r->failed && b < 64; b++) {
-            if (!(word >> b & 1)) continue;
-            size_t source = (size_t)w * 64 + b;
-            if (source >= sources->len) r->failed = true;
-            else flow_put(flows, to, &sources->data[source], kind);
+        for (; !r->failed && word; word &= word - 1) {
+            size_t source = (size_t)w * 64 + (size_t)__builtin_ctzll(word);
+            if (source >= sources->len) {
+                r->failed = true;
+                break;
+            }
+            if (mapped[source] == UINT32_MAX)
+                mapped[source] = flow_source(flows, &sources->data[source]);
+            if (!*dest) {
+                ir_spath_t key = canonical_path(to);
+                *dest = flow_dest(flows, &key);
+            }
+            bit_set(kind_bits(*dest, kind), mapped[source]);
         }
     }
 }
@@ -449,14 +470,18 @@ get_flows(summary_reader_t *r, flow_table_t *flows)
         ir_spath_t path = get_path(r);
         core_list_push(sources, path);
     }
+    uint32_t *mapped = core_alloc_array(uint32_t, sources.len + 1);
+    for (size_t s = 0; s < sources.len; s++) mapped[s] = UINT32_MAX;
     uint32_t dests = get_u32(r);
     for (uint32_t d = 0; !r->failed && d < dests; d++) {
-        ir_spath_t to = get_path(r);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_DATA);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_CONTROL);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_ALIAS);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_COPY);
+        ir_spath_t   to   = get_path(r);
+        flow_dest_t *dest = nullptr;
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_DATA);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_CONTROL);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_ALIAS);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_COPY);
     }
+    core_free(mapped);
     core_list_free(sources);
 }
 

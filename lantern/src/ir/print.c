@@ -333,10 +333,6 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
     case IR_OPD_ARG:
         break;
 
-    case IR_OPD_OUT:
-        core_buffer_puts(b, "out");
-        break;
-
     case IR_OPD_FRESH:
         core_buffer_puts(b, "fresh %");
         if (o->value) {
@@ -741,7 +737,10 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
             core_buffer_puts(b, "%");
             put_text(b, value->name);
             core_buffer_puts(b, ": ");
-            put_type(b, m, value->type);
+            // A by-reference parameter's value is a Ref to the caller's
+            // place; the signature spells the referent type.
+            put_type(b, m, th_mode_by_reference(parameter->mode)
+                               ? parameter->type : value->type);
             put_annots(b, m, ir_value_annots(value));
         }
         else {
@@ -753,9 +752,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
         first = false;
     }
 
-    size_t mapped = 0;
-    for (size_t i = 0; i < th_func_nparams(f->type); i++)
-        mapped += th_func_param(f->type, i)->mode != TH_OUT;
+    size_t mapped = th_func_nparams(f->type);
     for (uint32_t i = 0, k = 0; i < f->n_params; i++) {
         if (f->params[i]->is_keyword || f->params[i]->is_rest
             || k++ < mapped) continue;

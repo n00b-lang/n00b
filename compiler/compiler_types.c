@@ -3867,7 +3867,7 @@ static bool check_write_site(core_translation_unit_t  *unit,
     parse_sym_entry_t *root   = canonical_symbol(site->root);
     bool               param  = root->kind == PARSE_SYM_PARAM;
     bool               frozen = param
-        ? !(root->has_mode && th_mode_produces_output(root->mode))
+        ? !(root->has_mode && th_mode_by_reference(root->mode))
         : root->mutability == PARSE_SYM_IMMUTABLE
               || root->mutability == PARSE_SYM_CONST;
 

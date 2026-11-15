@@ -111,8 +111,15 @@ call_misuse(core_dict_t *classes, const ir_instr_t *call)
     type = type ? th_resolve(type) : nullptr;
     for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
         ir_call_arg_t argument = ir_call_argument(call, p);
-        if (!(lease_class(classes, argument.value) & LEASE_HELD)) continue;
         const th_param *param = type ? th_func_param(type, p) : nullptr;
+        uintptr_t class = lease_class(classes, argument.value);
+        // An `out` or `modify` argument is the place itself, so lending
+        // `storage` by reference lets the callee keep or replace its array.
+        if ((class & LEASE_ADDRESS) && param
+            && th_mode_by_reference(param->mode))
+            return CORE_STRING_STATIC("hands the array in `storage` to a "
+                                      "call that may keep it");
+        if (!(class & LEASE_HELD)) continue;
         if (!param || param->mode == TH_CONSUME || param->mode == TH_OUT
             || param->mode == TH_INOUT)
             return CORE_STRING_STATIC("hands the array in `storage` to a "

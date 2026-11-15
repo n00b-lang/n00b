@@ -225,15 +225,11 @@ bool ir_func_parameter_is_optional(const ir_func_t *function, uint32_t index)
 ir_value_t *ir_func_param_value(const ir_func_t *function, uint32_t index)
 {
     if (!function || !function->type
-        || index >= th_func_nparams(function->type)
-        || th_func_param(function->type, index)->mode == TH_OUT)
+        || index >= th_func_nparams(function->type))
         return nullptr;
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < index; i++)
-        value += th_func_param(function->type, i)->mode != TH_OUT;
     for (uint32_t p = 0, k = 0; p < function->n_params; p++) {
         ir_value_t *param = function->params[p];
-        if (!param->is_keyword && !param->is_rest && k++ == value)
+        if (!param->is_keyword && !param->is_rest && k++ == index)
             return param;
     }
     return nullptr;
@@ -1449,8 +1445,7 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
     if (want != kind
         && !(want == IR_OPD_ARG
              && (kind == IR_OPD_VALUE || kind == IR_OPD_SPREAD ||
-                 kind == IR_OPD_NAMED_ARG || kind == IR_OPD_OUT ||
-                 kind == IR_OPD_FRESH || kind == IR_OPD_MISSING))) {
+                 kind == IR_OPD_NAMED_ARG || kind == IR_OPD_FRESH || kind == IR_OPD_MISSING))) {
         return nullptr;
     }
 
@@ -1522,13 +1517,6 @@ bool ir_instr_operand_named_out(ir_instr_t *in, core_string_t name)
     if (!operand) return false;
     operand->named.name = ir_strdup(in->block->owner->owner->ctx, name);
     return operand->named.name.data != nullptr;
-}
-
-bool ir_instr_operand_out(ir_instr_t *in)
-{
-    return in && (in->op == IR_OP_CALL
-                  || in->op == IR_OP_CALLBACK_INVOKE)
-        && push(in, IR_OPD_OUT) != nullptr;
 }
 
 bool ir_instr_operand_missing(ir_instr_t *in)

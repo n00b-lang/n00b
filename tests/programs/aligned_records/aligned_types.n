@@ -1,0 +1,18 @@
+# Records whose `align(N)` asks for more than their fields need.
+
+const context_alignment: int = 16
+
+record Context layout(c) align(context_alignment) {
+    head:  u64
+    words: Array[u64][3]
+}
+
+record Page layout(c) align(4096) {
+    first: u8
+}
+
+# An aligned record inside another: the outer record takes its alignment.
+record Holder layout(c) {
+    tag:     u8
+    state: Context
+}

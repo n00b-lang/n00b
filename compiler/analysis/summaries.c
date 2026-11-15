@@ -80,12 +80,20 @@ runtime_init_entries(parse_grammar_t *grammar,
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                // Thread-locals start unset on every thread, and a module
+                // variable without an initializer is unset until code sets
+                // it: reads of either are checked from every entry.
                 if (symbol->kind == PARSE_SYM_VARIABLE
-                    && symbol->is_thread_local
-                    && is_module_global_symbol(grammar, symbol)) {
+                    && is_module_global_symbol(grammar, symbol)
+                    && (symbol->is_thread_local
+                        || !global_has_explicit_initializer(grammar,
+                                                            symbol))) {
+                    // A module variable nothing lowered has no storage to
+                    // read; a thread-local always has.
                     ir_global_t *global = link_ir_global_for_symbol(analysis,
                                                                     symbol);
-                    if (!runtime_init_target_add(runtime, global))
+                    if ((global || symbol->is_thread_local)
+                        && !runtime_init_target_add(runtime, global))
                         return false;
                 }
                 if (!thread_runtime_entry_function(grammar, symbol)) continue;
@@ -386,8 +394,9 @@ n00bb_summary_owned_field(void *context, th_type *record, core_string_t field)
         && lease_storage_record(record);
 }
 
-static core_translation_unit_t *
-visibility_unit(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+core_translation_unit_t *
+n00bb_visibility_unit(n00bb_link_analysis_t *analysis,
+                      const ir_module_t *module)
 {
     bool found = false;
     core_translation_unit_t *unit = core_dict_get(&analysis->visibility_units,
@@ -428,8 +437,8 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
                   const ir_module_t *other)
 {
     n00bb_link_analysis_t *analysis = context;
-    core_translation_unit_t *from = visibility_unit(analysis, viewer);
-    core_translation_unit_t *to   = visibility_unit(analysis, other);
+    core_translation_unit_t *from = n00bb_visibility_unit(analysis, viewer);
+    core_translation_unit_t *to   = n00bb_visibility_unit(analysis, other);
     return !from || !to || from == to
         || core_dict_contains(import_closure(analysis, from), to);
 }
@@ -454,6 +463,8 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .adjust = n00bb_summary_adjust,
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
+        .global_named = n00bb_summary_global_named,
+        .global_hidden = n00bb_summary_global_hidden,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,

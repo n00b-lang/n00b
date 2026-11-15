@@ -94,6 +94,13 @@ th_type *n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 bool cache_record_layout_request(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *declaration);
+// The `align(N)` of record `symbol`, in bytes, or 0 without one. False when
+// N isn't a constant power of two; with `report`, that's reported once and
+// remembered. Without it, N may just not be known yet.
+bool n00bb_record_alignment(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit,
+                            parse_sym_entry_t *symbol, bool report,
+                            uint32_t *bytes);
 bool cache_record_field_extents(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
                                 parse_tree_t *declaration);
@@ -800,6 +807,7 @@ bool n00bb_builtin_bit_count_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_gc_memory_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_signal_fence_function(parse_sym_entry_t *symbol);
+bool n00bb_builtin_machine_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_comptime_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_prefetch_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_rmw_function(parse_sym_entry_t *symbol);
@@ -827,11 +835,17 @@ bool type_may_contain_reference_alias(th_ctx *types, th_type *type);
 bool n00bb_type_reaches_shared_state(th_ctx *types, th_type *type);
 bool n00bb_unit_type_reaches_shared_state(n00bb_tu_state_t *state,
                                           th_type *type);
-typedef bool (*n00bb_semantic_unit_finish_t)(void *context,
+typedef bool (*n00bb_semantic_unit_hook_t)(void *context,
     core_translation_unit_t *unit);
+// `restore` runs as each module's walk ends; `finish` runs once every module
+// of its import cycle has been walked and restored.
+typedef struct {
+    n00bb_semantic_unit_hook_t restore;
+    n00bb_semantic_unit_hook_t finish;
+    void *context;
+} n00bb_semantic_hooks_t;
 bool semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
-    core_translation_unit_t *unit, n00bb_semantic_unit_finish_t finish,
-    void *context);
+    core_translation_unit_t *unit, const n00bb_semantic_hooks_t *hooks);
 bool is_reference_symbol(parse_sym_entry_t *symbol);
 bool is_integer_type(th_type *type);
 bool validate_cached_array_dimensions(parse_grammar_t *grammar,

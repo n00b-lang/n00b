@@ -1,3 +1,4 @@
+import sys.os
 import sys.threads
 
 record Fin {
@@ -48,9 +49,9 @@ func sliced() -> bool {
 }
 
 require sliced()
-let deadline: u64 = __os_now_ns() + 30_000_000_000
+let deadline: u64 = sys.os.now_ns() + 30_000_000_000
 while __atomic_load(ref finalized) == 0 {
-    require __os_now_ns() < deadline
+    require sys.os.now_ns() < deadline
     __gc_enter_blocking()
     sys.threads.thread_yield()
     __gc_leave_blocking()

@@ -1,0 +1,1 @@
+record Odd layout(c) align(24) { x: u64 }

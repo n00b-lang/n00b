@@ -1,0 +1,1 @@
+record Narrow layout(c) align(4) { x: u64 }

@@ -1,0 +1,124 @@
+# The machine's physical memory.
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall sysinfo(info: out *u8) -> c_int
+      number 99 when arch == x86_64
+      number 179 when arch == aarch64
+      effects env
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+
+    # Linux's struct sysinfo.
+    private record Linux_Sysinfo layout(c) {
+        uptime:      i64
+        load_1:      u64
+        load_5:      u64
+        load_15:     u64
+        total_ram:   u64
+        free_ram:    u64
+        shared_ram:  u64
+        buffer_ram:  u64
+        total_swap:  u64
+        free_swap:   u64
+        processes:   u16
+        padding_1:   u16
+        padding_2:   u32
+        total_high:  u64
+        free_high:   u64
+        memory_unit: u32
+        padding_3:   u32
+    }
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn sysconf(name: c_int) -> c_long
+      effects env
+
+    binding {
+        raw "sysconf"
+    }
+    -]'ffi
+
+    private const sysconf_page_size: i32 = 29
+    private const sysconf_physical_pages: i32 = 200
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    # The status's first field, its size, is set going in.
+    fn GlobalMemoryStatusEx(status: inout *u8) -> c_int
+      effects env
+
+    binding {
+        name GlobalMemoryStatusEx "memory_status"
+        raw "GlobalMemoryStatusEx"
+    }
+    -]'ffi
+
+    # Windows' MEMORYSTATUSEX.
+    private record Windows_Memory_Status layout(c) {
+        length:                     u32
+        load:                       u32
+        total_physical:             u64
+        available_physical:         u64
+        total_page_file:            u64
+        available_page_file:        u64
+        total_virtual:              u64
+        available_virtual:          u64
+        available_extended_virtual: u64
+    }
+}
+
+# The machine's physical memory in bytes, or the largest uint if it can't
+# be found.
+func physical_memory() -> uint {
+    let unknown: uint = ~cast[uint](0)
+    when target_os() == "linux" {
+        var info: Linux_Sysinfo = (uptime = 0, load_1 = 0, load_5 = 0,
+            load_15 = 0, total_ram = 0, free_ram = 0, shared_ram = 0,
+            buffer_ram = 0, total_swap = 0, free_swap = 0, processes = 0,
+            padding_1 = 0, padding_2 = 0, total_high = 0, free_high = 0,
+            memory_unit = 0, padding_3 = 0)
+        try {
+            _ = sysinfo(unsafe_cast[Ref[byte]] (ref info))!
+        } fail(failure) {
+            return unknown
+        }
+        if info.total_ram == 0 {
+            return unknown
+        }
+        var unit: u64 = cast[u64](info.memory_unit)
+        if unit == 0 {
+            unit = 1
+        }
+        return cast[uint](info.total_ram * unit)
+    } else when target_os() == "macos" {
+        let pages: int = sysconf_raw(sysconf_physical_pages)
+        let size: int = sysconf_raw(sysconf_page_size)
+        if pages <= 0 or size <= 0 {
+            return unknown
+        }
+        return cast[uint](pages) * cast[uint](size)
+    } else when target_os() == "windows" {
+        var status: Windows_Memory_Status = (length = 64, load = 0,
+            total_physical = 0, available_physical = 0, total_page_file = 0,
+            available_page_file = 0, total_virtual = 0,
+            available_virtual = 0, available_extended_virtual = 0)
+        if memory_status_raw(unsafe_cast[Ref[byte]] (ref status)) == 0 {
+            return unknown
+        }
+        return cast[uint](status.total_physical)
+    } else {
+        return unknown
+    }
+}

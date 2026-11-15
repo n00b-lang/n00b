@@ -92,157 +92,14 @@ __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *
 #error "unsupported self-capture architecture"
 #endif
 
-#if defined(__APPLE__)
+#if defined(__linux__)
 
-#include <mach/mach.h>
-#include <mach/thread_act.h>
-#include <pthread.h>
-
-uint64_t n00b_os_thread_control_self(void)
-{
-    return (uint64_t)pthread_mach_thread_np(pthread_self());
-}
-
-int32_t n00b_os_thread_suspend(uint64_t control,
-                               n00b_os_thread_context *context,
-                               uint64_t timeout_ns)
-{
-    (void)timeout_ns;
-    if (!control || !context) return -1;
-    mach_port_t port = (mach_port_t)control;
-    if (thread_suspend(port) != KERN_SUCCESS) return -1;
-
-#if defined(__aarch64__)
-    arm_thread_state64_t state;
-    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
-    if (thread_get_state(port, ARM_THREAD_STATE64,
-                         (thread_state_t)&state, &count) != KERN_SUCCESS) {
-        (void)thread_resume(port);
-        return -1;
-    }
-    context->sp = (void *)(uintptr_t)arm_thread_state64_get_sp(state);
-    context->fp = (void *)(uintptr_t)arm_thread_state64_get_fp(state);
-    context->pc = (void *)(uintptr_t)arm_thread_state64_get_pc(state);
-    context->nregs = 31;
-    for (size_t i = 0; i < 29; i++) context->regs[i] = state.__x[i];
-    context->regs[29] = (uintptr_t)arm_thread_state64_get_fp(state);
-    context->regs[30] = (uintptr_t)arm_thread_state64_get_lr(state);
-#elif defined(__x86_64__)
-    x86_thread_state64_t state;
-    mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
-    if (thread_get_state(port, x86_THREAD_STATE64,
-                         (thread_state_t)&state, &count) != KERN_SUCCESS) {
-        (void)thread_resume(port);
-        return -1;
-    }
-    context->sp = (void *)(uintptr_t)state.__rsp;
-    context->fp = (void *)(uintptr_t)state.__rbp;
-    context->pc = (void *)(uintptr_t)state.__rip;
-    const uint64_t regs[] = {
-        state.__rax, state.__rbx, state.__rcx, state.__rdx,
-        state.__rdi, state.__rsi, state.__rbp, state.__r8,
-        state.__r9, state.__r10, state.__r11, state.__r12,
-        state.__r13, state.__r14, state.__r15,
-    };
-    context->nregs = sizeof(regs) / sizeof(regs[0]);
-    for (size_t i = 0; i < context->nregs; i++) context->regs[i] = regs[i];
-#else
-#error "unsupported macOS thread context architecture"
-#endif
-    context->handle = (uintptr_t)port;
-    context->thread_id = 0;
-    atomic_store_explicit(&context->parked, 1, memory_order_release);
-    return 0;
-}
-
-int32_t n00b_os_thread_resume(uint64_t control,
-                              n00b_os_thread_context *context)
-{
-    if (!context || !atomic_load_explicit(&context->parked,
-                                          memory_order_acquire)
-        || context->handle != (uintptr_t)control) return -1;
-    if (thread_resume((mach_port_t)control) != KERN_SUCCESS) return -1;
-    atomic_store_explicit(&context->parked, 0, memory_order_release);
-    context->nregs = 0;
-    context->handle = 0;
-    return 0;
-}
-
-#elif defined(_WIN32)
-
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-uint64_t n00b_os_thread_control_self(void)
-{
-    return (uint64_t)GetCurrentThreadId();
-}
-
-int32_t n00b_os_thread_suspend(uint64_t control,
-                               n00b_os_thread_context *context,
-                               uint64_t timeout_ns)
-{
-    (void)timeout_ns;
-    if (!control || !context) return -1;
-    HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
-                               FALSE, (DWORD)control);
-    if (!handle) return -1;
-    if (SuspendThread(handle) == (DWORD)-1) {
-        CloseHandle(handle);
-        return -1;
-    }
-    CONTEXT state = {0};
-    state.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-    if (!GetThreadContext(handle, &state)) {
-        (void)ResumeThread(handle);
-        CloseHandle(handle);
-        return -1;
-    }
-#if defined(_M_X64) || defined(__x86_64__)
-    context->sp = (void *)(uintptr_t)state.Rsp;
-    context->fp = (void *)(uintptr_t)state.Rbp;
-    context->pc = (void *)(uintptr_t)state.Rip;
-    const uint64_t regs[] = {
-        state.Rax, state.Rbx, state.Rcx, state.Rdx,
-        state.Rsi, state.Rdi, state.Rbp, state.R8,
-        state.R9, state.R10, state.R11, state.R12,
-        state.R13, state.R14, state.R15,
-    };
-    context->nregs = sizeof(regs) / sizeof(regs[0]);
-    for (size_t i = 0; i < context->nregs; i++) context->regs[i] = regs[i];
-#elif defined(_M_ARM64) || defined(__aarch64__)
-    context->sp = (void *)(uintptr_t)state.Sp;
-    context->fp = (void *)(uintptr_t)state.Fp;
-    context->pc = (void *)(uintptr_t)state.Pc;
-    context->nregs = 31;
-    for (size_t i = 0; i < 29; i++) context->regs[i] = state.X[i];
-    context->regs[29] = state.Fp;
-    context->regs[30] = state.Lr;
-#else
-#error "unsupported Windows thread context architecture"
-#endif
-    context->handle = (uintptr_t)handle;
-    context->thread_id = control;
-    atomic_store_explicit(&context->parked, 1, memory_order_release);
-    return 0;
-}
-
-int32_t n00b_os_thread_resume(uint64_t control,
-                              n00b_os_thread_context *context)
-{
-    if (!context || !atomic_load_explicit(&context->parked,
-                                          memory_order_acquire)
-        || context->thread_id != control || !context->handle) return -1;
-    HANDLE handle = (HANDLE)context->handle;
-    if (ResumeThread(handle) == (DWORD)-1) return -1;
-    atomic_store_explicit(&context->parked, 0, memory_order_release);
-    context->nregs = 0;
-    context->handle = 0;
-    CloseHandle(handle);
-    return 0;
-}
-
-#elif defined(__linux__)
+// Linux has no call that suspends another thread: sys.os signals it with
+// rt_tgsigqueueinfo, carrying the context to fill, and this handler, which
+// runs on the stopped thread, saves its registers there and waits until
+// sys.os.thread_resume clears `parked`. The handler and the rt_sigreturn
+// trampoline are the only parts that can't be n00b code: they run on a
+// thread interrupted at an arbitrary instruction.
 
 #include <asm/signal.h>
 #include <asm/sigcontext.h>
@@ -263,24 +120,25 @@ __attribute__((naked)) static void stw_sigreturn(void)
 #error "unsupported Linux thread context architecture"
 #endif
 
-enum { STW_SIGNAL = 40, STW_CLOCK_MONOTONIC = 1 };
+enum { STW_CLOCK_MONOTONIC = 1 };
 
+// The start of the kernel's siginfo for a queued signal: the value sent with
+// it is the context to fill.
 typedef struct {
-    void (*handler)(int, void *, void *);
-    unsigned long flags;
-    void (*restorer)(void);
-    unsigned long mask;
-} stw_kernel_sigaction;
-
-static atomic_uint signal_state;
-static _Atomic(n00b_os_thread_context *) pending_context;
+    int signo;
+    int error;
+    int code;
+    int padding;
+    int pid;
+    unsigned uid;
+    n00b_os_thread_context *context;
+} stw_siginfo_t;
 
 static void stw_suspend_handler(int signal, void *info, void *raw_context)
 {
     (void)signal;
-    (void)info;
-    n00b_os_thread_context *context = atomic_load_explicit(
-        &pending_context, memory_order_acquire);
+    n00b_os_thread_context *context = info
+        ? ((const stw_siginfo_t *)info)->context : NULL;
     if (!context || context->thread_id != n00b_os_thread_id()) return;
 
     struct ucontext *state = raw_context;
@@ -315,75 +173,14 @@ static void stw_suspend_handler(int signal, void *info, void *raw_context)
     }
 }
 
-static int stw_install_handler(void)
+uintptr_t n00b_linux_stw_handler(void)
 {
-    unsigned expected = 0;
-    if (atomic_compare_exchange_strong_explicit(&signal_state, &expected,
-            1, memory_order_acq_rel, memory_order_acquire)) {
-        stw_kernel_sigaction action = {
-            .handler = stw_suspend_handler,
-            .flags = SA_SIGINFO | SA_RESTART | SA_RESTORER,
-            .restorer = stw_sigreturn,
-        };
-        long result = n00b_linux_syscall6(__NR_rt_sigaction,
-                                           STW_SIGNAL, (long)&action, 0,
-                                           sizeof(action.mask), 0, 0);
-        atomic_store_explicit(&signal_state, result == 0 ? 2 : 3,
-                              memory_order_release);
-    }
-    while (atomic_load_explicit(&signal_state, memory_order_acquire) == 1)
-        n00b_os_cpu_relax();
-    return atomic_load_explicit(&signal_state, memory_order_acquire) == 2
-        ? 0 : -1;
+    return (uintptr_t)stw_suspend_handler;
 }
 
-uint64_t n00b_os_thread_control_self(void)
+uintptr_t n00b_linux_stw_restorer(void)
 {
-    return n00b_os_thread_id();
+    return (uintptr_t)stw_sigreturn;
 }
 
-int32_t n00b_os_thread_suspend(uint64_t control,
-                               n00b_os_thread_context *context,
-                               uint64_t timeout_ns)
-{
-    if (!control || !context || stw_install_handler() != 0) return -1;
-    n00b_os_thread_context *empty = NULL;
-    while (!atomic_compare_exchange_weak_explicit(&pending_context, &empty,
-            context, memory_order_acq_rel, memory_order_acquire)) {
-        empty = NULL;
-        n00b_os_cpu_relax();
-    }
-    context->thread_id = control;
-    context->nregs = 0;
-    atomic_store_explicit(&context->parked, 0, memory_order_release);
-    long pid = n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0);
-    long sent = n00b_linux_syscall6(__NR_tgkill, pid, (long)control,
-                                    STW_SIGNAL, 0, 0, 0);
-    if (sent != 0) {
-        atomic_store_explicit(&pending_context, NULL, memory_order_release);
-        return -1;
-    }
-    uint64_t start = n00b_os_now_ns();
-    while (!atomic_load_explicit(&context->parked, memory_order_acquire)) {
-        if (timeout_ns && n00b_os_now_ns() - start > timeout_ns)
-            __builtin_trap();
-        n00b_os_cpu_relax();
-    }
-    atomic_store_explicit(&pending_context, NULL, memory_order_release);
-    return 0;
-}
-
-int32_t n00b_os_thread_resume(uint64_t control,
-                              n00b_os_thread_context *context)
-{
-    if (!context || context->thread_id != control
-        || !atomic_load_explicit(&context->parked, memory_order_acquire))
-        return -1;
-    context->nregs = 0;
-    atomic_store_explicit(&context->parked, 0, memory_order_release);
-    return 0;
-}
-
-#else
-#error "builtin/os requires macOS, Linux, or Windows"
 #endif

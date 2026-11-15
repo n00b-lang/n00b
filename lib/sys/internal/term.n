@@ -1,16 +1,16 @@
 import internal.errno
-import internal.os
+import internal.os.terminal
 
 func fd_is_tty(fd: int) -> bool fail: internal.errno.Errno {
-    return internal.os.is_terminal(cast[i32](fd))!
+    return internal.os.terminal.is_terminal(cast[i32](fd))!
 }
 
 func terminal_size(fd: int, out rows: u16, out cols: u16)
     fail: internal.errno.Errno {
     rows = 0
     cols = 0
-    let size: internal.os.Terminal_Size =
-        internal.os.terminal_size(cast[i32](fd))!
+    let size: internal.os.terminal.Terminal_Size =
+        internal.os.terminal.terminal_size(cast[i32](fd))!
     rows = size.rows
     cols = size.columns
 }

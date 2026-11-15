@@ -114,7 +114,7 @@ func caught(p: Pair, k: int) -> bool {
     return matched
 }
 
-func start() -> nil {
+func main() -> nil {
     var p: Pair = (a = 1, b = 2)
     var pairs: Array[Pair] = new[Array[Pair]](1)
     _ = by_value(p)

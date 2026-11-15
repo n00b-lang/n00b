@@ -38,6 +38,10 @@ typedef struct {
     n00bb_native_type_t  *result;
     bool                  pure;
     uint32_t              effects;
+    // Parameters (the first 16) whose pointer the callee only reads, and
+    // those whose pointer it only writes without reading what was there.
+    uint16_t              read_only;
+    uint16_t              write_only;
 } n00bb_native_declaration_t;
 
 typedef struct {

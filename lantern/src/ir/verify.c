@@ -360,7 +360,6 @@ static bool parsed_operand(ir_visit_t *vi)
                              && (got == IR_OPD_VALUE
                                  || got == IR_OPD_SPREAD
                                  || got == IR_OPD_NAMED_ARG
-                                 || got == IR_OPD_OUT
                                  || got == IR_OPD_FRESH
                                  || got == IR_OPD_MISSING));
 

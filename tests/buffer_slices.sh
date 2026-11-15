@@ -52,8 +52,7 @@ ordered call_argument 'buffer.as_string' 'call @measure' 'buffer.slice_end'
 ordered local_then_other_write 'buffer.as_string' 'call @byte_len' \
     'buffer.slice_end' 'call @__add_assign'
 ordered distinct_concat 'buffer.as_string' 'call @concat' 'buffer.slice_end'
-ordered out_view 'buffer.as_string' 'call @forward' 'call.output' \
-    'call @byte_len' 'buffer.slice_end' 'call @__add_assign'
+ordered out_view 'buffer.as_string' 'call @forward' 'call @byte_len' 'buffer.slice_end' 'call @__add_assign'
 ordered reassign_global 'buffer.as_string %__n00bb_slice_source' \
     'global.store' 'buffer.slice_end %__n00bb_slice_source'
 

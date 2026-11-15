@@ -36,31 +36,13 @@
 
 static const n00bb_axiom_t axioms[] = {
     RETURNING_NATIVE("__bitptr", "n00bb_bitptr", true, IR_SRETURN_PARAM),
-    NATIVE("__os_page_size", "n00b_os_page_size", 0, 0, 0),
     NATIVE("__gc_enter_blocking", "n00b_os_gc_enter_blocking",
            IR_SUMMARY_MAY_BLOCK, 0, 0),
     NATIVE("__gc_leave_blocking",
            "sys.internal.gc.alloc.leave_blocking_runtime",
            IR_SUMMARY_MAY_BLOCK, 0, 0),
-    NATIVE("__os_physical_memory", "n00b_os_physical_memory",
-           IR_SUMMARY_READS_ENV, 0, 0),
-    // Input, not pure: errno means something only right after the call that
-    // set it, so reads must not be merged or moved.
-    NATIVE("__os_errno", "n00b_os_errno", NATIVE_INPUT, 0, 0),
     NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
     NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
-    NATIVE("__os_futex_wait", "n00b_os_futex_wait", IR_SUMMARY_MAY_BLOCK,
-           0x1, 0),
-    NATIVE("__os_futex_wake_all", "n00b_os_futex_wake_all", 0, 0, 0),
-    NATIVE("__write_bytes", "n00bb_runtime_write_bytes",
-           NATIVE_BLOCKING_OUTPUT, 0x2, 0),
-    NATIVE("__os_thread_fence", "n00b_os_thread_fence", 0, 0, 0),
-    {.key = N00BB_AXIOM_NATIVE, .name = CORE_STRING_STATIC("__os_thread_start"),
-     .native = CORE_STRING_STATIC("n00b_os_thread_start"),
-     .effects = IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-         | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_STARTS_THREADS,
-     .entries = 0x1,
-     .returns = IR_SRETURN_NONE},
     COLLECTION_FREE_NATIVE("__effect_query", "n00bb_effect_query", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__function_has_effect",
                            "n00bb_function_has_effect", 0, 0, 0),
@@ -69,28 +51,8 @@ static const n00bb_axiom_t axioms[] = {
     COLLECTION_FREE_NATIVE("__function_writes", "n00bb_function_writes", 0,
                            0, 0),
     COLLECTION_FREE_NATIVE("__unobserved", "n00bb_unobserved", 0, 0, 0),
-    NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
-           0, 0, 0),
-    NATIVE("__os_stack_address", "n00b_os_stack_address", 0, 0, 0),
-    NATIVE("__os_stack_red_zone_bytes", "n00b_os_stack_red_zone_bytes", 0,
-           0, 0),
-    NATIVE("__os_frame_pointer_chain", "n00b_os_frame_pointer_chain", 0, 0,
-           0),
-    NATIVE("__os_thread_control_self", "n00b_os_thread_control_self", 0, 0,
-           0),
-    NATIVE("__os_thread_capture_self", "n00b_os_thread_capture_self", 0, 0,
-           0x1),
-    NATIVE("__os_thread_suspend", "n00b_os_thread_suspend",
-           IR_SUMMARY_MAY_BLOCK, 0, 0x2),
-    NATIVE("__os_thread_resume", "n00b_os_thread_resume", 0, 0x2, 0),
-    NATIVE("__os_now_ns", "n00b_os_now_ns", IR_SUMMARY_READS_CLOCK, 0, 0),
-    NATIVE("__os_cpu_relax", "n00b_os_cpu_relax", 0, 0, 0),
     NATIVE("__report_failure", "n00bb_runtime_report_failure",
            IR_SUMMARY_MAY_TRAP | IR_SUMMARY_DIVERGES, 0, 0),
-    RETURNING_NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", false,
-                     IR_SRETURN_FRESH_EXTERNAL),
-    NATIVE("__os_unmap", "n00b_os_unmap", 0, 0, 0x1),
-    NATIVE("__os_protect", "n00b_os_protect", 0, 0, 0x1),
     NATIVE("__abi_type", "n00b_builtin_abi_type", 0, 0, 0),
     NATIVE("__abi_field", "n00b_builtin_abi_field", 0, 0, 0),
     NATIVE("__abi_arm", "n00b_builtin_abi_arm", 0, 0, 0),
@@ -172,6 +134,11 @@ static const n00bb_axiom_t axioms[] = {
     NATIVE("__ffi_release", "n00b_ffi_release", 0, 0, 0),
     NATIVE("__ffi_unwind_jump", "n00b_ffi_unwind_jump", IR_SUMMARY_DIVERGES,
            0, 0),
+    // Fails on a thread the runtime started, where libc's thread state is
+    // missing (runtime/linux_start.c); raw bindings of libraries that link
+    // "c" call it first.
+    NATIVE("__ffi_libc_thread_check", "n00b_ffi_libc_thread_check",
+           IR_SUMMARY_MAY_TRAP, 0, 0),
     FUNCTION("sys.internal.gc.alloc", "allocate_runtime_known_on_mutator", 0,
              N00BB_AXIOM_MUTATOR_ALLOCATOR),
     FUNCTION("sys.internal.gc.alloc", "allocate_array_on_mutator", 0,
@@ -361,12 +328,31 @@ n00bb_axiom_note_pure_native(core_string_t symbol)
     note_generated_native(symbol, NATIVE_PURE, (core_string_t){0});
 }
 
+// A foreign native's entry packs its kind in bits 0-1, its effects from bit
+// 2, and which parameters it only reads or only writes in the high halves.
+_Static_assert(sizeof(uintptr_t) == 8, "foreign natives pack 64 bits");
+enum { NATIVE_EFFECT_BITS = 30, NATIVE_READ_ONLY = 32, NATIVE_WRITE_ONLY = 48 };
+
 void
 n00bb_axiom_note_foreign_native(core_string_t symbol, core_string_t name,
-                                uint32_t effects)
+                                uint32_t effects, uint16_t read_only,
+                                uint16_t write_only)
 {
-    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2),
-                          name);
+    note_generated_native(symbol, NATIVE_FOREIGN
+        | ((uintptr_t)(effects & ((1u << NATIVE_EFFECT_BITS) - 1)) << 2)
+        | ((uintptr_t)read_only << NATIVE_READ_ONLY)
+        | ((uintptr_t)write_only << NATIVE_WRITE_ONLY), name);
+}
+
+bool
+n00bb_axiom_foreign_access(const ir_func_t *function, uint16_t *read_only,
+                           uint16_t *write_only)
+{
+    uintptr_t kind = generated_native(function);
+    if ((kind & 3) != NATIVE_FOREIGN) return false;
+    *read_only = (uint16_t)(kind >> NATIVE_READ_ONLY);
+    *write_only = (uint16_t)(kind >> NATIVE_WRITE_ONLY);
+    return true;
 }
 
 core_string_t
@@ -392,6 +378,6 @@ n00bb_axiom_foreign_native(const ir_func_t *function, uint32_t *effects)
 {
     uintptr_t kind = generated_native(function);
     if ((kind & 3) != NATIVE_FOREIGN) return false;
-    *effects = (uint32_t)(kind >> 2);
+    *effects = (uint32_t)(kind >> 2) & ((1u << NATIVE_EFFECT_BITS) - 1);
     return true;
 }

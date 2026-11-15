@@ -1,14 +1,17 @@
 import internal.errno
-import internal.os
+import internal.os.close
+import internal.os.open
+import internal.os.read
+import internal.os.seek
 
 func open_read(path: string) -> i32 fail: internal.errno.Errno {
-    return internal.os.open(path, internal.os.Access.read_only)!
+    return internal.os.open.open(path, internal.os.open.Access.read_only)!
 }
 
 # The size of the file `fd` refers to. Leaves its offset at the start.
 func size(fd: i32) -> uint fail: internal.errno.Errno {
-    let end: uint = internal.os.seek(fd, 0, internal.os.Whence.end)!
-    _ = internal.os.seek(fd, 0, internal.os.Whence.start)!
+    let end: uint = internal.os.seek.seek(fd, 0, internal.os.seek.Whence.end)!
+    _ = internal.os.seek.seek(fd, 0, internal.os.seek.Whence.start)!
     return end
 }
 
@@ -16,11 +19,11 @@ func read_into(fd: i32, modify buffer: Array[u8], at: uint, count: uint)
     -> uint fail: internal.errno.Errno {
     require at <= __array_length(buffer)
     require count <= __array_length(buffer) - at
-    return internal.os.read(fd, buffer, at, at + count)!
+    return internal.os.read.read(fd, buffer, at, at + count)!
 }
 
 func close(fd: i32) fail: internal.errno.Errno {
-    internal.os.close(fd)!
+    internal.os.close.close(fd)!
 }
 
 func read_file(path: string) -> Array[u8] fail: internal.errno.Errno {
@@ -41,7 +44,7 @@ func read_file(path: string) -> Array[u8] fail: internal.errno.Errno {
         return data
     } fail(failure) {
         try {
-            internal.os.close(fd)!
+            internal.os.close.close(fd)!
         } fail(ignored) {
         }
         fail failure

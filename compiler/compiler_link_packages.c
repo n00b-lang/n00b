@@ -698,11 +698,24 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     CORE_STRING_STATIC("n00b.type-typevars"));
             n00bb_record_layout_request_t *layout = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.record-layout-request"));
-            if (ok && layout && !layout->alignment_expression) {
-                uint8_t policy = (uint8_t)layout->policy;
+            // The policy, then for `align(N)` N as 4 little-endian bytes.
+            // The layout pass reports an invalid `align(N)`.
+            uint32_t alignment = 0;
+            bool aligned = !layout || !n00bb_record_request_aligned(layout)
+                || n00bb_record_alignment(grammar, unit, symbol, false,
+                                          &alignment);
+            if (ok && layout && aligned
+                && (!n00bb_record_request_aligned(layout)
+                    || layout->policy == N00BB_RECORD_C)) {
+                uint8_t encoded[5] = {
+                    (uint8_t)layout->policy,
+                    (uint8_t)alignment, (uint8_t)(alignment >> 8),
+                    (uint8_t)(alignment >> 16), (uint8_t)(alignment >> 24),
+                };
                 ok = th_env_register_metadata(environment,
                     TH_ENV_METADATA_TYPE, core_buffer_string(&qualified),
-                    CORE_STRING_STATIC("n00b.record-layout"), 1, &policy, sizeof(policy));
+                    CORE_STRING_STATIC("n00b.record-layout"), 1, encoded,
+                    alignment ? sizeof(encoded) : 1);
             }
             if (ok && shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
                 ok = register_enum_values_metadata(grammar, unit,

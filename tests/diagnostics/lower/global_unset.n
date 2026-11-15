@@ -1,0 +1,27 @@
+# A module variable with no initializer must be set before any function
+# that may run after initialization reads it.
+
+var counted: int
+var set_later: int
+var set_here: int
+
+func read_counted() -> int {
+    return counted
+}
+
+func read_after_setting() -> int {
+    set_later = 2
+    return set_later
+}
+
+func read_set_here() -> int {
+    return set_here
+}
+
+set_here = 1
+
+func main() {
+    _ = read_counted()
+    _ = read_after_setting()
+    _ = read_set_here()
+}

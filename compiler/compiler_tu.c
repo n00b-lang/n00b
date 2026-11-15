@@ -1074,6 +1074,57 @@ cache_record_layout_request(parse_grammar_t *grammar,
         CORE_STRING_STATIC("n00bb.record-layout-request"), stored);
 }
 
+// True when a name in `node` couldn't be found, which was reported then.
+static bool
+has_unresolved_name(parse_tree_t *node)
+{
+    if (!node) return false;
+    if (parse_tree_unresolved_name(node).data
+        && parse_tree_resolution(node).kind == PARSE_NODE_RESOLUTION_NONE)
+        return true;
+    if (core_tree_is_leaf(node)) return false;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (has_unresolved_name(core_tree_child(node, i))) return true;
+    return false;
+}
+
+bool
+n00bb_record_alignment(parse_grammar_t *grammar,
+                       core_translation_unit_t *unit,
+                       parse_sym_entry_t *symbol, bool report,
+                       uint32_t *bytes)
+{
+    *bytes = 0;
+    n00bb_record_layout_request_t *request = symbol ? parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.record-layout-request")) : nullptr;
+    if (!request) return true;
+    if (request->alignment_invalid) return false;
+    if (request->alignment_bytes || !request->alignment_expression) {
+        *bytes = request->alignment_bytes;
+        return true;
+    }
+    n00bb_static_value_t value = {0};
+    bool valid = n00bb_trivial_static_value(grammar, tu_state(unit),
+            request->alignment_expression, &value)
+        && value.kind == N00BB_STATIC_VALUE_INT
+        && value.as.integer > 0 && value.as.integer <= UINT32_MAX
+        && !(value.as.integer & (value.as.integer - 1));
+    if (!valid) {
+        if (!report) return false;
+        request->alignment_invalid = true;
+        if (has_unresolved_name(request->alignment_expression)) return false;
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_RECORD_ALIGNMENT_INVALID,
+            link_source_location(request->alignment_expression),
+            N00B_TEXT_RECORD_ALIGNMENT_INVALID,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+        return false;
+    }
+    request->alignment_bytes = (uint32_t)value.as.integer;
+    *bytes = request->alignment_bytes;
+    return true;
+}
+
 static parse_sym_entry_t *
 member_field_named(parse_scope_t *scope, core_string_t name)
 {
@@ -7064,6 +7115,30 @@ scope_has_lexical_lifetime(parse_scope_t *scope)
     return false;
 }
 
+// The binding kind (`const`, `let` or `var`) and storage class the variable
+// declaration around `node` spells; false when `node` is in none.
+static bool
+declared_binding_kind(parse_grammar_t *grammar, parse_tree_t *node,
+                      parse_sym_mutability_t *mutability, bool *threaded)
+{
+    parse_tree_t *declaration = parse_tree_parent(node);
+    while (declaration && !NT_IS(grammar, declaration, "variable-decl"))
+        declaration = parse_tree_parent(declaration);
+    parse_tree_t *prefix = CHILD_NT(grammar, declaration,
+                                    "declaration-prefix");
+    if (!prefix) return false;
+    core_string_t spelling = first_token_text(
+        CHILD_NT(grammar, prefix, "binding-kind"));
+    *mutability = core_string_eq(spelling, CORE_STRING_STATIC("const"))
+        ? PARSE_SYM_CONST
+        : core_string_eq(spelling, CORE_STRING_STATIC("let"))
+            ? PARSE_SYM_IMMUTABLE : PARSE_SYM_MUTABLE;
+    *threaded = core_string_eq(
+        first_token_text(CHILD_NT(grammar, prefix, "storage-class")),
+        CORE_STRING_STATIC("thread"));
+    return true;
+}
+
 static void
 apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
                    parse_sym_mutability_t mutability, bool threaded)
@@ -7115,6 +7190,17 @@ apply_declaration_defaults(parse_visit_t *visit)
     if (declared && declared->is_field
         && in_private_fields(visit->grammar, visit->node))
         declared->visibility = CORE_STRING_STATIC("private");
+    // A module variable's binding kind is known once it is declared: an
+    // import cycle can expand a package's whole-module export before the
+    // module's own walk reaches the declaration, and whether a variable is
+    // exported by default depends on it being `const`.
+    parse_sym_mutability_t mutability;
+    bool threaded;
+    if (declared && declared->kind == PARSE_SYM_VARIABLE
+        && NT_IS(visit->grammar, visit->node, "sym-decl")
+        && declared_binding_kind(visit->grammar, visit->node, &mutability,
+                                 &threaded))
+        declared->mutability = mutability;
 }
 
 void
@@ -7245,26 +7331,12 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         n00bb_internal_error(annotations->diagnostics,
             annotations->diagnostic_unit, link_source_location(visit->node),
             "resolving names", "could not record the binding definition site");
-    if (NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern) {
-        parse_tree_t *declaration = parse_tree_parent(visit->node);
-        while (declaration && !NT_IS(visit->grammar, declaration,
-                                    "variable-decl"))
-            declaration = parse_tree_parent(declaration);
-        parse_tree_t *prefix = CHILD_NT(visit->grammar, declaration,
-                                        "declaration-prefix");
-        if (prefix) {
-            parse_tree_t *kind = CHILD_NT(visit->grammar, prefix,
-                                          "binding-kind");
-            parse_tree_t *storage = CHILD_NT(visit->grammar, prefix,
-                                             "storage-class");
-            core_string_t spelling = first_token_text(kind);
-            parse_sym_mutability_t mutability =
-                core_string_eq(spelling, CORE_STRING_STATIC("const"))
-                    ? PARSE_SYM_CONST
-                    : core_string_eq(spelling, CORE_STRING_STATIC("let"))
-                        ? PARSE_SYM_IMMUTABLE : PARSE_SYM_MUTABLE;
-            bool threaded = core_string_eq(first_token_text(storage),
-                                           CORE_STRING_STATIC("thread"));
+    parse_sym_mutability_t mutability = PARSE_SYM_MUTABLE;
+    bool threaded = false;
+    if ((NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern)
+        && declared_binding_kind(visit->grammar, visit->node, &mutability,
+                                 &threaded)) {
+        {
             apply_decl_binding(visit->grammar, visit->node,
                                mutability, threaded);
             parse_sym_entry_t *symbol = declared;
@@ -7328,7 +7400,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             declared->is_variadic = NT_IS(visit->grammar, visit->node,
                                                 "vargs-param");
             if (declared->has_mode
-                && (th_mode_produces_output(declared->mode)
+                && (th_mode_by_reference(declared->mode)
                     || declared->mode == TH_CONSUME))
                 declared->mutability = PARSE_SYM_MUTABLE;
             parse_sym_set_storage_duration(declared,

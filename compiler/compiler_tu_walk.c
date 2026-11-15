@@ -1196,7 +1196,7 @@ annotate_type_declarations(parse_grammar_t *grammar, th_ctx *types,
 static bool
 annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
                      core_translation_unit_t *unit,
-                     n00bb_semantic_unit_finish_t finish, void *context)
+                     const n00bb_semantic_hooks_t *hooks)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_tree_t *tree = n00bb_tu_parsed_tree(state);
@@ -1210,8 +1210,16 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
     if (!reject_imported_module_names(grammar, unit, state, tree)
         || (!annotated && !reported)
         || core_translation_unit_has_fatal_diagnostics(unit)
-        || core_diagnostics_count_severity(diagnostics, CORE_DIAG_INTERNAL)
-        || (finish && !finish(context, unit))) return false;
+        || core_diagnostics_count_severity(diagnostics, CORE_DIAG_INTERNAL))
+        return false;
+    return !hooks->restore || hooks->restore(hooks->context, unit);
+}
+
+static bool
+finish_unit(core_translation_unit_t *unit, const n00bb_semantic_hooks_t *hooks)
+{
+    if (hooks->finish && !hooks->finish(hooks->context, unit)) return false;
+    n00bb_tu_state_t *state = tu_state(unit);
     n00bb_index_type_symbols(state);
     state->semantic_annotation_complete = true;
     return true;
@@ -1379,7 +1387,7 @@ inject_literal_declarations(core_translation_unit_t *unit)
 static bool
 annotate_component(parse_grammar_t *grammar, th_ctx *types,
                    core_list_t(core_translation_unit_ptr_t) *members,
-                   n00bb_semantic_unit_finish_t finish, void *context)
+                   const n00bb_semantic_hooks_t *hooks)
 {
     for (size_t i = 0; i < members->len; i++)
         if (!declare_unit(grammar, types, members->data[i])) return false;
@@ -1401,14 +1409,19 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
             members->data, members->len)) return false;
     if (members->len > 1) order_component_bodies(members);
     for (size_t i = 0; i < members->len; i++) {
-        if (!annotate_unit_bodies(grammar, types, members->data[i], finish,
-                                  context)) return false;
+        if (!annotate_unit_bodies(grammar, types, members->data[i], hooks))
+            return false;
         for (size_t j = 0; members->len > 1 && j < members->len; j++)
             refresh_literal_members(members->data[j]);
         if (members->len > 1 && !refresh_component_export_bindings(
                 members->data, members->len)) return false;
     }
-    return true;
+    // Package exports resolve once every member is declared: a package can
+    // export a whole module that comes later in the cycle.
+    for (size_t i = 0; i < members->len; i++)
+        if (!finish_unit(members->data[i], hooks)) return false;
+    return members->len == 1
+        || refresh_component_export_bindings(members->data, members->len);
 }
 
 bool
@@ -1429,8 +1442,7 @@ typedef struct {
 typedef struct {
     parse_grammar_t *grammar;
     th_ctx *types;
-    n00bb_semantic_unit_finish_t finish;
-    void *context;
+    const n00bb_semantic_hooks_t *hooks;
     core_dict_t vertices;
     core_list_t(core_translation_unit_ptr_t) stack;
     size_t next_index;
@@ -1491,7 +1503,7 @@ annotate_components_from(component_search_t *search,
     } while (member != unit);
     bool annotated = !blocked
         && annotate_component(search->grammar, search->types, &members,
-                              search->finish, search->context);
+                              search->hooks);
     if (!annotated) {
         for (size_t i = 0; i < members.len; i++)
             tu_state(members.data[i])->semantic_annotation_failed = true;
@@ -1503,8 +1515,7 @@ annotate_components_from(component_search_t *search,
 
 bool
 semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
-    core_translation_unit_t *unit, n00bb_semantic_unit_finish_t finish,
-    void *context)
+    core_translation_unit_t *unit, const n00bb_semantic_hooks_t *hooks)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || state->semantic_annotation_failed) return false;
@@ -1512,8 +1523,7 @@ semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     component_search_t search = {
         .grammar = grammar,
         .types = types,
-        .finish = finish,
-        .context = context,
+        .hooks = hooks,
         .stack = core_list_new(core_translation_unit_ptr_t),
     };
     core_dict_init(&search.vertices, nullptr, nullptr);

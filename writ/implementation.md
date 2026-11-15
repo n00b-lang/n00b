@@ -907,7 +907,7 @@ hand-written C (no tests, no generated files):
 | `core/lower` | 800 |
 | `clang/` | 3,000 |
 | `toolchain/` | 3,000 |
-| `gen/`: profiles and bindings, conformance, C, Rust transport, n00b | 7,000 |
+| `gen/`: profiles and bindings, conformance, C, Rust transport, n00b | 7,100 |
 | `cli/` | 600 |
 | **Total** | **24,400** |
 

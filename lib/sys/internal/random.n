@@ -1,8 +1,8 @@
 import internal.errno
-import internal.os
+import internal.os.random
 
 func fill(modify buffer: Array[u8]) fail: internal.errno.Errno {
-    internal.os.random_bytes(buffer, 0, __array_length(buffer))!
+    internal.os.random.random_bytes(buffer, 0, __array_length(buffer))!
 }
 
 func fill(modify value: 'T) fail: internal.errno.Errno where 'T : Integer {

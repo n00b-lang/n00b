@@ -1,0 +1,18 @@
+# Ending the process.
+
+# The runtime's exit, which also ends evaluation at compile time.
+[-
+library n00b
+
+fn n00b_os_exit(code: i64)
+  effects noreturn, output
+
+binding {
+    raw "n00b_os_exit"
+}
+-]'ffi
+
+# Ends the process with `code`. At compile time, ends the evaluation instead.
+func exit(code: i32) {
+    n00b_os_exit_raw(cast[int](code))
+}

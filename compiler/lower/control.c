@@ -932,14 +932,22 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     }
 
     ir_value_t *cursor = n00bb_emit_iteration_call(context,
-        CORE_STRING_STATIC("__iterator"), source, TH_IN,
-        frame->iteration_plan->cursor_type, nullptr, frame->node);
-    if (!cursor) {
+        CORE_STRING_STATIC("__iterator"), source, false,
+        frame->iteration_plan->cursor_type, frame->node);
+    char cursor_buffer[48];
+    ir_local_t *cursor_local = cursor ? ir_local_add(context->function,
+        n00bb_format_name(cursor_buffer, sizeof(cursor_buffer),
+                          "__n00bb_cursor_%llu",
+                          (unsigned long long)context->next_value_id++),
+        frame->iteration_plan->cursor_type) : nullptr;
+    if (cursor_local) cursor_local->synthetic = true;
+    if (!cursor_local
+        || !n00bb_emit_local_write(context, cursor_local, cursor, span)) {
         lower_internal(context, span,
                     "could not initialize the iteration cursor");
         return false;
     }
-    ir_block_t *entry_block = context->block;
+    frame->iteration_cursor = cursor_local;
     frame->cleanup_active = true;
     ir_instr_t *enter = ir_instr_add(context->block, IR_OP_JUMP);
     if (!enter || !ir_instr_operand_block(enter, frame->header)) {
@@ -951,27 +959,15 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
 
     context->block = frame->header;
     context->reachable = true;
-    frame->iteration_cursor_phi = ir_lower_emit_instruction(context, IR_OP_PHI,
-                                                            span);
-    ir_value_t *current = frame->iteration_cursor_phi
-        && ir_lower_set_temp_dest(context, frame->iteration_cursor_phi,
-                                  CORE_STRING_STATIC("__n00bb_cursor_"),
-                                  frame->iteration_plan->cursor_type)
-        && ir_instr_operand_phi_arm(frame->iteration_cursor_phi, entry_block,
-                                    cursor)
-            ? frame->iteration_cursor_phi->dest : nullptr;
-    if (!current) {
-        lower_internal(context, span,
-                    "could not create the iteration cursor phi");
-        return false;
-    }
-    frame->iteration_cursor_value = current;
+    // `__next` advances the cursor in place: it is read from its local, and
+    // the call is given that local's address.
+    ir_value_t *current = n00bb_emit_local_read(context, cursor_local, span);
     th_type *option_type = th_option(ir_module_types(context->module),
                                      frame->iteration_plan->item_type);
     ir_value_t *option = current && option_type
         ? n00bb_emit_iteration_call(context,
-            CORE_STRING_STATIC("__next"), current, TH_INOUT,
-            option_type, &frame->iteration_cursor_value, frame->node)
+            CORE_STRING_STATIC("__next"), current, true,
+            option_type, frame->node)
         : nullptr;
     th_type *bool_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool"));
     ir_block_t *cleanup = n00bb_branch_block(context, lower,
@@ -1646,12 +1642,6 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         }
         else {
             if (context->reachable) {
-                if (!n00bb_add_iteration_backedge(frame, context->block)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, frame->node),
-                        "could not add the iteration cursor backedge");
-                    return false;
-                }
                 ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
                 if (!jump || !ir_instr_operand_block(
                                  jump, frame->continue_block)) {
@@ -2475,7 +2465,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (!n00bb_emit_with_success(context, visit->node)) return false;
         if (!n00bb_emit_success_return(context, value,
-                &lower->parameters_to_copy_out,
                 lower_span_for_tree(context, visit->node))) {
             lower_internal(context,
                 lower_span_for_tree(context, visit->node),
@@ -2608,13 +2597,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             || (is_break && !n00bb_emit_iteration_cleanup(
                     context, target, visit->node)))
             return false;
-        if (!is_break
-            && !n00bb_add_iteration_backedge(target, context->block)) {
-            lower_internal(context,
-                lower_span_for_tree(context, visit->node),
-                "could not add the continued iteration cursor backedge");
-            return false;
-        }
     }
     ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
     if (!jump || !ir_instr_operand_block(jump, destination)) {
@@ -2643,10 +2625,9 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_internal(context, span,
             "return statement received an invalid value");
     ir_value_t *value = operand_count ? operands[0] : nullptr;
-    if (!n00bb_emit_success_return(context, value,
-            &lower->parameters_to_copy_out, span))
+    if (!n00bb_emit_success_return(context, value, span))
         return lower_internal(context, span,
-            "could not emit the function success result and copy-out values");
+            "could not emit the function success result");
     return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
 }
 

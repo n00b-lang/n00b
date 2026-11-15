@@ -323,15 +323,9 @@ ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
     alias_cursor_t    stores = aliases_of(summary, IR_SFLOW_STORES);
     while (next_alias(&stores, &to, &from))
         escape |= escape_from(from, param, true);
-    th_type *callable = summary->function ? summary->function->type
-                                          : nullptr;
     alias_cursor_t results = aliases_of(summary, IR_SFLOW_RESULTS);
     while (next_alias(&results, &to, &from)) {
-        bool direct = !to->depth && !(to->flags & IR_SPATH_DEEP);
-        bool own    = to->output
-            ? direct && callable
-                && ir_call_output_param(callable, to->output - 1u) == param
-            : returns_pointers(summary);
+        bool own = !to->output && returns_pointers(summary);
         escape |= escape_from(from, param, !own);
     }
     const ir_func_t *function = summary->function;
@@ -697,6 +691,165 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
     return summary;
 }
 
+// A callee's summary as `caller` sees it when some of the globals it
+// touches lie behind a barrier for the caller: the paths and flows through
+// those globals are left out. Everything else is shared with the callee's
+// summary, which the view only reads.
+typedef struct {
+    ir_summary_t *view;
+    const ir_summary_t *source;
+    const ir_module_t  *module;
+    uint64_t      stamp;
+} summary_view_t;
+
+static uint8_t
+path_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_spath_t *path)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    return (path->root == IR_SPLACE_GLOBAL
+            || path->root == IR_SPLACE_THREAD) && path->global
+        ? hooks->global_hidden(hooks->context, caller,
+                               ir_global_identity(path->global))
+        : IR_SUMMARY_VISIBLE;
+}
+
+static bool
+hidden_path(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_spath_t *path)
+{
+    return path_hidden(summaries, caller, path) != IR_SUMMARY_VISIBLE;
+}
+
+static uint64_t
+view_stamp(const ir_summary_t *summary)
+{
+    return (uint64_t)summary->paths.len
+        ^ (uint64_t)summary->flows[0].dests.len << 16
+        ^ (uint64_t)summary->flows[0].sources.len << 28
+        ^ (uint64_t)summary->flows[1].dests.len << 40
+        ^ (uint64_t)summary->flows[1].sources.len << 52
+        ^ (uint64_t)summary->flags * 0x9e3779b97f4a7c15ull;
+}
+
+static void
+view_release(ir_summary_t *view)
+{
+    if (!view) return;
+    core_list_free(view->paths);
+    flow_table_free(&view->flows[IR_SFLOW_RESULTS]);
+    flow_table_free(&view->flows[IR_SFLOW_STORES]);
+    core_free(view);
+}
+
+static void
+views_free(ir_summaries_t *summaries)
+{
+    core_dict_foreach(&summaries->views, entry) {
+        summary_view_t *cached = entry->value;
+        view_release(cached->view);
+        core_free(cached);
+    }
+    core_dict_free(&summaries->views);
+}
+
+static void
+view_flows(ir_summaries_t *summaries, const ir_func_t *caller,
+           flow_table_t *into, const flow_table_t *from)
+{
+    flow_table_init(into, from->function);
+    // A barrier global's flows are left out; a private one's still reach
+    // what the caller sees, from the global as a whole.
+    uint32_t *mapped = core_alloc_array(uint32_t, from->sources.len + 1);
+    ir_spath_t *whole = core_alloc_array(ir_spath_t, from->sources.len + 1);
+    for (size_t s = 0; s < from->sources.len; s++) {
+        const ir_spath_t *source = from->sources.data[s];
+        uint8_t hidden = path_hidden(summaries, caller, source);
+        mapped[s] = hidden == IR_SUMMARY_HIDDEN_BARRIER ? UINT32_MAX - 1
+                                                        : UINT32_MAX;
+        whole[s] = *source;
+        if (hidden == IR_SUMMARY_HIDDEN_PRIVATE) {
+            whole[s].depth = 0;
+            whole[s].steps = nullptr;
+            whole[s].flags = (uint8_t)((whole[s].flags & ~IR_SPATH_MUST)
+                                       | IR_SPATH_DEEP);
+        }
+    }
+    for (size_t d = 0; d < from->dests.len; d++) {
+        flow_dest_t *source = &from->dests.data[d];
+        if (hidden_path(summaries, caller, source->to)) continue;
+        flow_dest_t *dest = nullptr;
+        for (size_t w = 0; w < (from->sources.len + 63) / 64; w++)
+            for (uint64_t any = dest_word(source, w); any; any &= any - 1) {
+                uint32_t s = (uint32_t)(w * 64
+                                        + (uint32_t)__builtin_ctzll(any));
+                if (s >= from->sources.len) break;
+                if (mapped[s] == UINT32_MAX - 1) continue;
+                for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY;
+                     kind++) {
+                    if (!bit_has(kind_bits(source, kind), s)) continue;
+                    if (mapped[s] == UINT32_MAX)
+                        mapped[s] = flow_source(into, &whole[s]);
+                    if (!dest) dest = flow_dest(into, source->to);
+                    bit_set(kind_bits(dest, kind), mapped[s]);
+                }
+            }
+    }
+    core_free(whole);
+    core_free(mapped);
+}
+
+static ir_summary_t *
+call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
+             ir_func_t *target)
+{
+    ir_summary_t *callee = target_summary(summaries, target);
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (!caller || !callee || !hooks || !hooks->global_hidden) return callee;
+    // A stored summary is seen through the same view as a computed one, or
+    // what a caller composes would depend on what was cached.
+    if (callee->encoded) decode_stored_body(callee);
+    void *key = (void *)((uintptr_t)callee
+                         ^ (uintptr_t)caller->owner * 0x9e3779b97f4a7c15ull);
+    summary_view_t *cached = core_dict_get(&summaries->views, key, nullptr);
+    uint64_t stamp = view_stamp(callee);
+    if (cached && cached->source == callee && cached->module == caller->owner
+        && cached->stamp == stamp)
+        return cached->view ? cached->view : callee;
+    bool hides = false;
+    for (size_t i = 0; !hides && i < callee->paths.len; i++)
+        hides = hidden_path(summaries, caller, &callee->paths.data[i]);
+    for (int t = 0; !hides && t < 2; t++) {
+        const flow_table_t *table = &callee->flows[t];
+        for (size_t i = 0; !hides && i < table->dests.len; i++)
+            hides = hidden_path(summaries, caller, table->dests.data[i].to);
+        for (size_t i = 0; !hides && i < table->sources.len; i++)
+            hides = hidden_path(summaries, caller, table->sources.data[i]);
+    }
+    ir_summary_t *view = nullptr;
+    if (hides) {
+        view  = core_alloc(ir_summary_t);
+        *view = *callee;
+        view->paths = core_list_new(ir_spath_t);
+        for (size_t i = 0; i < callee->paths.len; i++)
+            if (!hidden_path(summaries, caller, &callee->paths.data[i]))
+                core_list_push(view->paths, callee->paths.data[i]);
+        view_flows(summaries, caller, &view->flows[IR_SFLOW_RESULTS],
+                   &callee->flows[IR_SFLOW_RESULTS]);
+        view_flows(summaries, caller, &view->flows[IR_SFLOW_STORES],
+                   &callee->flows[IR_SFLOW_STORES]);
+    }
+    if (!cached) {
+        cached = core_alloc(summary_view_t);
+        *cached = (summary_view_t){0};
+        core_dict_put(&summaries->views, key, cached);
+    }
+    else view_release(cached->view);
+    *cached = (summary_view_t){.view = view, .source = callee,
+                               .module = caller->owner, .stamp = stamp};
+    return view ? view : callee;
+}
+
 ir_summary_t *
 ir_summary_for(ir_summaries_t *summaries, ir_func_t *function)
 {
@@ -786,8 +939,8 @@ add_unknown_path(ir_summary_t *summary, uint8_t flags)
 }
 
 static void
-add_function_path(ir_summary_t *summary, const ir_func_t *f,
-                  ir_spath_t *path)
+add_function_path(ir_summaries_t *summaries, ir_summary_t *summary,
+                  const ir_func_t *f, ir_spath_t *path)
 {
     th_type *type = path->root == IR_SPLACE_PARAM && path->param < f->n_params
             && f->params[path->param]->type
@@ -797,6 +950,18 @@ add_function_path(ir_summary_t *summary, const ir_func_t *f,
         || kind == TH_TRAIT) {
         path->depth  = 0;
         path->flags |= IR_SPATH_DEEP;
+    }
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    if ((path->root == IR_SPLACE_GLOBAL || path->root == IR_SPLACE_THREAD)
+        && path->depth && path->global && hooks && hooks->global_named
+        && !hooks->global_named(hooks->context, f,
+                                ir_global_identity(path->global))) {
+        // Writing one part isn't writing all of it.
+        path->depth  = 0;
+        path->steps  = nullptr;
+        path->flags  = (uint8_t)((path->flags & ~IR_SPATH_MUST)
+                                 | IR_SPATH_DEEP);
+        path->type   = ir_global_identity(path->global)->type;
     }
     add_path(summary, path);
 }
@@ -837,12 +1002,18 @@ ir_summary_call_diverges(ir_summaries_t *summaries, const ir_instr_t *call)
     return diverges;
 }
 
+static const ir_summary_t *
+entries_unrecorded(ir_summaries_t *summaries, uint32_t flag)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    return hooks && hooks->entries
+        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+}
+
 const ir_summary_t *
 ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
 {
-    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
-    const ir_summary_t *entry = hooks && hooks->entries
-        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+    const ir_summary_t *entry = entries_unrecorded(summaries, flag);
     note_entries(summaries, flag, entry);
     return entry;
 }
@@ -868,6 +1039,28 @@ access_touches(ir_summaries_t *summaries, const ir_splace_t *access,
     return access->kind == IR_SPLACE_UNKNOWN
         ? unseen_reaches(summaries, place)
         : ir_splace_eq(access, place);
+}
+
+// What the functions behind `flag` (the finalizers, or the entries of
+// threads started) can do to `place`.
+static uint8_t
+entries_access(ir_summaries_t *summaries, uint32_t flag,
+               const ir_splace_t *place)
+{
+    const ir_summary_t *entry = entries_unrecorded(summaries, flag);
+    if (!entry)
+        return unseen_reaches(summaries, place) ? IR_SPATH_ACCESS : 0;
+    uint8_t flags = 0;
+    for (size_t i = 0; i < entry->paths.len; i++) {
+        const ir_spath_t *path = &entry->paths.data[i];
+        ir_splace_t       places[2];
+        uint32_t          count = path->root == IR_SPLACE_PARAM ? 0
+            : ir_summary_path_places(entry->function, path, places);
+        for (uint32_t p = 0; p < count; p++)
+            if (access_touches(summaries, &places[p], place))
+                flags |= path->flags & IR_SPATH_ACCESS;
+    }
+    return flags;
 }
 
 bool
@@ -897,7 +1090,7 @@ check_pure_callee(void *context, const ir_func_t *target,
     const uint32_t effects = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_BLOCK
         | IR_SUMMARY_DIVERGES | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
         | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS
-        | IR_SUMMARY_OBSERVES;
+        | IR_SUMMARY_OBSERVES | IR_SUMMARY_HINTS | IR_SUMMARY_SYNCS;
     bool *pure = context;
     *pure = *pure && !(summary->flags & effects);
     for (size_t i = 0; *pure && i < summary->paths.len; i++)
@@ -969,6 +1162,11 @@ static bool
 summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
 {
     if (!summary) return true;
+    // While a call blocks or waits on other threads, they run, and what
+    // they write to shared memory is what the caller sees afterwards
+    // (waiting on a futex is how a lock hands over the data it guards).
+    if (summary->flags & (IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_SYNCS))
+        return true;
     for (size_t i = 0; i < summary->paths.len; i++) {
         const ir_spath_t *path = &summary->paths.data[i];
         ir_splace_t       places[2];

@@ -1,0 +1,76 @@
+# Closing a file descriptor.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall close(fd: c_int) -> c_int
+      number 3 when arch == x86_64
+      number 57 when arch == aarch64
+      effects input
+
+    binding {
+        error * -> "internal.errno.Errno"
+        # This module's own function of the name is the API.
+        name close "syscall_close"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    fn close(fd: c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+
+    binding {
+        name close "c_close"
+    }
+    -]'ffi
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _errno() -> *c_int static per thread
+    error_channel errno per thread {
+        value _errno()
+    }
+
+    fn _close(fd: c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+
+    binding {
+        name _close "c_close"
+    }
+    -]'ffi
+}
+
+# Closes `fd`. Not retried on EINTR: the descriptor is released even when
+# the call is interrupted, and a retry could close a reused one.
+func close(fd: i32) fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        syscall_close(fd)!
+    } else when target_os() == "macos" or target_os() == "windows" {
+        try {
+            c_close(fd)!
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}

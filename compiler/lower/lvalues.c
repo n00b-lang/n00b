@@ -106,7 +106,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
         th_mode mode = TH_IN;
         if (!argument || !function_parameter_info(visit->grammar, symbol,
                 plan.formals, i, nullptr, nullptr, nullptr, &mode)
-            || !th_mode_produces_output(mode)) continue;
+            || !th_mode_by_reference(mode)) continue;
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, argument, mode);
         if (!ok)
@@ -150,7 +150,7 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         bool target = site->init_call && i == 0;
         if (!argument || (!target && (!function_parameter_info(
                 visit->grammar, symbol, plan.formals, i, nullptr, nullptr,
-                nullptr, &mode) || !th_mode_produces_output(mode))))
+                nullptr, &mode) || !th_mode_by_reference(mode))))
             continue;
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, argument, mode);

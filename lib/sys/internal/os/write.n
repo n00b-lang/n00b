@@ -1,0 +1,113 @@
+# Writing to a file descriptor.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall write(fd: c_int, buf: in *u8, count: usize) -> isize
+      number 1 when arch == x86_64
+      number 64 when arch == aarch64
+      effects output, blocking
+
+    binding {
+        error * -> "internal.errno.Errno"
+        # This module's own function of the name is the API.
+        name write "syscall_write"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    fn write(fd: c_int, buf: in *u8, count: usize) -> isize
+      error ret == -1 via errno
+      effects output, blocking
+
+    binding {
+        name write "c_write"
+    }
+    -]'ffi
+} else when target_os() == "windows" {
+    # The descriptor's handle is written directly: the C runtime's _write
+    # would turn each newline into CRLF on a descriptor in text mode.
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _get_osfhandle(fd: c_int) -> isize
+      effects none
+    fn WriteFile(handle: isize, buf: in *u8, count: u32, written: out *u32,
+                 overlapped: in ?void) -> c_int
+      effects output, blocking
+
+    binding {
+        name WriteFile "write_file"
+        raw "_get_osfhandle"
+        raw "WriteFile"
+    }
+    -]'ffi
+    bring chunk from internal.os.support
+}
+
+# Writes `data[start:end]`; returns the number of bytes written, which may
+# be fewer than asked. An interrupted write is retried.
+func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(data)
+    if start == end {
+        return 0
+    }
+    return write_bytes(fd, unsafe_cast[Ref[byte]] ref data[start],
+        end - start)!
+}
+
+# Writes the `count` bytes at `at`; returns the number written, which may
+# be fewer than asked. An interrupted write is retried.
+func write_bytes(fd: i32, at: Ref[byte], count: uint) -> uint
+    fail: internal.errno.Errno {
+    if count == 0 {
+        return 0
+    }
+    while true {
+        try {
+            when target_os() == "linux" {
+                return cast[uint](syscall_write(fd, at, count)!)
+            } else when target_os() == "macos" {
+                try {
+                    return cast[uint](c_write(fd, at, count)!)
+                } fail(failure) {
+                    fail errno_of(failure)
+                }
+            } else when target_os() == "windows" {
+                let handle: int = get_osfhandle_raw(fd)
+                if handle == -1 {
+                    fail internal.errno.Errno.EBADF
+                }
+                var written: u32 = 0
+                if write_file_raw(handle, at, cast[u32](chunk(count)),
+                        unsafe_cast[Ref[byte]] (ref written), nil) == 0 {
+                    fail internal.errno.Errno.EIO
+                }
+                return cast[uint](written)
+            } else {
+                fail internal.errno.Errno.ENOSYS
+            }
+        } fail(e) {
+            if e != internal.errno.Errno.EINTR {
+                fail e
+            }
+        }
+    }
+}

@@ -70,6 +70,7 @@ typedef enum : uint8_t {
     SUMMARY_INPUT_EFFECTS,
     SUMMARY_INPUT_OVERLAP,
     SUMMARY_INPUT_REINTERPRETED,
+    SUMMARY_INPUT_ENTRY_ACCESS,
 } summary_input_kind_t;
 
 typedef struct {
@@ -112,7 +113,11 @@ struct ir_summary_t {
     const uint8_t             *encoded;
     size_t                     encoded_size;
     ir_summary_resolver_t      resolver;
+    // points_to_content's answer once the summary is final (see
+    // stamp_component).
+    uint64_t                   points_to;
     bool                       hashed;
+    bool                       points_hashed;
     bool                       stored;
     bool                       proof_free;
     bool                       bookkept;
@@ -137,6 +142,9 @@ struct ir_summaries_t {
     core_dict_t               sites;
     ir_func_t *const         *members;
     size_t                    member_count;
+    // Callee summaries as callers behind a barrier see them, by callee and
+    // the caller's module.
+    core_dict_t               views;
 };
 
 typedef ir_spath_list_t path_list_t;
@@ -159,8 +167,15 @@ typedef struct {
     const ir_spath_t  *leaf;
     core_dict_t       *path_places;
     core_dict_t       *stores;
+    // Calls' effects on the place `effects_place`, and on each of its
+    // leaves: `leaf_effects` maps a leaf's interned steps to its own dict.
     core_dict_t       *effects;
+    core_dict_t       *leaf_effects;
     ir_splace_t        effects_place;
+    // Per callee summary, its paths indexed by the place they reach; and
+    // what the finalizer and thread entries touch, per place.
+    core_dict_t       *access_index;
+    core_dict_t       *entry_access;
 } flow_query_t;
 
 typedef struct {
@@ -310,6 +325,9 @@ core_list_decl(pt_access_t);
 typedef struct {
     core_list_t(ir_spath_t) cells;
     core_dict_t             gens;
+    // Calls that must write places through `out` or `modify` arguments:
+    // each maps to a uint64_t array, a count then the cells it sets.
+    core_dict_t             call_gens;
     uint64_t               *in;
     uint64_t               *state;
     uint32_t                words;
@@ -346,11 +364,12 @@ struct pt_t {
     uint32_t               source_order;
     core_dict_t            flow_nodes;
     core_dict_t            heap_sites;
-    core_dict_t            copy_ins;
     pt_set_t               published;
     core_dict_t            escaped;
     bool                   escaped_built;
     core_dict_t            flow_groups;
+    // Per callee, whether each of its store destinations is surely written.
+    core_dict_t            must_dests;
     core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;
@@ -515,7 +534,6 @@ static void record_set(pt_t *pt, ir_summary_t *summary,
                        th_type *carried);
 static void record_stores(pt_t *pt, ir_summary_t *summary,
                           const pt_set_t *addresses, const pt_set_t *values);
-static bool copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own);
 
 static pt_t *function_engine(ir_summaries_t *summaries, ir_func_t *f);
 static const flow_bits_t *crossings(pt_t *pt, const pt_loc_t *loc);
@@ -553,6 +571,15 @@ static ir_summary_t *dep_summary(ir_summaries_t *summaries,
                                  ir_func_t *target);
 static ir_summary_t *target_summary(ir_summaries_t *summaries,
                                     ir_func_t *target);
+static ir_summary_t *call_summary(ir_summaries_t *summaries,
+                                  const ir_func_t *caller,
+                                  ir_func_t *target);
+static void views_free(ir_summaries_t *summaries);
+static void note_entry_access(ir_summaries_t *summaries,
+                              const ir_module_t *module, uint32_t flag,
+                              const ir_splace_t *place, uint8_t flags);
+static uint8_t entries_access(ir_summaries_t *summaries, uint32_t flag,
+                              const ir_splace_t *place);
 static bool stored_deps_hold(ir_summaries_t *summaries,
                              const ir_summary_t *summary,
                              ir_func_t *const *members, size_t count);

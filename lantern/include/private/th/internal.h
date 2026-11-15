@@ -209,6 +209,8 @@ struct th_ctx {
   core_string_t package;
   core_dict_t *implements_memo;
   core_dict_t *method_memo;
+  // Closed types parsed from their text, by the text.
+  core_dict_t *text_types;
   core_arena_t memo_arena;
 };
 
