@@ -1445,16 +1445,28 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
             core_buffer_release(&fixed);
             return false;
         }
-        // A fixed-size array passed by reference is passed as its elements.
+        // A fixed-size array passed by reference is passed as its elements:
+        // every dimension's size is known.
         ir_shape_t *shape = formal && th_mode_by_reference(mode)
             ? parse_sym_binding(formal, CORE_STRING_STATIC("ir.array-shape"))
             : nullptr;
-        ir_shape_extent_t extent;
-        if (shape && ir_shape_rank(shape) == 1
-            && ir_shape_extent(shape, 0, &extent)
-            && extent.kind == IR_SHAPE_EXTENT_STATIC && extent.static_value)
-            core_buffer_printf(&fixed, "%s%zu:%llu", fixed.byte_len ? "," : "",
-                i, (unsigned long long)extent.static_value);
+        uint32_t rank = shape ? ir_shape_rank(shape) : 0;
+        bool sized = rank && rank <= N00BB_FIXED_REFERENCE_MAX_RANK;
+        for (uint32_t d = 0; sized && d < rank; d++) {
+            ir_shape_extent_t extent;
+            sized = ir_shape_extent(shape, d, &extent)
+                && extent.kind == IR_SHAPE_EXTENT_STATIC
+                && extent.static_value;
+        }
+        if (sized)
+            core_buffer_printf(&fixed, "%s%zu:", fixed.byte_len ? "," : "",
+                               i);
+        for (uint32_t d = 0; sized && d < rank; d++) {
+            ir_shape_extent_t extent;
+            (void)ir_shape_extent(shape, d, &extent);
+            core_buffer_printf(&fixed, "%s%llu", d ? "x" : "",
+                               (unsigned long long)extent.static_value);
+        }
     }
     bool ok = !fixed.byte_len || ir_annot_set(ir_module_ctx(function->owner),
         &function->annots, (ir_annot_t){

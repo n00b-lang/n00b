@@ -1,0 +1,11 @@
+# A multi-dimensional array and the sized `modify` parameter it is passed
+# to must be declared with the same size in every dimension.
+var grid: Array[u32][3][4]
+
+func wrong(modify g: Array[u32][4][3]) -> nil {
+    g[0][0] = 1
+}
+
+func main() -> nil {
+    wrong(grid)
+}

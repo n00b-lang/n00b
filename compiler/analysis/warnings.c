@@ -1603,6 +1603,54 @@ field_declared_length(n00bb_link_analysis_t *analysis, th_type *record,
     return false;
 }
 
+// Writes the declared sizes of field `name` of `record` as text (`4`,
+// `3x4`) when it is an array with a size for every dimension; returns
+// whether it is.
+static bool
+field_declared_size(n00bb_link_analysis_t *analysis, th_type *record,
+                    core_string_t name, core_buffer_t *out)
+{
+    parse_scope_t *scope = record
+        ? record_scope_for_type(analysis, record, nullptr) : nullptr;
+    for (parse_sym_entry_t *field = scope ? scope->first_in_scope : nullptr;
+         field; field = field->next_in_scope)
+        if (field->is_field && core_string_eq(field->name, name))
+            return n00bb_shape_size_text(parse_sym_binding(field,
+                CORE_STRING_STATIC("ir.array-shape")), out);
+    return false;
+}
+
+// A multi-dimensional array field with a size for every dimension is one
+// block of elements held inline, of which the record's layout only knows
+// the count. The address (`field`) or value (`extract`) of such a field
+// carries its declared shape, so the backend gives it the dimensions.
+static bool
+attach_field_shape(n00bb_link_analysis_t *analysis, ir_instr_t *in)
+{
+    if ((in->op != IR_OP_FIELD && in->op != IR_OP_EXTRACT) || !in->dest
+        || in->n_operands != 2 || in->operands[1].kind != IR_OPD_NAME
+        || ir_value_shape(in->dest)) return true;
+    ir_value_t *base = ir_operand_value(&in->operands[0]);
+    th_type *record = !base ? nullptr
+        : in->op == IR_OP_FIELD ? th_ind_referent(th_resolve(base->type))
+        : base->type;
+    parse_scope_t *scope = record
+        ? record_scope_for_type(analysis, record, nullptr) : nullptr;
+    for (parse_sym_entry_t *field = scope ? scope->first_in_scope : nullptr;
+         field; field = field->next_in_scope) {
+        if (!field->is_field
+            || !core_string_eq(field->name, in->operands[1].name)) continue;
+        ir_shape_t *shape = parse_sym_binding(field,
+            CORE_STRING_STATIC("ir.array-shape"));
+        core_buffer_t text = {0};
+        bool sized = shape && ir_shape_rank(shape) > 1
+            && n00bb_shape_size_text(shape, &text);
+        core_buffer_release(&text);
+        return !sized || ir_value_set_shape(in->dest, shape);
+    }
+    return true;
+}
+
 // Reports an array literal stored into field `name` of `record` whose
 // length differs from the field's declared size.
 static bool
@@ -1651,32 +1699,46 @@ field_references_fit(n00bb_link_analysis_t *analysis,
             && field->operands[1].kind == IR_OPD_NAME
             ? ir_operand_value(&field->operands[0]) : nullptr;
         if (!base) continue;
-        uint64_t declared = 0;
-        (void)field_declared_length(analysis,
+        core_buffer_t declared = {0}, parameter = {0};
+        bool field_sized = field_declared_size(analysis,
             th_ind_referent(th_resolve(base->type)),
             field->operands[1].name, &declared);
-        uint64_t parameter = n00bb_fixed_reference_count(target, p);
-        if (declared == parameter) continue;
+        uint64_t extents[N00BB_FIXED_REFERENCE_MAX_RANK];
+        uint32_t rank = n00bb_fixed_reference_shape(target, p, extents);
+        n00bb_extents_text(rank, extents, &parameter);
+        bool same = field_sized == (rank != 0)
+            && (!rank || core_string_eq(core_buffer_string(&declared),
+                                        core_buffer_string(&parameter)));
         core_string_t name = field->operands[1].name;
-        if (!parameter)
+        if (same) {
+            core_buffer_release(&declared);
+            core_buffer_release(&parameter);
+            continue;
+        }
+        if (!rank)
             n00bb_report(core_translation_unit_diagnostics(unit), unit,
                 N00B_DIAG_FIXED_ARRAY_REFERENCE,
                 n00bb_span_location(call->span),
                 N00B_TEXT_FIXED_ARRAY_TO_UNSIZED_REFERENCE,
-                N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(declared)));
-        else if (!declared)
+                N00BB_ARGS(ARG_TEXT(name),
+                           ARG_TEXT(core_buffer_string(&declared))));
+        else if (!field_sized)
             n00bb_report(core_translation_unit_diagnostics(unit), unit,
                 N00B_DIAG_FIXED_ARRAY_REFERENCE,
                 n00bb_span_location(call->span),
                 N00B_TEXT_UNSIZED_ARRAY_TO_FIXED_REFERENCE,
-                N00BB_ARGS(ARG_NUMBER(parameter), ARG_TEXT(name)));
+                N00BB_ARGS(ARG_TEXT(core_buffer_string(&parameter)),
+                           ARG_TEXT(name)));
         else
             n00bb_report(core_translation_unit_diagnostics(unit), unit,
                 N00B_DIAG_FIXED_ARRAY_REFERENCE,
                 n00bb_span_location(call->span),
                 N00B_TEXT_FIXED_ARRAY_REFERENCE_SIZES_DIFFER,
-                N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(declared),
-                           ARG_NUMBER(parameter)));
+                N00BB_ARGS(ARG_TEXT(name),
+                           ARG_TEXT(core_buffer_string(&declared)),
+                           ARG_TEXT(core_buffer_string(&parameter))));
+        core_buffer_release(&declared);
+        core_buffer_release(&parameter);
         ok = false;
     }
     return ok;
@@ -1706,6 +1768,7 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                         ok &= field_references_fit(analysis, unit, in);
                         continue;
                     }
+                    if (!attach_field_shape(analysis, in)) return false;
                     // A function given the caller's elements can't be a
                     // value: a function value's type can't say so.
                     ir_value_t *function_value = in->op == IR_OP_RETAIN_REF

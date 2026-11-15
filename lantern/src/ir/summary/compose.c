@@ -701,6 +701,26 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
                 | IR_SUMMARY_ALLOCATES_DIRECT
             : IR_SUMMARY_MAY_ALLOCATE;
     }
+    case IR_OP_INDEX:
+    case IR_OP_SEQUENCE_GET: {
+        // A row of a rectangular array has no array value of its own; the
+        // index allocates a view of it unless storage placement keeps the
+        // view in the frame.
+        const ir_value_t *base = in->n_operands
+            ? ir_operand_value(&in->operands[0]) : nullptr;
+        th_type *array = !base ? nullptr
+            : in->op == IR_OP_INDEX ? th_resolve(th_ind_referent(
+                th_resolve(base->type)))
+            : th_resolve(base->type);
+        ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
+            CORE_STRING_STATIC("ir.allocation_local"));
+        if (!in->dest || !array || th_kind_of(array) != TH_SEQUENCE
+            || th_kind_of(th_resolve(th_seq_elem(array))) != TH_SEQUENCE
+            || (placed && placed->kind == IR_ANNOT_BOOL && placed->b))
+            return 0;
+        return IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+            | IR_SUMMARY_ALLOCATES_DIRECT;
+    }
     case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW_USING:
     case IR_OP_BOX:

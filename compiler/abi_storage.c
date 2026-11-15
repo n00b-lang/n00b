@@ -880,6 +880,56 @@ done:
     return valid;
 }
 
+// Nested sequences of `shape` from dimension `depth` on, with nil items:
+// the zero value of an inline global given no elements.
+static ir_global_init_value_t *
+zero_shape(const ir_shape_t *shape, uint32_t depth)
+{
+    ir_shape_extent_t extent;
+    if (!shape || !ir_shape_extent(shape, depth, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC) return nullptr;
+    size_t count = (size_t)extent.static_value;
+    ir_global_init_value_t *items = core_alloc_array(ir_global_init_value_t,
+                                                     count ? count : 1);
+    memset(items, 0, (count ? count : 1) * sizeof(*items));
+    bool inner = depth + 1 < ir_shape_rank(shape);
+    for (size_t i = 0; i < count; i++) {
+        ir_global_init_value_t *row = inner ? zero_shape(shape, depth + 1)
+                                            : nullptr;
+        if (inner && !row) {
+            for (size_t j = 0; j < i; j++)
+                core_free((void *)items[j].aggregate.items);
+            core_free(items);
+            return nullptr;
+        }
+        items[i] = row ? *row : (ir_global_init_value_t){
+            .kind = IR_GLOBAL_INIT_NIL,
+        };
+        core_free(row);
+    }
+    ir_global_init_value_t *value = core_alloc(ir_global_init_value_t);
+    *value = (ir_global_init_value_t){
+        .kind = IR_GLOBAL_INIT_SEQUENCE,
+        .aggregate = {.items = items, .count = count},
+    };
+    return value;
+}
+
+static void
+zero_shape_release(ir_global_init_value_t *value)
+{
+    if (!value) return;
+    for (size_t i = 0; i < value->aggregate.count; i++)
+        if (value->aggregate.items[i].kind == IR_GLOBAL_INIT_SEQUENCE) {
+            ir_global_init_value_t row = value->aggregate.items[i];
+            ir_global_init_value_t *copy = core_alloc(ir_global_init_value_t);
+            *copy = row;
+            zero_shape_release(copy);
+        }
+    core_free((void *)value->aggregate.items);
+    core_free(value);
+}
+
 static ir_global_t *
 storage_global(parse_sym_entry_t *symbol,
                n00bb_abi_declaration_lookup_fn lookup, void *lookup_context)
@@ -1366,7 +1416,7 @@ n00bb_abi_storage_rows_build(
         // storage is aligned for them too.
         const ir_final_layout_t *element_layout = inline_count
             ? ir_layout_final_visible(runtime,
-                th_resolve(th_seq_elem(th_resolve(global->type))),
+                n00bb_inline_global_element(global),
                 ir_module_target(runtime)) : nullptr;
         if (inline_count && (!element_layout
                 || !element_layout->alignment_bytes
@@ -1445,33 +1495,29 @@ n00bb_abi_storage_rows_build(
             }
         }
         else core_buffer_append(buffer, (const char *)bytes, byte_length);
-        // An inline global with no elements given starts zeroed.
+        // An inline global with no elements given starts zeroed: nested
+        // sequences of its shape, of nil items.
         ir_global_init_value_t *zeros = nullptr;
-        ir_global_init_value_t zeroed = {0};
         const ir_global_init_value_t *elements = initializer;
         if (inline_count && !phase_graph
             && (!initializer || initializer->kind == IR_GLOBAL_INIT_NIL)) {
-            zeros = core_alloc_array(ir_global_init_value_t, inline_count);
-            for (uint64_t z = 0; z < inline_count; z++)
-                zeros[z] = (ir_global_init_value_t){
-                    .kind = IR_GLOBAL_INIT_NIL,
-                };
-            zeroed = (ir_global_init_value_t){
-                .kind = IR_GLOBAL_INIT_SEQUENCE,
-                .aggregate = {.items = zeros, .count = inline_count},
-            };
-            elements = &zeroed;
+            zeros = zero_shape(global->shape, 0);
+            if (!zeros) {
+                valid = false;
+                break;
+            }
+            elements = zeros;
         }
         writer.inline_kind = inline_count ? kind : 0;
         if (is_array && elements && !phase_graph
             && !encode_array(&writer, global->type, elements,
                     global->shape, kind, row.byte_offset,
                     &row.instance_shape_index)) {
-            core_free(zeros);
+            zero_shape_release(zeros);
             valid = false;
             break;
         }
-        core_free(zeros);
+        zero_shape_release(zeros);
         writer.inline_kind = 0;
         if (elements_follow)
             row.byte_length = buffer->byte_len - row.byte_offset;
