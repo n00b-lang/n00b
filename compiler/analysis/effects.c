@@ -886,11 +886,24 @@ n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
     bool found = false;
     parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
                                               (void *)global, &found);
-    if (!found || !symbol) return IR_SUMMARY_VISIBLE;
-    parse_sym_entry_t *declared = canonical_symbol(symbol);
-    core_translation_unit_t *owner_unit = declared->owner_unit;
     core_translation_unit_t *viewer = n00bb_visibility_unit(analysis,
                                                             caller->owner);
+    if (!found || !symbol) {
+        // A cached module's private global has no symbol here, only its
+        // body's global; it's hidden exactly as when it's compiled, or
+        // summaries would depend on what was cached.
+        ir_global_t *cached = analysis->cached_globals_ready
+            ? core_dict_get(&analysis->cached_globals, (void *)global,
+                            nullptr) : nullptr;
+        core_translation_unit_t *owner_unit = cached && cached->owner
+            ? n00bb_visibility_unit(analysis, cached->owner) : nullptr;
+        if (!owner_unit || !viewer || owner_unit == viewer
+            || n00bb_summary_global_reachable(context, global))
+            return IR_SUMMARY_VISIBLE;
+        return IR_SUMMARY_HIDDEN_PRIVATE;
+    }
+    parse_sym_entry_t *declared = canonical_symbol(symbol);
+    core_translation_unit_t *owner_unit = declared->owner_unit;
     if (!owner_unit || !viewer
         || n00bb_symbol_visible_to(viewer, owner_unit, declared)
         || n00bb_summary_global_reachable(context, global))

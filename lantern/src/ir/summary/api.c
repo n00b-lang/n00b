@@ -805,8 +805,10 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
 {
     ir_summary_t *callee = target_summary(summaries, target);
     const ir_summary_hooks_t *hooks = summaries->hooks;
-    if (!caller || !callee || !hooks || !hooks->global_hidden
-        || callee->stored) return callee;
+    if (!caller || !callee || !hooks || !hooks->global_hidden) return callee;
+    // A stored summary is seen through the same view as a computed one, or
+    // what a caller composes would depend on what was cached.
+    if (callee->encoded) decode_stored_body(callee);
     void *key = (void *)((uintptr_t)callee
                          ^ (uintptr_t)caller->owner * 0x9e3779b97f4a7c15ull);
     summary_view_t *cached = core_dict_get(&summaries->views, key, nullptr);

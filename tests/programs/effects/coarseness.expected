@@ -14,7 +14,6 @@ coarseness.lookup: (Dict[int, int], int) -> int?
 coarseness.hash_str: (string) -> u128
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads s...
-  reads builtin.hashing.secret...
   traps explicit bounds unwrap arithmetic
   output result data[s...] control[]
 coarseness.len_of: (List[int]) -> uint
