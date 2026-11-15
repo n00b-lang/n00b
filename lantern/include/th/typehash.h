@@ -471,6 +471,9 @@ bool     th_is_poison(const th_type *type);
 bool     th_mentions_poison(th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
+// Closed types parsed from text, kept by the text.
+th_type *th_text_type(th_ctx *ctx, core_string_t text);
+void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
 bool     th_match(th_type *pattern, th_type *concrete);
