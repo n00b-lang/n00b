@@ -1606,16 +1606,27 @@ frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
 // value, 16 bytes into its storage. Returns their address and count, or
 // nullptr for any other variable. Other modules reach the elements through
 // the array value, which always points at them.
+static bool literal_element_layout_matches(ir_module_t *module,
+    th_type *type, LLVMTypeRef native, LLVMTargetDataRef target);
+
 static LLVMValueRef
 inline_global_elements(lower_state_t *state, const ir_global_t *global,
                        uint64_t *count)
 {
-    uint64_t elements = global
-        ? n00bb_inline_global_count(state->function->owner, global) : 0;
-    LLVMValueRef storage = elements ? global_ref(state->module, global,
-        state->global_bindings, state->global_binding_count) : nullptr;
-    if (!storage) return nullptr;
+    ir_module_t *module = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
+    uint64_t elements = global
+        ? n00bb_inline_global_count(module, global) : 0;
+    // Elements whose native layout differs from theirs are reached through
+    // the array value instead, which points at them all the same.
+    th_type *element = elements
+        ? th_resolve(th_seq_elem(th_resolve(global->type))) : nullptr;
+    if (!element || !literal_element_layout_matches(module, element,
+            value_type(module, element, context),
+            LLVMGetModuleDataLayout(state->module))) return nullptr;
+    LLVMValueRef storage = global_ref(state->module, global,
+        state->global_bindings, state->global_binding_count);
+    if (!storage) return nullptr;
     LLVMValueRef offset = LLVMConstInt(LLVMInt64TypeInContext(context),
                                        16, false);
     *count = elements;
@@ -6787,11 +6798,11 @@ by_reference_argument(lower_state_t *state, const ir_value_t *operand,
         uint64_t inline_count = 0;
         const ir_global_t *inline_global = addressed_inline_global(state,
                                                                    operand);
-        if (inline_global) {
-            LLVMValueRef elements = inline_global_elements(state,
-                inline_global, &inline_count);
+        LLVMValueRef elements = inline_global
+            ? inline_global_elements(state, inline_global, &inline_count)
+            : nullptr;
+        if (elements)
             return inline_count == fixed_count ? elements : nullptr;
-        }
         LLVMValueRef place = lowered_value(state, operand);
         if (!place || LLVMGetTypeKind(LLVMTypeOf(place))
                 != LLVMPointerTypeKind) return nullptr;
@@ -8680,14 +8691,15 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         // An inline global's elements are indexed where they are.
         const ir_global_t *inline_global = value_read || array ? nullptr
             : addressed_inline_global(state, operands[0].value);
-        if (inline_global) {
+        LLVMValueRef elements = inline_global
+            ? inline_global_elements(state, inline_global, &extent) : nullptr;
+        if (elements) {
             th_type *element = th_seq_elem(th_resolve(inline_global->type));
             LLVMTypeRef native_element = value_type(state->function->owner,
                 element, LLVMGetModuleContext(state->module));
-            base = native_element ? inline_global_elements(state,
-                inline_global, &extent) : nullptr;
-            array = base ? LLVMArrayType2(native_element, extent) : nullptr;
-            if (!array) break;
+            if (!native_element) break;
+            base = elements;
+            array = LLVMArrayType2(native_element, extent);
         }
         LLVMValueRef index = lowered_value(state, operands[1].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);

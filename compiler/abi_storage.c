@@ -674,6 +674,13 @@ encode_array_items(array_writer_t *writer,
         return true;
     }
     size_t at = packed ? 0 : data_offset + (*next) * stride;
+    // An inline global with no elements given is zeroed; its items are
+    // nil, and zero bytes are any element's zero value.
+    if (writer->inline_kind && depth >= shape->rank && value
+        && value->kind == IR_GLOBAL_INIT_NIL) {
+        (*next)++;
+        return true;
+    }
     if (depth < shape->rank) {
         if (!encode_array(writer, type, value, nullptr, data_kind, at,
                           nullptr)) return false;
@@ -1444,13 +1451,10 @@ n00bb_abi_storage_rows_build(
         const ir_global_init_value_t *elements = initializer;
         if (inline_count && !phase_graph
             && (!initializer || initializer->kind == IR_GLOBAL_INIT_NIL)) {
-            bool floating = ir_machine_of(runtime, th_resolve(th_seq_elem(
-                th_resolve(global->type)))).class == IR_CLASS_FLOAT;
             zeros = core_alloc_array(ir_global_init_value_t, inline_count);
             for (uint64_t z = 0; z < inline_count; z++)
                 zeros[z] = (ir_global_init_value_t){
-                    .kind = floating ? IR_GLOBAL_INIT_FLOAT
-                                     : IR_GLOBAL_INIT_INT,
+                    .kind = IR_GLOBAL_INIT_NIL,
                 };
             zeroed = (ir_global_init_value_t){
                 .kind = IR_GLOBAL_INIT_SEQUENCE,

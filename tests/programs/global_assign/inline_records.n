@@ -1,0 +1,54 @@
+# Inline module arrays of records, strings and optionals: their elements
+# hold references the collector finds through the array value, so strings
+# made at runtime and kept only there survive allocation pressure.
+record Point {
+    x: i32
+    y: i32
+}
+
+record Named {
+    name: string
+    score: u64
+    flag: bool
+}
+
+var points: Array[Point][3] = [(x = 1, y = 2), (x = 3, y = 4), (x = 5, y = 6)]
+var named: Array[Named][2] = [(name = "first", score = 10, flag = true),
+                              (name = "a much longer second name", score = 20, flag = false)]
+var empty: Array[Named][2] = [(name = "", score = 0, flag = false), (name = "", score = 0, flag = false)]
+var labels: Array[string][3] = ["one", "two", "a label long enough to be pooled"]
+var maybe: Array[u32?][2] = [nil, nil]
+
+func shift(modify ps: Array[Point][3]) -> nil {
+    ps[1] = (x = ps[1].x + 10, y = ps[1].y)
+}
+
+func churn(rounds: uint) -> uint {
+    var kept: uint = 0
+    var i: uint = 0
+    while i < rounds {
+        let junk = "garbage that is long enough to need the heap " + labels[0]
+        kept += junk.len() % 2
+        i += 1
+    }
+    return kept
+}
+
+func main() -> nil {
+    require points[2].y == 6 and named[1].score == 20 and named[0].flag
+    require named[1].name == "a much longer second name"
+    require labels[2] == "a label long enough to be pooled"
+    shift(points)
+    require points[1].x == 13
+    labels[1] = "made at runtime and long enough to need the heap " + labels[0]
+    empty[0] = (name = "also made at runtime and on the heap " + labels[2], score = 7, flag = true)
+    named = [(name = "x", score = 1, flag = false),
+             (name = "replaced at runtime, long enough for the heap " + labels[0], score = 2, flag = true)]
+    churn(400000)
+    require labels[1] == "made at runtime and long enough to need the heap one"
+    require empty[0].name == "also made at runtime and on the heap a label long enough to be pooled"
+    require named[1].name == "replaced at runtime, long enough for the heap one"
+    maybe[1] = 5
+    let m = maybe[1]
+    require m != nil and m == 5
+}
