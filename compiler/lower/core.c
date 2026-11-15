@@ -867,12 +867,67 @@ n00bb_emit_local_read(ir_lower_context_t *context, ir_local_t *local,
     return instruction->dest;
 }
 
+// The length of `value` along `dimension` when it is known while lowering:
+// an array literal's element count, or a static extent of its shape. Only
+// arrays are shape checked; a literal's type can still be open here.
+static bool
+static_sequence_extent(ir_value_t *value, uint32_t dimension,
+                       uint64_t *length)
+{
+    const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                         : nullptr;
+    ir_aggregate_form_t form;
+    if (!dimension && def && def->op == IR_OP_AGGREGATE
+        && (!ir_instr_aggregate_form(def, &form)
+            || form == IR_AGGREGATE_ELEMENTS)) {
+        *length = def->n_operands;
+        return true;
+    }
+    ir_shape_t *shape = ir_value_shape(value);
+    ir_shape_extent_t extent;
+    if (!shape || dimension >= ir_shape_rank(shape)
+        || !ir_shape_extent(shape, dimension, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC) return false;
+    *length = extent.static_value;
+    return true;
+}
+
+// A value whose length is known now and differs from a declared size can
+// never pass its shape check, so that is a compile-time error. The error
+// fails the build; lowering goes on as for a value that passed, since the
+// callers take a failed shape check for an internal error.
+void
+n00bb_report_static_shape_mismatch(ir_lower_context_t *context,
+                                   ir_value_t *value, ir_shape_t *expected,
+                                   ir_span_t span)
+{
+    if (!context || !value || !expected) return;
+    for (uint32_t i = 0; i < ir_shape_rank(expected); i++) {
+        ir_shape_extent_t extent;
+        uint64_t length;
+        if (!ir_shape_extent(expected, i, &extent)
+            || extent.kind != IR_SHAPE_EXTENT_STATIC
+            || !static_sequence_extent(value, i, &length)
+            || length == extent.static_value) continue;
+        ir_span_t at = value->kind == IR_VAL_INSTR && value->def
+                && ir_span_known(value->def->span)
+            ? value->def->span : span;
+        lower_report(context, N00B_DIAG_ARRAY_LENGTH_DIFFERS, at,
+            i ? N00B_TEXT_ARRAY_DIMENSION_HAS_N_NEEDS_M
+              : N00B_TEXT_ARRAY_HAS_N_ELEMENTS_NEEDS_M,
+            N00BB_ARGS(ARG_NUMBER(length), ARG_NUMBER(extent.static_value),
+                       ARG_NUMBER(i + 1)));
+        return;
+    }
+}
+
 bool
 n00bb_emit_sequence_shape_check_impl(ir_lower_context_t *context,
                                      ir_value_t *value, ir_shape_t *expected,
                                      ir_span_t span, bool force)
 {
     if (!expected || !value) return true;
+    n00bb_report_static_shape_mismatch(context, value, expected, span);
     bool constrained = false;
     bool opaque = false;
     for (uint32_t i = 0; i < ir_shape_rank(expected); i++) {

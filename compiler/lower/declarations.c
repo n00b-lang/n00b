@@ -256,6 +256,16 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             return n00bb_allocate_declared_array(context, local, shape, span)
                 && zero_declared_record(context, local, span);
         }
+        if (!local && symbol && expression) {
+            // A module variable's initializer becomes its static storage;
+            // only a length known now can be checked against its size.
+            ir_value_t *value = ir_lower_node_value(context, expression);
+            if (value)
+                n00bb_report_static_shape_mismatch(context, value,
+                    parse_sym_binding(symbol,
+                        CORE_STRING_STATIC("ir.array-shape")),
+                    lower_span_for_tree(context, visit->node));
+        }
         if (!n00bb_shape_has_constraints(shape)) return true;
         ir_value_t *value = ir_lower_node_value(context, expression);
         if (!value || !n00bb_attach_expression_shape(context, visit->grammar,

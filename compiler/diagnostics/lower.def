@@ -417,6 +417,11 @@ N00B_DIAG(ARRAY_EXTENT_NOT_CONSTANT, "N00B-T1019", ERROR,
     "an array size is not known where it is needed",
     "A fixed array size must be a constant known at compile time. Use a\n"
     "`const`, or leave the dimension unsized and pass its size to `new`.")
+N00B_DIAG(ARRAY_LENGTH_DIFFERS, "N00B-T1045", ERROR,
+    "an array's length differs from its declared size",
+    "A variable, field or parameter declared with a fixed size, like\n"
+    "`Array[u32][4]`, only holds arrays of exactly that size. Give the array\n"
+    "that many elements, or leave the size off the declaration.")
 N00B_DIAG(BUILTIN_ARGUMENTS, "N00B-T1026", ERROR,
     "a builtin function is given arguments it does not take",
     "The message says what the builtin takes.")

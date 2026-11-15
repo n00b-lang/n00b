@@ -256,6 +256,8 @@ N00B_TEXT(NEW_FOR_VARIANT_TAKES_NO, "`new` for variant `{0}` takes no arguments"
 N00B_TEXT(CREATE_IT_WITH_NEW_THEN, "create it with `new()`, then assign the arm you want")
 N00B_TEXT(ARRAY_DIMENSIONS_GIVEN_TO_NEW, "array dimensions given to `new` must be positional, not named")
 N00B_TEXT(PASS_ONE_SIZE_FOR_EACH, "pass one size for each unsized dimension, outermost first")
+N00B_TEXT(ARRAY_HAS_N_ELEMENTS_NEEDS_M, "this array's length is {0}, but it is stored where the declared size is {1}")
+N00B_TEXT(ARRAY_DIMENSION_HAS_N_NEEDS_M, "dimension {2} of this array has length {0}, but the declared size is {1}")
 N00B_TEXT(ARRAY_SIZE_MUST_BE_A, "array size `{0}` must be a constant known at compile time")
 N00B_TEXT(THIS_ARRAY_SIZE_MUST_BE, "this array size must be a constant known at compile time")
 N00B_TEXT(USE_A_CONST_OR_LEAVE, "use a `const`, or leave this dimension unsized and pass its size to `new`")

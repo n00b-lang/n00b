@@ -1,7 +1,8 @@
 #!/bin/sh
 # Assigning literals to module variables, from their own module and from an
 # importer: the declaration types the literal (a bounded array's used to be
-# an internal compiler error).
+# an internal compiler error). A literal whose length differs from a
+# declared size is a compile-time error.
 set -eu
 
 compiler=$1
@@ -16,31 +17,35 @@ cd "$program_dir"
 }
 "$tmp/main"
 
-if "$compiler" check mismatch.n >"$tmp/mismatch.log" 2>&1; then
-    echo "mismatch.n checked" >&2
-    exit 1
-fi
-for line in 6 7; do
-    grep -q "mismatch.n:$line:.*does not convert to \`u32\`" \
-        "$tmp/mismatch.log" || {
-        cat "$tmp/mismatch.log" >&2
+rejected() {
+    if "$compiler" check "$1.n" >"$tmp/$1.log" 2>&1; then
+        echo "$1.n checked" >&2
+        exit 1
+    fi
+    if grep -q 'internal compiler error' "$tmp/$1.log"; then
+        cat "$tmp/$1.log" >&2
+        exit 1
+    fi
+}
+
+reported() {
+    grep -q -- "$2" "$tmp/$1.log" || {
+        echo "$1.n: expected '$2'" >&2
+        cat "$tmp/$1.log" >&2
         exit 1
     }
-done
-if grep -q 'internal compiler error' "$tmp/mismatch.log"; then
-    cat "$tmp/mismatch.log" >&2
-    exit 1
-fi
+}
 
-"$compiler" build --output "$tmp/short" short.n >"$tmp/short.log" 2>&1 || {
-    cat "$tmp/short.log" >&2
-    exit 1
-}
-if "$tmp/short" 2>"$tmp/short.err"; then
-    echo "short.n stored a 2-element array into a 4-element variable" >&2
-    exit 1
-fi
-grep -q 'expected 4, found 2' "$tmp/short.err" || {
-    cat "$tmp/short.err" >&2
-    exit 1
-}
+rejected mismatch
+for line in 6 7; do
+    reported mismatch "mismatch.n:$line:.*does not convert to \`u32\`"
+done
+
+# A global's initializer, assignments to a global and a local, a local's
+# initializer and an argument.
+rejected lengths
+for at in 3:28:.*length\ is\ 2 11:13:.*length\ is\ 2 12:32:.*length\ is\ 5 \
+    13:13:.*length\ is\ 1 14:19:.*length\ is\ 3; do
+    reported lengths "lengths.n:$at, but it is stored where the declared size is 4"
+done
+test "$(grep -c 'declared size is' "$tmp/lengths.log")" = 5

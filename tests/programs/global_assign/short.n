@@ -1,6 +1,0 @@
-# A literal shorter than the variable's declared bound.
-var table: Array[u32][4]
-
-func main() -> nil {
-    table = [1, 2]
-}

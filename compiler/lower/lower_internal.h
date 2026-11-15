@@ -735,6 +735,13 @@ n00bb_emit_sequence_shape_check(ir_lower_context_t *context,
                                 ir_value_t *value, ir_shape_t *expected,
                                 ir_span_t span);
 
+// Reports an error when `value`'s length is known while lowering and
+// differs from a static extent of `expected`; the shape checks call it.
+void
+n00bb_report_static_shape_mismatch(ir_lower_context_t *context,
+                                   ir_value_t *value, ir_shape_t *expected,
+                                   ir_span_t span);
+
 bool
 n00bb_attach_expression_shape(ir_lower_context_t *context,
                               parse_grammar_t *grammar,
