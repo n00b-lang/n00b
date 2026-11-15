@@ -141,6 +141,9 @@ struct ir_summaries_t {
     core_dict_t               sites;
     ir_func_t *const         *members;
     size_t                    member_count;
+    // Callee summaries as callers behind a barrier see them, by callee and
+    // the caller's module.
+    core_dict_t               views;
 };
 
 typedef ir_spath_list_t path_list_t;
@@ -567,6 +570,10 @@ static ir_summary_t *dep_summary(ir_summaries_t *summaries,
                                  ir_func_t *target);
 static ir_summary_t *target_summary(ir_summaries_t *summaries,
                                     ir_func_t *target);
+static ir_summary_t *call_summary(ir_summaries_t *summaries,
+                                  const ir_func_t *caller,
+                                  ir_func_t *target);
+static void views_free(ir_summaries_t *summaries);
 static bool stored_deps_hold(ir_summaries_t *summaries,
                              const ir_summary_t *summary,
                              ir_func_t *const *members, size_t count);

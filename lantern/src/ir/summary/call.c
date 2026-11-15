@@ -425,8 +425,8 @@ note_callees(pt_t *pt, const ir_instr_t *call)
     resolve_targets(pt->summaries, call, &entry.targets);
     entry.known = !entry.targets.unknown;
     for (size_t t = 0; t < entry.targets.targets.len; t++) {
-        ir_summary_t *callee = target_summary(pt->summaries,
-                                              entry.targets.targets.data[t]);
+        ir_summary_t *callee = call_summary(pt->summaries, pt->f,
+                                            entry.targets.targets.data[t]);
         entry.known = entry.known && callee->results_known;
         core_list_push(entry.callees, callee);
     }

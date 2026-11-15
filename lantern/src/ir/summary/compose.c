@@ -242,7 +242,8 @@ call_effect(flow_query_t *q, const ir_instr_t *call, ir_path_outcome_t outcome)
     uint8_t effect = targets.unknown || !targets.targets.len
         ? IR_PATH_UNPASSED : 0;
     for (size_t t = 0; t < targets.targets.len; t++) {
-        ir_summary_t *s = target_summary(q->summaries, targets.targets.data[t]);
+        ir_summary_t *s = call_summary(q->summaries, q->f,
+                                       targets.targets.data[t]);
         effect |= callee_effect(s, target_access_flags(q, call, s), outcome);
     }
     core_list_free(targets.targets);

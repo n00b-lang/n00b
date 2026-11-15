@@ -691,6 +691,142 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
     return summary;
 }
 
+// A callee's summary as `caller` sees it when some of the globals it
+// touches lie behind a barrier for the caller: the paths and flows through
+// those globals are left out. Everything else is shared with the callee's
+// summary, which the view only reads.
+typedef struct {
+    ir_summary_t *view;
+    const ir_summary_t *source;
+    const ir_module_t  *module;
+    uint64_t      stamp;
+} summary_view_t;
+
+static bool
+hidden_path(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_spath_t *path)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    return (path->root == IR_SPLACE_GLOBAL
+            || path->root == IR_SPLACE_THREAD)
+        && path->global
+        && hooks->global_hidden(hooks->context, caller,
+                                ir_global_identity(path->global));
+}
+
+static uint64_t
+view_stamp(const ir_summary_t *summary)
+{
+    return (uint64_t)summary->paths.len
+        ^ (uint64_t)summary->flows[0].dests.len << 16
+        ^ (uint64_t)summary->flows[0].sources.len << 28
+        ^ (uint64_t)summary->flows[1].dests.len << 40
+        ^ (uint64_t)summary->flows[1].sources.len << 52
+        ^ (uint64_t)summary->flags * 0x9e3779b97f4a7c15ull;
+}
+
+static void
+view_release(ir_summary_t *view)
+{
+    if (!view) return;
+    core_list_free(view->paths);
+    flow_table_free(&view->flows[IR_SFLOW_RESULTS]);
+    flow_table_free(&view->flows[IR_SFLOW_STORES]);
+    core_free(view);
+}
+
+static void
+views_free(ir_summaries_t *summaries)
+{
+    core_dict_foreach(&summaries->views, entry) {
+        summary_view_t *cached = entry->value;
+        view_release(cached->view);
+        core_free(cached);
+    }
+    core_dict_free(&summaries->views);
+}
+
+static void
+view_flows(ir_summaries_t *summaries, const ir_func_t *caller,
+           flow_table_t *into, const flow_table_t *from)
+{
+    flow_table_init(into, from->function);
+    uint32_t *mapped = core_alloc_array(uint32_t, from->sources.len + 1);
+    for (size_t s = 0; s < from->sources.len; s++)
+        mapped[s] = hidden_path(summaries, caller, from->sources.data[s])
+            ? UINT32_MAX - 1 : UINT32_MAX;
+    for (size_t d = 0; d < from->dests.len; d++) {
+        flow_dest_t *source = &from->dests.data[d];
+        if (hidden_path(summaries, caller, source->to)) continue;
+        flow_dest_t *dest = nullptr;
+        for (size_t w = 0; w < (from->sources.len + 63) / 64; w++)
+            for (uint64_t any = dest_word(source, w); any; any &= any - 1) {
+                uint32_t s = (uint32_t)(w * 64
+                                        + (uint32_t)__builtin_ctzll(any));
+                if (s >= from->sources.len) break;
+                if (mapped[s] == UINT32_MAX - 1) continue;
+                for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY;
+                     kind++) {
+                    if (!bit_has(kind_bits(source, kind), s)) continue;
+                    if (mapped[s] == UINT32_MAX)
+                        mapped[s] = flow_source(into, from->sources.data[s]);
+                    if (!dest) dest = flow_dest(into, source->to);
+                    bit_set(kind_bits(dest, kind), mapped[s]);
+                }
+            }
+    }
+    core_free(mapped);
+}
+
+static ir_summary_t *
+call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
+             ir_func_t *target)
+{
+    ir_summary_t *callee = target_summary(summaries, target);
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (!caller || !callee || !hooks || !hooks->global_hidden
+        || callee->stored) return callee;
+    void *key = (void *)((uintptr_t)callee
+                         ^ (uintptr_t)caller->owner * 0x9e3779b97f4a7c15ull);
+    summary_view_t *cached = core_dict_get(&summaries->views, key, nullptr);
+    uint64_t stamp = view_stamp(callee);
+    if (cached && cached->source == callee && cached->module == caller->owner
+        && cached->stamp == stamp)
+        return cached->view ? cached->view : callee;
+    bool hides = false;
+    for (size_t i = 0; !hides && i < callee->paths.len; i++)
+        hides = hidden_path(summaries, caller, &callee->paths.data[i]);
+    for (int t = 0; !hides && t < 2; t++) {
+        const flow_table_t *table = &callee->flows[t];
+        for (size_t i = 0; !hides && i < table->dests.len; i++)
+            hides = hidden_path(summaries, caller, table->dests.data[i].to);
+        for (size_t i = 0; !hides && i < table->sources.len; i++)
+            hides = hidden_path(summaries, caller, table->sources.data[i]);
+    }
+    ir_summary_t *view = nullptr;
+    if (hides) {
+        view  = core_alloc(ir_summary_t);
+        *view = *callee;
+        view->paths = core_list_new(ir_spath_t);
+        for (size_t i = 0; i < callee->paths.len; i++)
+            if (!hidden_path(summaries, caller, &callee->paths.data[i]))
+                core_list_push(view->paths, callee->paths.data[i]);
+        view_flows(summaries, caller, &view->flows[IR_SFLOW_RESULTS],
+                   &callee->flows[IR_SFLOW_RESULTS]);
+        view_flows(summaries, caller, &view->flows[IR_SFLOW_STORES],
+                   &callee->flows[IR_SFLOW_STORES]);
+    }
+    if (!cached) {
+        cached = core_alloc(summary_view_t);
+        *cached = (summary_view_t){0};
+        core_dict_put(&summaries->views, key, cached);
+    }
+    else view_release(cached->view);
+    *cached = (summary_view_t){.view = view, .source = callee,
+                               .module = caller->owner, .stamp = stamp};
+    return view ? view : callee;
+}
+
 ir_summary_t *
 ir_summary_for(ir_summaries_t *summaries, ir_func_t *function)
 {

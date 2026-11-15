@@ -464,6 +464,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
         .global_named = n00bb_summary_global_named,
+        .global_hidden = n00bb_summary_global_hidden,
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,

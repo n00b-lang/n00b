@@ -722,6 +722,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->escapes_only = escapes_only;
     summaries->owned = core_list_new(summary_ptr_t);
     core_dict_init(&summaries->by_function, nullptr, nullptr);
+    core_dict_init(&summaries->views, nullptr, nullptr);
     core_dict_init(&summaries->type_memos, nullptr, nullptr);
     core_dict_init(&summaries->engines, nullptr, nullptr);
     core_dict_init(&summaries->adopted, nullptr, nullptr);
@@ -788,6 +789,7 @@ ir_summaries_free(ir_summaries_t *summaries)
     core_list_free(summaries->owned);
     core_dict_free(&summaries->adopted);
     core_dict_free(&summaries->by_function);
+    views_free(summaries);
     type_memos_free(&summaries->type_memos);
     core_dict_foreach(&summaries->engines, entry) {
         engine_release(entry->value);

@@ -856,6 +856,27 @@ n00bb_summary_global_named(void *context, const ir_func_t *function,
     return !owner || !viewer || owner == viewer;
 }
 
+// The collector's own module variables are behind an abstraction barrier
+// for code outside it: a caller sees what a collector function does to its
+// arguments and what it returns, not the collector's state.
+static bool
+collector_module(core_string_t name)
+{
+    return core_string_starts_with(name,
+                                   CORE_STRING_STATIC("sys.internal.gc."));
+}
+
+bool
+n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
+                            const ir_global_t *global)
+{
+    (void)context;
+    const ir_module_t *owner = global ? global->owner : nullptr;
+    return owner && caller && caller->owner
+        && collector_module(ir_module_name((ir_module_t *)owner))
+        && !collector_module(ir_module_name(caller->owner));
+}
+
 void
 param_text(core_buffer_t *out, const ir_func_t *function, uint32_t p)
 {

@@ -110,6 +110,11 @@ typedef struct {
     // has no use for the detail, and it would grow every summary it reaches.
     bool (*global_named)(void *context, const ir_func_t *function,
                          const ir_global_t *global);
+    // Whether `global` lies behind an abstraction barrier for code in
+    // `caller`: what a callee does to it is left out of the summary the
+    // caller composes, as if the callee were opaque there.
+    bool (*global_hidden)(void *context, const ir_func_t *caller,
+                          const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
                             const ir_summary_t *summary);
     bool (*inherits_effect)(void *context, const ir_func_t *caller,
