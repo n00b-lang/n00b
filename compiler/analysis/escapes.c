@@ -503,10 +503,8 @@ describe_rule_step(void *context, const ir_summary_step_t *step)
         || step->kind == IR_SUMMARY_STEP_DISCARDED
         || rule_step_seen(chain, step)) return true;
     core_string_t detail = {0};
-    n00bb_text_t clause = N00B_TEXT_CLAUSE_OUT_ARGUMENT;
+    n00bb_text_t clause = N00B_TEXT_CLAUSE_CALLS;
     switch (step->kind) {
-    case IR_SUMMARY_STEP_OUT_ARGUMENT:
-        break;
     case IR_SUMMARY_STEP_CALLS:
     case IR_SUMMARY_STEP_CALLS_UNSEEN:
         clause = chain->ignored ? N00B_TEXT_CLAUSE_CHANGES_NOTHING

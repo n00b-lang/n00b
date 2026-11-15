@@ -656,73 +656,9 @@ track_reference_stores(window_t *window, const ir_instr_t *call,
 }
 
 static bool
-output_carries_param(const ir_summary_t *summary, uint8_t output,
-                     uint32_t param)
-{
-    static const ir_sflow_kind_t kinds[] = {
-        IR_SFLOW_DATA, IR_SFLOW_COPY, IR_SFLOW_ALIAS,
-    };
-    uint32_t flows = ir_summary_flow_count(summary, IR_SFLOW_RESULTS);
-    uint32_t sources = ir_summary_flow_source_count(summary,
-                                                    IR_SFLOW_RESULTS);
-    for (uint32_t f = 0; f < flows; f++) {
-        const ir_spath_t *to = ir_summary_flow_to(summary, IR_SFLOW_RESULTS,
-                                                  f);
-        if (!to || to->output != output) continue;
-        for (uint32_t s = 0; s < sources; s++) {
-            const ir_spath_t *from = ir_summary_flow_source(summary,
-                IR_SFLOW_RESULTS, s);
-            if (!from || from->root != IR_SPLACE_PARAM
-                || from->param != param) continue;
-            for (size_t k = 0; k < sizeof(kinds) / sizeof(*kinds); k++)
-                if (ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
-                                        kinds[k])) return true;
-        }
-    }
-    return false;
-}
-
-static bool
-output_holds_tracked(window_t *window, const ir_instr_t *output)
-{
-    size_t ordinal = 0;
-    const ir_instr_t *call = ir_call_output_source(output, &ordinal);
-    callee_summary_t callee = {0};
-    if (!call || ordinal + 1 >= IR_SOUTPUT_STATUS
-        || !ir_summary_call_callees(window->analysis->summaries, call,
-                                    collect_callee_summary, &callee)
-        || !callee.summary) return false;
-    for (uint32_t o = 1; o < call->n_operands; o++) {
-        uint32_t index = 0;
-        ir_value_t *argument = operand_at(call, o);
-        if (argument && tracked_index(window, argument, &index)
-            && output_carries_param(callee.summary, (uint8_t)(ordinal + 1),
-                                    o - 1)) return true;
-    }
-    return false;
-}
-
-static bool
 collect_tracked(window_t *window)
 {
     if (!track(window, window->conversion->dest)) return false;
-    for (uint32_t b = 0; b < window->function->n_blocks; b++) {
-        ir_block_t *block = window->function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *output = block->instrs[i];
-            uint32_t index = 0;
-            if (output->op != IR_OP_CALL_OUTPUT
-                || !tracked_index(window, output->dest, &index))
-                continue;
-            ir_value_t *source = operand_at(output, 0);
-            if (!source || !track(window, source)) return false;
-            if (source->kind == IR_VAL_INSTR && source->def
-                && source->def->op == IR_OP_VARIANT_PAYLOAD
-                && source->def->n_operands
-                && !track(window, operand_at(source->def, 0)))
-                return false;
-        }
-    }
     bool ok = true;
     for (bool changed = true; ok && changed;) {
         changed = false;
@@ -731,15 +667,6 @@ collect_tracked(window_t *window)
             for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
                 ir_instr_t *copy = block->instrs[i];
                 uint32_t index = 0;
-                if (copy->op == IR_OP_CALL_OUTPUT && copy->dest
-                    && !tracked_index(window, copy->dest, &index)
-                    && output_holds_tracked(window, copy)) {
-                    ir_value_t *source = operand_at(copy, 0);
-                    ok = track(window, copy->dest)
-                        && (!source || track(window, source));
-                    changed = true;
-                    continue;
-                }
                 if (is_call(copy)) {
                     ok = track_reference_stores(window, copy, &changed);
                     continue;

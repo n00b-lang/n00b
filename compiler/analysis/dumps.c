@@ -65,7 +65,7 @@ dump_ir_places(ir_module_t *module, ir_func_t *function)
     }
     static const char *const site_kinds[] = {
         "branch", "loop_bound", "address", "divisor", "shift_amount",
-        "boxed", "call_argument", "call_result", "copy_out", "returned",
+        "boxed", "call_argument", "call_result", "returned",
         "trap", "failure"};
     ir_sites_t *sites = ir_func_sites(function);
     for (uint32_t i = 0; i < ir_sites_count(sites); i++) {

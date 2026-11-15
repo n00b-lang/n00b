@@ -1322,10 +1322,6 @@ static void gen_operands(ir_module_t *m, ir_func_t *f, ir_instr_t *in,
             }
             break;
 
-        case IR_OPD_OUT:
-            ir_instr_operand_out(in);
-            break;
-
         case IR_OPD_FRESH:
             return;
         }

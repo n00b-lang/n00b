@@ -18,7 +18,6 @@ typedef enum : uint8_t {
     REL_PARAM_PLACE,
     REL_CALL_TARGET,
     REL_CALL_UNKNOWN,
-    REL_OUT_ARGUMENT,
     REL_DISCARDED,
     REL_DECLARED_EFFECT,
     REL_ADDRESSABLE_ARGUMENT,
@@ -58,7 +57,6 @@ static const struct {
     [REL_PARAM_PLACE]          = {CORE_STRING_STATIC("param_place"), 2},
     [REL_CALL_TARGET]          = {CORE_STRING_STATIC("call_target"), 2},
     [REL_CALL_UNKNOWN]         = {CORE_STRING_STATIC("call_unknown"), 1},
-    [REL_OUT_ARGUMENT]         = {CORE_STRING_STATIC("out_argument"), 1},
     [REL_DISCARDED]            = {CORE_STRING_STATIC("discarded"), 1},
     [REL_DECLARED_EFFECT]      = {CORE_STRING_STATIC("declared_effect"), 1},
     [REL_ADDRESSABLE_ARGUMENT] = {CORE_STRING_STATIC("addressable_argument"),
@@ -155,7 +153,6 @@ static const rule_t rules[] = {
     {ATOM1(REL_VISIBLE_WRITE, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_ESCAPE, "G", "I"),
       ATOM2(REL_ADDRESSABLE_ARGUMENT, "S", "I")}},
-    {ATOM1(REL_SIDE_EFFECT, "S"), 1, {ATOM1(REL_OUT_ARGUMENT, "S")}},
     {ATOM1(REL_SIDE_EFFECT, "S"), 1, {ATOM1(REL_VISIBLE_WRITE, "S")}},
     {ATOM1(REL_SIDE_EFFECT, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
@@ -165,10 +162,9 @@ static const rule_t rules[] = {
     {ATOM1(REL_EFFECTFUL_CALL, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
       ATOM1(REL_RESULT_EFFECT, "K")}},
-    {ATOM1(REL_IGNORED_RESULT, "S"), 5,
+    {ATOM1(REL_IGNORED_RESULT, "S"), 4,
      {ATOM1(REL_DISCARDED, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
-      NOT1(REL_VISIBLE_WRITE, "S"), NOT1(REL_EFFECTFUL_CALL, "S"),
-      NOT1(REL_OUT_ARGUMENT, "S")}},
+      NOT1(REL_VISIBLE_WRITE, "S"), NOT1(REL_EFFECTFUL_CALL, "S")}},
     {ATOM2(REL_RESULT_ALIAS, "S", "I"), 3,
      {ATOM1(REL_IGNORED_RESULT, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
       ATOM2(REL_RETURN_ALIAS, "G", "I")}},
@@ -522,8 +518,6 @@ add_call(ir_summary_facts_t *facts, ir_func_t *function, ir_instr_t *in)
     }
     if (discarded(in)) fact(facts, REL_DISCARDED, site, 0, 0);
     for (uint32_t o = 1; o < in->n_operands; o++) {
-        if (in->operands[o].kind == IR_OPD_OUT)
-            fact(facts, REL_OUT_ARGUMENT, site, 0, 0);
         if (ir_summary_argument_addressable(function,
                                             ir_operand_value(&in->operands[o])))
             fact(facts, REL_ADDRESSABLE_ARGUMENT, site, integer(facts, o - 1),
@@ -779,9 +773,7 @@ record_step(core_datalog_relation_id_t relation,
     explain_t          *explain = context;
     ir_summary_facts_t *facts   = explain->facts;
     ir_summary_step_t   step    = {.depth = depth};
-    if (relation == facts->ids[REL_OUT_ARGUMENT])
-        step.kind = IR_SUMMARY_STEP_OUT_ARGUMENT;
-    else if (relation == facts->ids[REL_DISCARDED])
+    if (relation == facts->ids[REL_DISCARDED])
         step.kind = IR_SUMMARY_STEP_DISCARDED;
     else if (relation == facts->ids[REL_CALL_TARGET]) {
         step.callee = function_at(facts, tuple[1]);

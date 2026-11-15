@@ -916,8 +916,7 @@ ir_value_t *ir_call_param(ir_func_t *target, const ir_operand_t *o,
         return nullptr;
     }
     if (o->kind != IR_OPD_VALUE && o->kind != IR_OPD_ARG
-        && o->kind != IR_OPD_SPREAD && o->kind != IR_OPD_OUT
-        && o->kind != IR_OPD_FRESH && o->kind != IR_OPD_MISSING) {
+        && o->kind != IR_OPD_SPREAD && o->kind != IR_OPD_FRESH && o->kind != IR_OPD_MISSING) {
         return nullptr;
     }
     if (*position >= th_func_nparams(target->type)) {

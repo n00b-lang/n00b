@@ -2352,14 +2352,6 @@ static void push_operand(B *b, ir_func_t *f, ir_instr_t *in, ib_node *o)
                           "argument"));
             return;
         }
-        if (want == IR_OPD_ARG && o->text.data
-            && core_string_eq(o->text, CORE_STRING_STATIC("out"))) {
-            if (!ir_instr_operand_out(in))
-                bfail(b, o->span,
-                      CORE_STRING_STATIC(
-                          "out is only valid as a call argument"));
-            return;
-        }
         if (want == IR_OPD_TYPE) {
             th_type *t = ir_type_parse(b->m, o->text);
 

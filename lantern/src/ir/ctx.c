@@ -644,15 +644,6 @@ ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
     return th_type_definition_owner(m->ctx->types, named);
 }
 
-// A call has no outputs beyond its result: `out` and `modify` parameters
-// are passed by reference (th_mode_by_reference), so the callee writes the
-// caller's place itself. The output queries below answer accordingly.
-size_t ir_call_output_count(th_type *callable)
-{
-    (void)callable;
-    return 0;
-}
-
 th_type *ir_call_function_type(const ir_instr_t *call)
 {
     if (!call) return nullptr;
@@ -670,61 +661,12 @@ th_type *ir_call_function_type(const ir_instr_t *call)
                                                              : nullptr;
 }
 
-const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
-                                        size_t *ordinal)
-{
-    if (!output || output->op != IR_OP_CALL_OUTPUT || output->n_operands != 2
-        || output->operands[1].kind != IR_OPD_CONST
-        || output->operands[1].lit.is_float
-        || output->operands[1].lit.i.neg
-        || output->operands[1].lit.i.mag > SIZE_MAX) return nullptr;
-    const ir_value_t *source = ir_operand_value(&output->operands[0]);
-    const ir_instr_t *call = source && source->kind == IR_VAL_INSTR
-        ? source->def : nullptr;
-    if (call && call->op == IR_OP_VARIANT_PAYLOAD) {
-        source = call->n_operands ? ir_operand_value(&call->operands[0])
-                                  : nullptr;
-        call = source && source->kind == IR_VAL_INSTR ? source->def : nullptr;
-    }
-    if (!call || (call->op != IR_OP_CALL
-                  && call->op != IR_OP_CALLBACK_INVOKE)) return nullptr;
-    if (ordinal) *ordinal = (size_t)output->operands[1].lit.i.mag;
-    return call;
-}
-
-size_t ir_call_output_param(th_type *callable, size_t output_index)
-{
-    (void)callable;
-    (void)output_index;
-    return SIZE_MAX;
-}
-
-size_t ir_call_param_output(th_type *callable, size_t param)
-{
-    (void)callable;
-    (void)param;
-    return SIZE_MAX;
-}
-
 bool ir_callable_returns_value(ir_module_t *m, th_type *callable)
 {
     callable = callable ? th_resolve(callable) : nullptr;
     th_type *ret = callable && th_kind_of(callable) == TH_FUNCTION
         ? th_func_ret(callable) : nullptr;
     return ret && ir_machine_of(m, ret).class != IR_CLASS_VOID;
-}
-
-size_t ir_return_output_operand(ir_module_t *m, th_type *callable,
-                                size_t output_index)
-{
-    return (ir_callable_returns_value(m, callable) ? 1 : 0) + output_index;
-}
-
-th_type *ir_call_output_type(th_type *callable, size_t output_index)
-{
-    (void)callable;
-    (void)output_index;
-    return nullptr;
 }
 
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)

@@ -43,7 +43,6 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->source_maps, nullptr, nullptr);
     core_dict_init(&pt->flow_nodes, flow_node_hash, flow_node_eq);
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
-    core_dict_init(&pt->copy_ins, nullptr, nullptr);
     core_dict_init(&pt->escaped, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
@@ -83,7 +82,6 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
         }
     pt->dirty = core_alloc_array(bool, pt->order.len ? pt->order.len : 1);
     note_load_uses(pt);
-    note_copy_ins(pt);
     note_writers(pt);
     flow_build(pt);
 }
@@ -192,7 +190,6 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_nodes);
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);
-    core_dict_free(&pt->copy_ins);
     core_dict_foreach(&pt->escaped, entry) {
         region_list_t *regions = entry->value;
         core_list_free(*regions);

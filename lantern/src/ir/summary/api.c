@@ -323,15 +323,9 @@ ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
     alias_cursor_t    stores = aliases_of(summary, IR_SFLOW_STORES);
     while (next_alias(&stores, &to, &from))
         escape |= escape_from(from, param, true);
-    th_type *callable = summary->function ? summary->function->type
-                                          : nullptr;
     alias_cursor_t results = aliases_of(summary, IR_SFLOW_RESULTS);
     while (next_alias(&results, &to, &from)) {
-        bool direct = !to->depth && !(to->flags & IR_SPATH_DEEP);
-        bool own    = to->output
-            ? direct && callable
-                && ir_call_output_param(callable, to->output - 1u) == param
-            : returns_pointers(summary);
+        bool own = !to->output && returns_pointers(summary);
         escape |= escape_from(from, param, !own);
     }
     const ir_func_t *function = summary->function;

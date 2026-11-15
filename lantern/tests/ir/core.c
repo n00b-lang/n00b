@@ -138,24 +138,21 @@ static void test_call_arguments(void)
     ir_instr_t  *call   = ir_instr_add(entry, IR_OP_CALL);
     bool built = slot && call
         && ir_instr_operand_value(call, ir_func_address(m, callee))
-        && ir_instr_operand_value(call, p) && ir_instr_operand_out(call)
+        && ir_instr_operand_value(call, p)
         && ir_instr_operand_fresh(call, slot)
         && ir_instr_operand_missing(call);
 
     check("a call with every argument role is built", built);
     check("the callee operand is not an argument",
-          ir_call_argument_count(call) == 4);
+          ir_call_argument_count(call) == 3);
 
     ir_call_arg_t value   = ir_call_argument(call, 0);
-    ir_call_arg_t out     = ir_call_argument(call, 1);
-    ir_call_arg_t fresh   = ir_call_argument(call, 2);
-    ir_call_arg_t missing = ir_call_argument(call, 3);
-    ir_call_arg_t absent  = ir_call_argument(call, 4);
+    ir_call_arg_t fresh   = ir_call_argument(call, 1);
+    ir_call_arg_t missing = ir_call_argument(call, 2);
+    ir_call_arg_t absent  = ir_call_argument(call, 3);
 
     check("a value argument carries its value",
           value.role == IR_ARG_VALUE && value.value == p && value.operand == 1);
-    check("an out argument is written by the callee",
-          out.role == IR_ARG_OUT && ir_call_argument_writes(&out));
     check("a fresh argument names the storage it constructs into",
           fresh.role == IR_ARG_FRESH && fresh.value == slot
               && ir_call_argument_writes(&fresh));
@@ -163,13 +160,12 @@ static void test_call_arguments(void)
           missing.role == IR_ARG_MISSING && !missing.value);
     check("a parameter past the operands is absent",
           absent.role == IR_ARG_ABSENT);
-    check("value, out and fresh arguments are positional",
-          ir_call_arguments_positional(call, 2));
+    check("value and fresh arguments are positional",
+          ir_call_arguments_positional(call, 1));
     check("a missing argument is not",
-          !ir_call_arguments_positional(call, 3));
+          !ir_call_arguments_positional(call, 2));
     check("a callable returning i32 returns a value",
-          ir_callable_returns_value(m, callee->type)
-              && ir_return_output_operand(m, callee->type, 0) == 1);
+          ir_callable_returns_value(m, callee->type));
 
     ir_ctx_free(ctx);
 }

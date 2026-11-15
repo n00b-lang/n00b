@@ -21,13 +21,8 @@ ir_operand_used_value(const ir_instr_t *in, uint32_t index)
 const ir_value_t *
 ir_operand_referenced_value(const ir_operand_t *operand)
 {
-    switch (operand->kind) {
-    case IR_OPD_ARG:
-    case IR_OPD_OUT:
-        return operand->value;
-    default:
-        return ir_operand_value(operand);
-    }
+    return operand->kind == IR_OPD_ARG ? operand->value
+                                       : ir_operand_value(operand);
 }
 
 ir_value_t *
@@ -70,9 +65,6 @@ ir_call_argument(const ir_instr_t *call, uint32_t param)
     case IR_OPD_ARG:
         role = IR_ARG_VALUE;
         break;
-    case IR_OPD_OUT:
-        role = IR_ARG_OUT;
-        break;
     case IR_OPD_FRESH:
         role = IR_ARG_FRESH;
         break;
@@ -89,7 +81,7 @@ ir_call_argument(const ir_instr_t *call, uint32_t param)
 bool
 ir_call_argument_writes(const ir_call_arg_t *argument)
 {
-    return argument->role == IR_ARG_OUT || argument->role == IR_ARG_FRESH;
+    return argument->role == IR_ARG_FRESH;
 }
 
 bool

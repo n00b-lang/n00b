@@ -145,9 +145,6 @@ instr_sites(const ir_instr_t *in, ir_site_t *out, uint32_t capacity)
         if (in->dest_kind != IR_DEST_NONE)
             SITE(UINT32_MAX, IR_SITE_CALL_RESULT);
         break;
-    case IR_OP_CALL_OUTPUT:
-        SITE(UINT32_MAX, IR_SITE_COPY_OUT);
-        break;
     case IR_OP_RETURN:
         if (in->n_operands) SITE(0, IR_SITE_RETURNED);
         break;

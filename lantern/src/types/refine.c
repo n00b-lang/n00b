@@ -251,7 +251,7 @@ static bool controlled(const ir_pdg_t *g, ir_block_t *b, const test_t *t,
 static bool unwraps(const ir_instr_t *in)
 {
     return in->op == IR_OP_OPTION_IS_NIL || in->op == IR_OP_OPTION_GET
-        || in->op == IR_OP_OPTION_GET_OR_ELSE || in->op == IR_OP_CALL_OUTPUT;
+        || in->op == IR_OP_OPTION_GET_OR_ELSE;
 }
 
 static bool under_test(const ir_pdg_t *g, ir_block_t *b, const test_t *t)
@@ -278,17 +278,8 @@ static bool present_store(const ir_instr_t *in, const void *location)
                             : nullptr;
     ir_value_t *value   = address ? ir_operand_value(&in->operands[1])
                                   : nullptr;
-    size_t            ordinal = 0;
-    const ir_instr_t *call    = value && value->def
-                                  ? ir_call_output_source(value->def, &ordinal)
-                                  : nullptr;
-    th_type          *type    = call ? ir_call_output_type(
-                                           ir_call_function_type(call),
-                                           ordinal)
-                              : value ? value->type
-                                      : nullptr;
-
-    type = type ? th_resolve(type) : nullptr;
+    th_type    *type    = value && value->type ? th_resolve(value->type)
+                                               : nullptr;
 
     return type
         && (global_of(address) ? global_of(address) : address) == location

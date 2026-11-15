@@ -114,26 +114,13 @@ stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
 }
 
 static bool
-named_path(pt_t *pt, const pt_loc_t *loc, ir_spath_t *path)
+definite_path(const pt_set_t *addresses, ir_spath_t *path)
 {
-    if (loc->site == PT_EXTERNAL) {
-        *path = loc->path;
-        return true;
-    }
-    pt_loc_t own = {.site = PT_EXTERNAL};
-    if (!copy_in_param(pt, loc->site, &own.path)) return false;
-    loc_extend(pt, &own, loc->path.steps, loc->path.depth, loc_deep(loc));
-    *path = own.path;
-    return true;
-}
-
-static bool
-definite_path(pt_t *pt, const pt_set_t *addresses, ir_spath_t *path)
-{
-    return addresses->len == 1 && is_address(&addresses->data[0])
-        && !loc_deep(&addresses->data[0].loc)
-        && named_path(pt, &addresses->data[0].loc, path)
-        && path->root != IR_SPLACE_UNKNOWN;
+    if (addresses->len != 1 || !is_address(&addresses->data[0])) return false;
+    const pt_loc_t *loc = &addresses->data[0].loc;
+    if (loc_deep(loc) || loc->site != PT_EXTERNAL) return false;
+    *path = loc->path;
+    return path->root != IR_SPLACE_UNKNOWN;
 }
 
 static bool
@@ -169,7 +156,7 @@ definite_store(pt_t *pt, const ir_instr_t *in, ir_spath_t *path)
     pt->at = in;
     pt_set_t addresses = (pt_set_t){0};
     pt_address(pt, role_value(in, ir_op_address_operand(in->op)), &addresses);
-    bool definite = definite_path(pt, &addresses, path);
+    bool definite = definite_path(&addresses, path);
     core_list_free(addresses);
     pt->at = at;
     return definite;
@@ -206,7 +193,7 @@ entry_call_gens(pt_t *pt, const ir_instr_t *in)
         pt->at = in;
         argument_items(pt, in, path->param, &items);
         ir_spath_t mapped;
-        bool       definite = definite_path(pt, &items, &mapped);
+        bool       definite = definite_path(&items, &mapped);
         core_list_free(items);
         pt->at = at;
         if (definite) cells[count++] = entry_cell(&pt->entry, mapped);
@@ -328,21 +315,14 @@ argument_is(flow_query_t *q, const ir_instr_t *call, const ir_spath_t *path,
     const ir_instr_t *at    = pt->at;
     pt_set_t          items = (pt_set_t){0};
     pt->at = call;
-    if (path->output) {
-        ir_spath_t own = {.root   = IR_SPLACE_PARAM, .param = path->param,
-                          .output = path->output};
-        map_own_storage(pt, call, &own, false, &items);
-    }
-    else {
-        argument_items(pt, call, path->param, &items);
-        for (size_t i = 0; i < items.len; i++)
-            if (items.data[i].flow != PT_SAME || items.data[i].depth)
-                items.len = 0;
-    }
+    argument_items(pt, call, path->param, &items);
+    for (size_t i = 0; i < items.len; i++)
+        if (items.data[i].flow != PT_SAME || items.data[i].depth)
+            items.len = 0;
     // Asked about one leaf of the place, the argument must lead to it (a
     // pointer parameter's referent is a leaf below the parameter itself).
     ir_spath_t mapped;
-    bool matches = definite_path(pt, &items, &mapped)
+    bool matches = definite_path(&items, &mapped)
         && covers_place(&mapped, want, q->leaf);
     core_list_free(items);
     pt->at = at;
@@ -635,9 +615,6 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
         pt_call(pt, in);
-        break;
-    case IR_OP_CALL_OUTPUT:
-        call_output(pt, in, &out);
         break;
     default: {
         if (ir_op_transfers(in->op)) {

@@ -333,10 +333,6 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
     case IR_OPD_ARG:
         break;
 
-    case IR_OPD_OUT:
-        core_buffer_puts(b, "out");
-        break;
-
     case IR_OPD_FRESH:
         core_buffer_puts(b, "fresh %");
         if (o->value) {

@@ -12,7 +12,6 @@ typedef enum : uint8_t {
     IR_SITE_BOXED,
     IR_SITE_CALL_ARGUMENT,
     IR_SITE_CALL_RESULT,
-    IR_SITE_COPY_OUT,
     IR_SITE_RETURNED,
     IR_SITE_TRAP,
     IR_SITE_FAILURE,

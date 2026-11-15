@@ -99,8 +99,6 @@ core_string_t ir_opdkind_name(ir_opdkind_t k)
         return CORE_STRING_STATIC("switch arm");
     case IR_OPD_NAMED_ARG:
         return CORE_STRING_STATIC("named argument");
-    case IR_OPD_OUT:
-        return CORE_STRING_STATIC("out argument");
     case IR_OPD_FRESH:
         return CORE_STRING_STATIC("fresh construction target");
     case IR_OPD_MISSING:
@@ -125,8 +123,6 @@ static ir_opdkind_t kind_of_char(char c)
         return IR_OPD_DEFAULT_BLOCK;
     case 'k':
         return IR_OPD_ARG;
-    case 'o':
-        return IR_OPD_OUT;
     case 'c':
         return IR_OPD_CONST;
     case 'a':

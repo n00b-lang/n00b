@@ -46,7 +46,6 @@ typedef enum : uint8_t {
     IR_RES_ELEM_PTR,
     IR_RES_VARIANT_ARM,
     IR_RES_CALLEE_RET,
-    IR_RES_CALL_OUTPUT,
 } ir_resrule_t;
 
 typedef enum : uint8_t {
@@ -61,7 +60,6 @@ typedef enum : uint8_t {
     IR_OPD_SWITCH_ARM,
     IR_OPD_NAMED_ARG,
     IR_OPD_ARG,
-    IR_OPD_OUT,
     IR_OPD_FRESH,
     IR_OPD_MISSING,
 } ir_opdkind_t;
@@ -528,16 +526,8 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t);
 bool     ir_module_reintern_types(ir_module_t *m);
 th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
-size_t   ir_call_output_count(th_type *callable);
-th_type *ir_call_output_type(th_type *callable, size_t output_index);
-size_t   ir_call_output_param(th_type *callable, size_t output_index);
-size_t   ir_call_param_output(th_type *callable, size_t param);
 bool     ir_callable_returns_value(ir_module_t *m, th_type *callable);
-size_t   ir_return_output_operand(ir_module_t *m, th_type *callable,
-                                  size_t output_index);
 th_type *ir_call_function_type(const ir_instr_t *call);
-const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
-                                        size_t *ordinal);
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
@@ -699,7 +689,6 @@ bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_operand_named(ir_instr_t *in, core_string_t name,
                                    ir_value_t *v);
 bool        ir_instr_operand_named_out(ir_instr_t *in, core_string_t name);
-bool        ir_instr_operand_out(ir_instr_t *in);
 bool        ir_instr_operand_fresh(ir_instr_t *in, ir_value_t *storage);
 bool        ir_instr_operand_missing(ir_instr_t *in);
 bool        ir_instr_operand_type(ir_instr_t *in, th_type *t);

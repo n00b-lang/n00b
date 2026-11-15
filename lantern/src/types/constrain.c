@@ -592,37 +592,6 @@ static th_type *result_of(gen_t *g, ir_instr_t *in, bool *handled)
     case IR_OP_DISPATCH:
         dispatch_constraints(g, in);
         return nullptr;
-    case IR_OP_CALL_OUTPUT: {
-        ir_value_t *call = ir_operand_value(&in->operands[0]);
-
-        if (call && call->def && call->def->op == IR_OP_DISPATCH
-            && call->def->n_operands > 1) {
-            return operand_type(call->def, 1);
-        }
-
-        size_t            ordinal = 0;
-        const ir_instr_t *source  = ir_call_output_source(in, &ordinal);
-        th_type          *output  = source ? ir_call_output_type(
-                                                 ir_call_function_type(source),
-                                                 ordinal)
-                                           : nullptr;
-
-        if (output && th_is_closed(g->types, output)) {
-            return output;
-        }
-        if (output && in->dest) {
-            ty_require(g->s,
-                       (ty_pred_t){.kind       = TY_PRED_FLOW,
-                                   .name       = CORE_STRING_STATIC("flow"),
-                                   .subject    = output,
-                                   .other      = in->dest->type,
-                                   .positional = true},
-                       why_of(in, 40));
-            return nullptr;
-        }
-        skip(g, in);
-        return nullptr;
-    }
     case IR_OP_RETURN:
         return_constraints(g, in);
         return nullptr;

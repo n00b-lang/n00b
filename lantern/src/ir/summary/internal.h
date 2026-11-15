@@ -356,7 +356,6 @@ struct pt_t {
     uint32_t               source_order;
     core_dict_t            flow_nodes;
     core_dict_t            heap_sites;
-    core_dict_t            copy_ins;
     pt_set_t               published;
     core_dict_t            escaped;
     bool                   escaped_built;
@@ -527,7 +526,6 @@ static void record_set(pt_t *pt, ir_summary_t *summary,
                        th_type *carried);
 static void record_stores(pt_t *pt, ir_summary_t *summary,
                           const pt_set_t *addresses, const pt_set_t *values);
-static bool copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own);
 
 static pt_t *function_engine(ir_summaries_t *summaries, ir_func_t *f);
 static const flow_bits_t *crossings(pt_t *pt, const pt_loc_t *loc);

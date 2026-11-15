@@ -309,7 +309,6 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     switch (argument.role) {
     case IR_ARG_ABSENT:
     case IR_ARG_MISSING:
-    case IR_ARG_OUT:
         return;
     default:
         // A fresh operand, like any by-reference one, is the address of the
@@ -343,24 +342,6 @@ escaping_items(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(address);
 }
 
-static void
-map_own_storage(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
-                bool inline_tail, pt_set_t *into)
-{
-    ir_call_arg_t argument = ir_call_argument(call, path->param);
-    if (!ir_call_argument_writes(&argument)) return;
-    pt_set_t address = (pt_set_t){0};
-    pt_address(pt, argument.value, &address);
-    for (size_t i = 0; i < address.len; i++) {
-        if (!is_address(&address.data[i])) continue;
-        pt_loc_t loc = address.data[i].loc;
-        extend_tail(pt, &loc, path->steps, path->depth,
-                    path->flags & IR_SPATH_DEEP, inline_tail);
-        set_add(pt, into, item_at(loc));
-    }
-    core_list_free(address);
-}
-
 // The storage a constructor fills is uninitialized when the call starts: a
 // callee path that reaches through a pointer it held then reaches nothing.
 // (The callee's own stores into what it allocated are summarized at the
@@ -381,10 +362,6 @@ static void
 map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 bool inline_tail, pt_set_t *into)
 {
-    if (path->output) {
-        map_own_storage(pt, call, path, inline_tail, into);
-        return;
-    }
     if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
@@ -1139,60 +1116,6 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     return true;
 }
 
-static uint8_t
-output_ordinal(const ir_instr_t *call, uint32_t param)
-{
-    th_type *signature = ir_call_function_type(call);
-    size_t   ordinal   = signature ? ir_call_param_output(signature, param)
-                                   : SIZE_MAX;
-    return ordinal + 1 < UINT8_MAX ? (uint8_t)(ordinal + 1) : 0;
-}
-
-static void
-callee_outputs(pt_t *pt, const ir_instr_t *call,
-               const pt_callees_t *callees, uint8_t output, pt_set_t *into)
-{
-    for (size_t t = 0; t < callees->callees.len; t++)
-        mapped_output(pt, call, callees->callees.data[t], output, into);
-}
-
-static bool
-written_outputs(pt_t *pt, const ir_instr_t *call,
-                const pt_callees_t *callees, const pt_set_t *reach,
-                ir_summary_t *summary)
-{
-    bool settled = true;
-    for (uint32_t param = 0; param < ir_call_argument_count(call); param++) {
-        ir_call_arg_t argument = ir_call_argument(call, param);
-        if (!ir_call_argument_writes(&argument)) continue;
-        uint8_t  output  = output_ordinal(call, param);
-        // A by-reference argument (fresh storage a constructor fills, say)
-        // is no output: the callee's stores through its reference say what
-        // it writes there.
-        if (!output) continue;
-        pt_set_t address = (pt_set_t){0};
-        pt_set_t values  = (pt_set_t){0};
-        pt_address(pt, argument.value, &address);
-        if (output && callees->known)
-            callee_outputs(pt, call, callees, output, &values);
-        else if (reach)
-            for (size_t r = 0; r < reach->len; r++)
-                set_add(pt, &values, reach->data[r]);
-        else
-            call_reach(pt, call, callees, &values);
-        settled = settled && address.len;
-        if (summary) {
-            record_set(pt, summary, &address, IR_SPATH_WRITE, nullptr);
-            record_stores(pt, summary, &address, &values);
-        }
-        else
-            pt_store(pt, &address, &values, strong_writer(pt, call));
-        core_list_free(address);
-        core_list_free(values);
-    }
-    return settled;
-}
-
 static void
 pt_call(pt_t *pt, const ir_instr_t *call)
 {
@@ -1223,32 +1146,8 @@ pt_call(pt_t *pt, const ir_instr_t *call)
     for (size_t t = 0; t < callees->callees.len; t++)
         settled = call_escapes(pt, call, callees->callees.data[t], &reach,
                                &result) && settled;
-    settled = written_outputs(pt, call, callees, &reach, nullptr) && settled;
     if (settled) settle_writes(pt, call);
     pt_define(pt, call, &result);
     core_list_free(reach);
     core_list_free(result);
-}
-
-static void
-call_output(pt_t *pt, const ir_instr_t *output, pt_set_t *into)
-{
-    size_t            ordinal   = 0;
-    const ir_instr_t *call      = ir_call_output_source(output, &ordinal);
-    th_type          *signature = call ? ir_call_function_type(call)
-                                       : nullptr;
-    size_t param = signature ? ir_call_output_param(signature, ordinal)
-                             : SIZE_MAX;
-    const pt_callees_t *callees = param == SIZE_MAX
-        || ordinal + 1 >= IR_SOUTPUT_STATUS ? nullptr : callees_of(pt, call);
-    if (!callees) {
-        unresolved(pt, into);
-        return;
-    }
-    if (callees->known)
-        callee_outputs(pt, call, callees, (uint8_t)(ordinal + 1), into);
-    else {
-        argument_items(pt, call, (uint32_t)param, into);
-        call_reach(pt, call, callees, into);
-    }
 }

@@ -115,7 +115,6 @@ IR_OP(TRAIT_METHOD,    "trait.method",    4, 4,   ANNOTATED,   "nnvv", 0,       
 IR_OP(CALL,            "call",            1, VAR, CALLEE_RET,  "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
 IR_OP(CALLBACK_CREATE, "callback.create", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
 IR_OP(CALLBACK_INVOKE, "callback.invoke", 1, VAR, ANNOTATED,   "vk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
-IR_OP(CALL_OUTPUT,     "call.output",     2, 2,   CALL_OUTPUT, "vc", 0,                              HASRESULT, NOMEM)
 
 IR_OP(SIZEOF,          "sizeof",          1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)
 IR_OP(ALIGNOF,         "alignof",         1, 1,  U64,         "t",   0,                              HASRESULT | COMPTIME, NOMEM)

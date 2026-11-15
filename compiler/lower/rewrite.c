@@ -2257,11 +2257,9 @@ n00bb_rewrite_return_layout(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
     th_type *signature = th_resolve(rewrite->context.function->type);
     if (ir_callable_returns_value(rewrite->context.module, signature)
-        || in->n_operands != ir_call_output_count(signature) + 1)
+        || in->n_operands != 1)
         return true;
-    for (uint32_t o = 1; o < in->n_operands; o++)
-        in->operands[o - 1] = in->operands[o];
-    in->n_operands--;
+    in->n_operands = 0;
     ir_instr_uses_changed(in);
     return true;
 }
@@ -2762,32 +2760,9 @@ n00bb_rewrite_atomic_assignment(n00bb_rewrite_t *rewrite, ir_instr_t *in,
 }
 
 static bool
-n00bb_rewrite_call_output(n00bb_rewrite_t *rewrite, ir_instr_t *in)
-{
-    size_t ordinal = 0;
-    const ir_instr_t *source = ir_call_output_source(in, &ordinal);
-    th_type *output = source ? ir_call_output_type(
-        ir_call_function_type(source), ordinal) : nullptr;
-    th_type *wanted = in->dest ? in->dest->type : nullptr;
-    ir_module_t *module = rewrite->context.module;
-    if (!output || !wanted || !th_is_closed(ir_module_types(module), output)
-        || ir_type_eq(module, output, wanted))
-        return true;
-    in->dest->type = output;
-    ir_value_t *converted = n00bb_convert(rewrite, in, in->dest, wanted);
-    if (!converted || rewrite->context.block != rewrite->scratch)
-        return false;
-    ir_value_replace_uses(rewrite->context.function, in->dest, converted,
-                          n00bb_outside_scratch, rewrite->scratch);
-    return n00bb_rewrite_splice_after(rewrite, in);
-}
-
-static bool
 n00bb_emit_sinks(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
     if (in->op == IR_OP_BRANCH) return true;
-    if (in->op == IR_OP_CALL_OUTPUT)
-        return n00bb_rewrite_call_output(rewrite, in);
     if (in->op == IR_OP_EXTRACT)
         return n00bb_rewrite_atomic_field_read(rewrite, in);
     th_type *slot = nullptr;
