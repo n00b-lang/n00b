@@ -7115,6 +7115,30 @@ scope_has_lexical_lifetime(parse_scope_t *scope)
     return false;
 }
 
+// The binding kind (`const`, `let` or `var`) and storage class the variable
+// declaration around `node` spells; false when `node` is in none.
+static bool
+declared_binding_kind(parse_grammar_t *grammar, parse_tree_t *node,
+                      parse_sym_mutability_t *mutability, bool *threaded)
+{
+    parse_tree_t *declaration = parse_tree_parent(node);
+    while (declaration && !NT_IS(grammar, declaration, "variable-decl"))
+        declaration = parse_tree_parent(declaration);
+    parse_tree_t *prefix = CHILD_NT(grammar, declaration,
+                                    "declaration-prefix");
+    if (!prefix) return false;
+    core_string_t spelling = first_token_text(
+        CHILD_NT(grammar, prefix, "binding-kind"));
+    *mutability = core_string_eq(spelling, CORE_STRING_STATIC("const"))
+        ? PARSE_SYM_CONST
+        : core_string_eq(spelling, CORE_STRING_STATIC("let"))
+            ? PARSE_SYM_IMMUTABLE : PARSE_SYM_MUTABLE;
+    *threaded = core_string_eq(
+        first_token_text(CHILD_NT(grammar, prefix, "storage-class")),
+        CORE_STRING_STATIC("thread"));
+    return true;
+}
+
 static void
 apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
                    parse_sym_mutability_t mutability, bool threaded)
@@ -7166,6 +7190,17 @@ apply_declaration_defaults(parse_visit_t *visit)
     if (declared && declared->is_field
         && in_private_fields(visit->grammar, visit->node))
         declared->visibility = CORE_STRING_STATIC("private");
+    // A module variable's binding kind is known once it is declared: an
+    // import cycle can expand a package's whole-module export before the
+    // module's own walk reaches the declaration, and whether a variable is
+    // exported by default depends on it being `const`.
+    parse_sym_mutability_t mutability;
+    bool threaded;
+    if (declared && declared->kind == PARSE_SYM_VARIABLE
+        && NT_IS(visit->grammar, visit->node, "sym-decl")
+        && declared_binding_kind(visit->grammar, visit->node, &mutability,
+                                 &threaded))
+        declared->mutability = mutability;
 }
 
 void
@@ -7296,26 +7331,12 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         n00bb_internal_error(annotations->diagnostics,
             annotations->diagnostic_unit, link_source_location(visit->node),
             "resolving names", "could not record the binding definition site");
-    if (NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern) {
-        parse_tree_t *declaration = parse_tree_parent(visit->node);
-        while (declaration && !NT_IS(visit->grammar, declaration,
-                                    "variable-decl"))
-            declaration = parse_tree_parent(declaration);
-        parse_tree_t *prefix = CHILD_NT(visit->grammar, declaration,
-                                        "declaration-prefix");
-        if (prefix) {
-            parse_tree_t *kind = CHILD_NT(visit->grammar, prefix,
-                                          "binding-kind");
-            parse_tree_t *storage = CHILD_NT(visit->grammar, prefix,
-                                             "storage-class");
-            core_string_t spelling = first_token_text(kind);
-            parse_sym_mutability_t mutability =
-                core_string_eq(spelling, CORE_STRING_STATIC("const"))
-                    ? PARSE_SYM_CONST
-                    : core_string_eq(spelling, CORE_STRING_STATIC("let"))
-                        ? PARSE_SYM_IMMUTABLE : PARSE_SYM_MUTABLE;
-            bool threaded = core_string_eq(first_token_text(storage),
-                                           CORE_STRING_STATIC("thread"));
+    parse_sym_mutability_t mutability = PARSE_SYM_MUTABLE;
+    bool threaded = false;
+    if ((NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern)
+        && declared_binding_kind(visit->grammar, visit->node, &mutability,
+                                 &threaded)) {
+        {
             apply_decl_binding(visit->grammar, visit->node,
                                mutability, threaded);
             parse_sym_entry_t *symbol = declared;
