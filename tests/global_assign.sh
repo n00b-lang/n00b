@@ -49,3 +49,11 @@ for at in 3:28:.*length\ is\ 2 11:13:.*length\ is\ 2 12:32:.*length\ is\ 5 \
     reported lengths "lengths.n:$at, but it is stored where the declared size is 4"
 done
 test "$(grep -c 'declared size is' "$tmp/lengths.log")" = 5
+
+# A record literal and field assignments, on a local and on another
+# module's variable.
+rejected fields
+for at in 7:50:.*length\ is\ 2 8:20:.*length\ is\ 4 9:27:.*length\ is\ 1; do
+    reported fields "fields.n:$at, but it is stored where the declared size is 3"
+done
+test "$(grep -c 'declared size is' "$tmp/fields.log")" = 3

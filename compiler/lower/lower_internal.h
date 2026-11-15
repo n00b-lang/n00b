@@ -2034,6 +2034,9 @@ bool
 validate_frozen_writes(n00bb_link_analysis_t *analysis);
 
 bool
+check_field_array_lengths(n00bb_link_analysis_t *analysis);
+
+bool
 place_unit_allocations(n00bb_link_analysis_t *analysis);
 
 bool

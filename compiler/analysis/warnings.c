@@ -1579,6 +1579,118 @@ validate_assert_side_effects(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+// The declared length of field `name` of `record`, when the field is an
+// array with a fixed size.
+static bool
+field_declared_length(n00bb_link_analysis_t *analysis, th_type *record,
+                      core_string_t name, uint64_t *length)
+{
+    parse_scope_t *scope = record
+        ? record_scope_for_type(analysis, record, nullptr) : nullptr;
+    for (parse_sym_entry_t *field = scope ? scope->first_in_scope : nullptr;
+         field; field = field->next_in_scope) {
+        if (!field->is_field || !core_string_eq(field->name, name)) continue;
+        ir_shape_t *shape = parse_sym_binding(field,
+            CORE_STRING_STATIC("ir.array-shape"));
+        ir_shape_extent_t extent;
+        if (!shape || !ir_shape_rank(shape)
+            || !ir_shape_extent(shape, 0, &extent)
+            || extent.kind != IR_SHAPE_EXTENT_STATIC) return false;
+        *length = extent.static_value;
+        return true;
+    }
+    return false;
+}
+
+// Reports an array literal stored into field `name` of `record` whose
+// length differs from the field's declared size.
+static bool
+field_literal_fits(n00bb_link_analysis_t *analysis,
+                   core_translation_unit_t *unit, th_type *record,
+                   core_string_t name, const ir_value_t *value)
+{
+    const ir_instr_t *literal = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    ir_aggregate_form_t form;
+    uint64_t declared = 0;
+    if (!literal || literal->op != IR_OP_AGGREGATE
+        || !ir_instr_aggregate_form(literal, &form)
+        || form != IR_AGGREGATE_ELEMENTS
+        || !field_declared_length(analysis, record, name, &declared)
+        || literal->n_operands == declared) return true;
+    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                 N00B_DIAG_ARRAY_LENGTH_DIFFERS,
+                 n00bb_span_location(literal->span),
+                 N00B_TEXT_ARRAY_HAS_N_ELEMENTS_NEEDS_M,
+                 N00BB_ARGS(ARG_NUMBER(literal->n_operands),
+                            ARG_NUMBER(declared), ARG_NUMBER(1)));
+    return false;
+}
+
+// Array literals stored into fixed-size array fields, by a field
+// assignment or in a record literal, must have the field's length. Lowering
+// can't tell which field a write reaches before types are solved, so this
+// runs after.
+bool
+check_field_array_lengths(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *module = state && !state->interface_module
+            ? state->ir_module : nullptr;
+        th_ctx *types = module ? ir_module_types(module) : nullptr;
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+                ir_block_t *block = function->blocks[b];
+                for (uint32_t i = 0; i < block->n_instrs; i++) {
+                    ir_instr_t *in = block->instrs[i];
+                    if (in->op == IR_OP_STORE && in->n_operands == 2) {
+                        ir_value_t *address = ir_operand_value(
+                            &in->operands[0]);
+                        const ir_instr_t *field = address
+                            && address->kind == IR_VAL_INSTR
+                            ? address->def : nullptr;
+                        ir_value_t *base = field && field->op == IR_OP_FIELD
+                            && field->n_operands == 2
+                            && field->operands[1].kind == IR_OPD_NAME
+                            ? ir_operand_value(&field->operands[0]) : nullptr;
+                        if (base)
+                            ok &= field_literal_fits(analysis, unit,
+                                th_ind_referent(th_resolve(base->type)),
+                                field->operands[1].name,
+                                ir_operand_value(&in->operands[1]));
+                        continue;
+                    }
+                    if (in->op != IR_OP_AGGREGATE || !in->dest
+                        || !ir_annot_get(&in->annots,
+                                         N00BB_RECORD_LITERAL_KEY)) continue;
+                    // A record literal's values are in the order of the
+                    // record's definition.
+                    th_type *definition = th_resolve(in->dest->type);
+                    if (th_kind_of(definition) != TH_RECORD) {
+                        definition = th_type_definition(types,
+                                                        in->dest->type);
+                        definition = definition ? th_resolve(definition)
+                                                : nullptr;
+                    }
+                    if (!definition || th_kind_of(definition) != TH_RECORD
+                        || th_record_len(definition) != in->n_operands)
+                        continue;
+                    for (uint32_t m = 0; m < in->n_operands; m++)
+                        ok &= field_literal_fits(analysis, unit,
+                            in->dest->type,
+                            th_record_member(definition, m)->name,
+                            ir_operand_value(&in->operands[m]));
+                }
+            }
+        }
+    }
+    return ok;
+}
+
 bool
 place_unit_allocations(n00bb_link_analysis_t *analysis)
 {
