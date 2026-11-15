@@ -116,17 +116,27 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
     if (!value || !n00bb_attach_expression_shape(context, visit->grammar,
             source, value))
         return false;
+    // A size known only at runtime keeps the array a reference: assigning
+    // it rebinds. Only a size known at compile time fixes the storage.
+    bool fixed = true;
+    for (uint32_t d = 0; fixed && d < ir_shape_rank(required); d++) {
+        ir_shape_extent_t extent;
+        fixed = ir_shape_extent(required, d, &extent)
+            && extent.kind == IR_SHAPE_EXTENT_STATIC;
+    }
     // A local that isn't addressed holds its array by value, so rebinding
     // it can't be told from copying into it.
-    ir_value_t *local_address = local
+    ir_value_t *local_address = local && fixed
         ? ir_lower_local_address(context, local) : nullptr;
     if (local && !local_address)
         return n00bb_emit_local_write(context, local, value, span);
     if (!n00bb_emit_sequence_shape_check(context, value, required, span))
         return false;
-    if (local_address || address)
+    if (local_address || (address && fixed))
         return n00bb_emit_fixed_array_store(context,
             local_address ? local_address : address, value, true, span);
+    if (address)
+        return n00bb_emit_indirect_write(context, address, value, span);
     // Types are solved after lowering: the store's constraint is what gives
     // the value (an array literal, say) the global's declared type, so the
     // value's type can still be open here.
