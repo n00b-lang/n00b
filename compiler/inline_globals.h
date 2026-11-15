@@ -28,7 +28,8 @@ n00bb_inline_global_count(ir_module_t *module, const ir_global_t *global)
     if ((machine.class != IR_CLASS_SINT && machine.class != IR_CLASS_UINT
          && machine.class != IR_CLASS_FLOAT)
         || (machine.width != 8 && machine.width != 16
-            && machine.width != 32 && machine.width != 64)) return 0;
+            && machine.width != 32 && machine.width != 64
+            && machine.width != 128)) return 0;
     ir_shape_extent_t extent;
     if (!global->shape || ir_shape_rank(global->shape) != 1
         || !ir_shape_extent(global->shape, 0, &extent)

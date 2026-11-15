@@ -1355,6 +1355,20 @@ n00bb_abi_storage_rows_build(
         size_t byte_length = (size_t)(bits / 8 + (bits % 8 != 0));
         uint64_t inline_count = is_array && kind != N00B_ABI_STORAGE_TLS
             ? n00bb_inline_global_count(runtime, global) : 0;
+        // The elements start 16 bytes in, after the array value, so the
+        // storage is aligned for them too.
+        const ir_final_layout_t *element_layout = inline_count
+            ? ir_layout_final_visible(runtime,
+                th_resolve(th_seq_elem(th_resolve(global->type))),
+                ir_module_target(runtime)) : nullptr;
+        if (inline_count && (!element_layout
+                || !element_layout->alignment_bytes
+                || element_layout->alignment_bytes > 16)) {
+            valid = false;
+            break;
+        }
+        if (element_layout && element_layout->alignment_bytes > alignment)
+            alignment = element_layout->alignment_bytes;
         // A thread variable's array, and an inline global's, keeps its
         // elements after the array value, in the variable's own storage.
         bool elements_follow = is_array

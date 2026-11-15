@@ -18,6 +18,9 @@ const hex: Array[byte][4] = [0x30, 0x31, 0x41, 0x46]
 var weights: Array[f64][3] = [0.5, 1.5, 2.5]
 var zeros: Array[i16][6]
 var counted: Array[u32][3]
+# 16-byte elements: the storage is aligned for them.
+var tiny: u8 = 7
+var wide: Array[u128][2] = [1, 340282366920938463463374607431768211455]
 
 func count_at_comptime() -> nil {
     var i: uint = 0
@@ -53,4 +56,7 @@ func main() -> nil {
     let copy = computed
     computed = [9, 9, 9, 9, 9]
     require copy[4] == 16 and computed[4] == 9
+    require wide[1] == 340282366920938463463374607431768211455
+    wide[0] = wide[0] + 1
+    require wide[0] == 2 and tiny == 7
 }
