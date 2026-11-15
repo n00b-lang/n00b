@@ -662,7 +662,8 @@ func effect_paths_check() {
     require !__function_writes(ref dict_store, "key")
     require __function_reads(ref list_size, "items.__value.count")
     require !__function_reads(ref list_size, "items.__value.items")
-    require __function_writes(ref effects_random, "buffer.__value[]")
+    // `modify` passes the caller's place: its first `__value` is that place.
+    require __function_writes(ref effects_random, "buffer.__value.__value[]")
     require __function_has_effect(ref shout, "may_output")
     require !__function_has_effect(ref shout, "may_input")
     require __function_has_effect(ref effects_random, "reads_random")
@@ -1583,7 +1584,9 @@ func callback_failure_check() {
     var initial: Fail_State
     initial.count = 0
     try {
-        require run_fail_counter(initial)! == 2
+        # The handler's `modify` state is the callback's own: the failed
+        # call's update (-1) stays, so the next call counts from there.
+        require run_fail_counter(initial)! == 1
     } fail(err) {
         require false
     }

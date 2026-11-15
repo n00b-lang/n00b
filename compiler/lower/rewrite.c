@@ -492,18 +492,7 @@ n00bb_rewrite_return(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                      n00bb_sink_fn visit)
 {
     th_type *type = th_resolve(rewrite->context.function->type);
-    uint32_t outputs = 0;
-    for (size_t i = 0; i < th_func_nparams(type); i++)
-        outputs += th_mode_produces_output(th_func_param(type, i)->mode);
-    uint32_t at = in->n_operands > outputs ? 1 : 0;
-    bool ok = !at || visit(rewrite, in, 0,
-                                           th_func_ret(type));
-    for (size_t i = 0; ok && i < th_func_nparams(type); i++) {
-        const th_param *param = th_func_param(type, i);
-        if (th_mode_produces_output(param->mode) && at < in->n_operands)
-            ok = visit(rewrite, in, at++, param->type);
-    }
-    return ok;
+    return !in->n_operands || visit(rewrite, in, 0, th_func_ret(type));
 }
 
 static bool
@@ -1051,6 +1040,32 @@ n00bb_rewrite_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
         ? field->dest : nullptr;
 }
 
+// The address a by-reference operand passes for a value that is no place
+// the caller writes back: a temporary holding the value. Writes through it
+// are not seen by the caller.
+static ir_value_t *
+n00bb_rewrite_temporary_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
+                              ir_span_t span)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    char buffer[48];
+    ir_local_t *local = value ? ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_receiver_%llu",
+                          (unsigned long long)context->next_value_id++),
+        value->type) : nullptr;
+    if (local) local->synthetic = true;
+    ir_instr_t *copy = local
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    ir_instr_t *take = copy && ir_instr_set_dest_local(copy, local)
+            && ir_instr_operand_value(copy, value)
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+        : nullptr;
+    return take && ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_place_"),
+            th_ind(ir_module_types(context->module), 0, local->type))
+        && ir_instr_operand_local(take, local) ? take->dest : nullptr;
+}
+
 static ir_value_t *
 n00bb_rewrite_sequence(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                        core_string_t method)
@@ -1197,8 +1212,7 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
         th_mode mode = th_func_param(signature, p)->mode;
         ok = value ? ir_instr_operand_value(in, value)
             : ir_func_parameter_is_optional(function, p)
-                && th_mode_is_input_only(mode) ? ir_instr_operand_missing(in)
-            : mode == TH_OUT && ir_instr_operand_out(in);
+                && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
     }
     for (uint32_t k = 0; ok && k < count - positional; k++)
         ok = used[k] || ir_instr_operand_named(in, named[k].named.name,
@@ -1349,13 +1363,12 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             ir_instr_use_added(in, 1);
         }
     }
-    bool write_back = ir_annot_get(&in->annots, N00BB_WRITE_BACK_KEY);
-    ir_value_t *place = self && th_mode_produces_output(self->mode)
-        && write_back
+    bool by_reference = self && th_mode_by_reference(self->mode)
+        && in->operands[1].kind == IR_OPD_VALUE
+        && ir_annot_get(&in->annots, N00BB_WRITE_BACK_KEY);
+    ir_value_t *place = by_reference
         ? n00bb_rewrite_place(rewrite, receiver, in->span) : nullptr;
-    if (write_back && self && th_mode_produces_output(self->mode) && !place)
-        return false;
-    th_type *receiver_type = receiver->type;
+    if (by_reference && !place) return false;
     in->op = IR_OP_CALL;
     in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = callee};
     ir_instr_use_added(in, 0);
@@ -1402,27 +1415,26 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
          && p < th_func_nparams(signature); p++) {
         th_mode mode = th_func_param(signature, p)->mode;
         bool padded = ir_func_parameter_is_optional(function, p)
-                && th_mode_is_input_only(mode)
-            ? ir_instr_operand_missing(in)
-            : mode == TH_OUT && ir_instr_operand_out(in);
+            && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
         if (!padded) return false;
     }
-    core_list_t(n00bb_rewrite_value_ptr_t) places =
-        core_list_new(n00bb_rewrite_value_ptr_t);
-    core_list_t(n00bb_rewrite_value_ptr_t) values =
-        core_list_new(n00bb_rewrite_value_ptr_t);
-    uint32_t outputs = 0;
+    // Each `out` or `modify` operand passes the address of the place its
+    // value was read from. The receiver of a call whose result is not
+    // written back may be no place at all; it is passed through a
+    // temporary.
     bool written = true;
     for (uint32_t p = 0; written && th_kind_of(signature) == TH_FUNCTION
          && p < th_func_nparams(signature) && p + 1 < in->n_operands; p++) {
         th_mode mode = th_func_param(signature, p)->mode;
-        if (!th_mode_produces_output(mode)) continue;
         ir_operand_t *operand = &in->operands[p + 1];
-        ir_value_t *value = operand->kind == IR_OPD_VALUE
-            ? operand->value : nullptr;
-        ir_value_t *target = p == 0 ? place
-            : value ? n00bb_rewrite_place(rewrite, value, in->span) : nullptr;
-        if (value && !target && p > 0) {
+        if (!th_mode_by_reference(mode) || operand->kind != IR_OPD_VALUE)
+            continue;
+        ir_value_t *value = operand->value;
+        ir_value_t *target = p == 0
+            ? place ? place
+                    : n00bb_rewrite_temporary_place(rewrite, value, in->span)
+            : n00bb_rewrite_place(rewrite, value, in->span);
+        if (value && !target) {
             core_string_t name = describe_parameter_target(mode, symbol,
                 function->params[p]->name);
             n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
@@ -1432,39 +1444,13 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             core_free(name.data);
             written = false;
         }
-        if (target) {
-            core_list_push(places, target);
-            core_list_push(values, value);
-            core_list_push(values, (ir_value_t *)(uintptr_t)outputs);
-        }
-        outputs++;
+        if (!target) continue;
+        operand->value = target;
+        ir_instr_use_added(in, p + 1);
     }
-    if (!written) {
-        core_list_free(places);
-        core_list_free(values);
-        return true;
-    }
-    bool ok = n00bb_rewrite_splice(rewrite, in)
+    if (!written) return true;
+    return n00bb_rewrite_splice(rewrite, in)
         && n00bb_rewrite_arguments(rewrite, in, n00bb_rewrite_operand);
-    for (size_t i = 0; ok && i < places.len; i++) {
-        ir_value_t *value = values.data[2 * i];
-        uint32_t index = (uint32_t)(uintptr_t)values.data[2 * i + 1];
-        th_type *type = value ? value->type : receiver_type;
-        ir_instr_t *output = ir_lower_emit_instruction(context,
-            IR_OP_CALL_OUTPUT, in->span);
-        ir_instr_t *store = output && ir_lower_set_temp_dest(context, output,
-                CORE_STRING_STATIC("__n00bb_updated_"), type)
-            && ir_instr_operand_value(output, in->dest)
-            && ir_instr_operand_uint(output, index)
-            ? ir_lower_emit_instruction(context, IR_OP_STORE, in->span)
-            : nullptr;
-        ok = store && ir_instr_operand_value(store, places.data[i])
-            && ir_instr_operand_value(store, output->dest);
-    }
-    ok = ok && (!places.len || n00bb_rewrite_splice_after(rewrite, in));
-    core_list_free(places);
-    core_list_free(values);
-    return ok;
 }
 
 static bool
@@ -1527,6 +1513,21 @@ n00bb_rewrite_assign_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             : value;
         ok = arguments[o] != nullptr;
     }
+    // The dispatch yields the updated receiver, which the assignment stores
+    // back. A `modify` receiver is passed as the address of a temporary
+    // holding it, and the update is read from there after the call.
+    ir_value_t *receiver = nullptr;
+    for (uint32_t o = 0; ok && o < count && o < th_func_nparams(signature);
+         o++) {
+        if (!th_mode_by_reference(th_func_param(signature, o)->mode))
+            continue;
+        ir_value_t *address = n00bb_rewrite_temporary_place(rewrite,
+                                                            arguments[o],
+                                                            in->span);
+        if (!o && address) receiver = address;
+        arguments[o] = address;
+        ok = address != nullptr;
+    }
     ir_instr_t *call = ok
         ? ir_lower_emit_instruction(context, IR_OP_CALL, in->span) : nullptr;
     ok = call && ir_lower_set_temp_dest(context, call,
@@ -1535,19 +1536,13 @@ n00bb_rewrite_assign_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     for (uint32_t o = 0; ok && o < count; o++)
         ok = ir_instr_operand_value(call, arguments[o]);
     ok = ok && ir_instr_set_call_signature(call, function->type);
-    if (ok && th_func_nparams(signature)
-        && !th_mode_produces_output(th_func_param(signature, 0)->mode))
+    if (ok && !receiver)
         return n00bb_erase_unchanged_writebacks(rewrite, in)
             && n00bb_rewrite_replace(rewrite, in,
                                      ir_operand_value(&in->operands[1]));
-    ir_instr_t *output = ok
-        ? ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT, in->span)
-        : nullptr;
-    return output && ir_lower_set_temp_dest(context, output,
-            CORE_STRING_STATIC("__n00bb_updated_"), in->dest->type)
-        && ir_instr_operand_value(output, call->dest)
-        && ir_instr_operand_uint(output, 0)
-        && n00bb_rewrite_replace(rewrite, in, output->dest);
+    ir_value_t *updated = ok ? n00bb_emit_indirect_read(context, receiver,
+        th_ind_referent(receiver->type), in->span) : nullptr;
+    return updated && n00bb_rewrite_replace(rewrite, in, updated);
 }
 
 static bool
@@ -1618,9 +1613,14 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         return false;
     const th_param *self = th_kind_of(resolved) == TH_FUNCTION
         && th_func_nparams(resolved) ? th_func_param(resolved, 0) : nullptr;
-    ir_value_t *place = self && th_mode_produces_output(self->mode)
+    bool by_reference = self && th_mode_by_reference(self->mode)
+        && in->operands[1].kind == IR_OPD_VALUE;
+    ir_value_t *place = by_reference
         && ir_annot_get(&in->annots, N00BB_WRITE_BACK_KEY)
         ? n00bb_rewrite_place(rewrite, receiver, in->span) : nullptr;
+    if (by_reference && !place)
+        place = n00bb_rewrite_temporary_place(rewrite, receiver, in->span);
+    if (by_reference && !place) return false;
     ir_instr_t *selection = requirement
         ? ir_lower_emit_instruction(context, IR_OP_TRAIT_METHOD, in->span)
         : nullptr;
@@ -1652,24 +1652,29 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         return core_diagnostics_failed(
             core_translation_unit_diagnostics(rewrite->unit));
     if (!ir_instr_set_call_signature(in, signature)) return false;
+    // `out` and `modify` operands pass the address of their place: the
+    // receiver's was found above, before the method was selected from it.
     for (uint32_t o = 1; o < in->n_operands
          && o <= th_func_nparams(resolved); o++) {
-        th_type *formal = th_func_param(resolved, o - 1)->type;
-        if (in->operands[o].kind == IR_OPD_VALUE
-            && th_is_closed(types, formal)
-            && !n00bb_rewrite_operand(rewrite, in, o, formal)) return false;
+        const th_param *formal = th_func_param(resolved, o - 1);
+        if (in->operands[o].kind != IR_OPD_VALUE) continue;
+        if (th_mode_by_reference(formal->mode)) {
+            ir_value_t *value = in->operands[o].value;
+            ir_value_t *address = o == 1 ? place
+                : n00bb_rewrite_place(rewrite, value, in->span);
+            if (!address)
+                address = n00bb_rewrite_temporary_place(rewrite, value,
+                                                        in->span);
+            if (!address) return false;
+            in->operands[o].value = address;
+            ir_instr_use_added(in, o);
+            continue;
+        }
+        if (th_is_closed(types, formal->type)
+            && !n00bb_rewrite_operand(rewrite, in, o, formal->type))
+            return false;
     }
-    if (!place) return true;
-    ir_instr_t *output = ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT,
-                                                   in->span);
-    ir_instr_t *store = output && ir_lower_set_temp_dest(context, output,
-            CORE_STRING_STATIC("__n00bb_updated_"), receiver->type)
-        && ir_instr_operand_value(output, in->dest)
-        && ir_instr_operand_uint(output, 0)
-        ? ir_lower_emit_instruction(context, IR_OP_STORE, in->span) : nullptr;
-    return store && ir_instr_operand_value(store, place)
-        && ir_instr_operand_value(store, output->dest)
-        && n00bb_rewrite_splice_after(rewrite, in);
+    return n00bb_rewrite_splice(rewrite, in);
 }
 
 static bool
@@ -2925,6 +2930,10 @@ static bool
 n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
 {
     bool erased = rewrite->abandoned.len > 0;
+    // A read can be abandoned more than once (the same read of a `modify`
+    // parameter feeding several element accesses); it is erased once.
+    core_dict_t gone;
+    core_dict_init(&gone, nullptr, nullptr);
     while (erased) {
         erased = false;
         core_dict_t used;
@@ -2935,13 +2944,16 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
             ir_instr_t *def = value ? value->def : nullptr;
             bool pure_copy = def && def->op == IR_OP_COPY
                 && def->dest_kind != IR_DEST_LOCAL;
-            if (!def || !def->n_operands || core_dict_contains(&used, value)
+            if (!def || !def->n_operands || core_dict_contains(&gone, def)
+                || core_dict_contains(&used, value)
                 || (def->op != IR_OP_LOAD && def->op != IR_OP_EXTRACT
                     && def->op != IR_OP_FIELD && !pure_copy))
                 continue;
             ir_value_t *source = ir_operand_value(&def->operands[0]);
+            core_dict_put(&gone, def, def);
             if (!ir_instr_erase(def)) {
                 core_dict_free(&used);
+                core_dict_free(&gone);
                 return false;
             }
             rewrite->abandoned.data[i] = source;
@@ -2949,6 +2961,7 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
         }
         core_dict_free(&used);
     }
+    core_dict_free(&gone);
     return true;
 }
 

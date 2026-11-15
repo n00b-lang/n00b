@@ -49,20 +49,6 @@ n00bb_format_name(char *buffer, size_t size, const char *format, ...)
     return core_string_borrow(buffer, length);
 }
 
-void
-n00bb_order_copyouts(core_list_t(n00bb_copyout_t) *copyouts)
-{
-    for (size_t i = 1; i < copyouts->len; i++) {
-        n00bb_copyout_t item = copyouts->data[i];
-        size_t j = i;
-        while (j && copyouts->data[j - 1].output_index > item.output_index) {
-            copyouts->data[j] = copyouts->data[j - 1];
-            j--;
-        }
-        copyouts->data[j] = item;
-    }
-}
-
 th_type *
 n00bb_node_type(ir_lower_context_t *context, parse_tree_t *node)
 {
@@ -150,17 +136,6 @@ n00bb_dispatch(ir_lower_context_t *context, core_string_t method,
     return result;
 }
 
-bool
-n00bb_add_iteration_backedge(n00bb_loop_frame_t *frame,
-                              ir_block_t *predecessor)
-{
-    return !frame || !frame->is_container
-        || (frame->iteration_cursor_phi && frame->iteration_cursor_value
-            && predecessor
-            && ir_instr_operand_phi_arm(frame->iteration_cursor_phi,
-                                        predecessor,
-                                        frame->iteration_cursor_value));
-}
 
 ir_module_t *
 unit_module(n00bb_tu_state_t *state)
@@ -615,7 +590,7 @@ report_unwritable_output(ir_lower_context_t *context,
     core_string_t target = describe_parameter_target(mode, callee, parameter);
     ir_span_t span = lower_span_for_tree(context, argument);
     if (variable && variable->kind == PARSE_SYM_PARAM
-        && !(variable->has_mode && th_mode_produces_output(variable->mode))) {
+        && !(variable->has_mode && th_mode_by_reference(variable->mode))) {
         th_mode own = variable->has_mode ? variable->mode : TH_IN;
         lower_report(context, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, span,
             N00B_TEXT_PARAMETER_CANNOT_BE_PASSED,
@@ -1063,7 +1038,6 @@ n00bb_emit_indirect_write(ir_lower_context_t *context, ir_value_t *address,
 
 ir_instr_t *
 n00bb_emit_success_return(ir_lower_context_t *context, ir_value_t *result,
-                          const core_list_t(n00bb_copyout_t) *copyouts,
                           ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
@@ -1079,27 +1053,9 @@ n00bb_emit_success_return(ir_lower_context_t *context, ir_value_t *result,
         result = n00bb_emit_local_read(context, result_local, span);
         if (!result) return nullptr;
     }
-    core_list_t(n00bb_ir_value_ptr_t) values =
-        core_list_new(n00bb_ir_value_ptr_t);
-    for (size_t i = 0; i < copyouts->len; i++) {
-        ir_value_t *value = n00bb_emit_local_read(context,
-            copyouts->data[i].local, span);
-        if (!value || !lower || (value->def && !ir_annot_set(
-                lower->ir_context, &value->def->annots, (ir_annot_t){
-                    .key = CORE_STRING_STATIC("ir.copyout_read"),
-                    .kind = IR_ANNOT_BOOL, .b = true}))) {
-            core_list_free(values);
-            return nullptr;
-        }
-        core_list_push(values, value);
-    }
-
     ir_instr_t *ret = ir_lower_emit_terminator(context, IR_OP_RETURN, span);
-    bool emitted = ret && (!result || ir_instr_operand_value(ret, result));
-    for (size_t i = 0; emitted && i < values.len; i++)
-        emitted = ir_instr_operand_value(ret, values.data[i]);
-    core_list_free(values);
-    if (!emitted) return nullptr;
+    if (!ret || (result && !ir_instr_operand_value(ret, result)))
+        return nullptr;
     if (result) n00bb_rewrite_later(context, ret);
     return ret;
 }

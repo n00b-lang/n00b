@@ -338,6 +338,19 @@ path_parameter_bit(const ir_func_t *function, const ir_spath_t *path)
         ? parameter_bit(function->params[path->param]) : UINT64_MAX;
 }
 
+// Whether `path` is rooted at an `out` or `modify` parameter: one whose
+// value is the Ref to its caller's place.
+static bool
+by_reference_path(const ir_func_t *function, const ir_spath_t *path)
+{
+    th_type *signature = function->type ? th_resolve(function->type)
+                                        : nullptr;
+    return path->root == IR_SPLACE_PARAM && signature
+        && th_kind_of(signature) == TH_FUNCTION
+        && path->param < th_func_nparams(signature)
+        && th_mode_by_reference(th_func_param(signature, path->param)->mode);
+}
+
 static void
 add_source(uint64_t *from, const ir_func_t *function, const ir_spath_t *path)
 {
@@ -421,6 +434,11 @@ derive_stores(const ir_func_t *function, const ir_summary_t *summary,
                 if (to->root == IR_SPLACE_PARAM
                     && from->root == IR_SPLACE_PARAM
                     && from->param == to->param) continue;
+                if (by_reference_path(function, to)) {
+                    add_source(out->stored, function, from);
+                    out->stored_into |= path_parameter_bit(function, to);
+                    continue;
+                }
                 add_source(out->escapes, function, from);
                 if (leak) add_source(out->leaks, function, from);
                 escaped |= from->root == IR_SPLACE_HEAP;
@@ -576,6 +594,68 @@ track(window_t *window, ir_value_t *value)
 }
 
 static bool
+flow_bit(uint64_t bits, uint32_t parameter)
+{
+    return parameter >= 64 ? bits == UINT64_MAX : (bits >> parameter) & 1;
+}
+
+// Whether `call` may store a tracked argument into a caller place passed
+// to an `out` or `modify` parameter.
+static bool
+stores_tracked_by_reference(window_t *window, const ir_instr_t *call,
+                            const n00bb_flow_t *effects)
+{
+    if (!effects || effects->opaque || !effects->stored_into) return false;
+    for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
+        uint32_t index = 0;
+        if (tracked_index(window, ir_call_argument(call, p).value, &index)
+            && flow_bit(effects->stored[N00BB_FLOW_SELF], p)) return true;
+    }
+    return false;
+}
+
+// The caller local whose address is passed as by-reference argument `p`,
+// or nullptr when the place is anything else.
+static ir_local_t *
+reference_local(const ir_instr_t *call, uint32_t p)
+{
+    const ir_value_t *place = ir_call_argument(call, p).value;
+    if (!place || place->kind != IR_VAL_INSTR || !place->def
+        || place->def->op != IR_OP_ADDRESS_OF || !place->def->n_operands)
+        return nullptr;
+    return ir_operand_local(&place->def->operands[0]);
+}
+
+static bool
+window_has_local(const window_t *window, const ir_local_t *local)
+{
+    for (uint32_t l = 0; l < window->local_count; l++)
+        if (window->locals[l] == local) return true;
+    return false;
+}
+
+// A view stored through a by-reference argument lives in the caller's
+// place: track the local it lands in, so the slice spans its uses.
+static bool
+track_reference_stores(window_t *window, const ir_instr_t *call,
+                       bool *changed)
+{
+    const n00bb_flow_t *effects = call_effects(window->analysis, call);
+    if (!stores_tracked_by_reference(window, call, effects)) return true;
+    for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
+        if (!flow_bit(effects->stored_into, p)) continue;
+        ir_local_t *local = reference_local(call, p);
+        if (!local || window_has_local(window, local)) continue;
+        if (window->local_count
+            >= sizeof(window->locals) / sizeof(*window->locals))
+            return false;
+        window->locals[window->local_count++] = local;
+        *changed = true;
+    }
+    return true;
+}
+
+static bool
 output_carries_param(const ir_summary_t *summary, uint8_t output,
                      uint32_t param)
 {
@@ -658,6 +738,10 @@ collect_tracked(window_t *window)
                     ok = track(window, copy->dest)
                         && (!source || track(window, source));
                     changed = true;
+                    continue;
+                }
+                if (is_call(copy)) {
+                    ok = track_reference_stores(window, copy, &changed);
                     continue;
                 }
                 if (copy->op != IR_OP_COPY || copy->n_operands != 1) continue;
@@ -986,6 +1070,11 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
             || keeps_parameter(effects->leaks, p))
             keep(walk);
     }
+    if (stores_tracked_by_reference(window, instruction, effects))
+        for (uint32_t p = 0; p < ir_call_argument_count(instruction); p++)
+            if (flow_bit(effects->stored_into, p)
+                && !window_has_local(window, reference_local(instruction, p)))
+                keep(walk);
     return true;
 }
 

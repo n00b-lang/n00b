@@ -130,6 +130,17 @@ step_eq(core_string_t a, core_string_t b)
         && a.data[0] == b.data[0] && !memcmp(a.data, b.data, a.u8_bytes);
 }
 
+// How deep `path` reaches below the place it names. A pointer parameter's
+// place is the object it refers to, so the step through the pointer to that
+// object is not below it.
+static uint32_t
+object_depth(const ir_spath_t *path)
+{
+    return path->root == IR_SPLACE_PARAM && path->depth
+            && step_eq(path->steps[0], value_step)
+        ? path->depth - 1 : path->depth;
+}
+
 static bool
 named_root(ir_splace_kind_t root)
 {

@@ -1636,20 +1636,6 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                                               span)
             || !ir_value_set_shape(value, return_shape)))
         value = nullptr;
-    for (size_t i = 0; value && lower
-            && i < lower->pending_call_copyouts.len; i++) {
-        n00bb_pending_copyouts_t *pending =
-            &lower->pending_call_copyouts.data[i];
-        if (pending->outcome != outcome) continue;
-        for (size_t c = 0; value && c < pending->items.len; c++)
-            value = n00bb_emit_call_copyout(context,
-                &pending->items.data[c], value, span)
-                ? value : nullptr;
-        core_list_free(pending->items);
-        pending->items = core_list_new(n00bb_copyout_t);
-        pending->outcome = nullptr;
-        break;
-    }
     if (!value || !ir_lower_set_node_value(context, visit->node, value))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                                     "could not extract the successful call value");

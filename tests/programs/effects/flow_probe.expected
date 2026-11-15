@@ -17,15 +17,16 @@ flow_probe.via_array: (int) -> int
   output result data[x] control[]
 flow_probe.split: (modify Pair, int, int) -> int
   effects none
-  writes p.a
-  writes p.b
-  output result data[x] control[]
-  output result 1 data[x y] control[]
+  reads+writes p.__value.a
+  writes p.__value.b
+  output result data[p.__value.a x] control[]
+  output p.__value.a data[x] control[]
+  output p.__value.b data[y] control[]
 flow_probe.set_a: (modify Pair, int) -> nil
   effects none
-  writes p.a
+  writes p.__value.a
   output result data[] control[]
-  output result 1 data[p.b x] control[]
+  output p.__value.a data[x] control[]
 flow_probe.heap_fields: (int, int) -> int
   effects may_trap may_allocate may_collect allocates_direct
   traps bounds
@@ -36,23 +37,21 @@ flow_probe.heap_overwrite: (int, int) -> int
   output result data[x y] control[]
 flow_probe.param_fields: (modify Array[Pair], int, int) -> int
   effects may_trap
-  reads arr.__value[]
-  reads+writes arr.__value[].a
-  writes arr.__value[].b
-  reads arr
+  reads arr.__value
+  reads arr.__value.__value[]
+  reads+writes arr.__value.__value[].a
+  writes arr.__value.__value[].b
   traps bounds
-  output result data[arr.__value[].a x] control[]
-  output result 1 data[arr] control[]
-  output arr.__value[].a data[x] control[]
-  output arr.__value[].b data[y] control[]
+  output result data[arr.__value.__value[].a x] control[]
+  output arr.__value.__value[].a data[x] control[]
+  output arr.__value.__value[].b data[y] control[]
 flow_probe.put: (modify Array[int], int) -> nil
   effects may_trap
-  writes arr.__value[]
-  reads arr
+  reads arr.__value
+  writes arr.__value.__value[]
   traps bounds
   output result data[] control[]
-  output result 1 data[arr] control[]
-  output arr.__value[] data[x] control[]
+  output arr.__value.__value[] data[x] control[]
 flow_probe.caller: (int) -> int
   effects may_trap may_allocate may_collect allocates_direct
   traps bounds

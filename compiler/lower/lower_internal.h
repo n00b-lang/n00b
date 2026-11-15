@@ -292,8 +292,8 @@ typedef struct {
     parse_sym_entry_t *iterator_symbol;
     parse_tree_t *iteration_source;
     n00bb_iteration_plan_t *iteration_plan;
-    ir_instr_t *iteration_cursor_phi;
-    ir_value_t *iteration_cursor_value;
+    // The cursor lives in a local: `__next` takes it by reference.
+    ir_local_t *iteration_cursor;
     core_list_t(parse_sym_entry_ptr_t) iteration_bindings;
     void *binding_checkpoint;
     bool cleanup_active;
@@ -463,20 +463,24 @@ typedef struct {
 
 core_list_decl(n00bb_final_frame_t);
 
+// A place passed to an `out` or `modify` parameter. `symbol`, `local` and
+// `global` name it for the check that one call is not given the same place
+// twice. A place with no address (an element reached through its
+// container's accessors) is passed as the address of `temporary`, which is
+// written back to `index_target` once the call returns or fails.
 typedef struct {
     parse_sym_entry_t *symbol;
     ir_local_t *local;
     ir_value_t *global;
-    ir_value_t *address;
     parse_grammar_t *grammar;
     parse_tree_t *site_node;
     parse_tree_t *index_target;
     parse_tree_t *source_node;
     ir_shape_t *required_shape;
-    size_t output_index;
-} n00bb_copyout_t;
+    ir_local_t *temporary;
+} n00bb_reference_argument_t;
 
-core_list_decl(n00bb_copyout_t);
+core_list_decl(n00bb_reference_argument_t);
 
 typedef struct {
     parse_sym_entry_t *symbol;
@@ -489,15 +493,6 @@ typedef struct {
 
 core_list_decl(n00bb_default_param_t);
 
-typedef struct {
-    ir_value_t *outcome;
-    core_list_t(n00bb_copyout_t) items;
-} n00bb_pending_copyouts_t;
-
-core_list_decl(n00bb_pending_copyouts_t);
-
-void
-n00bb_order_copyouts(core_list_t(n00bb_copyout_t) *copyouts);
 
 typedef struct {
     parse_tree_t *node;
@@ -556,8 +551,6 @@ struct n00bb_lower_context {
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
     size_t final_base;
-    core_list_t(n00bb_copyout_t) parameters_to_copy_out;
-    core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
@@ -579,10 +572,6 @@ ir_value_t *
 n00bb_dispatch(ir_lower_context_t *context, core_string_t method,
                ir_value_t *const *operands, size_t count,
                th_type *result_type, ir_span_t span);
-
-bool
-n00bb_add_iteration_backedge(n00bb_loop_frame_t *frame,
-                              ir_block_t *predecessor);
 
 ir_module_t *
 unit_module(n00bb_tu_state_t *state);
@@ -765,7 +754,6 @@ n00bb_emit_indirect_write(ir_lower_context_t *context, ir_value_t *address,
 
 ir_instr_t *
 n00bb_emit_success_return(ir_lower_context_t *context, ir_value_t *result,
-                          const core_list_t(n00bb_copyout_t) *copyouts,
                           ir_span_t span);
 
 th_type *
@@ -1126,11 +1114,6 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       th_type *result_type, ir_span_t span, void *state);
 
 bool
-n00bb_emit_call_copyout(ir_lower_context_t *context,
-                        const n00bb_copyout_t *copyout,
-                        ir_value_t *successful_result, ir_span_t span);
-
-bool
 n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                            parse_tree_t *exit_node, uint64_t stop_order,
                            n00bb_try_frame_t *handler, bool success,
@@ -1203,9 +1186,8 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis);
 
 ir_value_t *
 n00bb_emit_iteration_call(ir_lower_context_t *context, core_string_t method,
-                          ir_value_t *receiver, th_mode receiver_mode,
-                          th_type *return_type, ir_value_t **copyout_value,
-                          parse_tree_t *source);
+                          ir_value_t *receiver, bool write_back,
+                          th_type *return_type, parse_tree_t *source);
 
 bool
 n00bb_emit_iteration_cleanup(ir_lower_context_t *context,

@@ -2,25 +2,20 @@
 
 ir_value_t *
 n00bb_emit_iteration_call(ir_lower_context_t *context, core_string_t method,
-                          ir_value_t *receiver, th_mode receiver_mode,
-                          th_type *return_type, ir_value_t **copyout_value,
-                          parse_tree_t *source)
+                          ir_value_t *receiver, bool write_back,
+                          th_type *return_type, parse_tree_t *source)
 {
     ir_span_t span = lower_span_for_tree(context, source);
+    n00bb_lower_context_t *lower = context->user;
     ir_value_t *result = receiver && return_type
         ? n00bb_dispatch(context, method, &receiver, 1, return_type, span)
         : nullptr;
-    if (!result || receiver_mode != TH_INOUT || !copyout_value)
-        return result;
-    ir_instr_t *output = ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT,
-                                                   span);
-    if (!output || !ir_lower_set_temp_dest(context, output,
-            CORE_STRING_STATIC("__n00bb_updated_"), receiver->type)
-        || !ir_instr_operand_value(output, result)
-        || !ir_instr_operand_uint(output, 0))
-        return nullptr;
-    *copyout_value = output->dest;
-    return result;
+    // A `modify` receiver is passed by the place it was read from.
+    return result && (!write_back || ir_annot_set(lower->ir_context,
+            &result->def->annots, (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
+                                               .kind = IR_ANNOT_BOOL,
+                                               .b = true}))
+        ? result : nullptr;
 }
 
 bool
@@ -29,12 +24,14 @@ n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
                              parse_tree_t *source)
 {
     if (!frame || !frame->cleanup_active || !frame->iteration_plan
-        || !frame->iteration_cursor_value) return true;
+        || !frame->iteration_cursor) return true;
+    ir_span_t span = lower_span_for_tree(context, source);
     th_type *nil_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil"));
-    return nil_type
+    ir_value_t *cursor = n00bb_emit_local_read(context,
+                                               frame->iteration_cursor, span);
+    return nil_type && cursor
         && n00bb_emit_iteration_call(context, CORE_STRING_STATIC("__cleanup"),
-            frame->iteration_cursor_value, TH_CONSUME, nil_type,
-            nullptr, source) != nullptr;
+            cursor, false, nil_type, source) != nullptr;
 }
 
 ir_value_t *

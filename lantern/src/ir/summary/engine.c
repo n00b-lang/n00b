@@ -203,6 +203,8 @@ pt_free(pt_t *pt)
     if (pt->entry.built) {
         core_list_free(pt->entry.cells);
         core_dict_free(&pt->entry.gens);
+        core_dict_foreach(&pt->entry.call_gens, gen) core_free(gen->value);
+        core_dict_free(&pt->entry.call_gens);
         core_free(pt->entry.in);
         core_free(pt->entry.state);
     }

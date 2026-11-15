@@ -225,15 +225,11 @@ bool ir_func_parameter_is_optional(const ir_func_t *function, uint32_t index)
 ir_value_t *ir_func_param_value(const ir_func_t *function, uint32_t index)
 {
     if (!function || !function->type
-        || index >= th_func_nparams(function->type)
-        || th_func_param(function->type, index)->mode == TH_OUT)
+        || index >= th_func_nparams(function->type))
         return nullptr;
-    uint32_t value = 0;
-    for (uint32_t i = 0; i < index; i++)
-        value += th_func_param(function->type, i)->mode != TH_OUT;
     for (uint32_t p = 0, k = 0; p < function->n_params; p++) {
         ir_value_t *param = function->params[p];
-        if (!param->is_keyword && !param->is_rest && k++ == value)
+        if (!param->is_keyword && !param->is_rest && k++ == index)
             return param;
     }
     return nullptr;

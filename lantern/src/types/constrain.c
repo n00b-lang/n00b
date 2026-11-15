@@ -182,7 +182,9 @@ static th_type *call_result(gen_t *g, ir_instr_t *call)
                                        ? th_func_rest(type)
                                        : nullptr;
 
-        if (operand->kind == IR_OPD_FRESH) {
+        if (operand->kind == IR_OPD_FRESH
+            || (formal && th_mode_by_reference(formal->mode)
+                && operand->kind == IR_OPD_VALUE)) {
             actual = referent(actual);
         }
         if (formal && actual) {
@@ -267,28 +269,11 @@ static void dispatch_constraints(gen_t *g, ir_instr_t *in)
 
 static void return_constraints(gen_t *g, ir_instr_t *in)
 {
-    th_type *type    = g->function->type;
-    uint32_t outputs = 0;
-
-    for (size_t i = 0; i < th_func_nparams(type); i++) {
-        const th_param *param = th_func_param(type, i);
-
-        outputs += param && th_mode_produces_output(param->mode);
-    }
-
-    uint32_t at = in->n_operands > outputs ? 1 : 0;
+    th_type *type = g->function->type;
 
     ty_unify(g->s, th_func_ret(type),
-             at ? operand_type(in, 0) : th_nil(g->types), why_of(in, 3));
-    for (size_t i = 0; i < th_func_nparams(type); i++) {
-        const th_param *param = th_func_param(type, i);
-
-        if (param && th_mode_produces_output(param->mode)
-            && at < in->n_operands) {
-            ty_unify(g->s, param->type, operand_type(in, at++),
-                     why_of(in, 3));
-        }
-    }
+             in->n_operands ? operand_type(in, 0) : th_nil(g->types),
+             why_of(in, 3));
 }
 
 static th_type *phi_result(gen_t *g, ir_instr_t *in)

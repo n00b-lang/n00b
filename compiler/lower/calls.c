@@ -26,66 +26,168 @@ static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
                          th_type *result_type, ir_span_t span);
 
-static bool
-n00bb_emit_copyout_write(ir_lower_context_t *context,
-                         const n00bb_copyout_t *copyout,
-                         ir_value_t *value, ir_span_t span)
+static ir_value_t *
+n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
+                   ir_value_t *storage, th_type *type, ir_span_t span)
 {
-    if (!n00bb_emit_sequence_shape_check(context, value,
-            copyout->required_shape, span)) return false;
-    if (copyout->index_target)
-        return n00bb_lower_index_store_at(context, copyout->grammar,
-            copyout->site_node, copyout->index_target,
-            copyout->source_node, value);
-    if (copyout->local)
-        return n00bb_emit_local_write(context, copyout->local, value, span);
-    if (copyout->address)
-        return n00bb_emit_indirect_write(context, copyout->address, value,
-                                         span);
-    ir_shape_t *target_shape = ir_value_shape(copyout->global);
-    if (!target_shape && copyout->symbol)
-        target_shape = parse_sym_binding(copyout->symbol,
-            CORE_STRING_STATIC("ir.array-shape"));
-    if (target_shape != copyout->required_shape
-        && !n00bb_emit_sequence_shape_check(context, value, target_shape,
-                                             span)) return false;
-    if (!copyout->global || copyout->global->kind != IR_VAL_GLOBAL
-        || !copyout->global->global) return false;
-    ir_instr_t *store = ir_lower_emit_instruction(context, IR_OP_GLOBAL_STORE,
-                                                  span);
-    if (!store || !ir_instr_set_binding_initialization(store, true)
-        || !ir_instr_operand_value(store, copyout->global)
-        || !ir_instr_operand_value(store, value)) return false;
-    return true;
-}
-
-static th_type *
-n00bb_copyout_type(ir_lower_context_t *context,
-                   const n00bb_copyout_t *copyout)
-{
-    return copyout->local ? copyout->local->type
-        : copyout->global ? copyout->global->type
-        : copyout->address ? th_ind_referent(copyout->address->type)
-        : copyout->index_target
-            ? n00bb_node_type(context, copyout->index_target) : nullptr;
-}
-
-bool
-n00bb_emit_call_copyout(ir_lower_context_t *context,
-                        const n00bb_copyout_t *copyout,
-                        ir_value_t *successful_result, ir_span_t span)
-{
-    ir_instr_t *projection = n00bb_copyout_type(context, copyout)
-            && successful_result
-        ? ir_lower_emit_instruction(context, IR_OP_CALL_OUTPUT, span)
+    th_type *address_type = type
+        ? th_ind(ir_module_types(context->module), 0, type) : nullptr;
+    ir_instr_t *take = address_type
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
         : nullptr;
-    if (!projection || !ir_lower_set_temp_dest(context, projection,
-        CORE_STRING_STATIC("__n00bb_copyout_"),
-        th_var(ir_module_types(context->module)))
-        || !ir_instr_operand_value(projection, successful_result)
-        || !ir_instr_operand_uint(projection, copyout->output_index))
-        return false;
-    return n00bb_emit_copyout_write(context, copyout, projection->dest, span);
+    return take && ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_reference_"), address_type)
+        && (local ? ir_instr_operand_local(take, local)
+                  : ir_instr_operand_value(take, storage))
+        ? take->dest : nullptr;
+}
+
+// Whether an element passed by reference has an address of its own: one
+// in an array, as opposed to one a container reaches through `__read` and
+// `__write`.
+static bool
+n00bb_element_has_address(ir_lower_context_t *context,
+                          parse_grammar_t *grammar, parse_tree_t *index)
+{
+    parse_tree_t *receiver = index && core_tree_num_children(index)
+        ? core_tree_child(index, 0) : nullptr;
+    th_type *container = receiver ? n00bb_node_type(context, receiver)
+                                  : nullptr;
+    container = container ? th_resolve(container) : nullptr;
+    if (!container) return false;
+    if (th_kind_of(container) == TH_INDIRECTION) {
+        uint8_t attrs = 0;
+        return th_ind_attrs(container, &attrs) && (attrs & TH_INDEXABLE);
+    }
+    if (th_kind_of(container) != TH_SEQUENCE) return false;
+    parse_tree_t *inner = n00bb_index_expression_node(grammar, receiver);
+    return !inner || n00bb_element_has_address(context, grammar, inner);
+}
+
+// Lowers the place `argument` names for an `out` or `modify` parameter and
+// returns its address, which the call passes. A place with no address is
+// passed through a temporary that n00bb_write_back_references stores back.
+// Returns nullptr after reporting when the argument is not a writable
+// place, or is a place the call already receives.
+static ir_value_t *
+n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
+                         parse_tree_t *argument, th_mode mode,
+                         parse_sym_entry_t *callee,
+                         core_string_t parameter_name,
+                         ir_shape_t *required_shape,
+                         core_list_t(n00bb_reference_argument_t) *places)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_span_t span = lower_span_for_tree(context, argument);
+    n00bb_out_location_t location = n00bb_out_argument_location(context,
+        visit->grammar, argument);
+    if (!location.type) {
+        report_unwritable_output(context, visit->grammar, argument, mode,
+                                 callee, parameter_name);
+        return nullptr;
+    }
+    for (size_t previous = 0; location.symbol && location.lvalue
+            && previous < places->len; previous++) {
+        n00bb_reference_argument_t *prior = &places->data[previous];
+        if (prior->symbol != location.symbol || prior->local != location.local
+            || prior->global != location.global) continue;
+        lower_report(context, N00B_DIAG_SAME_OUTPUT_TWICE, span,
+            N00B_TEXT_IS_PASSED_TO_MORE_THAN,
+            N00BB_ARGS(ARG_TEXT(location.symbol->name),
+                       ARG_TEXT(callee->name)));
+        lower_secondary(context,
+            lower_span_for_tree(context, prior->source_node),
+            N00B_TEXT_FIRST_PASSED_HERE, N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_PASS_A_SEPARATE_VARIABLE_TO,
+            N00BB_NO_ARGS);
+        return nullptr;
+    }
+    n00bb_reference_argument_t place = {
+        .symbol = location.symbol,
+        .local = location.local,
+        .global = location.global,
+        .grammar = visit->grammar,
+        .site_node = visit->node,
+        .index_target = location.index_target,
+        .source_node = argument,
+        .required_shape = required_shape,
+    };
+    ir_value_t *address = location.address;
+    if (!address && location.lvalue)
+        address = location.symbol
+            ? ir_lower_bound_address(context, location.symbol) : nullptr;
+    if (!address && location.local)
+        address = n00bb_take_address(context, location.local, nullptr,
+                                     location.local->type, span);
+    else if (!address && location.global
+             && location.global->kind == IR_VAL_GLOBAL)
+        address = n00bb_take_address(context, nullptr, location.global,
+                                     location.global->type, span);
+    else if (!address && location.index_target
+             && n00bb_element_has_address(context, visit->grammar,
+                    location.index_target)) {
+        lower->reference_write = true;
+        address = n00bb_addressable_expression_address(context,
+            visit->grammar, lower->unit, argument, span);
+        lower->reference_write = false;
+    }
+    if (address) {
+        if (mode == TH_INOUT && required_shape) {
+            ir_value_t *current = n00bb_emit_indirect_read(context, address,
+                th_ind_referent(th_resolve(address->type)), span);
+            if (!current || !n00bb_emit_sequence_shape_check(context,
+                    current, required_shape, span)) return nullptr;
+        }
+        core_list_push(*places, place);
+        return address;
+    }
+    if (!location.index_target) {
+        report_unwritable_output(context, visit->grammar, argument, mode,
+                                 callee, parameter_name);
+        return nullptr;
+    }
+    char buffer[48];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_reference_%llu",
+        (unsigned long long)context->next_value_id++);
+    place.temporary = ir_local_add(context->function, name, location.type);
+    if (!place.temporary) return nullptr;
+    place.temporary->synthetic = true;
+    if (mode == TH_INOUT) {
+        ir_value_t *initial = n00bb_out_location_read(context, argument,
+                                                      &location, span);
+        if (!initial
+            || !n00bb_emit_sequence_shape_check(context, initial,
+                                                required_shape, span)
+            || !n00bb_emit_local_write(context, place.temporary, initial,
+                                       span)) return nullptr;
+    }
+    address = n00bb_take_address(context, place.temporary, nullptr,
+                                 location.type, span);
+    if (address) core_list_push(*places, place);
+    return address;
+}
+
+// Stores each temporary passed for a place with no address back to that
+// place. Runs right after the call, so the callee's writes reach the place
+// whether the call succeeded or failed.
+static bool
+n00bb_write_back_references(ir_lower_context_t *context,
+                            const core_list_t(n00bb_reference_argument_t)
+                                *places, ir_span_t span)
+{
+    for (size_t i = 0; i < places->len; i++) {
+        const n00bb_reference_argument_t *place = &places->data[i];
+        if (!place->temporary) continue;
+        ir_value_t *value = n00bb_emit_local_read(context, place->temporary,
+                                                  span);
+        if (!value || !n00bb_emit_sequence_shape_check(context, value,
+                place->required_shape, span)
+            || !n00bb_lower_index_store_at(context, place->grammar,
+                place->site_node, place->index_target, place->source_node,
+                value)) return false;
+    }
+    return true;
 }
 
 static ir_value_t *
@@ -921,8 +1023,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_new(n00bb_ir_value_ptr_t);
     core_list_t(n00bb_call_actual_t) actuals =
         core_list_new(n00bb_call_actual_t);
-    core_list_t(n00bb_copyout_t) copyouts =
-        core_list_new(n00bb_copyout_t);
+    core_list_t(n00bb_reference_argument_t) references =
+        core_list_new(n00bb_reference_argument_t);
     size_t parameter_count = th_func_nparams(signature);
     parse_tree_t *formal_params = callable_formal_parameters(visit->grammar,
                                                              symbol);
@@ -966,7 +1068,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(actuals);
         core_list_free(values);
         core_list_free(rest_values);
-        core_list_free(copyouts);
+        core_list_free(references);
         core_free(argument_by_parameter);
         core_free(value_by_parameter);
         core_free(provided);
@@ -978,7 +1080,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(actuals);
         core_list_free(values);
         core_list_free(rest_values);
-        core_list_free(copyouts);
+        core_list_free(references);
         core_free(argument_by_parameter);
         core_free(value_by_parameter);
         core_free(provided);
@@ -1052,76 +1154,20 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             value_by_parameter[index] = value;
             continue;
         }
-        if (mode != TH_OUT && mode != TH_INOUT) {
+        if (!th_mode_by_reference(mode)) {
             collected = false;
             break;
         }
-        n00bb_out_location_t location = n00bb_out_argument_location(context,
-            visit->grammar, argument);
-        parse_sym_entry_t *arg_symbol = location.symbol;
-        ir_local_t *target = location.local;
-        ir_value_t *global = location.global;
-        ir_value_t *address = location.address;
-        parse_tree_t *index_target = location.index_target;
-        parse_tree_t *lvalue = location.lvalue;
-        th_type *target_type = location.type;
-        if (!target_type) {
-            core_string_t parameter_name = {0};
-            function_parameter_info(visit->grammar, symbol, formal_params,
-                index, nullptr, &parameter_name, nullptr, nullptr);
-            report_unwritable_output(context, visit->grammar, argument,
-                mode, symbol, parameter_name);
+        core_string_t parameter_name = {0};
+        function_parameter_info(visit->grammar, symbol, formal_params,
+            index, nullptr, &parameter_name, nullptr, nullptr);
+        value_by_parameter[index] = n00bb_reference_argument(context, visit,
+            argument, mode, symbol, parameter_name, required_shape,
+            &references);
+        if (!value_by_parameter[index]) {
             collected = false;
             break;
         }
-        parse_tree_t *aliased = nullptr;
-        for (size_t previous = 0; arg_symbol && lvalue
-                && previous < copyouts.len; previous++)
-            if (copyouts.data[previous].symbol == arg_symbol
-                && copyouts.data[previous].local == target
-                && copyouts.data[previous].global == global)
-                aliased = copyouts.data[previous].source_node;
-        if (aliased) {
-            lower_report(context, N00B_DIAG_SAME_OUTPUT_TWICE,
-                lower_span_for_tree(context, argument),
-                N00B_TEXT_IS_PASSED_TO_MORE_THAN,
-                N00BB_ARGS(ARG_TEXT(arg_symbol->name), ARG_TEXT(symbol->name)));
-            lower_secondary(context, lower_span_for_tree(context, aliased),
-                N00B_TEXT_FIRST_PASSED_HERE,
-                N00BB_NO_ARGS);
-            lower_help(context, N00B_TEXT_PASS_A_SEPARATE_VARIABLE_TO,
-                N00BB_NO_ARGS);
-            collected = false;
-            break;
-        }
-        ir_value_t *initial = nullptr;
-        if (mode == TH_INOUT) {
-            initial = n00bb_out_location_read(context, argument, &location,
-                                              span);
-            if (!initial || !n00bb_emit_sequence_shape_check(context,
-                    initial, required_shape,
-                    lower_span_for_tree(context, argument))) {
-                collected = false;
-                break;
-            }
-        }
-        value_by_parameter[index] = initial;
-        size_t output_index = 0;
-        for (size_t previous = 0; previous < index; previous++) {
-            const th_param *prior = th_func_param(signature, previous);
-            if (prior && th_mode_produces_output(prior->mode)) output_index++;
-        }
-        core_list_push(copyouts,
-            ((n00bb_copyout_t){.symbol = arg_symbol,
-                               .local = target,
-                               .global = global,
-                               .address = address,
-                               .grammar = visit->grammar,
-                               .site_node = visit->node,
-                               .index_target = index_target,
-                               .source_node = argument,
-                               .output_index = output_index,
-                               .required_shape = required_shape}));
     }
     for (size_t i = 0; collected && i < parameter_count; i++) {
         parse_sym_entry_t *formal = nullptr;
@@ -1177,9 +1223,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             }
             core_list_push(values, value);
         }
-        else if (mode == TH_OUT) {
-            core_list_push(values, nullptr);
-        }
         else if (value_by_parameter[i]) {
             ir_shape_t *required_shape = formal
                 ? parse_sym_binding(formal,
@@ -1225,7 +1268,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     core_free(provided);
     if (!collected) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_failed_after(context, span, CORE_STRING_STATIC(
             "call arguments could not be prepared for their parameter "
             "modes"));
@@ -1233,7 +1276,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (native_builtin && core_string_eq(symbol->name,
             CORE_STRING_STATIC("__array_length"))) {
         bool valid = values.len == 1 && values.data[0]
-            && !copyouts.len;
+            && !references.len;
         ir_instr_t *length = valid
             ? ir_lower_emit_instruction(context, IR_OP_SEQUENCE_LENGTH, span)
             : nullptr;
@@ -1242,7 +1285,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                        th_func_ret(th_resolve(signature)))
             && ir_instr_operand_value(length, values.data[0]);
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, length->dest}
             : lower_builtin_failure(context, valid, span, symbol,
@@ -1271,21 +1314,21 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 || (!option_builtin
                     && th_option_item(th_resolve(values.data[i]->type))));
     if (open_intrinsic) {
-        ir_value_t *placeholder = copyouts.len ? nullptr
+        ir_value_t *placeholder = references.len ? nullptr
             : n00bb_intrinsic_placeholder(context, symbol,
                   intrinsic_contract,
                   values.data, values.len, call_result_type, span);
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return placeholder ? (ir_lower_result_t){IR_LOWER_VALUE, placeholder}
             : lower_internal(context, span,
                 "could not lower an open intrinsic call");
     }
     if (intrinsic) {
         ir_lower_result_t emitted = n00bb_emit_intrinsic(context, symbol,
-            values.data, values.len, copyouts.len, call_result_type, span);
+            values.data, values.len, references.len, call_result_type, span);
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return emitted;
     }
     ir_instr_t *instruction = ir_lower_emit_instruction(context,
@@ -1304,9 +1347,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             && function_parameter_info(visit->grammar, symbol,
                 formal_params, i, nullptr, nullptr,&flags, &mode);
         emitted = known && (flags & 1u) && th_mode_is_input_only(mode)
-            ? ir_instr_operand_missing(instruction)
-            : known && mode == TH_OUT
-                ? ir_instr_operand_out(instruction) : false;
+            && ir_instr_operand_missing(instruction);
     }
     if (emitted) {
         core_list_t(th_param) call_params = core_list_new(th_param);
@@ -1361,7 +1402,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     if (!emitted) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_internal(context, span,
                            "could not emit the function call");
     }
@@ -1369,7 +1410,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (query && !annotate_effects_query(lower->ir_context, instruction,
                                          query_subject, query_name)) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_internal(context, span,
                            "could not annotate the call's effects");
     }
@@ -1378,14 +1419,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!has_error && !n00bb_emit_sequence_shape_check(context,
             instruction->dest, return_shape, span)) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_internal(context, span,
                            "could not emit the function return shape check");
     }
     if (!has_error && return_shape
         && !ir_value_set_shape(instruction->dest, return_shape)) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_internal(context, span,
                            "could not attach the checked function return shape");
     }
@@ -1394,29 +1435,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!n00bb_set_reference_access(lower->ir_context, instruction->dest,
                                     call_result_type)) {
         core_list_free(values);
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_internal(context, span,
             "could not attach the resolved return alias");
     }
     core_list_free(values);
-    n00bb_order_copyouts(&copyouts);
-    if (copyouts.len) {
-        if (has_error) {
-            core_list_push(lower->pending_call_copyouts,
-                ((n00bb_pending_copyouts_t){instruction->dest, copyouts}));
-        }
-        else {
-            bool copied = true;
-            for (size_t i = 0; copied && i < copyouts.len; i++)
-                copied = n00bb_emit_call_copyout(context, &copyouts.data[i],
-                                                  instruction->dest, span);
-            core_list_free(copyouts);
-            if (!copied)
-                return lower_internal(context, span,
-                                   "could not copy out call parameters");
-        }
-    }
-    else core_list_free(copyouts);
+    bool written = n00bb_write_back_references(context, &references, span);
+    core_list_free(references);
+    if (!written)
+        return lower_internal(context, span,
+            "could not write a by-reference temporary back to its place");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
@@ -1611,8 +1639,8 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
             N00BB_NO_ARGS);
     }
 
-    core_list_t(n00bb_copyout_t) copyouts =
-        core_list_new(n00bb_copyout_t);
+    core_list_t(n00bb_reference_argument_t) references =
+        core_list_new(n00bb_reference_argument_t);
     bool collected = true;
     for (size_t i = 1; collected && i < parameter_count; i++) {
         const th_param *parameter = th_func_param(source_type, i);
@@ -1655,62 +1683,17 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
             value_by_parameter[i] = value;
             continue;
         }
-        if (mode != TH_OUT && mode != TH_INOUT) {
+        if (!th_mode_by_reference(mode)) {
             collected = false;
             break;
         }
-        n00bb_out_location_t location = n00bb_out_argument_location(context,
-            visit->grammar, argument);
-        parse_sym_entry_t *arg_symbol = location.symbol;
-        ir_local_t *target_local = location.local;
-        ir_value_t *target_value = location.global;
-        ir_value_t *address = location.address;
-        parse_tree_t *index_target = location.index_target;
-        parse_tree_t *lvalue = location.lvalue;
-        th_type *target_type = location.type;
-        if (!target_type) {
-            collected = false;
-            break;
-        }
-        bool aliases = false;
-        for (size_t j = 0; lvalue && j < copyouts.len; j++)
-            aliases |= copyouts.data[j].symbol == arg_symbol;
-        if (aliases) {
-            collected = false;
-            break;
-        }
-        ir_value_t *initial = nullptr;
-        if (mode == TH_INOUT) {
-            initial = n00bb_out_location_read(context, argument, &location,
-                                              span);
-            if (!initial || !n00bb_emit_sequence_shape_check(context,
-                    initial, required_shape,
-                    lower_span_for_tree(context, argument))) {
-                collected = false;
-                break;
-            }
-        }
-        value_by_parameter[i] = initial;
-        size_t output_index = 1;
-        for (size_t previous = 1; previous < i; previous++) {
-            th_mode previous_mode = TH_IN;
-            if (!function_parameter_info(visit->grammar, symbol,
-                    formal_params, previous, nullptr, nullptr,
-                    nullptr, &previous_mode)) {
-                collected = false;
-                break;
-            }
-            if (th_mode_produces_output(previous_mode)) output_index++;
-        }
-        if (!collected) break;
-        core_list_push(copyouts,
-            ((n00bb_copyout_t){.symbol = arg_symbol,
-                .local = target_local, .global = target_value,
-                .address = address, .grammar = visit->grammar,
-                .site_node = visit->node, .index_target = index_target,
-                .source_node = argument,
-                .output_index = output_index,
-                .required_shape = required_shape}));
+        core_string_t parameter_name = {0};
+        function_parameter_info(visit->grammar, symbol, formal_params, i,
+            nullptr, &parameter_name, nullptr, nullptr);
+        value_by_parameter[i] = n00bb_reference_argument(context, visit,
+            argument, mode, symbol, parameter_name, required_shape,
+            &references);
+        if (!value_by_parameter[i]) collected = false;
     }
     for (size_t i = 1; collected && i < parameter_count; i++) {
         uint8_t flags = 0;
@@ -1731,8 +1714,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                 continue;
             }
         }
-        if (mode == TH_OUT) value_by_parameter[i] = nullptr;
-        else if (!value_by_parameter[i]) collected = false;
+        if (!value_by_parameter[i]) collected = false;
     }
 
     core_list_t(n00bb_ir_value_ptr_t) values =
@@ -1763,7 +1745,6 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     if (collected && object && !object_in)
         collected = n00bb_emit_indirect_write(context, allocation_address,
                                               fresh_object, span);
-    n00bb_order_copyouts(&copyouts);
     for (size_t i = 1; collected && i < parameter_count; i++)
         core_list_push(values, value_by_parameter[i]);
     if (collected && th_func_rest(source_type)) {
@@ -1814,8 +1795,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                 formal_params, parameter_index, nullptr, nullptr,
                 &flags, &mode);
         collected = known && (flags & 1u) && th_mode_is_input_only(mode)
-            ? ir_instr_operand_missing(call)
-            : known && mode == TH_OUT ? ir_instr_operand_out(call) : false;
+            && ir_instr_operand_missing(call);
     }
     core_list_t(th_param) call_params = core_list_new(th_param);
     core_list_t(th_kwparam) call_keywords = core_list_new(th_kwparam);
@@ -1862,18 +1842,15 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     core_free(provided);
     core_list_free(formals);
     if (!collected) {
-        core_list_free(copyouts);
+        core_list_free(references);
         return lower_failed_after(context, span, CORE_STRING_STATIC(
             "could not prepare the arguments or call for `__init`"));
     }
-    for (size_t i = 0; i < copyouts.len; i++)
-        if (!n00bb_emit_call_copyout(context, &copyouts.data[i], call->dest,
-                                     span)) {
-            core_list_free(copyouts);
-            return lower_internal(context, span,
-                "could not copy out constructor arguments");
-    }
-    core_list_free(copyouts);
+    bool written = n00bb_write_back_references(context, &references, span);
+    core_list_free(references);
+    if (!written)
+        return lower_internal(context, span,
+            "could not write a constructor's by-reference temporary back");
     if (direct_assignment
         && !ir_lower_finish_assignment(context, direct_assignment,
                                        visit->node))

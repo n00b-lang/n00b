@@ -384,7 +384,12 @@ recursive_object(const pt_t *pt, pt_loc_t *loc, th_type *slot)
                                                        slot))
                            : nullptr;
     if (!object) return false;
-    for (uint32_t k = 1; k <= loc->path.depth; k++) {
+    // A trailing dereference reached the slot itself (a handle held by a
+    // reference, such as a by-reference parameter's array): stepping into
+    // its object is not recursion even when the types coincide.
+    uint32_t last = loc->path.depth;
+    if (last && step_eq(loc->path.steps[last - 1], value_step)) last--;
+    for (uint32_t k = 1; k <= last; k++) {
         if (!step_eq(loc->path.steps[k - 1], value_step)) continue;
         if (!same_object_type(pt, loc_type(pt, loc, k), object)) continue;
         loc->path.flags |= IR_SPATH_DEEP;

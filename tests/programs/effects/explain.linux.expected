@@ -67,14 +67,14 @@ sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
   random          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom (70:32) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom_syscall (9:20)
   blocks          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom (70:32) -> sys.internal.os.__ffi_random___ffi_literal_6.n00b_os_gc_enter_blocking (8:5)
   panics          sys.internal.os.random.random_bytes (5:5) -> here (64:13)
-  param buffer    writer, lends
+  param buffer    writer
   detail          may_collect reinterprets
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
   random          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom (70:32) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom_syscall (9:20)
   blocks          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_6.getrandom (70:32) -> sys.internal.os.__ffi_random___ffi_literal_6.n00b_os_gc_enter_blocking (8:5)
   allocates       here (9:28)
   panics          here (14:17)
-  param value     untouched
+  param value     writer
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
   output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write (85:35) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write_syscall (9:20)

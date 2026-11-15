@@ -576,11 +576,9 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
                ir_func_address(module, adapter->target));
     size_t optional_index = 0;
     for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
-        const th_param *parameter = th_func_param(callee, i);
         bool optional = ir_func_parameter_is_optional(adapter->target,
                                                       (uint32_t)i);
-        if (parameter->mode == TH_OUT) ok = ir_instr_operand_out(call);
-        else if (optional && (missing >> optional_index & 1u))
+        if (optional && (missing >> optional_index & 1u))
             ok = ir_instr_operand_missing(call);
         else ok = ir_instr_operand_value(call, adapter->inputs[i]);
         optional_index += optional;
@@ -611,31 +609,8 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
     value = ok ? n00bb_adapter_boxed(context, value, returned) : nullptr;
     ir_instr_t *ret = value ? ir_instr_add(context->block, IR_OP_RETURN)
                             : nullptr;
-    ok = ret && (!ir_callable_returns_value(module, adapter->signature)
-                 || ir_instr_operand_value(ret, value));
-    uint64_t ordinal = 0;
-    for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
-        const th_param *parameter = th_func_param(callee, i);
-        if (!th_mode_produces_output(parameter->mode)) continue;
-        ir_instr_t *output = ir_instr_insert(context->block,
-            IR_OP_CALL_OUTPUT, ret->index);
-        ok = output && ir_lower_set_temp_dest(context, output,
-                CORE_STRING_STATIC("__n00bb_adapter_output_"),
-                parameter->type)
-            && ir_instr_operand_value(output, outcome)
-            && ir_instr_operand_uint(output, ordinal++);
-        th_type *wanted = th_func_param(adapter->signature, i)->type;
-        if (ok && th_kind_of(th_resolve(wanted)) == TH_VAR) {
-            ir_instr_t *box = ir_instr_insert(context->block, IR_OP_BOX,
-                                              ret->index);
-            ok = box && ir_lower_set_temp_dest(context, box,
-                    CORE_STRING_STATIC("__n00bb_adapter_boxed_"), wanted)
-                && ir_instr_operand_value(box, output->dest);
-            output = ok ? box : nullptr;
-        }
-        ok = ok && ir_instr_operand_value(ret, output->dest);
-    }
-    return ok;
+    return ret && (!ir_callable_returns_value(module, adapter->signature)
+                   || ir_instr_operand_value(ret, value));
 }
 
 static bool
@@ -700,7 +675,11 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
         char buffer[32];
         core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
                                                "arg%zu", i);
-        ir_value_t *value = ir_param_add(adapter, name, parameter->type);
+        // A by-reference parameter's value is a Ref to the caller's place.
+        bool by_reference = th_mode_by_reference(parameter->mode);
+        th_ctx *types = ir_module_types(adapter->owner);
+        ir_value_t *value = ir_param_add(adapter, name, by_reference
+            ? th_ind(types, 0, parameter->type) : parameter->type);
         ok = value != nullptr;
         if (ok && ir_func_parameter_is_optional(target, (uint32_t)i)) {
             ok = state.optional_count < 64
@@ -709,15 +688,16 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
             state.optional[state.optional_count++] = (uint32_t)i;
         }
         state.inputs[i] = value;
-        if (!ok || parameter->mode == TH_OUT
-            || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
+        if (!ok || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
             continue;
+        th_type *narrowed = by_reference ? th_ind(types, 0, receiver)
+                                         : receiver;
         ir_instr_t *narrow = ir_lower_emit_instruction(&context,
             IR_OP_TYPE_NARROW, IR_SPAN_UNKNOWN);
         ok = narrow && ir_lower_set_temp_dest(&context, narrow,
-                CORE_STRING_STATIC("__n00bb_adapter_self_"), receiver)
+                CORE_STRING_STATIC("__n00bb_adapter_self_"), narrowed)
             && ir_instr_operand_value(narrow, value)
-            && ir_instr_operand_type(narrow, receiver);
+            && ir_instr_operand_type(narrow, narrowed);
         if (ok) state.inputs[i] = narrow->dest;
     }
     ok = ok && n00bb_adapter_presence(&state, 0, 0);

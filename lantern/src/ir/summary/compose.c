@@ -58,7 +58,8 @@ named_place(const ir_splace_t *place)
 static uint8_t
 place_flags(const ir_spath_t *path)
 {
-    return path->depth ? path->flags & (uint8_t)~IR_SPATH_MUST : path->flags;
+    return object_depth(path) ? path->flags & (uint8_t)~IR_SPATH_MUST
+                              : path->flags;
 }
 
 // A place as a word, for the places a summary's named paths reach: the

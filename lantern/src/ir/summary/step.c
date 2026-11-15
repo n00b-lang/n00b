@@ -157,7 +157,7 @@ covers_place(const ir_spath_t *path, const ir_splace_t *place,
     }
     return same && (leaf ? steps_prefix(path->depth, path->steps,
                                         leaf->depth, leaf->steps)
-                         : !path->depth);
+                         : !object_depth(path));
 }
 
 static bool
@@ -175,6 +175,61 @@ definite_store(pt_t *pt, const ir_instr_t *in, ir_spath_t *path)
     return definite;
 }
 
+static size_t
+entry_cell(pt_entry_t *entry, ir_spath_t path)
+{
+    path.flags = 0;
+    size_t cell = 0;
+    while (cell < entry->cells.len
+           && compare_paths(&entry->cells.data[cell], &path))
+        cell++;
+    if (cell == entry->cells.len) core_list_push(entry->cells, path);
+    return cell;
+}
+
+// The places a call sets: each whole object its sole callee must write
+// through an `out` or `modify` parameter, named as the caller's place.
+static void
+entry_call_gens(pt_t *pt, const ir_instr_t *in)
+{
+    if (!is_call(in) || !sole_callee(pt, in)) return;
+    const ir_summary_t *callee = callees_of(pt, in)->callees.data[0];
+    uint64_t            cells[64];
+    size_t              count  = 0;
+    for (size_t p = 0; p < callee->paths.len && count < 64; p++) {
+        const ir_spath_t *path = &callee->paths.data[p];
+        if (path->root != IR_SPLACE_PARAM || !(path->flags & IR_SPATH_WRITE)
+            || !(path->flags & IR_SPATH_MUST_SUCCESS) || object_depth(path))
+            continue;
+        const ir_instr_t *at    = pt->at;
+        pt_set_t          items = (pt_set_t){0};
+        pt->at = in;
+        argument_items(pt, in, path->param, &items);
+        ir_spath_t mapped;
+        bool       definite = definite_path(pt, &items, &mapped);
+        core_list_free(items);
+        pt->at = at;
+        if (definite) cells[count++] = entry_cell(&pt->entry, mapped);
+    }
+    if (!count) return;
+    uint64_t *gens = core_alloc_array(uint64_t, count + 1);
+    gens[0] = count;
+    memcpy(gens + 1, cells, count * sizeof(*cells));
+    core_dict_put(&pt->entry.call_gens, (void *)in, gens);
+}
+
+static void
+entry_apply(pt_entry_t *entry, const ir_instr_t *in)
+{
+    uintptr_t cell = (uintptr_t)core_dict_get(&entry->gens, (void *)in,
+                                              nullptr);
+    if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
+    const uint64_t *calls = core_dict_get(&entry->call_gens, (void *)in,
+                                          nullptr);
+    for (uint64_t c = 0; calls && c < calls[0]; c++)
+        entry->state[calls[c + 1] / 64] |= 1ull << (calls[c + 1] % 64);
+}
+
 static void
 entry_build(pt_t *pt)
 {
@@ -183,17 +238,14 @@ entry_build(pt_t *pt)
     entry->built = true;
     entry->cells = core_list_new(ir_spath_t);
     core_dict_init(&entry->gens, nullptr, nullptr);
+    core_dict_init(&entry->call_gens, nullptr, nullptr);
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
             ir_spath_t        path;
+            entry_call_gens(pt, in);
             if (!definite_store(pt, in, &path)) continue;
-            path.flags = 0;
-            size_t cell = 0;
-            while (cell < entry->cells.len
-                   && compare_paths(&entry->cells.data[cell], &path))
-                cell++;
-            if (cell == entry->cells.len) core_list_push(entry->cells, path);
+            size_t cell = entry_cell(entry, path);
             core_dict_put(&entry->gens, (void *)in,
                           (void *)(uintptr_t)(cell + 1));
         }
@@ -210,11 +262,8 @@ entry_build(pt_t *pt)
             const ir_block_t *block = f->blocks[b];
             memcpy(entry->state, &entry->in[(size_t)b * entry->words],
                    entry->words * sizeof(uint64_t));
-            for (uint32_t i = 0; i < block->n_instrs; i++) {
-                uintptr_t cell = (uintptr_t)core_dict_get(
-                    &entry->gens, (void *)block->instrs[i], nullptr);
-                if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
-            }
+            for (uint32_t i = 0; i < block->n_instrs; i++)
+                entry_apply(entry, block->instrs[i]);
             ir_instr_t *last = block->n_instrs
                 ? block->instrs[block->n_instrs - 1] : nullptr;
             for (uint32_t s = 0; last && s < ir_succ_count(last); s++) {
@@ -241,11 +290,8 @@ written_before(pt_t *pt, const ir_instr_t *at, const ir_spath_t *read)
     if (!entry->words) return false;
     memcpy(entry->state, &entry->in[(size_t)at->block->index * entry->words],
            entry->words * sizeof(uint64_t));
-    for (uint32_t i = 0; i < at->index; i++) {
-        uintptr_t cell = (uintptr_t)core_dict_get(
-            &entry->gens, (void *)at->block->instrs[i], nullptr);
-        if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
-    }
+    for (uint32_t i = 0; i < at->index; i++)
+        entry_apply(entry, at->block->instrs[i]);
     for (size_t c = 0; c < entry->cells.len; c++) {
         const ir_spath_t *cell = &entry->cells.data[c];
         if ((entry->state[c / 64] >> (c % 64) & 1)

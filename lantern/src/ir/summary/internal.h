@@ -317,6 +317,9 @@ core_list_decl(pt_access_t);
 typedef struct {
     core_list_t(ir_spath_t) cells;
     core_dict_t             gens;
+    // Calls that must write places through `out` or `modify` arguments:
+    // each maps to a uint64_t array, a count then the cells it sets.
+    core_dict_t             call_gens;
     uint64_t               *in;
     uint64_t               *state;
     uint32_t                words;

@@ -177,7 +177,9 @@ record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
              param++)
             if (ir_summary_param_escape(callee, param)) {
                 pt_set_t items = (pt_set_t){0};
-                argument_items(pt, call, param, &items);
+                escaping_items(pt, call, callee, param,
+                               ir_summary_param_escape(callee, param),
+                               &items);
                 for (size_t i = 0; i < items.len; i++)
                     if (items.data[i].flow == PT_SAME)
                         set_add(pt, &from, deepened(&items.data[i]));

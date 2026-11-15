@@ -157,6 +157,52 @@ push_stored(void *context, ir_instr_t *from, bool exact)
     return true;
 }
 
+typedef struct {
+    frozen_walk_t     *walk;
+    const ir_value_t  *base;
+    core_string_t      field;
+} field_sources_t;
+
+// A store reaching a load of a whole record from which one field is
+// extracted: a store into another field of the same record never supplies
+// it. (A member of an `out` or `modify` parameter is read so, through the
+// parameter's reference.)
+static bool
+push_field_stored(void *context, ir_instr_t *from, bool exact)
+{
+    field_sources_t *sources = context;
+    int32_t at = from ? ir_op_address_operand(from->op) : -1;
+    const ir_value_t *address = at >= 0 && (uint32_t)at < from->n_operands
+        ? ir_operand_value(&from->operands[at]) : nullptr;
+    const ir_instr_t *field = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    if (field && field->op == IR_OP_FIELD && field->n_operands == 2
+        && field->operands[1].kind == IR_OPD_NAME
+        && ir_operand_value(&field->operands[0]) == sources->base
+        && !core_string_eq(field->operands[1].name, sources->field))
+        return true;
+    return push_stored(sources->walk, from, exact);
+}
+
+static void
+push_loaded_field(frozen_walk_t *walk, ir_instr_t *in, core_string_t field)
+{
+    int32_t address = ir_op_address_operand(in->op);
+    if (address < 0 || (uint32_t)address >= in->n_operands) return;
+    push_operand(walk, in, (uint32_t)address);
+    uint32_t access = walk->memory
+        ? ir_pdg_memory_access_of(walk->memory, in, IR_ACCESS_LOAD)
+        : UINT32_MAX;
+    field_sources_t sources = {
+        .walk = walk,
+        .base = ir_operand_value(&in->operands[address]),
+        .field = field,
+    };
+    if (access != UINT32_MAX)
+        ir_pdg_memory_load_sources(walk->memory, access, push_field_stored,
+                                   &sources);
+}
+
 static void
 push_loaded(frozen_walk_t *walk, ir_instr_t *in)
 {
@@ -265,9 +311,21 @@ produced_root(frozen_walk_t *walk, ir_instr_t *in)
     case IR_OP_FIELD:
     case IR_OP_INDEX:
     case IR_OP_OFFSET:
+    case IR_OP_EXTRACT: {
+        const ir_value_t *record = in->n_operands == 2
+                && in->operands[1].kind == IR_OPD_NAME
+            ? ir_operand_value(&in->operands[0]) : nullptr;
+        ir_instr_t *load = record && record->kind == IR_VAL_INSTR
+            && record->def && record->def->op == IR_OP_LOAD
+            ? record->def : nullptr;
+        if (load && core_dict_add(&walk->seen, (void *)record,
+                                  (void *)record))
+            push_loaded_field(walk, load, in->operands[1].name);
+        else if (!load) push_operand(walk, in, 0);
+        break;
+    }
     case IR_OP_OPTION_SOME:
     case IR_OP_OPTION_GET:
-    case IR_OP_EXTRACT:
     case IR_OP_EXTRACT_INDEX:
         push_operand(walk, in, 0);
         break;
@@ -568,6 +626,59 @@ store_target(ir_places_t *places, const ir_value_t *address)
     return out;
 }
 
+// Whether `address` lies in the place an `out` or `modify` parameter of its
+// function refers to.
+static bool
+in_reference_parameter(const ir_value_t *address)
+{
+    for (size_t depth = 0; address && depth < 64; depth++) {
+        if (address->kind == IR_VAL_PARAM) {
+            const th_param *formal = formal_of(address);
+            return formal && th_mode_by_reference(formal->mode);
+        }
+        const ir_instr_t *def = address->kind == IR_VAL_INSTR ? address->def
+                                                              : nullptr;
+        bool step = def && def->n_operands
+            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
+                || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
+                || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
+                || def->op == IR_OP_NOMINAL_CAST);
+        address = step ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return false;
+}
+
+// Whether the place an `out` or `modify` argument addresses outlives the
+// call. A local's own storage, or storage allocated for the caller (the
+// object a constructor fills), does not: what the callee stores there stays
+// with the caller, as its result would.
+static bool
+reference_place_outlives(ir_places_t *places, const ir_value_t *address)
+{
+    const ir_value_t *base = address;
+    for (size_t depth = 0; base && depth < 64; depth++) {
+        const ir_instr_t *def = base->kind == IR_VAL_INSTR ? base->def
+                                                           : nullptr;
+        if (def && (def->op == IR_OP_ADDRESS_OF || def->op == IR_OP_ALLOC
+                    || def->op == IR_OP_ALLOCA)) {
+            const ir_value_t *storage = def->op == IR_OP_ADDRESS_OF
+                    && def->n_operands
+                ? ir_operand_value(&def->operands[0]) : nullptr;
+            if (def->op != IR_OP_ADDRESS_OF
+                || (storage && storage->kind == IR_VAL_LOCAL))
+                return false;
+            break;
+        }
+        bool step = def && def->n_operands
+            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
+                || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
+                || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
+                || def->op == IR_OP_NOMINAL_CAST);
+        base = step ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return store_target(places, address).outlives;
+}
+
 static bool
 check_memory_write(n00bb_link_analysis_t *analysis,
                    core_translation_unit_t *unit, ir_func_t *function,
@@ -602,7 +713,10 @@ check_memory_write(n00bb_link_analysis_t *analysis,
         classify_place(&kept, &(ir_place_t){.kind = IR_PLACE_GLOBAL,
                                             .root = target});
     else kept = store_target(places, target);
-    if (!kept.outlives) return true;
+    // A store into the place of an `out` or `modify` parameter is the
+    // caller's to judge, as a copy-out to it was: it is checked where the
+    // call passes a place that outlives it.
+    if (!kept.outlives || in_reference_parameter(target)) return true;
     frozen_root_t root = frozen_root(analysis, function, value, false);
     if (!root.parameter && !(frozen(root) && kept.writable)) {
         const ir_value_t *array = lends_arrays(function)
@@ -689,7 +803,9 @@ merge_callee_flow(void *context, const ir_func_t *target,
         merged->flow.mutates[kind] |= flow.mutates[kind];
         merged->flow.escapes[kind] |= flow.escapes[kind];
         merged->flow.leaks[kind] |= flow.leaks[kind];
+        merged->flow.stored[kind] |= flow.stored[kind];
     }
+    merged->flow.stored_into |= flow.stored_into;
     merged->flow.opaque |= flow.opaque;
     merged->known = true;
 }
@@ -731,12 +847,24 @@ keeps_argument(th_ctx *types, const n00bb_flow_t *flow, uint32_t parameter,
 
 static bool
 check_call(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
-           ir_func_t *function, ir_instr_t *call)
+           ir_func_t *function, ir_places_t *places, ir_instr_t *call)
 {
     call_flow_t merged = {.analysis = analysis};
     bool resolved = ir_summary_call_callees(analysis->summaries, call,
                                             merge_callee_flow, &merged);
     bool opaque = !resolved || !merged.known || merged.flow.opaque;
+    // What the callee stores into the place an `out` or `modify` argument
+    // addresses escapes when that place outlives the call.
+    for (uint32_t p = 0; !opaque && merged.flow.stored_into
+         && p < ir_call_argument_count(call); p++) {
+        const ir_value_t *place = ir_call_argument(call, p).value;
+        if (!place || !((p >= 64 ? merged.flow.stored_into == UINT64_MAX
+                                 : (merged.flow.stored_into >> p) & 1))
+            || !reference_place_outlives(places, place)) continue;
+        for (int kind = 0; kind < N00BB_FLOW_KINDS; kind++)
+            merged.flow.escapes[kind] |= merged.flow.stored[kind];
+        break;
+    }
     const ir_value_t *callee = ir_call_callee(call);
     th_type *signature = callee ? callable_signature(callee->type) : nullptr;
     for (uint32_t p = 0; p < ir_call_argument_count(call); p++) {
@@ -785,7 +913,7 @@ check_function(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = function->blocks[b]->instrs[i];
             if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
-                ok = check_call(analysis, unit, function, in) && ok;
+                ok = check_call(analysis, unit, function, places, in) && ok;
             else
                 ok = check_memory_write(analysis, unit, function, places, in)
                     && ok;

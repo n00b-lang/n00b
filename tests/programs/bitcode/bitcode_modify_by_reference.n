@@ -1,0 +1,174 @@
+import sys.locks
+import sys.threads
+
+# `modify` and `out` parameters refer to the caller's place: a write through
+# one is a write to that place, seen at once, and seen even when the callee
+# then fails.
+
+record Counter {
+    count: uint
+    other: uint
+}
+
+var shared: Counter = (count = 0, other = 0)
+var lock: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
+                             nesting = 0, collector = false)
+var finished: Atomic[u64] = 0
+
+# Two threads bump a global record passed `modify`, under a lock the callee
+# takes. Copying the record in and out around the call would lose updates.
+func bump(modify c: Counter) {
+    sys.locks.mutex_lock(ref lock)
+    c.count += 1
+    sys.locks.mutex_unlock(ref lock)
+}
+
+func hammer() {
+    var i: uint = 0
+    while i < 200000 {
+        bump(shared)
+        i += 1
+    }
+    __atomic_fetch_add(ref finished, 1)
+}
+
+func race_check() {
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref hammer))
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref hammer))
+    while __atomic_load(ref finished) < 2 {
+    }
+    sys.locks.mutex_lock(ref lock)
+    let total: uint = shared.count
+    sys.locks.mutex_unlock(ref lock)
+    require total == 400000
+}
+
+# A write made before the callee fails stays made.
+func set_then_fail(modify value: int, out written: int) -> nil fail: string {
+    value = 7
+    written = 9
+    fail "after the writes"
+}
+
+func failure_check() {
+    var value: int = 1
+    var written: int = 0
+    var failed: bool = false
+    try {
+        set_then_fail(value, written)!
+    } fail(err) {
+        failed = true
+    }
+    require failed and value == 7 and written == 9
+}
+
+# An element a container reaches through accessors has no address; it is
+# passed through a temporary that is written back on success and failure.
+func add_one(modify value: int) {
+    value += 1
+}
+
+func add_then_fail(modify value: int) -> nil fail: string {
+    value += 10
+    fail "after the write"
+}
+
+func produce(out value: int) {
+    value = 42
+}
+
+func element_check() {
+    var items: List[int] = [1, 2, 3]
+    add_one(items[1])
+    require items[1] == 3
+    try {
+        add_then_fail(items[2])!
+    } fail(err) {
+        require items[2] == 13
+    }
+    require items[2] == 13
+
+    var cells: Array[int] = new[Array[int]](4)
+    add_one(cells[2])
+    add_one(cells[2])
+    try {
+        add_then_fail(cells[3])!
+    } fail(err) {
+        require cells[3] == 10
+    }
+    require cells[2] == 2 and cells[3] == 10
+}
+
+# A `modify` parameter passed on to another `modify` parameter passes the
+# same place.
+func add_two(modify value: int) {
+    add_one(value)
+    add_one(value)
+}
+
+func fill_twice(out first: int, out second: int) {
+    produce(first)
+    produce(second)
+    second += 1
+}
+
+func passing_check() {
+    var value: int = 5
+    add_two(value)
+    require value == 7
+    var first: int
+    var second: int
+    fill_twice(first, second)
+    require first == 42 and second == 43
+}
+
+# Fields, globals and packed bits are places too.
+record Pair {
+    left: int
+    right: int
+}
+
+var global_pair: Pair = (left = 1, right = 2)
+
+func flip(modify bit: bool) {
+    bit = !bit
+}
+
+func place_check() {
+    add_one(global_pair.right)
+    require global_pair.left == 1 and global_pair.right == 3
+    var pair: Pair = (left = 10, right = 20)
+    add_one(pair.left)
+    require pair.left == 11 and pair.right == 20
+    var flag: bool = false
+    flip(flag)
+    require flag
+    var bits: Array[bool] = new[Array[bool]](10)
+    flip(bits[3])
+    flip(bits[9])
+    require bits[3] and bits[9] and !bits[4]
+}
+
+# A generic callee works on the caller's place through a boxed reference.
+func replace(modify target: 'T, value: 'T) {
+    target = value
+}
+
+func generic_check() {
+    var number: int = 1
+    replace(number, 9)
+    require number == 9
+    var pair: Pair = (left = 0, right = 0)
+    replace(pair, (left = 3, right = 4))
+    require pair.left == 3 and pair.right == 4
+}
+
+race_check()
+failure_check()
+element_check()
+passing_check()
+place_check()
+generic_check()
+__fd_write(2, "ok")

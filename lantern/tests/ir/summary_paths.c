@@ -415,22 +415,18 @@ test_overwritten_fields_of_copies(void)
         "      return %w\n"
         "  }\n"
         "  func @modify(inout %v: P, %m: i32) -> nil {\n"
-        "    local $s: P\n"
         "    block entry:\n"
-        "      $s = copy %v\n"
-        "      %early: P = copy $s\n"
-        "      %at: ref[P] = address.of $s\n"
-        "      %b: ref[i32] = field %at, \"b\"\n"
+        "      %b: ref[i32] = field %v, \"b\"\n"
         "      store %b, %m\n"
-        "      %w: P = copy $s\n"
-        "      return %w\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
         "  }\n"));
     expect(&r, "a field written into a copy replaces only that field",
            S("k"), S("= v; ~.n m"));
     expect(&r, "and the same holds for a record of scalars",
            S("scalars"), S("~.a v.a; ~.b m"));
-    expect(&r, "and for a modified parameter's copy-out",
-           S("modify"), S("~.a v.a; ~.b m"));
+    expect(&r, "and a modified parameter's field is written in place",
+           S("modify"), S("s v.__value.b <~ m; w v.__value.b"));
     done(&r);
 }
 
@@ -640,8 +636,9 @@ test_fresh_construction(void)
     run_t r = load(MOD(TYPES
         "  func @init(inout %self: V, %a: ref[R]) -> void {\n"
         "    block entry:\n"
-        "      %made: V = insert %self, \"a\", %a\n"
-        "      return %made\n"
+        "      %slot: ref[ref[R]] = field %self, \"a\"\n"
+        "      store %slot, %a\n"
+        "      return\n"
         "  }\n"
         "  func @make(%p: ref[R]) -> i32 {\n"
         "    block entry:\n"
@@ -653,8 +650,8 @@ test_fresh_construction(void)
         "      %v: i32 = load %x\n"
         "      return %v\n"
         "  }\n"));
-    expect(&r, "a constructor's copy-out names what it holds", S("init"),
-           S("=1 self; =1.a a"));
+    expect(&r, "a constructor stores what it holds into its storage",
+           S("init"), S("s self.__value.a <- a; w self.__value.a"));
     expect(&r, "and the caller reads it from the constructed storage",
            S("make"), S("r p.__value.x; ~ p.__value.x"));
     done(&r);
@@ -669,13 +666,15 @@ test_nested_construction(void)
         "  type C = (inner: W, at: i32)\n\n"
         "  func @winit(inout %self: W, %items: array[ref[R]]) -> void {\n"
         "    block entry:\n"
-        "      %made: W = insert %self, \"items\", %items\n"
-        "      return %made\n"
+        "      %slot: ref[array[ref[R]]] = field %self, \"items\"\n"
+        "      store %slot, %items\n"
+        "      return\n"
         "  }\n"
         "  func @cinit(inout %self: C, %view: W) -> void {\n"
         "    block entry:\n"
-        "      %made: C = insert %self, \"inner\", %view\n"
-        "      return %made\n"
+        "      %slot: ref[W] = field %self, \"inner\"\n"
+        "      store %slot, %view\n"
+        "      return\n"
         "  }\n"
         "  func @slice(%a: array[ref[R]]) -> W {\n"
         "    block entry:\n"

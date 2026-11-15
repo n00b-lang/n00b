@@ -644,22 +644,13 @@ ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
     return th_type_definition_owner(m->ctx->types, named);
 }
 
+// A call has no outputs beyond its result: `out` and `modify` parameters
+// are passed by reference (th_mode_by_reference), so the callee writes the
+// caller's place itself. The output queries below answer accordingly.
 size_t ir_call_output_count(th_type *callable)
 {
-    callable = th_resolve(callable);
-    if (!callable || th_kind_of(callable) != TH_FUNCTION) return 0;
-    size_t output_count = 0;
-    for (size_t i = 0; i < th_func_nparams(callable); i++) {
-        const th_param *parameter = th_func_param(callable, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-    }
-    for (size_t i = 0; i < th_func_nkw(callable); i++) {
-        const th_kwparam *parameter = th_func_kw(callable, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-    }
-    const th_param *rest = th_func_rest(callable);
-    if (rest && th_mode_produces_output(rest->mode)) output_count++;
-    return output_count;
+    (void)callable;
+    return 0;
 }
 
 th_type *ir_call_function_type(const ir_instr_t *call)
@@ -703,29 +694,16 @@ const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
 
 size_t ir_call_output_param(th_type *callable, size_t output_index)
 {
-    callable = th_resolve(callable);
-    if (!callable || th_kind_of(callable) != TH_FUNCTION) return SIZE_MAX;
-    for (size_t i = 0; i < th_func_nparams(callable); i++) {
-        const th_param *parameter = th_func_param(callable, i);
-        if (parameter && th_mode_produces_output(parameter->mode)
-            && !output_index--) return i;
-    }
+    (void)callable;
+    (void)output_index;
     return SIZE_MAX;
 }
 
 size_t ir_call_param_output(th_type *callable, size_t param)
 {
-    callable = th_resolve(callable);
-    if (!callable || th_kind_of(callable) != TH_FUNCTION
-        || param >= th_func_nparams(callable)) return SIZE_MAX;
-    size_t output = 0;
-    for (size_t i = 0; i < param; i++) {
-        const th_param *parameter = th_func_param(callable, i);
-        output += parameter && th_mode_produces_output(parameter->mode);
-    }
-    const th_param *parameter = th_func_param(callable, param);
-    return parameter && th_mode_produces_output(parameter->mode) ? output
-                                                                 : SIZE_MAX;
+    (void)callable;
+    (void)param;
+    return SIZE_MAX;
 }
 
 bool ir_callable_returns_value(ir_module_t *m, th_type *callable)
@@ -744,23 +722,9 @@ size_t ir_return_output_operand(ir_module_t *m, th_type *callable,
 
 th_type *ir_call_output_type(th_type *callable, size_t output_index)
 {
-    callable = th_resolve(callable);
-    if (!callable || th_kind_of(callable) != TH_FUNCTION) return nullptr;
-    for (size_t i = 0; i < th_func_nparams(callable); i++) {
-        const th_param *parameter = th_func_param(callable, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) {
-            if (!output_index--) return parameter->type;
-        }
-    }
-    for (size_t i = 0; i < th_func_nkw(callable); i++) {
-        const th_kwparam *parameter = th_func_kw(callable, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) {
-            if (!output_index--) return parameter->type;
-        }
-    }
-    const th_param *rest = th_func_rest(callable);
-    return rest && th_mode_produces_output(rest->mode) && !output_index
-        ? rest->type : nullptr;
+    (void)callable;
+    (void)output_index;
+    return nullptr;
 }
 
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)

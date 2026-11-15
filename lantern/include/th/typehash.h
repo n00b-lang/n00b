@@ -71,7 +71,10 @@ static inline bool th_mode_is_in(th_mode mode)
     return mode == TH_IN || mode == TH_VIEW;
 }
 
-static inline bool th_mode_produces_output(th_mode mode)
+// `out` and `modify` pass the caller's place by reference: the parameter's
+// IR value is a Ref to that place, and the callee reads and writes through
+// it. No mode adds an output to the call's result.
+static inline bool th_mode_by_reference(th_mode mode)
 {
     return mode == TH_OUT || mode == TH_INOUT;
 }

@@ -311,18 +311,36 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     case IR_ARG_MISSING:
     case IR_ARG_OUT:
         return;
-    case IR_ARG_FRESH: {
-        pt_set_t address = (pt_set_t){0};
-        pt_read(pt, argument.value, &address);
-        pt_load(pt, &address, into);
-        core_list_free(address);
-        return;
-    }
     default:
+        // A fresh operand, like any by-reference one, is the address of the
+        // place the callee's parameter refers to.
         if (argument.value) pt_read(pt, argument.value, into);
         else unresolved(pt, into);
         return;
     }
+}
+
+// The items a call lets escape when its callee lets parameter `param`
+// escape. An `out` or `modify` parameter refers to the caller's place;
+// unless the callee lets that reference itself escape, only what the place
+// holds escapes, not the place.
+static void
+escaping_items(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+               uint32_t param, uint8_t escape, pt_set_t *into)
+{
+    th_type *signature = callee->function && callee->function->type
+        ? th_resolve(callee->function->type) : nullptr;
+    bool by_reference = signature && th_kind_of(signature) == TH_FUNCTION
+        && param < th_func_nparams(signature)
+        && th_mode_by_reference(th_func_param(signature, param)->mode);
+    if (!by_reference || (escape & IR_SESCAPE_ADDRESS)) {
+        argument_items(pt, call, param, into);
+        return;
+    }
+    pt_set_t address = (pt_set_t){0};
+    argument_items(pt, call, param, &address);
+    pt_load(pt, &address, into);
+    core_list_free(address);
 }
 
 static void
@@ -343,6 +361,22 @@ map_own_storage(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
     core_list_free(address);
 }
 
+// The storage a constructor fills is uninitialized when the call starts: a
+// callee path that reaches through a pointer it held then reaches nothing.
+// (The callee's own stores into what it allocated are summarized at the
+// allocations.)
+static bool
+fresh_entry_path(const ir_instr_t *call, const ir_spath_t *path)
+{
+    if (path->root != IR_SPLACE_PARAM) return false;
+    ir_call_arg_t argument = ir_call_argument(call, path->param);
+    if (argument.role != IR_ARG_FRESH) return false;
+    uint32_t skip = path->depth && step_eq(path->steps[0], value_step) ? 1
+                                                                       : 0;
+    return first_deref(path->steps + skip, path->depth - skip)
+        < path->depth - skip;
+}
+
 static void
 map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 bool inline_tail, pt_set_t *into)
@@ -351,6 +385,7 @@ map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         map_own_storage(pt, call, path, inline_tail, into);
         return;
     }
+    if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool deep = path->flags & IR_SPATH_DEEP;
@@ -557,6 +592,7 @@ static void
 map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 bool derived, pt_set_t *into)
 {
+    if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool    deep = path->flags & IR_SPATH_DEEP;
@@ -1090,9 +1126,10 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     }
     for (uint32_t param = 0;
          written.len && param < ir_call_argument_count(call); param++) {
-        if (!ir_summary_param_escape(callee, param)) continue;
+        uint8_t escape = ir_summary_param_escape(callee, param);
+        if (!escape) continue;
         pt_set_t items = (pt_set_t){0};
-        argument_items(pt, call, param, &items);
+        escaping_items(pt, call, callee, param, escape, &items);
         for (size_t w = 0; w < written.len; w++)
             pt_publish(pt, &items, &written.data[w].loc);
         core_list_free(items);
@@ -1129,6 +1166,10 @@ written_outputs(pt_t *pt, const ir_instr_t *call,
         ir_call_arg_t argument = ir_call_argument(call, param);
         if (!ir_call_argument_writes(&argument)) continue;
         uint8_t  output  = output_ordinal(call, param);
+        // A by-reference argument (fresh storage a constructor fills, say)
+        // is no output: the callee's stores through its reference say what
+        // it writes there.
+        if (!output) continue;
         pt_set_t address = (pt_set_t){0};
         pt_set_t values  = (pt_set_t){0};
         pt_address(pt, argument.value, &address);

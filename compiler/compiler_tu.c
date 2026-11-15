@@ -7379,7 +7379,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             declared->is_variadic = NT_IS(visit->grammar, visit->node,
                                                 "vargs-param");
             if (declared->has_mode
-                && (th_mode_produces_output(declared->mode)
+                && (th_mode_by_reference(declared->mode)
                     || declared->mode == TH_CONSUME))
                 declared->mutability = PARSE_SYM_MUTABLE;
             parse_sym_set_storage_duration(declared,

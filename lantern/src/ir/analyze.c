@@ -98,10 +98,7 @@ static bool analyze_operand(ir_visit_t *vi)
     if (l && !ir_local_read_earlier(vi->instr, vi->index, l)
         && ir_rd_maybe_unset(a->rd, vi->instr, l)
         && !th_zero_size(vi->func->owner->ctx->types, l->type)) {
-        ir_annot_t *copyout = ir_annot_get(&vi->instr->annots,
-            CORE_STRING_STATIC("ir.copyout_read"));
-        bool returned = vi->instr->op == IR_OP_RETURN
-            || (copyout && copyout->kind == IR_ANNOT_BOOL && copyout->b);
+        bool returned = vi->instr->op == IR_OP_RETURN;
         if (!l->synthetic || (returned && l->source_name.u8_bytes)) {
             core_string_t name = ir_local_label(l);
             ir_diag_t *dg = say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr,
