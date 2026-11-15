@@ -40,21 +40,22 @@ when target_os() == "linux" {
     }
     -]'ffi
 } else when target_os() == "windows" {
+    # The descriptor's handle is written directly: the C runtime's _write
+    # would turn each newline into CRLF on a descriptor in text mode.
     [-
     library c
     platforms x86_64-w64-windows-gnu
 
-    fn _errno() -> *c_int static per thread
-    error_channel errno per thread {
-        value _errno()
-    }
-
-    fn _write(fd: c_int, buf: in *u8, count: c_uint) -> c_int
-      error ret == -1 via errno
+    fn _get_osfhandle(fd: c_int) -> isize
+      effects input
+    fn WriteFile(handle: isize, buf: in *u8, count: u32, written: out *u32,
+                 overlapped: in ?void) -> c_int
       effects output, blocking
 
     binding {
-        name _write "c_write"
+        name WriteFile "write_file"
+        raw "_get_osfhandle"
+        raw "WriteFile"
     }
     -]'ffi
     bring chunk from internal.os.support
@@ -90,12 +91,16 @@ func write_bytes(fd: i32, at: Ref[byte], count: uint) -> uint
                     fail errno_of(failure)
                 }
             } else when target_os() == "windows" {
-                try {
-                    return cast[uint](c_write(fd, at,
-                        cast[u32](chunk(count)))!)
-                } fail(failure) {
-                    fail errno_of(failure)
+                let handle: int = get_osfhandle_raw(fd)
+                if handle == -1 {
+                    fail internal.errno.Errno.EBADF
                 }
+                var written: u32 = 0
+                if write_file_raw(handle, at, cast[u32](chunk(count)),
+                        unsafe_cast[Ref[byte]] (ref written), nil) == 0 {
+                    fail internal.errno.Errno.EIO
+                }
+                return cast[uint](written)
             } else {
                 fail internal.errno.Errno.ENOSYS
             }

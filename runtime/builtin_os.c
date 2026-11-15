@@ -1,3 +1,6 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 #include "builtin_os.h"
 #include "runtime_panic.h"
 
@@ -677,3 +680,27 @@ bool n00b_os_on_stack(const void *address, uint64_t bytes)
 {
     return os_on_stack_raw(address, bytes);
 }
+
+#if defined(__linux__) && !defined(N00B_LIBC_FREE)
+// A Linux program that links libc (for a library it calls through FFI)
+// gets the program runtime's Linux queries from libc instead.
+#include <pthread.h>
+#include <sys/auxv.h>
+
+uintptr_t n00b_linux_auxv(uintptr_t type)
+{
+    return (uintptr_t)getauxval((unsigned long)type);
+}
+
+uintptr_t n00b_linux_stack_high(uintptr_t sp)
+{
+    (void)sp;
+    pthread_attr_t attributes;
+    void *low = NULL;
+    size_t bytes = 0;
+    if (pthread_getattr_np(pthread_self(), &attributes)) return 0;
+    int failed = pthread_attr_getstack(&attributes, &low, &bytes);
+    pthread_attr_destroy(&attributes);
+    return failed || !low ? 0 : (uintptr_t)low + bytes;
+}
+#endif

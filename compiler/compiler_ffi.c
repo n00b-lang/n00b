@@ -1401,6 +1401,11 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     if (core_string_find(triple, CORE_STRING_STATIC("windows")) < 0) {
         arguments[next++] = "-fPIC";
     }
+    else {
+        // A shim declares the C runtime functions it calls, as _errno, which
+        // the runtime's headers declare dllimport; the call is the same.
+        arguments[next++] = "-Wno-inconsistent-dllimport";
+    }
     // Linux programs link no libc, so nothing provides the stack
     // protector's guard value.
     if (core_string_find(triple, CORE_STRING_STATIC("linux")) >= 0) {
