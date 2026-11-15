@@ -22,10 +22,13 @@ n00bb_system_libraries(const core_target_desc_t *target, bool libc)
     static const char *const elf[] = {"-static", "-nostartfiles", "-nolibc",
                                       "--rtlib=compiler-rt",
                                       "--unwindlib=none", nullptr};
-    // A program whose FFI contracts link "c" is an ordinary libc program,
-    // with the runtime built against libc.
-    static const char *const elf_libc[] = {"-lpthread", "-lm", "-ldl",
-                                           nullptr};
+    // A program whose FFI contracts link "c" still starts at the runtime's
+    // _start, with the same runtime: libc is linked dynamically, and the
+    // dynamic loader sets it up before _start runs. The runtime's malloc
+    // and free interpose libc's, so C code allocates from the n00b pool.
+    static const char *const elf_libc[] = {"-nostartfiles",
+                                           "--rtlib=compiler-rt",
+                                           "--unwindlib=none", nullptr};
     static const char *const coff[] = {"-lsynchronization", nullptr};
     return target->object_format == CORE_TARGET_OBJECT_MACH_O ? mach_o
         : target->object_format == CORE_TARGET_OBJECT_COFF ? coff

@@ -621,6 +621,21 @@ func leave_blocking_runtime() {
     }
 }
 
+# Called on each entry from C (builtin.ffi.__ffi_enter) with an address
+# above the n00b frames the entry makes. When that raises the thread's
+# known stack top (internal.os.thread.thread_stack_entry), the attached
+# mutator's follows, so the collector scans every frame.
+func note_stack_entry(address: uint) {
+    if !internal.threads.thread_stack_entry(address) {
+        return
+    }
+    let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
+    let high: Ref[byte]? = internal.threads.thread_stack_high_self()
+    if mutator != nil and high != nil {
+        internal.gc.mutator.set_stack_hi(mutator, high)
+    }
+}
+
 func attached_mutator() -> Ref[internal.gc.core.Mutator]? {
     return runtime_mutator
 }

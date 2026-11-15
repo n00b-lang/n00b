@@ -35,3 +35,6 @@ int n00b_linux_open(const char *path, int flags, int mode);
 int n00b_linux_close(int fd);
 long n00b_linux_write(int fd, const void *bytes, size_t count);
 [[noreturn]] void n00b_linux_exit(int status);
+// Exits the program; through libc's exit when it is linked and the calling
+// thread is one of libc's.
+[[noreturn]] void n00b_linux_exit_program(int status);

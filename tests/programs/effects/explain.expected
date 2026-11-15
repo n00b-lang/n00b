@@ -71,8 +71,8 @@ sys.internal.random.fill: (modify 'T) -> nil fail: Errno
   param value     writer
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
-  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (88:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
-  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (88:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
+  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
+  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
   panics          builtin.string.core.__fd_write (6:5) -> here (283:12)
   param s         reader
   detail          may_io reinterprets

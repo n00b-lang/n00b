@@ -135,6 +135,26 @@ func thread_stack_high_self() -> Ref[byte]? {
     }
 }
 
+# Notes that `address`, in a frame of an export entry from C, is above every
+# n00b frame the call makes. A thread C started (with libc's pthreads, say)
+# has a stack the runtime knows nothing of; on Linux its top is taken as the
+# highest such entry so far, since n00b code runs on it only below one.
+# Returns whether that raised the thread's stack top.
+func thread_stack_entry(address: uint) -> bool {
+    when target_os() == "linux" {
+        if linux_stack_high == 0 {
+            linux_stack_high = n00b_linux_stack_high_raw(__stack_pointer())
+        }
+        if address <= linux_stack_high {
+            return false
+        }
+        linux_stack_high = address
+        return true
+    } else {
+        return false
+    }
+}
+
 # An id for the calling thread that thread_suspend and thread_resume take.
 func thread_control_self() -> uint {
     when target_os() == "linux" {

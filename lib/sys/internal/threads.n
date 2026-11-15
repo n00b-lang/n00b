@@ -97,6 +97,10 @@ func thread_stack_high_self() -> Ref[byte]? {
     return internal.os.thread.thread_stack_high_self()
 }
 
+func thread_stack_entry(address: uint) -> bool {
+    return internal.os.thread.thread_stack_entry(address)
+}
+
 # The stack pointer: an address below every frame the caller's thread has
 # on its stack.
 func stack_address() -> uint {

@@ -32,6 +32,7 @@ typedef struct {
     core_list_t(writ_n00b_extern_t) *externs;
     core_list_t(record_handle_t) *record_handles;
     core_list_t(plan_patch_t) *patches;
+    bool                  libc; // shims check they aren't on a runtime thread (linux_start.c)
 } n00b_t;
 
 static bool
@@ -957,6 +958,9 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     }
     writ_emit_text(emit, "%s)", any ? "" : "void");
     writ_emit_open(emit, "");
+    if (g->libc) {
+        writ_emit_line(emit, "n00b_ffi_libc_thread_check();");
+    }
     size_t copies = 0;
     for (size_t i = 0; i < params.len; i++) {
         const shim_param_t *p = &params.data[i];
@@ -1416,6 +1420,9 @@ shim_c_text(const n00b_t *g, const writ_plan_view_t *const *plans)
     writ_emit_line(&emit, "void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);");
     writ_emit_line(&emit, "void n00b_ffi_release(void *object);");
     writ_emit_line(&emit, "void n00bb_runtime_trap(const char *reason, uint64_t length);");
+    if (g->libc) {
+        writ_emit_line(&emit, "void n00b_ffi_libc_thread_check(void);");
+    }
     writ_emit_line(&emit, "");
     if (shim_keeps(g)) {
         emit_kept_free(g, &emit);
@@ -3446,6 +3453,19 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
         writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(type_text(g, types[s])));
     }
     writ_emit_line(emit, ") -> %.*s {", S(result));
+    if (g->libc) {
+        // As a shim does (emit_c_shim): no libc call from a runtime thread.
+        writ_str_t check = writ_cstr("__ffi_libc_thread_check");
+        bool declared = false;
+        for (size_t i = 0; i < g->externs->len; i++) {
+            declared = declared || writ_str_eq(g->externs->data[i].name, check);
+        }
+        if (!declared) {
+            add_extern_as(g, check, writ_cstr("n00b_ffi_libc_thread_check"), nullptr, 0, named(g, writ_cstr("nil")),
+                          fn->effects, fn, nullptr);
+        }
+        writ_emit_line(emit, "    __ffi_libc_thread_check()");
+    }
     writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
@@ -4606,6 +4626,9 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
         }
     }
     links_for(&g, links);
+    for (size_t i = 0; i < links->libraries_count; i++) {
+        g.libc |= writ_str_eq(links->libraries[i], writ_cstr("c"));
+    }
     bool exporting = writ_binding_exports(b);
     writ_status_t status = WRIT_OK;
     if (exporting) {

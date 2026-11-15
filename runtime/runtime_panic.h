@@ -28,6 +28,7 @@ typedef enum : uint32_t {
     N00BB_FAILURE_RANGE = 23,
     N00BB_FAILURE_OS = 24,
     N00BB_FAILURE_NO_IMPLEMENTATION = 25,
+    N00BB_FAILURE_LIBC_THREAD = 26,
 } n00bb_failure_kind_t;
 
 typedef enum : uint64_t {

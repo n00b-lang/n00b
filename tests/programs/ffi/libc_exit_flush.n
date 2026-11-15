@@ -1,0 +1,14 @@
+# C code's buffered stdio output reaches its file when the program exits:
+# with libc linked, the program exits through libc's exit, which flushes.
+[-
+library c
+link "c"
+header <stdio.h>
+fn puts(text: *cstr) -> c_int
+-]'ffi
+
+try {
+    require puts("flushed at exit")! >= 0
+} fail(failure) {
+    require false
+}

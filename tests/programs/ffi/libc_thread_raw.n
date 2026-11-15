@@ -1,0 +1,25 @@
+# libc_thread.n's check for a raw binding, which calls C without a shim:
+# its n00b wrapper checks the thread instead.
+import sys.threads
+
+[-
+library c
+link "c"
+fn abs(x: c_int) -> c_int
+binding {
+    raw "abs"
+}
+-]'ffi
+
+var done: Atomic[int] = 0
+
+func worker() {
+    require abs_raw(-3) == 3
+    __atomic_store(ref done, 1)
+}
+
+require abs_raw(-2) == 2
+require sys.threads.thread_start(callback[sys.threads.Thread_Entry](ref worker))
+while __atomic_load(ref done) == 0 {
+    sys.threads.thread_yield()
+}

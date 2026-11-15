@@ -75,8 +75,8 @@ sys.internal.random.fill: (modify 'T) -> nil fail: Errno
   param value     writer
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
-  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write (85:35) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write_syscall (9:20)
-  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write (85:35) -> sys.internal.os.__ffi_write___ffi_literal_7.n00b_os_gc_enter_blocking (8:5)
+  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write (86:35) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write_syscall (9:20)
+  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_7.syscall_write (86:35) -> sys.internal.os.__ffi_write___ffi_literal_7.n00b_os_gc_enter_blocking (8:5)
   panics          builtin.string.core.__fd_write (6:5) -> here (283:12)
   param s         reader
   detail          may_io may_collect reinterprets

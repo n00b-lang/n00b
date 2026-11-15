@@ -47,7 +47,7 @@ when target_os() == "linux" {
     platforms x86_64-w64-windows-gnu
 
     fn _get_osfhandle(fd: c_int) -> isize
-      effects input
+      effects none
     fn WriteFile(handle: isize, buf: in *u8, count: u32, written: out *u32,
                  overlapped: in ?void) -> c_int
       effects output, blocking

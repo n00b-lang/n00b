@@ -41,6 +41,27 @@ basics)
         builds_and_runs errno_channel
         ;;
     esac
+    # stdout is a file here, so puts buffers until the program exits.
+    builds_and_runs libc_exit_flush >"$tmp/flush.out"
+    grep -q 'flushed at exit' "$tmp/flush.out" || {
+        echo "libc_exit_flush's output was lost at exit" >&2
+        exit 1
+    }
+    for program in libc_thread libc_thread_raw; do
+        case "$(uname -s)" in
+        Linux)
+            if builds_and_runs $program 2>"$tmp/$program.err"; then
+                echo "$program called into libc from a runtime thread" >&2
+                exit 1
+            fi
+            grep -q 'main thread only' "$tmp/$program.err" || {
+                cat "$tmp/$program.err" >&2
+                exit 1
+            }
+            ;;
+        *) builds_and_runs $program ;;
+        esac
+    done
     for marker in marker-literal-5be1 marker-contract-5be1; do
         if grep -q -a "$marker" "$tmp/ffi_basics"; then
             echo "ffi_basics contains $marker" >&2

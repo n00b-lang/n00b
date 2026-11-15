@@ -1642,10 +1642,7 @@ run_comptime(core_link_unit_t *link, program_link_t *program,
         return true;
     }
     bool ok = true;
-    // A program that links libc runs its compile-time code against libc too.
-    const char *comptime_runtime = n00bb_links_libc(&analysis->target,
-            program->native->libraries, program->native->library_count)
-        ? N00BB_LIBC_COMPTIME_RUNTIME : N00BB_COMPTIME_RUNTIME;
+    const char *comptime_runtime = N00BB_COMPTIME_RUNTIME;
     core_string_t runtime_name = n00bb_archive_path(
         core_string_borrow(comptime_runtime, strlen(comptime_runtime)));
     char *runtime = runtime_name.data ? core_string_to_cstr(runtime_name)
@@ -2394,12 +2391,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     char *output = plan.output;
     char *staging = plan.staging;
     core_string_t output_name = core_string_borrow(output, plan.output_length);
-    bool libc = n00bb_links_libc(&analysis->target, native->libraries,
-                                 native->library_count);
-    const char *runtime_archive = libc ? N00BB_LIBC_RUNTIME_ARCHIVE
-                                       : N00BB_RUNTIME_ARCHIVE;
-    const char *runtime_bitcode = libc ? N00BB_LIBC_RUNTIME_BITCODE
-                                       : N00BB_RUNTIME_BITCODE;
+    const char *runtime_archive = N00BB_RUNTIME_ARCHIVE;
+    const char *runtime_bitcode = N00BB_RUNTIME_BITCODE;
     core_string_t archive_name = n00bb_archive_path(
         core_string_borrow(runtime_archive, strlen(runtime_archive)));
     char *archive = core_string_to_cstr(archive_name);
