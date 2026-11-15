@@ -1,0 +1,45 @@
+# An inline array of packed bits in a record (`Array[bool][3]`) starts on
+# a byte and takes whole bytes, between packed neighbors. Sized `modify`
+# and `out` parameters of packed bits are given the caller's bits: those of
+# such a field, a module variable, a local or a grid.
+record Packed {
+    a: bool
+    flags: Array[bool][3]
+    b: bool
+    n: u:3
+}
+
+var global_flags: Array[bool][3]
+var grid: Array[bool][2][2]
+
+func set_last(modify f: Array[bool][3]) -> nil {
+    f[2] = true
+    f[0] = !f[0]
+}
+
+func fill(out f: Array[bool][3]) -> nil {
+    f = [true, false, true]
+}
+
+func set_corner(modify g: Array[bool][2][2]) -> nil {
+    g[1][1] = true
+}
+
+func main() -> nil {
+    var p: Packed = (a = true, flags = [false, true, false], b = true, n = 5)
+    require p.flags[1] and !p.flags[0] and p.a and p.b and p.n == 5
+    p.flags[2] = true
+    require p.flags[2] and p.b and p.n == 5
+    p.flags = [false, false, false]
+    set_last(p.flags)
+    require p.flags[2] and p.flags[0] and !p.flags[1] and p.a and p.b
+    fill(p.flags)
+    require p.flags[0] and !p.flags[1] and p.b and p.n == 5
+    set_last(global_flags)
+    require global_flags[2] and global_flags[0]
+    var local: Array[bool][3]
+    fill(local)
+    require local[0] and !local[1] and local[2]
+    set_corner(grid)
+    require grid[1][1] and !grid[0][0]
+}
