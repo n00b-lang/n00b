@@ -88,6 +88,13 @@ test "$(grep -c 'declared size is' "$tmp/fields.log")" = 3
 }
 "$tmp/rectangular"
 
+"$compiler" build --output "$tmp/inline_bits" inline_bits.n \
+    >"$tmp/inline_bits.log" 2>&1 || {
+    cat "$tmp/inline_bits.log" >&2
+    exit 1
+}
+"$tmp/inline_bits"
+
 rejected rectangular_errors
 reported rectangular_errors "rectangular_errors.n:10:11:.*\`grid\` is declared with size 3x4, but the parameter it is passed to by reference has size 4x3"
 

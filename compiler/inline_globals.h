@@ -17,9 +17,9 @@
 // code (the backend) both decide here, from the variable alone.
 //
 // The elements start 16 bytes in, so they may need at most 16-byte
-// alignment. Arrays whose innermost elements are arrays (a dimension
-// without a size), or packed bits (`bool`, and integers of widths other
-// than 8 to 128 bits), keep their elements apart.
+// alignment; packed bits (`bool`, integers of odd widths) start at that
+// byte's first bit. Arrays whose innermost elements are arrays (a dimension
+// without a size) keep their elements apart.
 //
 // Returns the element count of the whole block, or 0 for any other
 // variable.
@@ -44,12 +44,6 @@ n00bb_inline_global_count(ir_module_t *module, const ir_global_t *global)
     }
     if (!rank || !element || th_kind_of(element) == TH_SEQUENCE
         || !th_is_closed(ir_module_types(module), element)) return 0;
-    ir_machine_t machine = ir_machine_of(module, element);
-    if (machine.class == IR_CLASS_BOOL
-        || ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT)
-            && machine.width != 8 && machine.width != 16
-            && machine.width != 32 && machine.width != 64
-            && machine.width != 128)) return 0;
     const ir_final_layout_t *layout = ir_layout_final_visible(module,
         element, ir_module_target(module));
     if (!layout || !layout->alignment_bytes || layout->alignment_bytes > 16)
