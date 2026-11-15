@@ -70,6 +70,7 @@ typedef enum : uint8_t {
     SUMMARY_INPUT_EFFECTS,
     SUMMARY_INPUT_OVERLAP,
     SUMMARY_INPUT_REINTERPRETED,
+    SUMMARY_INPUT_ENTRY_ACCESS,
 } summary_input_kind_t;
 
 typedef struct {
@@ -574,6 +575,11 @@ static ir_summary_t *call_summary(ir_summaries_t *summaries,
                                   const ir_func_t *caller,
                                   ir_func_t *target);
 static void views_free(ir_summaries_t *summaries);
+static void note_entry_access(ir_summaries_t *summaries,
+                              const ir_module_t *module, uint32_t flag,
+                              const ir_splace_t *place, uint8_t flags);
+static uint8_t entries_access(ir_summaries_t *summaries, uint32_t flag,
+                              const ir_splace_t *place);
 static bool stored_deps_hold(ir_summaries_t *summaries,
                              const ir_summary_t *summary,
                              ir_func_t *const *members, size_t count);

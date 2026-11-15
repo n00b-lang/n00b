@@ -1000,12 +1000,18 @@ ir_summary_call_diverges(ir_summaries_t *summaries, const ir_instr_t *call)
     return diverges;
 }
 
+static const ir_summary_t *
+entries_unrecorded(ir_summaries_t *summaries, uint32_t flag)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    return hooks && hooks->entries
+        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+}
+
 const ir_summary_t *
 ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
 {
-    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
-    const ir_summary_t *entry = hooks && hooks->entries
-        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+    const ir_summary_t *entry = entries_unrecorded(summaries, flag);
     note_entries(summaries, flag, entry);
     return entry;
 }
@@ -1031,6 +1037,28 @@ access_touches(ir_summaries_t *summaries, const ir_splace_t *access,
     return access->kind == IR_SPLACE_UNKNOWN
         ? unseen_reaches(summaries, place)
         : ir_splace_eq(access, place);
+}
+
+// What the functions behind `flag` (the finalizers, or the entries of
+// threads started) can do to `place`.
+static uint8_t
+entries_access(ir_summaries_t *summaries, uint32_t flag,
+               const ir_splace_t *place)
+{
+    const ir_summary_t *entry = entries_unrecorded(summaries, flag);
+    if (!entry)
+        return unseen_reaches(summaries, place) ? IR_SPATH_ACCESS : 0;
+    uint8_t flags = 0;
+    for (size_t i = 0; i < entry->paths.len; i++) {
+        const ir_spath_t *path = &entry->paths.data[i];
+        ir_splace_t       places[2];
+        uint32_t          count = path->root == IR_SPLACE_PARAM ? 0
+            : ir_summary_path_places(entry->function, path, places);
+        for (uint32_t p = 0; p < count; p++)
+            if (access_touches(summaries, &places[p], place))
+                flags |= path->flags & IR_SPATH_ACCESS;
+    }
+    return flags;
 }
 
 bool

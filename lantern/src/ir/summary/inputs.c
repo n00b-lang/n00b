@@ -213,6 +213,30 @@ note_entries(ir_summaries_t *summaries, uint32_t flag,
     record_input(summaries, input);
 }
 
+// A place the entries were asked about, as an input: the flag and the
+// place's kind and parameter in `site`, its global or heap type beside.
+static void
+note_entry_access(ir_summaries_t *summaries, const ir_module_t *module,
+                  uint32_t flag, const ir_splace_t *place, uint8_t flags)
+{
+    if (!summaries->sink || place->param > 0xfff) return;
+    record_input(summaries, (summary_input_t){
+        .kind = SUMMARY_INPUT_ENTRY_ACCESS,
+        .site = (flag & 0xffff) | (uint32_t)place->kind << 16
+            | place->param << 20,
+        .global = place->global, .from = place->type,
+        .module = place->type ? module : nullptr,
+        .answer = (uint64_t)flags + 1});
+}
+
+static ir_splace_t
+entry_access_place(const summary_input_t *input)
+{
+    return (ir_splace_t){.kind = (ir_splace_kind_t)(input->site >> 16 & 0xf),
+                         .param = input->site >> 20, .global = input->global,
+                         .type = input->from};
+}
+
 static void
 note_global(ir_summaries_t *summaries, const ir_global_t *global,
             bool reachable)
@@ -333,6 +357,11 @@ current_answer(ir_summaries_t *summaries, const summary_input_t *input)
     case SUMMARY_INPUT_REINTERPRETED:
         return ir_places_type_reinterpreted((ir_module_t *)input->module,
                                             input->from) ? 2 : 1;
+    case SUMMARY_INPUT_ENTRY_ACCESS: {
+        ir_splace_t place = entry_access_place(input);
+        return (uint64_t)entries_access(summaries, input->site & 0xffff,
+                                        &place) + 1;
+    }
     }
     return 0;
 }
@@ -531,7 +560,7 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
         input.answer = get_u64(&r);
-        if (input.kind > SUMMARY_INPUT_REINTERPRETED) r.failed = true;
+        if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
     if (r.failed || r.at != r.size || !summary->stable) {

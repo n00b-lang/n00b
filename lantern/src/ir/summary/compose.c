@@ -153,21 +153,11 @@ entry_access(flow_query_t *q, uint32_t flag)
     uintptr_t had   = q->entry_access
         ? (uintptr_t)core_dict_get(q->entry_access, key, &found) : 0;
     if (found) return (uint8_t)(had - 1);
-    uint8_t flags = 0;
-    const ir_summary_t *entry = ir_summary_entries(q->summaries, flag);
-    if (!entry) {
-        if (unseen_reaches(q->summaries, q->target))
-            flags |= IR_SPATH_ACCESS;
-    }
-    for (size_t i = 0; entry && i < entry->paths.len; i++) {
-        const ir_spath_t *path = &entry->paths.data[i];
-        ir_splace_t       places[2];
-        uint32_t          count = path->root == IR_SPLACE_PARAM ? 0
-            : query_path_places(q, entry, i, places);
-        for (uint32_t p = 0; p < count; p++)
-            if (access_touches(q->summaries, &places[p], q->target))
-                flags |= path->flags & IR_SPATH_ACCESS;
-    }
+    uint8_t flags = entries_access(q->summaries, flag, q->target);
+    // What was asked of the entries, not their whole summary: entries grow
+    // as specialization adds functions, without changing most answers.
+    note_entry_access(q->summaries, q->f ? q->f->owner : nullptr, flag,
+                      q->target, flags);
     if (q->entry_access)
         core_dict_put(q->entry_access, key, (void *)(uintptr_t)(flags + 1u));
     return flags;
