@@ -1445,10 +1445,14 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, core_string_
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         append_payload_text(&payload, ffi->contract_dirs.data[i]);
     }
+    // Only the headers the shim includes: which other literals' headers a
+    // build happens to have loaded mustn't change the key.
     for (size_t i = 0; i < ffi->shims.len; i++) {
-        if (core_string_ends_with(ffi->shims.data[i].name, CORE_STRING_STATIC(".h"))) {
-            append_payload_text(&payload, ffi->shims.data[i].name);
-            append_payload_text(&payload, ffi->shims.data[i].contents);
+        const ffi_output_t *header = &ffi->shims.data[i];
+        if (core_string_ends_with(header->name, CORE_STRING_STATIC(".h"))
+            && core_string_find(shim->contents, header->name) >= 0) {
+            append_payload_text(&payload, header->name);
+            append_payload_text(&payload, header->contents);
         }
     }
     core_uint128_t key = n00bb_native_cache_key(cache, payload.data, payload.byte_len, triple,
