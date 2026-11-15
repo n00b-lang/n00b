@@ -191,16 +191,6 @@ canonical_sources(flow_table_t *table, const ir_spath_t *from,
 }
 
 static void
-flow_put(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
-         ir_sflow_kind_t kind)
-{
-    ir_spath_t   key_to = canonical_path(to);
-    uint32_t     source = flow_source(table, from);
-    flow_dest_t *dest   = flow_dest(table, &key_to);
-    bit_set(kind_bits(dest, kind), source);
-}
-
-static void
 flow_add(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
          ir_sflow_kind_t kind)
 {

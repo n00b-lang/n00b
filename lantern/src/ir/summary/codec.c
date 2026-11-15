@@ -424,18 +424,29 @@ get_paths(summary_reader_t *r, path_list_t *paths)
 }
 
 static void
-get_bits(summary_reader_t *r, flow_table_t *flows, const ir_spath_t *to,
-         const path_list_t *sources, ir_sflow_kind_t kind)
+get_bits(summary_reader_t *r, flow_table_t *flows, flow_dest_t **dest,
+         const ir_spath_t *to, const path_list_t *sources, uint32_t *mapped,
+         ir_sflow_kind_t kind)
 {
+    // As flow_put for each flow, in the same order, but each source and the
+    // destination are looked up once.
     uint32_t words = get_u32(r);
     for (uint32_t w = 0; !r->failed && w < words; w++) {
         uint64_t low  = get_u32(r);
         uint64_t word = low | (uint64_t)get_u32(r) << 32;
-        for (uint32_t b = 0; !r->failed && b < 64; b++) {
-            if (!(word >> b & 1)) continue;
-            size_t source = (size_t)w * 64 + b;
-            if (source >= sources->len) r->failed = true;
-            else flow_put(flows, to, &sources->data[source], kind);
+        for (; !r->failed && word; word &= word - 1) {
+            size_t source = (size_t)w * 64 + (size_t)__builtin_ctzll(word);
+            if (source >= sources->len) {
+                r->failed = true;
+                break;
+            }
+            if (mapped[source] == UINT32_MAX)
+                mapped[source] = flow_source(flows, &sources->data[source]);
+            if (!*dest) {
+                ir_spath_t key = canonical_path(to);
+                *dest = flow_dest(flows, &key);
+            }
+            bit_set(kind_bits(*dest, kind), mapped[source]);
         }
     }
 }
@@ -449,14 +460,18 @@ get_flows(summary_reader_t *r, flow_table_t *flows)
         ir_spath_t path = get_path(r);
         core_list_push(sources, path);
     }
+    uint32_t *mapped = core_alloc_array(uint32_t, sources.len + 1);
+    for (size_t s = 0; s < sources.len; s++) mapped[s] = UINT32_MAX;
     uint32_t dests = get_u32(r);
     for (uint32_t d = 0; !r->failed && d < dests; d++) {
-        ir_spath_t to = get_path(r);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_DATA);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_CONTROL);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_ALIAS);
-        get_bits(r, flows, &to, &sources, IR_SFLOW_COPY);
+        ir_spath_t   to   = get_path(r);
+        flow_dest_t *dest = nullptr;
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_DATA);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_CONTROL);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_ALIAS);
+        get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_COPY);
     }
+    core_free(mapped);
     core_list_free(sources);
 }
 
