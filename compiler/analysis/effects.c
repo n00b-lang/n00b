@@ -866,15 +866,36 @@ collector_module(core_string_t name)
                                    CORE_STRING_STATIC("sys.internal.gc."));
 }
 
-bool
+uint8_t
 n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
                             const ir_global_t *global)
 {
-    (void)context;
+    n00bb_link_analysis_t *analysis = context;
     const ir_module_t *owner = global ? global->owner : nullptr;
-    return owner && caller && caller->owner
-        && collector_module(ir_module_name((ir_module_t *)owner))
-        && !collector_module(ir_module_name(caller->owner));
+    if (!owner || !caller || !caller->owner) return IR_SUMMARY_VISIBLE;
+    if (collector_module(ir_module_name((ir_module_t *)owner))
+        && !collector_module(ir_module_name(caller->owner)))
+        return IR_SUMMARY_HIDDEN_BARRIER;
+    // A global the caller can't name, whose address never leaves its
+    // module, can't be seen from the caller at all.
+    if (!analysis->global_symbols_ready) {
+        core_dict_init(&analysis->global_symbols, nullptr, nullptr);
+        index_module_globals(analysis, &analysis->global_symbols);
+        analysis->global_symbols_ready = true;
+    }
+    bool found = false;
+    parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
+                                              (void *)global, &found);
+    if (!found || !symbol) return IR_SUMMARY_VISIBLE;
+    parse_sym_entry_t *declared = canonical_symbol(symbol);
+    core_translation_unit_t *owner_unit = declared->owner_unit;
+    core_translation_unit_t *viewer = n00bb_visibility_unit(analysis,
+                                                            caller->owner);
+    if (!owner_unit || !viewer
+        || n00bb_symbol_visible_to(viewer, owner_unit, declared)
+        || n00bb_summary_global_reachable(context, global))
+        return IR_SUMMARY_VISIBLE;
+    return IR_SUMMARY_HIDDEN_PRIVATE;
 }
 
 void

@@ -1717,7 +1717,7 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global);
 bool
 n00bb_summary_global_named(void *context, const ir_func_t *function,
                            const ir_global_t *global);
-bool
+uint8_t
 n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
                             const ir_global_t *global);
 core_translation_unit_t *

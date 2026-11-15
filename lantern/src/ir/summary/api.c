@@ -702,16 +702,23 @@ typedef struct {
     uint64_t      stamp;
 } summary_view_t;
 
-static bool
-hidden_path(ir_summaries_t *summaries, const ir_func_t *caller,
+static uint8_t
+path_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
             const ir_spath_t *path)
 {
     const ir_summary_hooks_t *hooks = summaries->hooks;
     return (path->root == IR_SPLACE_GLOBAL
-            || path->root == IR_SPLACE_THREAD)
-        && path->global
-        && hooks->global_hidden(hooks->context, caller,
-                                ir_global_identity(path->global));
+            || path->root == IR_SPLACE_THREAD) && path->global
+        ? hooks->global_hidden(hooks->context, caller,
+                               ir_global_identity(path->global))
+        : IR_SUMMARY_VISIBLE;
+}
+
+static bool
+hidden_path(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_spath_t *path)
+{
+    return path_hidden(summaries, caller, path) != IR_SUMMARY_VISIBLE;
 }
 
 static uint64_t
@@ -751,10 +758,23 @@ view_flows(ir_summaries_t *summaries, const ir_func_t *caller,
            flow_table_t *into, const flow_table_t *from)
 {
     flow_table_init(into, from->function);
+    // A barrier global's flows are left out; a private one's still reach
+    // what the caller sees, from the global as a whole.
     uint32_t *mapped = core_alloc_array(uint32_t, from->sources.len + 1);
-    for (size_t s = 0; s < from->sources.len; s++)
-        mapped[s] = hidden_path(summaries, caller, from->sources.data[s])
-            ? UINT32_MAX - 1 : UINT32_MAX;
+    ir_spath_t *whole = core_alloc_array(ir_spath_t, from->sources.len + 1);
+    for (size_t s = 0; s < from->sources.len; s++) {
+        const ir_spath_t *source = from->sources.data[s];
+        uint8_t hidden = path_hidden(summaries, caller, source);
+        mapped[s] = hidden == IR_SUMMARY_HIDDEN_BARRIER ? UINT32_MAX - 1
+                                                        : UINT32_MAX;
+        whole[s] = *source;
+        if (hidden == IR_SUMMARY_HIDDEN_PRIVATE) {
+            whole[s].depth = 0;
+            whole[s].steps = nullptr;
+            whole[s].flags = (uint8_t)((whole[s].flags & ~IR_SPATH_MUST)
+                                       | IR_SPATH_DEEP);
+        }
+    }
     for (size_t d = 0; d < from->dests.len; d++) {
         flow_dest_t *source = &from->dests.data[d];
         if (hidden_path(summaries, caller, source->to)) continue;
@@ -769,12 +789,13 @@ view_flows(ir_summaries_t *summaries, const ir_func_t *caller,
                      kind++) {
                     if (!bit_has(kind_bits(source, kind), s)) continue;
                     if (mapped[s] == UINT32_MAX)
-                        mapped[s] = flow_source(into, from->sources.data[s]);
+                        mapped[s] = flow_source(into, &whole[s]);
                     if (!dest) dest = flow_dest(into, source->to);
                     bit_set(kind_bits(dest, kind), mapped[s]);
                 }
             }
     }
+    core_free(whole);
     core_free(mapped);
 }
 

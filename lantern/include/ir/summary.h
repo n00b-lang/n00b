@@ -94,6 +94,17 @@ typedef struct ir_summaries_t ir_summaries_t;
 
 typedef void (*ir_summary_target_fn)(void *sink, ir_func_t *target);
 
+// How a global is hidden from a caller. A PRIVATE global (one the caller
+// can't name and whose address never leaves its module) has its own reads
+// and writes left out, but what flows out of it to places the caller sees
+// stays, as the global's deep path. A BARRIER global (behind the
+// collector's abstraction barrier) is left out entirely.
+typedef enum : uint8_t {
+    IR_SUMMARY_VISIBLE,
+    IR_SUMMARY_HIDDEN_PRIVATE,
+    IR_SUMMARY_HIDDEN_BARRIER,
+} ir_summary_hidden_t;
+
 typedef struct {
     void *context;
     bool (*call_targets)(void *context, const ir_instr_t *call,
@@ -110,11 +121,11 @@ typedef struct {
     // has no use for the detail, and it would grow every summary it reaches.
     bool (*global_named)(void *context, const ir_func_t *function,
                          const ir_global_t *global);
-    // Whether `global` lies behind an abstraction barrier for code in
-    // `caller`: what a callee does to it is left out of the summary the
-    // caller composes, as if the callee were opaque there.
-    bool (*global_hidden)(void *context, const ir_func_t *caller,
-                          const ir_global_t *global);
+    // How `global` is hidden from code in `caller`, an
+    // ir_summary_hidden_t: what a callee does to a hidden global is left
+    // out of the summary the caller composes.
+    uint8_t (*global_hidden)(void *context, const ir_func_t *caller,
+                             const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
                             const ir_summary_t *summary);
     bool (*inherits_effect)(void *context, const ir_func_t *caller,
