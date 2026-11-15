@@ -3455,15 +3455,6 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     writ_emit_line(emit, ") -> %.*s {", S(result));
     if (g->libc) {
         // As a shim does (emit_c_shim): no libc call from a runtime thread.
-        writ_str_t check = writ_cstr("__ffi_libc_thread_check");
-        bool declared = false;
-        for (size_t i = 0; i < g->externs->len; i++) {
-            declared = declared || writ_str_eq(g->externs->data[i].name, check);
-        }
-        if (!declared) {
-            add_extern_as(g, check, writ_cstr("n00b_ffi_libc_thread_check"), nullptr, 0, named(g, writ_cstr("nil")),
-                          fn->effects, fn, nullptr);
-        }
         writ_emit_line(emit, "    __ffi_libc_thread_check()");
     }
     writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
@@ -3475,7 +3466,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     writ_emit_line(emit, "}");
 }
 
-// Emits a `syscall` as an extern whose symbol `n00b.syscall.<number>` the
+// Emits a `syscall` as an extern whose symbol `n00b.syscall.<number>.<name>` the
 // n00b compiler lowers to the kernel-entry instruction, and a wrapper that
 // does the in-band errno check, the result conversion and, for `blocking`
 // calls, the collector's blocking transitions.
@@ -3491,7 +3482,11 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
     const writ_n00b_type_t **types = direct_params(g, fn, true, &access);
     bool has_result = fn->result != nullptr;
     writ_str_t entry = writ_str_format(g->session, "__%.*s_syscall", S(name));
-    writ_str_t symbol = writ_str_format(g->session, "n00b.syscall.%lld", (long long)fn->syscall_number);
+    // The name after the number keeps each declaration's facts apart: the
+    // compiler knows a native by its symbol, and two declarations of one
+    // call (futex wait and wake) can differ in their effects.
+    writ_str_t symbol = writ_str_format(g->session, "n00b.syscall.%lld.%.*s_%.*s", (long long)fn->syscall_number,
+                                        S(g->shim), S(name));
     add_extern_as(g, entry, symbol, types, fn->slots_count, named(g, writ_cstr(has_result ? "int" : "nil")),
                   fn->effects, fn, access);
 

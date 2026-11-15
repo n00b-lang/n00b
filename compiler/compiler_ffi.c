@@ -38,10 +38,24 @@ core_list_decl(n00bb_ffi_symbol_t);
 static pthread_mutex_t declared_symbols_lock = PTHREAD_MUTEX_INITIALIZER;
 static core_list_t(n00bb_ffi_symbol_t) declared_symbols;
 
-static void
-remember_declared_symbols(const writ_n00b_externs_t *externs, core_translation_unit_t *unit,
-                          core_string_t literal, n00bb_literal_origin_t origin)
+static bool
+same_native_facts(const n00bb_ffi_symbol_t *left, const n00bb_ffi_symbol_t *right)
 {
+    return left->pure == right->pure && left->effects == right->effects && left->read_only == right->read_only
+        && left->write_only == right->write_only;
+}
+
+// Records the C symbols a literal declares, for the missing-symbol report
+// and to hold every declaration of one C function to the same facts: the
+// summaries know a native by its symbol (n00bb_note_native_axioms), so two
+// differing declarations would make the analysis depend on which came
+// first. Returns false, having reported it, when a declaration differs from
+// another literal's.
+static bool
+remember_declared_symbols(const writ_n00b_externs_t *externs, const n00bb_native_declarations_t *natives,
+                          core_translation_unit_t *unit, core_string_t literal, n00bb_literal_origin_t origin)
+{
+    bool ok = true;
     pthread_mutex_lock(&declared_symbols_lock);
     if (!declared_symbols.data) {
         declared_symbols = core_list_new(n00bb_ffi_symbol_t);
@@ -54,19 +68,52 @@ remember_declared_symbols(const writ_n00b_externs_t *externs, core_translation_u
         core_buffer_t name = {0};
         core_buffer_printf(&name, "%.*s.%.*s", (int)literal.u8_bytes, literal.data, (int)function.u8_bytes,
                            function.data);
-        core_list_push(declared_symbols, ((n00bb_ffi_symbol_t){
-                                             .symbol = core_string_dup(core_string_borrow(
-                                                 externs->items[i].symbol.data, externs->items[i].symbol.length)),
-                                             .name   = core_string_dup(core_buffer_string(&name)),
-                                             .unit   = unit,
-                                             .line   = externs->items[i].declared_at.line
-                                                           ? externs->items[i].declared_at.line : origin.line,
-                                             .column = externs->items[i].declared_at.line
-                                                           ? externs->items[i].declared_at.column : origin.column,
-                                         }));
+        const n00bb_native_declaration_t *native = &natives->items[i];
+        n00bb_ffi_symbol_t entry = {
+            .symbol     = core_string_borrow(externs->items[i].symbol.data, externs->items[i].symbol.length),
+            .name       = core_buffer_string(&name),
+            .unit       = unit,
+            .line       = externs->items[i].declared_at.line ? externs->items[i].declared_at.line : origin.line,
+            .column     = externs->items[i].declared_at.line ? externs->items[i].declared_at.column : origin.column,
+            .pure       = native->pure,
+            .effects    = native->effects,
+            .read_only  = native->read_only,
+            .write_only = native->write_only,
+        };
+        n00bb_ffi_symbol_t *same = nullptr;
+        const n00bb_ffi_symbol_t *other = nullptr;
+        for (size_t d = 0; d < declared_symbols.len; d++) {
+            n00bb_ffi_symbol_t *known = &declared_symbols.data[d];
+            if (!core_string_eq(known->symbol, entry.symbol)) continue;
+            if (core_string_eq(known->name, entry.name)) same = known;
+            else if (!other && !same_native_facts(known, &entry)) other = known;
+        }
+        if (other) {
+            core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+            n00bb_report(diagnostics, unit, N00B_DIAG_NATIVE_DECLARATIONS_DIFFER,
+                (core_diag_location_t){entry.line, entry.column, entry.line, entry.column, true},
+                N00B_TEXT_FFI_NATIVE_DECLARED_DIFFERENTLY,
+                N00BB_ARGS(ARG_TEXT(entry.name), ARG_TEXT(entry.symbol), ARG_TEXT(other->name)));
+            n00bb_report_secondary(diagnostics, other->unit,
+                (core_diag_location_t){other->line, other->column, other->line, other->column, true},
+                N00B_TEXT_FFI_NATIVE_OTHER_DECLARATION, N00BB_ARGS(ARG_TEXT(other->name)));
+            ok = false;
+        }
+        // A literal generated again (in a long-running compiler) replaces
+        // what it declared before.
+        entry.symbol = core_string_dup(entry.symbol);
+        entry.name = core_string_dup(entry.name);
+        if (same) {
+            core_free((void *)same->symbol.data);
+            core_free((void *)same->name.data);
+            *same = entry;
+        } else {
+            core_list_push(declared_symbols, entry);
+        }
         core_buffer_release(&name);
     }
     pthread_mutex_unlock(&declared_symbols_lock);
+    return ok;
 }
 
 bool
@@ -1153,9 +1200,9 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         writ_output_t output = {capture_file, &capture};
         writ_n00b_externs_t externs = {0};
         ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
-          && register_exports(&externs, module);
+          && register_exports(&externs, module)
+          && remember_declared_symbols(&externs, natives, unit, name, origin);
         if (ok) {
-            remember_declared_symbols(&externs, unit, name, origin);
             for (size_t i = 0; i < externs.count; i++)
                 push_unique(&record.symbols, externs.items[i].symbol);
         }

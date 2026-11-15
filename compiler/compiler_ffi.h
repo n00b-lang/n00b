@@ -19,6 +19,12 @@ typedef struct {
     core_translation_unit_t *unit;
     uint32_t                 line;
     uint32_t                 column;
+    // What the declaration says of the C function, which every declaration
+    // of the symbol must agree on (the axioms know a native by its symbol).
+    bool                     pure;
+    uint32_t                 effects;
+    uint16_t                 read_only;
+    uint16_t                 write_only;
 } n00bb_ffi_symbol_t;
 
 bool             n00bb_ffi_declared_symbol(core_string_t symbol, n00bb_ffi_symbol_t *out);

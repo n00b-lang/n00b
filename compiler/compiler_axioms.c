@@ -134,6 +134,11 @@ static const n00bb_axiom_t axioms[] = {
     NATIVE("__ffi_release", "n00b_ffi_release", 0, 0, 0),
     NATIVE("__ffi_unwind_jump", "n00b_ffi_unwind_jump", IR_SUMMARY_DIVERGES,
            0, 0),
+    // Fails on a thread the runtime started, where libc's thread state is
+    // missing (runtime/linux_start.c); raw bindings of libraries that link
+    // "c" call it first.
+    NATIVE("__ffi_libc_thread_check", "n00b_ffi_libc_thread_check",
+           IR_SUMMARY_MAY_TRAP, 0, 0),
     FUNCTION("sys.internal.gc.alloc", "allocate_runtime_known_on_mutator", 0,
              N00BB_AXIOM_MUTATOR_ALLOCATOR),
     FUNCTION("sys.internal.gc.alloc", "allocate_array_on_mutator", 0,

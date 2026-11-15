@@ -1238,7 +1238,10 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     borrow_registered = borrow_registered
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__ffi_unwind_jump"), nil_type,
-            unwind_arguments, 1);
+            unwind_arguments, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__ffi_libc_thread_check"), nil_type,
+            nullptr, 0);
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);

@@ -129,6 +129,12 @@ N00B_DIAG(PROVIDED_FUNCTION_MISSING, "N00B-F0006", ERROR,
     "implements a callback, as `module.function`. That function must exist\n"
     "and have a body:\n"
     "    provide nth_sorted.compare = \"sorting.descending\"")
+N00B_DIAG(NATIVE_DECLARATIONS_DIFFER, "N00B-F0007", ERROR,
+    "two 'ffi literals declare the same C function differently",
+    "Every 'ffi literal that binds a C function must give it the same\n"
+    "effects, purity and pointer modes: the compiler knows one C function\n"
+    "by its symbol, so it can't keep two descriptions of it apart. Make the\n"
+    "declarations agree.")
 N00B_DIAG(NATIVE_ROOT_MISSING, "N00B-B0107", ERROR,
     "`--native-root` names a function that does not exist",
     "`--native-root NAME=module.function` exports an existing n00b\n"

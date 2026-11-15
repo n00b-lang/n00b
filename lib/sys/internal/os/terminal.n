@@ -58,7 +58,7 @@ when target_os() == "linux" {
     fn _isatty(fd: c_int) -> c_int
       effects input
     fn _get_osfhandle(fd: c_int) -> isize
-      effects input
+      effects none
     fn GetConsoleScreenBufferInfo(console: isize, info: out *u8) -> c_int
       effects input
 

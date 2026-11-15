@@ -47,7 +47,7 @@ when target_os() == "linux" {
       error ret == -1 via errno
       effects input
     fn _get_osfhandle(fd: c_int) -> isize
-      effects input
+      effects none
     fn GetFileType(handle: isize) -> c_uint
       effects input
 

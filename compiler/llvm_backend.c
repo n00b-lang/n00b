@@ -7679,7 +7679,8 @@ emit_trap_failure(lower_state_t *state, ir_instr_t *instruction)
 #define SYSCALL_SYMBOL_PREFIX "n00b.syscall."
 
 // The call number of an extern bound to a writ `syscall`, whose native
-// symbol is `n00b.syscall.<number>` (writ ffi-spec.md §7.1).
+// symbol is `n00b.syscall.<number>.<declaration>` (writ gen/n00b.c,
+// emit_syscall).
 static bool
 syscall_number(core_string_t symbol, uint64_t *number)
 {
@@ -7687,7 +7688,10 @@ syscall_number(core_string_t symbol, uint64_t *number)
     if (!symbol.data || symbol.u8_bytes <= prefix
         || memcmp(symbol.data, SYSCALL_SYMBOL_PREFIX, prefix)) return false;
     uint64_t value = 0;
-    for (size_t i = prefix; i < symbol.u8_bytes; i++) {
+    size_t end = prefix;
+    while (end < symbol.u8_bytes && symbol.data[end] != '.') end++;
+    if (end == prefix) return false;
+    for (size_t i = prefix; i < end; i++) {
         char digit = symbol.data[i];
         if (digit < '0' || digit > '9' || value > (UINT64_MAX - 9) / 10)
             return false;
