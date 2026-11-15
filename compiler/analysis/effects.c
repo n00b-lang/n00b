@@ -881,9 +881,18 @@ dump_param(const ir_func_t *function, uint32_t p)
 }
 
 static void
+steps_text_from(core_buffer_t *out, const ir_spath_t *path, uint32_t first);
+
+static void
 steps_text(core_buffer_t *out, const ir_spath_t *path)
 {
-    for (uint32_t s = 0; s < path->depth; s++) {
+    steps_text_from(out, path, 0);
+}
+
+static void
+steps_text_from(core_buffer_t *out, const ir_spath_t *path, uint32_t first)
+{
+    for (uint32_t s = first; s < path->depth; s++) {
         core_string_t step = path->steps[s];
         if (!core_string_eq(step, CORE_STRING_STATIC("[]")))
             core_buffer_putc(out, '.');
@@ -936,8 +945,19 @@ static void
 spath_text(core_buffer_t *out, const ir_func_t *function,
            const ir_summary_t *summary, const ir_spath_t *path)
 {
-    if (path->root == IR_SPLACE_PARAM)
+    if (path->root == IR_SPLACE_PARAM) {
         param_text(out, function, path->param);
+        // A modify or out parameter is a reference to the caller's place;
+        // its paths are shown as the place's, without that reference.
+        const th_param *formal = function && function->type
+                && path->param < th_func_nparams(function->type)
+            ? th_func_param(function->type, path->param) : nullptr;
+        if (formal && th_mode_by_reference(formal->mode) && path->depth
+            && core_string_eq(path->steps[0], CORE_STRING_STATIC("__value"))) {
+            steps_text_from(out, path, 1);
+            return;
+        }
+    }
     else if (path->root == IR_SPLACE_SOURCE) {
         core_buffer_puts(out, "(");
         core_buffer_append_string(out, ir_summary_flag_name(path->param));

@@ -22,19 +22,19 @@ sys.internal.clock.now_ns: () -> uint
   output result data[(reads_clock) ?...] control[]
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
   effects may_fail may_trap reinterprets reads_random
-  reads buffer.__value
-  reads+writes buffer.__value.__value[]...
+  reads buffer
+  reads+writes buffer.__value[]...
   traps explicit bounds arithmetic
   output result data[] control[]
-  output failure data[(reads_random) buffer.__value buffer.__value.__value.__len... buffer.__value.__value[]...] control[?...]
-  output buffer.__value.__value[]... data[(reads_random) buffer.__value buffer.__value.__value.__len... buffer.__value.__value[]...] control[]
+  output failure data[(reads_random) buffer buffer.__value.__len... buffer.__value[]...] control[?...]
+  output buffer.__value[]... data[(reads_random) buffer buffer.__value.__len... buffer.__value[]...] control[]
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
   effects may_fail may_trap may_allocate may_collect allocates_direct reinterprets reads_random
-  reads+writes value.__value
+  reads+writes value
   traps explicit bounds arithmetic
   output result data[] control[]
   output failure data[(reads_random)] control[?...]
-  output value.__value... data[(reads_random)] control[]
+  output value... data[(reads_random)] control[]
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.__value.index.live
@@ -158,15 +158,15 @@ unicode.internal.properties.general_category: (char) -> Gc
   output result data[] control[cp]
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
-  reads+writes self.__value.cap
-  reads+writes self.__value.data
-  reads+writes self.__value.len
-  reads+writes self.__value.data.__value[]
+  reads+writes self.cap
+  reads+writes self.data
+  reads+writes self.len
+  reads+writes self.data.__value[]
   traps bounds arithmetic
   output result data[] control[]
-  output (new in unicode.internal.runebuf.push:22:31).__len data[self.__value.cap] control[]
-  output (new in unicode.internal.runebuf.push:22:31)[] data[cp self.__value.data.__value[]] control[]
-  output self.__value.cap data[self.__value.cap] control[]
-  output self.__value.data data[(new in unicode.internal.runebuf.push:22:31)] control[]
-  output self.__value.data.__value[] data[cp] control[]
-  output self.__value.len data[self.__value.len] control[]
+  output (new in unicode.internal.runebuf.push:22:31).__len data[self.cap] control[]
+  output (new in unicode.internal.runebuf.push:22:31)[] data[cp self.data.__value[]] control[]
+  output self.cap data[self.cap] control[]
+  output self.data data[(new in unicode.internal.runebuf.push:22:31)] control[]
+  output self.data.__value[] data[cp] control[]
+  output self.len data[self.len] control[]
