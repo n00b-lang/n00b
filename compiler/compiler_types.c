@@ -2828,19 +2828,24 @@ static bool report_tuple_index(core_translation_unit_t *unit,
 
 static bool dispatch_plan_reports(parse_grammar_t         *grammar,
                                   core_translation_unit_t *unit,
-                                  parse_tree_t            *call,
+                                  const n00bb_written_call_t *site,
                                   const n00bb_dispatch_target_t *target,
                                   bool                     method_style)
 {
     n00bb_call_plan_t plan  = {0};
-    bool              bound = n00bb_plan_call(
+    bool              bound = n00bb_call_plan_init(
         &plan, grammar, target->function, target->signature,
-        child_nt(grammar, call, CORE_STRING_STATIC("call-args")),
         method_style ? 1 : 0);
+
+    if (bound) {
+        n00bb_call_plan_use(&plan, site);
+        bound = n00bb_call_plan_bind(&plan);
+    }
 
     if (!bound) {
         n00bb_call_plan_report(&plan, unit,
-                               core_translation_unit_diagnostics(unit), call);
+                               core_translation_unit_diagnostics(unit),
+                               site->span);
     }
     n00bb_call_plan_free(&plan);
 
@@ -2984,8 +2989,8 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
         return true;
     }
 
-    parse_tree_t *call = core_dict_get(&tu_state(unit)->dispatch_calls,
-                                       (void *)at, nullptr);
+    const n00bb_written_call_t *call = core_dict_get(
+        &tu_state(unit)->dispatch_calls, (void *)at, nullptr);
 
     if (!call) {
         return false;
@@ -3148,16 +3153,15 @@ static bool report_literal_argument(th_ctx *types,
                                         : (core_string_t){0};
 
     if (self && core_string_eq(method, CORE_STRING_STATIC("__init"))) {
-        parse_tree_t *call  = core_dict_get(&tu_state(unit)->dispatch_calls,
-                                            (void *)user, nullptr);
+        const n00bb_written_call_t *call = core_dict_get(
+            &tu_state(unit)->dispatch_calls, (void *)user, nullptr);
         th_type      *built = th_resolve(self->type);
 
         if (th_kind_of(built) == TH_INDIRECTION) {
             built = th_resolve(th_ind_referent(built));
         }
         n00bb_report(diagnostics, unit, N00B_DIAG_CONSTRUCTOR_NO_MATCH,
-                     call ? n00bb_node_span(call)
-                          : n00bb_span_location(user->span),
+                     call ? call->span : n00bb_span_location(user->span),
                      N00B_TEXT_NONE_OF_THE_VISIBLE_INIT,
                      N00BB_ARGS(ARG_NUMBER(visible_initializers(index, built)),
                                 ARG_TEXT(n00bb_print_type(types, built))));
@@ -4095,7 +4099,7 @@ static bool check_field_privacy(th_ctx *types, n00bb_link_analysis_t *analysis,
 static bool check_dispatch_call(th_ctx *types,
                                 const n00bb_dispatch_index_t *index,
                                 core_translation_unit_t *unit,
-                                const ir_instr_t *at, parse_tree_t *call)
+                                const ir_instr_t *at, const n00bb_written_call_t *call)
 {
     const ir_value_t *self = dispatch_operand(at, 1);
 
@@ -6167,6 +6171,8 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
+        core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
+            n00bb_written_call_free(item->value);
         core_dict_free(&tu_state(units[u])->dispatch_calls);
         core_dict_init(&tu_state(units[u])->dispatch_calls, nullptr, nullptr);
     }

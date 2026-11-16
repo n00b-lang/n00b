@@ -301,7 +301,8 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
     core_list_free(keywords);
     n00bb_lower_context_t *lower = context->user;
     if (ok && call)
-        core_dict_put(&tu_state(lower->unit)->dispatch_calls, dispatch, call);
+        core_dict_put(&tu_state(lower->unit)->dispatch_calls, dispatch,
+                      n00bb_written_call_record(grammar, call, arguments));
     return ok;
 }
 
@@ -1084,7 +1085,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (mapped) n00bb_call_plan_collect(&plan, args);
     if (mapped && !n00bb_call_plan_bind(&plan)) {
         n00bb_call_plan_report(&plan, lower_unit(context),
-                               lower_diagnostics(context), call_node);
+                               lower_diagnostics(context),
+                               n00bb_node_span(call_node));
         mapped = false;
     }
     for (size_t i = 0; mapped && i < n00bb_call_plan_argument_count(&plan);

@@ -870,7 +870,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                                   args, 0);
     if (!mapped)
         n00bb_call_plan_report(&plan, lower_unit(context),
-                               lower_diagnostics(context), visit->node);
+                               lower_diagnostics(context),
+                               n00bb_node_span(visit->node));
     for (size_t i = 0; mapped && i < n00bb_call_plan_argument_count(&plan);
          i++) {
         size_t index = 0;

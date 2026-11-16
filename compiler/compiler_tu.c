@@ -1,3 +1,4 @@
+#include "call_plan.h"
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -7221,6 +7222,8 @@ free_tu_state(void *data)
     core_dict_free(&state->shared_state_types);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_tracked_symbols);
+    core_dict_foreach(&state->dispatch_calls, item)
+        n00bb_written_call_free(item->value);
     core_dict_free(&state->dispatch_calls);
     core_dict_free(&state->declarations_typed_ahead);
     free_type_symbol_index(state);
