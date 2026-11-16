@@ -2644,7 +2644,10 @@ n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
         return false;
     parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
                                                 expression);
+    // A function is never a value a case can match, so a function of the
+    // same name doesn't hide an arm or enum member.
     if (symbol && symbol->kind != PARSE_SYM_ENUM_CONST
+        && symbol->kind != PARSE_SYM_FUNCTION
         && !n00bb_variant_arm_symbol(grammar, symbol)) return false;
     if (name) *name = text;
     return true;

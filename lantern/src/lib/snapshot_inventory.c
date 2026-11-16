@@ -42,6 +42,7 @@ struct core_snapshot_inventory_t {
     core_string_t cache_root;
     uint64_t filter_revision;
     core_snapshot_inventory_stats_t stats;
+    core_list_t(core_string_t) skipped;
 };
 
 static core_string_t
@@ -171,6 +172,7 @@ core_snapshot_inventory_new(const core_snapshot_root_t *roots,
     core_snapshot_inventory_t *inventory = core_alloc(core_snapshot_inventory_t);
     inventory->roots = core_list_new(core_snapshot_root_t);
     inventory->entries = core_list_new(inventory_entry_t);
+    inventory->skipped = core_list_new(core_string_t);
     inventory->accept = accept;
     inventory->context = context;
     for (size_t i = 0; i < root_count; i++) {
@@ -195,8 +197,32 @@ core_snapshot_inventory_free(core_snapshot_inventory_t *inventory)
     for (size_t i = 0; i < inventory->roots.len; i++)
         core_free(inventory->roots.data[i].path.data);
     core_list_free(inventory->roots);
+    for (size_t i = 0; i < inventory->skipped.len; i++)
+        core_free(inventory->skipped.data[i].data);
+    core_list_free(inventory->skipped);
     core_free(inventory->cache_root.data);
     core_free(inventory);
+}
+
+bool
+core_snapshot_inventory_skip(core_snapshot_inventory_t *inventory,
+                             core_string_t directory)
+{
+    if (!inventory || !directory.data || !core_os_is_absolute(directory))
+        return false;
+    // Roots are compared as given, and the driver gives real paths.
+    core_string_t real = core_os_real_path(directory);
+    core_list_push(inventory->skipped,
+                   real.data ? real : core_string_dup(directory));
+    return true;
+}
+
+static bool
+skipped(const core_snapshot_inventory_t *inventory, core_string_t absolute)
+{
+    for (size_t i = 0; i < inventory->skipped.len; i++)
+        if (core_string_eq(inventory->skipped.data[i], absolute)) return true;
+    return false;
 }
 
 bool
@@ -346,6 +372,7 @@ descends(const core_snapshot_inventory_t *inventory, size_t root_index,
     for (size_t i = 0; i < inventory->roots.len; i++)
         if (core_string_eq(inventory->roots.data[i].path, absolute))
             return false;
+    if (skipped(inventory, absolute)) return false;
     bool fileless = inventory->roots.data[root_index].enters_fileless_directories;
     directory_contents_t contents = directory_contents(inventory, absolute);
     return contents.sources || (fileless && !contents.files);
@@ -366,7 +393,8 @@ scan_child(refresh_context_t *refresh, size_t root_index,
     core_os_kind_t kind = CORE_OS_KIND_OTHER;
     core_os_lookup_t found = path_signature(absolute, &signature, &kind);
     bool ok = found != CORE_OS_FAILED;
-    if (found == CORE_OS_FOUND && kind == CORE_OS_KIND_DIRECTORY) {
+    if (found == CORE_OS_FOUND && kind == CORE_OS_KIND_DIRECTORY
+        && !skipped(refresh->inventory, absolute)) {
         if (directories) core_list_push(*directories, ((inventory_directory_t){
             .relative = core_string_dup(child),
             .signature = signature,
@@ -811,12 +839,9 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
         }));
         ok = scan_tree(refresh, root_index, group, recursive, &directories);
     }
-    core_string_t path = cache_file_path(refresh->inventory, group_path);
-    core_os_file_info_t existing = {0};
-    bool had_cache = path.data
-        && core_os_stat(path, true, &existing) == CORE_OS_FOUND;
-    core_free(path.data);
-    if (ok && (refresh->entries.len > first_entry || had_cache))
+    // A group with no sources is cached too, or every refresh walks it
+    // again (build output under the current directory, say).
+    if (ok)
         (void)write_package_cache(refresh, root_index, group, group_path,
                                   &directories, first_entry);
     release_directories(&directories);

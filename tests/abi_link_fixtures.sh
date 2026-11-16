@@ -34,8 +34,9 @@ library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
 library_dump "$abi_programs" "$tmp/cycle_long" builtin.cycle_long_a
 library_dump "$abi_programs" "$tmp/cycle_self" builtin.cycle_self
 # A module's object depends only on the module, not on what else the build
-# has in it (the cache reuses it in other programs).
-library_dump "$abi_programs" "$tmp/alone" c_foreign builtin.cycle_first
+# has in it (the cache reuses it in other programs). The other root is
+# cheap on purpose: this build is only here for the comparison.
+library_dump "$abi_programs" "$tmp/alone" empty builtin.cycle_first
 cmp "$tmp/abi/builtin.cycle_first.n00bm" \
     "$tmp/alone/builtin.cycle_first.n00bm" || {
     echo "builtin.cycle_first's ABI object differs with other roots" >&2
@@ -54,7 +55,7 @@ cycle_long="$tmp/cycle_long"
 cycle_self="$tmp/cycle_self"
 
 "$abi_record_object_test" "$abi/import_root.n00bm" import
-"$abi_record_object_test" "$abi/c_foreign.n00bm" c-foreign
+"$abi_record_object_test" "$abi/__ffi_c_foreign___ffi_literal_1.n00bm" c-foreign
 "$abi_record_object_test" "$rec/record_root.n00bm" import-record
 "$abi_link_input_test" --field "$rec/record_dep.n00bm"
 

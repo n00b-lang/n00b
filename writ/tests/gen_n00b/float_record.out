@@ -189,10 +189,7 @@ void pts_take_bytes(pts_bytes_t *bytes, void *out) {
 }
 
 int32_t pts_n00b_pt_scale(const void *p, double k) {
-    size_t p_length = 0;
-    const void *p_data = n00b_ffi_borrow((void *)p, &p_length, 0);
-    int32_t writ_n00b_value = pts_pt_scale((point *)p_data, k);
-    n00b_ffi_release((void *)p);
+    int32_t writ_n00b_value = pts_pt_scale((point *)p, k);
     return writ_n00b_value;
 }
 
@@ -228,29 +225,9 @@ int32_t pts_n00b_pt_sum(const void *args, void *result) {
 }
 
 
-record Point {
-    private storage: Array[u8]
-}
-
-func point() -> Point {
-    let value: Point = (storage = new[Array[u8]](8))
-    return value
-}
-
-func x(self: Point) -> f64 {
-    return __ffi_read_f32(ref self.storage, 0)
-}
-
-func set_x(modify self: Point, value: f64) {
-    __ffi_write_f32(ref self.storage, 0, value)
-}
-
-func y(self: Point) -> f64 {
-    return __ffi_read_f32(ref self.storage, 4)
-}
-
-func set_y(modify self: Point, value: f64) {
-    __ffi_write_f32(ref self.storage, 4, value)
+record Point layout(c) {
+    x: f32
+    y: f32
 }
 
 flagset Mode {
@@ -267,7 +244,7 @@ func peek_raw(p: Ref[byte]) -> i32 {
 }
 
 func scale(modify p: Point, k: f64) fail: Scale_Failure {
-    let outcome = __pt_scale(ref p.storage, k)
+    let outcome = __pt_scale(ref p, k)
     if outcome < 0 {
         fail new[Scale_Failure](cast[i64]outcome, nil, "pt_scale")
     }
@@ -277,8 +254,8 @@ func scale(modify p: Point, k: f64) fail: Scale_Failure {
 }
 
 func origin() -> Point fail: Ffi_Error {
-    var returned = point()
-    let outcome = __pt_origin(ref returned.storage)
+    var returned: Point = (x = 0, y = 0)
+    let outcome = __pt_origin(ref returned)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "pt_origin")
         fail failure
@@ -307,16 +284,16 @@ func sum(view args: List[f64]) -> f64 fail: Ffi_Error {
     return returned
 }
 2	tests/gen_n00b/float_record.writ:4:1	point
-27	tests/gen_n00b/float_record.writ:9:1	pt_mode
-36	tests/gen_n00b/float_record.writ:20:1	pt_peek
-40	tests/gen_n00b/float_record.writ:11:1	pt_scale
-50	tests/gen_n00b/float_record.writ:14:1	pt_origin
-60	tests/gen_n00b/float_record.writ:16:1	pt_type
-65	tests/gen_n00b/float_record.writ:18:1	pt_sum
+7	tests/gen_n00b/float_record.writ:9:1	pt_mode
+16	tests/gen_n00b/float_record.writ:20:1	pt_peek
+20	tests/gen_n00b/float_record.writ:11:1	pt_scale
+30	tests/gen_n00b/float_record.writ:14:1	pt_origin
+40	tests/gen_n00b/float_record.writ:16:1	pt_type
+45	tests/gen_n00b/float_record.writ:18:1	pt_sum
 library pts
 load static
-extern __pt_scale pts_n00b_pt_scale (ref[array[u8]], f64) -> i32 fail: nil
-extern __pt_origin pts_n00b_pt_origin (ref[array[u8]]) -> i32 fail: nil
+extern __pt_scale pts_n00b_pt_scale (ref[Point], f64) -> i32 fail: nil
+extern __pt_origin pts_n00b_pt_origin (ref[Point]) -> i32 fail: nil
 extern __pt_type pts_n00b_pt_type (Mode) -> i32 fail: nil
 extern __pt_sum pts_n00b_pt_sum (ref[array[f64]], ref[f64]) -> i32 fail: nil
 extern __peek_raw pt_peek (ref[byte]) -> i32 fail: nil

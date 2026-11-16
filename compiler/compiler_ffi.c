@@ -581,9 +581,40 @@ native_effects(writ_effects_t declared)
 }
 
 static bool
+keep_fields(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *natives)
+{
+    if (!externs->fields_count) {
+        return true;
+    }
+    natives->fields = core_alloc_array(n00bb_native_field_t, externs->fields_count);
+    if (!natives->fields) {
+        return false;
+    }
+    for (size_t i = 0; i < externs->fields_count; i++) {
+        const writ_n00b_field_t *field = &externs->fields[i];
+        natives->fields[i] = (n00bb_native_field_t){
+            .record      = core_string_dup(as_core(field->record)),
+            .field       = core_string_dup(as_core(field->field)),
+            .extent      = field->extent == WRIT_N00B_EXTENT_COUNT ? N00BB_NATIVE_EXTENT_COUNT
+                         : field->extent == WRIT_N00B_EXTENT_UNTIL ? N00BB_NATIVE_EXTENT_UNTIL
+                                                                    : N00BB_NATIVE_EXTENT_NONE,
+            .count_field = core_string_dup(as_core(field->count_field)),
+            .sentinel    = (uint64_t)field->sentinel,
+            .tag_field   = core_string_dup(as_core(field->tag_field)),
+            .tag         = (uint64_t)field->tag,
+        };
+    }
+    natives->field_count = externs->fields_count;
+    return true;
+}
+
+static bool
 keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *natives)
 {
     *natives = (n00bb_native_declarations_t){0};
+    if (!keep_fields(externs, natives)) {
+        return false;
+    }
     if (!externs->count) {
         return true;
     }

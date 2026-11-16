@@ -212,6 +212,12 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
                 resolver->inventory, packages, 2))
             resolver->package_syntax_profile = package_syntax_profile(argv0);
         core_free(packages.data);
+        // The compiler's caches hold no sources, but often sit under the
+        // current directory (a build directory), and are large.
+        core_string_t caches = n00bb_cache_root();
+        if (caches.data)
+            (void)core_snapshot_inventory_skip(resolver->inventory, caches);
+        core_free(caches.data);
     }
     core_free(roots);
     core_free(cwd.data);
@@ -343,6 +349,14 @@ n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
         native_type_free(native->result);
     }
     core_free(declarations->items);
+    for (size_t i = 0; i < declarations->field_count; i++) {
+        n00bb_native_field_t *field = &declarations->fields[i];
+        core_free(field->record.data);
+        core_free(field->field.data);
+        core_free(field->count_field.data);
+        core_free(field->tag_field.data);
+    }
+    core_free(declarations->fields);
     *declarations = (n00bb_native_declarations_t){0};
 }
 

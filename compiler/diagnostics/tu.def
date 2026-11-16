@@ -116,15 +116,6 @@ N00B_DIAG(CONFLICTING_TYPE_DEFINITION, "N00B-N0517", ERROR,
     "one type name is given two different definitions",
     "A type is defined once. Rename one of the definitions, or remove the\n"
     "duplicate.")
-N00B_DIAG(COUNT_FIELD_UNKNOWN, "N00B-N0518", ERROR,
-    "a `count` clause names a field the record does not have",
-    "`count n` says another field of the same record holds the number of\n"
-    "elements behind a `Foreign[...]` field. Name an existing integer field\n"
-    "other than the pointer field itself.")
-N00B_DIAG(UNION_BY_UNKNOWN_FIELD, "N00B-N0519", ERROR,
-    "`union by` names something other than a plain field of the record",
-    "`union by tag` selects the union arm using an integer field of the\n"
-    "same record declared outside the union. Name such a field.")
 N00B_DIAG(LOOP_BINDS_OUTER_LET, "N00B-N0520", ERROR,
     "a `for` loop names an outer `let` as its loop variable",
     "A name before `in` that is already a `var` outside the loop is assigned\n"
@@ -261,27 +252,6 @@ N00B_DIAG(C_LAYOUT_FIELD_TYPE, "N00B-T0569", ERROR,
     "Fields of a `layout(c)` record must have C-compatible types: sized\n"
     "integers, floats, `Foreign[...]` pointers and other `layout(c)`\n"
     "records.")
-N00B_DIAG(UNION_NEEDS_C_LAYOUT, "N00B-T0570", ERROR,
-    "a record with a union is not declared `layout(c)`",
-    "Unions exist to match C structures, so a record holding one must be\n"
-    "declared `layout(c)`.")
-N00B_DIAG(RECORD_MULTIPLE_UNIONS, "N00B-T0571", ERROR,
-    "a record holds more than one union",
-    "A record holds at most one union. Merge the arms into one union.")
-N00B_DIAG(UNION_ARM_VALUE_NOT_CONSTANT, "N00B-T0572", ERROR,
-    "a union arm's tag value is not a constant integer",
-    "Each union arm is selected by a constant integer tag value.")
-N00B_DIAG(UNION_ARM_DUPLICATE_VALUE, "N00B-T0573", ERROR,
-    "two union arms have the same tag value",
-    "Each arm of a union needs a distinct tag value.")
-N00B_DIAG(UNTIL_SENTINEL_NOT_CONSTANT, "N00B-T0574", ERROR,
-    "an `until` sentinel is not a constant integer",
-    "`until v` ends a `Foreign[...]` sequence at the first element equal to\n"
-    "v, so v must be a constant integer.")
-N00B_DIAG(EXTENT_ON_NON_FOREIGN_FIELD, "N00B-T0575", ERROR,
-    "an `until` or `count` clause is attached to a field that is not a `Foreign` pointer",
-    "`until` and `count` describe how many elements a `Foreign[...]` field\n"
-    "points at, so they only apply to such fields.")
 N00B_DIAG(TYPE_CONTAINS_ITSELF, "N00B-T0576", ERROR,
     "a type contains itself by value",
     "A value cannot contain a copy of itself. Break the cycle with a\n"

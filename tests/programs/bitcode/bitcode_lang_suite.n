@@ -193,6 +193,11 @@ variant Choice {
     empty: nil
 }
 
+// A function can't be a case, so this one doesn't hide the `empty` arm.
+func empty() -> uint {
+    return 0
+}
+
 func variant_array_literal_check() {
     let values: Array[Choice] = [(number = 7), (empty = nil)]
     let first = values[0]
@@ -206,7 +211,7 @@ func variant_array_literal_check() {
         case number { require false }
         case empty { saw_empty = true }
     }
-    require saw_empty
+    require saw_empty and empty() == 0
 }
 
 func read_at(values: Array['T], index: uint) -> 'T {
@@ -1742,24 +1747,34 @@ func f32_check() {
     require values[0] + values[1] + values[2] == 4.0
 }
 
-record Item layout(c) {
-    key: i32
-    value: i32
-    label: Foreign[i8]? until 0
+[-
+library c
+struct item @size(16) @align(8) {
+    key: i32 @0
+    value: i32 @4
+    label: *cstr @8
 }
 
-record Root layout(c) {
-    early: Foreign[Item]?
-    items: Foreign[Item]? count total
-    total: u64
-    codes: Foreign[i32]? until 0
-    kind: i32
-    v: union by kind {
-        1 => number: i64
-        2 => text: Foreign[i8]? until 0
+struct root @size(56) @align(8) {
+    early: *item @0
+    items: *[item; total] @8
+    total: u64 @16
+    codes: *[i32; until 0] @24
+    kind: i32 @32
+    v: union by kind @40 {
+        1 => quantity: i64
+        2 => caption: *cstr
     }
-    other: Foreign[i8]? until 0
+    other: *cstr @48
 }
+
+struct point @size(8) @align(4) {
+    x: f32 @0
+    y: f32 @4
+}
+
+union raw @size(8) @align(8) { whole: i64, real: f64, address: *void, low: i16, octet: u8 }
+-]'ffi
 
 var anchors: List[Array[u8]] = new[List[Array[u8]]]()
 var item_anchors: List[Array[Item]] = new[List[Array[Item]]]()
@@ -1781,10 +1796,13 @@ func make_root() -> Root {
     var codes: Array[i32] = [3, 5, 7, 0]
     code_anchors.append(codes)
     let base: uint = __abi_ref_address(ref items[0])
-    return (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
-            items = unsafe_cast[Foreign[Item]?] base, total = 4,
-            codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
-            kind = 2, text = c_text([119, 111, 114, 100, 0]), other = even)
+    // A field tuple leaves out the union's arms; the setter picks one.
+    var made: Root = (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
+                      items = unsafe_cast[Foreign[Item]?] base, total = 4,
+                      codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
+                      kind = 0, other = even)
+    made.set_caption(c_text([119, 111, 114, 100, 0]))
+    return made
 }
 
 const root: Root = make_root()
@@ -1812,8 +1830,24 @@ func bake_foreign_check() {
     require __abi_baked_address(unsafe_cast[uint] root.other)
     let label: string? = foreign_text(item_at(1).label)
     require label != nil and label == "odd"
-    let text: string? = foreign_text(root.text)
+    require root.kind == 2 and root.quantity() == nil
+    let text: string? = foreign_text(root.caption())
     require text != nil and text == "word"
+}
+
+// A C float field is an ordinary field; an untagged union keeps its bytes,
+// and every arm reads them as its own type.
+func foreign_bytes_check() {
+    var p: Point = (x = 1.5, y = 2.25)
+    p.y = p.x + p.y
+    require p.y == 3.75
+    var r = raw()
+    r.set_real(-2.5)
+    require r.real() == -2.5
+    r.set_whole(-7)
+    require r.whole() == -7 and r.low() == -7 and r.octet() == 249
+    r.set_address(4096)
+    require r.address() == 4096 and r.whole() == 4096
 }
 
 trait Checker {
@@ -2336,6 +2370,7 @@ func main() -> nil {
     gc_trace_record_check()
     f32_check()
     bake_foreign_check()
+    foreign_bytes_check()
     generic_trait_calls_check()
     pass_statement_check()
     tuples_check()

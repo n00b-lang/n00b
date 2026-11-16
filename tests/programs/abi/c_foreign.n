@@ -1,17 +1,22 @@
-record Item layout(c) {
-    key: i32
-    value: i32
+[-
+library c
+struct item @size(8) @align(4) {
+    key: i32 @0
+    value: i32 @4
 }
 
-record Holder layout(c) {
-    items: Foreign[Item]? count total
-    total: u64
-    name: Foreign[i8]? until 0
-    op: Foreign_Fn[(i64, i64) -> i64]?
-    kind: i32
-    v: union by kind {
+callback op_fn = fn(left: i64, right: i64) -> i64
+
+struct holder @size(48) @align(8) {
+    items: *[item; total] @0
+    total: u64 @8
+    name: *cstr @16
+    op: op_fn @24
+    kind: i32 @32
+    v: union by kind @40 {
         1 => number: i64
-        2 => text: Foreign[i8]? until 0
+        2 => text: *cstr
         3 => _
     }
 }
+-]'ffi

@@ -434,12 +434,24 @@ struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0
     symbol: writ_str_t @16
 }
-struct writ_n00b_externs_t @size(48) @align(8) {
+type writ_n00b_extent_t = u8
+struct writ_n00b_field_t @size(88) @align(8) {
+    record: writ_str_t @0
+    field: writ_str_t @16
+    extent: writ_n00b_extent_t @32
+    count_field: writ_str_t @40
+    sentinel: i64 @56
+    tag_field: writ_str_t @64
+    tag: i64 @80
+}
+struct writ_n00b_externs_t @size(64) @align(8) {
     count: usize @0
     items: ?writ_n00b_extern_t @8
     exports_count: usize @16
     exports: ?writ_n00b_export_t @24
     header: writ_str_t @32
+    fields_count: usize @48
+    fields: ?writ_n00b_field_t @56
 }
 struct writ_link_requirements_t @size(56) @align(8) {
     libraries_count: usize @0
@@ -636,6 +648,9 @@ const WRIT_PRESENCE_ALWAYS: c_int = 4
 const WRIT_N00B_ACCESS_ANY: c_int = 0
 const WRIT_N00B_ACCESS_READ_ONLY: c_int = 1
 const WRIT_N00B_ACCESS_WRITE_ONLY: c_int = 2
+const WRIT_N00B_EXTENT_NONE: c_int = 0
+const WRIT_N00B_EXTENT_COUNT: c_int = 1
+const WRIT_N00B_EXTENT_UNTIL: c_int = 2
 
 fn writ_api_version() -> u32
 fn writ_session_new(config: ?writ_session_config_t) -> ?writ_session_t unknown

@@ -2602,6 +2602,12 @@ generate_module_literal(import_driver_t *driver,
     }
     if (n00bb_cache_has_module(driver->loader->cache, id))
         n00bb_note_native_axioms(natives);
+    if (!n00bb_note_native_union_arms(id, natives)) {
+        n00bb_native_declarations_release(&natives);
+        n00bb_line_origins_release(&origins);
+        core_buffer_release(&source);
+        return false;
+    }
     core_buffer_t inputs = {0};
     if (generator->inputs)
         generator->inputs(generator->context, id, &inputs);

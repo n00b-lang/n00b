@@ -92,12 +92,39 @@ typedef struct {
     writ_str_t symbol;
 } writ_n00b_export_t;
 
+// How far a generated `layout(c)` record's foreign pointer field reaches:
+// the C data it points to holds `count_field` items, or runs to an item
+// equal to `sentinel`.
+typedef uint8_t writ_n00b_extent_t;
+enum {
+    WRIT_N00B_EXTENT_NONE,
+    WRIT_N00B_EXTENT_COUNT,
+    WRIT_N00B_EXTENT_UNTIL,
+};
+
+// What the contract knows about one field of a generated `layout(c)`
+// record that the n00b source can't say: the extent of a foreign pointer,
+// and whether the field is an arm of a C union. A union's arms are emitted
+// as private fields that share the union's storage; the arm is live while
+// `tag_field` holds `tag`.
+typedef struct {
+    writ_str_t         record;
+    writ_str_t         field;
+    writ_n00b_extent_t extent;
+    writ_str_t         count_field;
+    int64_t            sentinel;
+    writ_str_t         tag_field;
+    int64_t            tag;
+} writ_n00b_field_t;
+
 typedef struct {
     size_t                    count;
     const writ_n00b_extern_t *items;
     size_t                    exports_count;
     const writ_n00b_export_t *exports;
     writ_str_t                header;
+    size_t                    fields_count;
+    const writ_n00b_field_t  *fields;
 } writ_n00b_externs_t;
 
 typedef struct {

@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1142,23 +1143,13 @@ typedef struct {
 } union_arm_entry_t;
 core_list_decl(union_arm_entry_t);
 
+// Modules are checked in parallel, and a record's union arms are asked
+// about from the modules that use it.
 static core_list_t(union_arm_entry_t) union_arms;
+static pthread_mutex_t union_arms_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static bool
-n00bb_union_arm_register(uint64_t record_hash, core_string_t field,
-                         uint32_t group)
-{
-    if (n00bb_union_arm_group(record_hash, field)) return true;
-    core_string_t name = core_string_dup(field);
-    if (!name.data) return false;
-    core_list_push(union_arms, ((union_arm_entry_t){
-        .record_hash = record_hash, .field = name, .group = group,
-    }));
-    return true;
-}
-
-uint32_t
-n00bb_union_arm_group(uint64_t record_hash, core_string_t field)
+static uint32_t
+union_arm_group_locked(uint64_t record_hash, core_string_t field)
 {
     for (size_t i = 0; i < union_arms.len; i++)
         if (union_arms.data[i].record_hash == record_hash
@@ -1167,144 +1158,51 @@ n00bb_union_arm_group(uint64_t record_hash, core_string_t field)
     return 0;
 }
 
-typedef enum {
-    FOREIGN_CONSTANT_OK,
-    FOREIGN_CONSTANT_NOT_CONSTANT,
-} foreign_constant_status_t;
-
-static foreign_constant_status_t
-foreign_clause_constant(parse_grammar_t *grammar, parse_tree_t *expression,
-                        uint64_t *value)
-{
-    parse_tree_t *node = expression;
-    bool negative = false;
-    while (node && !core_tree_is_leaf(node)
-           && !NT_IS(grammar, node, "simple-lit")) {
-        size_t count = core_tree_num_children(node);
-        if (count == 2 && parse_tree_leaf_is(core_tree_child(node, 0),
-                                             CORE_STRING_STATIC("-"))) {
-            negative = !negative;
-            node = core_tree_child(node, 1);
-        }
-        else if (count == 1 && !core_tree_is_leaf(core_tree_child(node, 0)))
-            node = core_tree_child(node, 0);
-        else if (count == 3 && parse_tree_leaf_is(core_tree_child(node, 0),
-                                                  CORE_STRING_STATIC("(")))
-            node = core_tree_child(node, 1);
-        else break;
-    }
-    ir_lit_t literal = {0};
-    if (!NT_IS(grammar, node, "simple-lit")
-        || !n00bb_parse_switch_integer(first_token_text(node), &literal))
-        return FOREIGN_CONSTANT_NOT_CONSTANT;
-    ir_int_t signed_value = ir_lit_signed(literal);
-    *value = (uint64_t)(int64_t)(negative ? -signed_value : signed_value);
-    return FOREIGN_CONSTANT_OK;
-}
-
-static th_type *
-foreign_element_type(parse_grammar_t *grammar,
-                     core_translation_unit_t *unit, parse_sym_entry_t *field)
-{
-    th_type *type = field && field->decl_node
-        ? declared_type_from_node(grammar, unit, field->decl_node) : nullptr;
-    th_type *element = type ? th_option_item(type) : nullptr;
-    if (element) type = element;
-    type = type ? th_resolve(type) : nullptr;
-    return type && th_kind_of(type) == TH_INDIRECTION
-        ? th_ind_referent(type) : nullptr;
-}
-
-static void
-collect_union_arms(parse_grammar_t *grammar, parse_tree_t *node,
-                   core_list_t(parse_tree_ptr_t) *arms)
-{
-    if (!node || core_tree_is_leaf(node)) return;
-    if (NT_IS(grammar, node, "union-arm")) {
-        core_list_push(*arms, node);
-        return;
-    }
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        collect_union_arms(grammar, core_tree_child(node, i), arms);
-}
-
-static void
-report_union_arm_problem(parse_grammar_t *grammar,
-                         core_translation_unit_t *unit, parse_tree_t *arm,
-                         n00bb_diag_t problem, parse_tree_t *owner)
-{
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    parse_tree_t *value = CHILD_NT(grammar, arm, "expression");
-    core_string_t value_text = n00bb_node_source_text(unit, value,
-        n00bb_text_form(N00B_TEXT_THIS_VALUE));
-    core_string_t discriminant = owner && core_tree_num_children(owner) > 2
-        ? first_token_text(core_tree_child(owner, 2)) : (core_string_t){0};
-    switch (problem) {
-    case N00B_DIAG_UNION_ARM_VALUE_NOT_CONSTANT:
-        if (n00bb_report(diagnostics, unit, problem,
-            link_source_location(value ? value : arm),
-        N00B_TEXT_UNION_ARM_VALUE_IS_NOT,
-            N00BB_ARGS(ARG_TEXT(value_text))))
-            n00bb_report_help(diagnostics,
-                N00B_TEXT_WRITE_AN_INTEGER_LITERAL_OR,
-                N00BB_NO_ARGS);
-        return;
-    case N00B_DIAG_UNION_ARM_DUPLICATE_VALUE:
-        n00bb_report(diagnostics, unit, problem,
-            link_source_location(value ? value : arm),
-        N00B_TEXT_ANOTHER_ARM_OF_THIS_UNION,
-            N00BB_ARGS(ARG_TEXT(value_text)));
-        return;
-    case N00B_DIAG_UNION_BY_UNKNOWN_FIELD:
-        if (n00bb_report(diagnostics, unit, problem,
-            link_source_location(owner ? owner : arm),
-        N00B_TEXT_UNION_BY_DOES_NOT_NAME,
-            N00BB_ARGS(ARG_TEXT(discriminant))))
-            n00bb_report_help(diagnostics,
-                N00B_TEXT_NAME_AN_INTEGER_FIELD_DECLARED,
-                N00BB_NO_ARGS);
-        return;
-    default:
-        return;
-    }
-}
-
 static bool
-check_unnamed_union_arms(parse_grammar_t *grammar,
-                         core_translation_unit_t *unit, parse_scope_t *scope,
-                         const core_dict_t *named, parse_tree_t *owner)
+n00bb_union_arm_register(uint64_t record_hash, core_string_t field,
+                         uint32_t group)
 {
-    parse_sym_entry_t *discriminant = member_field_named(scope,
-        first_token_text(core_tree_child(owner, 2)));
-    th_type *tag_type = discriminant && discriminant->decl_node
-        ? declared_type_from_node(grammar, unit, discriminant->decl_node)
-        : nullptr;
-    core_list_t(parse_tree_ptr_t) arms = core_list_new(parse_tree_ptr_t);
-    collect_union_arms(grammar, CHILD_NT(grammar, owner, "union-arms"),
-                       &arms);
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
-    bool ok = tag_type != nullptr;
-    for (size_t i = 0; ok && i < arms.len; i++) {
-        parse_tree_t *arm = arms.data[i];
-        if (core_tree_num_children(arm) != 3) continue;
-        uint64_t tag = 0;
-        foreign_constant_status_t status = foreign_clause_constant(grammar,
-            CHILD_NT(grammar, arm, "expression"), &tag);
-        bool duplicate = core_dict_contains((core_dict_t *)named,
-                                            (void *)(uintptr_t)tag)
-            || !core_dict_add(&seen, tag, 1);
-        if (status == FOREIGN_CONSTANT_NOT_CONSTANT || duplicate) {
-            report_union_arm_problem(grammar, unit, arm,
-                status == FOREIGN_CONSTANT_NOT_CONSTANT
-                    ? N00B_DIAG_UNION_ARM_VALUE_NOT_CONSTANT
-                    : N00B_DIAG_UNION_ARM_DUPLICATE_VALUE, owner);
-            ok = false;
-            break;
-        }
+    pthread_mutex_lock(&union_arms_lock);
+    bool ok = union_arm_group_locked(record_hash, field) != 0;
+    core_string_t name = ok ? (core_string_t){0} : core_string_dup(field);
+    if (name.data) {
+        core_list_push(union_arms, ((union_arm_entry_t){
+            .record_hash = record_hash, .field = name, .group = group,
+        }));
+        ok = true;
     }
-    core_dict_free(&seen);
-    core_list_free(arms);
+    pthread_mutex_unlock(&union_arms_lock);
+    return ok;
+}
+
+uint32_t
+n00bb_union_arm_group(uint64_t record_hash, core_string_t field)
+{
+    pthread_mutex_lock(&union_arms_lock);
+    uint32_t group = union_arm_group_locked(record_hash, field);
+    pthread_mutex_unlock(&union_arms_lock);
+    return group;
+}
+
+bool
+n00bb_note_native_union_arms(core_string_t module,
+                             n00bb_native_declarations_t natives)
+{
+    th_ctx *types = natives.field_count ? th_ctx_new() : nullptr;
+    bool ok = !natives.field_count || types;
+    for (size_t i = 0; ok && i < natives.field_count; i++) {
+        const n00bb_native_field_t *fact = &natives.fields[i];
+        if (!fact->tag_field.u8_bytes) continue;
+        core_buffer_t name = {0};
+        core_buffer_append_string(&name, module);
+        core_buffer_putc(&name, '.');
+        core_buffer_append_string(&name, fact->record);
+        ok = n00bb_union_arm_register(
+            th_hash(types, th_name(types, core_buffer_string(&name))),
+            fact->field, 1);
+        core_buffer_release(&name);
+    }
+    if (types) th_ctx_free(types);
     return ok;
 }
 
@@ -1313,165 +1211,59 @@ cache_record_field_extents(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
                            parse_tree_t *declaration)
 {
+    (void)grammar;
     n00bb_tu_state_t *state = tu_state(unit);
     parse_sym_entry_t *record = parse_tree_sym(declaration);
     parse_scope_t *scope = record ? record->member_scope : nullptr;
-    if (!state || !scope) return true;
-    for (parse_sym_entry_t *field = scope->first_in_scope; field;
-         field = field->next_in_scope) {
-        parse_tree_t *clause = field->is_field && field->decl_node
-            ? CHILD_NT(grammar, field->decl_node, "field-extent") : nullptr;
-        if (!clause) continue;
-        n00bb_field_extent_t *extent = core_arena_alloc(
-            &state->semantic_values, sizeof(*extent));
-        if (!extent) return false;
-        bool counted = core_string_eq(first_token_text(clause),
-                                      CORE_STRING_STATIC("count"));
-        *extent = (n00bb_field_extent_t){
-            .kind = counted ? N00BB_FIELD_EXTENT_COUNT
-                            : N00BB_FIELD_EXTENT_UNTIL,
-            .node = clause,
-        };
-        th_type *element = counted ? nullptr
-            : foreign_element_type(grammar, unit, field);
-        foreign_constant_status_t sentinel = counted ? FOREIGN_CONSTANT_OK
-            : element ? foreign_clause_constant(grammar,
-                  CHILD_NT(grammar, clause, "expression"), &extent->sentinel)
-            : FOREIGN_CONSTANT_NOT_CONSTANT;
-        core_diagnostics_t *diagnostics =
-            core_translation_unit_diagnostics(unit);
-        if (sentinel == FOREIGN_CONSTANT_NOT_CONSTANT) {
-            parse_tree_t *value = CHILD_NT(grammar, clause, "expression");
-            core_string_t value_text = n00bb_node_source_text(unit, value,
-                n00bb_text_form(N00B_TEXT_THIS_VALUE));
-            if (!element) {
-                if (n00bb_report(diagnostics, unit,
-                    N00B_DIAG_EXTENT_ON_NON_FOREIGN_FIELD,
-                    link_source_location(clause),
-                    N00B_TEXT_FIELD_HAS_AN_UNTIL_CLAUSE,
-                    N00BB_ARGS(ARG_TEXT(field->name))))
-                    n00bb_report_help(diagnostics,
-                        N00B_TEXT_UNTIL_AND_COUNT_CLAUSES_DESCRIBE,
-                        N00BB_NO_ARGS);
-            }
-            else if (n00bb_report(diagnostics, unit,
-                N00B_DIAG_UNTIL_SENTINEL_NOT_CONSTANT,
-                link_source_location(value ? value : clause),
-                N00B_TEXT_UNTIL_SENTINEL_OF_FIELD_IS,
-                N00BB_ARGS(ARG_TEXT(value_text), ARG_TEXT(field->name))))
-                n00bb_report_help(diagnostics,
-                    N00B_TEXT_WRITE_AN_INTEGER_LITERAL_OR_2,
-                    N00BB_NO_ARGS);
-            return false;
-        }
-        if (counted) {
-            core_string_t name = first_token_text(core_tree_child(clause, 1));
-            extent->count_field = member_field_named(scope, name);
-            if (!extent->count_field || extent->count_field == field) {
-                core_list_t(core_string_t) fields =
-                    core_list_new(core_string_t);
-                for (parse_sym_entry_t *other = scope->first_in_scope; other;
-                     other = other->next_in_scope)
-                    if (other->is_field && other != field)
-                        core_list_push(fields, other->name);
-                if (n00bb_report(diagnostics, unit,
-                    N00B_DIAG_COUNT_FIELD_UNKNOWN,
-                    link_source_location(core_tree_child(clause, 1)),
-                    N00B_TEXT_COUNT_DOES_NOT_NAME_ANOTHER,
-                    N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(record->name))))
-                    n00bb_diag_did_you_mean(diagnostics, name, fields.data,
-                                            fields.len);
-                core_list_free(fields);
+    n00bb_native_declarations_t natives = n00bb_source_natives(unit);
+    if (!state || !scope || !natives.field_count) return true;
+    // Only an FFI contract describes these, for the `layout(c)` records it
+    // generates (n00bb_native_field_t); writ already checked them against
+    // the contract, so a field the facts name is always there.
+    for (size_t i = 0; i < natives.field_count; i++) {
+        const n00bb_native_field_t *fact = &natives.fields[i];
+        if (!core_string_eq(fact->record, record->name)) continue;
+        parse_sym_entry_t *field = member_field_named(scope, fact->field);
+        if (!field) return false;
+        if (fact->extent != N00BB_NATIVE_EXTENT_NONE
+            && !parse_sym_binding(field, N00BB_FIELD_EXTENT_KEY)) {
+            bool counted = fact->extent == N00BB_NATIVE_EXTENT_COUNT;
+            n00bb_field_extent_t *extent = core_arena_alloc(
+                &state->semantic_values, sizeof(*extent));
+            if (!extent) return false;
+            *extent = (n00bb_field_extent_t){
+                .kind = counted ? N00BB_FIELD_EXTENT_COUNT
+                                : N00BB_FIELD_EXTENT_UNTIL,
+                .count_field = counted
+                    ? member_field_named(scope, fact->count_field) : nullptr,
+                .sentinel = fact->sentinel,
+                .node = field->decl_node,
+            };
+            if ((counted && !extent->count_field)
+                || !parse_sym_set_binding(field, N00BB_FIELD_EXTENT_KEY,
+                                          extent))
                 return false;
-            }
         }
-        if (!parse_sym_set_binding(field, N00BB_FIELD_EXTENT_KEY, extent))
-            return false;
-    }
-    core_list_t(parse_tree_ptr_t) groups = core_list_new(parse_tree_ptr_t);
-    core_dict_t tags;
-    core_dict_init(&tags, nullptr, nullptr);
-    bool ok = true;
-    for (parse_sym_entry_t *field = scope->first_in_scope; ok && field;
-         field = field->next_in_scope) {
-        parse_tree_t *arm = field->is_field && field->decl_node
-            && NT_IS(grammar, field->decl_node, "union-arm")
-            ? field->decl_node : nullptr;
-        parse_tree_t *owner = arm ? parse_tree_parent(arm) : nullptr;
-        while (owner && !NT_IS(grammar, owner, "field-union"))
-            owner = parse_tree_parent(owner);
-        if (!owner) continue;
-        size_t group = 0;
-        while (group < groups.len && groups.data[group] != owner) group++;
-        if (group == groups.len) core_list_push(groups, owner);
-        n00bb_record_layout_request_t *request = parse_sym_binding(record,
-            CORE_STRING_STATIC("n00bb.record-layout-request"));
-        core_diagnostics_t *diagnostics =
-            core_translation_unit_diagnostics(unit);
-        if (!request || request->policy != N00BB_RECORD_C) {
-            if (n00bb_report(diagnostics, unit, N00B_DIAG_UNION_NEEDS_C_LAYOUT,
-                link_source_location(owner), N00B_TEXT_HOLDS_A_UNION_SO_IT,
-                N00BB_ARGS(ARG_TEXT(record->name))))
-                n00bb_report_help(diagnostics, N00B_TEXT_WRITE_RECORD_LAYOUT_C,
-                    N00BB_ARGS(ARG_TEXT(record->name)));
-            ok = false;
-            break;
-        }
-        if (groups.len > 1) {
-            if (n00bb_report(diagnostics, unit,
-                N00B_DIAG_RECORD_MULTIPLE_UNIONS, link_source_location(owner),
-                N00B_TEXT_ALREADY_HOLDS_A_UNION_A,
-                N00BB_ARGS(ARG_TEXT(record->name))))
-                n00bb_report_secondary(diagnostics, nullptr,
-                    link_source_location(groups.data[0]),
-                    N00B_TEXT_THE_FIRST_UNION_IS_HERE,
-                    N00BB_NO_ARGS);
-            ok = false;
-            break;
-        }
-        core_string_t name = first_token_text(core_tree_child(owner, 2));
+        if (!fact->tag_field.u8_bytes
+            || parse_sym_binding(field, N00BB_FIELD_UNION_KEY))
+            continue;
         n00bb_field_union_t *member = core_arena_alloc(
             &state->semantic_values, sizeof(*member));
-        ok = member != nullptr;
-        if (!ok) break;
+        if (!member) return false;
         *member = (n00bb_field_union_t){
-            .group = (uint32_t)group + 1,
-            .discriminant = member_field_named(scope, name),
-            .node = arm,
+            .group = 1,
+            .discriminant = member_field_named(scope, fact->tag_field),
+            .tag = fact->tag,
+            .node = field->decl_node,
         };
-        bool plain = member->discriminant
-            && !(member->discriminant->decl_node
-                 && NT_IS(grammar, member->discriminant->decl_node,
-                          "union-arm"));
-        th_type *tag_type = plain && member->discriminant->decl_node
-            ? declared_type_from_node(grammar, unit,
-                                      member->discriminant->decl_node)
-            : nullptr;
-        foreign_constant_status_t tag = tag_type
-            ? foreign_clause_constant(grammar,
-                  CHILD_NT(grammar, arm, "expression"), &member->tag)
-            : FOREIGN_CONSTANT_NOT_CONSTANT;
-        n00bb_diag_t problem = !plain ? N00B_DIAG_UNION_BY_UNKNOWN_FIELD
-            : tag == FOREIGN_CONSTANT_NOT_CONSTANT
-            ? N00B_DIAG_UNION_ARM_VALUE_NOT_CONSTANT
-            : !core_dict_add(&tags, member->tag, 1)
-            ? N00B_DIAG_UNION_ARM_DUPLICATE_VALUE : N00B_DIAG_COUNT;
-        if (problem != N00B_DIAG_COUNT) {
-            report_union_arm_problem(grammar, unit, arm, problem, owner);
-            ok = false;
-            break;
-        }
-        ok = parse_sym_set_binding(field, N00BB_FIELD_UNION_KEY, member)
-            && (!record->type || n00bb_union_arm_register(
-                th_hash(state->types, record->type), field->name,
-                member->group));
+        if (!member->discriminant
+            || !parse_sym_set_binding(field, N00BB_FIELD_UNION_KEY, member)
+            || (record->type && !n00bb_union_arm_register(
+                    th_hash(state->types, record->type), field->name,
+                    member->group)))
+            return false;
     }
-    for (size_t g = 0; ok && g < groups.len; g++)
-        ok = check_unnamed_union_arms(grammar, unit, scope, &tags,
-                                      groups.data[g]);
-    core_dict_free(&tags);
-    core_list_free(groups);
-    return ok;
+    return true;
 }
 
 bool

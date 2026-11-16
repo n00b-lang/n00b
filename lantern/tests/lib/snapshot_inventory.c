@@ -150,7 +150,8 @@ test_local_persistence(void)
     check("warm package refresh succeeds", core_snapshot_inventory_refresh(second));
     core_snapshot_inventory_stats_t warm = core_snapshot_inventory_stats(second);
     check("new process reuses package metadata without reading source",
-          warm.package_cache_hits == 1 && warm.source_reads == 0);
+          warm.package_cache_hits > 0 && warm.package_scans == 0
+          && warm.source_reads == 0);
     const core_source_snapshot_t *snapshot = core_snapshot_inventory_find(
         second, 0, S("demo/facade.n"));
     check("warm snapshot retains source contents",
@@ -229,6 +230,83 @@ test_local_persistence(void)
     core_free(root.data);
 }
 
+static void
+remove_tree(core_string_t directory)
+{
+    core_os_dir_t *dir = core_os_dir_open(directory, nullptr);
+    if (!dir) return;
+    core_string_t name = {};
+    core_os_kind_t kind = CORE_OS_KIND_OTHER;
+    while (core_os_dir_next(dir, &name, &kind)) {
+        core_string_t path = join(directory, name);
+        if (kind == CORE_OS_KIND_DIRECTORY) remove_tree(path);
+        else remove_file(path);
+        core_free(path.data);
+    }
+    core_os_dir_close(dir);
+    remove_directory(directory);
+}
+
+// A directory with no sources is cached like any other group, and a skipped
+// directory is never walked: the current directory is often a build
+// directory, with large trees of build output and the compiler's caches.
+static void
+test_skipped_and_sourceless(void)
+{
+    core_string_t created = temporary_directory(S("lantern-skip-"));
+    core_string_t cache_created = temporary_directory(S("lantern-skip-cache-"));
+    check("skip test directories exist", created.data && cache_created.data);
+    if (!created.data || !cache_created.data) return;
+    core_string_t root = core_os_real_path(created);
+    core_string_t cache_root = core_os_real_path(cache_created);
+    core_string_t demo = join(root, S("demo"));
+    core_string_t out = join(root, S("out"));
+    core_string_t deep = join(out, S("deep"));
+    core_string_t skipped = join(root, S("caches"));
+    core_string_t hidden = join(skipped, S("inner"));
+    core_string_t hidden_source = join(hidden, S("hidden.n"));
+    core_string_t demo_source = join(demo, S("a.n"));
+    check("skip test trees exist",
+          make_directory(demo) && make_directory(out) && make_directory(deep)
+          && make_directory(skipped) && make_directory(hidden)
+          && write_file(demo_source, S("package demo {}"))
+          && write_file(hidden_source, S("package hidden {}")));
+    core_snapshot_root_t roots = {.path = root,
+                                  .enters_fileless_directories = true};
+    core_snapshot_inventory_stats_t stats[2] = {0};
+    for (int run = 0; run < 2; run++) {
+        core_snapshot_inventory_t *inventory = core_snapshot_inventory_new(
+            &roots, 1, accept_source, nullptr);
+        core_snapshot_inventory_enable_cache(inventory, cache_root, 1);
+        check("skipped directory registers",
+              core_snapshot_inventory_skip(inventory, skipped));
+        check("skip refresh succeeds", core_snapshot_inventory_refresh(inventory));
+        check("sources outside the skipped directory are found",
+              core_snapshot_inventory_find(inventory, 0, S("demo/a.n")));
+        check("sources in the skipped directory are not",
+              !core_snapshot_inventory_find(inventory, 0,
+                                            S("caches/inner/hidden.n")));
+        stats[run] = core_snapshot_inventory_stats(inventory);
+        core_snapshot_inventory_free(inventory);
+    }
+    check("the first refresh scans", stats[0].package_scans > 0);
+    check("a later refresh scans nothing, sourceless groups included",
+          stats[1].package_scans == 0 && stats[1].package_cache_hits > 0);
+    remove_tree(root);
+    remove_tree(cache_root);
+    core_free(demo_source.data);
+    core_free(hidden_source.data);
+    core_free(hidden.data);
+    core_free(skipped.data);
+    core_free(deep.data);
+    core_free(out.data);
+    core_free(demo.data);
+    core_free(cache_root.data);
+    core_free(root.data);
+    core_free(cache_created.data);
+    core_free(created.data);
+}
+
 int
 main(void)
 {
@@ -294,5 +372,6 @@ main(void)
     core_free(subdir.data);
     core_free(root.data);
     test_local_persistence();
+    test_skipped_and_sourceless();
     return report("source snapshot inventory");
 }

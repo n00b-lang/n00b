@@ -141,37 +141,70 @@ func raw() -> Raw {
 }
 
 func i(self: Raw) -> i64 {
-    return __ffi_read_i64(ref self.storage, 0)
+    return __ffi_read_i64(self.storage, 0)
 }
 
 func set_i(modify self: Raw, value: i64) {
-    __ffi_write_i64(ref self.storage, 0, value)
+    __ffi_write_i64(self.storage, 0, value)
 }
 
 func d(self: Raw) -> f64 {
-    return __ffi_read_f64(ref self.storage, 0)
+    return __ffi_read_f64(self.storage, 0)
 }
 
 func set_d(modify self: Raw, value: f64) {
-    __ffi_write_f64(ref self.storage, 0, value)
+    __ffi_write_f64(self.storage, 0, value)
 }
 
 func p(self: Raw) -> uint {
-    return __ffi_read_u64(ref self.storage, 0)
+    return unsafe_cast[uint](__ffi_read_u64(self.storage, 0))
 }
 
 func set_p(modify self: Raw, value: uint) {
-    __ffi_write_u64(ref self.storage, 0, value)
+    __ffi_write_u64(self.storage, 0, unsafe_cast[u64](value))
 }
 
 record Value layout(c) {
     kind: i32
-    v: union by kind {
-        1 => i: i64
-        2 => d: f64
-        3 => s: Foreign[i8]? until 0
-        5 => _
+    private v_i: i64
+    private v_d: f64
+    private v_s: Foreign[i8]?
+}
+
+func i(self: Value) -> i64? {
+    if self.kind == 1 {
+        return self.v_i
     }
+    return nil
+}
+
+func set_i(modify self: Value, value: i64) {
+    self.kind = 1
+    self.v_i = value
+}
+
+func d(self: Value) -> f64? {
+    if self.kind == 2 {
+        return self.v_d
+    }
+    return nil
+}
+
+func set_d(modify self: Value, value: f64) {
+    self.kind = 2
+    self.v_d = value
+}
+
+func s(self: Value) -> Foreign[i8]? {
+    if self.kind == 3 {
+        return self.v_s
+    }
+    return nil
+}
+
+func set_s(modify self: Value, value: Foreign[i8]?) {
+    self.kind = 3
+    self.v_s = value
 }
 
 record Cell {
@@ -184,11 +217,11 @@ func cell() -> Cell {
 }
 
 func flag(self: Cell) -> u8 {
-    return __ffi_read_u8(ref self.storage, 8)
+    return __ffi_read_u8(self.storage, 8)
 }
 
 func set_flag(modify self: Cell, value: u8) {
-    __ffi_write_u8(ref self.storage, 8, value)
+    __ffi_write_u8(self.storage, 8, value)
 }
 
 open enum Value_Kind: i32 {
@@ -210,10 +243,10 @@ func cell_flag(cell: Cell, raw: uint) -> u8 {
 }
 2	tests/gen_n00b/unions.writ:6:1	Raw
 35	tests/gen_n00b/unions.writ:8:1	Value
-45	tests/gen_n00b/unions.writ:18:1	Cell
-62	tests/gen_n00b/unions.writ:4:1	ValueKind
-70	tests/gen_n00b/unions.writ:23:1	value_kind
-75	tests/gen_n00b/unions.writ:24:1	cell_flag
+78	tests/gen_n00b/unions.writ:18:1	Cell
+95	tests/gen_n00b/unions.writ:4:1	ValueKind
+103	tests/gen_n00b/unions.writ:23:1	value_kind
+108	tests/gen_n00b/unions.writ:24:1	cell_flag
 library unions
 load static
 extern __value_kind unions_n00b_value_kind (ref[Value]) -> i32 fail: nil
