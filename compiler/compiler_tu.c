@@ -7186,9 +7186,11 @@ free_tu_state(void *data)
     core_dict_free(&state->integer_shift_seen);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->mark_annotations);
+    core_list_free(state->mark_owners);
     core_list_free(state->assignment_patterns);
     core_list_free(state->call_nodes);
     core_list_free(state->value_owners);
+    core_list_free(state->function_defs);
     core_list_free(state->rewrite_sites);
     core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
@@ -7244,10 +7246,12 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
-    state->mark_annotations = core_list_new(parse_tree_ptr_t);
+    state->mark_annotations = core_list_new(n00bb_mark_annotation_t);
+    state->mark_owners = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->call_nodes = core_list_new(parse_tree_ptr_t);
     state->value_owners = core_list_new(parse_tree_ptr_t);
+    state->function_defs = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);

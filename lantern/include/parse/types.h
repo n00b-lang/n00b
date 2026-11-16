@@ -164,6 +164,8 @@ typedef struct parse_node_facts_t {
     // place a write-only builtin writes), and whether it also read it.
     bool                    field_written;
     bool                    field_write_reads;
+    // For an effect query: the function it is written in, if any.
+    void                   *query_function;
     // A name that is called or referenced (`f()`, `ref f`), as opposed to
     // used as a value.
     bool                    names_called;

@@ -339,6 +339,13 @@ parse_tree_case_spelled(const parse_tree_t *node)
     return facts ? facts->case_spelled : (core_string_t){0};
 }
 
+static inline parse_sym_entry_t *
+parse_tree_query_function(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->query_function : nullptr;
+}
+
 static inline bool
 parse_tree_field_written(const parse_tree_t *node, bool *also_reads)
 {

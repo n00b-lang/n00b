@@ -196,7 +196,19 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
             if (facts) facts->in_effect_query = true;
         }
-        if (NT_IS(grammar, node, "effect-query")) state->effect_query_depth++;
+        if (NT_IS(grammar, node, "effect-query")) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts && state->function_defs.len)
+                facts->query_function = parse_tree_sym(
+                    state->function_defs.data[state->function_defs.len - 1]);
+            state->effect_query_depth++;
+        }
+        if (NT_IS(grammar, node, "func-def"))
+            core_list_push(state->function_defs, node);
+        if (NT_IS(grammar, node, "pos-param")
+            || NT_IS(grammar, node, "type-decl-one")
+            || NT_IS(grammar, node, "record-decl"))
+            core_list_push(state->mark_owners, node);
         if (NT_IS(grammar, node, "binding-pattern")) state->pattern_depth++;
         if (state->pattern_depth) {
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
@@ -214,6 +226,37 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     }
     if (NT_IS(grammar, node, "effect-query") && state->effect_query_depth)
         state->effect_query_depth--;
+    if (NT_IS(grammar, node, "func-def") && state->function_defs.len
+        && state->function_defs.data[state->function_defs.len - 1] == node)
+        state->function_defs.len--;
+    if (NT_IS(grammar, node, "mark-annotation") && state->mark_owners.len) {
+        parse_tree_t *owner =
+            state->mark_owners.data[state->mark_owners.len - 1];
+        n00bb_mark_annotation_t mark = {
+            .annotation = node,
+            .kind = NT_IS(grammar, owner, "pos-param") ? N00BB_MARKS_PARAMETER
+                : NT_IS(grammar, owner, "type-decl-one") ? N00BB_MARKS_FIELD
+                : N00BB_MARKS_TYPE,
+            .owner = parse_tree_sym(owner),
+            .function = state->function_defs.len
+                ? parse_tree_sym(
+                      state->function_defs.data[state->function_defs.len - 1])
+                : nullptr,
+        };
+        for (size_t i = state->mark_owners.len; i > 0 && !mark.record; i--)
+            if (NT_IS(grammar, state->mark_owners.data[i - 1], "record-decl"))
+                mark.record = parse_tree_sym(state->mark_owners.data[i - 1]);
+        core_list_push(state->mark_annotations, mark);
+    }
+    else if (NT_IS(grammar, node, "mark-annotation")) {
+        core_list_push(state->mark_annotations,
+            ((n00bb_mark_annotation_t){.annotation = node}));
+    }
+    if ((NT_IS(grammar, node, "pos-param")
+         || NT_IS(grammar, node, "type-decl-one")
+         || NT_IS(grammar, node, "record-decl")) && state->mark_owners.len
+        && state->mark_owners.data[state->mark_owners.len - 1] == node)
+        state->mark_owners.len--;
     if (NT_IS(grammar, node, "binding-pattern") && state->pattern_depth)
         state->pattern_depth--;
     if (NT_IS(grammar, node, "unary-expr")) {
@@ -646,8 +689,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (!NT_IS(grammar, statement, "top-when-body"))
                 core_list_push(state->module_top_level_statements, statement);
         }
-        if (NT_IS(grammar, node, "mark-annotation"))
-            core_list_push(state->mark_annotations, node);
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);

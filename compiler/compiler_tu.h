@@ -493,12 +493,31 @@ typedef struct {
 } n00bb_write_site_t;
 core_list_decl(n00bb_write_site_t);
 
+typedef enum : uint8_t {
+    N00BB_MARKS_PARAMETER,
+    N00BB_MARKS_FIELD,
+    N00BB_MARKS_TYPE,
+} n00bb_mark_owner_kind_t;
+
+// A mark annotation and what it is written on, recorded by the front end:
+// a parameter (of `function`), a field (of `record`), or a record type.
+typedef struct {
+    parse_tree_t *annotation;
+    n00bb_mark_owner_kind_t kind;
+    parse_sym_entry_t *owner;
+    parse_sym_entry_t *record;
+    parse_sym_entry_t *function;
+} n00bb_mark_annotation_t;
+core_list_decl(n00bb_mark_annotation_t);
+
 typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
-    core_list_t(parse_tree_ptr_t) mark_annotations;
+    core_list_t(n00bb_mark_annotation_t) mark_annotations;
+    // The parameters, fields and record types enclosing the walk.
+    core_list_t(parse_tree_ptr_t) mark_owners;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
     // Calls, `ref`s and unwraps, classified once names are resolved
     // (n00bb_classify_calls).
@@ -508,6 +527,8 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) value_owners;
     size_t effect_query_depth;
     size_t pattern_depth;
+    // The function definitions enclosing the walk, innermost last.
+    core_list_t(parse_tree_ptr_t) function_defs;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;

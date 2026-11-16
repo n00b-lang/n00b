@@ -277,10 +277,42 @@ enum {
     N00BB_PHASE_FINAL   = 3,
 };
 
+typedef enum : uint8_t {
+    N00BB_CHECK_CONSTANT,
+    N00BB_CHECK_QUERY,
+    N00BB_CHECK_AND,
+    N00BB_CHECK_OR,
+    N00BB_CHECK_NOT,
+} n00bb_check_term_kind_t;
+
+// A `check` statement's condition, as lowering translated it: constants and
+// effect queries joined by `and`, `or` and `not`. A query carries what
+// lowering resolved for it, so it is answered once summaries exist without
+// going back to the source.
+typedef struct n00bb_check_term_t {
+    n00bb_check_term_kind_t kind;
+    bool constant;
+    struct n00bb_check_term_t *left;
+    struct n00bb_check_term_t *right;
+    n00bb_query_t query;
+    // The effect, mark or parameter named, and the effect resolved to its
+    // declaration (qualified) when the query is about an effect or a mark.
+    core_string_t name;
+    core_string_t effect;
+    // The function asked about, as written, and its symbol.
+    core_string_t function_text;
+    parse_sym_entry_t *subject;
+    // The callback parameter asked about, or -1.
+    int64_t callback;
+    // A `may_carry` query's question to the mark analysis.
+    struct ir_instr_t *question;
+    core_diag_location_t location;
+} n00bb_check_term_t;
+
 typedef struct {
     core_translation_unit_t *unit;
-    parse_tree_t *statement;
-    parse_tree_t *expression;
+    core_diag_location_t location;
+    n00bb_check_term_t *condition;
 } n00bb_effect_check_t;
 core_list_decl(n00bb_effect_check_t);
 
