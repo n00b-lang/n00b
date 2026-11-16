@@ -213,14 +213,14 @@ reference_is_simple_assignment_target(parse_grammar_t *grammar,
 }
 
 core_list_t(parse_sym_entry_ptr_t)
-variant_arms_in_source_order(parse_grammar_t *grammar, parse_scope_t *scope)
+variant_arms_in_source_order(parse_scope_t *scope)
 {
     core_list_t(parse_sym_entry_ptr_t) ordered =
         core_list_new(parse_sym_entry_ptr_t);
     core_list_t(int32_t) starts = core_list_new(int32_t);
     for (parse_sym_entry_t *arm = scope ? scope->first_in_scope : nullptr;
          arm; arm = arm->next_in_scope) {
-        if (!n00bb_variant_arm_symbol(grammar, arm)) continue;
+        if (!n00bb_variant_arm_symbol(arm)) continue;
         int32_t start = arm->decl_node
             ? core_tree_node_value(arm->decl_node).start : INT32_MAX;
         size_t at = ordered.len;
@@ -281,15 +281,16 @@ n00bb_variant_scope_for_type(core_translation_unit_t *unit,
         ? type_symbol->member_scope : nullptr;
 }
 
+// A variant's arms are the only symbols in its scope: the declared ones,
+// and the tags of variants loaded from an interface.
 bool
-n00bb_variant_arm_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
+n00bb_variant_arm_symbol(const parse_sym_entry_t *symbol)
 {
-    if (!symbol) return false;
-    if (symbol->decl_node)
-        return NT_IS(grammar, symbol->decl_node, "variant-decl-one");
-    return symbol->kind == PARSE_SYM_TAG && symbol->scope
+    return symbol && symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
-                          CORE_STRING_STATIC("variant"));
+                          CORE_STRING_STATIC("variant"))
+        && (symbol->kind == PARSE_SYM_TAG
+            || symbol->kind == PARSE_SYM_VARIABLE);
 }
 
 th_type *
@@ -4577,7 +4578,7 @@ append_module_type_name(core_translation_unit_t *unit, core_string_t name,
 }
 
 bool
-finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
+finalize_variant_symbol_type(parse_tree_t *node,
                              core_translation_unit_t *unit,
                              n00bb_tu_state_t *state)
 {
@@ -4587,7 +4588,7 @@ finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
 
     core_list_t(th_member) arms = core_list_new(th_member);
     core_list_t(parse_sym_entry_ptr_t) ordered =
-        variant_arms_in_source_order(grammar, members);
+        variant_arms_in_source_order(members);
     for (size_t i = 0; i < ordered.len; i++) {
         parse_sym_entry_t *arm = ordered.data[i];
         if (!arm->type) {
@@ -8199,53 +8200,6 @@ is_module_initializer_use(parse_grammar_t *grammar, parse_tree_t *node,
     }
     return false;
 }
-
-bool
-initializer_node_is_reference_store_target(parse_grammar_t *grammar,
-                                        core_translation_unit_t *unit,
-                                        parse_tree_t *node,
-                                        parse_sym_entry_t *symbol)
-{
-    if (!node || !symbol) return false;
-    for (parse_tree_t *at = parse_tree_parent(node); at;
-         at = parse_tree_parent(at)) {
-        if (!NT_IS(grammar, at, "unary-expr")
-            || core_tree_num_children(at) < 2) continue;
-        parse_tree_t *operator = core_tree_child(at, 0);
-        parse_tree_t *operand = core_tree_child(at, 1);
-        parse_tree_t *lvalue = n00bb_simple_lvalue(operand);
-        if (!operator || !core_tree_is_leaf(operator)
-            || !core_string_eq(parse_tree_leaf_text(operator),
-                               CORE_STRING_STATIC("ref"))
-            || !lvalue || !node_is_within(node, lvalue)
-            || canonical_symbol(attached_symbol(grammar, unit, lvalue))
-                != canonical_symbol(symbol)) continue;
-        for (parse_tree_t *call = parse_tree_parent(at); call;
-             call = parse_tree_parent(call)) {
-            parse_tree_t *args = CHILD_NT(grammar, call, "call-args");
-            if (!args || !node_is_within(at, args)) continue;
-            parse_tree_t *callee = core_tree_num_children(call)
-                ? core_tree_child(call, 0) : nullptr;
-            parse_sym_entry_t *function = bound_function_symbol(callee);
-            if (!function) continue;
-            const n00bb_axiom_t *axiom = n00bb_axiom_of_symbol(function);
-            if (!axiom || !(axiom->writes & N00BB_AXIOM_PARAM(0))
-                || (axiom->roles & N00BB_AXIOM_READS_TARGET)) continue;
-            parse_tree_t *positional = CHILD_NT(grammar, args,
-                                                "positional-args");
-            core_list_t(n00bb_tree_ptr_t) actuals =
-                core_list_new(n00bb_tree_ptr_t);
-            if (positional)
-                collect_positional_nodes(grammar, positional, &actuals);
-            bool direct_target = actuals.len
-                && node_is_within(at, actuals.data[0]);
-            core_list_free(actuals);
-            if (direct_target) return true;
-        }
-    }
-    return false;
-}
-
 
 static parse_sym_entry_t *
 module_variable_initializer_owner(parse_grammar_t *grammar,

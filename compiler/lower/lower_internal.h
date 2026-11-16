@@ -537,6 +537,10 @@ struct n00bb_lower_context {
     bool write_back_open_index;
     core_dict_t node_types;
     bool node_types_ready;
+    // The field use each field read (and each place formed from one) was
+    // lowered from.
+    core_dict_t field_reads;
+    bool field_reads_ready;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_default_param_t) default_params;
@@ -1254,6 +1258,14 @@ n00bb_from_reference_address(ir_value_t *value);
 // field there, and stores the temporary back through `__write`.
 
 
+
+void
+n00bb_note_field_read(ir_lower_context_t *context, ir_value_t *value,
+                      parse_tree_t *node);
+
+void
+n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
+                         bool reads);
 
 ir_value_t *
 n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,

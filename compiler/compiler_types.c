@@ -1290,10 +1290,9 @@ static parse_sym_entry_t *n00bb_case_owner(const n00bb_dispatch_index_t *index,
     return symbol;
 }
 
-static bool case_member_of(n00bb_link_analysis_t *analysis,
-                           parse_sym_entry_t *member, bool variant)
+static bool case_member_of(parse_sym_entry_t *member, bool variant)
 {
-    return variant ? n00bb_variant_arm_symbol(analysis->grammar, member)
+    return variant ? n00bb_variant_arm_symbol(member)
                    : member->kind == PARSE_SYM_ENUM_CONST
                          && !n00bb_flagset_member(member);
 }
@@ -1312,7 +1311,7 @@ parse_sym_entry_t *n00bb_case_member(const n00bb_dispatch_index_t *index,
         *variant = arms;
     }
 
-    return member && case_member_of(index->analysis, member, arms) ? member
+    return member && case_member_of(member, arms) ? member
                                                                    : nullptr;
 }
 
@@ -2083,17 +2082,6 @@ static const ir_value_t *dispatch_operand(const ir_instr_t *in, uint32_t i)
                 && in->operands[i].kind != IR_OPD_NAMED_ARG
              ? ir_operand_value(&in->operands[i])
              : nullptr;
-}
-
-static uint32_t dispatch_positional(const ir_instr_t *in)
-{
-    uint32_t count = 0;
-
-    for (uint32_t i = 1; i < in->n_operands; i++) {
-        count += dispatch_operand(in, i) != nullptr;
-    }
-
-    return count;
 }
 
 static const void *read_variable(const ir_value_t *value)
@@ -3004,16 +2992,9 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
     }
 
     parse_grammar_t  *grammar   = index->analysis->grammar;
-    parse_tree_t     *arguments = child_nt(grammar, call,
-                                           CORE_STRING_STATIC("call-args"));
-    n00bb_call_plan_t probe     = {0};
-
-    n00bb_call_plan_init(&probe, grammar, nullptr, nullptr, 0);
-    n00bb_call_plan_collect(&probe, arguments);
-
-    bool method_style = dispatch_positional(at) > probe.positional.len;
-
-    n00bb_call_plan_free(&probe);
+    bool method_style = ir_annot_get((ir_annots_t *)&at->annots,
+                                     N00BB_DISPATCH_IMPLICIT_SELF_KEY)
+        != nullptr;
 
     n00bb_dispatch_target_t target = {0};
     bool found = dispatch_callee(index, unit, receiver, method,
@@ -4123,17 +4104,11 @@ static bool check_dispatch_call(th_ctx *types,
     }
 
     parse_grammar_t        *grammar   = index->analysis->grammar;
-    parse_tree_t           *arguments = child_nt(
-        grammar, call, CORE_STRING_STATIC("call-args"));
-    n00bb_call_plan_t       probe     = {0};
     n00bb_dispatch_target_t target    = {0};
 
-    n00bb_call_plan_init(&probe, grammar, nullptr, nullptr, 0);
-    n00bb_call_plan_collect(&probe, arguments);
-
-    bool method_style = dispatch_positional(at) > probe.positional.len;
-
-    n00bb_call_plan_free(&probe);
+    bool method_style = ir_annot_get((ir_annots_t *)&at->annots,
+                                     N00BB_DISPATCH_IMPLICIT_SELF_KEY)
+        != nullptr;
     if (!dispatch_callee(index, unit, self->type, at->operands[0].name,
                          at->n_operands - 1, &target)) {
         return true;

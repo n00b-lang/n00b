@@ -587,10 +587,9 @@ bool identifier_is_variant_case_expression(parse_grammar_t *grammar,
 parse_scope_t *n00bb_variant_scope_for_type(core_translation_unit_t *unit,
                                             n00bb_tu_state_t *state,
                                             th_type *type);
-bool n00bb_variant_arm_symbol(parse_grammar_t *grammar,
-                              parse_sym_entry_t *symbol);
+bool n00bb_variant_arm_symbol(const parse_sym_entry_t *symbol);
 core_list_t(parse_sym_entry_ptr_t) variant_arms_in_source_order(
-    parse_grammar_t *grammar, parse_scope_t *scope);
+    parse_scope_t *scope);
 bool report_shadowed_litmods(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state);
 bool n00bb_declares_litmod(n00bb_tu_state_t *state,
@@ -632,9 +631,6 @@ bool module_initializer_declaration(parse_grammar_t *grammar,
 bool is_module_initializer_use(parse_grammar_t *grammar,
                                parse_tree_t *node,
                                parse_sym_entry_t *initializer_owner);
-bool initializer_node_is_reference_store_target(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *node,
-    parse_sym_entry_t *symbol);
 void validate_builtin_generic_type_arity(parse_grammar_t *grammar,
                                          parse_tree_t *node,
                                          core_translation_unit_t *unit,
@@ -719,8 +715,7 @@ bool record_function_parameter_fact(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state);
 void append_module_type_name(core_translation_unit_t *unit,
                              core_string_t name, core_buffer_t *buffer);
-bool finalize_variant_symbol_type(parse_grammar_t *grammar,
-                                  parse_tree_t *node,
+bool finalize_variant_symbol_type(parse_tree_t *node,
                                   core_translation_unit_t *unit,
                                   n00bb_tu_state_t *state);
 bool finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,

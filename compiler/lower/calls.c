@@ -273,6 +273,23 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
         child_nt(grammar, arguments, CORE_STRING_STATIC("keyword-args")),
         &keywords);
     bool ok = dispatch != nullptr;
+    // More positional operands than written arguments: the receiver is
+    // implicit, so argument diagnostics count from the second operand.
+    core_list_t(n00bb_tree_ptr_t) written = core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, arguments, CORE_STRING_STATIC("positional-args")),
+        &written);
+    uint32_t positional = 0;
+    for (uint32_t i = 1; dispatch && i < dispatch->n_operands; i++)
+        positional += dispatch->operands[i].kind != IR_OPD_NAME
+            && dispatch->operands[i].kind != IR_OPD_NAMED_ARG
+            && ir_operand_value(&dispatch->operands[i]) != nullptr;
+    n00bb_lower_context_t *annotating = context->user;
+    if (ok && positional > written.len)
+        ok = ir_annot_set(annotating->ir_context, &dispatch->annots,
+            (ir_annot_t){.key = N00BB_DISPATCH_IMPLICIT_SELF_KEY,
+                         .kind = IR_ANNOT_BOOL, .b = true});
+    core_list_free(written);
     for (size_t i = 0; ok && i < keywords.len; i++) {
         parse_tree_t *expression = child_nt(grammar, keywords.data[i],
             CORE_STRING_STATIC("expression"));
@@ -1280,6 +1297,13 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (array) core_list_push(values, array);
         else collected = false;
     }
+    // A builtin that writes its first argument (an atomic store) writes the
+    // place that argument refers to; it reads it too only if the axiom says.
+    const n00bb_axiom_t *axiom = collected && values.len
+        ? n00bb_axiom_of_symbol(symbol) : nullptr;
+    if (axiom && (axiom->writes & N00BB_AXIOM_PARAM(0)))
+        n00bb_note_place_written(context, values.data[0],
+                                 axiom->roles & N00BB_AXIOM_READS_TARGET);
     bool query = native_builtin && effects_query_builtin(symbol);
     ir_value_t *query_subject = query && parameter_count
         && argument_by_parameter[0]

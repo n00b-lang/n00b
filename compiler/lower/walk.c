@@ -944,37 +944,6 @@ static bool lower_tree_nt_post(parse_visit_t *visit)
     return lower_tree_run_visit(visit, false, true);
 }
 
-static parse_tree_t *
-lower_only_nonterminal_child(parse_tree_t *node)
-{
-    parse_tree_t *only = nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (core_tree_is_leaf(child)) continue;
-        if (only) return nullptr;
-        only = child;
-    }
-    return only;
-}
-
-static parse_tree_t *
-lower_discarded_expression(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        n00bb_emit_t emit;
-        bool emits = n00bb_node_emit(grammar, node, &emit);
-        parse_tree_t *inner = nullptr;
-        if (emits && core_string_eq(emit.action,
-                                    CORE_STRING_STATIC("identity")))
-            inner = core_tree_child(node, emit.operands[0]);
-        else if (!emits)
-            inner = lower_only_nonterminal_child(node);
-        if (!inner || core_tree_is_leaf(inner)) return node;
-        node = inner;
-    }
-    return node;
-}
-
 static bool lower_literal_handler_call(parse_tree_t *node)
 {
     while (node && !core_tree_is_leaf(node)) {
@@ -995,18 +964,18 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     if (state->failed || !state->context->reachable
         || !state->context->diagnostics)
         return true;
-    parse_tree_t *expression = lower_discarded_expression(visit->grammar,
+    // A discarded `f()!` discards the call's successful value.
+    parse_tree_t *expression = parse_tree_core(
         parse_tree_resolve_child_ref(visit->grammar, visit->node,
                                      visit->annot->value_ref));
-    const parse_rule_t *rule = expression && !core_tree_is_leaf(expression)
-        ? parse_tree_rule(visit->grammar, expression) : nullptr;
+    while (parse_tree_unwrapped(expression))
+        expression = parse_tree_core(parse_tree_unwrapped(expression));
     bool found = false;
     ir_value_t *value = expression
         ? core_dict_get(&state->values, expression, &found) : nullptr;
     th_type *type = found && value ? value->type : nullptr;
     if (!expression || lower_literal_handler_call(expression)) return true;
-    if (rule && parse_rule_find_annot(visit->grammar, rule,
-                                      PARSE_ANNOT_CALL)) {
+    if (parse_tree_is_call(expression)) {
         ir_instr_t *call  = found && value && value->kind == IR_VAL_INSTR
                               ? value->def : nullptr;
         if (call && (call->op == IR_OP_CALL || call->op == IR_OP_DISPATCH

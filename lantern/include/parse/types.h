@@ -156,6 +156,14 @@ typedef struct parse_node_facts_t {
     bool                    call_classified;
     bool                    call_unqualified;
     bool                    call_propagated;
+    // A call written as one (`f(x)`, `r.m(x)`), not an index or an operator.
+    bool                    call_written;
+    // For `e!`: `e`, whose successful value this is.
+    void                   *unwrapped;
+    // A field use that lowering stored to (an assignment's target, or the
+    // place a write-only builtin writes), and whether it also read it.
+    bool                    field_written;
+    bool                    field_write_reads;
     // A name that is called or referenced (`f()`, `ref f`), as opposed to
     // used as a value.
     bool                    names_called;

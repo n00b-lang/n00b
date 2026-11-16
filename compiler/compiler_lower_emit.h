@@ -5,6 +5,10 @@
 #include "lower/walk.h"
 
 #define N00BB_OPEN_CAST_KEY CORE_STRING_STATIC("n00bb.open-cast")
+// On a dispatch: its receiver was not written as an argument (`r.m(...)`,
+// or a constructor's fresh object).
+#define N00BB_DISPATCH_IMPLICIT_SELF_KEY \
+    CORE_STRING_STATIC("n00bb.dispatch.implicit-self")
 #define N00BB_RECORD_LITERAL_KEY CORE_STRING_STATIC("n00bb.record-literal")
 #define N00BB_SWITCH_COPY_KEY CORE_STRING_STATIC("n00bb.switch.copy")
 #define N00BB_WRITE_BACK_KEY CORE_STRING_STATIC("n00bb.write-back")

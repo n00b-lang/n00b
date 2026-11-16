@@ -44,6 +44,12 @@ n00bb_lower_tuple_field(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     ir_value_t *field = n00bb_extract_step(context, base,
         (n00bb_projection_step_t){.name = name}, result_type, span);
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    if (field && state)
+        n00bb_note_lowered_field_use(state->link_analysis, visit->node,
+                                     base, name);
+    if (field) n00bb_note_field_read(context, field, visit->node);
     return field ? (ir_lower_result_t){IR_LOWER_VALUE, field}
                  : lower_internal(context, span,
                                   "could not emit a tuple field read");
@@ -164,7 +170,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         if (!base) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
         // A field kept in storage (through a reference or object) is loaded
         // alone. A variant's arm is always taken out of the variant's value.
-        bool arm = n00bb_variant_arm_symbol(visit->grammar, member);
+        bool arm = n00bb_variant_arm_symbol(member);
         ir_value_t *address = arm ? nullptr
             : n00bb_field_storage(context, base, member->name, result_type,
                                   span);
@@ -183,6 +189,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                                                load->dest, result_type))
                 return lower_internal(context, span,
                     "could not load a field from its storage");
+            n00bb_note_field_read(context, load->dest, visit->node);
             return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
         }
         ir_instr_t *extract = ir_lower_emit_instruction(context, IR_OP_EXTRACT,
@@ -199,6 +206,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                                  .kind = IR_ANNOT_BOOL, .b = true})))
             return lower_internal(context, span,
                                "could not emit a record field read");
+        n00bb_note_field_read(context, extract->dest, visit->node);
         return (ir_lower_result_t){IR_LOWER_VALUE, extract->dest};
     }
     ir_value_t *binding = ir_lower_bound_value(context,

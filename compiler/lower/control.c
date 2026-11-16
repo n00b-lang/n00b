@@ -2615,7 +2615,7 @@ n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
     // same name doesn't hide an arm or enum member.
     if (symbol && symbol->kind != PARSE_SYM_ENUM_CONST
         && symbol->kind != PARSE_SYM_FUNCTION
-        && !n00bb_variant_arm_symbol(grammar, symbol)) return false;
+        && !n00bb_variant_arm_symbol(symbol)) return false;
     if (name) *name = text;
     return true;
 }
@@ -2999,7 +2999,7 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
     if (!lower) return false;
     parse_sym_entry_t *arm = attached_symbol(visit->grammar, lower->unit,
                                              visit->node);
-    if (!n00bb_variant_arm_symbol(visit->grammar, arm)
+    if (!n00bb_variant_arm_symbol(arm)
         || ir_lower_node_value(context, visit->node)) return true;
     parse_tree_t *receiver_node = core_tree_child(visit->node, 0);
     ir_value_t *value = ir_lower_node_value(context, receiver_node);

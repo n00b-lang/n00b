@@ -250,6 +250,79 @@ emit_address(ir_lower_context_t *context, ir_op_t op, th_type *referent,
 static bool
 element_read(ir_lower_context_t *context, const ir_instr_t *read);
 
+// Remembers that `value` reads the field named at `node`, so that writing
+// the place it was read from is recorded on that field use.
+void
+n00bb_note_field_read(ir_lower_context_t *context, ir_value_t *value,
+                      parse_tree_t *node)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    if (!lower || !value || !node) return;
+    if (!lower->field_reads_ready) {
+        core_dict_init(&lower->field_reads, nullptr, nullptr);
+        lower->field_reads_ready = true;
+    }
+    core_dict_put(&lower->field_reads, value, node);
+}
+
+static parse_tree_t *
+field_read_node(n00bb_lower_context_t *lower, const ir_value_t *value)
+{
+    return lower && lower->field_reads_ready && value
+        ? core_dict_get(&lower->field_reads, (void *)value, nullptr)
+        : nullptr;
+}
+
+// Records that the place `target` names (a value read from it, or its
+// address) is written, on each field use that place was formed from: a
+// write to `a.b.c` writes `c`, and `b` and `a` through it. `reads` when the
+// write also reads the old value (`+=`).
+void
+n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
+                         bool reads)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    for (size_t depth = 0; lower && lower->field_reads_ready && target
+         && depth < 64; depth++) {
+        parse_tree_t *node = field_read_node(lower, target);
+        parse_node_facts_t *facts = node
+            ? parse_tree_facts_for_update(node) : nullptr;
+            if (facts) {
+            facts->field_written = true;
+            facts->field_write_reads |= reads;
+        }
+        ir_instr_t *step = target->kind == IR_VAL_INSTR ? target->def
+                                                        : nullptr;
+        if (!step) return;
+        uint32_t base = 0;
+        switch (step->op) {
+        case IR_OP_EXTRACT: case IR_OP_LOAD: case IR_OP_FIELD:
+        case IR_OP_INDEX: case IR_OP_SEQUENCE_GET: case IR_OP_NOMINAL_CAST:
+            break;
+        case IR_OP_DISPATCH: {
+            // A reference made from the address, or an element of a sequence
+            // kept in the place. Writing an element of any other container
+            // (a list) reads the place to find the container.
+            ir_value_t *source = step->n_operands > 1
+                ? ir_operand_value(&step->operands[1]) : nullptr;
+            th_type *held = source ? th_resolve(source->type) : nullptr;
+            bool reference = step->operands[0].kind == IR_OPD_NAME
+                && core_string_starts_with(step->operands[0].name,
+                                           CORE_STRING_STATIC("__ref"));
+            if (!reference && !(element_read(context, step) && held
+                                && th_kind_of(held) == TH_SEQUENCE))
+                return;
+            base = 1;
+            break;
+        }
+        default:
+            return;
+        }
+        target = step->n_operands > base
+            ? ir_operand_value(&step->operands[base]) : nullptr;
+    }
+}
+
 // Erases the read that produced `value` once nothing else uses it, and the
 // reads it was made from, so that an operand used only as a place is never
 // read.
@@ -541,8 +614,12 @@ place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
                             nullptr, (core_string_t){0}, span);
     ir_instr_t *read = value->kind == IR_VAL_INSTR ? value->def : nullptr;
     ir_value_t *place = nullptr;
+    n00bb_lower_context_t *noting = context->user;
+    parse_tree_t *field_use = field_read_node(noting, value);
     if (read && read->op == IR_OP_LOAD && read->n_operands == 1) {
         place = ir_operand_value(&read->operands[0]);
+        if (field_use && !field_read_node(noting, place))
+            n00bb_note_field_read(context, place, field_use);
         drop_read(context, value, place);
         return place;
     }
@@ -602,6 +679,8 @@ place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
             if (!suffix || !ir_value_set_shape(place, suffix)) place = nullptr;
         }
     }
+    if (place && field_use && !field_read_node(noting, place))
+        n00bb_note_field_read(context, place, field_use);
     if (place) drop_read(context, value, place);
     return place;
 }
@@ -692,6 +771,9 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                ir_value_t *value, bool checked, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
+    // The fields this writes, read as well when the old value is still used.
+    n00bb_note_place_written(context, target,
+        target && ir_value_has_uses(context->function, target));
     // A local or global read whole is written as itself, rather than
     // through an address that would make it live in memory.
     ir_instr_t *read = target && target->kind == IR_VAL_INSTR ? target->def

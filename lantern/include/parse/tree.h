@@ -340,6 +340,28 @@ parse_tree_case_spelled(const parse_tree_t *node)
 }
 
 static inline bool
+parse_tree_field_written(const parse_tree_t *node, bool *also_reads)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    if (also_reads) *also_reads = facts && facts->field_write_reads;
+    return facts && facts->field_written;
+}
+
+static inline parse_tree_t *
+parse_tree_unwrapped(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->unwrapped : nullptr;
+}
+
+static inline bool
+parse_tree_is_call(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->call_written;
+}
+
+static inline bool
 parse_tree_names_called(const parse_tree_t *node)
 {
     const parse_node_facts_t *facts = parse_tree_facts(node);

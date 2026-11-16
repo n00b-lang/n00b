@@ -93,9 +93,6 @@ bool call_units_failed(core_translation_unit_t *const *units,
 bool publish_link_call_dependencies(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis, uint32_t producer_stage,
     core_link_contribution_state_t *state_out);
-parse_tree_t *call_argument_for_parameter(parse_grammar_t *grammar,
-    parse_tree_t *call, parse_sym_entry_t *function, size_t target,
-    bool trait_dispatch);
 core_link_declaration_t *linked_method_declaration(core_link_unit_t *link,
     const th_env_method_t *method);
 typedef enum {
@@ -108,8 +105,6 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     core_translation_unit_t *caller, core_string_t qualified_trait,
     core_string_t method_name);
 bool n00bb_field_shared_outside(parse_sym_entry_t *field);
-bool n00bb_field_use_is_write(parse_grammar_t *grammar,
-    parse_sym_entry_t *field, parse_tree_t *use, bool *also_reads);
 th_type *constructor_signature_instance(th_ctx *types,
     parse_sym_entry_t *symbol);
 th_type *link_semantic_type_for_symbol(parse_grammar_t *grammar,
@@ -321,6 +316,13 @@ typedef struct {
 } n00bb_nominal_hit_t;
 core_list_decl(n00bb_nominal_hit_t);
 
+typedef struct {
+    parse_tree_t *node;
+    struct ir_value_t *receiver;
+    core_string_t name;
+} n00bb_lowered_field_use_t;
+core_list_decl(n00bb_lowered_field_use_t);
+
 typedef struct n00bb_link_analysis_t {
     parse_grammar_t *grammar;
     ir_ctx_t *ir_context;
@@ -418,6 +420,9 @@ typedef struct n00bb_link_analysis_t {
     bool keep_summaries;
     n00bb_resolver_t *resolver;
     struct n00bb_cache_t *cache;
+    // Field uses name resolution could not type, with the IR value lowering
+    // read the field from (see n00bb_note_lowered_field_use).
+    core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
 } n00bb_link_analysis_t;
 
 void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
@@ -455,6 +460,10 @@ parse_scope_t *record_scope_for_type(n00bb_link_analysis_t *analysis,
 bool resolve_type_member_references(core_link_unit_t *link,
                                     n00bb_link_analysis_t *analysis);
 bool bind_field_member_uses(n00bb_link_analysis_t *analysis);
+void n00bb_note_lowered_field_use(n00bb_link_analysis_t *analysis,
+                                  parse_tree_t *node,
+                                  struct ir_value_t *receiver,
+                                  core_string_t name);
 bool diagnose_reserved_declarations(core_translation_unit_t *unit,
                                     const th_env *environment);
 

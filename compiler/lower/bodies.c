@@ -770,6 +770,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 
 cleanup:
     if (lower_data.node_types_ready) core_dict_free(&lower_data.node_types);
+    if (lower_data.field_reads_ready) core_dict_free(&lower_data.field_reads);
     for (size_t i = 0; i < lower_data.branches.len; i++)
         core_list_free(lower_data.branches.data[i].arms);
     core_list_free(lower_data.branches);

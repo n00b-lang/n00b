@@ -695,7 +695,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
         }
         if (NT_IS(grammar, node, "variant-decl")
-            && !finalize_variant_symbol_type(grammar, node, unit, state)) {
+            && !finalize_variant_symbol_type(node, unit, state)) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "checking declarations",
                 "could not resolve the declared variant type");
