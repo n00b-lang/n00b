@@ -467,6 +467,89 @@ n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
     return ir_lower_node_value(context, node);
 }
 
+// A slice bound written as an integer literal, possibly negated.
+static bool
+constant_slice_bound(parse_grammar_t *grammar, parse_tree_t *node,
+                     int64_t *value)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
+            ir_lit_t literal = {0};
+            if (!n00bb_parse_switch_integer(first_token_text(node), &literal)
+                || literal.mag > (ir_uint_t)INT64_MAX) return false;
+            *value = (int64_t)ir_lit_signed(literal);
+            return true;
+        }
+        if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr"))
+            && core_tree_num_children(node) == 2
+            && parse_tree_leaf_is(core_tree_child(node, 0),
+                                  CORE_STRING_STATIC("-"))) {
+            int64_t inner = 0;
+            if (!constant_slice_bound(grammar, core_tree_child(node, 1),
+                                      &inner)) return false;
+            *value = -inner;
+            return true;
+        }
+        if (core_tree_num_children(node) != 1) return false;
+        node = core_tree_child(node, 0);
+    }
+    return false;
+}
+
+bool
+n00bb_lower_slice_arguments(ir_lower_context_t *context,
+                            parse_grammar_t *grammar, parse_tree_t *contents,
+                            ir_value_t *arguments[3])
+{
+    parse_tree_t *bounds[2] = {0};
+    size_t position = 0;
+    bool inclusive = false;
+    for (size_t i = 0; contents && i < core_tree_num_children(contents);
+         i++) {
+        parse_tree_t *part = core_tree_child(contents, i);
+        if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
+            || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
+            position = 1;
+            inclusive = core_string_eq(first_token_text(part),
+                                       CORE_STRING_STATIC("to"));
+        }
+        else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
+            bounds[position] = part;
+    }
+    ir_span_t span = lower_span_for_tree(context, contents);
+    // Constant bounds counting from the same end of the sequence are
+    // ordered whatever its length: a start after the end can only fail.
+    int64_t start = 0, end = 0;
+    if (bounds[0] && bounds[1]
+        && constant_slice_bound(grammar, bounds[0], &start)
+        && constant_slice_bound(grammar, bounds[1], &end)
+        && (start < 0) == (end < 0)
+        && start > (inclusive ? end + 1 : end)) {
+        lower_report(context, N00B_DIAG_SLICE_REVERSED, span,
+            N00B_TEXT_SLICE_REVERSED,
+            N00BB_ARGS(ARG_NUMBER(start), ARG_NUMBER(end)));
+        lower_help(context, N00B_TEXT_SLICE_REVERSED_HELP, N00BB_NO_ARGS);
+        return false;
+    }
+    th_type *integer = n00bb_ir_builtin_type(context->module,
+                                             CORE_STRING_STATIC("int"));
+    th_type *bound_type = integer
+        ? th_option(ir_module_types(context->module), integer) : nullptr;
+    arguments[0] = n00bb_lower_slice_bound(context, bounds[0], bound_type,
+                                           span);
+    arguments[1] = n00bb_lower_slice_bound(context, bounds[1], bound_type,
+                                           span);
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    ir_instr_t *flag = bool_type
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
+    arguments[2] = flag && ir_lower_set_temp_dest(context, flag,
+            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
+        && ir_instr_operand_int(flag, inclusive ? 1 : 0)
+        ? flag->dest : nullptr;
+    return arguments[0] && arguments[1] && arguments[2];
+}
+
 bool
 n00bb_lower_index_store_at(ir_lower_context_t *context,
                            parse_grammar_t *grammar,
@@ -498,48 +581,15 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             ? ir_lower_node_value(context, index_arg) : nullptr;
         arguments[2] = arguments[4];
     }
-    else {
-        parse_tree_t *bounds[2] = {0};
-        size_t position = 0;
-        bool inclusive = false, separator_seen = false;
-        for (size_t i = 0; contents && i < core_tree_num_children(contents);
-             i++) {
-            parse_tree_t *part = core_tree_child(contents, i);
-            if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
-                || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
-                position = 1;
-                separator_seen = true;
-                inclusive = core_string_eq(first_token_text(part),
-                                           CORE_STRING_STATIC("to"));
-            }
-            else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
-                bounds[position] = part;
-        }
-        th_type *integer = n00bb_ir_builtin_type(context->module,
-                                                 CORE_STRING_STATIC("int"));
-        th_type *bound_type = integer
-            ? th_option(ir_module_types(context->module), integer) : nullptr;
-        ir_span_t span = lower_span_for_tree(context, contents);
-        arguments[1] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[0], bound_type, span)
-            : nullptr;
-        arguments[2] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[1], bound_type, span)
-            : nullptr;
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
-        ir_instr_t *flag = separator_seen && bool_type
-            ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
-        if (flag && ir_lower_set_temp_dest(context, flag,
-            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
-            && ir_instr_operand_int(flag, inclusive ? 1 : 0)) {
-            arguments[3] = flag->dest;
-        }
-    }
-    ir_value_t *operands[4] = {arguments[0], arguments[1], arguments[2],
-                               arguments[3]};
+    else if (!n00bb_lower_slice_arguments(context, grammar, contents,
+                                          &arguments[1]))
+        return false;
+    // `__write(self, index, value)`, or `__write_slice(self, start, end,
+    // inclusive, values)`.
+    ir_value_t *operands[5] = {arguments[0], arguments[1], arguments[2],
+                               arguments[3], arguments[4]};
     if (!slice) operands[2] = arguments[4];
-    else operands[3] = arguments[4];
-    size_t count = slice ? 4 : 3;
+    size_t count = slice ? 5 : 3;
     bool complete = lower != nullptr;
     for (size_t i = 0; i < count; i++) complete &= operands[i] != nullptr;
     ir_value_t *written = complete

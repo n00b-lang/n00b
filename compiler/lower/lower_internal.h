@@ -1438,6 +1438,23 @@ ir_value_t *
 n00bb_emit_let_default_array(ir_lower_context_t *context, th_type *type,
                              ir_span_t span);
 
+// The bounds of slice `contents` (`a:b`, `a until b`, `a to b`, with either
+// bound left out) as `__slice` and `__write_slice` take them: each an
+// `int?`, nil when left out, then whether `to` includes the end. Reports
+// constant bounds in the wrong order, and returns false. (Bounds outside an
+// array of known length are checked on the IR: n00bb_check_known_ranges.)
+bool
+n00bb_lower_slice_arguments(ir_lower_context_t *context,
+                            parse_grammar_t *grammar, parse_tree_t *contents,
+                            ir_value_t *arguments[3]);
+
+// The length of array `value`, in `function`, when it is known without
+// running the program: a declared size, a literal's, or the one every whole
+// assignment to the variable holding it gives.
+bool
+n00bb_static_array_length(const ir_func_t *function, const ir_value_t *value,
+                          uint64_t *length);
+
 bool
 n00bb_open_result_variable(ir_lower_context_t *context,
                            parse_sym_entry_t *function);

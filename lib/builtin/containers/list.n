@@ -51,14 +51,16 @@ func __write(self: List['T], index: int, value: 'T) {
     self.items[at] = value
 }
 
-func __slice(self: List['T], start_ix: int,
-                    end_ix: int) -> containers.slice.Slice['T] {
-    check_range(self, start_ix, end_ix)
-    let length: int       = end_ix - start_ix
+func __slice(self: List['T], start_ix: int?, end_ix: int?,
+             inclusive: bool) -> containers.slice.Slice['T] {
+    let start: int = containers.slice.slice_bound(start_ix, 0, self.count)
+    let end: int = containers.slice.slice_end(end_ix, inclusive, self.count)
+    check_range(self, start, end)
+    let length: int       = end - start
     var items:  Array['T] = new[Array['T]](length)
     var at:     int       = 0
     while at < length {
-        items[at] = self.items[start_ix + at]
+        items[at] = self.items[start + at]
         at += 1
     }
     return new[containers.slice.Slice['T]](items, 0, length)
@@ -67,23 +69,8 @@ func __slice(self: List['T], start_ix: int,
 func __write_slice(self: List['T], start_ix: int?,
                           end_ix: int?, inclusive: bool,
                           values: List['T]) {
-    var start: int = 0
-    if start_ix != nil {
-        start = start_ix
-    }
-    var end: int = cast[int]self.count
-    if end_ix != nil {
-        end = end_ix
-        if end < 0 {
-            end += cast[int]self.count
-        }
-        if inclusive {
-            end += 1
-        }
-    }
-    if start < 0 {
-        start += cast[int]self.count
-    }
+    let start: int = containers.slice.slice_bound(start_ix, 0, self.count)
+    let end: int = containers.slice.slice_end(end_ix, inclusive, self.count)
     check_range(self, start, end)
 
     let incoming: uint      = values.count

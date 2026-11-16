@@ -1,0 +1,68 @@
+// A constant index or slice bound outside an array of known length is
+// reported without running the program.
+record Holder {
+    tags: Array[int][2]
+}
+
+var fixed: Array[int][3]
+
+func indexes() -> int {
+    var grid: Array[int][2][3]
+    var holder: Holder
+    fixed[3] = 1
+    let low = fixed[-4]
+    let row = grid[2][0]
+    let column = grid[1][3]
+    let tag = holder.tags[2]
+    let fine = fixed[2] + fixed[-3] + grid[-2][2] + holder.tags[-1]
+    return low + row + column + tag + fine
+}
+
+func slices() -> uint {
+    let mixed = fixed[2:-2]
+    let past = fixed[4:4]
+    let through = fixed[1 to 3]
+    let below = fixed[:-4]
+    let meets = fixed[3:3]
+    let whole = fixed[-3:]
+    return mixed.len() + past.len() + through.len() + below.len() + meets.len() + whole.len()
+}
+
+// Range analysis knows a literal's length, and the values an index or bound
+// can take, not just constants.
+let literal: Array[int] = [10, 20, 30]
+
+func ranges(c: bool) -> int {
+    let past = literal[3]
+    let at = 4
+    let held = literal[at]
+    var from = 3
+    if c {
+        from = 4
+    }
+    let joined = fixed[from]
+    let backwards = fixed[from:2]
+    let beyond = literal[1:4]
+    var maybe = 1
+    if c {
+        maybe = 5
+    }
+    let unsure = fixed[maybe]
+    return past + held + joined + cast[int](backwards.len()) + cast[int](beyond.len()) + unsure
+}
+
+// The length of an array passed in isn't known, and neither is one whose
+// address goes to a call that could assign it, so these are checked when
+// the program runs.
+func grow(modify items: Array[int]) {
+    items = [1, 2, 3, 4, 5]
+}
+
+func unknown(items: Array[int]) -> int {
+    var local: Array[int] = [1, 2, 3]
+    grow(local)
+    return items[7] + cast[int](items[3:9].len()) + local[4]
+}
+
+require indexes() == 0 and slices() == 0 and unknown([1]) == 0
+require ranges(true) == 0

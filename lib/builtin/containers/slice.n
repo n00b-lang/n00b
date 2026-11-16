@@ -14,15 +14,45 @@ func __init(modify self: Slice['T], consume items: Array['T],
     self.end_ix = end_ix
 }
 
-func __slice(self: Array['T], start_ix: int, end_ix: int) -> Slice['T] {
-    let available: uint = __array_length(self)
-    if start_ix < 0 or start_ix > end_ix
-        or (cast[uint] end_ix) > available {
-        panic.index_out_of_range(end_ix, available, "an array")
+// A bound of a slice of something `length` long, as written: left out, it
+// is `missing` (the start or the end); negative, it counts from the end.
+func slice_bound(bound: int?, missing: int, length: uint) -> int {
+    if bound == nil {
+        return missing
     }
-    let count: uint = cast[uint](end_ix - start_ix)
+    var at: int = bound
+    if at < 0 {
+        at += cast[int] length
+    }
+    return at
+}
+
+// The end of a slice: `to` (inclusive) takes the item at the end bound too.
+func slice_end(bound: int?, inclusive: bool, length: uint) -> int {
+    let at: int = slice_bound(bound, cast[int] length, length)
+    if inclusive and bound != nil {
+        return at + 1
+    }
+    return at
+}
+
+// Bounds may meet anywhere from the start to the end, for an empty slice;
+// any other range panics.
+func check_slice(start: int, end: int, length: uint, container: string) {
+    if start < 0 or end < start or cast[uint](end) > length {
+        panic.range_out_of_bounds(start, end, length, container)
+    }
+}
+
+func __slice(self: Array['T], start_ix: int?, end_ix: int?,
+             inclusive: bool) -> Slice['T] {
+    let available: uint = __array_length(self)
+    let start: int = slice_bound(start_ix, 0, available)
+    let end: int = slice_end(end_ix, inclusive, available)
+    check_slice(start, end, available, "an array")
+    let count: uint = cast[uint](end - start)
     var copy: Array['T] = new[Array['T]](cast[int] count)
-    containers.array.copy_items(copy, 0, self, cast[uint] start_ix, count)
+    containers.array.copy_items(copy, 0, self, cast[uint] start, count)
     return new[Slice['T]](copy, 0, cast[int] count)
 }
 

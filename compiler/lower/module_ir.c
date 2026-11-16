@@ -2760,6 +2760,210 @@ size_let_default(core_translation_unit_t *unit, ir_func_t *function,
     return true;
 }
 
+// An integer constant, through copies and casts that keep its value.
+static bool
+constant_index(const ir_value_t *value, int64_t *out)
+{
+    for (int hops = 0; value && hops < 8; hops++) {
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                            : nullptr;
+        if (!def || !def->n_operands) return false;
+        if (def->op == IR_OP_CONST) {
+            const ir_operand_t *literal = &def->operands[0];
+            if (literal->kind != IR_OPD_CONST || literal->lit.is_float
+                || literal->lit.i.mag > (ir_uint_t)INT64_MAX) return false;
+            *out = (int64_t)ir_lit_signed(literal->lit.i);
+            return true;
+        }
+        if (def->op != IR_OP_COPY && def->op != IR_OP_NOMINAL_CAST)
+            return false;
+        value = ir_operand_value(&def->operands[0]);
+    }
+    return false;
+}
+
+// The values `value` can take at `at`, as far as range analysis can tell:
+// each end, and whether it is bounded.
+typedef struct {
+    int64_t lo, hi;
+    bool    has_lo, has_hi;
+} known_range_t;
+
+static int64_t
+clamp_int(ir_int_t value)
+{
+    return value > INT64_MAX ? INT64_MAX
+         : value < INT64_MIN ? INT64_MIN : (int64_t)value;
+}
+
+static bool
+value_range(ir_abcd_t *abcd, const ir_value_t *value, const ir_instr_t *at,
+            known_range_t *out)
+{
+    int64_t constant = 0;
+    if (constant_index(value, &constant)) {
+        *out = (known_range_t){constant, constant, true, true};
+        return true;
+    }
+    ir_abcd_range_t range = {0};
+    if (!abcd || !value || !ir_abcd_range_of(abcd, value, at, &range))
+        return false;
+    *out = (known_range_t){
+        .lo = clamp_int(range.seen.lo), .hi = clamp_int(range.seen.hi),
+        .has_lo = !range.unbounded_min, .has_hi = !range.unbounded_max,
+    };
+    return out->has_lo || out->has_hi;
+}
+
+// An index into an array whose length is known without running the
+// program, that can only be out of range: every value range analysis
+// allows for it is outside -length .. length - 1.
+static bool
+check_index_range(core_translation_unit_t *unit, ir_func_t *function,
+                  ir_abcd_t *abcd, ir_instr_t *in)
+{
+    uint64_t length = 0;
+    known_range_t index = {0};
+    if (in->n_operands < 2 || !ir_span_known(in->span)
+        || !n00bb_static_array_length(function,
+               ir_operand_value(&in->operands[0]), &length)
+        || length > INT64_MAX
+        || !value_range(abcd, ir_operand_value(&in->operands[1]), in, &index))
+        return true;
+    int64_t n = (int64_t)length;
+    bool below = index.has_hi && index.hi < -n;
+    bool above = index.has_lo && index.lo >= n;
+    if (!below && !above) return true;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool reported = index.has_lo && index.has_hi && index.lo == index.hi
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+              n00bb_span_location(in->span),
+              N00B_TEXT_CONSTANT_INDEX_OUT_OF_RANGE,
+              N00BB_ARGS(ARG_NUMBER(index.lo), ARG_NUMBER(length)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+              n00bb_span_location(in->span),
+              N00B_TEXT_INDEX_ALWAYS_OUT_OF_RANGE,
+              N00BB_ARGS(ARG_NUMBER(below ? index.hi : index.lo),
+                         ARG_TEXT(below ? CORE_STRING_STATIC("at most")
+                                        : CORE_STRING_STATIC("at least")),
+                         ARG_NUMBER(length)));
+    if (reported)
+        n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_INDEX_RANGE_HELP,
+                          N00BB_ARGS(ARG_NUMBER(length ? length - 1 : 0),
+                                     ARG_NUMBER(length)));
+    return false;
+}
+
+// A slice bound's values once resolved against the array's length `n`:
+// negative ones count from the end, and `to` takes the end item too. Only
+// when they all count from the same end can they be resolved as a range.
+static bool
+resolved_bound(const known_range_t *bound, int64_t n, bool inclusive_end,
+               known_range_t *out)
+{
+    if (!bound->has_lo || !bound->has_hi
+        || (bound->lo < 0 && bound->hi >= 0)) return false;
+    int64_t shift = bound->hi < 0 ? n : 0;
+    int64_t plus = inclusive_end ? 1 : 0;
+    *out = (known_range_t){bound->lo + shift + plus, bound->hi + shift + plus,
+                           true, true};
+    return true;
+}
+
+// A slice of an array of known length (a `__slice` or `__write_slice`
+// call: the receiver, each bound as an option, whether `to` includes the
+// end) whose bounds can only fall outside it, or only be in the wrong
+// order.
+static bool
+check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
+                  ir_abcd_t *abcd, ir_instr_t *in)
+{
+    uint64_t length = 0;
+    int64_t inclusive = 0;
+    if (in->n_operands < 5 || !ir_span_known(in->span)
+        || !n00bb_static_array_length(function,
+               ir_operand_value(&in->operands[1]), &length)
+        || length > INT64_MAX
+        || !constant_index(ir_operand_value(&in->operands[4]), &inclusive))
+        return true;
+    int64_t n = (int64_t)length;
+    known_range_t bounds[2] = {{0, 0, true, true}, {n, n, true, true}};
+    bool written[2] = {false, false}, known[2] = {true, true};
+    for (int b = 0; b < 2; b++) {
+        ir_value_t *option = ir_operand_value(&in->operands[2 + b]);
+        const ir_instr_t *def = option && option->kind == IR_VAL_INSTR
+            ? option->def : nullptr;
+        if (def && def->op == IR_OP_OPTION_NONE) continue;
+        written[b] = true;
+        ir_value_t *bound = def && def->op == IR_OP_OPTION_SOME
+                && def->n_operands
+            ? ir_operand_value(&def->operands[0]) : nullptr;
+        known[b] = bound && value_range(abcd, bound, in, &bounds[b]);
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    // Each bound may be from -n to n, or, for `to`, -n to n - 1.
+    for (int b = 0; b < 2; b++) {
+        if (!written[b] || !known[b]) continue;
+        int64_t top = b && inclusive ? n - 1 : n;
+        bool below = bounds[b].has_hi && bounds[b].hi < -n;
+        bool above = bounds[b].has_lo && bounds[b].lo > top;
+        if (!below && !above) continue;
+        known_range_t at = bounds[b];
+        resolved_bound(&bounds[b], n, b && inclusive, &at);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+                n00bb_span_location(in->span),
+                N00B_TEXT_CONSTANT_SLICE_BOUND_OUT_OF_RANGE,
+                N00BB_ARGS(ARG_TEXT(b ? CORE_STRING_STATIC("end")
+                                      : CORE_STRING_STATIC("start")),
+                           ARG_NUMBER(below ? at.hi : at.lo),
+                           ARG_NUMBER(length))))
+            n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_SLICE_RANGE_HELP,
+                              N00BB_ARGS(ARG_NUMBER(length)));
+        return false;
+    }
+    // The start always after the end.
+    known_range_t start = bounds[0], end = bounds[1];
+    if (!known[0] || !known[1]
+        || (written[0] && !resolved_bound(&bounds[0], n, false, &start))
+        || (written[1] && !resolved_bound(&bounds[1], n, inclusive, &end))
+        || start.lo <= end.hi) return true;
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+            n00bb_span_location(in->span),
+            N00B_TEXT_CONSTANT_SLICE_OUT_OF_RANGE,
+            N00BB_ARGS(ARG_NUMBER(start.lo), ARG_NUMBER(end.hi),
+                       ARG_NUMBER(length))))
+        n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_SLICE_RANGE_HELP,
+                          N00BB_ARGS(ARG_NUMBER(length)));
+    return false;
+}
+
+// Indexes and slices that range analysis shows can only be out of range,
+// for arrays of known length, are reported here rather than panicking
+// when the program runs.
+static bool
+check_known_ranges(core_translation_unit_t *unit, ir_func_t *function)
+{
+    ir_abcd_t *abcd = nullptr;
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            ir_func_t *callee = in->op == IR_OP_CALL
+                ? ir_call_function(in) : nullptr;
+            bool slice = callee
+                && (core_string_eq(callee->name, CORE_STRING_STATIC("__slice"))
+                    || core_string_eq(callee->name,
+                                      CORE_STRING_STATIC("__write_slice")));
+            if (!slice && in->op != IR_OP_INDEX
+                && in->op != IR_OP_SEQUENCE_GET) continue;
+            if (!abcd) abcd = ir_abcd_build(function);
+            ok = (slice ? check_slice_range(unit, function, abcd, in)
+                        : check_index_range(unit, function, abcd, in)) && ok;
+        }
+    if (abcd) ir_abcd_free(abcd);
+    return ok;
+}
+
 static bool
 size_let_defaults(core_translation_unit_t *unit, ir_func_t *function)
 {
@@ -2789,6 +2993,7 @@ n00bb_check_required_fields(n00bb_link_analysis_t *analysis)
             ? state->ir_module : nullptr;
         for (size_t f = 0; module && f < ir_func_count(module); f++)
             ok = size_let_defaults(unit, ir_func_at(module, f))
+                && check_known_ranges(unit, ir_func_at(module, f))
                 && check_required_fields(unit, ir_func_at(module, f))
                 && check_zeroed_values(unit, ir_func_at(module, f)) && ok;
     }

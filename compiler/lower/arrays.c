@@ -63,6 +63,205 @@ n00bb_lower_array_dimension_value(ir_lower_context_t *context,
 
 #include "sequence_transfer.h"
 
+static bool
+static_extent(const ir_shape_t *shape, uint32_t dimension, uint64_t *length)
+{
+    ir_shape_extent_t extent;
+    if (!shape || !ir_shape_extent(shape, dimension, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC) return false;
+    *length = extent.static_value;
+    return true;
+}
+
+static bool
+static_array_extent(const ir_func_t *function, const ir_value_t *value,
+                    uint32_t dimension, uint64_t *length, int depth);
+
+static bool
+declaration_default_write(const ir_instr_t *in)
+{
+    ir_annot_t *mark = ir_annot_get((ir_annots_t *)&in->annots,
+        CORE_STRING_STATIC("ir.declaration_default"));
+    return mark && mark->kind == IR_ANNOT_BOOL && mark->b;
+}
+
+// A local's length, when every whole assignment to it in `function` gives
+// it the same one that's known: a literal's, or another known array's.
+static bool
+assigned_local_extent(const ir_func_t *function, const ir_local_t *local,
+                      uint32_t dimension, uint64_t *length, int depth)
+{
+    if (static_extent(ir_local_shape(local), dimension, length)) return true;
+    if (!function || dimension || depth > 16) return false;
+    // If its address goes anywhere but to index, read or store it (to a
+    // call, say, which could assign it), its assignments aren't all here.
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *taken = function->blocks[b]->instrs[i];
+            if (taken->op != IR_OP_ADDRESS_OF || !taken->n_operands
+                || !taken->dest
+                || ir_operand_local(&taken->operands[0]) != local) continue;
+            for (uint32_t ub = 0; ub < function->n_blocks; ub++)
+                for (uint32_t u = 0; u < function->blocks[ub]->n_instrs; u++) {
+                    const ir_instr_t *user = function->blocks[ub]->instrs[u];
+                    for (uint32_t o = 0; o < user->n_operands; o++) {
+                        if (ir_operand_value(&user->operands[o])
+                            != taken->dest) continue;
+                        bool reaches = o == 0
+                            && (user->op == IR_OP_INDEX
+                                || user->op == IR_OP_LOAD
+                                || user->op == IR_OP_STORE);
+                        if (!reaches) return false;
+                    }
+                }
+        }
+    bool any = false;
+    uint64_t found = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            const ir_value_t *written = nullptr;
+            if (in->op == IR_OP_COPY && in->dest_kind == IR_DEST_LOCAL
+                && in->dest_local == local && in->n_operands)
+                written = ir_operand_value(&in->operands[0]);
+            else if (in->op == IR_OP_STORE && in->n_operands == 2) {
+                const ir_value_t *address = ir_operand_value(&in->operands[0]);
+                const ir_instr_t *taken = address
+                        && address->kind == IR_VAL_INSTR ? address->def
+                                                         : nullptr;
+                if (taken && taken->op == IR_OP_ADDRESS_OF
+                    && taken->n_operands
+                    && ir_operand_local(&taken->operands[0]) == local)
+                    written = ir_operand_value(&in->operands[1]);
+            }
+            else continue;
+            if (!written || declaration_default_write(in)) continue;
+            uint64_t got = 0;
+            if (!static_array_extent(function, written, 0, &got, depth + 1)
+                || (any && got != found)) return false;
+            found = got;
+            any = true;
+        }
+    if (any) *length = found;
+    return any;
+}
+
+// A module array's length: its declared size, or the length of the static
+// value an immutable one starts with.
+static bool
+global_extent(const ir_global_t *global, uint32_t dimension, uint64_t *length)
+{
+    if (static_extent(global->shape, dimension, length)) return true;
+    const ir_global_init_value_t *value = global->has_static_initializer
+        ? global->static_initializer : nullptr;
+    if (!value || global->mutability == IR_MUT_MUTABLE) return false;
+    for (uint32_t d = 0; d < dimension; d++) {
+        if (value->kind != IR_GLOBAL_INIT_SEQUENCE || !value->aggregate.count)
+            return false;
+        // Rows of one length are a rectangle; otherwise, there's no one
+        // length for the dimension.
+        uint64_t row = value->aggregate.items[0].aggregate.count;
+        for (size_t i = 0; i < value->aggregate.count; i++)
+            if (value->aggregate.items[i].kind != IR_GLOBAL_INIT_SEQUENCE
+                || value->aggregate.items[i].aggregate.count != row)
+                return false;
+        value = &value->aggregate.items[0];
+    }
+    if (value->kind != IR_GLOBAL_INIT_SEQUENCE) return false;
+    *length = value->aggregate.count;
+    return true;
+}
+
+// The static extent of dimension `dimension` of the array `value` reaches,
+// following copies, loads and addresses back to what declares its shape or
+// assigns it, and indexes out to the dimension they select from.
+static bool
+static_array_extent(const ir_func_t *function, const ir_value_t *value,
+                    uint32_t dimension, uint64_t *length, int depth)
+{
+    if (!value || depth > 16) return false;
+    if (static_extent(ir_value_shape((ir_value_t *)value), dimension, length))
+        return true;
+    if (value->local)
+        return assigned_local_extent(function, value->local, dimension,
+                                     length, depth);
+    if (value->kind == IR_VAL_GLOBAL && value->global)
+        return global_extent(value->global, dimension, length);
+    const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+    if (!def) return false;
+    if (!function && def->block) function = def->block->owner;
+    // An array literal not laid out by its shape has one item per operand.
+    if (def->op == IR_OP_AGGREGATE && !dimension
+        && th_kind_of(th_resolve(value->type)) == TH_SEQUENCE) {
+        *length = def->n_operands;
+        return true;
+    }
+    if (!def->n_operands) return false;
+    const ir_value_t *base = ir_operand_value(&def->operands[0]);
+    switch (def->op) {
+    case IR_OP_ADDRESS_OF:
+    case IR_OP_COPY:
+    case IR_OP_NOMINAL_CAST:
+    case IR_OP_LOAD: {
+        const ir_local_t *local = ir_operand_local(&def->operands[0]);
+        if (local)
+            return assigned_local_extent(function, local, dimension, length,
+                                         depth);
+        if (base && base->kind == IR_VAL_GLOBAL && base->global)
+            return global_extent(base->global, dimension, length);
+        return static_array_extent(function, base, dimension, length,
+                                   depth + 1);
+    }
+    case IR_OP_INDEX:
+    case IR_OP_SEQUENCE_GET:
+        // A row of a multi-dimensional array: the next dimension.
+        return static_array_extent(function, base, dimension + 1, length,
+                                   depth + 1);
+    case IR_OP_FIELD:
+    case IR_OP_EXTRACT: {
+        // A one-dimensional array field held inline has as many elements as
+        // its layout holds.
+        th_type *field_type = th_resolve(value->type);
+        if (th_kind_of(field_type) == TH_INDIRECTION)
+            field_type = th_resolve(th_ind_referent(field_type));
+        th_type *record = base ? th_resolve(base->type) : nullptr;
+        if (record && def->op == IR_OP_FIELD
+            && th_kind_of(record) == TH_INDIRECTION)
+            record = th_resolve(th_ind_referent(record));
+        ir_module_t *module = def->block && def->block->owner
+            ? def->block->owner->owner : nullptr;
+        bool known = false;
+        const ir_final_layout_t *layout = module && record
+            ? ir_layout_final(module, record, ir_module_target(module))
+            : nullptr;
+        if (dimension || def->n_operands != 2
+            || def->operands[1].kind != IR_OPD_NAME || !layout
+            || th_kind_of(field_type) != TH_SEQUENCE
+            || th_kind_of(th_resolve(th_seq_elem(field_type))) == TH_SEQUENCE
+            || !ir_layout_member_inline(module, record,
+                                        def->operands[1].name, &known))
+            return false;
+        for (size_t i = 0; i < layout->n_members; i++)
+            if (layout->members[i].name.data
+                && core_string_eq(layout->members[i].name,
+                                  def->operands[1].name)) {
+                *length = layout->members[i].inline_element_count;
+                return true;
+            }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+bool
+n00bb_static_array_length(const ir_func_t *function, const ir_value_t *value,
+                          uint64_t *length)
+{
+    return static_array_extent(function, value, 0, length, 0);
+}
+
 // Whether a closed enum `symbol` has a member whose value is 0.
 static bool
 enum_has_zero(parse_sym_entry_t *symbol)

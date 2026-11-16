@@ -1,0 +1,6 @@
+panic: range 4..4 is out of bounds for an array of length 3
+  --> tests/diagnostics/runtime/failures.n:176:12
+backtrace:
+  at check_slice (lib/builtin/containers/slice.n:43:9)
+  at empty_slice (tests/diagnostics/runtime/failures.n:176:12)
+  at run (tests/diagnostics/runtime/failures.n:134:17)

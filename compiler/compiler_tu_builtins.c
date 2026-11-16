@@ -1809,14 +1809,20 @@ register_builtin_traits(th_env *environment, th_ctx *types)
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"),
             TH_ENV_PUBLIC, address_signature)) return false;
 
+    // A slice's bounds as written: either may be left out (nil), and `to`
+    // includes the end (`inclusive`), as for `__write_slice`.
     th_type *slice_receiver = th_var(types);
+    th_type *slice_bound = th_option(types,
+        th_name(types, CORE_STRING_STATIC("int")));
     th_param slice_parameters[] = {
         {.mode = TH_IN, .type = slice_receiver},
-        {.mode = TH_IN, .type = th_name(types, CORE_STRING_STATIC("int"))},
-        {.mode = TH_IN, .type = th_name(types, CORE_STRING_STATIC("int"))},
+        {.mode = TH_IN, .type = slice_bound},
+        {.mode = TH_IN, .type = slice_bound},
+        {.mode = TH_IN, .type = th_name(types, CORE_STRING_STATIC("bool"))},
     };
-    th_type *slice_signature = th_func_with_error(types, th_var(types),
-        th_var(types), slice_parameters, 3, nullptr, nullptr, 0);
+    th_type *slice_signature = slice_bound
+        ? th_func_with_error(types, th_var(types), th_var(types),
+            slice_parameters, 4, nullptr, nullptr, 0) : nullptr;
     th_member slice_method = {
         .name = CORE_STRING_STATIC("__slice"), .type = slice_signature,
     };
