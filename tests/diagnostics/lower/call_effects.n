@@ -14,7 +14,26 @@ func keep(s: string) {
     kept.append(s)
 }
 
+// Writes reached through a parameter are the caller's to see.
+func fill(modify bytes: Array[u8]) {
+    bytes[0] = 1
+}
+
+record Box {
+    private bytes: Array[u8]
+}
+
+func stamp(modify self: Box) {
+    self.bytes[0] = 2
+}
+
 keep("value")
 peek()
 scratch()
 require len(kept) == 1
+var buffer = new[Array[u8]](1)
+fill(buffer)
+require buffer[0] == 1
+var box: Box = (bytes = new[Array[u8]](1))
+box.stamp()
+require box.bytes[0] == 2
