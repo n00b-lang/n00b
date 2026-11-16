@@ -1,6 +1,18 @@
+// `shapes` is found on the package path, so it is another package; a type
+// it defines with an `__init` must be built with that `__init`.
 import shapes
 
 let made: shapes.Built = new[shapes.Built](1)
 let raw: shapes.Built = shapes.raw_built(1)
 let forged: shapes.Built = (x = 1)
-require made.x == 2 and raw.x == 1 and forged.x == 1
+let plain: shapes.Plain = (x = 1)
+let nested: shapes.Holder = (built = (x = 1))
+let held: shapes.Holder = (built = new[shapes.Built](1))
+require made.x == 2 and raw.x == 1 and forged.x == 1 and plain.x == 1
+require nested.built.x == held.built.x
+
+// `cast` follows the same rules; `unsafe_cast` is the back door.
+let casted = cast[shapes.Built]((x = 1))
+let plain_cast = cast[shapes.Plain]((x = 1))
+let reinterpreted = unsafe_cast[shapes.Built]((x = 1))
+require casted.x == plain_cast.x and reinterpreted.x == 1

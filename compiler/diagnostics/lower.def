@@ -497,10 +497,11 @@ N00B_DIAG(UNION_VARIABLE, "N00B-T1033", ERROR,
     "alternatives.")
 N00B_DIAG(RECORD_HAS_CONSTRUCTOR, "N00B-T1034", ERROR,
     "a field tuple builds a record or object that has an `__init`",
-    "A type with an `__init` is built through its constructor, so neither a\n"
-    "field tuple nor `cast[T]` fills it in field by field. Call the\n"
-    "constructor, or write `unsafe_cast[T](...)` when skipping it is\n"
-    "intended.")
+    "Outside the package that defines it, a type with an `__init` is built\n"
+    "through its constructor, so neither a field tuple nor `cast[T]` fills\n"
+    "it in field by field. Within its package, either may build it unless a\n"
+    "field is private to another module. Call the constructor, or write\n"
+    "`unsafe_cast[T](...)` when skipping it is intended.")
 N00B_DIAG(TYPE_PARAMETER_FIXED, "N00B-T1039", ERROR,
     "a function body fixes a declared type parameter to one type",
     "A declared type parameter must work for any type. Use the concrete\n"

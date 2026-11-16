@@ -316,14 +316,15 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             type = th_auto_deref(ir_module_types(context->module), type);
         bool variant = false;
         (void)th_named_info(th_resolve(type), nullptr, &variant, nullptr);
-        // The module that defines a type may build it field by field,
-        // bypassing its constructor.
+        // The package that defines a type may build it field by field,
+        // bypassing its constructor; fields private to another module are
+        // checked when the literal is rewritten.
         core_translation_unit_t *defining = nullptr;
         if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED)
             (void)record_scope_for_type(tu_state(lower->unit)->link_analysis,
                                         th_resolve(built_type), &defining);
         if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED
-            && defining != lower->unit
+            && !n00bb_same_package(defining, lower->unit)
             && n00bb_type_has_constructor(lower->unit, built_type)) {
             core_string_t type_text = lower_type_text(context, built_type);
             lower_report(context, N00B_DIAG_RECORD_HAS_CONSTRUCTOR, span,

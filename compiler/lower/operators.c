@@ -815,6 +815,55 @@ structural_field_fits(ir_lower_context_t *context, th_type *from,
                             ir_machine_of(context->module, to));
 }
 
+// `cast[T]` follows the field tuple rules: outside the module that defines
+// `T`, it cannot set a private field, and outside `T`'s package, it cannot
+// bypass `T`'s `__init`. Reports and returns true when the cast is refused;
+// `unsafe_cast[T]` is never checked.
+static bool
+cast_bypasses_constructor(ir_lower_context_t *context, th_type *target,
+                          ir_span_t span, ir_lower_result_t *result)
+{
+    n00bb_lower_context_t *lower = context->user;
+    core_translation_unit_t *owner = nullptr;
+    parse_scope_t *scope = record_scope_for_type(
+        tu_state(lower->unit)->link_analysis, th_resolve(target), &owner);
+    // A union's arms are not filled in by the cast (an accessor selects
+    // one), so only the other fields count.
+    uint64_t record_hash = th_hash(ir_module_types(context->module), target);
+    parse_sym_entry_t *hidden = nullptr;
+    for (parse_sym_entry_t *field = scope && owner != lower->unit
+             ? scope->first_in_scope : nullptr;
+         field && !hidden; field = field->next_in_scope)
+        if (field->is_field && member_is_private(field, field->owner_type)
+            && !n00bb_union_arm_group(record_hash, field->name))
+            hidden = field;
+    bool constructed = n00bb_type_has_constructor(lower->unit, target);
+    if (!hidden && (!constructed || n00bb_same_package(owner, lower->unit)))
+        return false;
+    core_string_t target_text = lower_type_text(context, target);
+    if (hidden) {
+        *result = lower_report(context, N00B_DIAG_FIELD_NOT_VISIBLE, span,
+            N00B_TEXT_CAST_HAS_PRIVATE_FIELD,
+            N00BB_ARGS(ARG_TEXT(target_text), ARG_TEXT(hidden->name),
+                       ARG_TEXT(owner->module.identifier)));
+        if (constructed)
+            lower_help(context, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                       N00BB_ARGS(ARG_TEXT(target_text)));
+        else
+            lower_help(context, N00B_TEXT_BUILD_IT_IN_MODULE,
+                       N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
+    }
+    else {
+        *result = lower_report(context, N00B_DIAG_RECORD_HAS_CONSTRUCTOR, span,
+            N00B_TEXT_TUPLE_CAST_CONSTRUCTOR,
+            N00BB_ARGS(ARG_TEXT(target_text)));
+        lower_help(context, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                   N00BB_ARGS(ARG_TEXT(target_text)));
+    }
+    core_free(target_text.data);
+    return true;
+}
+
 static ir_lower_result_t
 report_tuple_cast_field(ir_lower_context_t *context, th_type *from,
                         th_type *target, core_string_t field, ir_span_t span)
@@ -860,16 +909,8 @@ n00bb_lower_structural_cast(ir_lower_context_t *context, ir_value_t *value,
     }
     if (!source || !destination || from_named == to_named) return false;
     if (to_named && !unsafe_cast
-        && n00bb_type_has_constructor(lower->unit, target)) {
-        core_string_t target_text = lower_type_text(context, target);
-        *result = lower_report(context, N00B_DIAG_RECORD_HAS_CONSTRUCTOR, span,
-            N00B_TEXT_TUPLE_CAST_CONSTRUCTOR,
-            N00BB_ARGS(ARG_TEXT(target_text)));
-        lower_help(context, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
-                   N00BB_ARGS(ARG_TEXT(target_text)));
-        core_free(target_text.data);
+        && cast_bypasses_constructor(context, target, span, result))
         return true;
-    }
     for (size_t i = 0; i < th_record_len(source); i++) {
         core_string_t name = th_record_member(source, i)->name;
         if (!record_lookup_text(nullptr, destination, name)) {

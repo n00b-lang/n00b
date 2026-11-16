@@ -2423,20 +2423,25 @@ n00bb_record_literal_buildable(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             && member_is_private(field, field->owner_type))
             hidden = field;
     }
+    bool constructed = n00bb_type_has_constructor(rewrite->unit, type);
     if (hidden) {
         n00bb_report(diagnostics, rewrite->unit, N00B_DIAG_FIELD_NOT_VISIBLE,
                      n00bb_span_location(in->span),
                      N00B_TEXT_RECORD_HAS_PRIVATE_FIELD,
                      N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(hidden->name),
                                 ARG_TEXT(owner->module.identifier)));
-        n00bb_report_help(diagnostics, N00B_TEXT_BUILD_IT_IN_MODULE,
-                          N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
+        if (constructed)
+            n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                              N00BB_ARGS(ARG_TEXT(text)));
+        else
+            n00bb_report_help(diagnostics, N00B_TEXT_BUILD_IT_IN_MODULE,
+                              N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
         return false;
     }
-    // The module that defines a type may build it field by field, bypassing
-    // its constructor.
-    if (owner == rewrite->unit
-        || !n00bb_type_has_constructor(rewrite->unit, type)) return true;
+    // Within the package that defines a type, a field tuple may build it,
+    // bypassing its constructor, unless a field is private to another
+    // module (checked above). Outside the package, its constructor is used.
+    if (!constructed || n00bb_same_package(owner, rewrite->unit)) return true;
     n00bb_report(diagnostics, rewrite->unit,
                  N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
                  n00bb_span_location(in->span), N00B_TEXT_HAS_AN_INIT_SO_A,
