@@ -215,6 +215,7 @@ N00B_TEXT(STEP_BY_A_NONZERO_AMOUNT, "step by a nonzero amount, or leave out `ste
 N00B_TEXT(THIS_BLOCK_IS_USED_AS, "this block is used as a value, but it can reach its end without producing one")
 N00B_TEXT(END_EVERY_PATH_THROUGH_THE, "end every path through the block with the value it produces")
 N00B_TEXT(THIS_CASE_IS_BUT_THE_SWITCH, "this case is {0}, but the `switch` value is `{1}`")
+N00B_TEXT(CASE_NAMES_NO_VALUE, "`{0}` is not a value, and a `switch` on `{1}` has no arm or member to name")
 N00B_TEXT(A_SWITCH_CANNOT_MATCH, "a `switch` cannot match `{0}` values")
 N00B_TEXT(COMPARE_THEM_WITH_IF, "compare them with `if` and `elif` instead")
 N00B_TEXT(EACH_CASE_OF_A_SWITCH, "each `case` of a `switch` on a variant names exactly one arm, but this one names {0}")

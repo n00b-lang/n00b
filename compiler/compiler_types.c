@@ -835,7 +835,20 @@ static void report_case_mismatch(th_ctx *types, core_translation_unit_t *unit,
     core_buffer_t text  = {0};
     ir_annot_t   *kind  = ir_annot_get((ir_annots_t *)&test->annots,
                                        N00BB_CASE_KIND_KEY);
+    ir_annot_t   *named = ir_annot_get((ir_annots_t *)&test->annots,
+                                       N00BB_CASE_KEY);
 
+    // A bare name that is not a value can only name an arm or an enum
+    // member, and this subject has neither.
+    if (named && named->kind == IR_ANNOT_STR) {
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                     N00B_DIAG_UNRESOLVED_NAME, n00bb_span_location(test->span),
+                     N00B_TEXT_CASE_NAMES_NO_VALUE,
+                     N00BB_ARGS(ARG_TEXT(named->s),
+                                ARG_TEXT(subject ? shown(types, subject->type)
+                                                 : (core_string_t){0})));
+        return;
+    }
     if (kind && kind->kind == IR_ANNOT_STR) {
         core_buffer_append_string(&text, kind->s);
     }

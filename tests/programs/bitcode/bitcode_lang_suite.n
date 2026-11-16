@@ -193,6 +193,11 @@ variant Choice {
     empty: nil
 }
 
+// A function can't be a case, so this one doesn't hide the `empty` arm.
+func empty() -> uint {
+    return 0
+}
+
 func variant_array_literal_check() {
     let values: Array[Choice] = [(number = 7), (empty = nil)]
     let first = values[0]
@@ -206,7 +211,7 @@ func variant_array_literal_check() {
         case number { require false }
         case empty { saw_empty = true }
     }
-    require saw_empty
+    require saw_empty and empty() == 0
 }
 
 func read_at(values: Array['T], index: uint) -> 'T {

@@ -41,6 +41,25 @@ func number_by_float(n: uint) -> uint {
     }
 }
 
+func one() -> uint {
+    return 1
+}
+
+// A bare name that is not a value names an arm or member, which uint has none of.
+func number_by_function(n: uint) -> uint {
+    switch n {
+        case one { return 1 }
+        else { return 0 }
+    }
+}
+
+func number_by_unknown(n: uint) -> uint {
+    switch n {
+        case nothing_here { return 1 }
+        else { return 0 }
+    }
+}
+
 func by_float(f: f64) -> uint {
     switch f {
         case 1.5 { return 1 }
@@ -73,6 +92,8 @@ require by_flag(true) == 1
 require number_by_flag(1) == 1
 require number_by_text(1) == 1
 require number_by_float(1) == 1
+require number_by_function(1) == 1
+require number_by_unknown(1) == 1
 require by_float(1.5) == 1
 require by_text("one") == 1
 require by_point(origin, origin) == 1
