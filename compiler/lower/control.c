@@ -1335,9 +1335,6 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         && (!visit->annot || !core_string_eq(visit->annot->scope_tag,
                                              CORE_STRING_STATIC("block")))))
         return true;
-    if (!entering
-        && !n00bb_finish_final_scope(context, visit->node, visit->node))
-        return false;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("block-value-expr"))) {
         if (entering) {
             n00bb_value_block_frame_t frame = {
@@ -2341,8 +2338,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                     expected, lower_span_for_tree(context, visit->node)))
                 return false;
         }
-        if (!n00bb_move_source(context, visit->grammar, expression))
-            return false;
         ir_value_t *result = expression
             ? ir_lower_node_value(context, expression) : nullptr;
         if (result && result->kind == IR_VAL_GLOBAL) {
@@ -2367,9 +2362,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression)
                 : nullptr;
-            if (value && !n00bb_move_source(context, visit->grammar,
-                                            expression))
-                return false;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;

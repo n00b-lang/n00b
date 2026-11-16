@@ -28,6 +28,38 @@ table(n00bb_abi_merged_rows_t *rows, uint32_t kind)
     return (n00bb_abi_merged_table_t *)n00bb_abi_merged_table(rows, kind);
 }
 
+// The row of `type`'s first component, when it has one of `kind`.
+static n00b_abi_type_v1 *
+first_component(n00bb_abi_merged_table_t *types,
+                const n00bb_abi_merged_table_t *stream,
+                const n00b_abi_type_v1 *type, uint32_t kind)
+{
+    if (!type->components.count
+        || type->components.first >= stream->record_count) return nullptr;
+    uint32_t index = ((const uint32_t *)(const void *)stream->records)
+        [type->components.first];
+    n00b_abi_type_v1 *component = index && index < types->record_count
+        ? (n00b_abi_type_v1 *)(void *)(types->records
+            + (size_t)index * types->record_bytes) : nullptr;
+    return component && component->kind == kind ? component : nullptr;
+}
+
+// The record row of an object's fields: an object is a reference to them.
+static n00b_abi_type_v1 *
+object_fields_row(n00bb_abi_merged_rows_t *merged,
+                  n00bb_abi_merged_table_t *types,
+                  const n00b_abi_type_v1 *object)
+{
+    const n00bb_abi_merged_table_t *stream = table(merged,
+        N00B_ABI_TABLE_U32_STREAM);
+    if (object->kind != N00B_ABI_TYPE_OBJECT || !stream
+        || stream->record_bytes != sizeof(uint32_t)) return nullptr;
+    n00b_abi_type_v1 *reference = first_component(types, stream, object,
+                                                  N00B_ABI_TYPE_REFERENCE);
+    return reference ? first_component(types, stream, reference,
+                                       N00B_ABI_TYPE_RECORD) : nullptr;
+}
+
 typedef struct {
     const n00bb_abi_selected_objects_t *selected;
     const n00bb_abi_merged_table_t     *types;
@@ -457,9 +489,8 @@ finalizer_instance(const n00bb_abi_semantics_t *facts, th_ctx *ctx,
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
             const th_param *self = function && function->n_blocks
-                && (n00bb_generic_generated_finalizer(function->name)
-                    || n00bb_names_function(CORE_STRING_STATIC("__finalize"),
-                                            function->name))
+                && n00bb_names_function(CORE_STRING_STATIC("__finalize"),
+                                        function->name)
                 ? th_func_param(function->type, 0) : nullptr;
             if (self && th_hash(ir_module_types(module), self->type)
                     == wanted) return true;
@@ -623,10 +654,8 @@ n00bb_abi_link_semantic_rows(
         th_env_method_status_t status = th_env_method_resolve(ctx, reference,
             CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
             &method);
-        bool generic = status == TH_ENV_METHOD_FOUND
-            && (n00bb_generic_generated_finalizer(method.qualified_name)
-                || (method.signature
-                    && !th_is_closed(ctx, method.signature)));
+        bool generic = status == TH_ENV_METHOD_FOUND && method.signature
+            && !th_is_closed(ctx, method.signature);
         if (status == TH_ENV_METHOD_NOT_FOUND
             || (generic && !finalizer_instance(facts, ctx, reference)))
             continue;
@@ -634,7 +663,12 @@ n00bb_abi_link_semantic_rows(
         valid = status == TH_ENV_METHOD_FOUND
             && function_index_for_method(ctx, &link, plan, &method, true,
                                          &function_index);
-        if (valid) row->finalizer_function_index = function_index;
+        if (!valid) break;
+        row->finalizer_function_index = function_index;
+        // An object's storage is its fields record, so that is the row the
+        // collector finds in a dead object's header.
+        n00b_abi_type_v1 *fields = object_fields_row(merged, types, row);
+        if (fields) fields->finalizer_function_index = function_index;
     }
     if (valid) valid = add_specializations(merged, &specializations)
         && add_dispatch(merged, &dispatch, &entries);

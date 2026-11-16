@@ -248,12 +248,8 @@ static bool
 check_use_after_consume(core_translation_unit_t *unit, ir_func_t *function,
                         const ir_instr_t *consume, core_dict_t *reported)
 {
-    bool moved = consume->n_operands == 1
-        && ir_annot_get((ir_annots_t *)&consume->annots,
-                        CORE_STRING_STATIC("n00bb.move"));
     ir_local_t *consumed = consume->n_operands == 2
-        ? ir_operand_local(&consume->operands[1])
-        : moved ? ir_operand_local(&consume->operands[0]) : nullptr;
+        ? ir_operand_local(&consume->operands[1]) : nullptr;
     if (!consumed || consumed->synthetic || !consumed->source_name.u8_bytes)
         return true;
     core_list_t(local_ptr_t) aliases = core_list_new(local_ptr_t);
@@ -268,40 +264,17 @@ check_use_after_consume(core_translation_unit_t *unit, ir_func_t *function,
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
         n00bb_report(diagnostics, unit, N00B_DIAG_USE_AFTER_CONSUME,
-            n00bb_span_location(read->span),
-            moved ? N00B_TEXT_USED_AFTER_MOVE : N00B_TEXT_USED_AFTER_CONSUME,
+            n00bb_span_location(read->span), N00B_TEXT_USED_AFTER_CONSUME,
             N00BB_ARGS(ARG_TEXT(local->source_name)));
         n00bb_report_secondary(diagnostics, nullptr,
-            n00bb_span_location(consume->span),
-            moved ? N00B_TEXT_IS_MOVED_HERE : N00B_TEXT_IS_CONSUMED_HERE,
+            n00bb_span_location(consume->span), N00B_TEXT_IS_CONSUMED_HERE,
             N00BB_ARGS(ARG_TEXT(consumed->source_name)));
-        n00bb_report_help(diagnostics, moved
-            ? N00B_TEXT_A_MOVED_VALUE_CANNOT_BE
-            : N00B_TEXT_A_CONSUMED_VALUE_CANNOT_BE, N00BB_NO_ARGS);
+        n00bb_report_help(diagnostics, N00B_TEXT_A_CONSUMED_VALUE_CANNOT_BE,
+                          N00BB_NO_ARGS);
         ok = false;
     }
     core_list_free(aliases);
     return ok;
-}
-
-static bool
-check_place_copy(core_translation_unit_t *unit, ir_func_t *function,
-                 ir_instr_t *in)
-{
-    ir_annot_t *copy = ir_annot_get(&in->annots,
-        CORE_STRING_STATIC("n00bb.place_copy"));
-    if (!copy || copy->kind != IR_ANNOT_STR || !in->dest
-        || !n00bb_type_finalized(unit, in->dest->type))
-        return true;
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    core_string_t type_text = n00bb_print_type(
-        ir_module_types(function->owner), in->dest->type);
-    n00bb_report(diagnostics, unit, N00B_DIAG_FINALIZED_COPY,
-        n00bb_span_location(in->span), N00B_TEXT_FINALIZED_VALUE_COPIED,
-        N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(copy->s)));
-    n00bb_report_help(diagnostics, N00B_TEXT_MOVE_THE_WHOLE_VARIABLE,
-                      N00BB_NO_ARGS);
-    return false;
 }
 
 bool
@@ -324,7 +297,6 @@ validate_consumed_bindings(n00bb_link_analysis_t *analysis)
                 ir_block_t *block = function->blocks[b];
                 for (uint32_t i = 0; i < block->n_instrs; i++) {
                     ir_instr_t *in = block->instrs[i];
-                    ok = check_place_copy(unit, function, in) && ok;
                     if (in->op == IR_OP_CONSUME)
                         ok = check_use_after_consume(unit, function, in,
                                                      &reported) && ok;

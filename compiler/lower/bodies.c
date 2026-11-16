@@ -7,7 +7,7 @@ n00bb_record_assert_site(ir_lower_context_t *context,
                          n00bb_lower_context_t *lower, ir_span_t span);
 
 typedef struct {
-    size_t loops, requires, value_blocks, tries, withs, finals, branches;
+    size_t loops, requires, value_blocks, tries, withs, branches;
     size_t switches, typecases;
 } frame_marks_t;
 
@@ -16,7 +16,7 @@ frame_marks(const n00bb_lower_context_t *lower)
 {
     return (frame_marks_t){
         lower->loops.len, lower->requires.len, lower->value_blocks.len,
-        lower->tries.len, lower->withs.len, lower->finals.len,
+        lower->tries.len, lower->withs.len,
         lower->branches.len, lower->switches.len, lower->typecases.len,
     };
 }
@@ -29,7 +29,6 @@ restore_frames(n00bb_lower_context_t *lower, frame_marks_t marks)
     lower->value_blocks.len = marks.value_blocks;
     lower->tries.len = marks.tries;
     lower->withs.len = marks.withs;
-    lower->finals.len = marks.finals;
     lower->branches.len = marks.branches;
     lower->switches.len = marks.switches;
     lower->typecases.len = marks.typecases;
@@ -376,7 +375,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .grammar = grammar,
         .lowerer = lowerer,
         .bind_external = true,
-        .track_writes = true,
         .ir_context = ir_context,
         .units = units,
         .unit = unit,
@@ -385,10 +383,8 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .loops = core_list_new(n00bb_loop_frame_t),
         .requires = core_list_new(n00bb_require_frame_t),
         .value_blocks = core_list_new(n00bb_value_block_frame_t),
-        .init_fields = core_list_new(n00bb_init_field_t),
         .tries = core_list_new(n00bb_try_frame_t),
         .withs = core_list_new(n00bb_with_frame_t),
-        .finals = core_list_new(n00bb_final_frame_t),
         .default_params = core_list_new(n00bb_default_param_t),
         .branches = core_list_new(n00bb_branch_frame_t),
         .switches = core_list_new(n00bb_switch_frame_t),
@@ -514,10 +510,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     goto cleanup;
                 }
             }
-            else if (!ir_lower_bind_value(&context, parameter, value)
-                     || !n00bb_begin_final_frame(&context, parameter,
-                            lower_span_for_tree(&context,
-                                                parameter->decl_node))) {
+            else if (!ir_lower_bind_value(&context, parameter, value)) {
                 goto cleanup;
             }
             continue;
@@ -704,16 +697,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             size_t before = lower_failures(&context);
             lowered = ir_lower_tree(lowerer, &context, grammar,
                                     roots->data[i]);
-            parse_tree_t *statement = roots->data[i];
-            while (statement && !nt_is(grammar, statement,
-                                       CORE_STRING_STATIC("top-level-stmt")))
-                statement = parse_tree_parent(statement);
             bool settled = lowered.status != IR_LOWER_FAILED
                 && (!n00bb_static_declaration(grammar, state, roots->data[i])
-                    || mark_declaration(ir_context, context.block))
-                && (!statement || n00bb_finish_final_scope(&context,
-                                                           statement,
-                                                           roots->data[i]));
+                    || mark_declaration(ir_context, context.block));
             size_t added = lower_failures(&context) - before;
             if (settled && !added) {
                 if (start && !tag_statement(ir_context, function, start, i)) {
@@ -750,16 +736,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                        expression_result_data))
             goto cleanup;
         if (context.reachable) {
-            if (!n00bb_finish_final_scope(&context, lower_data.finals.len
-                        ? lower_data.finals.data[0].scope : nullptr, body)
-                || !n00bb_emit_success_return(&context, lowered.value,
+            if (!n00bb_emit_success_return(&context, lowered.value,
                     lower_span_for_tree(&context, body))) goto cleanup;
         }
     }
     else if (context.reachable) {
-        if (!n00bb_emit_with_success(&context, body)
-            || !n00bb_finish_final_scope(&context, lower_data.finals.len
-                    ? lower_data.finals.data[0].scope : nullptr, body))
+        if (!n00bb_emit_with_success(&context, body))
             goto cleanup;
         ir_span_t implicit_return = ir_module_span(module);
         implicit_return.implied = true;
@@ -797,7 +779,6 @@ cleanup:
         core_list_free(lower_data.typecases.data[i].arms);
     core_list_free(lower_data.typecases);
     core_list_free(lower_data.value_blocks);
-    core_list_free(lower_data.init_fields);
     core_list_free(lower_data.tries);
     for (size_t w = 0; w < lower_data.withs.len; w++) {
         for (size_t i = 0; i < lower_data.withs.data[w].items.len; i++)
@@ -805,7 +786,6 @@ cleanup:
         core_list_free(lower_data.withs.data[w].items);
     }
     core_list_free(lower_data.withs);
-    core_list_free(lower_data.finals);
     core_list_free(lower_data.default_params);
     for (size_t i = 0; i < lower_data.tuple_parts.len; i++) {
         core_list_free(lower_data.tuple_parts.data[i].expressions);

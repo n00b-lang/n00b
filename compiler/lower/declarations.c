@@ -443,5 +443,5 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             "could not lower a dispatched indexed assignment");
         return false;
     }
-    return n00bb_move_source(context, grammar, source);
+    return true;
 }

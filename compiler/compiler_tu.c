@@ -462,67 +462,6 @@ collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 
-enum { N00BB_FINALIZE_DEPTH = 16 };
-
-th_type *
-n00bb_finalize_record_shape(th_ctx *types, th_type *type, bool open,
-                            bool named_only)
-{
-    th_type *resolved = type ? th_resolve(type) : nullptr;
-    if (!resolved || th_is_poison(resolved)
-        || (!open && !th_is_closed(types, resolved))
-        || n00bb_object_type(types, resolved)) return nullptr;
-    bool named = th_kind_of(resolved) == TH_NAMED;
-    if (named_only && !named) return nullptr;
-    th_type *shape = named ? th_type_definition(types, resolved) : resolved;
-    shape = shape ? th_resolve(shape) : nullptr;
-    return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
-}
-
-static bool
-finalize_reaches(th_ctx *types, th_type *type, bool open, bool named_only,
-                 n00bb_has_finalizer_fn has_finalizer, void *context,
-                 size_t depth)
-{
-    th_type *resolved = type ? th_resolve(type) : nullptr;
-    if (!resolved || depth >= N00BB_FINALIZE_DEPTH) return false;
-    if (open && th_kind_of(resolved) == TH_VAR) return true;
-    th_type *item = th_option_item(resolved);
-    if (item) return finalize_reaches(types, item, open, named_only,
-                                      has_finalizer, context, depth + 1);
-    size_t count = 0;
-    if (th_tuple_element(resolved, 0, &count)) {
-        for (size_t i = 0; i < count; i++)
-            if (finalize_reaches(types,
-                    th_tuple_element(resolved, i, nullptr), open,
-                    named_only, has_finalizer, context, depth + 1))
-                return true;
-        return false;
-    }
-    th_type *shape = n00bb_finalize_record_shape(types, resolved, open,
-                                                 named_only);
-    if (!shape) return false;
-    if (has_finalizer(context, resolved)) return true;
-    for (size_t i = 0; i < th_record_len(shape); i++) {
-        const th_member *member = th_record_member(shape, i);
-        if (member && member->type
-            && finalize_reaches(types, member->type, open, named_only,
-                                has_finalizer, context, depth + 1))
-            return true;
-    }
-    return false;
-}
-
-bool
-n00bb_finalize_reaches(th_ctx *types, th_type *type, bool open,
-                       bool named_only, n00bb_has_finalizer_fn has_finalizer,
-                       void *context)
-{
-    return types && has_finalizer
-        && finalize_reaches(types, type, open, named_only, has_finalizer,
-                            context, 0);
-}
-
 bool
 n00bb_reference_hook(th_ctx *types, th_type *receiver, core_string_t name,
                      th_env_method_t *method, th_type **result)
@@ -571,54 +510,9 @@ n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
     th_env_method_t found = {0};
     bool resolved = reference && th_env_method_resolve(state->types,
         reference, CORE_STRING_STATIC("Finalize"),
-        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND
-        && !n00bb_generic_generated_finalizer(found.qualified_name);
+        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND;
     if (resolved && method) *method = found;
     return resolved;
-}
-
-static bool
-unit_has_finalizer(void *context, th_type *type)
-{
-    return n00bb_type_finalizer(context, type, nullptr);
-}
-
-static bool
-type_finalized_within(core_translation_unit_t *unit, th_type *type,
-                      bool open)
-{
-    return n00bb_finalize_reaches(tu_state(unit)->types, type, open, false,
-                                  unit_has_finalizer, unit);
-}
-
-static bool
-type_finalized_cached(core_translation_unit_t *unit, th_type *type,
-                      bool open)
-{
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    th_type *key = type ? th_resolve(type) : nullptr;
-    if (!state || !key) return false;
-    uintptr_t known = open ? 4 : 1;
-    uintptr_t yes = open ? 8 : 2;
-    uintptr_t cached = (uintptr_t)core_dict_get(&state->finalized_types, key,
-                                                nullptr);
-    if (cached & known) return (cached & yes) != 0;
-    bool finalized = type_finalized_within(unit, key, open);
-    cached |= known | (finalized ? yes : 0);
-    core_dict_put(&state->finalized_types, key, (void *)cached);
-    return finalized;
-}
-
-bool
-n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
-{
-    return type_finalized_cached(unit, type, false);
-}
-
-bool
-n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type)
-{
-    return type_finalized_cached(unit, type, true);
 }
 
 bool
@@ -3841,6 +3735,26 @@ record_function_signature(parse_grammar_t *grammar,
                 n00bb_report_help(diagnostics,
                     N00B_TEXT_WRITE_FUNC_FINALIZE_CONSUME_SELF,
                     N00BB_NO_ARGS);
+        }
+        else {
+            // A value type would be finalized once per copy.
+            th_type *finalized = th_resolve(
+                th_ind_referent(th_resolve(receiver->type)));
+            if (finalized && th_kind_of(finalized) != TH_VAR
+                && !th_is_poison(finalized)
+                && !n00bb_object_type(state->types, finalized)) {
+                core_string_t shown = n00bb_print_type(state->types,
+                                                       finalized);
+                core_diag_location_t at = receiver->decl_node
+                    ? link_source_location(receiver->decl_node) : name_at;
+                if (n00bb_report(diagnostics, unit,
+                        N00B_DIAG_FINALIZE_NOT_OBJECT, at,
+                        N00B_TEXT_FINALIZE_NOT_OBJECT,
+                        N00BB_ARGS(ARG_TEXT(shown))))
+                    n00bb_report_help(diagnostics,
+                        N00B_TEXT_DECLARE_IT_AS_AN_OBJECT,
+                        N00BB_ARGS(ARG_TEXT(shown)));
+            }
         }
         th_type *failure = symbol->error_type
             ? th_resolve(symbol->error_type) : nullptr;
@@ -7428,7 +7342,6 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
-    core_dict_free(&state->finalized_types);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_free(&state->dispatch_calls);
@@ -7454,7 +7367,6 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
-    core_dict_init(&state->finalized_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->mark_annotations = core_list_new(parse_tree_ptr_t);

@@ -462,32 +462,32 @@ int32_t writ_kv_n00b_kv_iter_next(uint64_t it, void *result) {
 }
 
 
-private record Db_Cell {
+private object Db_Cell {
     raw: uint
 }
 
-alias type Db = Ref[Db_Cell]
+alias type Db = Db_Cell
 
 func __db_cell(raw: uint) -> Db {
-    var cell: Db_Cell = (raw = raw)
-    return ref cell
+    let cell: Db_Cell = (raw = raw)
+    return cell
 }
 
-private record Iter_Cell {
+private object Iter_Cell {
     raw: uint
     keep_db: Db?
 }
 
-alias type Iter = Ref[Iter_Cell]
+alias type Iter = Iter_Cell
 
 func __iter_cell(raw: uint) -> Iter {
-    var cell: Iter_Cell = (raw = raw, keep_db = nil)
-    return ref cell
+    let cell: Iter_Cell = (raw = raw, keep_db = nil)
+    return cell
 }
 
 func __iter_cell_with_db(raw: uint, keep: Db) -> Iter {
-    var cell: Iter_Cell = (raw = raw, keep_db = keep)
-    return ref cell
+    let cell: Iter_Cell = (raw = raw, keep_db = keep)
+    return cell
 }
 
 record Entry {
@@ -540,9 +540,11 @@ func db_open(path: string) -> Db fail: Ffi_Error {
     return __db_cell(out_db)
 }
 
-func __init(modify self: Db, path: string) {
+func __init(self: Db, path: string) {
     try {
-        self = db_open(path)!
+        let opened = db_open(path)!
+        self.raw = opened.raw
+        opened.raw = 0
     } fail(failure) {
         panic("db_open failed")
     }
@@ -551,11 +553,11 @@ func __init(modify self: Db, path: string) {
 func put(self: Db, key: Array[u8], val: Array[u8]) fail: Ffi_Error {
     var key_value = key
     var val_value = val
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "kv_put")
         fail failure
     }
-    let outcome = __kv_put(self.__value.raw, ref key_value, ref val_value)
+    let outcome = __kv_put(self.raw, ref key_value, ref val_value)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
         fail failure
@@ -569,11 +571,11 @@ func put(self: Db, key: Array[u8], val: Array[u8]) fail: Ffi_Error {
 func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Ffi_Error {
     var key_value = key
     var out_val: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "kv_get")
         fail failure
     }
-    let outcome = __kv_get(self.__value.raw, ref key_value, ref out_val)
+    let outcome = __kv_get(self.raw, ref key_value, ref out_val)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
         fail failure
@@ -591,11 +593,11 @@ func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Ffi_Error {
 func iter(self: Db, prefix: Array[u8]) -> Iter fail: Ffi_Error {
     var prefix_value = prefix
     var returned: uint = 0
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "kv_iter_new")
         fail failure
     }
-    let outcome = __kv_iter_new(self.__value.raw, ref prefix_value, ref returned)
+    let outcome = __kv_iter_new(self.raw, ref prefix_value, ref returned)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
         fail failure
@@ -609,11 +611,11 @@ func iter(self: Db, prefix: Array[u8]) -> Iter fail: Ffi_Error {
 
 func next(self: Iter) -> Entry? fail: Ffi_Error {
     var returned: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "kv_iter_next")
         fail failure
     }
-    let outcome = __kv_iter_next(self.__value.raw, ref returned)
+    let outcome = __kv_iter_next(self.raw, ref returned)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
         fail failure
@@ -625,10 +627,10 @@ func next(self: Iter) -> Entry? fail: Ffi_Error {
 30	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
 35	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
 64	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-88	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-106	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-128	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
-147	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+90	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+108	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+130	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+149	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
 library kv
 load static
 extern __kv_open writ_kv_n00b_kv_open (ref[array[u8]], ref[uint], ref[int]) -> i32 fail: nil

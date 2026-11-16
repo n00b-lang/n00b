@@ -438,8 +438,6 @@ static const struct {
     core_string_t trait;
     core_string_t method;
 } open_hooks[] = {
-    {CORE_STRING_STATIC("__n00bb_finalize_open"),
-     CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize")},
     {CORE_STRING_STATIC("__n00bb_ref_address_open"),
      CORE_STRING_STATIC("Reference"), CORE_STRING_STATIC("__ref_address")},
     {CORE_STRING_STATIC("__n00bb_ref_address_mut_open"),

@@ -1218,25 +1218,6 @@ native_named(const ir_instr_t *call, core_string_t name)
 }
 
 static bool
-rewrite_open_finalize(box_calls_t *calls, ir_func_t *caller,
-                      ir_instr_t *instruction)
-{
-    ir_value_t *address = n00bb_open_call(instruction,
-            CORE_STRING_STATIC("__n00bb_finalize_open"))
-        && instruction->operands[1].kind == IR_OPD_VALUE
-        ? instruction->operands[1].value : nullptr;
-    th_type *reference = address ? th_resolve(address->type) : nullptr;
-    if (!reference || th_kind_of(reference) != TH_INDIRECTION
-        || th_is_closed(ir_module_types(caller->owner), reference))
-        return true;
-    th_type *referent = th_ind_referent(reference);
-    ir_func_t *target = runtime_function(calls,
-                                         CORE_STRING_STATIC("finalize_ref"));
-    return !target || retarget(calls, caller, instruction, target, &referent,
-                               1, &address, 1);
-}
-
-static bool
 rewrite_open_reference(box_calls_t *calls, ir_func_t *caller,
                        ir_instr_t *instruction)
 {
@@ -1890,10 +1871,8 @@ rewrite_emitted(box_calls_t *calls)
                     rewritten = rewrite_field(calls,function, instruction);
                     break;
                 case IR_OP_CALL:
-                    rewritten = rewrite_open_finalize(calls, function,
-                                                      instruction)
-                        && rewrite_open_reference(calls, function,
-                                                  instruction)
+                    rewritten = rewrite_open_reference(calls, function,
+                                                       instruction)
                         && rewrite_reference_arguments(calls, function,
                                                        instruction)
                         && rewrite_native_call(calls,function, instruction);

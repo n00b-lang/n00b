@@ -227,15 +227,15 @@ int32_t policy_n00b_stmt_release(uint64_t stmt) {
 }
 
 
-private record Stmt_Cell {
+private object Stmt_Cell {
     raw: uint
 }
 
-alias type Stmt = Ref[Stmt_Cell]
+alias type Stmt = Stmt_Cell
 
 func __stmt_cell(raw: uint) -> Stmt {
-    var cell: Stmt_Cell = (raw = raw)
-    return ref cell
+    let cell: Stmt_Cell = (raw = raw)
+    return cell
 }
 
 func __finalize(consume self: Ref[Stmt_Cell]) {
@@ -250,11 +250,11 @@ func __finalize(consume self: Ref[Stmt_Cell]) {
 func bind_text(stmt: Stmt, text: string) -> i32 fail: Ffi_Error {
     var text_value: Array[u8] = __text_byte_array(text)
     var returned: i32 = 0
-    if stmt.__value.raw == 0 {
+    if stmt.raw == 0 {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "bind_text")
         fail failure
     }
-    let outcome = __bind_text_text_transient(stmt.__value.raw, ref text_value, ref returned)
+    let outcome = __bind_text_text_transient(stmt.raw, ref text_value, ref returned)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
         fail failure
@@ -263,13 +263,13 @@ func bind_text(stmt: Stmt, text: string) -> i32 fail: Ffi_Error {
 }
 
 func close(modify self: Stmt) fail: Ffi_Error {
-    let outcome = __stmt_release(self.__value.raw)
+    let outcome = __stmt_release(self.raw)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "stmt_release")
         fail failure
     }
-    __ffi_event("policy:stmt_release", [cast[u64](self.__value.raw)]'array, __ffi_thread_id())
-    self.__value.raw = 0
+    __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __ffi_thread_id())
+    self.raw = 0
 }
 2	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
 22	tests/gen_n00b/../policy/policy.writ:11:1	bind_text

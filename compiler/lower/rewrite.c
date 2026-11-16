@@ -30,8 +30,6 @@ typedef struct {
     const n00bb_dispatch_index_t *dispatch;
     core_dict_t *requests;
     core_list_t(n00bb_ir_instr_ptr_t) *request_calls;
-    core_list_t(n00bb_ir_instr_ptr_t) *pruned;
-    core_dict_t *doomed;
     core_list_t(n00bb_ir_instr_ptr_t) *demotions;
     core_list_t(n00bb_rewrite_value_ptr_t) abandoned;
     bool writing;
@@ -238,17 +236,6 @@ n00bb_lifted_item(th_type *target, const ir_value_t *value)
     th_type *item = target ? th_option_item(th_resolve(target)) : nullptr;
     return item && value && !th_option_item(th_resolve(value->type))
         && !th_is_nil(th_resolve(value->type)) ? item : nullptr;
-}
-
-static ir_instr_t *
-n00bb_pending_consume(const ir_instr_t *call, ir_value_t **address)
-{
-    ir_value_t *consumed = call && call->n_operands == 2
-        ? ir_operand_value(&call->operands[1]) : nullptr;
-    ir_instr_t *consume = consumed && consumed->def
-        && consumed->def->op == IR_OP_CONSUME ? consumed->def : nullptr;
-    *address = consume ? ir_operand_value(&consume->operands[0]) : nullptr;
-    return consume;
 }
 
 static bool
@@ -644,36 +631,6 @@ n00bb_rewrite_split(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         if (!ir_block_find(rewrite->context.function, name))
             return ir_block_split(in->block, in->index + 1, name);
     }
-}
-
-static bool
-n00bb_rewrite_finalize(n00bb_rewrite_t *rewrite, ir_instr_t *in)
-{
-    ir_value_t *address = nullptr;
-    ir_instr_t *consume = n00bb_pending_consume(in, &address);
-    th_type *type = address
-        ? th_ind_referent(th_resolve(address->type)) : nullptr;
-    ir_block_t *block = in->block;
-    ir_span_t span = in->span;
-    ir_block_t *tail = type ? n00bb_rewrite_split(rewrite, in) : nullptr;
-    if (!tail || !ir_instr_erase(in) || !ir_instr_erase(consume))
-        return false;
-    ir_lower_context_t *context = &rewrite->context;
-    context->block = block;
-    bool ok = !n00bb_type_may_finalize(rewrite->unit, type)
-        || n00bb_emit_finalize_value(context, address, type, span, 0);
-    ok = ok && n00bb_emit_jump(context, tail, span);
-    context->block = rewrite->scratch;
-    context->reachable = true;
-    return ok;
-}
-
-static bool
-n00bb_open_finalize_call(const ir_instr_t *in)
-{
-    ir_func_t *target = ir_call_function(in);
-    return target && core_string_starts_with(target->name,
-        CORE_STRING_STATIC("__n00bb_finalize_pending#"));
 }
 
 static bool
@@ -2301,7 +2258,10 @@ n00bb_record_literal_buildable(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                           N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
         return false;
     }
-    if (!n00bb_type_has_constructor(rewrite->unit, type)) return true;
+    // The module that defines a type may build it field by field, bypassing
+    // its constructor.
+    if (owner == rewrite->unit
+        || !n00bb_type_has_constructor(rewrite->unit, type)) return true;
     n00bb_report(diagnostics, rewrite->unit,
                  N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
                  n00bb_span_location(in->span), N00B_TEXT_HAS_AN_INIT_SO_A,
@@ -2398,8 +2358,6 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (open_cast && in->dest && operand)
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_cast(rewrite, in, open_cast));
-    if (n00bb_open_finalize_call(in))
-        return n00bb_rewrite_finalize(rewrite, in);
     if (in->op == IR_OP_CALLBACK_CREATE)
         return n00bb_rewrite_callback_setup(rewrite, in);
     bool arm_store = false;
@@ -2435,9 +2393,7 @@ typedef struct {
     core_dict_t modules;
     core_dict_t requests;
     core_list_t(n00bb_ir_instr_ptr_t) request_calls;
-    core_dict_t doomed;
     core_dict_t failed;
-    core_list_t(n00bb_ir_instr_ptr_t) pruned;
     core_list_t(n00bb_ir_instr_ptr_t) demotions;
     core_list_t(n00bb_rewrite_ptr_t) rewrites;
     core_list_t(n00bb_ir_instr_ptr_t) retyped;
@@ -2466,8 +2422,6 @@ n00bb_rewrite_for_function(n00bb_rewriter_t *rewriter, ir_func_t *function)
     rewrite->dispatch = rewriter->typing->dispatch;
     rewrite->requests = &rewriter->requests;
     rewrite->request_calls = &rewriter->request_calls;
-    rewrite->pruned = &rewriter->pruned;
-    rewrite->doomed = &rewriter->doomed;
     rewrite->demotions = &rewriter->demotions;
     core_dict_put(&rewriter->by_function, function, rewrite);
     core_list_push(rewriter->rewrites, rewrite);
@@ -2538,90 +2492,6 @@ n00bb_settle_returns(n00bb_rewriter_t *rewriter)
     }
 }
 
-static void
-n00bb_doom(n00bb_rewrite_t *rewrite, ir_instr_t *in)
-{
-    if (!core_dict_get(rewrite->doomed, in, nullptr)) {
-        core_dict_put(rewrite->doomed, in, in);
-        core_list_push(*rewrite->pruned, in);
-    }
-}
-
-static bool
-n00bb_doomed_uses(n00bb_rewrite_t *rewrite, ir_instr_t *in)
-{
-    for (uint32_t i = 0; i < ir_pdg_out_count(rewrite->pdg, in); i++) {
-        const ir_dep_edge_t *edge = ir_pdg_out_at(rewrite->pdg, in, i);
-        if (edge->kind == IR_DEP_DATA
-            && !core_dict_get(rewrite->doomed, edge->to, nullptr))
-            return false;
-    }
-    return true;
-}
-
-static void
-n00bb_doom_writes(n00bb_rewrite_t *rewrite, ir_instr_t *reader)
-{
-    for (uint32_t i = 0; i < ir_pdg_in_count(rewrite->pdg, reader); i++) {
-        const ir_dep_edge_t *edge = ir_pdg_in_at(rewrite->pdg, reader, i);
-        ir_instr_t *write = edge->from;
-        if (edge->kind != IR_DEP_DATA || !edge->via
-            || write->dest_kind != IR_DEST_LOCAL
-            || !n00bb_doomed_uses(rewrite, write))
-            continue;
-        n00bb_doom(rewrite, write);
-        ir_value_t *source = n00bb_operand_value(write, 0);
-        if (source && source->def && source->def->op == IR_OP_CONST
-            && n00bb_doomed_uses(rewrite, source->def))
-            n00bb_doom(rewrite, source->def);
-    }
-}
-
-static bool
-n00bb_plan_scaffold(n00bb_rewrite_t *rewrite, ir_instr_t *branch)
-{
-    ir_block_t *finalize = branch->op == IR_OP_BRANCH
-        && branch->n_operands == 3 ? branch->operands[1].block : nullptr;
-    ir_instr_t *call = nullptr;
-    for (uint32_t i = 0; finalize && !call && i < finalize->n_instrs; i++)
-        if (n00bb_open_finalize_call(finalize->instrs[i]))
-            call = finalize->instrs[i];
-    ir_value_t *address = nullptr;
-    n00bb_pending_consume(call, &address);
-    th_type *type = address
-        ? th_ind_referent(th_resolve(address->type)) : nullptr;
-    if (!type || !rewrite->pdg
-        || n00bb_type_may_finalize(rewrite->unit, type))
-        return true;
-    n00bb_doom(rewrite, branch);
-    for (uint32_t i = 0; i < finalize->n_instrs; i++)
-        n00bb_doom(rewrite, finalize->instrs[i]);
-    n00bb_doom_writes(rewrite, branch);
-    for (uint32_t i = 0; i < finalize->n_instrs; i++)
-        n00bb_doom_writes(rewrite, finalize->instrs[i]);
-    return true;
-}
-
-static bool
-n00bb_apply_pruning(core_list_t(n00bb_ir_instr_ptr_t) *pruned)
-{
-    bool ok = true;
-    for (size_t i = 0; i < pruned->len; i++) {
-        ir_instr_t *in = pruned->data[i];
-        if (in->op != IR_OP_BRANCH) continue;
-        ir_block_t *finalize = in->operands[1].block;
-        in->op = IR_OP_JUMP;
-        in->operands[0] = in->operands[2];
-        in->n_operands = 1;
-        while (finalize->n_instrs)
-            ok = ir_instr_erase(finalize->instrs[0]) && ok;
-        ok = ir_block_erase(finalize) && ok;
-    }
-    for (size_t i = 0; i < pruned->len; i++)
-        if (pruned->data[i]->block && pruned->data[i]->op != IR_OP_JUMP)
-            ok = ir_instr_erase(pruned->data[i]) && ok;
-    return ok;
-}
 
 static bool
 n00bb_settle_outcome(n00bb_rewrite_t *rewrite, ir_instr_t *call)
@@ -2785,12 +2655,6 @@ n00bb_emit_sinks(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         || n00bb_rewrite_object_literal(rewrite, in);
 }
 
-static bool
-n00bb_plan_site(n00bb_rewrite_t *rewrite, ir_instr_t *in)
-{
-    return in->op != IR_OP_BRANCH || n00bb_plan_scaffold(rewrite, in);
-}
-
 static ir_local_t *
 n00bb_open_storage_local(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
@@ -2840,7 +2704,7 @@ n00bb_plan_demotion(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     for (uint32_t i = 0; i < ir_pdg_out_count(rewrite->pdg, in); i++) {
         const ir_dep_edge_t *edge = ir_pdg_out_at(rewrite->pdg, in, i);
         ir_instr_t *user = edge->kind == IR_DEP_DATA ? edge->to : nullptr;
-        if (!user || core_dict_get(rewrite->doomed, user, nullptr)) continue;
+        if (!user) continue;
         bool store = user->op == IR_OP_STORE && user->n_operands == 2
             && ir_operand_value(&user->operands[0]) == in->dest
             && ir_operand_value(&user->operands[1]) != in->dest;
@@ -2943,6 +2807,25 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
     return true;
 }
 
+// Whether `function` makes an object: converts a fresh allocation of an
+// object's fields to the object.
+static bool
+n00bb_makes_object(const ir_func_t *function)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            const ir_value_t *fields = in->op == IR_OP_NOMINAL_CAST
+                && in->n_operands ? ir_operand_value(&in->operands[0])
+                                  : nullptr;
+            if (fields && fields->kind == IR_VAL_INSTR && fields->def
+                && fields->def->op == IR_OP_ALLOC
+                && ir_instr_is_fresh(fields->def))
+                return true;
+        }
+    return false;
+}
+
 bool
 n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
                        parse_grammar_t *grammar, n00bb_typing_t *typing)
@@ -2953,7 +2836,6 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
         .typing = typing,
         .rewrites = core_list_new(n00bb_rewrite_ptr_t),
         .retyped = core_list_new(n00bb_ir_instr_ptr_t),
-        .pruned = core_list_new(n00bb_ir_instr_ptr_t),
         .demotions = core_list_new(n00bb_ir_instr_ptr_t),
     };
     core_dict_init(&rewriter.by_function, nullptr, nullptr);
@@ -2964,7 +2846,6 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
         core_dict_put(&rewriter.modules,
                       tu_state(analysis->units.data[u])->ir_module,
                       analysis->units.data[u]);
-    core_dict_init(&rewriter.doomed, nullptr, nullptr);
     core_dict_init(&rewriter.failed, nullptr, nullptr);
     rewriter.request_calls = core_list_new(n00bb_ir_instr_ptr_t);
     bool ok = n00bb_rewrite_sites(&rewriter, &typing->outcome_calls,
@@ -2975,14 +2856,9 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
     for (size_t u = 0; u < analysis->units.len; u++)
         ok = n00bb_rewrite_sites(&rewriter,
                 &tu_state(analysis->units.data[u])->rewrite_sites,
-                n00bb_plan_site) && ok;
-    for (size_t u = 0; u < analysis->units.len; u++)
-        ok = n00bb_rewrite_sites(&rewriter,
-                &tu_state(analysis->units.data[u])->rewrite_sites,
                 n00bb_plan_demotion) && ok;
     for (size_t i = 0; i < rewriter.rewrites.len; i++)
         rewriter.rewrites.data[i]->pdg = nullptr;
-    ok = n00bb_apply_pruning(&rewriter.pruned) && ok;
     ok = n00bb_apply_demotions(&rewriter) && ok;
     for (size_t u = 0; u < analysis->units.len; u++)
         ok = n00bb_rewrite_sites(&rewriter,
@@ -2992,6 +2868,16 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
                              n00bb_emit_sinks)
         && n00bb_rewrite_sites(&rewriter, &rewriter.retyped, n00bb_emit_sinks)
         && ok;
+    for (size_t u = 0; ok && u < analysis->units.len; u++) {
+        ir_module_t *module = tu_state(analysis->units.data[u])->ir_module;
+        for (size_t f = 0; ok && module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            n00bb_rewrite_t *rewrite = n00bb_makes_object(function)
+                ? n00bb_rewrite_for_function(&rewriter, function) : nullptr;
+            ok = !rewrite
+                || n00bb_finalize_frame_objects(&rewrite->context);
+        }
+    }
     for (size_t i = 0; i < rewriter.rewrites.len; i++) {
         n00bb_rewrite_t *rewrite = rewriter.rewrites.data[i];
         ok = ir_block_erase(rewrite->scratch)
@@ -3017,14 +2903,6 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
             }
         }
     }
-    for (size_t u = 0; ok && u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        ir_module_t *module = tu_state(unit)->ir_module;
-        for (size_t f = 0; module && !tu_state(unit)->interface_module
-                 && f < ir_func_count(module); f++)
-            ok = n00bb_finalize_temporaries(analysis, grammar, unit,
-                                            ir_func_at(module, f)) && ok;
-    }
     core_list_free(rewriter.rewrites);
     core_list_free(rewriter.retyped);
     core_dict_free(&rewriter.by_function);
@@ -3032,9 +2910,7 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
     core_dict_free(&rewriter.requests);
     core_dict_free(&rewriter.modules);
     core_list_free(rewriter.request_calls);
-    core_dict_free(&rewriter.doomed);
     core_dict_free(&rewriter.failed);
-    core_list_free(rewriter.pruned);
     core_list_free(rewriter.demotions);
     return ok;
 }

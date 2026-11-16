@@ -1,0 +1,6 @@
+import shapes
+
+let made: shapes.Built = new[shapes.Built](1)
+let raw: shapes.Built = shapes.raw_built(1)
+let forged: shapes.Built = (x = 1)
+require made.x == 2 and raw.x == 1 and forged.x == 1

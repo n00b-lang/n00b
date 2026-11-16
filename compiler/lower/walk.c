@@ -1093,19 +1093,8 @@ lower_write_binding(ir_lower_context_t *context,
                     ir_lower_symbol_binding_t *binding, ir_value_t *value,
                     bool initializes, ir_span_t span)
 {
-    n00bb_lower_context_t *owner = lower_owner(context);
-    bool track = owner && owner->track_writes;
-    if (track && !n00bb_write_binding(context, binding->symbol, false))
-        return lower_failure(context, IR_DIAG_INTERNAL, span,
-                             "could not prepare the assigned binding");
-    ir_lower_result_t result = lower_write_binding_value(context, binding,
-                                                         value, initializes,
-                                                         span);
-    if (result.status != IR_LOWER_FAILED && track
-        && !n00bb_write_binding(context, binding->symbol, true))
-        return lower_failure(context, IR_DIAG_INTERNAL, span,
-                             "could not record the assigned binding");
-    return result;
+    return lower_write_binding_value(context, binding, value, initializes,
+                                     span);
 }
 
 static ir_lower_result_t

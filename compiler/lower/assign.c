@@ -28,15 +28,6 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
 static bool
 n00bb_suppress_dereferences(ir_lower_context_t *context,
                             parse_grammar_t *grammar, parse_tree_t *member);
-static parse_sym_entry_t *
-n00bb_initialized_self(ir_lower_context_t *context, parse_grammar_t *grammar,
-                       parse_tree_t *target);
-static ir_local_t *
-n00bb_init_field_flag(ir_lower_context_t *context, core_string_t name,
-                      ir_span_t span);
-static bool
-n00bb_finalize_replaced(ir_lower_context_t *context, ir_value_t *address,
-                        ir_local_t *initialized, ir_span_t span);
 static bool
 n00bb_lower_open_field_assignment(ir_lower_context_t *context,
                                   parse_visit_t *visit, parse_tree_t *target,
@@ -186,7 +177,7 @@ n00bb_materialize_assignment_source(ir_lower_context_t *context,
             "could not materialize the assigned value");
         return false;
     }
-    return n00bb_move_source(context, visit->grammar, source);
+    return true;
 }
 
 static parse_sym_entry_t *
@@ -300,24 +291,6 @@ n00bb_lower_field_receiver(ir_lower_context_t *context, parse_visit_t *visit,
     return n00bb_suppress_dereferences(context, visit->grammar, visit->node);
 }
 
-static parse_sym_entry_t *
-n00bb_initialized_self(ir_lower_context_t *context, parse_grammar_t *grammar,
-                       parse_tree_t *target)
-{
-    n00bb_lower_context_t *lower = context->user;
-    if (!lower || !lower->function_symbol
-        || !core_string_eq(lower->function_symbol->name,
-                           CORE_STRING_STATIC("__init"))) return nullptr;
-    parse_tree_t *member = member_access_node(grammar, target);
-    parse_tree_t *lvalue = member && core_tree_num_children(member)
-        ? n00bb_simple_lvalue(core_tree_child(member, 0)) : nullptr;
-    parse_sym_entry_t *symbol = lvalue
-        ? attached_symbol(grammar, lower->unit, lvalue) : nullptr;
-    return symbol && symbol->kind == PARSE_SYM_PARAM
-        && core_string_eq(symbol->name, CORE_STRING_STATIC("self"))
-        ? symbol : nullptr;
-}
-
 static bool
 record_write_site(ir_lower_context_t *context, parse_grammar_t *grammar,
                   parse_tree_t *target, core_string_t field)
@@ -396,63 +369,6 @@ check_loop_initialization(ir_lower_context_t *context,
 }
 
 
-static ir_local_t *
-n00bb_init_field_flag(ir_lower_context_t *context, core_string_t name,
-                      ir_span_t span)
-{
-    n00bb_lower_context_t *lower = context->user;
-    for (size_t i = 0; i < lower->init_fields.len; i++)
-        if (core_string_eq(lower->init_fields.data[i].name, name))
-            return lower->init_fields.data[i].flag;
-    th_type *bool_type = n00bb_ir_builtin_type(context->module,
-                                               CORE_STRING_STATIC("bool"));
-    char buffer[48];
-    core_string_t local_name = n00bb_format_name(buffer, sizeof(buffer),
-        "__n00bb_initialized_%llu",
-        (unsigned long long)context->next_value_id++);
-    ir_local_t *flag = bool_type
-        ? ir_local_add(context->function, local_name, bool_type) : nullptr;
-    ir_block_t *entry = ir_block_entry(context->function);
-    ir_instr_t *constant = flag && entry
-        ? ir_instr_insert(entry, IR_OP_CONST, 0) : nullptr;
-    ir_instr_t *clear = constant
-        && ir_instr_set_fresh_dest(constant, "__n00bb_", bool_type)
-        && ir_instr_operand_int(constant, 0)
-        ? ir_instr_insert(entry, IR_OP_COPY, 1) : nullptr;
-    if (!clear || !ir_instr_set_dest_local(clear, flag)
-        || !ir_instr_operand_value(clear, constant->dest)) return nullptr;
-    constant->span = clear->span = span;
-    core_list_push(lower->init_fields, ((n00bb_init_field_t){name, flag}));
-    return flag;
-}
-
-static bool
-n00bb_finalize_replaced(ir_lower_context_t *context, ir_value_t *address,
-                        ir_local_t *initialized, ir_span_t span)
-{
-    n00bb_lower_context_t *lower = context->user;
-    th_type *type = th_ind_referent(th_resolve(address->type));
-    if (!type || !n00bb_type_may_finalize(lower->unit, type)) return true;
-    ir_block_t *join = nullptr;
-    if (initialized) {
-        ir_block_t *replace = n00bb_branch_block(context, lower, "replace");
-        join = n00bb_branch_block(context, lower, "replaced");
-        ir_value_t *flag = ir_local_value(context->function, initialized);
-        if (!replace || !join || !flag
-            || !n00bb_emit_branch(context, flag, replace, join, span))
-            return false;
-        context->block = replace;
-    }
-    ir_value_t *old = n00bb_emit_temp(context, IR_OP_COPY, address->type,
-                                      address, span);
-    if (!old || !n00bb_emit_finalize_value(context, old, type, span, 0))
-        return false;
-    if (!join) return true;
-    if (!n00bb_emit_jump(context, join, span)) return false;
-    context->block = join;
-    return true;
-}
-
 static ir_value_t *
 assigned_field_address(ir_lower_context_t *context, parse_grammar_t *grammar,
                        core_translation_unit_t *unit, parse_tree_t *target,
@@ -493,12 +409,7 @@ n00bb_lower_open_field_assignment(ir_lower_context_t *context,
             && address->def->op == IR_OP_FIELD && address->def->n_operands == 2
             && address->def->operands[1].kind == IR_OPD_NAME
         ? address->def : nullptr;
-    bool self = n00bb_initialized_self(context, visit->grammar, target);
-    ir_local_t *initialized = self && field
-        ? n00bb_init_field_flag(context, field->operands[1].name, span)
-        : nullptr;
-    if (!address || !value || (self && !initialized)
-        || !n00bb_finalize_replaced(context, address, initialized, span)
+    if (!address || !value
         || !n00bb_emit_indirect_write(context, address, value, span)) {
         lower_internal(context, span,
             "could not lower an open field assignment");
@@ -511,11 +422,9 @@ n00bb_lower_open_field_assignment(ir_lower_context_t *context,
     if (field && !record_write_site(context, visit->grammar, target,
                                     field->operands[1].name))
         return false;
-    if (initialized && !n00bb_set_flag(context, initialized, true, span))
-        return false;
     if (n00bb_index_writeback_finish(context, visit->grammar, visit->node,
                                      &writeback, span))
-        return n00bb_move_source(context, visit->grammar, source);
+        return true;
     lower_internal(context, span, "could not write back an indexed element");
     return false;
 }
@@ -570,24 +479,14 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
             "record field assignment does not match its array shape");
         return false;
     }
-    parse_sym_entry_t *self = n00bb_initialized_self(context, visit->grammar,
-                                                    target);
-    ir_local_t *initialized = self && n00bb_type_may_finalize(lower->unit,
-            th_ind_referent(th_resolve(address->type)))
-        ? n00bb_init_field_flag(context, field->name, span) : nullptr;
-    if ((self && n00bb_type_may_finalize(lower->unit,
-                th_ind_referent(th_resolve(address->type))) && !initialized)
-        || !n00bb_finalize_replaced(context, address, initialized, span)
-        || !n00bb_emit_indirect_write(context, address, value, span)
-        || !record_write_site(context, visit->grammar, target, field->name)
-        || (initialized && !n00bb_set_flag(context, initialized, true, span))) {
+    if (!n00bb_emit_indirect_write(context, address, value, span)
+        || !record_write_site(context, visit->grammar, target, field->name)) {
         lower_internal(context, span,
             "could not emit the record field store");
         return false;
     }
     return n00bb_index_writeback_finish(context, visit->grammar, visit->node,
-                                        &writeback, span)
-        && n00bb_move_source(context, visit->grammar, source);
+                                        &writeback, span);
 }
 
 static bool
@@ -619,13 +518,12 @@ n00bb_lower_referent_assignment(ir_lower_context_t *context,
             lower_internal(context, span, "`__value` assignment has no value");
         return false;
     }
-    if (!n00bb_finalize_replaced(context, address, nullptr, span)
-        || !n00bb_emit_indirect_write(context, address, value, span)) {
+    if (!n00bb_emit_indirect_write(context, address, value, span)) {
         lower_internal(context, span,
                     "could not emit the store through a reference");
         return false;
     }
-    return n00bb_move_source(context, visit->grammar, source);
+    return true;
 }
 
 static bool

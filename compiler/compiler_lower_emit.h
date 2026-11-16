@@ -28,10 +28,6 @@ n00bb_lower_context_t *n00bb_solved_lower_new(n00bb_link_analysis_t *analysis,
 ir_diags_t *attach_ir_diags(ir_ctx_t *ir_context, ir_policy_t *policy,
                             core_translation_unit_t *unit,
                             const char *policy_name);
-bool n00bb_finalize_temporaries(n00bb_link_analysis_t *analysis,
-                                parse_grammar_t *grammar,
-                                core_translation_unit_t *unit,
-                                ir_func_t *function);
 parse_sym_entry_t *n00bb_comparison_member(n00bb_link_analysis_t *analysis,
                                            th_type *type, core_string_t name);
 
@@ -85,9 +81,6 @@ ir_lower_result_t n00bb_emit_cast(ir_lower_context_t *context,
                                   ir_value_t *const *operands,
                                   th_type *target, bool unsafe_cast,
                                   ir_span_t span);
-bool n00bb_emit_finalize_value(ir_lower_context_t *context,
-                               ir_value_t *address, th_type *type,
-                               ir_span_t span, size_t depth);
 ir_value_t *n00bb_emit_indirect_read(ir_lower_context_t *context,
                                      ir_value_t *address, th_type *type,
                                      ir_span_t span);
@@ -102,6 +95,10 @@ ir_value_t *n00bb_emit_fresh_object(ir_lower_context_t *context,
 ir_value_t *n00bb_object_from_fields(ir_lower_context_t *context,
                                      ir_value_t *fields,
                                      th_type *object_type, ir_span_t span);
+// Finalizes, on every `return` and `fail` of `context`'s function, each
+// object it makes whose type has a finalizer, unless storage placement moves
+// the object's storage to the heap, where the collector finalizes it.
+bool n00bb_finalize_frame_objects(ir_lower_context_t *context);
 ir_lower_result_t n00bb_emit_intrinsic(ir_lower_context_t *context,
                                        parse_sym_entry_t *symbol,
                                        ir_value_t *const *operands,

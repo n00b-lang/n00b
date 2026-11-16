@@ -115,7 +115,7 @@ writ runs **in the preprocessor** of each compile:
 | `bool` | n00b `bool` |
 | `layout c` records | `type X layout(c) { ... }` |
 | Records n00b's `layout(c)` can't express (bitfields, `layout explicit`) | Opaque storage with generated accessors |
-| `handle` | A generated `X_Cell` record holding the C value, used through `alias X = Ref[X_Cell]`, with `close()` and a finalizer (§4.5) |
+| `handle` | A generated `X_Cell` object holding the C value, used through `alias X = X_Cell`, with `close()` and a finalizer (§4.5) |
 | `bytes[n]`, `utf8[n]`, `cstr` | n00b `string` or `Array[u8]`, copied across the boundary by the shim; a `borrow` slot passes the array's storage directly |
 | `out` and `inout` promoted to results | Multiple return values or a result record |
 | `error ...` | n00b `fail:` results (`-> T fail: E`) |
@@ -275,11 +275,15 @@ writ's `abi_class` facts, which writ derives from the start
   borrowed object stays live through the caller's frame across the call.
   `for call` spans wrap the call in a borrow and a release; `keep until
   EVENT` spans hold the borrow in the handle wrapper until the event.
-- **Handles.** A handle is a generated `X_Cell` record holding the C
-  value, used through `alias X = Ref[X_Cell]`:
+- **Handles.** A handle is a generated `X_Cell` object holding the C
+  value, used through `alias X = X_Cell`. Copies of a handle share the
+  one cell, so it is released once:
   - `close()` calls the release function and marks the handle closed. A
     call on a closed handle fails with `Error`; `consume` closes it too.
   - `with x` results keep `x`'s wrapper alive.
+  - A static function that returns the handle also makes an `__init`, so
+    `new[X](...)` opens one: the opened cell's value moves into the new
+    object and the opened cell is emptied.
   - The cell has a `__finalize`. In debug builds, a handle collected
     while open is reported ("collected while open; releasing it") and
     released.

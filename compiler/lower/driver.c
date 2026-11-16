@@ -381,21 +381,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("body-stmt"), n00bb_lower_statement_scope,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("top-level-stmt"), n00bb_lower_statement_scope,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("expression"), n00bb_lower_statement_scope,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("or-expr"), n00bb_lower_statement_scope,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("and-expr"), n00bb_lower_statement_scope,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("postfix-expr"), n00bb_lower_field_receiver,
             nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
@@ -504,8 +489,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = explained_by_errors(&units);
     ok = ok && reintern_unit_types(&units)
         && n00bb_generate_dispatch_adapters(analysis);
-    if (ok && !n00bb_check_initialized_fields(analysis))
-        ok = explained_by_errors(&units);
     if (ok && !n00bb_check_variant_arms(analysis))
         ok = explained_by_errors(&units);
     n00bb_typing_free(&typing);

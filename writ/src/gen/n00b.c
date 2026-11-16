@@ -451,10 +451,8 @@ static const writ_type_view_t *
 record_target(const writ_plan_item_view_t *item)
 {
     const writ_type_view_t *type = item->type;
-    if (type && type->kind == WRIT_TYPE_POINTER && type->target && type->target->kind == WRIT_TYPE_RECORD) {
-        return type->target;
-    }
-    return nullptr;
+    return type && type->kind == WRIT_TYPE_POINTER && type->target && type->target->kind == WRIT_TYPE_RECORD
+               ? type->target : nullptr;
 }
 
 static bool
@@ -639,7 +637,7 @@ released_handle(const n00b_t *g, writ_str_t fn)
 static writ_str_t
 raw_of(const n00b_t *g, const writ_type_view_t *type, writ_str_t owner)
 {
-    return writ_str_format(g->session, typed_handle(g, type) ? "unsafe_cast[uint] %.*s.__value.raw" : "%.*s.__value.raw", S(owner));
+    return writ_str_format(g->session, typed_handle(g, type) ? "unsafe_cast[uint] %.*s.raw" : "%.*s.raw", S(owner));
 }
 
 static const char *
@@ -700,10 +698,8 @@ bound_plan(const n00b_t *g, size_t fn, size_t k)
 {
     writ_bound_fn_t bound = bound_fn(g, fn);
     const writ_fn_view_t *view = writ_model_fn_at(g->model, fn);
-    if (bound.policy_arm != WRIT_PLAN_NONE) {
-        return k ? nullptr : patched_plan(g, writ_model_fn_arm_plan(g->model, view, bound.policy_arm));
-    }
-    return patched_plan(g, writ_model_fn_arm_plan(g->model, view, k));
+    bool policy = bound.policy_arm != WRIT_PLAN_NONE;
+    return policy && k ? nullptr : patched_plan(g, writ_model_fn_arm_plan(g->model, view, policy ? bound.policy_arm : k));
 }
 
 static void
@@ -1560,10 +1556,9 @@ foreign_pointer(const n00b_t *g, const writ_record_view_t *record, const writ_sl
 {
     writ_str_t element = record ? foreign_pointee(g, field->type->target) : foreign_element(g, field->type->target);
     writ_n00b_field_t extent = {0};
-    if (!element.length || (record && !foreign_extent(g, record, field, &extent))) {
-        return writ_cstr(record ? "Foreign[nil]?" : "uint");
-    }
-    return writ_str_format(g->session, "Foreign[%.*s]?", S(element));
+    return !element.length || (record && !foreign_extent(g, record, field, &extent))
+               ? writ_cstr(record ? "Foreign[nil]?" : "uint")
+               : writ_str_format(g->session, "Foreign[%.*s]?", S(element));
 }
 
 static writ_str_t
@@ -1696,9 +1691,7 @@ note_field(const n00b_t *g, const writ_record_view_t *record, const writ_slot_vi
     inner.type = unviewed(field->type);
     bool pointer = inner.type && (inner.type->kind == WRIT_TYPE_POINTER || inner.type->kind == WRIT_TYPE_ARRAY)
                    && foreign_pointee(g, inner.type->target).length;
-    if (!pointer || !foreign_extent(g, record, &inner, &fact)) {
-        fact.extent = WRIT_N00B_EXTENT_NONE;
-    }
+    (void)(pointer && foreign_extent(g, record, &inner, &fact)); // the extent stays NONE if it fails
     if (fact.extent != WRIT_N00B_EXTENT_NONE || fact.tag_field.length) {
         core_list_push(*g->fields, fact);
     }
@@ -2059,9 +2052,8 @@ handle_sources(const n00b_t *g, const writ_handle_view_t *handle, writ_str_t *ou
         for (size_t s = 0; s < count && !seen; s++) {
             seen = writ_str_eq(out[s], type);
         }
-        if (!seen) {
-            out[count++] = type;
-        }
+        out[count] = type; // overwritten by the next source if already seen
+        count += !seen;
     }
     return count;
 }
@@ -2071,12 +2063,12 @@ emit_cell_constructor(writ_emit_t *emit, writ_str_t type, writ_str_t name, writ_
                       const writ_str_t *fields, size_t count, size_t kept, writ_str_t raw)
 {
     writ_emit_open(emit, "func %.*s(raw: uint%.*s) -> %.*s", S(name), S(keep_param), S(type));
-    writ_emit_text(emit, "var cell: %.*s_Cell = (raw = %.*s", S(type), S(raw));
+    writ_emit_text(emit, "let cell: %.*s_Cell = (raw = %.*s", S(type), S(raw));
     for (size_t f = 0; f < count; f++) {
         writ_emit_text(emit, ", %.*s = %s", S(fields[f]), f == kept ? "keep" : "nil");
     }
     writ_emit_line(emit, ")");
-    writ_emit_line(emit, "return ref cell");
+    writ_emit_line(emit, "return cell");
     writ_emit_close(emit, nullptr);
 }
 
@@ -2090,10 +2082,12 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_emit_line(emit, "");
     mark(g, emit, handle->declared_at, handle->name);
     const record_handle_t *typed = typed_handle(g, handle->type);
-    writ_str_t raw = raw_of(g, handle->type, writ_cstr("self"));
+    writ_str_t raw = raw_of(g, handle->type, writ_cstr("self.__value"));
     writ_str_t initial = typed ? writ_str_format(g->session, "unsafe_cast[%.*s] raw", S(typed->raw_type))
                                : writ_cstr("raw");
-    writ_emit_open(emit, "private record %.*s_Cell", S(type));
+    // An object, so only the cell's storage is finalized, once, however many
+    // handles share it.
+    writ_emit_open(emit, "private object %.*s_Cell", S(type));
     writ_emit_line(emit, "raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
     for (size_t s = 0; s < source_count; s++) {
         fields[s] = keep_field(g, sources[s]);
@@ -2101,7 +2095,7 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     }
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_line(emit, "alias type %.*s = Ref[%.*s_Cell]", S(type), S(type));
+    writ_emit_line(emit, "alias type %.*s = %.*s_Cell", S(type), S(type));
     writ_emit_line(emit, "");
     emit_cell_constructor(emit, type, cell_constructor(g, type), writ_cstr(""), fields, source_count, source_count,
                           initial);
@@ -2621,7 +2615,7 @@ static void
 emit_fixup(const wrapper_t *w, writ_emit_t *emit, writ_str_t name)
 {
     writ_str_t problem = writ_str_format(w->g->session, "__fixup_%.*s", S(name));
-    writ_emit_line(emit, "let %.*s: string? = __ffi_fixup(%.*s.__value.raw)", S(problem), S(name));
+    writ_emit_line(emit, "let %.*s: string? = __ffi_fixup(%.*s.raw)", S(problem), S(name));
     writ_emit_open(emit, "if %.*s != nil", S(problem));
     if (declares_failure(w)) {
         emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR), problem);
@@ -2643,7 +2637,7 @@ emit_closed_checks(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim
         }
         writ_str_t name = local_name(w, p->item);
         if (!item->type || !item->type->nullable || guarded) {
-            writ_emit_open(emit, "if %.*s.__value.raw == %s", S(name), raw_empty(w->g, item->type));
+            writ_emit_open(emit, "if %.*s.raw == %s", S(name), raw_empty(w->g, item->type));
             if (declares_failure(w)) {
                 emit_fail(w, emit, writ_str_format(w->g->session, "%d", WRIT_C_ARGUMENT_ERROR),
                           writ_cstr("\"handle is closed\""));
@@ -2722,10 +2716,8 @@ keyword_name(const n00b_t *g, const writ_slot_view_t *field)
 static writ_str_t
 keyword_literal(const n00b_t *g, const writ_slot_view_t *field, int64_t value)
 {
-    if (field->type && field->type->kind == WRIT_TYPE_BOOL) {
-        return writ_cstr(value ? "true" : "false");
-    }
-    return writ_str_format(g->session, "%lld", (long long)value);
+    return field->type && field->type->kind == WRIT_TYPE_BOOL ? writ_cstr(value ? "true" : "false")
+                                                              : writ_str_format(g->session, "%lld", (long long)value);
 }
 
 static void
@@ -2831,21 +2823,32 @@ emit_wrapper_arguments(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords,
     }
 }
 
+// `new` allocates a handle (an object) before `__init` runs, so the opened
+// handle's state moves into it and the opened one is emptied: one releases.
 static void
-emit_static_init(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record)
+emit_static_init(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record,
+                 const writ_handle_view_t *handle)
 {
     writ_emit_line(emit, "");
-    writ_emit_text(emit, "func __init(modify self: %.*s", S(w->bound.owner));
-    bool first = false;
-    emit_wrapper_params(w, emit, keywords, options_record, &first);
+    writ_emit_text(emit, "func __init(%sself: %.*s", handle ? "" : "modify ", S(w->bound.owner));
+    emit_wrapper_params(w, emit, keywords, options_record, &(bool){false});
     writ_emit_text(emit, ")");
     writ_emit_open(emit, "");
     if (can_fail(w)) {
         writ_emit_open(emit, "try");
     }
-    writ_emit_text(emit, "self = %.*s(", S(wrapper_name(w)));
+    writ_emit_text(emit, "%s = %.*s(", handle ? "let opened" : "self", S(wrapper_name(w)));
     emit_wrapper_arguments(w, emit, keywords, options_record);
     writ_emit_line(emit, ")%s", can_fail(w) ? "!" : "");
+    if (handle) {
+        writ_str_t *sources = writ_alloc(w->g->session, sizeof(writ_str_t) * (writ_model_fn_count(w->g->model) + 1));
+        writ_emit_line(emit, "self.raw = opened.raw");
+        for (size_t s = 0, count = handle_sources(w->g, handle, sources); s < count; s++) {
+            writ_str_t field = keep_field(w->g, sources[s]);
+            writ_emit_line(emit, "self.%.*s = opened.%.*s", S(field), S(field));
+        }
+        writ_emit_line(emit, "opened.raw = %s", raw_empty(w->g, handle->type));
+    }
     if (can_fail(w)) {
         writ_emit_close(emit, " fail(failure) {");
         writ_emit_indent(emit, 1);
@@ -2949,10 +2952,8 @@ item_value(const wrapper_t *w, const core_list_t(shim_param_t) *params, uint32_t
     if (is_handle(item)) {
         return raw_of(w->g, item->type, name);
     }
-    if (item->type && (item->type->kind == WRIT_TYPE_INT || item->type->kind == WRIT_TYPE_ENUM)) {
-        return name;
-    }
-    return writ_cstr("0");
+    return item->type && (item->type->kind == WRIT_TYPE_INT || item->type->kind == WRIT_TYPE_ENUM) ? name
+                                                                                                   : writ_cstr("0");
 }
 
 static uint32_t
@@ -3354,7 +3355,7 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     emit_event_sites(&w, emit, &params);
     emit_callback_spans(&w, emit, &params);
     if (w.receiver != WRIT_PLAN_NONE && consumes(&w, w.receiver)) {
-        writ_emit_line(emit, "self.__value.raw = %s", raw_empty(g, plan->items[w.receiver].type));
+        writ_emit_line(emit, "self.raw = %s", raw_empty(g, plan->items[w.receiver].type));
     }
     emit_text_checks(&w, emit, &params);
     if (multiple_success) {
@@ -3407,7 +3408,8 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     core_list_free(params);
     if (w.bound.is_static && w.bound.owner.length && out_count == 1 && !multiple_success
         && writ_str_eq(item_type(g, fn, plan, outs[0]), w.bound.owner)) {
-        emit_static_init(&w, emit, keywords, options_record);
+        emit_static_init(&w, emit, keywords, options_record, is_handle(&plan->items[outs[0]])
+                         ? writ_model_handle_named(g->model, plan->items[outs[0]].type->name) : nullptr);
     }
 }
 
@@ -3590,9 +3592,7 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
 
     writ_span_t error_at = fn->declared_at;
     writ_str_t error = writ_binding_error_for(g->b, fn->contract_name, &error_at);
-    if (!error.length) {
-        error = writ_cstr("i32");
-    }
+    error = error.length ? error : writ_cstr("i32");
     bool fails = has_result && !fn->infallible;
     bool blocking = (fn->effects & WRIT_EFFECTS_BLOCKING) != 0;
     bool pointer_result = has_result && fn->result->type && fn->result->type->kind == WRIT_TYPE_POINTER;

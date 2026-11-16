@@ -405,13 +405,6 @@ typedef struct {
 core_list_decl(n00bb_value_block_frame_t);
 
 typedef struct {
-    core_string_t name;
-    ir_local_t *flag;
-} n00bb_init_field_t;
-
-core_list_decl(n00bb_init_field_t);
-
-typedef struct {
     parse_tree_t *node;
     parse_tree_t *body;
     parse_tree_t *error_clause;
@@ -448,20 +441,6 @@ typedef struct {
 } n00bb_with_frame_t;
 
 core_list_decl(n00bb_with_frame_t);
-
-typedef struct {
-    parse_tree_t *scope;
-    parse_sym_entry_t *symbol;
-    ir_local_t *owned;
-    th_type *type;
-    ir_local_t *storage;
-    ir_value_t *value;
-    bool fields;
-    bool moved;
-    uint64_t order;
-} n00bb_final_frame_t;
-
-core_list_decl(n00bb_final_frame_t);
 
 // A place passed to an `out` or `modify` parameter. `symbol`, `local` and
 // `global` name it for the check that one call is not given the same place
@@ -520,7 +499,6 @@ typedef struct {
     int32_t file_id;
     size_t with_count;
     size_t try_count;
-    size_t final_base;
     bool reachable;
 } n00bb_literal_frame_t;
 
@@ -529,7 +507,6 @@ struct n00bb_lower_context {
     ir_lowerer_t *lowerer;
     void *walk;
     bool bind_external;
-    bool track_writes;
     ir_ctx_t *ir_context;
     core_list_t(core_translation_unit_ptr_t) *units;
     core_translation_unit_t *unit;
@@ -542,15 +519,12 @@ struct n00bb_lower_context {
     core_list_t(n00bb_switch_frame_t) switches;
     core_list_t(n00bb_typecase_frame_t) typecases;
     core_list_t(n00bb_value_block_frame_t) value_blocks;
-    core_list_t(n00bb_init_field_t) init_fields;
     bool reference_write;
     bool write_back_open_index;
     core_dict_t node_types;
     bool node_types_ready;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
-    core_list_t(n00bb_final_frame_t) finals;
-    size_t final_base;
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
@@ -773,55 +747,17 @@ n00bb_set_reference_access(ir_ctx_t *context, ir_value_t *value,
 ir_mutability_t
 local_binding_mutability(const parse_sym_entry_t *symbol);
 
-n00bb_final_frame_t *
-n00bb_final_frame(n00bb_lower_context_t *lower,
-                  const parse_sym_entry_t *symbol);
-
 bool
 n00bb_set_flag(ir_lower_context_t *context, ir_local_t *flag, bool value,
                ir_span_t span);
-
-bool
-n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
-                bool owned, ir_span_t span);
-
-enum { N00BB_FINALIZE_DEPTH = 16 };
 
 ir_value_t *
 n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op, th_type *type,
                 ir_value_t *operand, ir_span_t span);
 
 bool
-n00bb_emit_finalize_fields(ir_lower_context_t *context, ir_value_t *address,
-                           ir_span_t span, size_t depth);
-
-bool
-n00bb_emit_finalize_value(ir_lower_context_t *context, ir_value_t *address,
-                          th_type *type, ir_span_t span, size_t depth);
-
-bool
-n00bb_emit_scope_finalize(ir_lower_context_t *context,
-                          n00bb_final_frame_t *frame, parse_tree_t *source);
-
-bool
-n00bb_begin_final_frame(ir_lower_context_t *context,
-                        parse_sym_entry_t *symbol, ir_span_t span);
-
-bool
-n00bb_finish_final_scope(ir_lower_context_t *context,
-                         parse_tree_t *scope, parse_tree_t *source);
-
-bool
-n00bb_lower_statement_scope(ir_lower_context_t *context, parse_visit_t *visit,
-                            bool entering, void *state);
-
-bool
-n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
-                  parse_tree_t *source);
-
-bool
-n00bb_write_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol,
-                    bool written);
+n00bb_emit_local_finalizer(ir_lower_context_t *context, ir_local_t *handle,
+                           const th_env_method_t *method, ir_span_t span);
 
 bool
 n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
@@ -1462,9 +1398,6 @@ n00bb_initialize_default_reference(ir_lower_context_t *context,
 bool
 bind_missing_external(ir_lower_context_t *context,
                       parse_sym_entry_t *symbol);
-
-bool
-n00bb_check_initialized_fields(n00bb_link_analysis_t *analysis);
 
 bool
 n00bb_open_result_variable(ir_lower_context_t *context,

@@ -407,7 +407,7 @@ var nested_root: Nested_Root
 
 variant_root = new[Root_Variant]()
 
-record Sample {
+object Sample {
     value: int
 }
 
@@ -444,8 +444,8 @@ func wait_blocked() {
     }
 }
 
-record Twin {
-    other: Ref[Twin]?
+object Twin {
+    other: Twin?
     id: int
     magic: int
 }
@@ -455,42 +455,51 @@ var seen_first: bool = false
 var seen_second: bool = false
 
 func __finalize(consume self: Ref[Twin]) {
-    require self.__value.magic == 713
-    let partner: Ref[Twin]? = self.__value.other
+    let me: Twin = self.__value
+    require me.magic == 713
+    let partner: Twin? = me.other
     require partner != nil
-    let other: Ref[Twin] = partner
-    require other.__value.magic == 713
-    require other.__value.id != self.__value.id
-    let backlink: Ref[Twin]? = other.__value.other
+    let other: Twin = partner
+    require other.magic == 713
+    require other.id != me.id
+    let backlink: Twin? = other.other
     require backlink != nil
-    require backlink == self
-    if self.__value.id == 0 {
+    require backlink == me
+    if me.id == 0 {
         require !seen_first
         seen_first = true
-    } elif self.__value.id == 1 {
+    } elif me.id == 1 {
         require !seen_second
         seen_second = true
     } else { require false }
     twin_finalized += 1
 }
 
+// An object's handle is the address of its fields, so a raw payload
+// allocated with the object's type row is the object: read the address back
+// as a handle.
+func twin_at(payload: Ref[byte]) -> Twin {
+    var address: uint = __abi_ref_address(payload)
+    return (unsafe_cast[Ref[Twin]] (ref address)).__value
+}
+
 func allocate_twin(mutator: Ref[sys.gc.core.Mutator], type_index: u32,
-                   bytes: uint, alignment: uint, id: int) -> Ref[Twin]? {
+                   bytes: uint, alignment: uint, id: int) -> Twin? {
     let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
         mutator, ref mutator.__value.small, type_index, bytes, alignment, true)
     if allocated == nil { return nil }
-    let twin: Ref[Twin] = unsafe_cast[Ref[Twin]] allocated
-    twin.__value.other = nil
-    twin.__value.id = id
-    twin.__value.magic = 713
+    let twin: Twin = twin_at(allocated)
+    twin.other = nil
+    twin.id = id
+    twin.magic = 713
     return twin
 }
 
-record Ref_Sample {
+object Ref_Sample {
     value: int
 }
 
-record Plain {
+object Plain {
     value: int
 }
 
@@ -501,21 +510,43 @@ func __finalize(consume self: Ref[Ref_Sample]) {
     ref_finalized = ref_finalized + 1
 }
 
-record Finalized_Record {
+object Finalized_Object {
     payload: int
 }
 
-func __init(modify self: Finalized_Record, payload: int) {
+func __init(self: Finalized_Object, payload: int) {
     self.payload = payload
 }
 
-func __finalize(consume self: Ref[Finalized_Record]) {
+func __finalize(consume self: Ref[Finalized_Object]) {
     require self.__value.payload == 42
 }
 
-func construct_finalized() -> Ref[Finalized_Record] {
-    var value: Finalized_Record = new[Finalized_Record](42)
-    return ref value
+func construct_finalized() -> Finalized_Object {
+    return new[Finalized_Object](42)
+}
+
+// The type row of object `probe` (an optional object), which carries the
+// finalizer, and the row of its fields (the object is a reference to them).
+func object_rows(probe: typespec) -> Tuple[i64, Ref[sys.abi.Type_Record]] {
+    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(probe)
+    require option_row != nil
+    let index: i64 = sys.abi.range_index(option_row.__value.components, 0)
+    require index > 0
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] index)
+    require row != nil
+    let reference_index: i64 = sys.abi.range_index(row.__value.components, 0)
+    require reference_index > 0
+    let reference: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] reference_index)
+    require reference != nil
+    let fields_index: i64 = sys.abi.range_index(
+        reference.__value.components, 0)
+    require fields_index > 0
+    let fields: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] fields_index)
+    require fields != nil
+    return (index, fields)
 }
 
 func gc_atomic() {
@@ -2354,15 +2385,8 @@ func gc_finalize() {
                 sys.gc.core.bump_attach(mutator, ref mutator.__value.small, assigned)
                 let found: bool = sys.gc.core.bump_next_hole(ref mutator.__value.small, 48)
                 require found
-                let sample: Ref[Sample]? = nil
-                let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
-                require option_row != nil
-                let reference_index: i64 = sys.abi.range_index(option_row.__value.components, 0)
-                require reference_index > 0
-                let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
-                require reference_row != nil
-                let type_index: i64 = sys.abi.range_index(reference_row.__value.components, 0)
-                require type_index > 0
+                let sample: Sample? = nil
+                let type_index: i64 = object_rows(typeof(sample))[0]
                 let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.__value.small, cast[u32] type_index, 8,
                     sys.gc.core.granule_bytes, true)
@@ -2487,31 +2511,21 @@ func gc_finalizer_cycle() {
     sys.gc.core.bump_attach(mutator, ref mutator.__value.small, assigned)
     require sys.gc.core.bump_next_hole(ref mutator.__value.small, 48)
 
-    let probe: Ref[Twin]? = nil
-    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
+    let probe: Twin? = nil
+    let rows: Tuple[i64, Ref[sys.abi.Type_Record]] = object_rows(
         typeof(probe))
-    require option_row != nil
-    let reference_index: i64 = sys.abi.range_index(
-        option_row.__value.components, 0)
-    require reference_index > 0
-    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
-        cast[u32] reference_index)
-    require reference_row != nil
-    let index: i64 = sys.abi.range_index(reference_row.__value.components, 0)
-    require index > 0
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] index)
-    require row != nil
-    let bytes: uint = sys.abi.size_bytes(row)
-    let alignment: uint = sys.abi.alignment_bytes(row)
-    let first: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
+    let index: i64 = rows[0]
+    let bytes: uint = sys.abi.size_bytes(rows[1])
+    let alignment: uint = sys.abi.alignment_bytes(rows[1])
+    let first: Twin? = allocate_twin(mutator, cast[u32] index,
         bytes, alignment, 0)
-    let second: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
+    let second: Twin? = allocate_twin(mutator, cast[u32] index,
         bytes, alignment, 1)
     require first != nil and second != nil
-    let a: Ref[Twin] = first
-    let b: Ref[Twin] = second
-    a.__value.other = b
-    b.__value.other = a
+    let a: Twin = first
+    let b: Twin = second
+    a.other = b
+    b.other = a
 
     var marker: sys.gc.core.Marker
     sys.gc.mark.marker_init(marker, heap, false)
@@ -2528,25 +2542,22 @@ func gc_finalizer_cycle() {
 }
 
 func gc_finalize_ref() {
-    let probe: Ref[Ref_Sample]? = nil
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    let probe: Ref_Sample? = nil
+    let rows: Tuple[i64, Ref[sys.abi.Type_Record]] = object_rows(
+        typeof(probe))
+    let sample_index: i64 = rows[0]
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] sample_index)
     require row != nil
     require row.__value.finalizer_function_index != 0
-    let plain_probe: Ref[Plain]? = nil
-    let plain_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(plain_probe))
+    let plain_probe: Plain? = nil
+    let plain_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] object_rows(typeof(plain_probe))[0])
     require plain_row != nil
     require plain_row.__value.finalizer_function_index == 0
-    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
-    require option_row != nil
-    let reference_index: i64 = sys.abi.range_index(option_row.__value.components, 0)
-    require reference_index > 0
-    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
-    require reference_row != nil
-    let sample_index: i64 = sys.abi.range_index(reference_row.__value.components, 0)
-    require sample_index > 0
     let storage: Ref[byte]? = sys.gc.alloc.allocate_runtime(
-        cast[u32] sample_index, cast[u64](sys.abi.size_bytes(row)),
-        cast[u32](sys.abi.alignment_bytes(row)), nil)
+        cast[u32] sample_index, cast[u64](sys.abi.size_bytes(rows[1])),
+        cast[u32](sys.abi.alignment_bytes(rows[1])), nil)
     require storage != nil
     require (sys.gc.core.header_of(storage).__value.meta & sys.gc.core.obj_final) != 0
     __gc_invoke_finalizer(cast[u32] sample_index, storage)
@@ -2555,72 +2566,6 @@ func gc_finalize_ref() {
 
 record Gcfin_Value {
     v: int
-}
-
-record Gcfin_Holder {
-    tag: int
-    f: Gcfin_Value
-}
-
-object Gcfin_Box {
-    f: Gcfin_Value
-}
-
-var gcfin_count: int = 0
-var gcfin_seen: int = 0
-
-func __finalize(consume self: Ref[Gcfin_Value]) {
-    gcfin_count += 1
-    gcfin_seen = self.__value.v
-}
-
-func gcfin_storage(probe_type: typespec, row: Ref[sys.abi.Type_Record])
-    -> Tuple[i64, Ref[byte]] {
-    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(probe_type)
-    require option_row != nil
-    let reference_index: i64 = sys.abi.range_index(
-        option_row.__value.components, 0)
-    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
-        cast[u32] reference_index)
-    require reference_row != nil
-    let index: i64 = sys.abi.range_index(
-        reference_row.__value.components, 0)
-    let storage: Ref[byte]? = sys.gc.alloc.allocate_runtime(cast[u32] index,
-        cast[u64](sys.abi.size_bytes(row)),
-        cast[u32](sys.abi.alignment_bytes(row)), nil)
-    require storage != nil
-    return (index, storage)
-}
-
-func gc_generated_record_finalizer() {
-    gcfin_count = 0
-    let probe: Ref[Gcfin_Holder]? = nil
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
-        typeof(probe))
-    require row != nil
-    require row.__value.finalizer_function_index != 0
-    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
-                                                       row)
-    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
-    require gcfin_count == 1
-}
-
-func gc_generated_object_finalizer() {
-    gcfin_count = 0
-    let probe: Ref[Gcfin_Box]? = nil
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
-        typeof(probe))
-    require row != nil
-    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
-                                                       row)
-    let word: Ref[int] = unsafe_cast[Ref[int]] placed[1]
-    word.__value = 8
-    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
-    require gcfin_count == 1 and gcfin_seen == 8
-}
-
-object Gcfin_Generic_Box {
-    f: 'T
 }
 
 object Gcfin_User_Box {
@@ -2633,57 +2578,31 @@ func __finalize(consume self: Ref[Gcfin_User_Box['T]]) {
     gcfin_user_count += 1
 }
 
-func gc_generic_object_finalizer() {
-    gcfin_count = 0
-    let probe: Ref[Gcfin_Generic_Box[Gcfin_Value]]? = nil
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
-        typeof(probe))
-    require row != nil
-    require row.__value.finalizer_function_index != 0
-    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
-                                                       row)
-    let word: Ref[int] = unsafe_cast[Ref[int]] placed[1]
-    word.__value = 9
-    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
-    require gcfin_count == 1 and gcfin_seen == 9
-    let plain: Ref[Gcfin_Generic_Box[int]]? = nil
-    let plain_row: Ref[sys.abi.Type_Record]? =
-        sys.abi.optional_reference_target(typeof(plain))
-    require plain_row == nil
-        or plain_row.__value.finalizer_function_index == 0
+// A generic object's finalizer is bound to each instance's type row; an
+// object that holds another object's handle needs no finalizer of its own.
+object Gcfin_Generic_Box {
+    f: 'T
 }
 
 func gc_user_generic_object_finalizer() {
     gcfin_user_count = 0
-    let probe: Ref[Gcfin_User_Box[int]]? = nil
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+    let probe: Gcfin_User_Box[int]? = nil
+    let rows: Tuple[i64, Ref[sys.abi.Type_Record]] = object_rows(
         typeof(probe))
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] rows[0])
     require row != nil
     require row.__value.finalizer_function_index != 0
-    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
-                                                       row)
-    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
+    let storage: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+        cast[u32] rows[0], cast[u64](sys.abi.size_bytes(rows[1])),
+        cast[u32](sys.abi.alignment_bytes(rows[1])), nil)
+    require storage != nil
+    __gc_invoke_finalizer(cast[u32] rows[0], storage)
     require gcfin_user_count == 1
-}
-
-func gc_boxed_finalizer_dispatch() {
-    gcfin_count = 0
-    var value: Gcfin_Value = (v = 11)
-    __finalize_boxed(sys.box.type_field_of(value) & 0x7fffffff,
-                     unsafe_cast[Ref[byte]] (ref value))
-    require gcfin_count == 1 and gcfin_seen == 11
-    var held: Gcfin_Holder = (tag = 1, f = (v = 12))
-    __finalize_boxed(sys.box.type_field_of(held) & 0x7fffffff,
-                     unsafe_cast[Ref[byte]] (ref held))
-    require gcfin_count == 2 and gcfin_seen == 12
-    var maybe: Gcfin_Value? = (v = 13)
-    __finalize_boxed(sys.box.type_field_of(maybe) & 0x7fffffff,
-                     unsafe_cast[Ref[byte]] (ref maybe))
-    require gcfin_count == 3 and gcfin_seen == 13
-    var plain: int = 4
-    __finalize_boxed(sys.box.type_field_of(plain) & 0x7fffffff,
-                     unsafe_cast[Ref[byte]] (ref plain))
-    require gcfin_count == 3
+    let holder: Gcfin_Generic_Box[Gcfin_User_Box[int]]? = nil
+    let holder_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] object_rows(typeof(holder))[0])
+    require holder_row != nil
+    require holder_row.__value.finalizer_function_index == 0
 }
 
 object Gcref_Handle {
@@ -2720,11 +2639,11 @@ func gc_boxed_reference_dispatch() {
 }
 
 func gc_known_finalizer() {
-    let value: Ref[Finalized_Record] = construct_finalized()
-    require value.__value.payload == 42
-    let exemplar: Finalized_Record = new[Finalized_Record](42)
-    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
-        typeof(exemplar))
+    let value: Finalized_Object = construct_finalized()
+    require value.payload == 42
+    let probe: Finalized_Object? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] object_rows(typeof(probe))[0])
     require row != nil
     require row.__value.finalizer_function_index != 0
 }
@@ -2754,15 +2673,8 @@ func gc_destroy_blocked_finalizer() {
                 sys.gc.core.bump_attach(mutator, ref mutator.__value.small, assigned)
                 let found: bool = sys.gc.core.bump_next_hole(ref mutator.__value.small, 48)
                 require found
-                let sample: Ref[Sample]? = nil
-                let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
-                require option_row != nil
-                let reference_index: i64 = sys.abi.range_index(option_row.__value.components, 0)
-                require reference_index > 0
-                let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
-                require reference_row != nil
-                let type_index: i64 = sys.abi.range_index(reference_row.__value.components, 0)
-                require type_index > 0
+                let sample: Sample? = nil
+                let type_index: i64 = object_rows(typeof(sample))[0]
                 let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.__value.small, cast[u32] type_index, 8,
                     sys.gc.core.granule_bytes, true)
@@ -2803,8 +2715,12 @@ func gc_destroy_blocked_finalizer() {
 // low bit instead sees the record as absent, so nothing inside it is marked
 // and a finalizer runs on an object that is still in use. `first` is false
 // so the low bit is clear.
-record Watched {
+object Watched {
     live: bool
+}
+
+func __init(self: Watched, live: bool) {
+    self.live = live
 }
 
 var watched_live: Atomic[uint] = 0
@@ -2818,13 +2734,12 @@ func __finalize(consume self: Ref[Watched]) {
     }
 }
 
-func watched(live: bool) -> Ref[Watched] {
-    var w: Watched = (live = live)
-    return ref w
+func watched(live: bool) -> Watched {
+    return new[Watched](live)
 }
 
 record Flagged {
-    item:   Ref[Watched]
+    item:   Watched
     first:  bool
     second: bool
 }
@@ -2841,7 +2756,7 @@ var flagged_holder: Flagged_Holder? = nil
 
 func flagged_intact(holder: Flagged_Holder) -> bool {
     let kept: Flagged? = holder.slot
-    return kept != nil and !kept.first and kept.second and kept.item.__value.live
+    return kept != nil and !kept.first and kept.second and kept.item.live
 }
 
 func gc_option_tag() {
@@ -2896,11 +2811,7 @@ gc_finalize()
 gc_finalizer_cycle()
 gc_finalize_ref()
 gc_known_finalizer()
-gc_generated_record_finalizer()
-gc_generated_object_finalizer()
-gc_generic_object_finalizer()
 gc_user_generic_object_finalizer()
-gc_boxed_finalizer_dispatch()
 gc_boxed_reference_dispatch()
 gc_destroy_blocked_finalizer()
 gc_option_tag()

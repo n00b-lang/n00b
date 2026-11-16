@@ -1170,15 +1170,15 @@ int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *nam
 
 import resharp
 
-private record Regex_Options_Cell {
+private object Regex_Options_Cell {
     raw: uint
 }
 
-alias type Regex_Options = Ref[Regex_Options_Cell]
+alias type Regex_Options = Regex_Options_Cell
 
 func __regex_options_cell(raw: uint) -> Regex_Options {
-    var cell: Regex_Options_Cell = (raw = raw)
-    return ref cell
+    let cell: Regex_Options_Cell = (raw = raw)
+    return cell
 }
 
 func __finalize(consume self: Ref[Regex_Options_Cell]) {
@@ -1188,15 +1188,15 @@ func __finalize(consume self: Ref[Regex_Options_Cell]) {
     }
 }
 
-private record Regex_Cell {
+private object Regex_Cell {
     raw: uint
 }
 
-alias type Regex = Ref[Regex_Cell]
+alias type Regex = Regex_Cell
 
 func __regex_cell(raw: uint) -> Regex {
-    var cell: Regex_Cell = (raw = raw)
-    return ref cell
+    let cell: Regex_Cell = (raw = raw)
+    return cell
 }
 
 func __finalize(consume self: Ref[Regex_Cell]) {
@@ -1265,19 +1265,19 @@ private func __ffi_take_array_Match(data: uint, length: uint) -> Array[Match] {
 }
 
 func close(modify self: Regex_Options) fail: resharp.Error {
-    let outcome = __regex_options_free(self.__value.raw)
+    let outcome = __regex_options_free(self.raw)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_free")
     }
-    self.__value.raw = 0
+    self.raw = 0
 }
 
 func close(modify self: Regex) fail: resharp.Error {
-    let outcome = __regex_free(self.__value.raw)
+    let outcome = __regex_free(self.raw)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_free")
     }
-    self.__value.raw = 0
+    self.raw = 0
 }
 
 func regex_options_default() -> Regex_Options fail: resharp.Error {
@@ -1297,9 +1297,11 @@ func regex_options_default() -> Regex_Options fail: resharp.Error {
     return __regex_options_cell(out_)
 }
 
-func __init(modify self: Regex_Options) {
+func __init(self: Regex_Options) {
     try {
-        self = regex_options_default()!
+        let opened = regex_options_default()!
+        self.raw = opened.raw
+        opened.raw = 0
     } fail(failure) {
         panic("regex_options_default failed")
     }
@@ -1309,10 +1311,10 @@ func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fa
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_unicode")
     }
-    let outcome = __regex_options_unicode(self.__value.raw, mode, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_unicode(self.raw, mode, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_unicode")
     }
@@ -1322,7 +1324,7 @@ func unicode(modify self: Regex_Options, mode: Unicode_Mode) -> Regex_Options fa
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_unicode")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1330,10 +1332,10 @@ func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fa
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_case_insensitive")
     }
-    let outcome = __regex_options_case_insensitive(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_case_insensitive(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_case_insensitive")
     }
@@ -1343,7 +1345,7 @@ func case_insensitive(modify self: Regex_Options, yes: bool) -> Regex_Options fa
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_case_insensitive")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1351,10 +1353,10 @@ func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Option
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_dot_matches_new_line")
     }
-    let outcome = __regex_options_dot_matches_new_line(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_dot_matches_new_line(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_dot_matches_new_line")
     }
@@ -1364,7 +1366,7 @@ func dot_matches_new_line(modify self: Regex_Options, yes: bool) -> Regex_Option
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_dot_matches_new_line")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1372,10 +1374,10 @@ func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: res
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_multiline")
     }
-    let outcome = __regex_options_multiline(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_multiline(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_multiline")
     }
@@ -1385,7 +1387,7 @@ func multiline(modify self: Regex_Options, yes: bool) -> Regex_Options fail: res
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_multiline")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1393,10 +1395,10 @@ func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options f
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_ignore_whitespace")
     }
-    let outcome = __regex_options_ignore_whitespace(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_ignore_whitespace(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_ignore_whitespace")
     }
@@ -1406,7 +1408,7 @@ func ignore_whitespace(modify self: Regex_Options, yes: bool) -> Regex_Options f
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_ignore_whitespace")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1414,10 +1416,10 @@ func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: resh
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_hardened")
     }
-    let outcome = __regex_options_hardened(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_hardened(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_hardened")
     }
@@ -1427,7 +1429,7 @@ func hardened(modify self: Regex_Options, yes: bool) -> Regex_Options fail: resh
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_hardened")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1435,10 +1437,10 @@ func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_unbounded_size")
     }
-    let outcome = __regex_options_unbounded_size(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_unbounded_size(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_unbounded_size")
     }
@@ -1448,7 +1450,7 @@ func unbounded_size(modify self: Regex_Options, yes: bool) -> Regex_Options fail
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_unbounded_size")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1456,10 +1458,10 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_options_implicit_captures")
     }
-    let outcome = __regex_options_implicit_captures(self.__value.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_options_implicit_captures(self.raw, yes, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_options_implicit_captures")
     }
@@ -1469,7 +1471,7 @@ func implicit_captures(modify self: Regex_Options, yes: bool) -> Regex_Options f
     if outcome == 2 {
         fail new[resharp.Error](cast[i64]outcome, __ffi_take_string(ref panicked_detail), "regex_options_implicit_captures")
     }
-    self.__value.raw = 0
+    self.raw = 0
     return __regex_options_cell(out_)
 }
 
@@ -1478,10 +1480,10 @@ func is_match(self: Regex, input: string) -> bool fail: resharp.Error {
     var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_is_match")
     }
-    let outcome = __regex_is_match(self.__value.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_is_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_is_match")
     }
@@ -1512,9 +1514,11 @@ func regex_new(pattern: string) -> Regex fail: resharp.Error {
     return __regex_cell(out_)
 }
 
-func __init(modify self: Regex, pattern: string) {
+func __init(self: Regex, pattern: string) {
     try {
-        self = regex_new(pattern)!
+        let opened = regex_new(pattern)!
+        self.raw = opened.raw
+        opened.raw = 0
     } fail(failure) {
         panic("regex_new failed")
     }
@@ -1525,10 +1529,10 @@ func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: res
     var out_: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if opts.__value.raw == 0 {
+    if opts.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_with_options")
     }
-    let outcome = __regex_with_options(ref pattern_value, opts.__value.raw, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_with_options(ref pattern_value, opts.raw, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_with_options")
     }
@@ -1541,9 +1545,11 @@ func regex_with_options(pattern: string, opts: Regex_Options) -> Regex fail: res
     return __regex_cell(out_)
 }
 
-func __init(modify self: Regex, pattern: string, opts: Regex_Options) {
+func __init(self: Regex, pattern: string, opts: Regex_Options) {
     try {
-        self = regex_with_options(pattern, opts)!
+        let opened = regex_with_options(pattern, opts)!
+        self.raw = opened.raw
+        opened.raw = 0
     } fail(failure) {
         panic("regex_with_options failed")
     }
@@ -1555,10 +1561,10 @@ func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: resharp.Error
     var out__length: uint = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_find_all")
     }
-    let outcome = __regex_find_all(self.__value.raw, ref input_value, 64, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_find_all(self.raw, ref input_value, 64, ref out_, ref out__length, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_find_all")
     }
@@ -1576,10 +1582,10 @@ func find_anchored(self: Regex, input: Array[u8]) -> Match? fail: resharp.Error 
     var out_: Match = (start = 0, end = 0)
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_find_anchored")
     }
-    let outcome = __regex_find_anchored(self.__value.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_find_anchored(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_find_anchored")
     }
@@ -1600,10 +1606,10 @@ func is_full_match(self: Regex, input: Array[u8]) -> bool fail: resharp.Error {
     var out_: bool = false
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_is_full_match")
     }
-    let outcome = __regex_is_full_match(self.__value.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_is_full_match(self.raw, ref input_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_is_full_match")
     }
@@ -1621,10 +1627,10 @@ func capture_index_for_name(self: Regex, name: string) -> u64? fail: resharp.Err
     var out_: u64 = 0
     var failed_detail: Ffi_Bytes = (data = 0, length = 0)
     var panicked_detail: Ffi_Bytes = (data = 0, length = 0)
-    if self.__value.raw == 0 {
+    if self.raw == 0 {
         fail new[resharp.Error](-1, "handle is closed", "regex_capture_index_for_name")
     }
-    let outcome = __regex_capture_index_for_name(self.__value.raw, ref name_value, ref out_, ref failed_detail, ref panicked_detail)
+    let outcome = __regex_capture_index_for_name(self.raw, ref name_value, ref out_, ref failed_detail, ref panicked_detail)
     if outcome < 0 {
         fail new[resharp.Error](cast[i64]outcome, nil, "regex_capture_index_for_name")
     }
@@ -1648,21 +1654,21 @@ func capture_index_for_name(self: Regex, name: string) -> u64? fail: resharp.Err
 97	resharp.derived.writ:30:1	regex_options_free
 105	resharp.derived.writ:39:1	regex_free
 113	resharp.derived.writ:53:1	regex_options_default
-138	resharp.derived.writ:62:1	regex_options_unicode
-159	resharp.derived.writ:73:1	regex_options_case_insensitive
-180	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
-201	resharp.derived.writ:95:1	regex_options_multiline
-222	resharp.derived.writ:106:1	regex_options_ignore_whitespace
-243	resharp.derived.writ:117:1	regex_options_hardened
-264	resharp.derived.writ:128:1	regex_options_unbounded_size
-285	resharp.derived.writ:139:5	regex_options_implicit_captures
-306	resharp.derived.writ:151:1	regex_is_match
-327	resharp.derived.writ:163:1	regex_new
-353	resharp.derived.writ:174:1	regex_with_options
-382	resharp.derived.writ:186:1	regex_find_all
-404	resharp.derived.writ:201:1	regex_find_anchored
-428	resharp.derived.writ:215:1	regex_is_full_match
-449	resharp.derived.writ:227:5	regex_capture_index_for_name
+140	resharp.derived.writ:62:1	regex_options_unicode
+161	resharp.derived.writ:73:1	regex_options_case_insensitive
+182	resharp.derived.writ:84:1	regex_options_dot_matches_new_line
+203	resharp.derived.writ:95:1	regex_options_multiline
+224	resharp.derived.writ:106:1	regex_options_ignore_whitespace
+245	resharp.derived.writ:117:1	regex_options_hardened
+266	resharp.derived.writ:128:1	regex_options_unbounded_size
+287	resharp.derived.writ:139:5	regex_options_implicit_captures
+308	resharp.derived.writ:151:1	regex_is_match
+329	resharp.derived.writ:163:1	regex_new
+357	resharp.derived.writ:174:1	regex_with_options
+388	resharp.derived.writ:186:1	regex_find_all
+410	resharp.derived.writ:201:1	regex_find_anchored
+434	resharp.derived.writ:215:1	regex_is_full_match
+455	resharp.derived.writ:227:5	regex_capture_index_for_name
 library resharp_writ
 search_path target/release
 load static

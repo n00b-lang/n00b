@@ -142,8 +142,12 @@ func run(selected: string) {
     }
 }
 
-record Noisy {
+object Noisy {
     id: int
+}
+
+func __init(self: Noisy, id: int) {
+    self.id = id
 }
 
 func __finalize(consume self: Ref[Noisy]) {
@@ -151,7 +155,7 @@ func __finalize(consume self: Ref[Noisy]) {
 }
 
 func panic_with_live_value() {
-    let noisy: Noisy = (id = 1)
+    let noisy: Noisy = new[Noisy](1)
     if noisy.id == 1 {
         panic("live value")
     }

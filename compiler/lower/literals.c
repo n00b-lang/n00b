@@ -70,8 +70,7 @@ collect_sequence_literal_values(ir_lower_context_t *context,
     if (!cached) return false;
     for (size_t i = 0; i < cached->count; i++) {
         ir_value_t *value = ir_lower_node_value(context, cached->nodes[i]);
-        if (!value || !n00bb_move_source(context, visit->grammar,
-                                         cached->nodes[i])) return false;
+        if (!value) return false;
         core_list_push(*values, value);
     }
     return true;
@@ -164,8 +163,7 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
             }
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression) : nullptr;
-            if (!expression || !value
-                || !n00bb_move_source(context, visit->grammar, expression))
+            if (!expression || !value)
                 return false;
             core_list_push(parts->expressions, expression);
             core_list_push(parts->values, value);
@@ -318,7 +316,14 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             type = th_auto_deref(ir_module_types(context->module), type);
         bool variant = false;
         (void)th_named_info(th_resolve(type), nullptr, &variant, nullptr);
+        // The module that defines a type may build it field by field,
+        // bypassing its constructor.
+        core_translation_unit_t *defining = nullptr;
+        if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED)
+            (void)record_scope_for_type(tu_state(lower->unit)->link_analysis,
+                                        th_resolve(built_type), &defining);
         if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED
+            && defining != lower->unit
             && n00bb_type_has_constructor(lower->unit, built_type)) {
             core_string_t type_text = lower_type_text(context, built_type);
             lower_report(context, N00B_DIAG_RECORD_HAS_CONSTRUCTOR, span,
@@ -436,9 +441,6 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                         : nullptr;
         core_free(elements);
     }
-    for (size_t i = 0; i < parts->expressions.len; i++)
-        if (!n00bb_move_source(context, visit->grammar,
-                               parts->expressions.data[i])) return false;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                        IR_OP_AGGREGATE, span);

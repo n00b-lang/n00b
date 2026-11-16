@@ -234,7 +234,7 @@ func constructed_cast() -> int {
     return converted.x
 }
 
-func constructed_literal() -> int {
+func constructed_literal() -> int { // its own module may skip `__init`
     let built: Tuple_Built = (x = 2)
     return built.x
 }

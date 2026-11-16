@@ -281,12 +281,16 @@ require prefix_hash(1024) == 0xf69630613f24324d70bd377d9574f4bb
 require prefix_hash(1025) == 0x621af7b8277effa466c4487c41e127a7
 require prefix_hash(4200) == 0x007161758707bfa270f62ca10c1e5638
 
-record Fin {
+object Fin {
     v: int
 }
 
+func __init(self: Fin, v: int) {
+    self.v = v
+}
+
 var g: Buffer = buffer_from_string("hello world this is long")
-var keep: Ref[Fin]? = nil
+var keep: Fin? = nil
 var on_main: Atomic[bool] = false
 var finalized: Atomic[uint] = 0
 var appended: Atomic[bool] = false
@@ -310,11 +314,11 @@ func appender() {
 func churn(n: int) {
     var i: int = 0
     while i < n {
-        var f: Fin = (v = i)
-        keep = ref f
+        keep = new[Fin](v = i)
         i += 1
     }
-    require keep != nil and keep.__value.v == n - 1
+    let last: Fin? = keep
+    require last != nil and last.v == n - 1
 }
 
 func sliced() -> bool {
