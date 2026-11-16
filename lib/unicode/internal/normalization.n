@@ -45,7 +45,8 @@ private inline func hangul_is_t(cp: char) -> bool {
         cast[u32](cp) < hangul_t_base + hangul_t_count
 }
 
-private func hangul_decompose(cp: char, modify out: Array[char]) -> i32 {
+private func hangul_decompose(cp: char,
+        modify out: Array[char][generated.decomposition.max_decomp]) -> i32 {
     let s_index: u32 = cast[u32](cp) - hangul_s_base
     let l: u32 = hangul_l_base + s_index / hangul_n_count
     let v: u32 = hangul_v_base +
@@ -84,7 +85,8 @@ private func hangul_compose(a: char, b: char) -> char {
     return cast[char] 0
 }
 
-private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
+private func get_canon_decomp(cp: char,
+        modify out: Array[char][generated.decomposition.max_decomp]) -> i32 {
     if hangul_is_syllable(cp) {
         return hangul_decompose(cp, out)
     }
@@ -109,7 +111,8 @@ private func get_canon_decomp(cp: char, modify out: Array[char]) -> i32 {
     return cast[i32] len
 }
 
-private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
+private func get_compat_decomp(cp: char,
+        modify out: Array[char][generated.decomposition.max_decomp]) -> i32 {
     let n: i32 = get_canon_decomp(cp, out)
 
     if n > 0 {

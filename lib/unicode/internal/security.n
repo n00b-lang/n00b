@@ -9,7 +9,7 @@ import internal.query
 import generated.confusables
 import generated.scripts
 
-const max_script_ext = 32
+const max_script_ext = internal.charinfo.max_script_extensions
 
 enum Restriction {
     ascii_only = 0, single_script, highly_restrictive, moderately_restrictive,
@@ -133,8 +133,8 @@ func is_confusable(a: string, b: string) -> bool {
 }
 
 private func augmented_script_set(cp: char,
-                                  modify out: Array[internal.types.Script],
-                                  max: i32, ids: Script_Ids) -> i32 {
+        modify out: Array[internal.types.Script][max_script_ext],
+        max: i32, ids: Script_Ids) -> i32 {
     var ext: Array[internal.types.Script][max_script_ext] =
         new[Array[internal.types.Script][max_script_ext]]()
     let n: i32 = internal.charinfo.script_extensions(cp, ext, max_script_ext)

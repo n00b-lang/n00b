@@ -92,8 +92,12 @@ func age_name(a: internal.types.Age) -> string {
     return generated.age.age_names(cast[u32] a)
 }
 
-func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
-                       max_scripts: i32) -> i32 {
+// The most script extensions script_extensions gives one code point.
+const max_script_extensions = 32
+
+func script_extensions(cp: char,
+        modify scripts: Array[internal.types.Script][max_script_extensions],
+        max_scripts: i32) -> i32 {
     if cast[u32](cp) >= internal.properties.max_cp or max_scripts <= 0 {
         return 0
     }

@@ -699,11 +699,16 @@ publish_record_layout(
             .child_typehash = th_hash(ir_module_types(module),
                                       members[i].type),
             .declaration_ordinal = members[i].ordinal,
-            .extent_bits = inline_array ? stride * repetitions
-                         : packed ? child->occupied[0].width
-                                  : child_stride,
+            // An inline array of packed bits (`Array[bool][N]`) starts on a
+            // byte and takes whole bytes, so a reference to it is a byte
+            // address and nothing shares its last byte.
+            .extent_bits = inline_array
+                ? (bit_packed ? (stride * repetitions + 7) / 8 * 8
+                              : stride * repetitions)
+                : packed ? child->occupied[0].width
+                         : child_stride,
             .occupied_bits = value_bits * repetitions,
-            .alignment_bits = packed || bit_packed ? 1
+            .alignment_bits = packed ? 1 : bit_packed ? 8
                                      : (uint64_t)child->alignment_bytes * 8,
             .c_compatible = members[i].c_compatible,
             .union_group = members[i].union_group,

@@ -1,0 +1,38 @@
+# Inline module arrays of packed bits (`bool`, odd-width integers): their
+# bits start at the first byte after the array value, whatever the
+# dimensions, and a sized `modify` parameter works on them in place.
+var flags: Array[bool][10]
+var seeded: Array[bool][3] = [true, false, true]
+var small: Array[u:3][5] = [1, 2, 3, 4, 7]
+var grid: Array[bool][2][3]
+var after: u8 = 9
+
+func flip(i: int) -> bool {
+    flags[i] = !flags[i]
+    return flags[i]
+}
+
+func set_bits(modify b: Array[bool][10]) -> nil {
+    b[9] = true
+}
+
+func count_at_comptime() -> nil {
+    flags[3] = true
+}
+count_at_comptime()
+
+func main() -> nil {
+    require flags[3] and !flags[2]
+    require flip(2) and !flip(2)
+    require seeded[0] and !seeded[1] and seeded[2]
+    require small[4] == 7 and small[1] == 2
+    small[1] = 5
+    require small[1] == 5 and small[2] == 3
+    grid[1][2] = true
+    require grid[1][2] and !grid[1][1]
+    set_bits(flags)
+    require flags[9]
+    flags = [true, true, false, false, false, false, false, false, false, true]
+    require flags[1] and !flags[3] and flags[9]
+    require after == 9
+}

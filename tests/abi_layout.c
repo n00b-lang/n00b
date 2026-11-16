@@ -540,8 +540,9 @@ int main(void)
             module, packed_array, target.triple);
         const ir_final_layout_t *c_bool_array_layout = ir_layout_final(
             module, c_bool_array, target.triple);
+        // Packed bits inline: one bit each, in whole bytes from a byte.
         ok = ok && packed_array_layout
-            && packed_array_layout->intrinsic_bits == 9
+            && packed_array_layout->intrinsic_bits == 16
             && packed_array_layout->members[0].inline_element_stride_bits == 1
             && c_bool_array_layout
             && c_bool_array_layout->intrinsic_bits == 72

@@ -1,0 +1,15 @@
+# Array literals whose length differs from the declared size: each is a
+# compile-time error, not a runtime shape panic.
+var table: Array[u32][4] = [1, 2]
+var other: Array[u32][4]
+
+func first(words: Array[u32][4]) -> u32 {
+    return words[0]
+}
+
+func main() -> nil {
+    other = [1, 2]
+    var local: Array[u32][4] = [1, 2, 3, 4, 5]
+    local = [1]
+    require first([1, 2, 3]) == 1 and local[0] == 1
+}

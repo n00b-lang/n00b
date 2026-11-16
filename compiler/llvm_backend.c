@@ -2,6 +2,7 @@
 #include "cached_body.h"
 #include "compiler_axioms.h"
 #include "sequence_transfer.h"
+#include "inline_globals.h"
 
 #include "ir/layout.h"
 #include "ir/analyses.h"
@@ -361,6 +362,10 @@ typedef struct {
     bool packed;
     bool overlay;
     uint64_t overlay_offset;
+    // An inline array of packed bits: its element count and bits each.
+    // Its native element is its bytes.
+    uint64_t packed_count;
+    uint64_t packed_width;
 } record_slot_t;
 
 typedef struct {
@@ -396,6 +401,9 @@ typedef struct {
     LLVMBasicBlockRef *block_tails;
     LLVMValueRef *locals;
     LLVMValueRef *param_addresses;
+    // By formal index: the array a fixed-size parameter passed as its
+    // elements is used as, built at entry (see fixed_reference_count).
+    LLVMValueRef *fixed_reference_views;
     LLVMValueRef mutator;
     const pointer_set_t *mutator_functions;
     lowered_value_t *values;
@@ -732,14 +740,29 @@ is_atomic_bool(ir_module_t *module, th_type *type)
 static LLVMTypeRef value_type(ir_module_t *module, th_type *type,
                               LLVMContextRef context);
 
+// Whether an inline array member's elements are packed bits (`bool`, odd
+// widths). The member starts on a byte; its native type is its bytes, and
+// it is addressed through an array over them (see IR_OP_FIELD).
+static bool
+packed_inline_member(const ir_final_member_layout_t *member)
+{
+    return member->inline_element_count && member->inline_element_type
+        && member->inline_element_stride_bits % 8;
+}
+
 static LLVMTypeRef
 inline_member_type(ir_module_t *module,
                    const ir_final_member_layout_t *member,
                    LLVMContextRef context)
 {
     if (!member->inline_element_count || !member->inline_element_type
-        || member->inline_element_count > UINT32_MAX
-        || member->inline_element_stride_bits % 8) return nullptr;
+        || member->inline_element_count > UINT32_MAX) return nullptr;
+    if (packed_inline_member(member)) {
+        uint64_t bits = member->inline_element_count
+            * member->inline_element_stride_bits;
+        return LLVMArrayType2(LLVMInt8TypeInContext(context),
+                              (bits + 7) / 8);
+    }
     LLVMTypeRef element = value_type(module, member->inline_element_type,
                                     context);
     if (!element) return nullptr;
@@ -806,6 +829,12 @@ record_member_extent(ir_module_t *module,
     uint64_t bits = member->inline_element_count
         ? member->inline_element_stride_bits * member->inline_element_count
         : stride;
+    // An inline array of packed bits takes whole bytes (see abi_layout).
+    if (packed_inline_member(member)) {
+        *bytes = (bits + 7) / 8;
+        *alignment = 1;
+        return true;
+    }
     if (bits % 8) return false;
     *bytes = bits / 8;
     *alignment = child->alignment_bytes;
@@ -978,6 +1007,10 @@ record_shape_build(ir_module_t *requester, th_type *type,
             if (!ok) break;
             shape->slots[order[i]] = (record_slot_t){
                 .element = shape->n_elements - 1,
+                .packed_count = packed_inline_member(member)
+                    ? member->inline_element_count : 0,
+                .packed_width = packed_inline_member(member)
+                    ? member->inline_element_stride_bits : 0,
             };
             if (alignment > record_alignment) record_alignment = alignment;
             cursor = first + bytes;
@@ -1597,6 +1630,98 @@ frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
     }
 }
 
+// The elements of a module variable this module defines whose fixed-size
+// array is stored inline (n00bb_inline_global_count): they follow its array
+// value, 16 bytes into its storage. Returns their address and count, or
+// nullptr for any other variable. Other modules reach the elements through
+// the array value, which always points at them.
+static bool literal_element_layout_matches(ir_module_t *module,
+    th_type *type, LLVMTypeRef native, LLVMTargetDataRef target);
+
+static LLVMValueRef
+inline_global_storage(lower_state_t *state, const ir_global_t *global,
+                      uint64_t *count)
+{
+    ir_module_t *module = state->function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    uint64_t elements = global
+        ? n00bb_inline_global_count(module, global) : 0;
+    LLVMValueRef storage = elements ? global_ref(state->module, global,
+        state->global_bindings, state->global_binding_count) : nullptr;
+    if (!storage) return nullptr;
+    LLVMValueRef offset = LLVMConstInt(LLVMInt64TypeInContext(context),
+                                       16, false);
+    *count = elements;
+    return LLVMConstInBoundsGEP2(LLVMInt8TypeInContext(context), storage,
+                                 &offset, 1);
+}
+
+// inline_global_storage, for addressing the elements as native values:
+// nullptr when they are packed bits or their native layout differs from
+// theirs. Those are reached through the array value, which points at them
+// all the same.
+static LLVMValueRef
+inline_global_elements(lower_state_t *state, const ir_global_t *global,
+                       uint64_t *count)
+{
+    ir_module_t *module = state->function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    th_type *element = global && n00bb_inline_global_count(module, global)
+        ? n00bb_inline_global_element(global) : nullptr;
+    if (!element || packed_array_width(module, element)
+        || !literal_element_layout_matches(module, element,
+            value_type(module, element, context),
+            LLVMGetModuleDataLayout(state->module))) return nullptr;
+    return inline_global_storage(state, global, count);
+}
+
+static LLVMValueRef array_descriptor(lower_state_t *state, uint64_t count);
+static LLVMValueRef shaped_array_descriptor(lower_state_t *state,
+    uint32_t rank, const uint64_t *extents);
+static bool static_shape_extents(const ir_shape_t *shape, uint32_t *rank,
+                                 uint64_t **extents);
+
+// An inline global's array value, which never changes: its elements and a
+// constant descriptor for its shape. Returns nullptr when its elements are
+// reached through its storage instead (inline_global_elements).
+static LLVMValueRef
+inline_global_value(lower_state_t *state, const ir_global_t *global)
+{
+    uint64_t count = 0;
+    LLVMValueRef elements = inline_global_storage(state, global, &count);
+    LLVMTypeRef array = elements ? value_type(state->function->owner,
+        global->type, LLVMGetModuleContext(state->module)) : nullptr;
+    uint32_t rank = 0;
+    uint64_t *extents = nullptr;
+    if (!array || LLVMGetTypeKind(array) != LLVMStructTypeKind
+        || !static_shape_extents(global->shape, &rank, &extents))
+        return nullptr;
+    LLVMValueRef fields[] = {
+        elements, shaped_array_descriptor(state, rank, extents),
+    };
+    free(extents);
+    return LLVMIsLiteralStruct(array)
+        ? LLVMConstStructInContext(LLVMGetModuleContext(state->module),
+                                   fields, 2, false)
+        : LLVMConstNamedStruct(array, fields, 2);
+}
+
+// The inline global `address` takes the address of (`address.of @g`), if
+// any.
+static const ir_global_t *
+addressed_inline_global(lower_state_t *state, const ir_value_t *address)
+{
+    const ir_instr_t *taken = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    const ir_value_t *operand = taken && taken->op == IR_OP_ADDRESS_OF
+        && taken->n_operands == 1 && taken->operands[0].kind == IR_OPD_VALUE
+        ? taken->operands[0].value : nullptr;
+    const ir_global_t *global = operand && operand->kind == IR_VAL_GLOBAL
+        ? operand->global : nullptr;
+    return global && n00bb_inline_global_count(state->function->owner,
+                                               global) ? global : nullptr;
+}
+
 static uint64_t
 pointer_key_hash(void *key)
 {
@@ -1679,6 +1804,9 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
             return LLVMBuildLoad2(state->builder, type, field,
                                   "optional.value");
         }
+        if (state->fixed_reference_views
+            && state->fixed_reference_views[formal_index])
+            return state->fixed_reference_views[formal_index];
         unsigned native_position = state->parameter_base
             + (unsigned)(formal_index - optional_index);
         if (native_position >= LLVMCountParams(state->target_function))
@@ -1708,6 +1836,9 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
     if (value->kind == IR_VAL_GLOBAL && value->global) {
         LLVMValueRef frozen = frozen_scalar_global(state, value->global);
         if (frozen) return frozen;
+        // An inline array's value never changes, so it is a constant.
+        LLVMValueRef constant = inline_global_value(state, value->global);
+        if (constant) return constant;
         LLVMValueRef global = global_ref(state->module, value->global,
             state->global_bindings, state->global_binding_count);
         if (!global) return nullptr;
@@ -2926,6 +3057,60 @@ array_descriptor(lower_state_t *state, uint64_t count)
     return descriptor;
 }
 
+// A constant descriptor for a rectangular array whose `rank` extents are
+// `extents`: the header, then one extent per dimension.
+static LLVMValueRef
+shaped_array_descriptor(lower_state_t *state, uint32_t rank,
+                        const uint64_t *extents)
+{
+    if (rank == 1) return array_descriptor(state, extents[0]);
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    uint64_t total = 1;
+    LLVMValueRef *values = calloc(rank, sizeof(*values));
+    if (!values) return nullptr;
+    for (uint32_t d = 0; d < rank; d++) {
+        total *= extents[d];
+        values[d] = LLVMConstInt(i64, extents[d], false);
+    }
+    LLVMValueRef fields[] = {
+        LLVMConstInt(i64, total, false), LLVMConstInt(i32, rank, false),
+        LLVMConstInt(i32, rank, false), LLVMConstNull(i32),
+        LLVMConstNull(i32), LLVMConstArray2(i64, values, rank),
+    };
+    free(values);
+    LLVMValueRef value = LLVMConstStructInContext(context, fields, 6, false);
+    LLVMValueRef descriptor = LLVMAddGlobal(state->module, LLVMTypeOf(value),
+        "n00bb.literal.array.descriptor");
+    LLVMSetInitializer(descriptor, value);
+    LLVMSetGlobalConstant(descriptor, true);
+    LLVMSetLinkage(descriptor, LLVMPrivateLinkage);
+    LLVMSetAlignment(descriptor, 8);
+    return descriptor;
+}
+
+// The static extents of `shape`, every one of whose dimensions has a size.
+static bool
+static_shape_extents(const ir_shape_t *shape, uint32_t *rank,
+                     uint64_t **extents)
+{
+    *rank = shape ? ir_shape_rank(shape) : 0;
+    *extents = *rank ? calloc(*rank, sizeof(**extents)) : nullptr;
+    if (!*extents) return false;
+    for (uint32_t d = 0; d < *rank; d++) {
+        ir_shape_extent_t extent;
+        if (!ir_shape_extent(shape, d, &extent)
+            || extent.kind != IR_SHAPE_EXTENT_STATIC) {
+            free(*extents);
+            *extents = nullptr;
+            return false;
+        }
+        (*extents)[d] = extent.static_value;
+    }
+    return true;
+}
+
 static LLVMValueRef
 array_value_with_descriptor(lower_state_t *state, LLVMValueRef data,
                             uint64_t count)
@@ -3140,11 +3325,12 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             bool inline_match = member->inline_element_count
                 && child == inline_member_type(module, member,
                     LLVMGetTypeContext(native))
-                && LLVMABISizeOfType(target, LLVMGetElementType(child))
-                    == member->inline_element_stride_bits / 8
-                && literal_element_layout_matches(module,
-                    member->inline_element_type,
-                    LLVMGetElementType(child), target);
+                && (packed_inline_member(member)
+                    || (LLVMABISizeOfType(target, LLVMGetElementType(child))
+                            == member->inline_element_stride_bits / 8
+                        && literal_element_layout_matches(module,
+                            member->inline_element_type,
+                            LLVMGetElementType(child), target)));
             valid = field
                 && member->bit_offset == shape.offsets[slot->element] * 8
                 && (inline_match
@@ -3317,6 +3503,60 @@ record_value_get(lower_state_t *state, LLVMValueRef record,
     return packed_value_from_bits(state, bits, slot->width, type);
 }
 
+// The bytes of an inline array of `count` packed elements of `width` bits
+// each, from `array` (of that many elements): its bits copied from their
+// origin into zeroed bytes, after checking its length.
+static LLVMValueRef
+packed_inline_from_value(lower_state_t *state, LLVMValueRef array,
+                         LLVMTypeRef storage, uint64_t count, uint64_t width)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef source = LLVMTypeOf(array);
+    if (LLVMGetTypeKind(source) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(source) != 2
+        || LLVMStructGetTypeAtIndex(source, 0) != pointer
+        || LLVMStructGetTypeAtIndex(source, 1) != pointer) return nullptr;
+    LLVMValueRef data = LLVMBuildExtractValue(state->builder, array, 0,
+                                              "packed.source.data");
+    LLVMValueRef descriptor = LLVMBuildExtractValue(state->builder, array, 1,
+                                                    "packed.source.descriptor");
+    LLVMTypeRef header = array_descriptor_type(context);
+    LLVMValueRef length = load_array_extent(state,
+        LLVMBuildStructGEP2(state->builder, header, descriptor, 0,
+                            "packed.source.length.address"),
+        "packed.source.length");
+    LLVMValueRef expected = LLVMConstInt(i64, count, false);
+    failure_operand_t lengths[] = {
+        unsigned_operand(expected), unsigned_operand(length),
+    };
+    emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE, length,
+        expected, "packed.source.mismatch"), &(failure_t){
+            .kind = N00BB_FAILURE_SHAPE,
+            .text = CORE_STRING_STATIC(
+                "the array length does not match the fixed-size array"),
+            .operands = lengths, .operand_count = 2,
+        });
+    LLVMValueRef origin = LLVMBuildAnd(state->builder,
+        LLVMBuildLoad2(state->builder, i32, LLVMBuildStructGEP2(
+            state->builder, header, descriptor, 3, "packed.source.flags.slot"),
+            "packed.source.flags"),
+        LLVMConstInt(i32, N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
+        "packed.source.origin");
+    LLVMValueRef scratch = entry_alloca(state, storage);
+    if (!scratch) return nullptr;
+    LLVMBuildMemSet(state->builder, scratch, LLVMConstNull(i8),
+        LLVMConstInt(i64, LLVMGetArrayLength2(storage), false), 1);
+    if (!copy_bool_bits(state, scratch, LLVMConstNull(i32), data, origin,
+            LLVMConstInt(i64, count * width, false),
+            th_name(ir_module_types(state->function->owner),
+                    CORE_STRING_STATIC("bool")))) return nullptr;
+    return LLVMBuildLoad2(state->builder, storage, scratch, "packed.inline");
+}
+
 static LLVMValueRef
 inline_array_from_value(lower_state_t *state, LLVMValueRef array,
                         LLVMTypeRef storage)
@@ -3332,9 +3572,11 @@ inline_array_from_value(lower_state_t *state, LLVMValueRef array,
                                               "inline.source.data");
     LLVMValueRef descriptor = LLVMBuildExtractValue(state->builder, array, 1,
                                                     "inline.source.descriptor");
+    // The whole count of the source's elements: an inline field is one
+    // block, whatever its dimensions.
     LLVMValueRef length = load_array_extent(state,
         LLVMBuildStructGEP2(state->builder, array_descriptor_type(context),
-                            descriptor, 5, "inline.source.length.address"),
+                            descriptor, 0, "inline.source.length.address"),
         "inline.source.length");
     LLVMValueRef expected = LLVMConstInt(LLVMInt64TypeInContext(context),
                                          LLVMGetArrayLength(storage), false);
@@ -3352,7 +3594,8 @@ inline_array_from_value(lower_state_t *state, LLVMValueRef array,
 }
 
 static LLVMValueRef
-array_from_inline(lower_state_t *state, LLVMValueRef items, th_type *type)
+array_from_inline(lower_state_t *state, LLVMValueRef items, th_type *type,
+                  const ir_shape_t *shape, uint64_t packed_count)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
@@ -3364,15 +3607,26 @@ array_from_inline(lower_state_t *state, LLVMValueRef items, th_type *type)
     LLVMValueRef type_index = runtime_type_value(state, type);
     if (!layout || !type_index
         || LLVMGetTypeKind(storage) != LLVMArrayTypeKind) return nullptr;
-    uint64_t count = LLVMGetArrayLength(storage);
+    // Packed bits are stored as bytes; their count is the field's.
+    uint64_t count = packed_count ? packed_count
+                                  : LLVMGetArrayLength(storage);
     uint64_t bytes = LLVMABISizeOfType(layout, storage);
     uint64_t alignment = LLVMABIAlignmentOfType(layout, storage);
     if (alignment < 8) alignment = 8;
-    uint64_t descriptor_bytes = LLVMABISizeOfType(layout,
-        array_descriptor_type(context));
+    // A multi-dimensional field (its value carries the declared shape) has
+    // a descriptor with every dimension.
+    uint32_t rank = 1;
+    uint64_t *extents = nullptr;
+    if (shape && ir_shape_rank(shape) > 1
+        && !static_shape_extents(shape, &rank, &extents)) return nullptr;
+    uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
+        + (uint64_t)rank * sizeof(uint64_t);
     uint64_t data_offset = (descriptor_bytes + alignment - 1)
         & ~(alignment - 1);
-    LLVMValueRef descriptor = array_descriptor(state, count);
+    LLVMValueRef descriptor = extents
+        ? shaped_array_descriptor(state, rank, extents)
+        : array_descriptor(state, count);
+    free(extents);
     LLVMTypeRef parameters[] = {i32, i64, i32, pointer};
     LLVMValueRef arguments[] = {
         type_index, LLVMConstInt(i64, data_offset + (bytes ? bytes : 1),
@@ -3432,7 +3686,10 @@ record_value_set(lower_state_t *state, LLVMValueRef record,
                                   "record.field.bool");
         if (LLVMGetTypeKind(storage) == LLVMArrayTypeKind
             && LLVMTypeOf(value) != storage)
-            value = inline_array_from_value(state, value, storage);
+            value = slot->packed_count
+                ? packed_inline_from_value(state, value, storage,
+                      slot->packed_count, slot->packed_width)
+                : inline_array_from_value(state, value, storage);
         return value && LLVMTypeOf(value) == storage
             ? LLVMBuildInsertValue(state->builder, record, value,
                 slot->element, "record.field.set")
@@ -3679,15 +3936,35 @@ nominal_record_value(lower_state_t *state, LLVMValueRef source,
     return result;
 }
 
+// The layout of member `name` of `record` when it holds an array inline.
+static const ir_final_member_layout_t *
+record_inline_member(lower_state_t *state, th_type *record,
+                     core_string_t name)
+{
+    ir_module_t *module = state->function->owner;
+    const ir_final_layout_t *layout = record
+        ? ir_layout_final(module, record, ir_module_target(module)) : nullptr;
+    for (size_t i = 0; layout && i < layout->n_members; i++) {
+        const ir_final_member_layout_t *member = &layout->members[i];
+        if (member->name.data && core_string_eq(member->name, name))
+            return member->inline_element_count ? member : nullptr;
+    }
+    return nullptr;
+}
+
 static LLVMTypeRef
 inline_index_base_type(lower_state_t *state, const ir_value_t *base,
                        uint64_t *count_out)
 {
     const ir_instr_t *field = base ? base->def : nullptr;
+    // A multi-dimensional field's address is an array over its elements
+    // (see IR_OP_FIELD), indexed by rows like any rectangular array.
+    const ir_shape_t *shape = base ? ir_value_shape(base) : nullptr;
     if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
         || field->operands[0].kind != IR_OPD_VALUE
         || field->operands[1].kind != IR_OPD_NAME
-        || !field->operands[0].value || !field->operands[1].name.data)
+        || !field->operands[0].value || !field->operands[1].name.data
+        || (shape && ir_shape_rank(shape) > 1))
         return nullptr;
     ir_module_t *module = state->function->owner;
     th_type *record = th_ind_referent(field->operands[0].value->type);
@@ -3699,6 +3976,8 @@ inline_index_base_type(lower_state_t *state, const ir_value_t *base,
         if (!member->name.data
             || !core_string_eq(member->name, field->operands[1].name))
             continue;
+        // Packed bits are reached through the field's array (IR_OP_FIELD).
+        if (packed_inline_member(member)) return nullptr;
         LLVMTypeRef native = inline_member_type(module, member,
             LLVMGetModuleContext(state->module));
         if (native) *count_out = member->inline_element_count;
@@ -3744,7 +4023,8 @@ gc_array_storage(lower_state_t *state, LLVMValueRef type_index,
 }
 
 // An array storage placement keeps in the frame: one it proved stays in the
-// call, of at most 1024 plain scalars, not made in a loop.
+// call, of plain scalars within the function's frame-array budget, not made
+// in a loop.
 static bool
 frame_array_placed(const ir_instr_t *instruction)
 {
@@ -3848,9 +4128,29 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
         ? th_resolve(instruction->dest->type) : nullptr;
     th_type *element = type && th_kind_of(type) == TH_SEQUENCE
         ? th_seq_elem(type) : nullptr;
-    if (!element || array_requires_flat_storage(instruction)
-        || (ir_instr_aggregate_form(instruction, &form)
+    if (!element || (ir_instr_aggregate_form(instruction, &form)
                      && form != IR_AGGREGATE_ELEMENTS)) return nullptr;
+    // A rectangular literal (flattened by storage placement) is one block
+    // of its innermost elements, which are its operands, with a descriptor
+    // for every dimension.
+    uint32_t rank = 1;
+    uint64_t *extents = nullptr;
+    if (array_requires_flat_storage(instruction)) {
+        uint64_t total = 1;
+        if (!static_shape_extents(ir_value_shape(instruction->dest), &rank,
+                                  &extents)) return nullptr;
+        for (uint32_t d = 0; d < rank; d++) total *= extents[d];
+        for (uint32_t d = 1; element && d < rank; d++)
+            element = th_kind_of(th_resolve(element)) == TH_SEQUENCE
+                ? th_seq_elem(th_resolve(element)) : nullptr;
+        if (!element || th_kind_of(th_resolve(element)) == TH_SEQUENCE
+            || total != instruction->n_operands) {
+            free(extents);
+            state->failure_detail = FAILURE_DETAIL(
+                "a rectangular array literal does not match its shape");
+            return nullptr;
+        }
+    }
     ir_module_t *source = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     const ir_final_layout_t *layout = ir_layout_final(source, element,
@@ -3864,27 +4164,31 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
         state->failure_detail = !layout || !layout->alignment_bytes
             ? FAILURE_DETAIL("array element type has no final layout")
             : FAILURE_DETAIL("array element or array type has no LLVM type");
+        free(extents);
         return nullptr;
     }
     if (!packed_width && !literal_element_layout_matches(source, element,
             element_type, LLVMGetModuleDataLayout(state->module))) {
         state->failure_detail = FAILURE_DETAIL(
             "array element layout does not match its LLVM type");
+        free(extents);
         return nullptr;
     }
     uint64_t element_align = layout->alignment_bytes;
     uint64_t stride = stride_bits / 8;
     uint64_t alignment = element_align > 8 ? element_align : 8;
     uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
-        + sizeof(uint64_t);
+        + (uint64_t)rank * sizeof(uint64_t);
     uint64_t data_offset = ((descriptor_bytes + alignment - 1) / alignment)
         * alignment;
     uint64_t count = instruction->n_operands;
     if (alignment > UINT32_MAX
         || (packed_width && count > (UINT64_MAX - 7) / packed_width)
         || (!packed_width && stride
-            && count > (UINT64_MAX - data_offset) / stride))
+            && count > (UINT64_MAX - data_offset) / stride)) {
+        free(extents);
         return nullptr;
+    }
     uint64_t payload_bytes = packed_width
         ? (count * packed_width + 7) / 8 : count * stride;
     if (payload_bytes > UINT64_MAX - data_offset) return nullptr;
@@ -3896,9 +4200,15 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
             type_index = state->type_indices[i].index;
             break;
         }
-    if (!type_index) return nullptr;
+    if (!type_index) {
+        free(extents);
+        return nullptr;
+    }
 
-    LLVMValueRef descriptor = array_descriptor(state, count);
+    LLVMValueRef descriptor = extents
+        ? shaped_array_descriptor(state, rank, extents)
+        : array_descriptor(state, count);
+    free(extents);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
     bool frame = frame_array_placed(instruction);
@@ -4082,10 +4392,19 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMValueRef bytes = LLVMBuildAdd(state->builder,
         LLVMConstInt(i64, data_offset, false), allocated_bytes,
         "array.new.total.bytes");
-    bool frame = frame_array_placed(instruction) && rank == 1
-        && LLVMIsConstant(count) && LLVMIsConstant(allocated_bytes);
-    LLVMValueRef storage = frame
-        ? array_descriptor(state, LLVMConstIntGetZExtValue(count))
+    // In the frame, a rectangular array whose every extent is known has a
+    // constant descriptor.
+    uint32_t static_rank = 0;
+    uint64_t *static_extents = nullptr;
+    bool frame = frame_array_placed(instruction)
+        && storage_shape.flat_prefix_rank == rank
+        && LLVMIsConstant(count) && LLVMIsConstant(allocated_bytes)
+        && static_shape_extents(shape, &static_rank, &static_extents);
+    LLVMValueRef frame_descriptor = frame
+        ? shaped_array_descriptor(state, static_rank, static_extents)
+        : nullptr;
+    free(static_extents);
+    LLVMValueRef storage = frame ? frame_descriptor
         : gc_array_storage(state, runtime_type_index_value(state, type),
                            bytes, alignment, descriptor);
     if (!storage) return nullptr;
@@ -4151,10 +4470,14 @@ array_flat_item_stride(lower_state_t *state, th_type *type,
     return stride;
 }
 
+// A view over row `position` of a rectangular array: an array value and
+// its descriptor. In the frame when storage placement found every use of
+// the row reference right after it (`local`), else allocated.
 static LLVMValueRef
 rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
                            LLVMValueRef descriptor, LLVMValueRef position,
-                           LLVMValueRef flat_rank, th_type *parent_type)
+                           LLVMValueRef flat_rank, th_type *parent_type,
+                           bool local)
 {
     ir_module_t *module = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
@@ -4255,26 +4578,44 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
     uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
         + (uint64_t)(rank - 1) * sizeof(uint64_t);
     uint64_t value_bytes = sizeof(n00b_abi_array_value_v1);
-    LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
-    LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
-    const char *allocator_name = "n00b_allocate";
-    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-        allocator_name);
-    if (!allocator) allocator = LLVMAddFunction(state->module,
-        allocator_name, signature);
-    if (!allocator || LLVMGlobalGetValueType(allocator) != signature)
-        return nullptr;
-    LLVMValueRef arguments[] = {
-        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
-        runtime_type_index_value(state, child),
-        LLVMConstInt(i64, value_bytes + descriptor_bytes, false),
-        LLVMConstInt(i32, 8, false), LLVMConstNull(pointer),
-    };
-    LLVMValueRef wrapper = LLVMBuildCall2(state->builder, signature,
-        allocator, arguments, 5, "array.suffix.storage");
-    LLVMValueRef descriptor_offset = LLVMConstInt(i64, value_bytes, false);
-    LLVMValueRef suffix = LLVMBuildGEP2(state->builder, i8, wrapper,
-        &descriptor_offset, 1, "array.suffix.descriptor");
+    LLVMValueRef wrapper = nullptr;
+    LLVMValueRef suffix = nullptr;
+    if (local) {
+        // In the frame, the array value and its descriptor are apart: the
+        // value pointing into its own slot would keep LLVM from promoting
+        // either once the loads through them are forwarded. The descriptor
+        // is words, aligned for its counts.
+        LLVMTypeRef child_value = value_type(module, child, context);
+        wrapper = child_value ? entry_alloca(state, child_value) : nullptr;
+        suffix = entry_alloca(state, LLVMArrayType2(i64,
+            (descriptor_bytes + 7) / 8));
+        if (!wrapper || !suffix) return nullptr;
+    } else {
+        LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
+        LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5,
+                                                 false);
+        const char *allocator_name = "n00b_allocate";
+        LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
+            allocator_name);
+        if (!allocator) allocator = LLVMAddFunction(state->module,
+            allocator_name, signature);
+        if (!allocator || LLVMGlobalGetValueType(allocator) != signature)
+            return nullptr;
+        LLVMValueRef arguments[] = {
+            LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
+            runtime_type_index_value(state, child),
+            LLVMConstInt(i64, value_bytes + descriptor_bytes, false),
+            LLVMConstInt(i32, 8, false), LLVMConstNull(pointer),
+        };
+        wrapper = LLVMBuildCall2(state->builder, signature,
+            allocator, arguments, 5, "array.suffix.storage");
+    }
+    if (!suffix) {
+        LLVMValueRef descriptor_offset = LLVMConstInt(i64, value_bytes,
+                                                      false);
+        suffix = LLVMBuildGEP2(state->builder, i8, wrapper,
+            &descriptor_offset, 1, "array.suffix.descriptor");
+    }
     LLVMValueRef slot = LLVMBuildStructGEP2(state->builder, header, suffix,
         0, "array.suffix.total.slot");
     LLVMBuildStore(state->builder, row_count, slot);
@@ -4516,7 +4857,7 @@ copy_present_sequence(lower_state_t *state, LLVMValueRef value, th_type *type)
 
 static bool
 copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
-                     LLVMValueRef value, th_type *type)
+                     LLVMValueRef value, th_type *type, core_string_t text)
 {
     ir_module_t *module = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
@@ -4603,9 +4944,7 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
         unsigned_operand(count), unsigned_operand(source_count),
     };
     emit_failure_if(state, invalid, &(failure_t){
-        .kind = N00BB_FAILURE_SHAPE,
-        .text = CORE_STRING_STATIC(
-            "the assigned row has a different shape than the row it replaces"),
+        .kind = N00BB_FAILURE_SHAPE, .text = text,
         .operands = row_counts, .operand_count = 2,
     });
     if (packed_width) {
@@ -6683,13 +7022,71 @@ typedef struct {
     th_type *type;
 } by_reference_writeback_t;
 
+// The element count of parameter `index` of `function` when it is passed as
+// the caller's elements (n00bb_fixed_reference_count), else 0. Caller and
+// callee both decide from the callee's declared parameter, so they agree:
+// arrays of open element types keep the ordinary convention. Packed bits
+// are passed as the address of their first byte: a whole fixed-size array's
+// bits start there (an inline field of them starts on a byte).
+static uint64_t
+fixed_reference_count(lower_state_t *state, const ir_func_t *function,
+                      size_t index)
+{
+    uint64_t count = n00bb_fixed_reference_count(function, (uint32_t)index);
+    uint32_t rank = n00bb_fixed_reference_shape(function, (uint32_t)index,
+                                                nullptr);
+    const th_param *formal = count
+        ? th_func_param(function->type, index) : nullptr;
+    th_type *array = formal && th_mode_by_reference(formal->mode)
+        ? th_resolve(formal->type) : nullptr;
+    // The innermost elements, one level per dimension.
+    th_type *element = array;
+    for (uint32_t d = 0; element && d < rank; d++)
+        element = th_kind_of(element) == TH_SEQUENCE
+            ? th_resolve(th_seq_elem(element)) : nullptr;
+    ir_module_t *module = function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef native = array ? value_type(module, array, context)
+                               : nullptr;
+    if (!element || th_kind_of(element) == TH_SEQUENCE
+        || !th_is_closed(ir_module_types(module), array)
+        || !native || native == box_llvm_type(context)
+        || LLVMGetTypeKind(native) != LLVMStructTypeKind) return 0;
+    return count;
+}
+
 static LLVMValueRef
 by_reference_argument(lower_state_t *state, const ir_value_t *operand,
-                      th_type *formal_type,
+                      th_type *formal_type, uint64_t fixed_count,
                       by_reference_writeback_t *writeback)
 {
     ir_module_t *owner = state->function->owner;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
+    // A fixed-size array parameter is given the caller's elements. A field
+    // that holds its array inline is those elements already; otherwise the
+    // place holds an array whose data they are. Lowering only passes arrays
+    // declared with the parameter's size.
+    if (fixed_count && operand) {
+        uint64_t inline_count = 0;
+        const ir_global_t *inline_global = addressed_inline_global(state,
+                                                                   operand);
+        LLVMValueRef elements = inline_global
+            ? inline_global_elements(state, inline_global, &inline_count)
+            : nullptr;
+        if (elements)
+            return inline_count == fixed_count ? elements : nullptr;
+        LLVMValueRef place = lowered_value(state, operand);
+        if (!place || LLVMGetTypeKind(LLVMTypeOf(place))
+                != LLVMPointerTypeKind) return nullptr;
+        if (inline_index_base_type(state, operand, &inline_count))
+            return inline_count == fixed_count ? place : nullptr;
+        LLVMTypeRef array = value_type(owner, formal_type, context);
+        if (!array) return nullptr;
+        LLVMValueRef value = LLVMBuildLoad2(state->builder, array, place,
+                                            "fixed.reference.array");
+        return LLVMBuildExtractValue(state->builder, value, 0,
+                                     "fixed.reference.elements");
+    }
     th_type *reference = operand && formal_type
         ? th_ind(ir_module_types(owner), 0, formal_type) : nullptr;
     LLVMTypeRef type = reference ? value_type(owner, reference, context)
@@ -8346,8 +8743,22 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             && binding->index < state->function->n_params) {
             result = state->param_addresses[binding->index];
         } else if (binding->kind == IR_VAL_GLOBAL && binding->global) {
-            result = global_ref(state->module, binding->global,
-                state->global_bindings, state->global_binding_count);
+            // An inline global's array value never changes (whole stores
+            // copy into its elements), so its address can be a constant
+            // copy of it, which the loads through it fold away.
+            LLVMValueRef constant = inline_global_value(state,
+                                                        binding->global);
+            if (constant) {
+                result = LLVMAddGlobal(state->module, LLVMTypeOf(constant),
+                                       "n00bb.inline.array");
+                LLVMSetInitializer(result, constant);
+                LLVMSetGlobalConstant(result, true);
+                LLVMSetLinkage(result, LLVMPrivateLinkage);
+                LLVMSetUnnamedAddress(result, LLVMGlobalUnnamedAddr);
+            } else {
+                result = global_ref(state->module, binding->global,
+                    state->global_bindings, state->global_binding_count);
+            }
         }
         if (result && instruction->dest
             && uses_bitptr(state->function->owner, instruction->dest->type)) {
@@ -8405,6 +8816,41 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                      member_slot.element, "field.address");
         if (member_slot.overlay)
             result = overlay_member_address(state, result, &member_slot);
+        // A multi-dimensional field holding its elements inline, or one of
+        // packed bits, is addressed as an array over them, with a
+        // descriptor for every dimension, so it is indexed like any array:
+        // rows of a rectangular one, bits of a packed one. Whole stores
+        // copy into the elements; nothing rebinds it.
+        const ir_shape_t *field_shape = ir_value_shape(instruction->dest);
+        const ir_final_member_layout_t *inline_layout = record_inline_member(
+            state, record_type, operands[1].name);
+        bool packed_field = inline_layout
+            && packed_inline_member(inline_layout);
+        bool multi = field_shape && ir_shape_rank(field_shape) > 1;
+        uint32_t field_rank = 1;
+        uint64_t *field_extents = nullptr;
+        if ((multi || packed_field)
+            && !member_slot.overlay && !member_slot.packed
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(native,
+                   member_slot.element)) == LLVMArrayTypeKind
+            && (!multi || static_shape_extents(field_shape, &field_rank,
+                                               &field_extents))) {
+            LLVMTypeRef array = value_type(state->function->owner,
+                th_ind_referent(instruction->dest->type),
+                LLVMGetModuleContext(state->module));
+            LLVMValueRef view = array ? entry_alloca(state, array) : nullptr;
+            LLVMValueRef descriptor = multi
+                ? shaped_array_descriptor(state, field_rank, field_extents)
+                : array_descriptor(state, inline_layout->inline_element_count);
+            free(field_extents);
+            if (!view || !descriptor) break;
+            LLVMValueRef handle = LLVMBuildInsertValue(state->builder,
+                LLVMGetUndef(array), result, 0, "field.array.data");
+            handle = LLVMBuildInsertValue(state->builder, handle, descriptor,
+                                          1, "field.array.descriptor");
+            LLVMBuildStore(state->builder, handle, view);
+            return save_result(state, instruction, view);
+        }
         bool bit_reference = uses_bitptr(state->function->owner,
                                          instruction->dest->type);
         if (member_slot.packed && !bit_reference) {
@@ -8563,6 +9009,24 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMTypeRef array = value_read ? nullptr
             : inline_index_base_type(state, operands[0].value, &extent);
         LLVMValueRef base = lowered_value(state, operands[0].value);
+        // An inline global's elements are indexed where they are.
+        // (One dimension: indexing more yields a row, through the constant
+        // array value `address.of` gives an inline global.)
+        const ir_global_t *inline_global = value_read || array ? nullptr
+            : addressed_inline_global(state, operands[0].value);
+        if (inline_global && th_kind_of(th_resolve(th_seq_elem(
+                th_resolve(inline_global->type)))) == TH_SEQUENCE)
+            inline_global = nullptr;
+        LLVMValueRef elements = inline_global
+            ? inline_global_elements(state, inline_global, &extent) : nullptr;
+        if (elements) {
+            th_type *element = th_seq_elem(th_resolve(inline_global->type));
+            LLVMTypeRef native_element = value_type(state->function->owner,
+                element, LLVMGetModuleContext(state->module));
+            if (!native_element) break;
+            base = elements;
+            array = LLVMArrayType2(native_element, extent);
+        }
         LLVMValueRef index = lowered_value(state, operands[1].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);
         bool boxed_reference = !value_read && base
@@ -8694,8 +9158,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 == LLVMInt64TypeInContext(context) ? position
                 : LLVMBuildTrunc(state->builder, position,
                     LLVMInt64TypeInContext(context), "array.index64");
+            ir_annot_t *placed = ir_annot_get(&instruction->annots,
+                CORE_STRING_STATIC("ir.allocation_local"));
             LLVMValueRef suffix = rectangular_suffix_address(state, base,
-                descriptor, position64, flat_rank, sequence);
+                descriptor, position64, flat_rank, sequence,
+                placed && placed->kind == IR_ANNOT_BOOL && placed->b);
             if (!suffix) return false;
             LLVMBasicBlockRef flat_exit = LLVMGetInsertBlock(state->builder);
             LLVMBuildBr(state->builder, done);
@@ -9227,7 +9694,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             && th_kind_of(th_resolve(instruction->dest->type))
                 == TH_SEQUENCE)
             result = array_from_inline(state, result,
-                                       instruction->dest->type);
+                                       instruction->dest->type,
+                                       ir_value_shape(instruction->dest),
+                                       member_slot.packed_count);
         if (!result || LLVMTypeOf(result) != value_type(
                 state->function->owner, instruction->dest->type,
                 LLVMGetModuleContext(state->module))) {
@@ -9373,6 +9842,23 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[1].value);
         if (!global || !value
             || LLVMGlobalGetValueType(global) != LLVMTypeOf(value)) break;
+        // An inline global's storage is its elements, so every store, its
+        // declaration's too, copies into them.
+        if ((n00bb_fixed_array_store(instruction)
+             || n00bb_inline_global_count(state->function->owner,
+                    operands[0].value->global))
+            && th_kind_of(th_resolve(operands[0].value->global->type))
+                == TH_SEQUENCE) {
+            if (!copy_rectangular_row(state, global, value,
+                    operands[0].value->global->type,
+                    CORE_STRING_STATIC("the assigned array has a different "
+                        "length than the fixed-size array"))) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy into a fixed-size array");
+                return false;
+            }
+            return true;
+        }
         if (th_kind_of(th_resolve(operands[0].value->global->type))
                 == TH_SEQUENCE
             && !n00bb_sequence_transfers_storage(operands[1].value)) {
@@ -9528,6 +10014,66 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (!store_packed_bitptr(state, address, value, storage)) break;
             return true;
         }
+        // A field that holds its array inline is the elements, not an array
+        // value: the stored array's elements are copied in, after checking
+        // its length, as a record literal's are.
+        ir_instr_t *field = operands[0].value->def;
+        LLVMTypeRef record_native = nullptr;
+        record_slot_t field_slot = {0};
+        // A multi-dimensional field's address, or a packed one's, is an
+        // array over its elements (see IR_OP_FIELD): copy into them through
+        // it.
+        const ir_shape_t *field_shape = ir_value_shape(operands[0].value);
+        const ir_final_member_layout_t *inline_layout = field
+            && field->op == IR_OP_FIELD && field->n_operands == 2
+            && field->operands[1].kind == IR_OPD_NAME
+            ? record_inline_member(state,
+                  th_ind_referent(field->operands[0].value->type),
+                  field->operands[1].name) : nullptr;
+        if (field && field->op == IR_OP_FIELD
+            && ((field_shape && ir_shape_rank(field_shape) > 1)
+                || (inline_layout && packed_inline_member(inline_layout)))
+            && th_kind_of(th_resolve(storage)) == TH_SEQUENCE) {
+            if (!copy_rectangular_row(state, address, value, storage,
+                    CORE_STRING_STATIC("the assigned array has a different "
+                        "length than the fixed-size array"))) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy into a multi-dimensional field");
+                return false;
+            }
+            return true;
+        }
+        if (field && field->op == IR_OP_FIELD && field->n_operands == 2
+            && field->operands[0].kind == IR_OPD_VALUE
+            && field->operands[1].kind == IR_OPD_NAME
+            && th_kind_of(th_resolve(storage)) == TH_SEQUENCE
+            && record_member_slot(state,
+                   th_ind_referent(field->operands[0].value->type),
+                   field->operands[1].name, &record_native, &field_slot)
+            && !field_slot.overlay && !field_slot.packed
+            && LLVMGetTypeKind(LLVMStructGetTypeAtIndex(record_native,
+                   field_slot.element)) == LLVMArrayTypeKind) {
+            LLVMValueRef items = inline_array_from_value(state, value,
+                LLVMStructGetTypeAtIndex(record_native, field_slot.element));
+            if (!items) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy an array into an inline field");
+                break;
+            }
+            LLVMBuildStore(state->builder, items, address);
+            return true;
+        }
+        if (n00bb_fixed_array_store(instruction)
+            && th_kind_of(th_resolve(storage)) == TH_SEQUENCE) {
+            if (!copy_rectangular_row(state, address, value, storage,
+                    CORE_STRING_STATIC("the assigned array has a different "
+                        "length than the fixed-size array"))) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "could not copy into a fixed-size array");
+                return false;
+            }
+            return true;
+        }
         LLVMBasicBlockRef row_done = nullptr;
         ir_instr_t *indexed = operands[0].value->def;
         if (indexed && indexed->op == IR_OP_INDEX
@@ -9566,7 +10112,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 function, "array.row.done");
             LLVMBuildCondBr(state->builder, rectangular, flat, ragged);
             LLVMPositionBuilderAtEnd(state->builder, flat);
-            if (!copy_rectangular_row(state, address, value, storage)) {
+            if (!copy_rectangular_row(state, address, value, storage,
+                    CORE_STRING_STATIC("the assigned row has a different "
+                        "shape than the row it replaces"))) {
                 state->failure_detail =
                     FAILURE_DETAIL("could not copy a rectangular array row");
                 return false;
@@ -11004,7 +11552,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 if (formal && th_mode_by_reference(formal->mode))
                     value = operands[j].kind == IR_OPD_VALUE
                         ? by_reference_argument(state, operands[j].value,
-                              formal->type, &direct_writebacks[j - 1])
+                              formal->type, 0, &direct_writebacks[j - 1])
                         : nullptr;
                 else {
                     value = operands[j].kind == IR_OPD_VALUE
@@ -11101,7 +11649,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             if (formal && th_mode_by_reference(formal->mode)) {
                 arguments[ordinal] = operands[i].kind == IR_OPD_VALUE
                     ? by_reference_argument(state, operands[i].value,
-                          formal->type, &writebacks[ordinal])
+                          formal->type, 0, &writebacks[ordinal])
                     : nullptr;
                 valid = arguments[ordinal] != nullptr;
                 continue;
@@ -11472,6 +12020,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 // directly.
                 arguments[native_index] = by_reference_argument(state,
                     operands[i].value, formal->type,
+                    shape ? fixed_reference_count(state, shape, i - 1) : 0,
                     &writebacks[native_index]);
                 valid = arguments[native_index] != nullptr;
             } else {
@@ -12350,6 +12899,54 @@ prepare_frame_map(lower_state_t *state)
     return call != nullptr;
 }
 
+// A fixed-size array parameter passed as the caller's elements is used in
+// the body as an array whose data is those elements and whose descriptor is
+// a constant: a local the parameter's value addresses. Whole stores into it
+// are marked fixed and copy into the data, so the caller's storage is the
+// only storage, and the callee can't rebind it.
+static bool
+prepare_fixed_references(lower_state_t *state)
+{
+    ir_func_t *function = state->function;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    size_t count = th_func_nparams(function->type);
+    size_t optional_before = 0;
+    for (size_t p = 0; p < count; p++) {
+        if (ir_func_parameter_is_optional(function, p)) {
+            optional_before++;
+            continue;
+        }
+        uint64_t elements = fixed_reference_count(state, function, p);
+        if (!elements) continue;
+        if (!state->fixed_reference_views) {
+            state->fixed_reference_views = calloc(count,
+                sizeof(*state->fixed_reference_views));
+            if (!state->fixed_reference_views) return false;
+        }
+        unsigned position = state->parameter_base
+            + (unsigned)(p - optional_before);
+        if (position >= LLVMCountParams(state->target_function)) return false;
+        LLVMTypeRef array = value_type(function->owner,
+            th_func_param(function->type, p)->type, context);
+        LLVMValueRef view = array
+            ? LLVMBuildAlloca(state->builder, array, "fixed.reference")
+            : nullptr;
+        if (!view) return false;
+        uint64_t extents[N00BB_FIXED_REFERENCE_MAX_RANK];
+        uint32_t rank = n00bb_fixed_reference_shape(function, (uint32_t)p,
+                                                    extents);
+        LLVMValueRef value = LLVMBuildInsertValue(state->builder,
+            LLVMGetUndef(array), LLVMGetParam(state->target_function, position),
+            0, "fixed.reference.data");
+        value = LLVMBuildInsertValue(state->builder, value,
+            shaped_array_descriptor(state, rank, extents), 1,
+            "fixed.reference.descriptor");
+        LLVMBuildStore(state->builder, value, view);
+        state->fixed_reference_views[p] = view;
+    }
+    return true;
+}
+
 static bool
 prepare_parameter_addresses(lower_state_t *state)
 {
@@ -12366,7 +12963,7 @@ prepare_parameter_addresses(lower_state_t *state)
                 || value->owner != function || value->index >= function->n_params)
                 continue;
             if (state->param_addresses[value->index]) continue;
-            size_t input_index = 0, native_index = 0;
+            size_t input_index = 0, native_index = 0, formal_index = 0;
             const th_param *formal = nullptr;
             size_t parameter_count = th_func_nparams(function->type);
             for (size_t p = 0; p < parameter_count; p++) {
@@ -12376,6 +12973,7 @@ prepare_parameter_addresses(lower_state_t *state)
                     if (optional) return backend_error(state->diagnostics,
                         "address of an optional parameter is not lowered yet");
                     formal = candidate;
+                    formal_index = p;
                     break;
                 }
                 if (!optional) native_index++;
@@ -12384,7 +12982,10 @@ prepare_parameter_addresses(lower_state_t *state)
                 + (unsigned)native_index;
             if (!formal || position >= LLVMCountParams(state->target_function))
                 return false;
-            LLVMValueRef native = th_mode_by_reference(formal->mode)
+            LLVMValueRef view = state->fixed_reference_views
+                ? state->fixed_reference_views[formal_index] : nullptr;
+            LLVMValueRef native = view ? view
+                : th_mode_by_reference(formal->mode)
                 ? by_reference_parameter(state, value->type, formal->type,
                       LLVMGetParam(state->target_function, position))
                 : LLVMGetParam(state->target_function, position);
@@ -12554,6 +13155,9 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
         if (ok && emit_frame_maps && !prepare_frame_map(&state))
             ok = backend_error(diagnostics,
                 "LLVM backend could not prepare a function frame map");
+        if (ok && !prepare_fixed_references(&state))
+            ok = backend_error(diagnostics,
+                "LLVM backend could not prepare fixed-size array parameters");
         if (ok && !prepare_parameter_addresses(&state))
             ok = backend_error(diagnostics,
                 "LLVM backend could not prepare parameter addresses");
@@ -12632,6 +13236,7 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
     free(feasible_blocks);
     free(state.locals);
     free(state.param_addresses);
+    free(state.fixed_reference_views);
     free(state.values);
     ir_analysis_scope_end(state.analysis_scope);
     core_indexed_table_free(state.frame_roots);

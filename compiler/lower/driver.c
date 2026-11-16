@@ -647,6 +647,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-consume %.3f\n",
             n00bb_profile_seconds() - profile_start);
+    if (ok) ok = check_field_array_lengths(analysis)
+        || explained_by_errors(&units);
     if (ok) ok = place_unit_allocations(analysis)
         || explained_by_errors(&units);
     exclude_failed_functions(analysis, &units, marks);

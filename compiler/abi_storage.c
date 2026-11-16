@@ -1,5 +1,6 @@
 #include "abi_storage.h"
 #include "abi_string.h"
+#include "inline_globals.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -242,6 +243,10 @@ typedef struct {
     core_list_t(n00bb_abi_storage_relocation_t) *tls_fixups;
     core_list_t(n00bb_abi_storage_index_patch_t) *index_patches;
     core_list_t(pending_address_t) *addresses;
+    // The storage kind an inline global's elements follow its array value
+    // in (n00bb_inline_global_count), else 0. Only arrays of plain numbers
+    // are inline, so it only applies to the variable's own array.
+    uint32_t inline_kind;
 } array_writer_t;
 
 static bool
@@ -269,7 +274,20 @@ static core_buffer_t *
 data_segment(array_writer_t *writer, uint32_t data_kind)
 {
     return data_kind == N00B_ABI_STORAGE_TLS ? &writer->built->tls
-                                             : &writer->built->aggregates;
+        : data_kind == N00B_ABI_STORAGE_WRITABLE ? &writer->built->writable
+        : data_kind == N00B_ABI_STORAGE_READ_ONLY ? &writer->built->read_only
+        : &writer->built->aggregates;
+}
+
+static uint32_t *
+data_alignment_of(array_writer_t *writer, uint32_t data_kind)
+{
+    return data_kind == N00B_ABI_STORAGE_TLS ? &writer->built->tls_alignment
+        : data_kind == N00B_ABI_STORAGE_WRITABLE
+            ? &writer->built->writable_alignment
+        : data_kind == N00B_ABI_STORAGE_READ_ONLY
+            ? &writer->built->read_only_alignment
+        : &writer->built->aggregate_alignment;
 }
 
 static bool
@@ -656,6 +674,13 @@ encode_array_items(array_writer_t *writer,
         return true;
     }
     size_t at = packed ? 0 : data_offset + (*next) * stride;
+    // An inline global with no elements given is zeroed; its items are
+    // nil, and zero bytes are any element's zero value.
+    if (writer->inline_kind && depth >= shape->rank && value
+        && value->kind == IR_GLOBAL_INIT_NIL) {
+        (*next)++;
+        return true;
+    }
     if (depth < shape->rank) {
         if (!encode_array(writer, type, value, nullptr, data_kind, at,
                           nullptr)) return false;
@@ -778,7 +803,8 @@ encode_array(array_writer_t *writer, th_type *type,
     if (!data_size) data_size = 1;
     bool thread = source_kind == N00B_ABI_STORAGE_TLS;
     uint32_t data_kind = thread ? N00B_ABI_STORAGE_TLS
-                                : N00BB_ABI_RELOC_AGGREGATE;
+        : writer->inline_kind ? writer->inline_kind
+        : N00BB_ABI_RELOC_AGGREGATE;
     core_buffer_t *buffer = data_segment(writer, data_kind);
     if (!append_padding(buffer, alignment)
         || data_size >= SIZE_MAX - buffer->byte_len) {
@@ -790,8 +816,7 @@ encode_array(array_writer_t *writer, th_type *type,
     memset(buffer->data + buffer->byte_len, 0, data_size);
     buffer->byte_len += data_size;
     buffer->data[buffer->byte_len] = 0;
-    uint32_t *data_alignment = thread ? &writer->built->tls_alignment
-                                      : &writer->built->aggregate_alignment;
+    uint32_t *data_alignment = data_alignment_of(writer, data_kind);
     if (*data_alignment < alignment) *data_alignment = (uint32_t)alignment;
     core_buffer_t *descriptors = &writer->built->aggregates;
     if (!append_padding(descriptors, 8)
@@ -853,6 +878,56 @@ encode_array(array_writer_t *writer, th_type *type,
 done:
     array_shape_release(&shape);
     return valid;
+}
+
+// Nested sequences of `shape` from dimension `depth` on, with nil items:
+// the zero value of an inline global given no elements.
+static ir_global_init_value_t *
+zero_shape(const ir_shape_t *shape, uint32_t depth)
+{
+    ir_shape_extent_t extent;
+    if (!shape || !ir_shape_extent(shape, depth, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC) return nullptr;
+    size_t count = (size_t)extent.static_value;
+    ir_global_init_value_t *items = core_alloc_array(ir_global_init_value_t,
+                                                     count ? count : 1);
+    memset(items, 0, (count ? count : 1) * sizeof(*items));
+    bool inner = depth + 1 < ir_shape_rank(shape);
+    for (size_t i = 0; i < count; i++) {
+        ir_global_init_value_t *row = inner ? zero_shape(shape, depth + 1)
+                                            : nullptr;
+        if (inner && !row) {
+            for (size_t j = 0; j < i; j++)
+                core_free((void *)items[j].aggregate.items);
+            core_free(items);
+            return nullptr;
+        }
+        items[i] = row ? *row : (ir_global_init_value_t){
+            .kind = IR_GLOBAL_INIT_NIL,
+        };
+        core_free(row);
+    }
+    ir_global_init_value_t *value = core_alloc(ir_global_init_value_t);
+    *value = (ir_global_init_value_t){
+        .kind = IR_GLOBAL_INIT_SEQUENCE,
+        .aggregate = {.items = items, .count = count},
+    };
+    return value;
+}
+
+static void
+zero_shape_release(ir_global_init_value_t *value)
+{
+    if (!value) return;
+    for (size_t i = 0; i < value->aggregate.count; i++)
+        if (value->aggregate.items[i].kind == IR_GLOBAL_INIT_SEQUENCE) {
+            ir_global_init_value_t row = value->aggregate.items[i];
+            ir_global_init_value_t *copy = core_alloc(ir_global_init_value_t);
+            *copy = row;
+            zero_shape_release(copy);
+        }
+    core_free((void *)value->aggregate.items);
+    core_free(value);
 }
 
 static ir_global_t *
@@ -1335,8 +1410,27 @@ n00bb_abi_storage_rows_build(
             ? &built.tls_alignment : kind == N00B_ABI_STORAGE_READ_ONLY
                 ? &built.read_only_alignment : &built.writable_alignment;
         size_t byte_length = (size_t)(bits / 8 + (bits % 8 != 0));
-        size_t graph_bytes_placed = phase_graph
-            && kind == N00B_ABI_STORAGE_TLS && is_array
+        uint64_t inline_count = is_array && kind != N00B_ABI_STORAGE_TLS
+            ? n00bb_inline_global_count(runtime, global) : 0;
+        // The elements start 16 bytes in, after the array value, so the
+        // storage is aligned for them too.
+        const ir_final_layout_t *element_layout = inline_count
+            ? ir_layout_final_visible(runtime,
+                n00bb_inline_global_element(global),
+                ir_module_target(runtime)) : nullptr;
+        if (inline_count && (!element_layout
+                || !element_layout->alignment_bytes
+                || element_layout->alignment_bytes > 16)) {
+            valid = false;
+            break;
+        }
+        if (element_layout && element_layout->alignment_bytes > alignment)
+            alignment = element_layout->alignment_bytes;
+        // A thread variable's array, and an inline global's, keeps its
+        // elements after the array value, in the variable's own storage.
+        bool elements_follow = is_array
+            && (kind == N00B_ABI_STORAGE_TLS || inline_count);
+        size_t graph_bytes_placed = phase_graph && elements_follow
             && graph_size > byte_length ? graph_size : byte_length;
         if (phase_graph && (graph_size != graph_bytes_placed
             || graph_alignment > alignment
@@ -1401,14 +1495,31 @@ n00bb_abi_storage_rows_build(
             }
         }
         else core_buffer_append(buffer, (const char *)bytes, byte_length);
-        if (is_array && initializer && !phase_graph
-            && !encode_array(&writer, global->type, initializer,
+        // An inline global with no elements given starts zeroed: nested
+        // sequences of its shape, of nil items.
+        ir_global_init_value_t *zeros = nullptr;
+        const ir_global_init_value_t *elements = initializer;
+        if (inline_count && !phase_graph
+            && (!initializer || initializer->kind == IR_GLOBAL_INIT_NIL)) {
+            zeros = zero_shape(global->shape, 0);
+            if (!zeros) {
+                valid = false;
+                break;
+            }
+            elements = zeros;
+        }
+        writer.inline_kind = inline_count ? kind : 0;
+        if (is_array && elements && !phase_graph
+            && !encode_array(&writer, global->type, elements,
                     global->shape, kind, row.byte_offset,
                     &row.instance_shape_index)) {
+            zero_shape_release(zeros);
             valid = false;
             break;
         }
-        if (kind == N00B_ABI_STORAGE_TLS)
+        zero_shape_release(zeros);
+        writer.inline_kind = 0;
+        if (elements_follow)
             row.byte_length = buffer->byte_len - row.byte_offset;
         if (descriptor_index != UINT32_MAX
             && !record_type_index(&writer, kind, row.byte_offset,

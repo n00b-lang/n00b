@@ -713,7 +713,11 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         ready = false;
                         break;
                     }
-                    bool packable = child->n_occupied == 1
+                    // An inline array (of `bool`, say) starts on a byte; its
+                    // elements may be packed bits within it, but the field
+                    // itself isn't packed among its neighbors.
+                    bool packable = !inline_element
+                        && child->n_occupied == 1
                         && child->occupied[0].offset == 0
                         && child->occupied[0].width < child->intrinsic_bits
                         && !child->n_reserved;

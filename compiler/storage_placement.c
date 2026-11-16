@@ -322,40 +322,66 @@ block_in_cycle(ir_block_t *block)
     return cycle;
 }
 
+// The arrays a function keeps in its frame share this many bytes. That is
+// well under the smallest guard page a thread stack gets (4 KiB), so keeping
+// arrays in the frame neither lets an overflow step over the guard nor
+// makes deep recursion run out of stack noticeably sooner than it would with
+// the arrays on the heap. Arrays past the budget are allocated.
+enum { FRAME_ARRAY_BUDGET = 2048 };
+
 // A bounded array of plain scalars (integers, floats, bools, bytes), made
 // whole by one instruction: zeroed (`array.new`) or from its elements (an
 // array literal). Its storage holds no references, so it can live in the
-// frame when it doesn't outlive the call.
-static bool
-frame_array(const ir_instr_t *in)
+// frame when it doesn't outlive the call. Returns the bytes its elements
+// take there, or 0 when it isn't such an array or alone exceeds the budget.
+static uint64_t
+frame_array(ir_module_t *module, const ir_instr_t *in)
 {
-    th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
-    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
-        ? th_resolve(th_seq_elem(type)) : nullptr;
+    if ((in->op != IR_OP_AGGREGATE && in->op != IR_OP_ARRAY_NEW)
+        || !in->dest) return 0;
+    // A rectangular array (a shape with a size for every dimension) is one
+    // block of its innermost elements; a flattened literal's operands are
+    // those elements.
+    ir_shape_t *shape = ir_value_shape(in->dest);
+    uint32_t rank = shape ? ir_shape_rank(shape) : 1;
+    th_type *element = th_resolve(in->dest->type);
+    uint64_t extents = 1;
+    for (uint32_t d = 0; d < rank; d++) {
+        ir_shape_extent_t extent;
+        if (!element || th_kind_of(element) != TH_SEQUENCE) return 0;
+        element = th_resolve(th_seq_elem(element));
+        if (!shape) continue;
+        if (!ir_shape_extent(shape, d, &extent)
+            || extent.kind != IR_SHAPE_EXTENT_STATIC
+            || (extent.static_value
+                && extents > UINT64_MAX / extent.static_value)) return 0;
+        extents *= extent.static_value;
+    }
     const th_builtin_type_t *builtin = element ? th_builtin_of(element)
                                                : nullptr;
     bool scalar = element && (th_kind_of(element) == TH_BITINT
                               || (builtin && builtin->scalar));
-    if (!scalar) return false;
-    // A scalar is at most 16 bytes, so this keeps a frame array within
-    // 16 KiB.
-    enum { FRAME_ELEMENTS = 1024 };
+    if (!scalar) return 0;
+    // An element's width rounded up to a power of two bytes is never less
+    // than the stride the backend gives it.
+    uint32_t bits = ir_machine_of(module, element).width;
+    uint64_t stride = 1;
+    while (stride * 8 < bits) stride *= 2;
+    uint64_t count = 0;
     if (in->op == IR_OP_AGGREGATE) {
         ir_aggregate_form_t form;
-        return in->n_operands <= FRAME_ELEMENTS
-            && (!ir_instr_aggregate_form(in, &form)
-                || form == IR_AGGREGATE_ELEMENTS);
+        if ((ir_instr_aggregate_form(in, &form)
+             && form != IR_AGGREGATE_ELEMENTS)
+            || (shape && in->n_operands != extents)) return 0;
+        count = in->n_operands;
+    } else {
+        ir_array_init_t init;
+        if (!shape || !ir_instr_array_init(in, &init)
+            || init != IR_ARRAY_INIT_LANGUAGE_ZERO) return 0;
+        count = extents;
     }
-    ir_array_init_t init;
-    ir_shape_extent_t extent;
-    ir_shape_t *shape = in->op == IR_OP_ARRAY_NEW ? ir_value_shape(in->dest)
-                                                  : nullptr;
-    return shape && ir_shape_rank(shape) == 1
-        && ir_shape_extent(shape, 0, &extent)
-        && extent.kind == IR_SHAPE_EXTENT_STATIC
-        && extent.static_value <= FRAME_ELEMENTS
-        && ir_instr_array_init(in, &init)
-        && init == IR_ARRAY_INIT_LANGUAGE_ZERO;
+    if (count > FRAME_ARRAY_BUDGET / stride) return 0;
+    return count ? count * stride : 1;
 }
 
 typedef const ir_value_t *placed_value_ptr_t;
@@ -413,15 +439,25 @@ uses_of(core_dict_t *uses, const ir_value_t *value)
 }
 
 // Whether every use of `value`, an element's address, loads or stores
-// through it.
+// through it. A row's address (in a multi-dimensional array) may also be
+// indexed for an element's address that is.
 static bool
 only_accessed(core_dict_t *uses, const ir_value_t *value)
 {
     const placed_uses_t *list = uses_of(uses, value);
     for (size_t u = 0; list && u < list->len; u++) {
-        ir_op_t op = list->data[u].user->op;
-        if (!((op == IR_OP_LOAD || op == IR_OP_STORE)
-              && list->data[u].operand == 0)) return false;
+        const ir_instr_t *user = list->data[u].user;
+        if (list->data[u].operand != 0) return false;
+        if (user->op == IR_OP_INDEX) {
+            if (!only_accessed(uses, user->dest)) return false;
+            continue;
+        }
+        // A row loaded whole is an array over the same storage, which
+        // could be kept.
+        if ((user->op != IR_OP_LOAD && user->op != IR_OP_STORE)
+            || (user->op == IR_OP_LOAD && user->dest
+                && th_kind_of(th_resolve(user->dest->type))
+                    == TH_SEQUENCE)) return false;
     }
     return value != nullptr;
 }
@@ -451,6 +487,12 @@ array_use_stays(ir_func_t *function, core_dict_t *uses,
 {
     switch (user->op) {
     case IR_OP_SEQUENCE_GET:
+        // A row of a multi-dimensional array is itself an array over the
+        // same storage, and must stay too.
+        if (at == 0 && user->dest
+            && th_kind_of(th_resolve(user->dest->type)) == TH_SEQUENCE)
+            core_list_push(*follow, user->dest);
+        return at == 0;
     case IR_OP_SEQUENCE_LENGTH:
     case IR_OP_SEQUENCE_SHAPE_CHECK:
     case IR_OP_SEQUENCE_SET:
@@ -515,31 +557,94 @@ array_stays(ir_func_t *function, core_dict_t *uses, const ir_value_t *array)
     return stays;
 }
 
+// An index into a multi-dimensional array's outer dimension: in a
+// rectangular array the row has no array value of its own, so the index
+// makes one (a view over the row's elements) for the reference to address.
+static bool
+row_view(const ir_instr_t *in)
+{
+    if ((in->op != IR_OP_INDEX && in->op != IR_OP_SEQUENCE_GET) || !in->dest
+        || !in->n_operands) return false;
+    ir_value_t *base = ir_operand_value(&in->operands[0]);
+    th_type *array = !base ? nullptr
+        : in->op == IR_OP_INDEX ? th_resolve(th_ind_referent(
+            th_resolve(base->type)))
+        : th_resolve(base->type);
+    return array && th_kind_of(array) == TH_SEQUENCE
+        && th_kind_of(th_resolve(th_seq_elem(array))) == TH_SEQUENCE;
+}
+
+// A row view can live in the frame when every use of the row comes right
+// after it, in its own block, and only reaches the row's elements: for a
+// reference, indexing it or writing it whole (which copies into the row);
+// for a row read as a value (`sequence.get`), reading its elements. A row
+// read whole could be kept, and its descriptor is the view's. A later run of the index
+// (in a loop) can't then replace a view still in use, and nothing keeps
+// the row.
+static size_t
+position_in_block(const ir_instr_t *in)
+{
+    for (uint32_t i = 0; in->block && i < in->block->n_instrs; i++)
+        if (in->block->instrs[i] == in) return i;
+    return SIZE_MAX;
+}
+
+static bool
+view_stays(core_dict_t *uses, const ir_instr_t *view)
+{
+    const placed_uses_t *list = uses_of(uses, view->dest);
+    size_t at = position_in_block(view);
+    for (size_t u = 0; list && u < list->len; u++) {
+        const ir_instr_t *user = list->data[u].user;
+        uint32_t operand = list->data[u].operand;
+        bool reaches_row = view->op == IR_OP_SEQUENCE_GET
+            ? user->op == IR_OP_SEQUENCE_GET
+            : user->op == IR_OP_INDEX
+                || (user->op == IR_OP_STORE && user->n_operands == 2);
+        if (at == SIZE_MAX || user->block != view->block
+            || position_in_block(user) <= at || operand != 0 || !reaches_row)
+            return false;
+    }
+    return true;
+}
+
 static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
-                     ir_func_t *function)
+                     ir_module_t *module, ir_func_t *function)
 {
     core_list_t(placed_alloc_t) found = core_list_new(placed_alloc_t);
+    core_list_t(placed_alloc_t) views = core_list_new(placed_alloc_t);
     core_dict_t uses;
     bool indexed = false;
+    uint64_t budget = FRAME_ARRAY_BUDGET;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *allocation = block->instrs[i];
+            if (row_view(allocation)) {
+                core_list_push(views, ((placed_alloc_t){
+                    .allocation = allocation,
+                    .local = view_stays(indexed_uses(function, &uses,
+                                                     &indexed), allocation),
+                }));
+                continue;
+            }
             bool required = false;
-            bool array = frame_array(allocation);
+            uint64_t array = frame_array(module, allocation);
             if ((allocation->op != IR_OP_ALLOC && !array) || !allocation->dest
                 || (!array
                     && (ir_instr_storage_class(allocation, &required).data
                         || required))) continue;
+            bool local = !block_in_cycle(block)
+                && (array ? array <= budget
+                            && array_stays(function,
+                                   indexed_uses(function, &uses, &indexed),
+                                   allocation->dest)
+                          : !ir_address_escapes(summaries, function,
+                                                allocation->dest));
+            if (local && array) budget -= array;
             core_list_push(found, ((placed_alloc_t){
-                .allocation = allocation,
-                .local      = (array ? array_stays(function,
-                                       indexed_uses(function, &uses, &indexed),
-                                       allocation->dest)
-                               : !ir_address_escapes(summaries, function,
-                                                     allocation->dest))
-                    && !block_in_cycle(block)}));
+                .allocation = allocation, .local = local}));
         }
     }
     if (indexed) free_uses(&uses);
@@ -551,8 +656,215 @@ annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
         ok = ir_annot_set(context, &found.data[a].allocation->annots,
             (ir_annot_t){.key  = CORE_STRING_STATIC("ir.allocation_local"),
                          .kind = IR_ANNOT_BOOL, .b = found.data[a].local});
+    for (size_t a = 0; ok && a < views.len; a++)
+        ok = ir_annot_set(context, &views.data[a].allocation->annots,
+            (ir_annot_t){.key  = CORE_STRING_STATIC("ir.allocation_local"),
+                         .kind = IR_ANNOT_BOOL, .b = views.data[a].local});
+    core_list_free(views);
     core_list_free(found);
     if (!ok) return false;
+    return true;
+}
+
+// How many operands in `function` use `value`.
+static size_t
+value_uses(ir_func_t *function, const ir_value_t *value)
+{
+    size_t uses = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+            for (uint32_t o = 0; o < in->n_operands; o++)
+                uses += ir_operand_value(&in->operands[o]) == value;
+        }
+    }
+    return uses;
+}
+
+// An array literal built from its elements.
+static ir_instr_t *
+element_literal(const ir_value_t *value)
+{
+    ir_instr_t *in = value && value->kind == IR_VAL_INSTR ? value->def
+                                                         : nullptr;
+    ir_aggregate_form_t form;
+    return in && in->op == IR_OP_AGGREGATE && in->dest
+        && th_kind_of(th_resolve(in->dest->type)) == TH_SEQUENCE
+        && (!ir_instr_aggregate_form(in, &form)
+            || form == IR_AGGREGATE_ELEMENTS) ? in : nullptr;
+}
+
+// Whether `literal` is rows of literals, `depth` levels down, each with the
+// extent the shape gives its level, used only by their parent.
+static bool
+rows_of_literals(ir_func_t *function, const ir_instr_t *literal,
+                 const ir_shape_t *shape, uint32_t depth)
+{
+    ir_shape_extent_t extent;
+    if (!ir_shape_extent(shape, depth, &extent)
+        || extent.kind != IR_SHAPE_EXTENT_STATIC
+        || literal->n_operands != extent.static_value) return false;
+    if (depth + 1 == ir_shape_rank(shape)) return true;
+    for (uint32_t o = 0; o < literal->n_operands; o++) {
+        ir_value_t *row = ir_operand_value(&literal->operands[o]);
+        const ir_instr_t *inner = element_literal(row);
+        if (!inner || value_uses(function, row) != 1
+            || !rows_of_literals(function, inner, shape, depth + 1))
+            return false;
+    }
+    return true;
+}
+
+// Moves the innermost elements under `literal` into `leaves`, in order, and
+// erases the row literals.
+static void
+take_leaves(ir_instr_t *literal, uint32_t levels,
+            core_list_t(placed_value_ptr_t) *leaves)
+{
+    for (uint32_t o = 0; o < literal->n_operands; o++) {
+        ir_value_t *item = ir_operand_value(&literal->operands[o]);
+        if (!levels) {
+            core_list_push(*leaves, item);
+            continue;
+        }
+        ir_instr_t *row = item->def;
+        take_leaves(row, levels - 1, leaves);
+        row->n_operands = 0;
+        ir_instr_erase(row);
+    }
+}
+
+// Makes `literal`, rows of literals matching `shape`, a literal of its
+// innermost elements carrying `shape`, and erases the row literals.
+static bool
+flatten_literal(ir_instr_t *literal, ir_shape_t *shape)
+{
+    core_list_t(placed_value_ptr_t) leaves = core_list_new(placed_value_ptr_t);
+    take_leaves(literal, ir_shape_rank(shape) - 1, &leaves);
+    literal->n_operands = 0;
+    bool ok = true;
+    for (size_t l = 0; ok && l < leaves.len; l++)
+        ok = ir_instr_operand_value(literal, (ir_value_t *)leaves.data[l]);
+    core_list_free(leaves);
+    return ok && ir_value_set_shape(literal->dest, shape);
+}
+
+// The shape of a nested array literal whose rows, at every level its type
+// nests, are literals of one length used only by their parent; nullptr for
+// any other value.
+static ir_shape_t *
+literal_structure_shape(ir_ctx_t *context, ir_func_t *function,
+                        const ir_value_t *value)
+{
+    const ir_instr_t *literal = element_literal(value);
+    if (!literal || ir_value_shape(literal->dest)) return nullptr;
+    uint32_t rank = 0;
+    th_type *element = th_resolve(literal->dest->type);
+    while (element && th_kind_of(element) == TH_SEQUENCE) {
+        rank++;
+        element = th_resolve(th_seq_elem(element));
+    }
+    ir_shape_t *shape = rank > 1 && element
+        ? ir_shape_new(context, element, rank) : nullptr;
+    const ir_instr_t *row = literal;
+    for (uint32_t d = 0; shape && d < rank; d++) {
+        if (!row || !row->n_operands
+            || !ir_shape_set_extent(shape, d, (ir_shape_extent_t){
+                   .kind = IR_SHAPE_EXTENT_STATIC,
+                   .static_value = row->n_operands}))
+            return nullptr;
+        if (d + 1 < rank)
+            row = element_literal(ir_operand_value(&row->operands[0]));
+    }
+    return shape && rows_of_literals(function, literal, shape, 0) ? shape
+                                                                 : nullptr;
+}
+
+// Whether `record`'s member `name` holds its array inline.
+static bool
+inline_member(ir_func_t *function, th_type *record, core_string_t name)
+{
+    bool known = false;
+    return record && name.data
+        && ir_layout_member_inline(function->owner, record, name, &known);
+}
+
+// A multi-dimensional array literal (`[[1, 2], [3, 4]]`) bound for storage
+// whose every dimension has a size is one rectangular block: it becomes a
+// literal of the innermost elements carrying the shape, and the row
+// literals go. Its type stays the nested array type the solver gave it;
+// the shape says the storage is flat. Such storage is a shape check's (a
+// declared size), or a record's inline array field, given the literal in a
+// record literal or by assigning the field; those take the shape the
+// literal's own rows give.
+static bool
+flatten_rectangular_literals(ir_ctx_t *context, ir_func_t *function)
+{
+    th_ctx *types = ir_module_types(function->owner);
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+            bool flattened = false;
+            if (in->op == IR_OP_SEQUENCE_SHAPE_CHECK && in->n_operands) {
+                ir_shape_t *shape = in->shape_constraint;
+                ir_instr_t *literal = shape && ir_shape_rank(shape) > 1
+                    ? element_literal(ir_operand_value(&in->operands[0]))
+                    : nullptr;
+                if (literal && !ir_value_shape(literal->dest)
+                    && rows_of_literals(function, literal, shape, 0)) {
+                    if (!flatten_literal(literal, shape)) return false;
+                    flattened = true;
+                }
+            }
+            else if (in->op == IR_OP_STORE && in->n_operands == 2) {
+                ir_value_t *address = ir_operand_value(&in->operands[0]);
+                const ir_instr_t *field = address
+                    && address->kind == IR_VAL_INSTR ? address->def
+                                                     : nullptr;
+                ir_value_t *value = ir_operand_value(&in->operands[1]);
+                ir_shape_t *shape = field && field->op == IR_OP_FIELD
+                    && field->n_operands == 2
+                    && field->operands[1].kind == IR_OPD_NAME
+                    && inline_member(function, th_ind_referent(th_resolve(
+                           ir_operand_value(&field->operands[0])->type)),
+                           field->operands[1].name)
+                    ? literal_structure_shape(context, function, value)
+                    : nullptr;
+                if (shape) {
+                    if (!flatten_literal(value->def, shape)) return false;
+                    flattened = true;
+                }
+            }
+            else if (in->op == IR_OP_AGGREGATE && in->dest
+                     && ir_annot_get(&in->annots,
+                            CORE_STRING_STATIC("n00bb.record-literal"))) {
+                th_type *definition = th_resolve(in->dest->type);
+                if (th_kind_of(definition) != TH_RECORD) {
+                    definition = th_type_definition(types, in->dest->type);
+                    definition = definition ? th_resolve(definition)
+                                            : nullptr;
+                }
+                for (uint32_t m = 0; definition
+                     && th_kind_of(definition) == TH_RECORD
+                     && th_record_len(definition) == in->n_operands
+                     && m < in->n_operands; m++) {
+                    ir_value_t *value = ir_operand_value(&in->operands[m]);
+                    ir_shape_t *shape = inline_member(function,
+                            in->dest->type, th_record_member(definition,
+                                                             m)->name)
+                        ? literal_structure_shape(context, function, value)
+                        : nullptr;
+                    if (!shape) continue;
+                    if (!flatten_literal(value->def, shape)) return false;
+                    flattened = true;
+                }
+            }
+            // Erasing rows moved this block's instructions.
+            if (flattened) i = 0;
+        }
+    }
     return true;
 }
 
@@ -564,6 +876,7 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
         if (!function || !function->n_blocks) continue;
+        if (!flatten_rectangular_literals(context, function)) return false;
         uint32_t locals = function->n_locals;
         ir_local_t **moved = core_alloc_array(ir_local_t *, locals + 1);
         uint32_t count = 0;
@@ -586,7 +899,7 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         }
         core_free(moved);
         if (!ok) return false;
-        if (!annotate_allocations(context, summaries, function)
+        if (!annotate_allocations(context, summaries, module, function)
             || !retire_scope_finalizers(context, function))
             return false;
     }

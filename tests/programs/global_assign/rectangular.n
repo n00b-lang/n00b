@@ -1,0 +1,80 @@
+# Multi-dimensional arrays with a size for every dimension are one block
+# of elements: built from nested literals, kept in the frame, inline in a
+# module variable or a record field, and given to sized `modify` and `out`
+# parameters as their elements. Rows are indexed without allocating.
+var grid: Array[u32][3][4]
+var seeded: Array[u16][2][3] = [[1, 2, 3], [4, 5, 6]]
+
+record Board {
+    tag: u8
+    cells: Array[u32][2][3]
+    after: u64
+}
+
+func poke(r: int, c: int, v: u32) -> u32 {
+    grid[r][c] = v
+    return grid[r][c] + cast[u32](seeded[1][2])
+}
+
+func clear_row(modify g: Array[u32][3][4], r: int) -> nil {
+    g[r][0] = 0
+    g[r][3] = g[r][3] + 1
+}
+
+func refill(out g: Array[u32][2][2]) -> nil {
+    g = [[1, 2], [3, 4]]
+}
+
+func declared() -> u32 {
+    var m: Array[u32][2][3] = [[1, 2, 3], [4, 5, 6]]
+    return m[1][0] + m[0][2]
+}
+
+func assigned() -> u32 {
+    var m: Array[u32][2][2]
+    m = [[5, 6], [7, 8]]
+    m[0][1] = m[0][1] + 10
+    return m[1][1] + m[0][1]
+}
+
+func row_total(r: int) -> u32 {
+    let m: Array[u32][2][2] = [[1, 2], [3, 4]]
+    let row = m[r]
+    return row[0] + row[1]
+}
+
+func board_total(cells: Array[u32][2][3]) -> u32 {
+    return cells[0][0] + cells[1][2]
+}
+
+func bump(modify cells: Array[u32][2][3]) -> nil {
+    cells[1][2] = cells[1][2] + 100
+}
+
+func main() -> nil {
+    require poke(2, 3, 7) == 13
+    grid[2][0] = 9
+    clear_row(grid, 2)
+    require grid[2][0] == 0 and grid[2][3] == 8
+    grid = [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]]
+    require grid[2][3] == 3 and grid[1][0] == 2
+    require declared() == 7 and assigned() == 24 and row_total(1) == 7
+
+    var local: Array[u32][2][2]
+    refill(local)
+    require local[1][0] == 3
+
+    var b: Board
+    b.cells[1][1] = 4
+    require b.cells[1][1] == 4 and b.cells[0][0] == 0
+    b.cells = [[1, 2, 3], [4, 5, 6]]
+    require b.cells[1][2] == 6
+    var c: Board = (tag = 9, cells = [[7, 7, 7], [8, 8, 8]], after = 5)
+    require c.cells[1][0] == 8 and c.tag == 9 and c.after == 5
+    require board_total(c.cells) == 15
+    bump(c.cells)
+    require c.cells[1][2] == 108 and c.after == 5
+    let copy = c.cells
+    c.cells[0][0] = 1
+    require copy[0][0] == 7
+}

@@ -1,0 +1,33 @@
+# A record's fixed-size array field passed by reference, and a function
+# with a sized `modify` parameter used as a value. These are found once
+# types are solved.
+record Slots {
+    tag: u8
+    values: Array[u32][3]
+}
+
+callback Filler {
+    call (modify words: Array[u32]) -> nil
+    handler (modify words: Array[u32]) -> nil
+}
+
+func refill(modify words: Array[u32]) -> nil {
+    words = [5, 6]
+}
+
+func four(modify words: Array[u32][4]) -> nil {
+    words[0] = 1
+}
+
+func fixed(modify words: Array[u32][3]) -> nil {
+    words[0] = 1
+}
+
+func main() -> nil {
+    var slots: Slots = (tag = 1, values = [1, 2, 3])
+    refill(slots.values)
+    four(slots.values)
+    let filler: Filler = callback[Filler](ref fixed)
+    var loose: Array[u32] = [1]
+    filler.call(loose)
+}

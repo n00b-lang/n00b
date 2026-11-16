@@ -14,6 +14,11 @@ typedef pwz_res_t *pwz_res_ptr_t;
 core_list_decl(pwz_exp_ptr_t);
 core_list_decl(pwz_res_ptr_t);
 
+// An ambiguity's alternatives: the list lives in the parse arena, its
+// items on the heap, so the parser keeps every one to free them.
+typedef core_list_t(pwz_res_ptr_t) *pwz_res_list_ptr_t;
+core_list_decl(pwz_res_list_ptr_t);
+
 #define PWZ_MEM_IN_PROGRESS_BIT ((int32_t)(1u << 31))
 
 #define PWZ_POS_BOTTOM ((int32_t)0x7FFFFFFE)
@@ -217,6 +222,7 @@ struct parse_pwz_parser_t {
     core_list_t(pwz_zipper_t)    worklist;
     core_list_t(pwz_zipper_t)    worklist_swap;
     core_list_t(pwz_res_ptr_t)   tops;
+    core_list_t(pwz_res_list_ptr_t) ambiguities;
     core_list_t(pwz_step_t)      steps;
     core_list_t(pwz_score_entry_t) score_cache;
     int32_t                    *score_index;

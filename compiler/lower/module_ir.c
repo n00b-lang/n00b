@@ -1,4 +1,5 @@
 #include "lower_internal.h"
+#include "sequence_transfer.h"
 
 static core_string_t
 context_hook_suffix(parse_grammar_t *grammar, parse_tree_t *hook);
@@ -1423,19 +1424,58 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
     size_t count = th_func_nparams(function->type)
         - (th_func_rest(symbol->type) != nullptr);
     named = named && !function->n_params;
+    core_buffer_t fixed = {0};
     for (size_t i = 0; i < count; i++) {
         uint8_t flags = 0;
         core_string_t name = {0};
+        parse_sym_entry_t *formal = nullptr;
+        th_mode mode = TH_IN;
         if (!function_parameter_info(grammar, symbol, formals, i,
-                nullptr, &name, &flags, nullptr)) return !symbol->decl_node;
+                &formal, &name, &flags, &mode)) {
+            core_buffer_release(&fixed);
+            return !symbol->decl_node;
+        }
         if (named && (!name.data || !ir_param_add(function, name,
-                          th_func_param(function->type, i)->type)))
+                          th_func_param(function->type, i)->type))) {
+            core_buffer_release(&fixed);
             return false;
+        }
         if ((flags & 1u)
-            && !ir_func_set_parameter_optional(function, (uint32_t)i, true))
+            && !ir_func_set_parameter_optional(function, (uint32_t)i, true)) {
+            core_buffer_release(&fixed);
             return false;
+        }
+        // A fixed-size array passed by reference is passed as its elements:
+        // every dimension's size is known.
+        ir_shape_t *shape = formal && th_mode_by_reference(mode)
+            ? parse_sym_binding(formal, CORE_STRING_STATIC("ir.array-shape"))
+            : nullptr;
+        uint32_t rank = shape ? ir_shape_rank(shape) : 0;
+        bool sized = rank && rank <= N00BB_FIXED_REFERENCE_MAX_RANK;
+        for (uint32_t d = 0; sized && d < rank; d++) {
+            ir_shape_extent_t extent;
+            sized = ir_shape_extent(shape, d, &extent)
+                && extent.kind == IR_SHAPE_EXTENT_STATIC
+                && extent.static_value;
+        }
+        if (sized)
+            core_buffer_printf(&fixed, "%s%zu:", fixed.byte_len ? "," : "",
+                               i);
+        for (uint32_t d = 0; sized && d < rank; d++) {
+            ir_shape_extent_t extent;
+            (void)ir_shape_extent(shape, d, &extent);
+            core_buffer_printf(&fixed, "%s%llu", d ? "x" : "",
+                               (unsigned long long)extent.static_value);
+        }
     }
-    return true;
+    bool ok = !fixed.byte_len || ir_annot_set(ir_module_ctx(function->owner),
+        &function->annots, (ir_annot_t){
+            .key = N00BB_FIXED_REFERENCES_KEY, .kind = IR_ANNOT_STR,
+            .s = ir_strdup(ir_module_ctx(function->owner),
+                           core_buffer_string(&fixed)),
+        });
+    core_buffer_release(&fixed);
+    return ok;
 }
 
 static ir_func_t *
