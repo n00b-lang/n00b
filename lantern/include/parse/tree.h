@@ -242,6 +242,55 @@ parse_tree_set_reference_target(parse_tree_t *node,
 }
 
 static inline bool
+parse_tree_declares_binding(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->declares_binding;
+}
+
+static inline bool
+parse_tree_mark_declares_binding(parse_tree_t *node)
+{
+    parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+    if (!facts) return false;
+    facts->declares_binding = true;
+    return true;
+}
+
+static inline bool
+parse_tree_discards_value(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->discards_value;
+}
+
+static inline bool
+parse_tree_mark_discards_value(parse_tree_t *node)
+{
+    parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+    if (!facts) return false;
+    facts->discards_value = true;
+    return true;
+}
+
+static inline parse_sym_entry_t *
+parse_tree_narrowed_subject(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->narrowed_subject : nullptr;
+}
+
+static inline bool
+parse_tree_set_narrowed_subject(parse_tree_t *node, parse_sym_entry_t *symbol)
+{
+    if (!symbol) return true;
+    parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+    if (!facts) return false;
+    facts->narrowed_subject = symbol;
+    return true;
+}
+
+static inline bool
 parse_tree_is_direct_symbol_reference(const parse_tree_t *node)
 {
     const parse_node_facts_t *facts = parse_tree_facts(node);

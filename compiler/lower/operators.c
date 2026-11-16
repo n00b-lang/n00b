@@ -1482,15 +1482,15 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (is_ref) {
         if (entering) {
             parse_tree_t *operand = nullptr;
+            // A function is named, not read; any other operand is lowered
+            // as a value, and its place recovered from how it was read.
             bool function_reference =
                 referenced_function(context, visit, &operand) != nullptr;
             if (!operand || (function_reference
-                    ? !ir_lower_skip_value(context, visit->node, operand)
-                    : !n00bb_mark_reference_target(context,
-                        visit->grammar, visit->node, operand)))
+                    && !ir_lower_skip_value(context, visit->node, operand)))
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL,
                     lower_span_for_tree(context, visit->node),
-                    "could not mark a reference target as an lvalue");
+                    "could not mark a function reference");
             return true;
         }
 
@@ -1526,44 +1526,13 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                 ? ir_func_reference(module, function) : nullptr;
         }
         else if (operand && lower)
-            storage = n00bb_addressable_expression_address(context,
-                visit->grammar, lower->unit, operand, span);
-        ir_value_t *root = storage;
-        while (root && root->def && (root->def->op == IR_OP_FIELD
-                                     || root->def->op == IR_OP_INDEX)
-               && root->def->n_operands)
-            root = ir_operand_value(&root->def->operands[0]);
-        bool escapes = storage && n00bb_from_reference_address(storage)
-            && !n00bb_call_argument(visit->grammar, visit->node);
-        if (escapes && root && root->def && root->def->op == IR_OP_DISPATCH) {
-            if (!ir_annot_set(lower->ir_context, &root->def->annots,
-                    (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
-                                 .kind = IR_ANNOT_STR,
-                                 .s = ir_strdup(lower->ir_context,
-                                     source_text_of(lower->unit, operand))}))
-                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                    "could not defer the reference escape check");
-            escapes = false;
-        }
-        if (escapes) {
-            lower_report(context, N00B_DIAG_REFERENCE_ADDRESS_ESCAPES, span,
-                N00B_TEXT_REFERENCE_ADDRESS_ESCAPES,
-                N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, operand))));
-            lower_help(context, N00B_TEXT_PASS_THE_REFERENCE_DIRECTLY,
-                       N00BB_NO_ARGS);
-            return false;
-        }
+            storage = n00bb_place_of(context,
+                ir_lower_node_value(context, operand), true, span);
         if (storage && storage->def && storage->def->op == IR_OP_INDEX
             && storage->def->n_operands
             && storage->def->operands[0].kind == IR_OPD_VALUE) {
-            ir_shape_t *shape = ir_value_shape(
+            ir_shape_t *shape = n00bb_place_shape(
                 storage->def->operands[0].value);
-            if (!shape) {
-                parse_sym_entry_t *root = n00bb_assignment_root_symbol(
-                    visit->grammar, lower->unit, operand);
-                shape = root ? parse_sym_binding(root,
-                    CORE_STRING_STATIC("ir.array-shape")) : nullptr;
-            }
             ir_shape_storage_t layout = {0};
             if (shape && ir_shape_storage(shape, &layout)
                 && layout.classification_known
@@ -1602,6 +1571,15 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                     th_var(ir_module_types(context->module)))
                 && ir_instr_operand_name(open, N00BB_REF_METHOD)
                 && ir_instr_operand_fresh(open, storage)
+                // An address a reference type lends may only be passed
+                // straight to a call; rewrite checks how the `ref` is used
+                // once the reference types are known.
+                && ir_annot_set(lower->ir_context, &open->annots,
+                       (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
+                                    .kind = IR_ANNOT_STR,
+                                    .s = ir_strdup(lower->ir_context,
+                                        source_text_of(lower->unit,
+                                                       operand))})
                 ? open->dest : nullptr;
             if (referenced) n00bb_rewrite_later(context, open);
         }

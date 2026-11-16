@@ -286,9 +286,6 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     parse_tree_t *named_fields = child_nt(visit->grammar, visit->node,
                                           CORE_STRING_STATIC("named-field-list"));
     if (named_fields) {
-        bool compound = false;
-        if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
-            return true;
         n00bb_tuple_parts_t *parts = n00bb_tuple_parts(lower, named_fields,
                                                        false);
         th_type *type = n00bb_node_type(context, visit->node);
@@ -402,16 +399,11 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                  CORE_STRING_STATIC("expression"))) {
         ir_value_t *value = ir_lower_node_value(context,
                                                 core_tree_child(visit->node, 1));
-        if (value) return ir_lower_set_node_value(context, visit->node, value);
-        bool compound = false;
-        return n00bb_assignment_target(visit->grammar, visit->node, &compound);
+        return !value || ir_lower_set_node_value(context, visit->node, value);
     }
     if (child_count != 5
         || !nt_is(visit->grammar, core_tree_child(visit->node, 1),
                   CORE_STRING_STATIC("expression"))) return true;
-    bool compound = false;
-    if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
-        return true;
     n00bb_tuple_parts_t *parts = n00bb_tuple_parts(lower, visit->node, true);
     parse_tree_t *first = core_tree_child(visit->node, 1);
     parse_tree_t *rest_node = core_tree_child(visit->node, 3);

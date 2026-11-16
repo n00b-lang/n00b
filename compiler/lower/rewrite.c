@@ -881,6 +881,26 @@ n00bb_element_address(ir_lower_context_t *context, ir_value_t *base,
         ? address->dest : nullptr;
 }
 
+// Whether every use of `value` is as an operand of a call: an address a
+// reference type lends is valid only for the call it is passed to.
+static bool
+n00bb_only_call_operand(const ir_func_t *function, const ir_value_t *value)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            bool call = in->op == IR_OP_CALL || in->op == IR_OP_DISPATCH
+                || in->op == IR_OP_CALLBACK_INVOKE;
+            for (uint32_t o = 0; o < in->n_operands; o++) {
+                const ir_operand_t *operand = &in->operands[o];
+                const ir_value_t *used = operand->kind == IR_OPD_NAMED_ARG
+                    ? operand->named.value : ir_operand_value(operand);
+                if (used == value && !call) return false;
+            }
+        }
+    return true;
+}
+
 static ir_value_t *
 n00bb_rewrite_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
                     ir_span_t span);
@@ -939,62 +959,17 @@ n00bb_rewrite_payload_writeback(n00bb_rewrite_t *rewrite, ir_span_t span)
         && ir_instr_operand_value(store, some->dest);
 }
 
+// The place a by-reference operand names, recovered from how its value was
+// read (see n00bb_place_of). An option's payload has no place of its own, so
+// it is copied out and stored back afterwards.
 static ir_value_t *
 n00bb_rewrite_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
                     ir_span_t span)
 {
-    ir_lower_context_t *context = &rewrite->context;
     ir_instr_t *def = value ? value->def : nullptr;
-    th_ctx *types = ir_module_types(context->module);
-    if (def && def->op == IR_OP_LOAD && def->n_operands == 1)
-        return ir_operand_value(&def->operands[0]);
     if (def && def->op == IR_OP_OPTION_GET && def->n_operands == 1)
         return n00bb_rewrite_payload_place(rewrite, value, span);
-    ir_local_t *local = def && def->op == IR_OP_COPY && def->n_operands == 1
-        ? ir_operand_local(&def->operands[0]) : nullptr;
-    bool storage = value && (value->kind == IR_VAL_GLOBAL
-                             || value->kind == IR_VAL_PARAM);
-    if (local || storage) {
-        ir_instr_t *take = ir_lower_emit_instruction(context,
-            IR_OP_ADDRESS_OF, span);
-        return take && ir_lower_set_temp_dest(context, take,
-                CORE_STRING_STATIC("__n00bb_place_"),
-                th_ind(types, 0, local ? local->type : value->type))
-            && (local ? ir_instr_operand_local(take, local)
-                      : ir_instr_operand_value(take, value))
-            ? take->dest : nullptr;
-    }
-    if (def && def->op == IR_OP_COPY && def->n_operands == 1)
-        return n00bb_rewrite_place(rewrite,
-                                   ir_operand_value(&def->operands[0]), span);
-    bool element = def && ((def->op == IR_OP_SEQUENCE_GET
-                            && def->n_operands == 2)
-        || (def->op == IR_OP_DISPATCH && def->n_operands == 3
-            && def->operands[0].kind == IR_OPD_NAME
-            && core_string_eq(def->operands[0].name,
-                              CORE_STRING_STATIC("__read"))));
-    if (element) {
-        uint32_t at = def->op == IR_OP_DISPATCH ? 1 : 0;
-        ir_value_t *base = n00bb_rewrite_place(rewrite,
-            ir_operand_value(&def->operands[at]), span);
-        return base ? n00bb_element_address(context, base,
-                          ir_operand_value(&def->operands[at + 1]),
-                          value->type, span)
-                    : nullptr;
-    }
-    if (!def || def->op != IR_OP_EXTRACT || def->n_operands != 2
-        || def->operands[1].kind != IR_OPD_NAME)
-        return nullptr;
-    ir_value_t *base = n00bb_rewrite_place(rewrite,
-        ir_operand_value(&def->operands[0]), span);
-    ir_instr_t *field = base
-        ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
-    return field && ir_lower_set_temp_dest(context, field,
-            CORE_STRING_STATIC("__n00bb_place_"),
-            th_ind(types, 0, value->type))
-        && ir_instr_operand_value(field, base)
-        && ir_instr_operand_name(field, def->operands[1].name)
-        ? field->dest : nullptr;
+    return n00bb_place_of(&rewrite->context, value, rewrite->writing, span);
 }
 
 // The address a by-reference operand passes for a value that is no place
@@ -1328,6 +1303,8 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && ir_annot_get(&in->annots, N00BB_WRITE_BACK_KEY);
     ir_value_t *place = by_reference
         ? n00bb_rewrite_place(rewrite, receiver, in->span) : nullptr;
+    if (by_reference && !place)
+        place = n00bb_rewrite_temporary_place(rewrite, receiver, in->span);
     if (by_reference && !place) return false;
     in->op = IR_OP_CALL;
     in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = callee};
@@ -2040,8 +2017,9 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     bool writable = false;
     ir_annot_t *escapes = ir_annot_get(&in->annots,
                                        N00BB_REFERENCE_ESCAPES_KEY);
-    if (escapes && th_kind_of(receiver_type) == TH_NAMED
-        && n00bb_reference_dispatch(method, nullptr)) {
+    if (escapes && core_string_eq(method, N00BB_REF_METHOD)
+        && n00bb_from_reference_address(receiver)
+        && !n00bb_only_call_operand(rewrite->context.function, in->dest)) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(rewrite->unit);
         n00bb_report(diagnostics, rewrite->unit,

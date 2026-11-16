@@ -26,11 +26,17 @@ bool ir_lower_emit_suppressed(ir_lower_context_t *context,
                               parse_tree_t *node);
 bool ir_lower_handle_assignment(ir_lower_context_t *context,
                                 parse_tree_t *assignment);
-bool ir_lower_finish_assignment(ir_lower_context_t *context,
-                                parse_tree_t *assignment,
-                                parse_tree_t *completed_node);
 bool ir_lower_evaluate_assignment_target(ir_lower_context_t *context,
                                          parse_tree_t *assignment);
+parse_sym_entry_t *ir_lower_read_variable(ir_lower_context_t *context,
+                                          const ir_value_t *value);
+bool ir_lower_symbol_defined_at(const parse_sym_entry_t *symbol,
+                                parse_tree_t *node);
+bool ir_lower_bound_since(ir_lower_context_t *context,
+                          const parse_sym_entry_t *symbol, void *checkpoint);
+parse_sym_entry_t *ir_lower_binding_symbol(ir_lower_context_t *context,
+                                           const ir_local_t *local,
+                                           const ir_value_t *value);
 bool ir_lower_skip_value(ir_lower_context_t *context, parse_tree_t *owner,
                          parse_tree_t *node);
 bool ir_lower_bind_value(ir_lower_context_t *context,

@@ -214,16 +214,14 @@ bool n00bb_trap_integer_arithmetic(ir_instr_t *instruction, ir_class_t class);
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
 parse_tree_t *referent_access_node(parse_grammar_t *grammar,
                                    parse_tree_t *node);
+bool n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node,
+                      bool *slice);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
 bool n00bb_index_reference_storage(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
                                           parse_tree_t *node);
-parse_tree_t *n00bb_addressable_root_lvalue(parse_grammar_t *grammar,
-                                            parse_tree_t *target);
-parse_sym_entry_t *direct_ref_target(parse_grammar_t *grammar,
-                                     parse_tree_t *node);
 core_string_t canonical_builtin_type_name(core_string_t name);
 bool dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node);
 int builtin_generic_type_arity(core_string_t name);
@@ -302,13 +300,12 @@ bool n00bb_bitwise_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
+parse_sym_entry_t *n00bb_narrowed_subject(parse_grammar_t *grammar,
+                                          core_translation_unit_t *unit,
+                                          parse_tree_t *node);
 ir_summary_t *n00bb_native_axiom(ir_summaries_t *summaries,
                                  const ir_func_t *function);
 bool n00bb_native_calls_n00b(const ir_func_t *function);
-parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
-    parse_grammar_t *grammar, core_translation_unit_t *unit,
-    parse_tree_t *target);
-bool n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node);
 parse_sym_entry_t *n00bb_atomic_load_symbol(parse_grammar_t *grammar,
                                             core_translation_unit_t *unit,
                                             parse_tree_t *node);

@@ -577,16 +577,15 @@ describe_parameter_target(th_mode mode, parse_sym_entry_t *callee,
                       N00BB_ARGS(ARG_TEXT(mode_keyword(mode))));
 }
 
+// Reports that `argument` cannot be passed to an `out` or `modify`
+// parameter. `variable` is the variable it names, when it names one whole,
+// which says why: a `let`, or a parameter not passed by reference.
 void
 report_unwritable_output(ir_lower_context_t *context,
-                         parse_grammar_t *grammar, parse_tree_t *argument,
+                         parse_sym_entry_t *variable, parse_tree_t *argument,
                          th_mode mode, parse_sym_entry_t *callee,
                          core_string_t parameter)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
-    parse_sym_entry_t *variable = lvalue && lower
-        ? attached_symbol(grammar, lower->unit, lvalue) : nullptr;
     core_string_t target = describe_parameter_target(mode, callee, parameter);
     ir_span_t span = lower_span_for_tree(context, argument);
     if (variable && variable->kind == PARSE_SYM_PARAM
@@ -994,10 +993,11 @@ n00bb_attach_expression_shape(ir_lower_context_t *context,
                               parse_grammar_t *grammar,
                               parse_tree_t *expression, ir_value_t *value)
 {
+    // A variable read whole has the shape its declaration gave it.
+    (void)grammar;
+    (void)expression;
     if (!context || !value || ir_value_shape(value)) return true;
-    n00bb_lower_context_t *lower = context->user;
-    parse_sym_entry_t *symbol = attached_symbol(grammar,
-        lower ? lower->unit : nullptr, expression);
+    parse_sym_entry_t *symbol = ir_lower_read_variable(context, value);
     if (!symbol) return true;
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *binding = ir_lower_bound_value(context, symbol);

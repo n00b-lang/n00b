@@ -130,6 +130,14 @@ typedef struct parse_node_facts_t {
     core_string_t           unresolved_name;
     parse_node_resolution_t resolution;
     bool                    direct_symbol_reference;
+    // An assignment that introduces the variable it assigns: its name was
+    // not bound when name resolution reached it.
+    bool                    declares_binding;
+    // An assignment to `_`, which evaluates its value and discards it.
+    bool                    discards_value;
+    // The variable a `switch` or `typecase` narrows: its subject, when that
+    // names a variable or parameter.
+    parse_sym_entry_t      *narrowed_subject;
     bool                    index_address_access;
 } parse_node_facts_t;
 

@@ -6,9 +6,6 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
 static bool
 n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
                               ir_shape_t *shape, ir_span_t span);
-static ir_value_t *
-n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
-                        th_type *bound_type, ir_span_t span);
 
 bool
 n00bb_attach_symbol_array_shape(ir_lower_context_t *context,
@@ -323,125 +320,85 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
     return true;
 }
 
-bool
-n00bb_has_index_store_target(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    core_string_t trait = {0}, method = {0};
-    if (index_dispatch_for_node(grammar, node, &trait, &method)
-        && (core_string_eq(trait, CORE_STRING_STATIC("Index_Write"))
-            || core_string_eq(trait,
-                              CORE_STRING_STATIC("Index_Slice_Write"))
-            || index_is_compound_target(grammar, node)))
-        return true;
-    for (size_t i = 0; node && !core_tree_is_leaf(node)
-            && i < core_tree_num_children(node); i++)
-        if (n00bb_has_index_store_target(grammar,
-                                         core_tree_child(node, i)))
-            return true;
-    return false;
-}
 
-static ir_value_t *
-n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
-                        th_type *bound_type, ir_span_t span)
-{
-    if (!bound_type) return nullptr;
-    if (!node)
-        return n00bb_emit_wrapping(context, IR_OP_OPTION_NONE, nullptr,
-                                   bound_type, span);
-    return ir_lower_node_value(context, node);
-}
-
-bool
-n00bb_lower_index_store_at(ir_lower_context_t *context,
-                           parse_grammar_t *grammar,
-                           parse_tree_t *site_node,
-                           parse_tree_t *target, parse_tree_t *source,
-                           ir_value_t *source_value)
+// Lowers `container[start:end]`, `container[start to end]` and their
+// open-ended forms as a read of the slice: `__slice` of the container with
+// the start and the end it excludes (an absent start is 0, an absent end the
+// container's length, and an included end is one more). The bounds as
+// written are kept on the read, so an assignment to the slice can store
+// through `__write_slice` with them instead (see n00bb_store_to).
+ir_value_t *
+n00bb_lower_slice_read(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *index_node, ir_value_t *container,
+                       th_type *result_type, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *index_node = n00bb_index_expression_node(grammar, target);
-    bool slice = nt_is(grammar, index_node
-        && core_tree_num_children(index_node) > 2
-            ? core_tree_child(index_node, 2) : nullptr, CORE_STRING_STATIC("slice-contents"));
-    parse_tree_t *contents = index_node
-        && core_tree_num_children(index_node) > 2
-            ? core_tree_child(index_node, 2) : nullptr;
-    parse_tree_t *receiver_node = index_node
-        && core_tree_num_children(index_node)
-            ? core_tree_child(index_node, 0) : nullptr;
-    parse_tree_t *index_arg = child_nt(grammar, contents,
-                                       CORE_STRING_STATIC("expression"));
-    ir_value_t *arguments[5] = {
-        receiver_node ? ir_lower_node_value(context, receiver_node) : nullptr,
-        nullptr, nullptr, nullptr,
-        source_value ? source_value
-                     : source ? ir_lower_node_value(context, source) : nullptr,
-    };
-    if (!slice) {
-        arguments[1] = index_arg
-            ? ir_lower_node_value(context, index_arg) : nullptr;
-        arguments[2] = arguments[4];
-    }
-    else {
-        parse_tree_t *bounds[2] = {0};
-        size_t position = 0;
-        bool inclusive = false, separator_seen = false;
-        for (size_t i = 0; contents && i < core_tree_num_children(contents);
-             i++) {
-            parse_tree_t *part = core_tree_child(contents, i);
-            if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
-                || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
-                position = 1;
-                separator_seen = true;
-                inclusive = core_string_eq(first_token_text(part),
-                                           CORE_STRING_STATIC("to"));
-            }
-            else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
-                bounds[position] = part;
+    parse_tree_t *contents = core_tree_num_children(index_node) > 2
+        ? core_tree_child(index_node, 2) : nullptr;
+    parse_tree_t *bounds[2] = {0};
+    size_t position = 0;
+    bool inclusive = false;
+    for (size_t i = 0; contents && i < core_tree_num_children(contents);
+         i++) {
+        parse_tree_t *part = core_tree_child(contents, i);
+        if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
+            || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
+            position = 1;
+            inclusive = core_string_eq(first_token_text(part),
+                                       CORE_STRING_STATIC("to"));
         }
-        th_type *integer = n00bb_ir_builtin_type(context->module,
-                                                 CORE_STRING_STATIC("int"));
-        th_type *bound_type = integer
-            ? th_option(ir_module_types(context->module), integer) : nullptr;
-        ir_span_t span = lower_span_for_tree(context, contents);
-        arguments[1] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[0], bound_type, span)
-            : nullptr;
-        arguments[2] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[1], bound_type, span)
-            : nullptr;
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
-        ir_instr_t *flag = separator_seen && bool_type
-            ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
-        if (flag && ir_lower_set_temp_dest(context, flag,
-            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
-            && ir_instr_operand_int(flag, inclusive ? 1 : 0)) {
-            arguments[3] = flag->dest;
-        }
+        else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
+            bounds[position] = part;
     }
-    ir_value_t *operands[4] = {arguments[0], arguments[1], arguments[2],
-                               arguments[3]};
-    if (!slice) operands[2] = arguments[4];
-    else operands[3] = arguments[4];
-    size_t count = slice ? 4 : 3;
-    bool complete = lower != nullptr;
-    for (size_t i = 0; i < count; i++) complete &= operands[i] != nullptr;
-    ir_value_t *written = complete
-        ? n00bb_dispatch(context,
-              slice ? CORE_STRING_STATIC("__write_slice")
-                    : CORE_STRING_STATIC("__write"),
-              operands, count,
-              th_name(ir_module_types(context->module),
-                      CORE_STRING_STATIC("nil")),
-              lower_span_for_tree(context, site_node))
-        : nullptr;
-    if (!written || !ir_annot_set(lower->ir_context, &written->def->annots,
-            (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
-                         .kind = IR_ANNOT_BOOL, .b = true})) {
-        lower_internal(context, lower_span_for_tree(context, site_node),
-            "could not lower a dispatched indexed assignment");
-        return false;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *integer = n00bb_ir_builtin_type(context->module,
+                                             CORE_STRING_STATIC("int"));
+    ir_value_t *start = bounds[0] ? ir_lower_node_value(context, bounds[0])
+                                  : nullptr;
+    ir_value_t *end = bounds[1] ? ir_lower_node_value(context, bounds[1])
+                                : nullptr;
+    if ((bounds[0] && !start) || (bounds[1] && !end) || !integer)
+        return nullptr;
+    ir_value_t *from = start;
+    if (!from) {
+        ir_instr_t *zero = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+        from = zero && ir_lower_set_temp_dest(context, zero,
+                CORE_STRING_STATIC("__n00bb_slice_start_"), integer)
+            && ir_instr_operand_int(zero, 0) ? zero->dest : nullptr;
     }
-    return true;
+    ir_value_t *to = end;
+    if (to && inclusive) {
+        ir_instr_t *one = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                    span);
+        ir_value_t *step = one && ir_lower_set_temp_dest(context, one,
+                CORE_STRING_STATIC("__n00bb_slice_step_"), integer)
+            && ir_instr_operand_int(one, 1) ? one->dest : nullptr;
+        to = step ? n00bb_emit_binary_ir(context, IR_OP_ADD, integer, to,
+                                         step, span) : nullptr;
+    }
+    else if (!to) {
+        th_type *uint = n00bb_ir_builtin_type(context->module,
+                                              CORE_STRING_STATIC("uint"));
+        ir_value_t *length = uint ? n00bb_dispatch(context,
+            CORE_STRING_STATIC("len"), &container, 1, uint, span) : nullptr;
+        to = length ? n00bb_emit_temp(context, IR_OP_CAST, integer, length,
+                                      span) : nullptr;
+    }
+    if (!from || !to) return nullptr;
+    ir_value_t *operands[] = {container, from, to};
+    ir_value_t *read = n00bb_dispatch(context, CORE_STRING_STATIC("__slice"),
+        operands, 3, result_type ? result_type : th_var(types), span);
+    ir_annots_t *annots = read ? &read->def->annots : nullptr;
+    ir_ctx_t *ctx = lower->ir_context;
+    return read
+        && ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = N00BB_SLICE_TARGET_KEY, .kind = IR_ANNOT_BOOL,
+               .b = inclusive})
+        && (!start || ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = N00BB_SLICE_START_KEY, .kind = IR_ANNOT_VALUE,
+               .v = start}))
+        && (!end || ir_annot_set(ctx, annots, (ir_annot_t){
+               .key = N00BB_SLICE_END_KEY, .kind = IR_ANNOT_VALUE, .v = end}))
+        ? read : nullptr;
 }

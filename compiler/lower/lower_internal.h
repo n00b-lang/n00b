@@ -296,6 +296,9 @@ typedef struct {
     ir_local_t *iteration_cursor;
     core_list_t(parse_sym_entry_ptr_t) iteration_bindings;
     void *binding_checkpoint;
+    // The bindings when the loop began: a variable bound since then is
+    // declared inside the loop.
+    void *entry_bindings;
     bool cleanup_active;
     bool binding_scope_active;
     bool range_inclusive;
@@ -446,18 +449,17 @@ typedef struct {
 
 core_list_decl(n00bb_with_frame_t);
 
-// A place passed to an `out` or `modify` parameter. `symbol`, `local` and
-// `global` name it for the check that one call is not given the same place
-// twice. A place with no address (an element reached through its
-// container's accessors) is passed as the address of `temporary`, which is
-// written back to `index_target` once the call returns or fails.
+// A place passed to an `out` or `modify` parameter. When it is a whole
+// variable, `local` or `storage` (a parameter or global) names it, for the
+// check that one call is not given the same variable twice. An element a
+// container reaches through its accessors has no address, so it is passed as
+// the address of `temporary`, which is written back to `container` at
+// `index` once the call returns or fails.
 typedef struct {
-    parse_sym_entry_t *symbol;
     ir_local_t *local;
-    ir_value_t *global;
-    parse_grammar_t *grammar;
-    parse_tree_t *site_node;
-    parse_tree_t *index_target;
+    ir_value_t *storage;
+    ir_value_t *container;
+    ir_value_t *index;
     parse_tree_t *source_node;
     ir_shape_t *required_shape;
     ir_local_t *temporary;
@@ -523,7 +525,6 @@ struct n00bb_lower_context {
     core_list_t(n00bb_switch_frame_t) switches;
     core_list_t(n00bb_typecase_frame_t) typecases;
     core_list_t(n00bb_value_block_frame_t) value_blocks;
-    bool reference_write;
     bool write_back_open_index;
     core_dict_t node_types;
     bool node_types_ready;
@@ -647,7 +648,7 @@ mode_keyword(th_mode mode);
 
 void
 report_unwritable_output(ir_lower_context_t *context,
-                         parse_grammar_t *grammar, parse_tree_t *argument,
+                         parse_sym_entry_t *variable, parse_tree_t *argument,
                          th_mode mode, parse_sym_entry_t *callee,
                          core_string_t parameter);
 
@@ -1091,19 +1092,11 @@ bool
 n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state);
 
-bool
-n00bb_mark_reference_target(ir_lower_context_t *context,
-                            parse_grammar_t *grammar,
-                            parse_tree_t *owner, parse_tree_t *target);
 
 bool
 n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state);
 
-bool
-n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
-                               parse_visit_t *visit, bool entering,
-                               void *state);
 
 ir_lower_result_t
 n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
@@ -1166,23 +1159,6 @@ ir_value_t *
 n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
                   ir_value_t *value, th_type *target, ir_span_t span);
 
-typedef struct {
-    parse_sym_entry_t *symbol;
-    ir_local_t *local;
-    ir_value_t *global;
-    ir_value_t *address;
-    parse_tree_t *index_target;
-    parse_tree_t *lvalue;
-    th_type *type;
-} n00bb_out_location_t;
-
-n00bb_out_location_t
-n00bb_out_argument_location(ir_lower_context_t *context,
-                            parse_grammar_t *grammar, parse_tree_t *argument);
-
-ir_value_t *
-n00bb_out_location_read(ir_lower_context_t *context, parse_tree_t *argument,
-                        const n00bb_out_location_t *location, ir_span_t span);
 
 ir_lower_result_t
 n00bb_emit_intrinsic(ir_lower_context_t *context, parse_sym_entry_t *symbol,
@@ -1246,23 +1222,11 @@ bool
 n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state);
 
-bool
-n00bb_has_index_store_target(parse_grammar_t *grammar, parse_tree_t *node);
 
-bool
-n00bb_lower_index_store_at(ir_lower_context_t *context,
-                           parse_grammar_t *grammar,
-                           parse_tree_t *site_node,
-                           parse_tree_t *target, parse_tree_t *source,
-                           ir_value_t *source_value);
 
 bool
 n00bb_shape_has_constraints(ir_shape_t *shape);
 
-parse_sym_entry_t *
-n00bb_assignment_root_symbol(parse_grammar_t *grammar,
-                             core_translation_unit_t *unit,
-                             parse_tree_t *target);
 
 ir_value_t *
 n00bb_reference_view(ir_lower_context_t *context, ir_value_t *value,
@@ -1281,52 +1245,78 @@ n00bb_reference_placeholder(ir_lower_context_t *context,
 bool
 n00bb_from_reference_address(ir_value_t *value);
 
-bool
-n00bb_call_argument(parse_grammar_t *grammar, parse_tree_t *node);
 
-ir_value_t *
-n00bb_record_field_address(ir_lower_context_t *context,
-                           parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           parse_tree_t *node, ir_span_t span);
 
 // A container element reached through `__read` has no address. Assigning
 // to one of its fields copies the element into a temporary, updates the
 // field there, and stores the temporary back through `__write`.
+
+
+
+ir_value_t *
+n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
+               ir_span_t span);
+
+ir_value_t *
+n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *node, ir_span_t span);
+
+ir_value_t *
+n00bb_lower_slice_read(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *index_node, ir_value_t *container,
+                       th_type *result_type, ir_span_t span);
+
+ir_value_t *
+n00bb_field_storage(ir_lower_context_t *context, ir_value_t *base,
+                    core_string_t name, th_type *type, ir_span_t span);
+
+// An element a container reaches through `__read` has no address, so writing
+// part of it goes through `element`, a copy, which is stored back to the
+// container at `index` with `__write` afterwards. The container is read
+// again from `container_place` then, when it has one (it may itself be such
+// a copy), and is the value `container` otherwise.
 typedef struct {
-    parse_tree_t *index_node;
+    ir_value_t *container;
+    ir_value_t *container_place;
+    ir_value_t *index;
     ir_local_t *element;
-} n00bb_index_writeback_t;
+} n00bb_element_writeback_t;
+
+core_list_decl(n00bb_element_writeback_t);
 
 ir_value_t *
-n00bb_index_writeback_place(ir_lower_context_t *context,
-                            parse_grammar_t *grammar,
-                            core_translation_unit_t *unit, parse_tree_t *node,
-                            n00bb_index_writeback_t *writeback, ir_span_t span);
+n00bb_place_for_write(ir_lower_context_t *context, ir_value_t *value,
+                      ir_span_t span,
+                      core_list_t(n00bb_element_writeback_t) *writebacks);
 
 bool
-n00bb_index_writeback_finish(ir_lower_context_t *context,
-                             parse_grammar_t *grammar, parse_tree_t *site,
-                             const n00bb_index_writeback_t *writeback,
-                             ir_span_t span);
-
-ir_value_t *
-n00bb_addressable_expression_address(ir_lower_context_t *context,
-                                     parse_grammar_t *grammar,
-                                     core_translation_unit_t *unit,
-                                     parse_tree_t *node, ir_span_t span);
+n00bb_emit_writebacks(ir_lower_context_t *context,
+                      core_list_t(n00bb_element_writeback_t) *writebacks,
+                      ir_span_t span);
 
 bool
-n00bb_lower_field_receiver(ir_lower_context_t *context, parse_visit_t *visit,
-                           bool entering, void *state);
+n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
+               ir_value_t *value, bool checked, ir_span_t span);
+
+bool
+n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage);
+
+ir_shape_t *
+n00bb_place_shape(ir_value_t *place);
+
+bool
+n00bb_place_writable(const ir_value_t *place);
+
+bool
+n00bb_accessed_element(const ir_value_t *value, ir_value_t **container,
+                       ir_value_t **index);
+
+
 
 bool
 n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state);
 
-bool
-n00bb_simple_assignment_field_target(parse_grammar_t *grammar,
-                                     parse_tree_t *node);
 
 
 ir_lower_result_t
@@ -1337,9 +1327,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
                                 th_type *result_type, ir_span_t span,
                                 void *state);
 
-bool
-n00bb_capture_compound_target(ir_lower_context_t *context,
-                              parse_visit_t *visit, bool entering, void *state);
 
 const parse_sym_entry_t *
 function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node);

@@ -11,12 +11,9 @@ static ir_lower_result_t
 n00bb_lower_referent_read(ir_lower_context_t *context, parse_visit_t *visit,
                           th_type *result_type, ir_span_t span)
 {
-    if (n00bb_simple_assignment_field_target(visit->grammar, visit->node)
-        || n00bb_reference_target(visit->grammar, visit->node))
-        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     n00bb_lower_context_t *lower = context->user;
-    ir_value_t *address = lower ? n00bb_record_field_address(context,
-        visit->grammar, lower->unit, visit->node, span) : nullptr;
+    ir_value_t *address = lower ? n00bb_referent_address(context,
+        visit->grammar, visit->node, span) : nullptr;
     if (!address)
         return lower_report(context, N00B_DIAG_VALUE_NEEDS_REFERENCE, span,
             N00B_TEXT_VALUE_READS_THROUGH_A_REFERENCE,
@@ -36,8 +33,6 @@ static ir_lower_result_t
 n00bb_lower_tuple_field(ir_lower_context_t *context, parse_visit_t *visit,
                         th_type *result_type, ir_span_t span)
 {
-    if (n00bb_simple_assignment_field_target(visit->grammar, visit->node))
-        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     parse_tree_t *parent = parse_tree_parent(visit->node);
     if (parent && core_tree_num_children(parent) > 1
         && core_tree_child(parent, 0) == visit->node
@@ -118,10 +113,6 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 lower->unit, visit->node, member)) {
             parse_tree_t *base_node = core_tree_child(visit->node, 0);
             ir_value_t *base = ir_lower_node_value(context, base_node);
-            parse_sym_entry_t *base_symbol = attached_symbol(
-                visit->grammar, lower->unit, base_node);
-            if (!base && base_symbol)
-                base = ir_lower_bound_value(context, base_symbol);
             n00bb_flagset_value_t *value = member->has_comptime_value
                 ? member->comptime_value : nullptr;
             ir_instr_t *mask = value
@@ -185,59 +176,38 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
     if (core_tree_num_children(visit->node) != 3)
         return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
-    if (n00bb_variant_arm_symbol(visit->grammar, resolution.target.symbol)
-        && n00bb_assignment_target(visit->grammar, visit->node, nullptr))
-        return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
-    if (n00bb_reference_target(visit->grammar, visit->node))
-        return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
     if (th_option_item(resolution.target.symbol->type)
         && th_kind_of(th_resolve(result_type)) == TH_FUNCTION)
         return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
     n00bb_lower_context_t *lower = context->user;
     parse_sym_entry_t *member = resolution.target.symbol;
     if (member->is_field) {
-        if (n00bb_simple_assignment_field_target(visit->grammar,
-                                                 visit->node))
-            return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
         parse_tree_t *base_node = core_tree_num_children(visit->node)
             ? core_tree_child(visit->node, 0) : nullptr;
-        if (base_node && referent_access_node(visit->grammar, base_node)) {
-            ir_value_t *address = n00bb_record_field_address(context,
-                visit->grammar, lower->unit, visit->node, span);
-            ir_instr_t *load = address
-                ? ir_lower_emit_instruction(context, IR_OP_LOAD, span)
-                : nullptr;
-            if (!load || !ir_lower_set_temp_dest(context, load,
-                CORE_STRING_STATIC("__n00bb_"), result_type)
-                || !ir_instr_operand_value(load, address)
-                || !n00bb_set_reference_access(lower->ir_context,
-                                               load->dest, result_type))
-                return lower_internal(context, span,
-                    "could not load a field through a reference");
-            return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
-        }
         ir_value_t *base = base_node
             ? ir_lower_node_value(context, base_node) : nullptr;
-        parse_sym_entry_t *base_symbol = base_node && lower
-            ? attached_symbol(visit->grammar, lower->unit, base_node) : nullptr;
-        if (!base && base_symbol)
-            base = ir_lower_bound_value(context, base_symbol);
         if (!base) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-        if (th_kind_of(th_resolve(base->type)) == TH_INDIRECTION
-            || n00bb_reference_definition(ir_module_types(context->module),
-                                          base->type)) {
-            ir_value_t *address = n00bb_record_field_address(context,
-                visit->grammar, lower->unit, visit->node, span);
-            ir_instr_t *load = address
-                ? ir_lower_emit_instruction(context, IR_OP_LOAD, span)
-                : nullptr;
+        // A field kept in storage (through a reference or object) is loaded
+        // alone. A variant's arm is always taken out of the variant's value.
+        bool arm = n00bb_variant_arm_symbol(visit->grammar, member);
+        ir_value_t *address = arm ? nullptr
+            : n00bb_field_storage(context, base, member->name, result_type,
+                                  span);
+        ir_shape_t *shape = parse_sym_binding(member,
+            CORE_STRING_STATIC("ir.array-shape"));
+        if (shape && !ir_value_set_shape(address, shape))
+            return lower_internal(context, span,
+                "could not attach a field's array shape");
+        if (address) {
+            ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD,
+                                                         span);
             if (!load || !ir_lower_set_temp_dest(context, load,
                 CORE_STRING_STATIC("__n00bb_"), result_type)
                 || !ir_instr_operand_value(load, address)
                 || !n00bb_set_reference_access(lower->ir_context,
                                                load->dest, result_type))
                 return lower_internal(context, span,
-                    "could not load a referenced record field");
+                    "could not load a field from its storage");
             return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
         }
         ir_instr_t *extract = ir_lower_emit_instruction(context, IR_OP_EXTRACT,
@@ -247,7 +217,11 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_value(extract, base)
             || !ir_instr_operand_name(extract, member->name)
             || !n00bb_set_reference_access(lower->ir_context,
-                                           extract->dest, result_type))
+                                           extract->dest, result_type)
+            || (shape && !ir_value_set_shape(extract->dest, shape))
+            || (arm && !ir_annot_set(lower->ir_context, &extract->annots,
+                    (ir_annot_t){.key = N00BB_VARIANT_ARM_KEY,
+                                 .kind = IR_ANNOT_BOOL, .b = true})))
             return lower_internal(context, span,
                                "could not emit a record field read");
         return (ir_lower_result_t){IR_LOWER_VALUE, extract->dest};

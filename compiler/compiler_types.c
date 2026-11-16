@@ -3808,7 +3808,11 @@ static bool check_empty_lists(th_ctx *types,
     return ok;
 }
 
-static bool reaches_root(const ir_value_t *address)
+// Whether a store to `address` writes the variable it starts from. A field
+// of an object is in the storage its handle refers to, not in the variable
+// holding the handle, so a field taken where an object is kept leaves the
+// variable unchanged.
+static bool reaches_root(th_ctx *types, const ir_value_t *address)
 {
     while (address && address->kind != IR_VAL_GLOBAL) {
         const ir_instr_t *def = address->def;
@@ -3823,6 +3827,14 @@ static bool reaches_root(const ir_value_t *address)
             return false;
         }
         address = ir_operand_value(&def->operands[0]);
+
+        th_type *held = address ? th_resolve(address->type) : nullptr;
+
+        if (held && th_kind_of(held) == TH_INDIRECTION
+            && n00bb_reference_definition(
+                types, th_resolve(th_ind_referent(held)))) {
+            return false;
+        }
     }
 
     return address != nullptr;
@@ -3888,7 +3900,8 @@ static bool check_write_site(core_translation_unit_t  *unit,
               || root->mutability == PARSE_SYM_CONST;
 
     if (!frozen || site->store->n_operands != 2
-        || !reaches_root(ir_operand_value(&site->store->operands[0]))) {
+        || !reaches_root(tu_state(unit)->types,
+                         ir_operand_value(&site->store->operands[0]))) {
         return true;
     }
 

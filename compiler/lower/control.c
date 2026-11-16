@@ -1996,10 +1996,9 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
                                 CORE_STRING_STATIC("typecase-value-expr"));
         parse_cf_label_t *label = parse_cf_label_lookup(
             tu_state(lower->unit)->annotations, visit->node);
-        parse_tree_t *subject_node = label
-            ? n00bb_simple_lvalue(label->cond) : nullptr;
-        parse_sym_entry_t *symbol = subject_node
-            ? parse_tree_sym(subject_node) : nullptr;
+        // Name resolution records the variable a typecase narrows.
+        parse_tree_t *subject_node = label ? label->cond : nullptr;
+        parse_sym_entry_t *symbol = parse_tree_narrowed_subject(visit->node);
         if (!label || !subject_node || !symbol
             || (symbol->kind != PARSE_SYM_VARIABLE
                 && symbol->kind != PARSE_SYM_PARAM)) {
@@ -2308,6 +2307,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (jump) jump->span = lower_span_for_tree(context, visit->node);
     core_list_push(lower->loops, ((n00bb_loop_frame_t){
         .node = visit->node,
+        .entry_bindings = ir_lower_bindings_checkpoint(context),
         .label = n00bb_control_label(visit->grammar, visit->node,
                                     while_loop
                                         ? CORE_STRING_STATIC("labeled-while")
@@ -2981,10 +2981,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         tu_state(lower->unit)->annotations, visit->node);
     if (!label || label->kind != PARSE_CF_SWITCH || !label->cond
         || !label->then_body) return false;
-    parse_tree_t *subject_lvalue = n00bb_simple_lvalue(label->cond);
-    parse_sym_entry_t *subject = subject_lvalue
-        ? attached_symbol(visit->grammar, lower->unit, subject_lvalue)
-        : nullptr;
+    parse_sym_entry_t *subject = parse_tree_narrowed_subject(visit->node);
     n00bb_switch_frame_t frame = {
         .node = visit->node,
         .label = n00bb_control_label(visit->grammar, visit->node,
@@ -3055,7 +3052,6 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_entry_t *arm = attached_symbol(visit->grammar, lower->unit,
                                              visit->node);
     if (!n00bb_variant_arm_symbol(visit->grammar, arm)
-        || n00bb_assignment_target(visit->grammar, visit->node, nullptr)
         || ir_lower_node_value(context, visit->node)) return true;
     parse_tree_t *receiver_node = core_tree_child(visit->node, 0);
     ir_value_t *value = ir_lower_node_value(context, receiver_node);
@@ -3071,6 +3067,9 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_node_result_type(context, visit->node))
         || !ir_instr_operand_value(extract, value)
         || !ir_instr_operand_name(extract, arm->name)
+        || !ir_annot_set(lower->ir_context, &extract->annots,
+               (ir_annot_t){.key = N00BB_VARIANT_ARM_KEY,
+                            .kind = IR_ANNOT_BOOL, .b = true})
         || !ir_lower_set_node_value(context, visit->node, extract->dest)) {
         lower_internal(context, span, "could not lower variant payload access");
         return false;

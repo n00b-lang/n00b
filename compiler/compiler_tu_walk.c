@@ -392,6 +392,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             "could not cache array type dimensions");
         return;
     }
+    if (!entering && (NT_IS(grammar, node, "switch-stmt")
+                      || NT_IS(grammar, node, "switch-value-expr")
+                      || NT_IS(grammar, node, "typecase-stmt")
+                      || NT_IS(grammar, node, "typecase-value-expr")))
+        (void)n00bb_narrowed_subject(grammar, unit, node);
     if (!entering && !cache_typecase_arm_types(grammar, state, node)) {
         n00bb_tu_internal_error(unit, node, "checking declarations",
             "could not cache typecase arm types");
