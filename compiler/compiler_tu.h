@@ -497,6 +497,9 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) mark_annotations;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
+    // Calls, `ref`s and unwraps, classified once names are resolved
+    // (n00bb_classify_calls).
+    core_list_t(parse_tree_ptr_t) call_nodes;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
@@ -610,10 +613,6 @@ void collect_positional_nodes(parse_grammar_t *grammar,
 parse_tree_t *n00bb_call_positional_argument(parse_grammar_t *grammar,
                                              parse_tree_t *call, size_t index,
                                              size_t arity);
-bool n00bb_call_literal_argument(parse_grammar_t *grammar,
-                                 n00bb_tu_state_t *state, parse_tree_t *call,
-                                 size_t index, size_t arity,
-                                 core_string_t *out);
 bool n00bb_scalar_role_is(th_type *type, ir_role_t role);
 bool n00bb_flagset_type(core_translation_unit_t *unit,
                         n00bb_tu_state_t *state, th_type *type,

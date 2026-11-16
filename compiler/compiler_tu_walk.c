@@ -392,6 +392,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             "could not cache array type dimensions");
         return;
     }
+    n00bb_emit_t emit;
+    if (!entering && (n00bb_call_operator_node(grammar, node)
+                      || (n00bb_node_emit(grammar, node, &emit)
+                          && core_string_eq(emit.action,
+                                            CORE_STRING_STATIC("call")))))
+        core_list_push(state->call_nodes, node);
     if (!entering && (NT_IS(grammar, node, "switch-stmt")
                       || NT_IS(grammar, node, "switch-value-expr")
                       || NT_IS(grammar, node, "typecase-stmt")

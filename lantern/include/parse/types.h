@@ -138,6 +138,21 @@ typedef struct parse_node_facts_t {
     // The variable a `switch` or `typecase` narrows: its subject, when that
     // names a variable or parameter.
     parse_sym_entry_t      *narrowed_subject;
+    // What name resolution found a call, a `ref` of a function, or an
+    // unwrap (`!`) of a call refers to: the function, and for a method call
+    // the receiver and the method's name. `call_callee` is the part of the
+    // call that names what is called, which is not evaluated as a value.
+    parse_sym_entry_t      *call_function;
+    void                   *call_receiver; // parse_tree_t *
+    void                   *call_callee;   // parse_tree_t *
+    core_string_t           call_method;
+    core_string_t           call_spelled;
+    bool                    call_classified;
+    bool                    call_unqualified;
+    bool                    call_propagated;
+    // A name that is called or referenced (`f()`, `ref f`), as opposed to
+    // used as a value.
+    bool                    names_called;
     bool                    index_address_access;
 } parse_node_facts_t;
 

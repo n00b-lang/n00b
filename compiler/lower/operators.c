@@ -1447,10 +1447,13 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     return ir_lower_set_node_value(context, visit->node, constant->dest);
 }
 
+// The function `ref` names, when its operand names one (recorded by name
+// resolution); the operand is returned in `operand_out`.
 static parse_sym_entry_t *
 referenced_function(ir_lower_context_t *context, parse_visit_t *visit,
                     parse_tree_t **operand_out)
 {
+    (void)context;
     parse_tree_t *operand = nullptr;
     for (size_t i = 0; !operand && i < core_tree_num_children(visit->node);
          i++) {
@@ -1458,17 +1461,8 @@ referenced_function(ir_lower_context_t *context, parse_visit_t *visit,
         if (!core_tree_is_leaf(child)) operand = child;
     }
     *operand_out = operand;
-    n00bb_lower_context_t *lower = context->user;
-    parse_sym_entry_t *target = operand && lower
-        ? attached_symbol(visit->grammar, lower->unit, operand) : nullptr;
-    if (!target || target->kind != PARSE_SYM_FUNCTION) return nullptr;
-    if (names_symbol_directly(operand)) return target;
-    parse_tree_t *member = member_access_node(visit->grammar, operand);
-    parse_tree_t *receiver = member && core_tree_num_children(member)
-        ? core_tree_child(member, 0) : nullptr;
-    return receiver && call_receiver_is_module(visit->grammar, lower->unit,
-                                               receiver)
-        ? target : nullptr;
+    parse_node_facts_t *facts = parse_tree_call_facts(visit->node);
+    return facts ? facts->call_function : nullptr;
 }
 
 bool
@@ -1611,12 +1605,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (!n00bb_unwrap_call_outcome(context, visit, outcome, span, &value,
                                    false))
         return false;
-    n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *callee = operand_node
-        && core_tree_num_children(operand_node)
-            ? core_tree_child(operand_node, 0) : nullptr;
-    parse_sym_entry_t *callee_symbol = lower && callee
-        ? attached_symbol(visit->grammar, lower->unit, callee) : nullptr;
+    parse_node_facts_t *unwrap_facts = parse_tree_call_facts(visit->node);
+    parse_sym_entry_t *callee_symbol = unwrap_facts
+        ? unwrap_facts->call_function : nullptr;
     ir_shape_t *return_shape = callee_symbol
         ? parse_sym_binding(callee_symbol,
             CORE_STRING_STATIC("ir.return-shape")) : nullptr;

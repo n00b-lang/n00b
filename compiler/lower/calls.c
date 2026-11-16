@@ -290,10 +290,15 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
 
 bool
 n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                 parse_tree_t *callee, parse_sym_entry_t *symbol)
+                 parse_tree_t *call_node, parse_sym_entry_t *symbol)
 {
-    core_string_t spelled = symbol ? symbol->name : (core_string_t){0};
-    bool unqualified = simple_identifier_expression(grammar, callee, &spelled);
+    (void)grammar;
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    parse_tree_t *callee = core_tree_num_children(call_node)
+        ? core_tree_child(call_node, 0) : nullptr;
+    bool unqualified = facts && facts->call_unqualified;
+    core_string_t spelled = unqualified ? facts->call_spelled
+        : symbol ? symbol->name : (core_string_t){0};
     n00bb_link_use_site_t *site = state && !unqualified
         ? link_use_site_for_node(state, callee) : nullptr;
     return state && symbol && n00bb_function_has_overloads(state, symbol,
@@ -325,7 +330,8 @@ n00bb_lower_overloaded_call(ir_lower_context_t *context,
                             th_type *result_type, ir_span_t span)
 {
     th_ctx *types = ir_module_types(context->module);
-    if (n00bb_call_is_error_propagated(grammar, call_node))
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    if (facts && facts->call_propagated)
         result_type = ir_call_outcome_type(context->module,
             th_func_with_error(types, result_type, th_var(types), nullptr, 0,
                                nullptr, nullptr, 0));
@@ -366,7 +372,8 @@ n00bb_lower_dispatch_call(ir_lower_context_t *context, parse_visit_t *visit,
 {
     parse_grammar_t *grammar = visit->grammar;
     th_ctx *types = ir_module_types(context->module);
-    bool propagated = n00bb_call_is_error_propagated(grammar, call_node);
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    bool propagated = facts && facts->call_propagated;
     th_type *outcome = propagated
         ? ir_call_outcome_type(context->module,
               th_func_with_error(types, result_type, th_var(types), nullptr,
@@ -845,28 +852,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     parse_cf_label_t *call_label = lower && caller_state
         ? parse_cf_label_lookup(caller_state->annotations, call_node) : nullptr;
-    parse_tree_t *callee = core_tree_num_children(call_node)
-        ? core_tree_child(call_node, 0) : nullptr;
-    parse_tree_t *member = member_access_node(visit->grammar, callee);
+    // Name resolution recorded what this call calls (n00bb_classify_calls).
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    if (!facts)
+        return lower_internal(context, span,
+                              "name resolution did not classify this call");
     parse_tree_t *receiver_node = index_call
-        ? (core_tree_num_children(call_node)
-            ? core_tree_child(call_node, 0) : nullptr)
-        : member && core_tree_num_children(member)
-            ? core_tree_child(member, 0) : nullptr;
-    bool member_call = member
-        && !call_receiver_is_module(visit->grammar, lower->unit,
-                                    receiver_node);
-    n00bb_link_use_site_t *member_site = member && caller_state
-        ? link_use_site_for_node(caller_state, member) : nullptr;
+        ? core_tree_child(call_node, 0) : facts->call_receiver;
+    bool member_call = !index_call && facts->call_receiver;
     n00bb_link_use_site_t *call_site = caller_state
         ? link_use_site_for_node(caller_state, call_node) : nullptr;
-    parse_sym_entry_t *symbol = index_call ? nullptr
-        : call_site && call_site->init_call ? call_site->symbol
-        : member_site && member_site->symbol
-            && member_site->symbol->kind == PARSE_SYM_FUNCTION
-            ? member_site->symbol
-        : callee && lower
-        ? attached_symbol(visit->grammar, lower->unit, callee) : nullptr;
+    parse_sym_entry_t *symbol = index_call ? nullptr : facts->call_function;
     bool callback_call = member_call
         && n00bb_builtin_callback_function(symbol);
     th_type *callback_type = callback_call && receiver_node && caller_state
@@ -882,8 +878,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             "callback call has no registered value representation");
     if (index_call || (member_call && !callback_call)) {
         core_string_t method = index_call ? index_method
-            : first_token_text(core_tree_child(member,
-                  core_tree_num_children(member) - 1));
+                                          : facts->call_method;
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
             : call_arguments_node(visit->grammar, call_node);
@@ -902,9 +897,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_entry_t *bound = symbol;
     if (symbol) symbol = canonical_symbol(symbol);
     if (symbol && symbol->kind != PARSE_SYM_FUNCTION) symbol = nullptr;
-    if (symbol && n00bb_overloaded(visit->grammar, caller_state,
-            core_tree_num_children(call_node) ? core_tree_child(call_node, 0)
-                                              : nullptr,
+    if (symbol && n00bb_overloaded(visit->grammar, caller_state, call_node,
             bound->kind == PARSE_SYM_FUNCTION ? bound : symbol)) {
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
@@ -1292,9 +1285,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         && argument_by_parameter[0]
         ? ir_lower_node_value(context, argument_by_parameter[0]) : nullptr;
     core_string_t query_name = {0};
-    if (query && parameter_count == 2)
-        (void)n00bb_call_literal_argument(visit->grammar, caller_state,
-                                          call_node, 1, 2, &query_name);
+    ir_value_t *query_named = query && parameter_count == 2
+            && argument_by_parameter[1]
+        ? ir_lower_node_value(context, argument_by_parameter[1]) : nullptr;
+    size_t query_name_len = 0;
+    const uint8_t *query_name_bytes = query_named && query_named->def
+            && query_named->def->op == IR_OP_CONST
+        ? ir_instr_const_bytes(query_named->def, &query_name_len) : nullptr;
+    if (query_name_bytes)
+        query_name = core_string_borrow((const char *)query_name_bytes,
+                                        query_name_len);
     core_free(argument_types);
     core_list_free(actuals);
     core_list_free(rest_values);
@@ -1872,17 +1872,6 @@ n00bb_operator_error_text(ir_lower_context_t *context, ir_diagcode_t code,
     return false;
 }
 
-bool
-names_symbol_directly(parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        if (parse_tree_is_direct_symbol_reference(node)) return true;
-        if (core_tree_num_children(node) != 1) return false;
-        node = core_tree_child(node, 0);
-    }
-    return false;
-}
-
 static core_diag_location_t
 declared_callee_location(ir_lower_context_t *context, const ir_func_t *callee,
                          core_string_t name)
@@ -1947,13 +1936,10 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         if (success) *success = outcome;
         return true;
     }
-    n00bb_lower_context_t *unwrap_lower = context->user;
-    parse_tree_t *operand = !complete && core_tree_num_children(visit->node)
-        ? core_tree_child(visit->node, 0) : nullptr;
-    parse_sym_entry_t *infallible = operand && unwrap_lower
-            && core_tree_num_children(operand)
-        ? attached_symbol(visit->grammar, unwrap_lower->unit,
-                          core_tree_child(operand, 0)) : nullptr;
+    parse_node_facts_t *unwrap_facts = !complete
+        ? parse_tree_call_facts(visit->node) : nullptr;
+    parse_sym_entry_t *infallible = unwrap_facts
+        ? unwrap_facts->call_function : nullptr;
     if (infallible && infallible->kind == PARSE_SYM_FUNCTION) {
         lower_report(context, N00B_DIAG_PROPAGATE_INFALLIBLE, span,
                      N00B_TEXT_CANNOT_FAIL_SO_THIS_HAS,

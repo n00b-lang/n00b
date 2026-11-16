@@ -4460,3 +4460,157 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
     return true;
 }
 
+
+static bool
+classified_names_direct(parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (parse_tree_is_direct_symbol_reference(node)) return true;
+        if (core_tree_num_children(node) != 1) return false;
+        node = core_tree_child(node, 0);
+    }
+    return false;
+}
+
+// Marks `node`, and the nodes it is made of alone, as naming something
+// called or referenced rather than read as a value.
+static void
+mark_names_called(parse_tree_t *node)
+{
+    for (size_t depth = 0; node && !core_tree_is_leaf(node) && depth < 64;
+         depth++) {
+        parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+        if (facts) facts->names_called = true;
+        if (core_tree_num_children(node) != 1) return;
+        node = core_tree_child(node, 0);
+    }
+}
+
+// The function `operand` names, when it names one: directly, or as a
+// module's member.
+static parse_sym_entry_t *
+named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
+               parse_tree_t *operand)
+{
+    parse_sym_entry_t *target = operand
+        ? attached_symbol(grammar, unit, operand) : nullptr;
+    if (!target || target->kind != PARSE_SYM_FUNCTION) return nullptr;
+    if (classified_names_direct(operand)) return target;
+    parse_tree_t *member = member_access_node(grammar, operand);
+    parse_tree_t *receiver = member && core_tree_num_children(member)
+        ? core_tree_child(member, 0) : nullptr;
+    return receiver && call_receiver_is_module(grammar, unit, receiver)
+        ? target : nullptr;
+}
+
+// Whether `node` is a `ref` or unwrap (`!`) operator, which name
+// resolution classifies like a call.
+bool
+n00bb_call_operator_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    const parse_rule_t *rule = node && !core_tree_is_leaf(node)
+        ? parse_tree_rule(grammar, node) : nullptr;
+    parse_annotation_t *operator = rule
+        ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR) : nullptr;
+    return operator
+        && (core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref"))
+            || core_string_eq(operator->op_kind,
+                              CORE_STRING_STATIC("unwrap_result")));
+}
+
+static void
+classify_operator(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                  parse_tree_t *node)
+{
+    const parse_rule_t *rule = parse_tree_rule(grammar, node);
+    parse_annotation_t *operator = rule
+        ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR) : nullptr;
+    if (!operator) return;
+    parse_node_facts_t *facts = nullptr;
+    if (core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref"))) {
+        parse_tree_t *operand = nullptr;
+        for (size_t i = 0; !operand && i < core_tree_num_children(node); i++)
+            if (!core_tree_is_leaf(core_tree_child(node, i)))
+                operand = core_tree_child(node, i);
+        parse_sym_entry_t *function = named_function(grammar, unit, operand);
+        if (!function || !(facts = parse_tree_facts_for_update(node))) return;
+        facts->call_classified = true;
+        facts->call_function = function;
+        facts->call_callee = operand;
+        mark_names_called(operand);
+    }
+    else if (core_string_eq(operator->op_kind,
+                            CORE_STRING_STATIC("unwrap_result"))) {
+        parse_tree_t *operand = core_tree_num_children(node)
+            ? core_tree_child(node, 0) : nullptr;
+        parse_tree_t *callee = operand && core_tree_num_children(operand)
+            ? core_tree_child(operand, 0) : nullptr;
+        if (!(facts = parse_tree_facts_for_update(node))) return;
+        facts->call_classified = true;
+        facts->call_function = callee ? attached_symbol(grammar, unit, callee)
+                                       : nullptr;
+    }
+}
+
+static void
+classify_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
+              n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+    if (!facts) return;
+    facts->call_classified = true;
+    facts->call_propagated = n00bb_call_is_error_propagated(grammar, node);
+    bool slice = false;
+    if (n00bb_index_node(grammar, node, &slice)) return;
+    parse_tree_t *callee = core_tree_num_children(node)
+        ? core_tree_child(node, 0) : nullptr;
+    parse_tree_t *member = member_access_node(grammar, callee);
+    parse_tree_t *receiver = member && core_tree_num_children(member)
+        ? core_tree_child(member, 0) : nullptr;
+    bool method = member && !call_receiver_is_module(grammar, unit, receiver);
+    n00bb_link_use_site_t *call_site = link_use_site_for_node(state, node);
+    n00bb_link_use_site_t *member_site = member
+        ? link_use_site_for_node(state, member) : nullptr;
+    facts->call_function = call_site && call_site->init_call
+        ? call_site->symbol
+        : member_site && member_site->symbol
+            && member_site->symbol->kind == PARSE_SYM_FUNCTION
+            ? member_site->symbol
+        : callee ? attached_symbol(grammar, unit, callee) : nullptr;
+    facts->call_receiver = method ? receiver : nullptr;
+    facts->call_method = method
+        ? first_token_text(core_tree_child(member,
+              core_tree_num_children(member) - 1))
+        : (core_string_t){0};
+    facts->call_callee = method
+        ? core_tree_child(member, core_tree_num_children(member) - 1)
+        : callee;
+    core_string_t spelled = {0};
+    facts->call_unqualified = callee
+        && simple_identifier_expression(grammar, callee, &spelled);
+    facts->call_spelled = spelled;
+    mark_names_called(callee);
+}
+
+// Records, for every call, `ref` and unwrap, what name resolution found it
+// refers to (the call_* facts on its node), so that lowering reads those
+// facts instead of working them out from the shape of the tree.
+bool
+n00bb_classify_calls(parse_grammar_t *grammar,
+                     core_translation_unit_t *const *units, size_t count)
+{
+    for (size_t u = 0; u < count; u++) {
+        core_translation_unit_t *unit = units[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state) continue;
+        for (size_t i = 0; i < state->call_nodes.len; i++) {
+            parse_tree_t *node = state->call_nodes.data[i];
+            if (n00bb_call_operator_node(grammar, node))
+                classify_operator(grammar, unit, node);
+            else
+                classify_call(grammar, unit, state, node);
+        }
+        state->call_nodes.len = 0;
+    }
+    return true;
+}

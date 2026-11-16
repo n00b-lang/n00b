@@ -33,11 +33,7 @@ static ir_lower_result_t
 n00bb_lower_tuple_field(ir_lower_context_t *context, parse_visit_t *visit,
                         th_type *result_type, ir_span_t span)
 {
-    parse_tree_t *parent = parse_tree_parent(visit->node);
-    if (parent && core_tree_num_children(parent) > 1
-        && core_tree_child(parent, 0) == visit->node
-        && parse_tree_leaf_is(core_tree_child(parent, 1),
-                              CORE_STRING_STATIC("(")))
+    if (parse_tree_names_called(visit->node))
         return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     parse_tree_t *base_node = core_tree_child(visit->node, 0);
     ir_value_t *base = ir_lower_node_value(context, base_node);
@@ -51,27 +47,6 @@ n00bb_lower_tuple_field(ir_lower_context_t *context, parse_visit_t *visit,
     return field ? (ir_lower_result_t){IR_LOWER_VALUE, field}
                  : lower_internal(context, span,
                                   "could not emit a tuple field read");
-}
-
-static bool
-called_or_referenced(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    parse_tree_t *parent = parse_tree_parent(node);
-    while (parent && core_tree_num_children(parent) == 1) {
-        node = parent;
-        parent = parse_tree_parent(node);
-    }
-    const parse_rule_t *rule = parent ? parse_tree_rule(grammar, parent)
-                                      : nullptr;
-    if (!rule) return false;
-    parse_annotation_t *operator = parse_rule_find_annot(grammar, rule,
-        PARSE_ANNOT_OPERATOR);
-    if (operator && core_string_eq(operator->op_kind,
-                                   CORE_STRING_STATIC("ref")))
-        return true;
-    return parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
-        && core_tree_num_children(parent)
-        && core_tree_child(parent, 0) == node;
 }
 
 ir_lower_result_t
@@ -91,7 +66,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             && resolution.target.symbol
         ? canonical_symbol(resolution.target.symbol) : nullptr;
     if (named && named->kind == PARSE_SYM_FUNCTION
-        && !called_or_referenced(visit->grammar, visit->node)) {
+        && !parse_tree_names_called(visit->node)) {
         lower_report(context, N00B_DIAG_FUNCTION_NAME_AS_VALUE, span,
                      N00B_TEXT_FUNCTION_NAME_AS_VALUE,
                      N00BB_ARGS(ARG_TEXT(named->name)));

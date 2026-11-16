@@ -1194,9 +1194,6 @@ n00bb_operator_error_text(ir_lower_context_t *context, ir_diagcode_t code,
                               CORE_STRING_STATIC(literal))
 
 bool
-names_symbol_directly(parse_tree_t *node);
-
-bool
 n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *outcome, ir_span_t span,
                           ir_value_t **success, bool trap_unhandled);

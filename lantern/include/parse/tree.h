@@ -257,6 +257,21 @@ parse_tree_mark_declares_binding(parse_tree_t *node)
     return true;
 }
 
+static inline parse_node_facts_t *
+parse_tree_call_facts(parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->call_classified
+        ? parse_tree_facts_for_update(node) : nullptr;
+}
+
+static inline bool
+parse_tree_names_called(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->names_called;
+}
+
 static inline bool
 parse_tree_discards_value(const parse_tree_t *node)
 {

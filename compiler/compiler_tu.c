@@ -683,28 +683,6 @@ n00bb_call_positional_argument(parse_grammar_t *grammar, parse_tree_t *call,
 }
 
 bool
-n00bb_call_literal_argument(parse_grammar_t *grammar,
-                            n00bb_tu_state_t *state, parse_tree_t *call,
-                            size_t index, size_t arity, core_string_t *out)
-{
-    parse_tree_t *argument = n00bb_call_positional_argument(grammar, call,
-                                                            index, arity);
-    parse_token_info_t *token = argument
-        ? parse_tree_find_first_terminal(argument) : nullptr;
-    if (!token || !state
-        || !core_string_eq(parse_terminal_name(grammar,
-                                               parse_token_tid(token)),
-                           CORE_STRING_STATIC("STRING_LIT"))) return false;
-    core_buffer_t decoded = {0};
-    bool found = n00bb_decode_string_literal(first_token_text(argument),
-                                             &decoded);
-    if (found) *out = store_semantic_string(state,
-                                            core_buffer_string(&decoded));
-    core_buffer_release(&decoded);
-    return found;
-}
-
-bool
 collect_ordered_children(parse_tree_t *node,
                          core_list_t(parse_tree_ptr_t) *children)
 {
@@ -7225,6 +7203,7 @@ free_tu_state(void *data)
     core_list_free(state->module_top_level_statements);
     core_list_free(state->mark_annotations);
     core_list_free(state->assignment_patterns);
+    core_list_free(state->call_nodes);
     core_list_free(state->rewrite_sites);
     core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
@@ -7282,6 +7261,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->mark_annotations = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
+    state->call_nodes = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);

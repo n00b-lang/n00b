@@ -798,10 +798,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!frame->active || !node_is_within(visit->node, frame->node))
         return 0;
 
-    parse_tree_t *callee = core_tree_num_children(visit->node)
-        ? core_tree_child(visit->node, 0) : nullptr;
-    parse_sym_entry_t *symbol = attached_symbol(visit->grammar, lower->unit,
-                                                 callee);
+    parse_node_facts_t *facts = parse_tree_call_facts(visit->node);
+    parse_sym_entry_t *symbol = facts ? facts->call_function : nullptr;
     if (!context_symbol(visit->grammar, symbol)) return 0;
     core_translation_unit_t *owner = unit_for_symbol(visit->grammar,
                                                       lower->units, symbol);

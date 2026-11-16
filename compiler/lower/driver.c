@@ -258,6 +258,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             state->link_analysis = analysis;
         }
     }
+    ok = ok && n00bb_classify_calls(grammar, units.data, units.len);
     ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
     ok = ok && lowerer
         && ir_lowerer_register(lowerer, CORE_STRING_STATIC("binary"), n00bb_lower_binary,
