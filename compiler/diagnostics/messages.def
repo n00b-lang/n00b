@@ -492,6 +492,8 @@ N00B_TEXT(WRITE_A_FACTORY_FUNCTION_TO, "write a factory function to produce a va
 N00B_TEXT(WRITE_FUNC_FINALIZE_CONSUME_SELF, "write `func __finalize(consume self: Ref[T])`")
 N00B_TEXT(FINALIZE_CANNOT_FAIL, "`__finalize` cannot fail")
 N00B_TEXT(FINALIZE_RETURNS_BUT_IT_MUST, "`__finalize` returns `{0}`, but it must return no value")
+N00B_TEXT(FINALIZE_NOT_OBJECT, "`{0}` is not an `object`, so it cannot have a finalizer")
+N00B_TEXT(DECLARE_IT_AS_AN_OBJECT, "declare `{0}` as an `object`, or keep the resource in an `object` field")
 N00B_TEXT(CONTEXT_HAS_A_FAIL_HOOK, "context `{0}` has a `fail` hook but declares no failure type")
 N00B_TEXT(ADD_FAIL_T_TO_THE, "add `fail: T` to the declaration of `{0}`, or remove the `fail` hook")
 N00B_TEXT(PARAMETER_IS_DECLARED_BUT_IT, "parameter `{0}` is declared `{1}`, but it is also given type `{2}`")

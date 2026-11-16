@@ -1,0 +1,30 @@
+// Only an object can have a finalizer: a value type is copied on assignment,
+// and each copy would be finalized.
+record Guard {
+    id: int
+}
+
+func __finalize(consume self: Ref[Guard]) {
+}
+
+record Wrapped {
+    item: 'T
+}
+
+func __finalize(consume self: Ref[Wrapped['T]]) {
+}
+
+variant Choice {
+    number: int
+    empty: nil
+}
+
+func __finalize(consume self: Ref[Choice]) {
+}
+
+object Handle {
+    fd: int
+}
+
+func __finalize(consume self: Ref[Handle]) {
+}

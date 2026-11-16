@@ -1,4 +1,4 @@
-record Handle {
+object Handle {
     fd: int
 }
 
@@ -8,7 +8,7 @@ func __finalize(consume self: Ref[Handle]) {
     log += "x"
 }
 
-record Counted {
+object Counted {
     n: int
 }
 
@@ -18,6 +18,14 @@ func __finalize(consume self: Ref[Counted]) {
     __atomic_fetch_add(ref closed, 1)
 }
 
-var h: Handle = (fd = 3)
-var c: Counted = (n = 1)
+func __init(self: Handle, fd: int) {
+    self.fd = fd
+}
+
+func __init(self: Counted, n: int) {
+    self.n = n
+}
+
+var h: Handle = new[Handle](3)
+var c: Counted = new[Counted](1)
 require h.fd + c.n == 4

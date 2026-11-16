@@ -28,6 +28,38 @@ table(n00bb_abi_merged_rows_t *rows, uint32_t kind)
     return (n00bb_abi_merged_table_t *)n00bb_abi_merged_table(rows, kind);
 }
 
+// The row of `type`'s first component, when it has one of `kind`.
+static n00b_abi_type_v1 *
+first_component(n00bb_abi_merged_table_t *types,
+                const n00bb_abi_merged_table_t *stream,
+                const n00b_abi_type_v1 *type, uint32_t kind)
+{
+    if (!type->components.count
+        || type->components.first >= stream->record_count) return nullptr;
+    uint32_t index = ((const uint32_t *)(const void *)stream->records)
+        [type->components.first];
+    n00b_abi_type_v1 *component = index && index < types->record_count
+        ? (n00b_abi_type_v1 *)(void *)(types->records
+            + (size_t)index * types->record_bytes) : nullptr;
+    return component && component->kind == kind ? component : nullptr;
+}
+
+// The record row of an object's fields: an object is a reference to them.
+static n00b_abi_type_v1 *
+object_fields_row(n00bb_abi_merged_rows_t *merged,
+                  n00bb_abi_merged_table_t *types,
+                  const n00b_abi_type_v1 *object)
+{
+    const n00bb_abi_merged_table_t *stream = table(merged,
+        N00B_ABI_TABLE_U32_STREAM);
+    if (object->kind != N00B_ABI_TYPE_OBJECT || !stream
+        || stream->record_bytes != sizeof(uint32_t)) return nullptr;
+    n00b_abi_type_v1 *reference = first_component(types, stream, object,
+                                                  N00B_ABI_TYPE_REFERENCE);
+    return reference ? first_component(types, stream, reference,
+                                       N00B_ABI_TYPE_RECORD) : nullptr;
+}
+
 typedef struct {
     const n00bb_abi_selected_objects_t *selected;
     const n00bb_abi_merged_table_t     *types;
@@ -634,7 +666,12 @@ n00bb_abi_link_semantic_rows(
         valid = status == TH_ENV_METHOD_FOUND
             && function_index_for_method(ctx, &link, plan, &method, true,
                                          &function_index);
-        if (valid) row->finalizer_function_index = function_index;
+        if (!valid) break;
+        row->finalizer_function_index = function_index;
+        // An object's storage is its fields record, so that is the row the
+        // collector finds in a dead object's header.
+        n00b_abi_type_v1 *fields = object_fields_row(merged, types, row);
+        if (fields) fields->finalizer_function_index = function_index;
     }
     if (valid) valid = add_specializations(merged, &specializations)
         && add_dispatch(merged, &dispatch, &entries);

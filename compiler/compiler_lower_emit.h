@@ -102,6 +102,10 @@ ir_value_t *n00bb_emit_fresh_object(ir_lower_context_t *context,
 ir_value_t *n00bb_object_from_fields(ir_lower_context_t *context,
                                      ir_value_t *fields,
                                      th_type *object_type, ir_span_t span);
+// Finalizes, on every `return` and `fail` of `context`'s function, each
+// object it makes whose type has a finalizer, unless storage placement moves
+// the object's storage to the heap, where the collector finalizes it.
+bool n00bb_finalize_frame_objects(ir_lower_context_t *context);
 ir_lower_result_t n00bb_emit_intrinsic(ir_lower_context_t *context,
                                        parse_sym_entry_t *symbol,
                                        ir_value_t *const *operands,

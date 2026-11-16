@@ -238,15 +238,15 @@ int32_t keywords_n00b_db_close(uint64_t db) {
 }
 
 
-private record Db_Cell {
+private object Db_Cell {
     raw: uint
 }
 
-alias type Db = Ref[Db_Cell]
+alias type Db = Db_Cell
 
 func __db_cell(raw: uint) -> Db {
-    var cell: Db_Cell = (raw = raw)
-    return ref cell
+    let cell: Db_Cell = (raw = raw)
+    return cell
 }
 
 func __finalize(consume self: Ref[Db_Cell]) {
@@ -324,10 +324,10 @@ func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {
     } else {
         limits_record.min_rows = -1
     }
-    if db.__value.raw == 0 {
+    if db.raw == 0 {
         panic("db_limit: handle is closed")
     }
-    let returned = __db_limit(db.__value.raw, ref limits_record)
+    let returned = __db_limit(db.raw, ref limits_record)
     return returned
 }
 
@@ -335,30 +335,30 @@ func db_flags(db: Db, flags: u32 = 4) -> u32 {
     var sized_record: Sized = (size = 0, flags = 0)
     sized_record.flags = flags
     sized_record.size = 8
-    if db.__value.raw == 0 {
+    if db.raw == 0 {
         panic("db_flags: handle is closed")
     }
-    let returned = __db_flags(db.__value.raw, ref sized_record)
+    let returned = __db_flags(db.raw, ref sized_record)
     return returned
 }
 
 func db_depth(db: Db, depth: i32 = 3) -> i32 {
     var plain_record: Plain = (depth = 0)
     plain_record.depth = depth
-    if db.__value.raw == 0 {
+    if db.raw == 0 {
         panic("db_depth: handle is closed")
     }
-    let returned = __db_depth(db.__value.raw, ref plain_record)
+    let returned = __db_depth(db.raw, ref plain_record)
     return returned
 }
 
 func close(modify self: Db) fail: Ffi_Error {
-    let outcome = __db_close(self.__value.raw)
+    let outcome = __db_close(self.raw)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "db_close")
         fail failure
     }
-    self.__value.raw = 0
+    self.raw = 0
 }
 2	tests/gen_n00b/../keywords/keywords.writ:4:1	Db
 20	tests/gen_n00b/../keywords/keywords.writ:6:1	OpenOpts

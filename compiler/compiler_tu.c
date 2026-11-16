@@ -3842,6 +3842,26 @@ record_function_signature(parse_grammar_t *grammar,
                     N00B_TEXT_WRITE_FUNC_FINALIZE_CONSUME_SELF,
                     N00BB_NO_ARGS);
         }
+        else {
+            // A value type would be finalized once per copy.
+            th_type *finalized = th_resolve(
+                th_ind_referent(th_resolve(receiver->type)));
+            if (finalized && th_kind_of(finalized) != TH_VAR
+                && !th_is_poison(finalized)
+                && !n00bb_object_type(state->types, finalized)) {
+                core_string_t shown = n00bb_print_type(state->types,
+                                                       finalized);
+                core_diag_location_t at = receiver->decl_node
+                    ? link_source_location(receiver->decl_node) : name_at;
+                if (n00bb_report(diagnostics, unit,
+                        N00B_DIAG_FINALIZE_NOT_OBJECT, at,
+                        N00B_TEXT_FINALIZE_NOT_OBJECT,
+                        N00BB_ARGS(ARG_TEXT(shown))))
+                    n00bb_report_help(diagnostics,
+                        N00B_TEXT_DECLARE_IT_AS_AN_OBJECT,
+                        N00BB_ARGS(ARG_TEXT(shown)));
+            }
+        }
         th_type *failure = symbol->error_type
             ? th_resolve(symbol->error_type) : nullptr;
         if (failure && th_kind_of(failure) != TH_VAR && !th_is_nil(failure))

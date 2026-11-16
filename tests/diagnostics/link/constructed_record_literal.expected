@@ -1,0 +1,2 @@
+tests/diagnostics/link/constructed_record_literal.n:5:28: error N00B-T1034: `Built` has an `__init`, so a field tuple cannot build it
+  help: call its constructor, or write `unsafe_cast[Built](...)` to build it without running the constructor

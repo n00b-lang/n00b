@@ -237,6 +237,15 @@ n00bb_emit_finalizer_call(ir_lower_context_t *context,
         && ir_instr_set_call_signature(call, signature);
 }
 
+bool
+n00bb_emit_local_finalizer(ir_lower_context_t *context, ir_local_t *handle,
+                           const th_env_method_t *method, ir_span_t span)
+{
+    ir_value_t *address = n00bb_storage_address(context, handle, span);
+    return address && n00bb_emit_finalizer_call(context, method, address,
+                                                span);
+}
+
 static bool
 n00bb_emit_open_finalize(ir_lower_context_t *context, ir_value_t *address,
                          th_type *type, ir_span_t span)
@@ -726,5 +735,174 @@ n00bb_finalize_temporaries(n00bb_link_analysis_t *analysis,
     ok = (!scratch || ir_block_erase(scratch)) && ok;
     core_free(lower);
     core_list_free(producers);
+    return ok;
+}
+
+// One object a function makes whose type has a finalizer: the handle is kept
+// in `handle`, and `owned` says the object was made on this path.
+typedef struct {
+    ir_instr_t *cast;
+    ir_local_t *handle;
+    ir_local_t *owned;
+    th_env_method_t method;
+} n00bb_frame_object_t;
+
+core_list_decl(n00bb_frame_object_t);
+
+// The object made by `in` (the conversion of a fresh `__fields` allocation
+// to its object type), when that type is closed and has a finalizer.
+static ir_instr_t *
+finalizable_object(core_translation_unit_t *unit, ir_instr_t *in,
+                   th_env_method_t *method)
+{
+    ir_value_t *fields = in->op == IR_OP_NOMINAL_CAST && in->dest
+        && in->n_operands ? ir_operand_value(&in->operands[0]) : nullptr;
+    ir_instr_t *allocation = fields && fields->kind == IR_VAL_INSTR
+        ? fields->def : nullptr;
+    th_ctx *types = tu_state(unit)->types;
+    th_type *object = in->dest ? th_resolve(in->dest->type) : nullptr;
+    if (!allocation || allocation->op != IR_OP_ALLOC
+        || !ir_instr_is_fresh(allocation) || !object
+        || !th_is_closed(types, object) || !n00bb_object_type(types, object))
+        return nullptr;
+    return n00bb_type_finalizer(unit, object, method) ? allocation : nullptr;
+}
+
+static ir_block_t *
+split_named(ir_lower_context_t *context, ir_block_t *block, uint32_t at)
+{
+    n00bb_lower_context_t *lower = context->user;
+    char buffer[64];
+    for (;;) {
+        core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+            "__n00bb_frame_object_%llu",
+            (unsigned long long)lower->next_block_id++);
+        if (!ir_block_find(context->function, name))
+            return ir_block_split(block, at, name);
+    }
+}
+
+static ir_local_t *
+frame_object_local(ir_lower_context_t *context, const char *role,
+                   th_type *type)
+{
+    char buffer[64];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_%s_%llu", role,
+        (unsigned long long)context->next_value_id++);
+    return ir_local_add(context->function, name, type);
+}
+
+// Keeps the handle of `object->cast` and marks the object made, right after
+// the conversion; storage placement clears the mark for an allocation it
+// moves to the heap (`n00bb.finalize_owned`), where the collector finalizes
+// the object instead.
+static bool
+track_frame_object(ir_lower_context_t *context, n00bb_frame_object_t *object,
+                   ir_instr_t *allocation)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_instr_t *cast = object->cast;
+    th_type *truth = n00bb_ir_builtin_type(context->module,
+                                           CORE_STRING_STATIC("bool"));
+    object->handle = frame_object_local(context, "frame_object",
+                                        cast->dest->type);
+    object->owned = truth
+        ? frame_object_local(context, "frame_object_made", truth) : nullptr;
+    ir_block_t *block = cast->block;
+    ir_block_t *tail = object->handle && object->owned
+        ? split_named(context, block, cast->index + 1) : nullptr;
+    if (!tail) return false;
+    context->block = block;
+    ir_instr_t *keep = ir_lower_emit_instruction(context, IR_OP_COPY,
+                                                 cast->span);
+    return keep && ir_instr_set_dest_local(keep, object->handle)
+        && ir_instr_operand_value(keep, cast->dest)
+        && n00bb_set_flag(context, object->owned, true, cast->span)
+        && n00bb_emit_jump(context, tail, cast->span)
+        && ir_annot_set(lower->ir_context, &allocation->annots, (ir_annot_t){
+               .key = CORE_STRING_STATIC("n00bb.finalize_owned"),
+               .kind = IR_ANNOT_VALUE,
+               .v = ir_local_value(context->function, object->owned),
+           });
+}
+
+// Finalizes, before `exit` (a `return` or `fail`), every object made on the
+// path to it, latest first.
+static bool
+finalize_before_exit(ir_lower_context_t *context, ir_instr_t *exit,
+                     const core_list_t(n00bb_frame_object_t) *objects)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_block_t *block = exit->block;
+    ir_span_t span = exit->span;
+    ir_block_t *tail = split_named(context, block, exit->index);
+    if (!tail) return false;
+    context->block = block;
+    for (size_t i = objects->len; i > 0; i--) {
+        const n00bb_frame_object_t *object = &objects->data[i - 1];
+        ir_block_t *finalize = n00bb_branch_block(context, lower, "finalize");
+        ir_block_t *next = n00bb_branch_block(context, lower, "finalized");
+        if (!finalize || !next
+            || !n00bb_emit_branch(context,
+                   ir_local_value(context->function, object->owned),
+                   finalize, next, span))
+            return false;
+        context->block = finalize;
+        if (!n00bb_emit_local_finalizer(context, object->handle,
+                                        &object->method, span)
+            || !n00bb_emit_jump(context, next, span))
+            return false;
+        context->block = next;
+    }
+    return n00bb_emit_jump(context, tail, span);
+}
+
+bool
+n00bb_finalize_frame_objects(ir_lower_context_t *context)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    ir_func_t *function = context ? context->function : nullptr;
+    if (!lower || !lower->unit || !function || !function->n_blocks)
+        return true;
+    core_list_t(n00bb_frame_object_t) objects =
+        core_list_new(n00bb_frame_object_t);
+    core_list_t(n00bb_ir_instr_ptr_t) allocations =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    core_list_t(n00bb_ir_instr_ptr_t) exits =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            n00bb_frame_object_t object = {.cast = in};
+            ir_instr_t *allocation = finalizable_object(lower->unit, in,
+                                                        &object.method);
+            if (allocation) {
+                core_list_push(objects, object);
+                core_list_push(allocations, allocation);
+            }
+            if (in->op == IR_OP_RETURN || in->op == IR_OP_FAIL)
+                core_list_push(exits, in);
+        }
+    bool ok = true;
+    for (size_t i = 0; ok && i < objects.len; i++)
+        ok = track_frame_object(context, &objects.data[i],
+                                allocations.data[i]);
+    // Every path starts with nothing made.
+    ir_block_t *entry = ok && objects.len ? function->blocks[0] : nullptr;
+    ir_block_t *body = entry ? split_named(context, entry, 0) : nullptr;
+    if (entry) {
+        context->block = entry;
+        ok = body != nullptr;
+        for (size_t i = 0; ok && i < objects.len; i++)
+            ok = n00bb_set_flag(context, objects.data[i].owned, false,
+                                function->span);
+        ok = ok && n00bb_emit_jump(context, body, function->span);
+    }
+    for (size_t i = 0; ok && objects.len && i < exits.len; i++)
+        ok = finalize_before_exit(context, exits.data[i], &objects);
+    core_list_free(exits);
+    core_list_free(allocations);
+    core_list_free(objects);
     return ok;
 }

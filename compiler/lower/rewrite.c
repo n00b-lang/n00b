@@ -2301,7 +2301,10 @@ n00bb_record_literal_buildable(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                           N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
         return false;
     }
-    if (!n00bb_type_has_constructor(rewrite->unit, type)) return true;
+    // The module that defines a type may build it field by field, bypassing
+    // its constructor.
+    if (owner == rewrite->unit
+        || !n00bb_type_has_constructor(rewrite->unit, type)) return true;
     n00bb_report(diagnostics, rewrite->unit,
                  N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
                  n00bb_span_location(in->span), N00B_TEXT_HAS_AN_INIT_SO_A,
@@ -2943,6 +2946,25 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
     return true;
 }
 
+// Whether `function` makes an object: converts a fresh allocation of an
+// object's fields to the object.
+static bool
+n00bb_makes_object(const ir_func_t *function)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            const ir_value_t *fields = in->op == IR_OP_NOMINAL_CAST
+                && in->n_operands ? ir_operand_value(&in->operands[0])
+                                  : nullptr;
+            if (fields && fields->kind == IR_VAL_INSTR && fields->def
+                && fields->def->op == IR_OP_ALLOC
+                && ir_instr_is_fresh(fields->def))
+                return true;
+        }
+    return false;
+}
+
 bool
 n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
                        parse_grammar_t *grammar, n00bb_typing_t *typing)
@@ -2992,6 +3014,16 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
                              n00bb_emit_sinks)
         && n00bb_rewrite_sites(&rewriter, &rewriter.retyped, n00bb_emit_sinks)
         && ok;
+    for (size_t u = 0; ok && u < analysis->units.len; u++) {
+        ir_module_t *module = tu_state(analysis->units.data[u])->ir_module;
+        for (size_t f = 0; ok && module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            n00bb_rewrite_t *rewrite = n00bb_makes_object(function)
+                ? n00bb_rewrite_for_function(&rewriter, function) : nullptr;
+            ok = !rewrite
+                || n00bb_finalize_frame_objects(&rewrite->context);
+        }
+    }
     for (size_t i = 0; i < rewriter.rewrites.len; i++) {
         n00bb_rewrite_t *rewrite = rewriter.rewrites.data[i];
         ok = ir_block_erase(rewrite->scratch)

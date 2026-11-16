@@ -377,6 +377,35 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
     return true;
 }
 
+// The index of `type`'s first component row, when it is of `kind`.
+static uint32_t
+n00bb_first_component_index(const n00bb_abi_object_view_t *view,
+                            const n00b_abi_type_v1 *type, uint32_t kind)
+{
+    const uint32_t *index = type->components.count
+        ? n00bb_abi_object_row(view, N00B_ABI_TABLE_U32_STREAM,
+                               type->components.first) : nullptr;
+    const n00b_abi_type_v1 *component = index && *index
+        ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE, *index) : nullptr;
+    return component && component->kind == kind ? *index : 0;
+}
+
+// The row of an object's fields record: the object is a reference to it,
+// and the collector finds that row in a dead object's header.
+static uint32_t
+n00bb_object_fields_index(const n00bb_abi_object_view_t *view,
+                          const n00b_abi_type_v1 *type)
+{
+    if (type->kind != N00B_ABI_TYPE_OBJECT) return 0;
+    uint32_t reference = n00bb_first_component_index(view, type,
+                                                     N00B_ABI_TYPE_REFERENCE);
+    const n00b_abi_type_v1 *row = reference
+        ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE, reference)
+        : nullptr;
+    return row ? n00bb_first_component_index(view, row, N00B_ABI_TYPE_RECORD)
+               : 0;
+}
+
 static bool
 n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                         core_translation_unit_t *const *units,
@@ -398,7 +427,10 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, i);
         if (!type) { valid = false; break; }
-        if (!type->finalizer_function_index) continue;
+        // An object's fields record shares its finalizer, bound with the
+        // object below.
+        if (!type->finalizer_function_index
+            || type->kind == N00B_ABI_TYPE_RECORD) continue;
         const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_FUNCTION, type->finalizer_function_index);
         const n00b_abi_symbol_v1 *symbol = function
@@ -429,6 +461,10 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
         valid = valid && matched;
         if (valid) bindings[count++] = (n00bb_llvm_finalizer_binding_t){
             .type_index = i, .function = matched,
+        };
+        uint32_t fields = valid ? n00bb_object_fields_index(view, type) : 0;
+        if (fields) bindings[count++] = (n00bb_llvm_finalizer_binding_t){
+            .type_index = fields, .function = matched,
         };
     }
     if (valid) {

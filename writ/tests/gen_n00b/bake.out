@@ -443,15 +443,15 @@ record Bake_Root_T layout(c) {
     path: Foreign[i8]?
 }
 
-private record Bake_Root_Cell {
+private object Bake_Root_Cell {
     raw: Foreign[Bake_Root_T]?
 }
 
-alias type Bake_Root = Ref[Bake_Root_Cell]
+alias type Bake_Root = Bake_Root_Cell
 
 func __bake_root_cell(raw: uint) -> Bake_Root {
-    var cell: Bake_Root_Cell = (raw = unsafe_cast[Foreign[Bake_Root_T]?] raw)
-    return ref cell
+    let cell: Bake_Root_Cell = (raw = unsafe_cast[Foreign[Bake_Root_T]?] raw)
+    return cell
 }
 
 func __finalize(consume self: Ref[Bake_Root_Cell]) {
@@ -499,28 +499,28 @@ func bake_build(spec: string) -> Bake_Root fail: Ffi_Error {
 }
 
 func bake_query(root: Bake_Root, key: i32) -> i64 {
-    if root.__value.raw == nil {
+    if root.raw == nil {
         panic("bake_query: handle is closed")
     }
-    let __fixup_root: string? = __ffi_fixup(root.__value.raw)
+    let __fixup_root: string? = __ffi_fixup(root.raw)
     if __fixup_root != nil {
         panic(__fixup_root)
     }
-    let returned = __bake_query(unsafe_cast[uint] root.__value.raw, key)
+    let returned = __bake_query(unsafe_cast[uint] root.raw, key)
     return returned
 }
 
 func bake_reopen(root: Bake_Root) fail: Ffi_Error {
-    if root.__value.raw == nil {
+    if root.raw == nil {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "bake_reopen")
         fail failure
     }
-    let __fixup_root: string? = __ffi_fixup(root.__value.raw)
+    let __fixup_root: string? = __ffi_fixup(root.raw)
     if __fixup_root != nil {
         let failure: Ffi_Error = (code = -1, text = __fixup_root, fn = "bake_reopen")
         fail failure
     }
-    let outcome = __bake_reopen(unsafe_cast[uint] root.__value.raw)
+    let outcome = __bake_reopen(unsafe_cast[uint] root.raw)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_reopen")
         fail failure
@@ -555,20 +555,20 @@ func bake_touch(path: string, text: string) -> i32 fail: Ffi_Error {
 }
 
 func close(modify self: Bake_Root) fail: Ffi_Error {
-    if self.__value.raw == nil {
+    if self.raw == nil {
         let failure: Ffi_Error = (code = -1, text = "handle is closed", fn = "bake_free")
         fail failure
     }
-    if __abi_baked_address(unsafe_cast[uint] self.__value.raw) {
+    if __abi_baked_address(unsafe_cast[uint] self.raw) {
         let failure: Ffi_Error = (code = -1, text = "a baked object cannot be released", fn = "bake_free")
         fail failure
     }
-    let outcome = __bake_free(unsafe_cast[uint] self.__value.raw)
+    let outcome = __bake_free(unsafe_cast[uint] self.raw)
     if outcome < 0 {
         let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bake_free")
         fail failure
     }
-    self.__value.raw = nil
+    self.raw = nil
 }
 2	tests/gen_n00b/bake.writ:6:1	bake_item_t
 9	tests/gen_n00b/bake.writ:13:1	bake_items_t

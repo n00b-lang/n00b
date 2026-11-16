@@ -800,6 +800,10 @@ n00bb_emit_finalize_value(ir_lower_context_t *context, ir_value_t *address,
                           th_type *type, ir_span_t span, size_t depth);
 
 bool
+n00bb_emit_local_finalizer(ir_lower_context_t *context, ir_local_t *handle,
+                           const th_env_method_t *method, ir_span_t span);
+
+bool
 n00bb_emit_scope_finalize(ir_lower_context_t *context,
                           n00bb_final_frame_t *frame, parse_tree_t *source);
 

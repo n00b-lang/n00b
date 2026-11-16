@@ -1,0 +1,9 @@
+tests/diagnostics/tu/finalizer_not_object.n:4:5: warning N00B-N0022: field `id` of `Guard` is never used
+tests/diagnostics/tu/finalizer_not_object.n:7:17: error N00B-T0599: `Guard` is not an `object`, so it cannot have a finalizer
+  help: declare `Guard` as an `object`, or keep the resource in an `object` field
+tests/diagnostics/tu/finalizer_not_object.n:11:5: warning N00B-N0022: field `item` of `Wrapped` is never used
+tests/diagnostics/tu/finalizer_not_object.n:14:17: error N00B-T0599: `Wrapped['T]` is not an `object`, so it cannot have a finalizer
+  help: declare `Wrapped['T]` as an `object`, or keep the resource in an `object` field
+tests/diagnostics/tu/finalizer_not_object.n:22:17: error N00B-T0599: `Choice` is not an `object`, so it cannot have a finalizer
+  help: declare `Choice` as an `object`, or keep the resource in an `object` field
+tests/diagnostics/tu/finalizer_not_object.n:26:5: warning N00B-N0022: field `fd` of `Handle` is never used

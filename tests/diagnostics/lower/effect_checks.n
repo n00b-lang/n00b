@@ -98,8 +98,12 @@ fn loud_free(r: consume ?Loud)
   effects output
 -]'ffi
 
-record Noisy {
+object Noisy {
     id: int
+}
+
+func __init(self: Noisy, id: int) {
+    self.id = id
 }
 
 func __finalize(consume self: Ref[Noisy]) {
@@ -112,11 +116,11 @@ func copy_twice(view item: 'T) -> 'T {
     return second
 }
 
-func noisy_copy(n: Noisy) -> Noisy {
+func noisy_copy(view n: Noisy) -> Noisy {
     return copy_twice(n)
 }
 
-let sample: Noisy = (id = 1)
+let sample: Noisy = new[Noisy](1)
 require noisy_copy(sample).id == 1
 require quiet_copy(2) == 2
 

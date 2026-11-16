@@ -205,6 +205,14 @@ N00B_DIAG(FINALIZE_CANNOT_FAIL, "N00B-T0553", ERROR,
 N00B_DIAG(FINALIZE_RETURNS_VALUE, "N00B-T0554", ERROR,
     "`__finalize` returns a value",
     "A finalizer returns nothing.")
+N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
+    "`__finalize` is defined for a type that is not an `object`",
+    "Only an `object` can have a finalizer. An object is a handle to its\n"
+    "storage, so copying the handle never copies what the finalizer\n"
+    "releases, and the storage is finalized once, when it dies. A value\n"
+    "type, such as a `record`, is copied on assignment, so each copy would\n"
+    "be finalized. Declare the type as an `object`, or keep the resource in\n"
+    "an `object` field.")
 N00B_DIAG(CONTEXT_FAIL_WITHOUT_TYPE, "N00B-T0555", ERROR,
     "a context has a `fail` hook but no failure type",
     "A context's `fail` hook receives the context's failure value, so the\n"
