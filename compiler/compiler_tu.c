@@ -378,20 +378,6 @@ collect_pattern_items(parse_grammar_t *grammar, parse_tree_t *node,
     }
 }
 
-static bool
-pattern_node(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    return NT_IS(grammar, node, "for-var-list")
-        || NT_IS(grammar, node, "binding-pattern")
-        || NT_IS(grammar, node, "pattern-items")
-        || NT_IS(grammar, node, "pattern-item")
-        || NT_IS(grammar, node, "pattern-target")
-        || NT_IS(grammar, node, "assign-pattern")
-        || NT_IS(grammar, node, "assign-pattern-items")
-        || NT_IS(grammar, node, "assign-pattern-item")
-        || NT_IS(grammar, node, "assign-pattern-target");
-}
-
 static bool pattern_path_within(parse_grammar_t *grammar, parse_tree_t *node,
     parse_tree_t *target, core_list_t(n00bb_projection_step_t) *path);
 
@@ -428,14 +414,11 @@ pattern_path_within(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 bool
-n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *target,
+n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *pattern,
+                   parse_tree_t *target,
                    core_list_t(n00bb_projection_step_t) *path)
 {
-    parse_tree_t *root = nullptr;
-    for (parse_tree_t *at = parse_tree_parent(target);
-         at && pattern_node(grammar, at); at = parse_tree_parent(at))
-        root = at;
-    return root && pattern_path_within(grammar, root, target, path);
+    return pattern && pattern_path_within(grammar, pattern, target, path);
 }
 
 void
@@ -7204,6 +7187,7 @@ free_tu_state(void *data)
     core_list_free(state->mark_annotations);
     core_list_free(state->assignment_patterns);
     core_list_free(state->call_nodes);
+    core_list_free(state->value_owners);
     core_list_free(state->rewrite_sites);
     core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
@@ -7262,6 +7246,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->mark_annotations = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->call_nodes = core_list_new(parse_tree_ptr_t);
+    state->value_owners = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);

@@ -50,6 +50,8 @@ typedef struct ir_lower_skip_frame_t {
     parse_tree_t *owner;
     parse_tree_t *reference;
     struct ir_lower_skip_frame_t *next;
+    // The walk is inside `reference`.
+    bool open;
 } ir_lower_skip_frame_t;
 
 struct ir_lowerer_t {
@@ -76,6 +78,8 @@ typedef struct {
     core_dict_t handled_assignments;
     core_dict_t suppressed_emits;
     ir_lower_skip_frame_t *skip_values;
+    // How many skipped references enclose the walk.
+    size_t suppressed_depth;
     parse_tree_t *active_node;
     bool active_entering;
     bool failed;
@@ -873,6 +877,7 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
     if (*at) {
         ir_lower_skip_frame_t *frame = *at;
         *at = frame->next;
+        if (frame->open && state->suppressed_depth) state->suppressed_depth--;
         core_free(frame);
     }
     core_dict_remove(&state->custom_assignments, visit->node);
@@ -1126,26 +1131,9 @@ lower_symbol_defines_at(const parse_sym_entry_t *symbol, parse_tree_t *node)
 }
 
 static bool
-lower_tree_is_suppressed_value(ir_lower_tree_state_t *state,
-                                parse_tree_t *node)
+lower_tree_is_suppressed_value(ir_lower_tree_state_t *state)
 {
-    for (ir_lower_skip_frame_t *target = state->skip_values;
-         target; target = target->next)
-        for (parse_tree_t *ancestor = node; ancestor;
-             ancestor = parse_tree_parent(ancestor))
-            if (target->reference == ancestor) return true;
-    return false;
-}
-
-static bool
-inside_effect_query(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    for (parse_tree_t *ancestor = node ? parse_tree_parent(node) : nullptr;
-         ancestor; ancestor = parse_tree_parent(ancestor))
-        if (core_string_eq(parse_tree_nt_name(grammar, ancestor),
-                           CORE_STRING_STATIC("effect-query")))
-            return true;
-    return false;
+    return state->suppressed_depth > 0;
 }
 
 static void
@@ -1159,6 +1147,7 @@ lower_tree_clear_lvalues(ir_lower_tree_state_t *state, parse_tree_t *owner)
         }
         ir_lower_skip_frame_t *mark = *at;
         *at = mark->next;
+        if (mark->open && state->suppressed_depth) state->suppressed_depth--;
         core_free(mark);
     }
 }
@@ -1284,7 +1273,7 @@ static bool lower_tree_node_value(parse_visit_t *visit);
 // target that is a global is read (copied) as soon as it is lowered, before
 // the assigned value can change it.
 static bool
-lower_tree_node(parse_visit_t *visit)
+lower_tree_node_lowered(parse_visit_t *visit)
 {
     ir_lower_tree_state_t *state = visit->user;
     if (!lower_tree_node_value(visit)) return false;
@@ -1298,6 +1287,36 @@ lower_tree_node(parse_visit_t *visit)
             CORE_STRING_STATIC("__n00bb_"), value->type)
         && ir_instr_operand_value(read, value)
         && ir_lower_set_node_value(state->context, visit->node, read->dest);
+}
+
+// Entering a reference that is not lowered as a value (the part of a call
+// that names the function, an assignment's target) suppresses the values
+// inside it until the walk leaves it.
+static bool
+lower_tree_node_enter(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    for (ir_lower_skip_frame_t *frame = state->skip_values; frame;
+         frame = frame->next)
+        if (frame->reference == visit->node && !frame->open) {
+            frame->open = true;
+            state->suppressed_depth++;
+        }
+    return true;
+}
+
+static bool
+lower_tree_node(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    bool ok = lower_tree_node_lowered(visit);
+    for (ir_lower_skip_frame_t *frame = state->skip_values; frame;
+         frame = frame->next)
+        if (frame->reference == visit->node && frame->open) {
+            frame->open = false;
+            if (state->suppressed_depth) state->suppressed_depth--;
+        }
+    return ok;
 }
 
 static bool
@@ -1319,7 +1338,7 @@ lower_tree_node_value(parse_visit_t *visit)
         return true;
     }
     if (core_dict_contains(&state->suppressed_emits, visit->node)
-        || inside_effect_query(visit->grammar, visit->node)) {
+        || parse_tree_in_effect_query(visit->node)) {
         core_dict_put(&state->values, visit->node, (void *)0);
         return true;
     }
@@ -1331,7 +1350,7 @@ lower_tree_node_value(parse_visit_t *visit)
         : lower_find_annotation(visit, PARSE_ANNOT_ASSIGNS);
 
     if (emits && core_string_eq(emit.action, CORE_STRING_STATIC("reference"))
-        && lower_tree_is_suppressed_value(state, visit->node)) {
+        && lower_tree_is_suppressed_value(state)) {
         _core_dict_put(&state->values, visit->node, nullptr);
         return true;
     }
@@ -1439,7 +1458,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
             break;
         }
     }
-    parse_walk_on_node(walk, nullptr, lower_tree_node, nullptr);
+    parse_walk_on_node(walk, lower_tree_node_enter, lower_tree_node, nullptr);
     parse_tree_t *parent = nullptr;
     int32_t child_index = -1;
     int32_t depth = 0;

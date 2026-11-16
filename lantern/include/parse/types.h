@@ -121,6 +121,12 @@ typedef struct {
     } target;
 } parse_node_resolution_t;
 
+typedef enum : uint8_t {
+    PARSE_JUNCTION_NONE,
+    PARSE_JUNCTION_AND,
+    PARSE_JUNCTION_OR,
+} parse_junction_t;
+
 typedef struct parse_node_facts_t {
     parse_sym_entry_t      *sym;
     th_type                *argument_type;
@@ -154,6 +160,23 @@ typedef struct parse_node_facts_t {
     // used as a value.
     bool                    names_called;
     bool                    index_address_access;
+    // `a and b` / `a or b`: which short-circuit junction this node is.
+    parse_junction_t        junction;
+    // A comparison (`a == b`, `a < b`) whose operands are children 0 and 2.
+    bool                    comparison;
+    // Inside an effect query's operands, which are never evaluated.
+    bool                    in_effect_query;
+    // For a value statement (`-> e`): the construct whose value it gives
+    // (a function or statement body, a value body, or a block value).
+    void                   *value_owner;
+    // For a labeled loop, switch or typecase: its label.
+    core_string_t           control_label;
+    // An integer literal written with a `-` in front of it.
+    bool                    negated_literal;
+    // Inside a destructuring pattern.
+    bool                    in_pattern;
+    // For a switch case written as a bare name: the name.
+    core_string_t           case_spelled;
 } parse_node_facts_t;
 
 typedef struct {
@@ -162,6 +185,9 @@ typedef struct {
     th_type            *type;
     void               *frontend_data;
     parse_node_facts_t *facts;
+    // The expression this node only wraps (a parenthesized or single-child
+    // node), when it is one; recorded by the front end.
+    void               *core;
 } parse_node_semantic_t;
 
 typedef struct parse_nt_node_t {

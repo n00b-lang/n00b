@@ -1411,25 +1411,13 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
         return true;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     if (!lower || !lower->grammar) return true;
-    bool negative = false;
-    bool saw_sign = false;
     ir_lit_t magnitude = {0};
-    parse_tree_t *literal = nullptr;
-    for (parse_tree_t *ancestor = parse_tree_parent(visit->node);
-         ancestor && !literal;
-         ancestor = parse_tree_parent(ancestor)) {
-        if (!nt_is(lower->grammar, ancestor, CORE_STRING_STATIC("unary-expr"))) continue;
-        bool candidate_negative = false;
-        bool candidate_saw_sign = false;
-        parse_tree_t *candidate = n00bb_simple_switch_literal(
-            lower->grammar, ancestor, &candidate_negative,
-            &candidate_saw_sign);
-        if (!candidate || !candidate_saw_sign) continue;
-        literal = candidate;
-        negative = candidate_negative;
-        saw_sign = candidate_saw_sign;
-        break;
-    }
+    // The literal is the operand of a negation (recorded by the front end),
+    // so its magnitude may be one past the type's largest positive value.
+    if (!parse_tree_negated_literal(visit->node)) return true;
+    parse_tree_t *literal = visit->node;
+    bool negative = true;
+    bool saw_sign = true;
     if (!literal || !negative || !saw_sign
         || literal_modifier(lower->grammar, literal).data
         || !n00bb_parse_switch_integer(first_token_text(literal), &magnitude))

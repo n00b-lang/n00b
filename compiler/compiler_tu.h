@@ -81,7 +81,10 @@ void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
 parse_tree_t *n00bb_pattern_owner(parse_grammar_t *grammar,
                                   parse_tree_t *node);
-bool n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *target,
+// The projections that take a value destructured by `pattern` to `target`,
+// one of the pattern's bindings.
+bool n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *pattern,
+                        parse_tree_t *target,
                         core_list_t(n00bb_projection_step_t) *path);
 bool measure_static_shape_prefix(ir_shape_t *shape,
                                  uint32_t flat_prefix_rank);
@@ -500,6 +503,11 @@ typedef struct {
     // Calls, `ref`s and unwraps, classified once names are resolved
     // (n00bb_classify_calls).
     core_list_t(parse_tree_ptr_t) call_nodes;
+    // The constructs a value statement may give the value of, innermost
+    // last, and how many effect queries enclose the walk.
+    core_list_t(parse_tree_ptr_t) value_owners;
+    size_t effect_query_depth;
+    size_t pattern_depth;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;

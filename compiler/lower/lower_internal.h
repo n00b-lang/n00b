@@ -295,6 +295,8 @@ typedef struct {
     // The cursor lives in a local: `__next` takes it by reference.
     ir_local_t *iteration_cursor;
     core_list_t(parse_sym_entry_ptr_t) iteration_bindings;
+    // The loop's binding pattern, which the bindings are projected from.
+    parse_tree_t *iteration_pattern;
     void *binding_checkpoint;
     // The bindings when the loop began: a variable bound since then is
     // declared inside the loop.
@@ -420,10 +422,15 @@ typedef struct {
     ir_block_t *join;
     ir_local_t *error_value;
     ir_local_t *result_value;
+    // When the try was entered, against the other control frames' orders:
+    // a frame with a smaller order encloses it.
+    uint64_t order;
     bool expression;
     bool error_reachable;
     bool join_reachable;
     bool active;
+    // Lowering is still in the try's body, so failures go to its handler.
+    bool in_body;
 } n00bb_try_frame_t;
 
 core_list_decl(n00bb_try_frame_t);
@@ -483,6 +490,8 @@ typedef struct {
     parse_tree_t *node;
     core_list_t(parse_tree_ptr_t) expressions;
     core_list_t(n00bb_ir_value_ptr_t) values;
+    // The field names of a named-field literal (empty for a tuple).
+    core_list_t(core_string_t) names;
 } n00bb_tuple_parts_t;
 
 th_type *
@@ -557,10 +566,6 @@ unit_module(n00bb_tu_state_t *state);
 
 parse_tree_t *
 value_body_expression(parse_grammar_t *grammar, parse_tree_t *body);
-
-core_string_t
-n00bb_control_label(parse_grammar_t *grammar, parse_tree_t *node,
-                    core_string_t labeled_form);
 
 void
 append_module_symbol_name(core_translation_unit_t *unit,
@@ -794,7 +799,7 @@ n00bb_branch_on_outcome(ir_lower_context_t *context, ir_value_t *outcome,
                         ir_span_t span);
 
 bool
-jumping_condition(parse_grammar_t *grammar, parse_tree_t *node);
+jumping_condition(parse_tree_t *node);
 
 bool
 n00bb_describe_failure(n00bb_lower_context_t *lower, ir_instr_t *trap,
@@ -834,8 +839,8 @@ n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                 ir_span_t span);
 
 int
-n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
-                      ir_value_t *error, ir_span_t span);
+n00bb_route_try_error(ir_lower_context_t *context, ir_value_t *error,
+                      ir_span_t span);
 
 bool
 n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,

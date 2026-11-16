@@ -1986,7 +1986,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     if (!error || !n00bb_emit_with_failure(context, visit->node))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not unwind active context managers");
-    int routed = n00bb_route_try_error(context, visit->node, error, span);
+    int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (!routed) {
         n00bb_lower_context_t *lower = context->user;

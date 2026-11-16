@@ -5,18 +5,13 @@ collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
                   parse_tree_t *node, core_string_t clause_kind,
                   core_list_t(n00bb_branch_arm_t) *arms,
                   parse_tree_t **else_body, bool *has_else_clause);
-static parse_tree_t *
-condition_core(parse_grammar_t *grammar, parse_tree_t *node);
 static bool
-n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
-                   parse_tree_t *node, ir_block_t **on_true,
-                   ir_block_t **on_false);
+n00bb_jump_targets(n00bb_lower_context_t *lower, parse_tree_t *node,
+                   ir_block_t **on_true, ir_block_t **on_false);
 static core_string_t
 n00bb_failure_text(n00bb_lower_context_t *lower, core_string_t text);
 static bool
 n00bb_reportable_operand(ir_module_t *module, ir_value_t *value);
-static bool
-n00bb_comparison_node(parse_grammar_t *grammar, parse_tree_t *node);
 static size_t
 n00bb_failed_comparisons(parse_grammar_t *grammar, parse_tree_t *expression,
                          bool always, parse_tree_t **out, size_t count);
@@ -30,7 +25,7 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
                              n00bb_loop_frame_t *frame);
 static ir_value_t *
 n00bb_project_node(ir_lower_context_t *context, ir_value_t *value,
-                   parse_tree_t *node, ir_span_t span);
+                   parse_tree_t *pattern, parse_tree_t *node, ir_span_t span);
 static bool
 n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                  n00bb_lower_context_t *lower,
@@ -127,48 +122,29 @@ collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
     return true;
 }
 
-static parse_tree_t *
-condition_core(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        if (core_tree_num_children(node) == 1
-            && !core_tree_is_leaf(core_tree_child(node, 0)))
-            node = core_tree_child(node, 0);
-        else if (nt_is(grammar, node, CORE_STRING_STATIC("tuple-or-paren"))
-                 && core_tree_num_children(node) == 3)
-            node = core_tree_child(node, 1);
-        else break;
-    }
-    return node;
-}
-
 bool
-jumping_condition(parse_grammar_t *grammar, parse_tree_t *node)
+jumping_condition(parse_tree_t *node)
 {
-    parse_tree_t *core = condition_core(grammar, node);
-    return core && core_tree_num_children(core) == 3
-        && (nt_is(grammar, core, CORE_STRING_STATIC("or-expr"))
-            || nt_is(grammar, core, CORE_STRING_STATIC("and-expr")));
+    return parse_tree_junction(parse_tree_core(node)) != PARSE_JUNCTION_NONE;
 }
 
 static bool
-n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
-                   parse_tree_t *node, ir_block_t **on_true,
-                   ir_block_t **on_false)
+n00bb_jump_targets(n00bb_lower_context_t *lower, parse_tree_t *node,
+                   ir_block_t **on_true, ir_block_t **on_false)
 {
     for (size_t i = lower->branches.len; i > 0; i--) {
         n00bb_branch_frame_t *frame = &lower->branches.data[i - 1];
         if (!frame->active) continue;
         if (frame->jumping) {
             n00bb_branch_arm_t *arm = &frame->arms.data[0];
-            bool is_or = nt_is(grammar, frame->node,
-                               CORE_STRING_STATIC("or-expr"));
-            if (condition_core(grammar, arm->condition) == node) {
+            bool is_or = parse_tree_junction(frame->node)
+                == PARSE_JUNCTION_OR;
+            if (parse_tree_core(arm->condition) == node) {
                 *on_true = is_or ? frame->jump_true : arm->body_block;
                 *on_false = is_or ? arm->body_block : frame->jump_false;
                 return true;
             }
-            if (condition_core(grammar, arm->body) == node) {
+            if (parse_tree_core(arm->body) == node) {
                 *on_true = frame->jump_true;
                 *on_false = frame->jump_false;
                 return true;
@@ -178,15 +154,15 @@ n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
         if (frame->short_circuit) {
             n00bb_branch_arm_t *arm = &frame->arms.data[0];
             if (!frame->short_block
-                || condition_core(grammar, arm->condition) != node) continue;
-            bool is_or = nt_is(grammar, frame->node,
-                               CORE_STRING_STATIC("or-expr"));
+                || parse_tree_core(arm->condition) != node) continue;
+            bool is_or = parse_tree_junction(frame->node)
+                == PARSE_JUNCTION_OR;
             *on_true = is_or ? frame->short_block : arm->body_block;
             *on_false = is_or ? arm->body_block : frame->short_block;
             return true;
         }
         for (size_t a = 0; a < frame->arms.len; a++) {
-            if (condition_core(grammar, frame->arms.data[a].condition) != node)
+            if (parse_tree_core(frame->arms.data[a].condition) != node)
                 continue;
             *on_true = frame->arms.data[a].body_block;
             *on_false = a + 1 < frame->arms.len
@@ -198,14 +174,14 @@ n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
     for (size_t i = lower->loops.len; i > 0; i--) {
         n00bb_loop_frame_t *frame = &lower->loops.data[i - 1];
         if (!frame->active || frame->is_range || frame->is_container
-            || condition_core(grammar, frame->condition) != node) continue;
+            || parse_tree_core(frame->condition) != node) continue;
         *on_true = frame->body_block;
         *on_false = frame->exit;
         return true;
     }
     for (size_t i = lower->requires.len; i > 0; i--) {
         n00bb_require_frame_t *frame = &lower->requires.data[i - 1];
-        if (condition_core(grammar, frame->condition) != node) continue;
+        if (parse_tree_core(frame->condition) != node) continue;
         *on_true = frame->join;
         *on_false = frame->failure;
         return true;
@@ -269,27 +245,19 @@ n00bb_reportable_operand(ir_module_t *module, ir_value_t *value)
         || th_builtin_kind_of(th_resolve(value->type)) == TH_BUILTIN_STRING;
 }
 
-static bool
-n00bb_comparison_node(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    return node && core_tree_num_children(node) == 3
-        && (nt_is(grammar, node, CORE_STRING_STATIC("equality-expr"))
-            || nt_is(grammar, node, CORE_STRING_STATIC("compare-expr")));
-}
-
 static size_t
 n00bb_failed_comparisons(parse_grammar_t *grammar, parse_tree_t *expression,
                          bool always, parse_tree_t **out, size_t count)
 {
-    parse_tree_t *core = condition_core(grammar, expression);
+    parse_tree_t *core = parse_tree_core(expression);
     if (!core || count >= N00BB_FAILURE_COMPARISONS) return count;
-    if (n00bb_comparison_node(grammar, core)) {
+    if (parse_tree_is_comparison(core)) {
         out[count++] = core;
         return count;
     }
     if (core_tree_num_children(core) != 3) return count;
-    bool is_or = nt_is(grammar, core, CORE_STRING_STATIC("or-expr"));
-    bool is_and = nt_is(grammar, core, CORE_STRING_STATIC("and-expr"));
+    bool is_or = parse_tree_junction(core) == PARSE_JUNCTION_OR;
+    bool is_and = parse_tree_junction(core) == PARSE_JUNCTION_AND;
     if (!is_or && !is_and) return count;
     count = n00bb_failed_comparisons(grammar, core_tree_child(core, 0),
                                      always || is_and, out, count);
@@ -321,7 +289,7 @@ n00bb_condition_operands(ir_lower_context_t *context,
             ir_value_t *value = ir_lower_node_value(context, child);
             if (!value)
                 value = ir_lower_node_value(context,
-                                            condition_core(grammar, child));
+                                            parse_tree_core(child));
             if (!n00bb_reportable_operand(context->module, value)) continue;
             core_string_t text = n00bb_failure_text(lower,
                 n00bb_node_source_text(lower->unit, child,
@@ -450,18 +418,12 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         return true;
     }
 
+    // An elif clause is lowered as an arm of the `if` it belongs to.
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("elif-clause"))
-        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause"))) {
-        for (parse_tree_t *parent = parse_tree_parent(visit->node);
-             parent; parent = parse_tree_parent(parent)) {
-            if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("elif-clause"))
-                && nt_is(visit->grammar, parent, CORE_STRING_STATIC("if-stmt"))) return true;
-            if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause"))
-                && nt_is(visit->grammar, parent, CORE_STRING_STATIC("if-value-expr"))) return true;
-        }
-    }
-    bool short_circuit = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("and-expr"))
-        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-expr"));
+        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause")))
+        return true;
+    bool short_circuit = parse_tree_junction(visit->node)
+        != PARSE_JUNCTION_NONE;
     bool expression_form = short_circuit
         || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("if-value-expr"));
     if (!expression_form
@@ -522,11 +484,10 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
     }
     ir_block_t *jump_true = nullptr, *jump_false = nullptr;
     bool jumping = short_circuit
-        && n00bb_jump_targets(lower, visit->grammar, visit->node,
-                              &jump_true, &jump_false);
+        && n00bb_jump_targets(lower, visit->node, &jump_true, &jump_false);
     if (jumping) {
         ir_block_t *rhs = n00bb_branch_block_named(context, lower,
-            nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-expr"))
+            (parse_tree_junction(visit->node) == PARSE_JUNCTION_OR)
                 ? CORE_STRING_STATIC("condition_or")
                 : CORE_STRING_STATIC("condition_and"));
         if (!rhs) {
@@ -576,14 +537,13 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
     }
     ir_block_t *short_block = nullptr;
     if (short_circuit && result_local
-        && jumping_condition(visit->grammar, arms.data[0].condition)) {
+        && jumping_condition(arms.data[0].condition)) {
         short_block = n00bb_branch_block(context, lower, "short_circuit");
         ir_block_t *resume = context->block;
         ir_span_t span = lower_span_for_tree(context, visit->node);
         th_type *bool_type = n00bb_ir_builtin_type(context->module,
                                                    CORE_STRING_STATIC("bool"));
-        bool is_or = nt_is(visit->grammar, visit->node,
-                           CORE_STRING_STATIC("or-expr"));
+        bool is_or = (parse_tree_junction(visit->node) == PARSE_JUNCTION_OR);
         context->block = short_block;
         ir_instr_t *literal = short_block && bool_type
             ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
@@ -832,12 +792,12 @@ n00bb_extract_step(ir_lower_context_t *context, ir_value_t *value,
 
 static ir_value_t *
 n00bb_project_node(ir_lower_context_t *context, ir_value_t *value,
-                   parse_tree_t *node, ir_span_t span)
+                   parse_tree_t *pattern, parse_tree_t *node, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
     core_list_t(n00bb_projection_step_t) path
         = core_list_new(n00bb_projection_step_t);
-    n00bb_pattern_path(lower->grammar, node, &path);
+    n00bb_pattern_path(lower->grammar, pattern, node, &path);
     for (size_t i = 0; value && i < path.len; i++)
         value = n00bb_extract_step(context, value, path.data[i],
             th_var(ir_module_types(context->module)), span);
@@ -904,8 +864,8 @@ n00bb_lower_pattern(ir_lower_context_t *context, parse_visit_t *visit,
             internal = true;
             break;
         }
-        ir_value_t *element = n00bb_project_node(context, value, target,
-                                                 span);
+        ir_value_t *element = n00bb_project_node(context, value, pattern,
+                                                 target, span);
         internal = !element || ir_lower_assign_symbol(context, symbol, element,
             declaration, span).status == IR_LOWER_FAILED;
     }
@@ -1021,6 +981,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         parse_sym_entry_t *binding = frame->iteration_bindings.data[i];
         ir_local_t *local = ir_lower_bound_local(context, binding);
         ir_value_t *value = n00bb_project_node(context, get->dest,
+                                               frame->iteration_pattern,
                                                binding->decl_node, span);
         if (!value) {
             lower_internal(context, span,
@@ -1081,15 +1042,14 @@ n00bb_store_try_value(ir_lower_context_t *context,
 }
 
 int
-n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
-                      ir_value_t *error, ir_span_t span)
+n00bb_route_try_error(ir_lower_context_t *context, ir_value_t *error,
+                      ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_try_frame_t *frame = nullptr;
     for (size_t i = lower->tries.len; i > 0; i--) {
         n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
-        if (candidate->active && candidate->body
-            && node_is_within(source, candidate->body)) {
+        if (candidate->active && candidate->in_body) {
             frame = candidate;
             break;
         }
@@ -1174,8 +1134,10 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                         ? CORE_STRING_STATIC("try-value-error-clause")
                         : CORE_STRING_STATIC("try-error-clause")),
                 .error_symbol = nullptr,
+                .order = ++lower->next_control_order,
                 .expression = try_expression,
                 .active = context->reachable,
+                .in_body = true,
             };
             frame.error_symbol = n00bb_try_clause_symbol(visit->grammar,
                                                          frame.error_clause);
@@ -1249,7 +1211,9 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                        CORE_STRING_STATIC("block"))) {
         if (entering || !lower->tries.len) return true;
         n00bb_try_frame_t *frame = &lower->tries.data[lower->tries.len - 1];
-        if (frame->body != visit->node || !frame->active) return true;
+        if (frame->body != visit->node) return true;
+        frame->in_body = false;
+        if (!frame->active) return true;
         if (context->reachable) {
             if (frame->expression
                 && !n00bb_store_try_value(context, frame, visit->grammar,
@@ -1414,12 +1378,11 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             ir_span_t span = lower_span_for_tree(context, frame->node);
             bool nested = (!frame->short_circuit || frame->jumping
                            || frame->short_block)
-                && jumping_condition(visit->grammar, arm->condition);
+                && jumping_condition(arm->condition);
             if (frame->jumping || nested) {
                 if (nested && !n00bb_close_condition_scratch(lower))
                     return false;
-                bool is_or = nt_is(visit->grammar, frame->node,
-                                   CORE_STRING_STATIC("or-expr"));
+                bool is_or = (parse_tree_junction(frame->node) == PARSE_JUNCTION_OR);
                 if (frame->jumping && !nested) {
                     ir_value_t *operand = condition_value(context,
                                                           arm->condition);
@@ -1457,7 +1420,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_text_t construct = logical_construct(visit->grammar,
                                                        frame->node);
             bool shortcut_true = frame->short_circuit
-                && nt_is(visit->grammar, frame->node, CORE_STRING_STATIC("or-expr"));
+                && (parse_tree_junction(frame->node) == PARSE_JUNCTION_OR);
             // The result if this operand short-circuits: `false` for `and`,
             // `true` for `or`; the next operand overwrites it otherwise. The
             // operand is only tested, so a flagset counts as any flag set.
@@ -1486,13 +1449,13 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = true;
         }
         else if (arm_index < frame->arms.len && frame->jumping) {
-            if (jumping_condition(visit->grammar, visit->node)) {
+            if (jumping_condition(visit->node)) {
                 if (!n00bb_close_condition_scratch(lower)) return false;
             }
             else if (context->reachable) {
                 ir_span_t span = lower_span_for_tree(context, frame->node);
                 parse_tree_t *operand_node =
-                    condition_core(visit->grammar, visit->node);
+                    parse_tree_core(visit->node);
                 ir_value_t *operand = condition_value(context, operand_node);
                 th_type *bool_type = th_name(tu_state(lower->unit)->types,
                                              CORE_STRING_STATIC("bool"));
@@ -1624,7 +1587,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             if (frame->is_container)
                 return n00bb_lower_container_body_enter(context, lower,
                                                         frame);
-            if (jumping_condition(visit->grammar, frame->condition)) {
+            if (jumping_condition(frame->condition)) {
                 if (!n00bb_close_condition_scratch(lower)) return false;
                 context->block = frame->body_block;
                 context->reachable = true;
@@ -2012,8 +1975,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         }
         n00bb_typecase_frame_t frame = {
             .node = visit->node,
-            .label = n00bb_control_label(visit->grammar, visit->node,
-                                         CORE_STRING_STATIC("labeled-typecase")),
+            .label = parse_tree_control_label(visit->node),
             .subject_node = subject_node,
             .subject_symbol = symbol,
             .arms = core_list_new(n00bb_typecase_arm_t),
@@ -2308,10 +2270,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_push(lower->loops, ((n00bb_loop_frame_t){
         .node = visit->node,
         .entry_bindings = ir_lower_bindings_checkpoint(context),
-        .label = n00bb_control_label(visit->grammar, visit->node,
-                                    while_loop
-                                        ? CORE_STRING_STATIC("labeled-while")
-                                        : CORE_STRING_STATIC("labeled-for")),
+        .label = parse_tree_control_label(visit->node),
         .condition = label->cond,
         .body = label->then_body,
         .range_start = range_start,
@@ -2329,6 +2288,8 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         .iteration_source = iteration_source,
         .iteration_plan = iteration_plan,
         .iteration_bindings = iteration_bindings,
+        .iteration_pattern = child_nt(visit->grammar, visit->node,
+                                      CORE_STRING_STATIC("for-var-list")),
         .range_inclusive = inclusive,
         .is_range = range_loop,
         .is_container = container_loop,
@@ -2338,6 +2299,44 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (while_loop) context->block = header;
     context->reachable = true;
     return true;
+}
+
+// Whether an active value-producing expression (an `if`, `switch`,
+// `typecase` or `try` used as a value) takes its value from `body`.
+static bool
+n00bb_expression_owns_body(n00bb_lower_context_t *lower,
+                           parse_grammar_t *grammar, parse_tree_t *body)
+{
+    for (size_t i = 0; i < lower->branches.len; i++) {
+        n00bb_branch_frame_t *frame = &lower->branches.data[i];
+        if (!frame->active || !frame->expression) continue;
+        if (frame->else_body == body) return true;
+        for (size_t arm = 0; arm < frame->arms.len; arm++)
+            if (frame->arms.data[arm].body == body) return true;
+    }
+    for (size_t i = 0; i < lower->switches.len; i++) {
+        n00bb_switch_frame_t *frame = &lower->switches.data[i];
+        if (!frame->active || !frame->expression) continue;
+        if (frame->else_body == body) return true;
+        for (size_t arm = 0; arm < frame->cases.len; arm++)
+            if (frame->cases.data[arm].body == body) return true;
+    }
+    for (size_t i = 0; i < lower->typecases.len; i++) {
+        n00bb_typecase_frame_t *frame = &lower->typecases.data[i];
+        if (!frame->active || !frame->expression) continue;
+        if (frame->else_body == body) return true;
+        for (size_t arm = 0; arm < frame->arms.len; arm++)
+            if (frame->arms.data[arm].body == body) return true;
+    }
+    for (size_t i = 0; i < lower->tries.len; i++) {
+        n00bb_try_frame_t *frame = &lower->tries.data[i];
+        if (!frame->active || !frame->expression) continue;
+        if (frame->body == body
+            || child_nt(grammar, frame->error_clause,
+                        CORE_STRING_STATIC("value-body")) == body)
+            return true;
+    }
+    return false;
 }
 
 bool
@@ -2378,11 +2377,14 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
         if (entering || !context->reachable) return true;
         n00bb_lower_context_t *lower = context->user;
-        for (size_t i = lower->value_blocks.len; i > 0; i--) {
+        // Name resolution recorded the construct this statement gives the
+        // value of: a block value, a value body, or a body.
+        parse_tree_t *owner = parse_tree_value_owner(visit->node);
+        for (size_t i = lower->value_blocks.len; owner && i > 0; i--) {
             n00bb_value_block_frame_t *frame =
                 &lower->value_blocks.data[i - 1];
-            if (!frame->active
-                || !node_is_within(visit->node, frame->node)) continue;
+            if (frame->node != owner) continue;
+            if (!frame->active) return true;
             parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                                 CORE_STRING_STATIC("expression"));
             ir_value_t *value = expression
@@ -2411,60 +2413,10 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = true;
             return true;
         }
-        bool handled_by_value_expression = false;
-        for (size_t i = 0; i < lower->tries.len; i++) {
-            n00bb_try_frame_t *frame = &lower->tries.data[i];
-            if (frame->active && frame->expression
-                && node_is_within(visit->node, frame->node)) {
-                handled_by_value_expression = true;
-                break;
-            }
-        }
-        for (parse_tree_t *ancestor = visit->node;
-             ancestor && !handled_by_value_expression;
-             ancestor = parse_tree_parent(ancestor)) {
-            for (size_t i = 0; i < lower->branches.len; i++) {
-                n00bb_branch_frame_t *frame = &lower->branches.data[i];
-                if (!frame->active || !frame->expression) continue;
-                for (size_t arm = 0; arm < frame->arms.len; arm++)
-                    if (frame->arms.data[arm].body == ancestor)
-                        handled_by_value_expression = true;
-                if (frame->else_body == ancestor)
-                    handled_by_value_expression = true;
-            }
-            for (size_t i = 0; i < lower->switches.len; i++) {
-                n00bb_switch_frame_t *frame = &lower->switches.data[i];
-                if (!frame->active || !frame->expression) continue;
-                for (size_t arm = 0; arm < frame->cases.len; arm++)
-                    if (frame->cases.data[arm].body == ancestor)
-                        handled_by_value_expression = true;
-                if (frame->else_body == ancestor)
-                    handled_by_value_expression = true;
-            }
-            for (size_t i = 0; i < lower->typecases.len; i++) {
-                n00bb_typecase_frame_t *frame = &lower->typecases.data[i];
-                if (!frame->active || !frame->expression) continue;
-                for (size_t arm = 0; arm < frame->arms.len; arm++)
-                    if (frame->arms.data[arm].body == ancestor)
-                        handled_by_value_expression = true;
-                if (frame->else_body == ancestor)
-                    handled_by_value_expression = true;
-            }
-        }
-        if (handled_by_value_expression) return true;
-
-        bool function_body_value = false;
-        bool nested_value_body = false;
-        for (parse_tree_t *ancestor = parse_tree_parent(visit->node);
-             ancestor; ancestor = parse_tree_parent(ancestor)) {
-            if (nt_is(visit->grammar, ancestor, CORE_STRING_STATIC("value-body")))
-                nested_value_body = true;
-            if (nt_is(visit->grammar, ancestor, CORE_STRING_STATIC("body"))) {
-                function_body_value = ancestor == lower->function_body;
-                break;
-            }
-        }
-        if (!function_body_value || nested_value_body) {
+        // A value body's value is taken by the expression that owns it.
+        if (owner && n00bb_expression_owns_body(lower, visit->grammar, owner))
+            return true;
+        if (!owner || owner != lower->function_body) {
             lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
                 lower_span_for_tree(context, visit->node),
                 N00B_TEXT_NOT_SUPPORTED_YET_A_VALUE,
@@ -2506,7 +2458,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
         if (!n00bb_emit_with_failure(context, visit->node))
             return false;
-        int routed = n00bb_route_try_error(context, visit->node, value, span);
+        int routed = n00bb_route_try_error(context, value, span);
         if (routed) return routed > 0;
         th_type *failure_type = lower->function_symbol
             ? th_func_error(lower->function_symbol->type) : nullptr;
@@ -2653,13 +2605,10 @@ static bool
 n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
                        parse_tree_t *item, core_string_t *name)
 {
-    parse_tree_t *expression = child_nt(grammar, item,
-                                        CORE_STRING_STATIC("expression"));
-    core_string_t text = {0};
-    if (!lower || !expression
-        || child_nt(grammar, item, CORE_STRING_STATIC("range-sep"))
-        || !simple_identifier_expression(grammar, expression, &text))
-        return false;
+    core_string_t text = parse_tree_case_spelled(item);
+    parse_tree_t *expression = text.data
+        ? child_nt(grammar, item, CORE_STRING_STATIC("expression")) : nullptr;
+    if (!lower || !expression) return false;
     parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
                                                 expression);
     // A function is never a value a case can match, so a function of the
@@ -2984,8 +2933,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     parse_sym_entry_t *subject = parse_tree_narrowed_subject(visit->node);
     n00bb_switch_frame_t frame = {
         .node = visit->node,
-        .label = n00bb_control_label(visit->grammar, visit->node,
-                                    CORE_STRING_STATIC("labeled-switch")),
+        .label = parse_tree_control_label(visit->node),
         .scrutinee = label->cond,
         .cases = core_list_new(n00bb_switch_case_t),
         .order = ++lower->next_control_order,

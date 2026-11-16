@@ -265,6 +265,80 @@ parse_tree_call_facts(parse_tree_t *node)
         ? parse_tree_facts_for_update(node) : nullptr;
 }
 
+// The expression `node` stands for once parentheses and single-child
+// wrappers are seen through.
+static inline parse_tree_t *
+parse_tree_core(parse_tree_t *node)
+{
+    parse_node_semantic_t *semantic = parse_tree_semantic(node);
+    return semantic && semantic->core ? semantic->core : node;
+}
+
+static inline bool
+parse_tree_set_core(parse_tree_t *node, parse_tree_t *core)
+{
+    parse_node_semantic_t *semantic = parse_tree_semantic(node);
+    if (!semantic) return false;
+    semantic->core = core == node ? nullptr : core;
+    return true;
+}
+
+static inline parse_junction_t
+parse_tree_junction(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->junction : PARSE_JUNCTION_NONE;
+}
+
+static inline bool
+parse_tree_is_comparison(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->comparison;
+}
+
+static inline bool
+parse_tree_in_effect_query(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->in_effect_query;
+}
+
+static inline parse_tree_t *
+parse_tree_value_owner(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->value_owner : nullptr;
+}
+
+static inline core_string_t
+parse_tree_control_label(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->control_label : (core_string_t){0};
+}
+
+static inline bool
+parse_tree_negated_literal(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->negated_literal;
+}
+
+static inline bool
+parse_tree_in_pattern(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts && facts->in_pattern;
+}
+
+static inline core_string_t
+parse_tree_case_spelled(const parse_tree_t *node)
+{
+    const parse_node_facts_t *facts = parse_tree_facts(node);
+    return facts ? facts->case_spelled : (core_string_t){0};
+}
+
 static inline bool
 parse_tree_names_called(const parse_tree_t *node)
 {

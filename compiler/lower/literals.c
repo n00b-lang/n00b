@@ -91,6 +91,7 @@ n00bb_tuple_parts(n00bb_lower_context_t *lower, parse_tree_t *node,
         .node = node,
         .expressions = core_list_new(parse_tree_ptr_t),
         .values = core_list_new(n00bb_ir_value_ptr_t),
+        .names = core_list_new(core_string_t),
     }));
     return &lower->tuple_parts.data[lower->tuple_parts.len - 1];
 }
@@ -115,6 +116,7 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
     if (!parts) return false;
     core_list_push(parts->expressions, head);
     core_list_push(parts->values, head_value);
+    core_list_push(parts->names, (core_string_t){0});
     if (child_count == 3) {
         parse_tree_t *tail_node = core_tree_child(visit->node, 2);
         n00bb_tuple_parts_t *tail = n00bb_tuple_parts(lower, tail_node, false);
@@ -126,6 +128,7 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t i = 0; i < tail->expressions.len; i++) {
             core_list_push(parts->expressions, tail->expressions.data[i]);
             core_list_push(parts->values, tail->values.data[i]);
+            core_list_push(parts->names, tail->names.data[i]);
         }
     }
     return true;
@@ -150,6 +153,7 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
             for (size_t j = 0; j < tail->expressions.len; j++) {
                 core_list_push(parts->expressions, tail->expressions.data[j]);
                 core_list_push(parts->values, tail->values.data[j]);
+                core_list_push(parts->names, tail->names.data[j]);
             }
         }
         else if (nt_is(visit->grammar, child, CORE_STRING_STATIC("named-field"))) {
@@ -167,6 +171,7 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
                 return false;
             core_list_push(parts->expressions, expression);
             core_list_push(parts->values, value);
+            core_list_push(parts->names, first_token_text(child));
         }
     }
     return parts->values.len != 0;
@@ -368,12 +373,8 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             size_t i = j;
             if (by_name) {
                 core_string_t member = th_record_member(definition, j)->name;
-                for (i = 0; i < parts->values.len; i++) {
-                    parse_tree_t *field = parse_tree_parent(
-                        parts->expressions.data[i]);
-                    if (field && core_string_eq(first_token_text(field),
-                                                member)) break;
-                }
+                for (i = 0; i < parts->values.len; i++)
+                    if (core_string_eq(parts->names.data[i], member)) break;
             }
             ok = i < parts->values.len
                 && ir_instr_operand_value(aggregate, parts->values.data[i]);
@@ -417,9 +418,11 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             .status != IR_LOWER_FAILED;
     core_list_push(parts->expressions, first);
     core_list_push(parts->values, first_value);
+    core_list_push(parts->names, (core_string_t){0});
     for (size_t i = 0; i < rest->expressions.len; i++) {
         core_list_push(parts->expressions, rest->expressions.data[i]);
         core_list_push(parts->values, rest->values.data[i]);
+        core_list_push(parts->names, rest->names.data[i]);
     }
     if (!type || th_kind_of(th_resolve(type)) == TH_VAR) {
         th_type **elements = core_alloc_array(th_type *, parts->values.len);

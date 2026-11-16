@@ -1,0 +1,1 @@
+tests/diagnostics/lower/value_owner.n:6:13: error N00B-S0039: not supported yet: a value statement outside a block that produces a value

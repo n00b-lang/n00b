@@ -1,0 +1,12 @@
+// A value statement inside an `if` statement's body has no value-producing
+// construct to give its value to, even inside a block value.
+func pick(c: bool) -> int {
+    let x = {
+        if c {
+            -> 1
+        }
+        -> 2
+    }
+    -> x
+}
+require pick(true) == 1
