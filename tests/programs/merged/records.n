@@ -263,6 +263,20 @@ require wide_class(Wide.w9) == 3
 require wide_class(Wide.w0 - Wide.w0) == 4
 require wide_class(Wide.w1) == 5
 
+// Every operand of `and` and `or` is a condition, the last one too, also
+// where the result is a value: a flagset is true when any flag is set.
+func both_set(a: Access) -> bool {
+    return a.see and a.edit
+}
+
+func either_set(a: Access) -> bool {
+    let found: bool = a.run or a.admin
+    return found
+}
+
+require both_set(Access.rw) and !both_set(Access.see)
+require either_set(Access.admin) and !either_set(Access.rw)
+
 func access_slice(a: Access) -> int {
     switch a.rw {
         case is nil { return 0 }

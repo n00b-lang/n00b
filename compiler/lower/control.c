@@ -1459,17 +1459,16 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 : frame->else_block ? frame->else_block : frame->join;
             n00bb_text_t construct = logical_construct(visit->grammar,
                                                        frame->node);
-            if (frame->short_circuit) {
-                ir_instr_t *store = ir_lower_emit_instruction(context,
-                    IR_OP_COPY, lower_span_for_tree(context, frame->node));
-                if (!store || !ir_instr_set_dest_local(store,
-                        frame->result_local)
-                    || !ir_instr_operand_value(store, condition)
-                    || !n00bb_mark_condition(context, construct,
-                                             arm->condition)) return false;
-            }
             bool shortcut_true = frame->short_circuit
                 && nt_is(visit->grammar, frame->node, CORE_STRING_STATIC("or-expr"));
+            // The result if this operand short-circuits: `false` for `and`,
+            // `true` for `or`; the next operand overwrites it otherwise. The
+            // operand is only tested, so a flagset counts as any flag set.
+            if (frame->short_circuit
+                && !n00bb_set_flag(context, frame->result_local,
+                                   shortcut_true,
+                                   lower_span_for_tree(context, frame->node)))
+                return false;
             ir_instr_t *branch = ir_instr_add(context->block, IR_OP_BRANCH);
             bool emitted = branch
                 && ir_instr_operand_value(branch, condition)
@@ -1527,15 +1526,42 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         logical_construct(visit->grammar, frame->node));
                     return false;
                 }
+                // The last operand of `and` or `or` is a condition too (a
+                // flagset is true when any flag is set), so it is tested
+                // like the others rather than copied into the `bool` result.
+                if (frame->short_circuit) {
+                    ir_span_t span = lower_span_for_tree(context, visit->node);
+                    ir_block_t *yes = n00bb_branch_block(context, lower,
+                                                         "logical_true");
+                    ir_block_t *no = n00bb_branch_block(context, lower,
+                                                        "logical_false");
+                    ir_block_t *done = n00bb_branch_block(context, lower,
+                                                          "logical_value");
+                    bool ok = yes && no && done
+                        && n00bb_emit_branch(context, value, yes, no, span)
+                        && n00bb_mark_condition(context, logical_construct(
+                               visit->grammar, frame->node), expression);
+                    for (int truth = 1; ok && truth >= 0; truth--) {
+                        context->block = truth ? yes : no;
+                        ok = n00bb_set_flag(context, frame->result_local,
+                                            truth, span)
+                            && n00bb_emit_jump(context, done, span);
+                    }
+                    if (!ok) {
+                        lower_internal(context, span,
+                            "could not test the last operand of `and`/`or`");
+                        return false;
+                    }
+                    context->block = done;
+                    value = nullptr;
+                }
                 ir_instr_t *store = value
                     ? ir_lower_emit_instruction(context, IR_OP_COPY,
                         lower_span_for_tree(context, visit->node)) : nullptr;
-                if (!store || !ir_instr_set_dest_local(
-                                  store, frame->result_local)
-                    || !ir_instr_operand_value(store, value)
-                    || (frame->short_circuit && !n00bb_mark_condition(context,
-                            logical_construct(visit->grammar, frame->node),
-                            expression))) {
+                if (!frame->short_circuit
+                    && (!store || !ir_instr_set_dest_local(
+                                      store, frame->result_local)
+                        || !ir_instr_operand_value(store, value))) {
                     lower_internal(context,
                         lower_span_for_tree(context, visit->node),
                         "an if-expression arm produced no value");

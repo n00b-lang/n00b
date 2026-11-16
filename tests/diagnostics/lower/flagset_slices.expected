@@ -1,3 +1,11 @@
+tests/diagnostics/lower/flagset_slices.n:1:9: warning N00B-N0023: type `Perm` is never used
+  help: remove it
+tests/diagnostics/lower/flagset_slices.n:3:8: warning N00B-N0023: type `Box` is never used
+  help: remove it
+tests/diagnostics/lower/flagset_slices.n:7:6: warning N00B-N0019: function `clear` is never called
+  help: call it or delete it
+tests/diagnostics/lower/flagset_slices.n:11:6: warning N00B-N0019: function `outside` is never called
+  help: call it or delete it
 tests/diagnostics/lower/flagset_slices.n:13:14: warning N00B-S0093: this case can never match: earlier cases match every value it would
   help: move it before the cases that cover it, or remove it
 tests/diagnostics/lower/flagset_slices.n:13:25: warning N00B-S0005: this code can never run: no path reaches it
