@@ -5,6 +5,12 @@ N00B_DIAG(UNRESOLVED_NAME, "N00B-N0001", ERROR,
     "Check the spelling, or import the module that declares it:\n"
     "    import helper\n"
     "    let x = helper.compute(1)")
+N00B_DIAG(AMBIGUOUS_MEMBER_NAME, "N00B-N0026", ERROR,
+    "a bare name matches members of more than one enum or flagset",
+    "Enum and flagset members can be used without their type's name, but\n"
+    "only when one of the module's enums or flagsets has a member by that\n"
+    "name. Write the type's name to say which one you mean:\n"
+    "    let state = Phase.idle")
 N00B_DIAG(UNKNOWN_TYPE, "N00B-N0002", ERROR,
     "a type name does not refer to any visible type",
     "Type annotations must name a built-in type, a type declared in this\n"

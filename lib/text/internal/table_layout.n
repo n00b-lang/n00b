@@ -1,4 +1,5 @@
 import sys.abi
+import internal.border
 import internal.layout
 import internal.string
 import internal.table
@@ -87,6 +88,7 @@ private func spec_dim(dim: internal.layout.Layout_Dim?, available: i64) -> i64 {
 
 private func table_has_interior_v(table: internal.table.Table) -> bool {
     return table.table_props.borders.interior_v
+        != internal.border.Border_Set.none
 }
 
 private func scan_column_preferences(table: internal.table.Table, width: i64)

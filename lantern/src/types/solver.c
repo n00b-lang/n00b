@@ -1263,11 +1263,22 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
 
         return signature && dispatch_call(s, p, signature) ? HOLDS : FAILS;
     }
-    case TY_PRED_CONDITION:
-        return same(s, th_name(s->types, CORE_STRING_STATIC("bool")), subject,
-                    p->why)
-                 ? HOLDS
-                 : FAILS;
+    case TY_PRED_CONDITION: {
+        th_type *boolean = th_name(s->types, CORE_STRING_STATIC("bool"));
+        th_type *truth   = s->methods && th_kind_of(subject) == TH_NAMED
+                               ? s->methods(s->methods_context, subject,
+                                            CORE_STRING_STATIC("__truth"),
+                                            nullptr)
+                               : nullptr;
+
+        if (truth && th_kind_of(th_resolve(truth)) == TH_FUNCTION
+            && th_same_type(th_resolve(th_func_ret(th_resolve(truth))),
+                            boolean)) {
+            return HOLDS;
+        }
+
+        return same(s, boolean, subject, p->why) ? HOLDS : FAILS;
+    }
     case TY_PRED_ONE_OF: {
         th_type *members = p->pred.other ? th_resolve(p->pred.other) : nullptr;
 

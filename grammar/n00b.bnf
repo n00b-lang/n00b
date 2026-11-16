@@ -275,6 +275,25 @@
 
 <case-expr-item> ::= <expression> <range-sep> <expression>
 <case-expr-item>             ::= <expression>
+<case-expr-item>             ::= <case-flags-test>
+
+<case-flags-test> ::= <case-flags-kind> <case-flags>
+<case-flags-kind> ::= %"has"
+                    | %"is"
+<case-flags> ::= <case-flags> <plus-op> <case-flags-xor>
+               | <case-flags> <minus-op> <case-flags-xor>
+               | <case-flags> <pipe-op> <case-flags-xor>
+               | <case-flags-xor>
+<case-flags-xor> ::= <case-flags-xor> <xor-op> <case-flags-and>
+                   | <case-flags-and>
+<case-flags-and> ::= <case-flags-and> <amp-op> <case-flags-unary>
+                   | <case-flags-unary>
+<case-flags-unary> @nospace ::= %"~" <case-flags-unary>
+<case-flags-unary> ::= <case-flags-primary>
+<case-flags-primary> ::= <nil-keyword>
+                       | <case-flag-name>
+<case-flags-primary> @nospace ::= %"(" <case-flags> %")"
+<case-flag-name> ::= %IDENTIFIER
 
 <case-else> ::= %"else" <body>
 
@@ -502,11 +521,11 @@
                 | <flagset-intersection>
 <flagset-intersection> ::= <flagset-intersection> <amp-op> <flagset-unary>
                          | <flagset-unary>
-<flagset-unary> ::= %"~" <flagset-unary>
-                  | <flagset-primary>
+<flagset-unary> @nospace ::= %"~" <flagset-unary>
+<flagset-unary> ::= <flagset-primary>
 <flagset-primary> ::= <nil-keyword>
                     | <flagset-name>
-                    | %"(" <flagset-value> %")"
+<flagset-primary> @nospace ::= %"(" <flagset-value> %")"
 <flagset-name> @varref($0) ::= %IDENTIFIER
 
 <assign-stmt> @assigns($0, $2) ::= <place> <assign-op> <expression>

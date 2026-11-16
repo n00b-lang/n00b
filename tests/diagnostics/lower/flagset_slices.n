@@ -1,0 +1,30 @@
+flagset Perm { read, write, exec, rw = read + write, none = nil }
+
+record Box {
+    perm: Perm
+}
+
+func clear(modify f: Perm) {
+    f = Perm.none
+}
+
+func outside(p: Perm) -> int {
+    switch p.rw {
+        case has exec { return 1 }
+        case is read { return 2 }
+        else { return 0 }
+    }
+}
+
+func start() {
+    var p = Perm.read
+    p.write = Perm.write
+    p.none = Perm.read
+    var b: Box = (perm = Perm.read)
+    b.perm.rw = Perm.read
+    clear(p.read)
+    require p.rw == Perm.read
+    require p.rw != Perm.exec
+    require p.rw == Perm.read + Perm.exec
+    require outside(p) + outside(b.perm) == 4
+}

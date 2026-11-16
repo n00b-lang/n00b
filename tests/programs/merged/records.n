@@ -192,6 +192,124 @@ let q: Packed = (name = "q", x = false, mode = Mode.a, small = 1,
                  perm = Perm.exec, maybe = true, count = 3,
                  inner = (on = false, mode = Mode.a), y = true)
 require q.y and !q.x and q.small == 1
+
+flagset Access { see, edit, run, admin, rw = see + edit, every = ~nil }
+
+func access_class(a: Access) -> int {
+    switch a {
+        case is nil { return 0 }
+        case is see { return 1 }
+        case has rw { return 2 }
+        case has run, is edit { return 3 }
+        else { return 9 }
+    }
+}
+
+func access_kind(a: Access) -> int {
+    return switch a {
+        case is every { -> 1 }
+        case has admin { -> 2 }
+        case is rw { -> 3 }
+        else { -> 4 }
+    }
+}
+
+func access_full(a: Access) -> int {
+    switch a {
+        case has see { return 1 }
+        case has edit { return 2 }
+        case has run + admin { return 3 }
+        case has run { return 4 }
+        case has admin { return 5 }
+        case is nil { return 6 }
+    }
+}
+
+flagset Wide { w0, w1, w2, w3, w4, w5, w6, w7, w8, w9 }
+
+func wide_class(w: Wide) -> int {
+    switch w {
+        case is w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8 { return 1 }
+        case has w9 + w0 { return 2 }
+        case has w9 { return 3 }
+        case is nil { return 4 }
+        else { return 5 }
+    }
+}
+
+require access_class(Access.see - Access.see) == 0
+require access_class(Access.see) == 1
+require access_class(Access.see + Access.admin) == 9
+require access_class(Access.rw) == 2
+require access_class(Access.rw + Access.run) == 2
+require access_class(Access.run + Access.admin) == 3
+require access_class(Access.edit) == 3
+require access_class(Access.edit + Access.admin) == 9
+require access_class(Access.admin) == 9
+require access_kind(Access.every) == 1
+require access_kind(Access.admin + Access.see) == 2
+require access_kind(Access.rw) == 3
+require access_kind(Access.rw + Access.run) == 4
+require access_full(Access.see + Access.admin) == 1
+require access_full(Access.edit + Access.run) == 2
+require access_full(Access.run + Access.admin) == 3
+require access_full(Access.run) == 4
+require access_full(Access.admin) == 5
+require access_full(Access.see - Access.see) == 6
+require wide_class(Wide.w0 + Wide.w1 + Wide.w2 + Wide.w3 + Wide.w4 + Wide.w5
+    + Wide.w6 + Wide.w7 + Wide.w8) == 1
+require wide_class(Wide.w9 + Wide.w0 + Wide.w2) == 2
+require wide_class(Wide.w9) == 3
+require wide_class(Wide.w0 - Wide.w0) == 4
+require wide_class(Wide.w1) == 5
+
+// Every operand of `and` and `or` is a condition, the last one too, also
+// where the result is a value: a flagset is true when any flag is set.
+func both_set(a: Access) -> bool {
+    return a.see and a.edit
+}
+
+func either_set(a: Access) -> bool {
+    let found: bool = a.run or a.admin
+    return found
+}
+
+require both_set(Access.rw) and !both_set(Access.see)
+require either_set(Access.admin) and !either_set(Access.rw)
+
+func access_slice(a: Access) -> int {
+    switch a.rw {
+        case is nil { return 0 }
+        case is see { return 1 }
+        case is edit { return 2 }
+        case is rw { return 3 }
+    }
+}
+
+let some_access = Access.see + Access.run
+let read_part: Access = some_access.rw
+require read_part == Access.see
+require some_access.rw == Access.see
+require some_access.see and some_access.run
+require some_access.rw
+require !some_access.edit
+let run_only = Access.run
+require !run_only.rw
+if run_only.rw {
+    require false
+}
+let held = run_only.rw
+if held {
+    require false
+}
+require access_slice(Access.run) == 0 and access_slice(some_access) == 1
+require access_slice(Access.edit + Access.admin) == 2
+require access_slice(Access.every) == 3
+let bare_access: Access = see + run
+require bare_access.rw == see and bare_access.rw != rw
+require access_slice(edit) == 2 and access_slice(every) == 3
+let bare_mode: Mode = b
+require bare_mode == Mode.b and bare_mode != c
 record Pair {
     lo:   char
     hi:   char
