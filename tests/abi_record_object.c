@@ -1561,9 +1561,12 @@ check_c_foreign(const core_object_section_t *metadata,
     assert(types && extractors && trace_arms && stream);
     th_ctx *context = th_ctx_new();
     assert(context);
-    uint64_t holder_hash = th_hash(context,
-                                   TH_NAME(context, "c_foreign.Holder"));
-    uint64_t item_hash = th_hash(context, TH_NAME(context, "c_foreign.Item"));
+    // The records come from c_foreign's FFI contract, so they live in the
+    // module its literal generates.
+    uint64_t holder_hash = th_hash(context, TH_NAME(context,
+        "__ffi_c_foreign___ffi_literal_1.Holder"));
+    uint64_t item_hash = th_hash(context, TH_NAME(context,
+        "__ffi_c_foreign___ffi_literal_1.Item"));
     th_ctx_free(context);
     uint32_t holder_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++)
@@ -1581,9 +1584,9 @@ check_c_foreign(const core_object_section_t *metadata,
     const n00b_abi_field_v1 *kind = RECORD_FIELD_NAMED(metadata, entries,
         count, holder_index, "kind");
     const n00b_abi_field_v1 *number = RECORD_FIELD_NAMED(metadata, entries,
-        count, holder_index, "number");
+        count, holder_index, "v_number");
     const n00b_abi_field_v1 *text = RECORD_FIELD_NAMED(metadata, entries,
-        count, holder_index, "text");
+        count, holder_index, "v_text");
     assert(foreign_target(metadata, entries, count, items)->typehash
         == item_hash);
     assert(foreign_target(metadata, entries, count, name)->kind

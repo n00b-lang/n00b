@@ -427,10 +427,14 @@ const config = settings.load("app.conf")
 
 - **Description.** Every struct reachable from the value must be fully
   described by its contract. writ's layout facts become `layout(c)`
-  n00b records whose pointer fields are `Foreign[T]` or `Foreign_Fn[...]`,
-  with field clauses: `count FIELD` for a counted pointer, `until EXPR`
-  for a sentinel-terminated array, and `union by FIELD { … }` for a
-  union and its discriminant (N00BB-T0037 rejects malformed clauses).
+  n00b records whose pointer fields are `Foreign[T]` or `Foreign_Fn[...]`.
+  n00b has no syntax for extents or C unions; writ hands them to the
+  compiler as data beside the generated source (`writ_n00b_field_t`): a
+  counted pointer's count field, a sentinel-terminated array's sentinel,
+  and a tagged union's arms and discriminant. A union's arms are private
+  fields of the record that share its storage; the generated module
+  gives each arm an accessor (`value.arm()`, nil unless the tag selects
+  it) and a setter (`value.set_arm(x)`, which sets the tag too).
   A pointer the contract doesn't describe fails the capture, naming the
   field path.
 - **Copy.** The copier (`sys.internal.marshal`) runs in the build-time

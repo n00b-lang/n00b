@@ -467,18 +467,6 @@ N00B_DIAG(RECORD_HAS_CONSTRUCTOR, "N00B-T1034", ERROR,
     "field tuple nor `cast[T]` fills it in field by field. Call the\n"
     "constructor, or write `unsafe_cast[T](...)` when skipping it is\n"
     "intended.")
-N00B_DIAG(UNION_DISCRIMINANT_TYPE, "N00B-T1036", ERROR,
-    "a union discriminant is not an 8, 16 or 32-bit integer",
-    "The field that selects a union arm must be an 8, 16 or 32-bit\n"
-    "integer.")
-N00B_DIAG(EXTENT_NEEDS_FOREIGN, "N00B-T1037", ERROR,
-    "an extent clause is used on a field that is not `Foreign[...]`",
-    "`count` and `until` clauses describe foreign memory, so only\n"
-    "`Foreign[...]` fields can have them.")
-N00B_DIAG(EXTENT_COUNT_TYPE, "N00B-T1038", ERROR,
-    "the `count` field of an extent clause is not an integer",
-    "The field named by `count` holds the number of elements, so it must\n"
-    "have an integer type.")
 N00B_DIAG(TYPE_PARAMETER_FIXED, "N00B-T1039", ERROR,
     "a function body fixes a declared type parameter to one type",
     "A declared type parameter must work for any type. Use the concrete\n"

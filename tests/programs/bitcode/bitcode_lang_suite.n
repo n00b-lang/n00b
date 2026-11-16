@@ -1742,24 +1742,27 @@ func f32_check() {
     require values[0] + values[1] + values[2] == 4.0
 }
 
-record Item layout(c) {
-    key: i32
-    value: i32
-    label: Foreign[i8]? until 0
+[-
+library c
+struct item @size(16) @align(8) {
+    key: i32 @0
+    value: i32 @4
+    label: *cstr @8
 }
 
-record Root layout(c) {
-    early: Foreign[Item]?
-    items: Foreign[Item]? count total
-    total: u64
-    codes: Foreign[i32]? until 0
-    kind: i32
-    v: union by kind {
-        1 => number: i64
-        2 => text: Foreign[i8]? until 0
+struct root @size(56) @align(8) {
+    early: *item @0
+    items: *[item; total] @8
+    total: u64 @16
+    codes: *[i32; until 0] @24
+    kind: i32 @32
+    v: union by kind @40 {
+        1 => quantity: i64
+        2 => caption: *cstr
     }
-    other: Foreign[i8]? until 0
+    other: *cstr @48
 }
+-]'ffi
 
 var anchors: List[Array[u8]] = new[List[Array[u8]]]()
 var item_anchors: List[Array[Item]] = new[List[Array[Item]]]()
@@ -1781,10 +1784,13 @@ func make_root() -> Root {
     var codes: Array[i32] = [3, 5, 7, 0]
     code_anchors.append(codes)
     let base: uint = __abi_ref_address(ref items[0])
-    return (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
-            items = unsafe_cast[Foreign[Item]?] base, total = 4,
-            codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
-            kind = 2, text = c_text([119, 111, 114, 100, 0]), other = even)
+    // A field tuple leaves out the union's arms; the setter picks one.
+    var made: Root = (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
+                      items = unsafe_cast[Foreign[Item]?] base, total = 4,
+                      codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
+                      kind = 0, other = even)
+    made.set_caption(c_text([119, 111, 114, 100, 0]))
+    return made
 }
 
 const root: Root = make_root()
@@ -1812,7 +1818,8 @@ func bake_foreign_check() {
     require __abi_baked_address(unsafe_cast[uint] root.other)
     let label: string? = foreign_text(item_at(1).label)
     require label != nil and label == "odd"
-    let text: string? = foreign_text(root.text)
+    require root.kind == 2 and root.quantity() == nil
+    let text: string? = foreign_text(root.caption())
     require text != nil and text == "word"
 }
 

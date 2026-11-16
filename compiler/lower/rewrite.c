@@ -1232,10 +1232,13 @@ n00bb_rewrite_function_address(n00bb_rewrite_t *rewrite,
     core_translation_unit_t *unit = symbol
         ? unit_for_symbol(analysis->grammar, &analysis->units, symbol)
         : nullptr;
-    ir_module_t *owner = unit ? tu_state(unit)->ir_module : nullptr;
-    *function = symbol ? link_ir_function_for_symbol(analysis, symbol)
-                       : nullptr;
-    return owner && *function ? ir_func_address(owner, *function) : nullptr;
+    *function = unit ? link_ir_function_for_symbol(analysis, symbol)
+                     : nullptr;
+    // The function's own module, which isn't the symbol's unit's for a
+    // module literal's generated functions: their names are declared into
+    // the module that holds the literal.
+    return *function ? ir_func_address((*function)->owner, *function)
+                     : nullptr;
 }
 
 static bool

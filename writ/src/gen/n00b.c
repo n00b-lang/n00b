@@ -1,6 +1,7 @@
 #include "gen.h"
 
 core_list_decl(writ_n00b_extern_t);
+core_list_decl(writ_n00b_field_t);
 
 enum { N00B_FFI_WRITE = 1 };
 
@@ -30,6 +31,7 @@ typedef struct {
     core_buffer_t        *map;
     writ_str_t            type_namespace;
     core_list_t(writ_n00b_extern_t) *externs;
+    core_list_t(writ_n00b_field_t) *fields;
     core_list_t(record_handle_t) *record_handles;
     core_list_t(plan_patch_t) *patches;
     bool                  libc; // shims check they aren't on a runtime thread (linux_start.c)
@@ -1504,15 +1506,19 @@ sibling_field(const n00b_t *g, const writ_record_view_t *record, uint32_t expr, 
     return false;
 }
 
+// The extent of a pointer field in a generated `layout(c)` record, for the
+// compiler (writ_n00b_field_t); false when the contract's extent can't be
+// described that way.
 static bool
-foreign_clause(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field, writ_str_t *clause)
+foreign_extent(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field,
+               writ_n00b_field_t *out)
 {
     const writ_type_view_t *type = field->type;
     writ_str_t name = {0};
     int64_t sentinel = 0;
-    *clause = writ_cstr("");
+    out->extent = WRIT_N00B_EXTENT_NONE;
     if (type->kind == WRIT_TYPE_POINTER) {
-        *clause = type->target->kind == WRIT_TYPE_CSTR ? writ_cstr(" until 0") : *clause;
+        out->extent = type->target->kind == WRIT_TYPE_CSTR ? WRIT_N00B_EXTENT_UNTIL : out->extent;
         return true;
     }
     switch (field->extent_kind) {
@@ -1524,13 +1530,15 @@ foreign_clause(const n00b_t *g, const writ_record_view_t *record, const writ_slo
                            &name)) {
             return false;
         }
-        *clause = writ_str_format(g->session, " count %.*s", S(name));
+        out->extent = WRIT_N00B_EXTENT_COUNT;
+        out->count_field = name;
         return true;
     case WRIT_EXTENT_UNTIL:
         if (!writ_expr_eval(g->model, field->count_expr, nullptr, &sentinel)) {
             return false;
         }
-        *clause = writ_str_format(g->session, " until %lld", (long long)sentinel);
+        out->extent = WRIT_N00B_EXTENT_UNTIL;
+        out->sentinel = sentinel;
         return true;
     default:
         return false;
@@ -1551,11 +1559,11 @@ static writ_str_t
 foreign_pointer(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
 {
     writ_str_t element = record ? foreign_pointee(g, field->type->target) : foreign_element(g, field->type->target);
-    writ_str_t clause = {0};
-    if (!element.length || (record && !foreign_clause(g, record, field, &clause))) {
+    writ_n00b_field_t extent = {0};
+    if (!element.length || (record && !foreign_extent(g, record, field, &extent))) {
         return writ_cstr(record ? "Foreign[nil]?" : "uint");
     }
-    return writ_str_format(g->session, "Foreign[%.*s]?%.*s", S(element), S(clause));
+    return writ_str_format(g->session, "Foreign[%.*s]?", S(element));
 }
 
 static writ_str_t
@@ -1581,16 +1589,57 @@ foreign_callback(const n00b_t *g, const writ_type_view_t *type)
                          : writ_cstr("uint");
 }
 
-static bool
-union_expressible(const n00b_t *g, const writ_record_view_t *tagged)
+static writ_str_t
+field_name(const n00b_t *g, const writ_slot_view_t *field)
 {
-    for (size_t f = 0; f < tagged->fields_count; f++) {
-        writ_str_t spec = field_spec(g, tagged, &tagged->fields[f]);
-        if (!spec.length || writ_str_eq(spec, writ_cstr("union"))) {
-            return false;
-        }
+    return writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
+}
+
+// The private field that holds one arm of a C union.
+static writ_str_t
+arm_storage(const n00b_t *g, const writ_slot_view_t *owner, const writ_slot_view_t *member)
+{
+    return writ_str_format(g->session, "%.*s_%.*s", S(field_name(g, owner)), S(field_name(g, member)));
+}
+
+static bool
+has_field_named(const n00b_t *g, const writ_record_view_t *record, writ_str_t name)
+{
+    bool found = false;
+    for (size_t f = 0; f < record->fields_count && !found; f++) {
+        found = writ_str_eq(field_name(g, &record->fields[f]), name);
     }
-    return tagged->arms_count != 0;
+    return found;
+}
+
+static const writ_type_view_t *
+unviewed(const writ_type_view_t *type)
+{
+    return type && type->kind == WRIT_TYPE_VIEW ? unviewed(type->target) : type;
+}
+
+// A C union in a `layout(c)` record becomes one private field per arm, all
+// sharing the union's storage, plus an accessor and a setter per arm (see
+// emit_union); writ_n00b_field_t tells the compiler which fields overlap
+// and which tag selects each. That needs an integer tag field, and arm
+// names that don't collide with the record's own fields.
+static bool
+union_expressible(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
+{
+    const writ_record_view_t *tagged = writ_model_record_at(g->model, field->type->decl);
+    const writ_type_view_t *tag = field->tag_field < record->fields_count
+                                      ? unviewed(record->fields[field->tag_field].type) : nullptr;
+    bool ok = tagged && tagged->arms_count && tag && tag->kind == WRIT_TYPE_INT
+              && (tag->size == 1 || tag->size == 2 || tag->size == 4);
+    for (size_t a = 0; ok && a < tagged->arms_count; a++) {
+        const writ_slot_view_t *member = tagged->arms[a].field == WRIT_PLAN_NONE
+                                             ? nullptr : &tagged->fields[tagged->arms[a].field];
+        writ_str_t spec = member ? field_spec(g, tagged, member) : writ_cstr("nil");
+        ok = spec.length && !writ_str_eq(spec, writ_cstr("union"))
+             && (!member || (!has_field_named(g, record, arm_storage(g, field, member))
+                             && !has_field_named(g, record, field_name(g, member))));
+    }
+    return ok;
 }
 
 static writ_str_t
@@ -1618,8 +1667,7 @@ field_spec(const n00b_t *g, const writ_record_view_t *record, const writ_slot_vi
     case WRIT_TYPE_RECORD:
         return foreign_element(g, type);
     case WRIT_TYPE_UNION:
-        return record && union_expressible(g, writ_model_record_at(g->model, type->decl)) ? writ_cstr("union")
-                                                                                          : (writ_str_t){0};
+        return record && union_expressible(g, record, field) ? writ_cstr("union") : (writ_str_t){0};
     default:
         return (writ_str_t){0};
     }
@@ -1631,38 +1679,83 @@ expressible(const n00b_t *g, const writ_record_view_t *record)
     if (record->type->kind == WRIT_TYPE_UNION) {
         return false;
     }
+    size_t unions = 0;
     for (size_t f = 0; f < record->fields_count; f++) {
         if (!field_spec(g, record, &record->fields[f]).length) {
             return false;
         }
+        unions += record->fields[f].type->kind == WRIT_TYPE_UNION;
     }
-    return true;
+    return unions <= 1; // the compiler traces at most one union per record
+}
+
+// Notes the extent of a foreign pointer field for the compiler.
+static void
+note_field(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field, writ_n00b_field_t fact)
+{
+    writ_slot_view_t inner = *field;
+    inner.type = unviewed(field->type);
+    bool pointer = inner.type && (inner.type->kind == WRIT_TYPE_POINTER || inner.type->kind == WRIT_TYPE_ARRAY)
+                   && foreign_pointee(g, inner.type->target).length;
+    if (!pointer || !foreign_extent(g, record, &inner, &fact)) {
+        fact.extent = WRIT_N00B_EXTENT_NONE;
+    }
+    if (fact.extent != WRIT_N00B_EXTENT_NONE || fact.tag_field.length) {
+        core_list_push(*g->fields, fact);
+    }
+}
+
+// A record's C union, as private fields inside the record, or as the
+// accessors that follow it: each arm reads as an option, nil unless the tag
+// selects it, and setting an arm sets the tag too.
+static void
+emit_union(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record, const writ_slot_view_t *field,
+           bool accessors)
+{
+    writ_str_t type = writ_binding_type(g->b, record->name);
+    const writ_record_view_t *tagged = writ_model_record_at(g->model, field->type->decl);
+    writ_str_t tag = field_name(g, &record->fields[field->tag_field]);
+    for (size_t a = 0; a < tagged->arms_count; a++) {
+        const writ_union_arm_view_t *arm = &tagged->arms[a];
+        if (arm->field == WRIT_PLAN_NONE) {
+            continue;
+        }
+        const writ_slot_view_t *member = &tagged->fields[arm->field];
+        writ_str_t storage = arm_storage(g, field, member);
+        writ_str_t spec = field_spec(g, tagged, member);
+        if (!accessors) {
+            writ_emit_line(emit, "private %.*s: %.*s", S(storage), S(spec));
+            note_field(g, tagged, member,
+                       (writ_n00b_field_t){.record = type, .field = storage, .tag_field = tag, .tag = arm->value});
+            continue;
+        }
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "func %.*s(self: %.*s) -> %.*s%s", S(field_name(g, member)), S(type), S(spec),
+                       spec.data[spec.length - 1] == '?' ? "" : "?");
+        writ_emit_open(emit, "if self.%.*s == %lld", S(tag), (long long)arm->value);
+        writ_emit_line(emit, "return self.%.*s", S(storage));
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "return nil");
+        writ_emit_close(emit, nullptr);
+        writ_emit_line(emit, "");
+        writ_emit_open(emit, "func set_%.*s(modify self: %.*s, value: %.*s)", S(field_name(g, member)), S(type),
+                       S(spec));
+        writ_emit_line(emit, "self.%.*s = %lld", S(tag), (long long)arm->value);
+        writ_emit_line(emit, "self.%.*s = value", S(storage));
+        writ_emit_close(emit, nullptr);
+    }
 }
 
 static void
 emit_layout_field(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record, const writ_slot_view_t *field)
 {
-    writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
-    writ_str_t spec = field_spec(g, record, field);
-    if (field->type->kind != WRIT_TYPE_UNION) {
-        writ_emit_line(emit, "%.*s: %.*s", S(name), S(spec));
+    if (field->type->kind == WRIT_TYPE_UNION) {
+        emit_union(g, emit, record, field, false);
         return;
     }
-    const writ_record_view_t *tagged = writ_model_record_at(g->model, field->type->decl);
-    writ_emit_open(emit, "%.*s: union by %.*s", S(name),
-                   S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, record->fields[field->tag_field].name)));
-    for (size_t a = 0; a < tagged->arms_count; a++) {
-        const writ_union_arm_view_t *arm = &tagged->arms[a];
-        if (arm->field == WRIT_PLAN_NONE) {
-            writ_emit_line(emit, "%lld => _", (long long)arm->value);
-            continue;
-        }
-        const writ_slot_view_t *member = &tagged->fields[arm->field];
-        writ_emit_line(emit, "%lld => %.*s: %.*s", (long long)arm->value,
-                       S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, member->name)),
-                       S(field_spec(g, tagged, member)));
-    }
-    writ_emit_close(emit, nullptr);
+    writ_str_t name = field_name(g, field);
+    writ_emit_line(emit, "%.*s: %.*s", S(name), S(field_spec(g, record, field)));
+    note_field(g, record, field, (writ_n00b_field_t){.record = writ_binding_type(g->b, record->name), .field = name});
 }
 
 static void
@@ -2080,6 +2173,11 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             emit_layout_field(g, emit, record, &record->fields[f]);
         }
         writ_emit_close(emit, nullptr);
+        for (size_t f = 0; f < record->fields_count; f++) {
+            if (record->fields[f].type->kind == WRIT_TYPE_UNION) {
+                emit_union(g, emit, record, &record->fields[f], true);
+            }
+        }
     }
     for (size_t h = 0; handles && h < g->record_handles->len; h++) {
         emit_handle_type(g, emit, &g->record_handles->data[h].handle);
@@ -4608,6 +4706,8 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     core_list_t(record_handle_t) record_handles = core_list_new(record_handle_t);
     g.patches = &patches;
     g.record_handles = &record_handles;
+    core_list_t(writ_n00b_field_t) field_list = core_list_new(writ_n00b_field_t);
+    g.fields = &field_list;
     find_record_handles(&g);
     size_t count = writ_model_fn_count(model);
     const writ_plan_view_t **plans = writ_alloc(session, sizeof(writ_plan_view_t *) * (count ? count : 1));
@@ -4617,6 +4717,7 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
         if (!plans[i] && bound.bound && !bound.raw) {
             core_list_free(patches);
             core_list_free(record_handles);
+            core_list_free(field_list);
             return WRIT_HAS_ERRORS;
         }
     }
@@ -4656,6 +4757,13 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     writ_n00b_export_t *exports = exporting ? adapter_exports(&g, &export_count) : provided_exports(&g, &export_count);
     *externs = (writ_n00b_externs_t){.count = extern_list.len, .items = items, .exports_count = export_count,
                                      .exports = exports, .header = exporting ? writ_binding_header(b) : (writ_str_t){0}};
+    writ_n00b_field_t *fields = writ_alloc(session, sizeof(*fields) * (field_list.len ? field_list.len : 1));
+    for (size_t i = 0; i < field_list.len; i++) {
+        fields[i] = field_list.data[i];
+    }
+    externs->fields_count = field_list.len;
+    externs->fields = fields;
+    core_list_free(field_list);
     core_list_free(extern_list);
     core_list_free(patches);
     core_list_free(record_handles);

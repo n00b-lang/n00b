@@ -380,21 +380,43 @@ record Bake_Item_T layout(c) {
     key: i32
     value: i32
     hash: u64
-    label: Foreign[i8]? until 0
+    label: Foreign[i8]?
 }
 
 record Bake_Items_T layout(c) {
-    data: Foreign[Bake_Item_T]? count len
+    data: Foreign[Bake_Item_T]?
     len: u64
     cap: u64
 }
 
 record Bake_Variant_T layout(c) {
     kind: i32
-    v: union by kind {
-        1 => number: i64
-        2 => text: Foreign[i8]? until 0
+    private v_number: i64
+    private v_text: Foreign[i8]?
+}
+
+func number(self: Bake_Variant_T) -> i64? {
+    if self.kind == 1 {
+        return self.v_number
     }
+    return nil
+}
+
+func set_number(modify self: Bake_Variant_T, value: i64) {
+    self.kind = 1
+    self.v_number = value
+}
+
+func text(self: Bake_Variant_T) -> Foreign[i8]? {
+    if self.kind == 2 {
+        return self.v_text
+    }
+    return nil
+}
+
+func set_text(modify self: Bake_Variant_T, value: Foreign[i8]?) {
+    self.kind = 2
+    self.v_text = value
 }
 
 record Bake_Slot_T layout(c) {
@@ -404,21 +426,21 @@ record Bake_Slot_T layout(c) {
 }
 
 record Bake_Table_T layout(c) {
-    slots: Foreign[Bake_Slot_T]? count len
+    slots: Foreign[Bake_Slot_T]?
     len: u64
 }
 
 record Bake_Root_T layout(c) {
-    name: Foreign[i8]? until 0
+    name: Foreign[i8]?
     items: Bake_Items_T
-    codes: Foreign[i32]? until 0
+    codes: Foreign[i32]?
     variant_: Bake_Variant_T
     middle: Foreign[Bake_Item_T]?
     op: Foreign_Fn[(i64, i64) -> i64]?
     table: Bake_Table_T
     cache: i64
     fd: i32
-    path: Foreign[i8]? until 0
+    path: Foreign[i8]?
 }
 
 private record Bake_Root_Cell {
@@ -551,29 +573,29 @@ func close(modify self: Bake_Root) fail: Ffi_Error {
 2	tests/gen_n00b/bake.writ:6:1	bake_item_t
 9	tests/gen_n00b/bake.writ:13:1	bake_items_t
 15	tests/gen_n00b/bake.writ:19:1	bake_variant_t
-23	tests/gen_n00b/bake.writ:29:1	bake_slot_t
-29	tests/gen_n00b/bake.writ:35:1	bake_table_t
-34	tests/gen_n00b/bake.writ:40:1	bake_root_t
-47	tests/gen_n00b/bake.writ:40:1	bake_root
-65	tests/gen_n00b/bake.writ:4:1	bake_kind
-70	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
-71	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
-72	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
-73	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
-74	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
-75	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
-76	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
-77	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
-78	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
-79	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
-81	tests/gen_n00b/bake.writ:64:1	bake_add
-86	tests/gen_n00b/bake.writ:65:1	bake_multiply
-91	tests/gen_n00b/bake.writ:66:1	bake_build
-102	tests/gen_n00b/bake.writ:67:1	bake_query
-114	tests/gen_n00b/bake.writ:68:1	bake_reopen
-135	tests/gen_n00b/bake.writ:70:1	bake_open
-146	tests/gen_n00b/bake.writ:71:1	bake_touch
-158	tests/gen_n00b/bake.writ:72:1	bake_free
+45	tests/gen_n00b/bake.writ:29:1	bake_slot_t
+51	tests/gen_n00b/bake.writ:35:1	bake_table_t
+56	tests/gen_n00b/bake.writ:40:1	bake_root_t
+69	tests/gen_n00b/bake.writ:40:1	bake_root
+87	tests/gen_n00b/bake.writ:4:1	bake_kind
+92	tests/gen_n00b/bake.writ:53:1	BAKE_QUERY_NAME
+93	tests/gen_n00b/bake.writ:54:1	BAKE_QUERY_ITEMS
+94	tests/gen_n00b/bake.writ:55:1	BAKE_QUERY_CODES
+95	tests/gen_n00b/bake.writ:56:1	BAKE_QUERY_VARIANT
+96	tests/gen_n00b/bake.writ:57:1	BAKE_QUERY_SHARED
+97	tests/gen_n00b/bake.writ:58:1	BAKE_QUERY_MIDDLE
+98	tests/gen_n00b/bake.writ:59:1	BAKE_QUERY_OP
+99	tests/gen_n00b/bake.writ:60:1	BAKE_QUERY_HASH
+100	tests/gen_n00b/bake.writ:61:1	BAKE_QUERY_CACHE
+101	tests/gen_n00b/bake.writ:62:1	BAKE_QUERY_FD
+103	tests/gen_n00b/bake.writ:64:1	bake_add
+108	tests/gen_n00b/bake.writ:65:1	bake_multiply
+113	tests/gen_n00b/bake.writ:66:1	bake_build
+124	tests/gen_n00b/bake.writ:67:1	bake_query
+136	tests/gen_n00b/bake.writ:68:1	bake_reopen
+157	tests/gen_n00b/bake.writ:70:1	bake_open
+168	tests/gen_n00b/bake.writ:71:1	bake_touch
+180	tests/gen_n00b/bake.writ:72:1	bake_free
 load static
 extern __bake_add writ_bake_n00b_bake_add (int, int) -> int fail: nil
 extern __bake_multiply writ_bake_n00b_bake_multiply (int, int) -> int fail: nil

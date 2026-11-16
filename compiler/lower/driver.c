@@ -1,8 +1,6 @@
 #include "lower_internal.h"
 #include "comptime.h"
 
-static bool
-field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units);
 static int
 compare_functions(const void *left, const void *right);
 static void
@@ -42,64 +40,6 @@ n00bb_dump_ir(const n00bb_link_analysis_t *analysis)
     return analysis != nullptr;
 }
 
-static bool
-field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units)
-{
-    bool ok = true;
-    for (size_t u = 0; u < units->len; u++) {
-        core_translation_unit_t *unit = units->data[u];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-             scope; scope = scope->all_next)
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                n00bb_field_union_t *member = symbol->is_field
-                    ? parse_sym_binding(symbol, N00BB_FIELD_UNION_KEY)
-                    : nullptr;
-                uint64_t width = 0;
-                bool is_signed = false;
-                if (member && (!n00bb_integer_representation(
-                        th_resolve(member->discriminant->type), &width,
-                        &is_signed)
-                    || (width != 8 && width != 16 && width != 32))) {
-                    core_string_t type_text = n00bb_print_type(state->types,
-                        member->discriminant->type);
-                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
-                        N00B_DIAG_UNION_DISCRIMINANT_TYPE,
-                        link_source_location(member->node),
-                        N00B_TEXT_THE_DISCRIMINANT_IS_BUT_A,
-                        N00BB_ARGS(ARG_TEXT(member->discriminant->name),
-                                   ARG_TEXT(type_text)));
-                    ok = false;
-                }
-                n00bb_field_extent_t *extent = symbol->is_field
-                    ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY)
-                    : nullptr;
-                if (!extent) continue;
-                if (!foreign_pointer_type(symbol->type)) {
-                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
-                        N00B_DIAG_EXTENT_NEEDS_FOREIGN,
-                        link_source_location(extent->node),
-                        N00B_TEXT_FIELD_HAS_AN_EXTENT_CLAUSE,
-                        N00BB_ARGS(ARG_TEXT(symbol->name)));
-                    ok = false;
-                }
-                else if (extent->count_field && !is_integer_type(
-                        th_resolve(extent->count_field->type))) {
-                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
-                        N00B_DIAG_EXTENT_COUNT_TYPE,
-                        link_source_location(extent->node),
-                        N00B_TEXT_THE_COUNT_FIELD_OF_MUST,
-                        N00BB_ARGS(ARG_TEXT(extent->count_field->name),
-                                   ARG_TEXT(symbol->name)));
-                    ok = false;
-                }
-            }
-    }
-    return ok;
-}
 
 static int
 compare_functions(const void *left, const void *right)
@@ -309,8 +249,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
          && i < core_link_unit_translation_unit_count(link); i++)
         core_list_push(units,
             core_link_unit_translation_unit(link, i));
-    ok = ok && units.len
-        && field_extents_hold(&units);
+    ok = ok && units.len;
     for (size_t i = 0; ok && i < units.len; i++) {
         n00bb_tu_state_t *state = tu_state(units.data[i]);
         if (!state) ok = false;

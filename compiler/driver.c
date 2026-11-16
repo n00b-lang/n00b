@@ -343,6 +343,14 @@ n00bb_native_declarations_release(n00bb_native_declarations_t *declarations)
         native_type_free(native->result);
     }
     core_free(declarations->items);
+    for (size_t i = 0; i < declarations->field_count; i++) {
+        n00bb_native_field_t *field = &declarations->fields[i];
+        core_free(field->record.data);
+        core_free(field->field.data);
+        core_free(field->count_field.data);
+        core_free(field->tag_field.data);
+    }
+    core_free(declarations->fields);
     *declarations = (n00bb_native_declarations_t){0};
 }
 

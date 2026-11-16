@@ -705,6 +705,11 @@ bool register_native_declarations(parse_annot_result_t *annotations,
 // Notes what the analyses know about natives: pure, or their declared
 // effects.
 void n00bb_note_native_axioms(n00bb_native_declarations_t natives);
+// Notes the union arms an FFI contract gives the records of `module`, the
+// module its literal generates, before any module that uses them is typed
+// (the generated module may come from the cache, or be checked alongside).
+bool n00bb_note_native_union_arms(core_string_t module,
+                                  n00bb_native_declarations_t natives);
 bool register_builtin_symbols(parse_annot_result_t *annotations,
                               n00bb_tu_state_t *state, th_ctx *types);
 bool n00bb_register_operator_function(th_env *environment, th_ctx *types,
