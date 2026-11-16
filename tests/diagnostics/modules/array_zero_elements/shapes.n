@@ -1,0 +1,12 @@
+// On the package path, so another package than the test.
+record Built {
+    x: int
+}
+
+func __init(modify self: Built, x: int) {
+    self.x = x
+}
+
+record Plain {
+    x: int
+}

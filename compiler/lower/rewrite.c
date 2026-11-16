@@ -583,6 +583,20 @@ n00bb_rewrite_object_field(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             th_ind(ir_module_types(context->module), 0, member))
         && ir_instr_operand_value(address, base)
         && ir_instr_operand_name(address, in->operands[1].name);
+    // An array field keeps its declared shape, which says how one held
+    // inline is laid out (a multi-dimensional one is rows of its elements).
+    ir_shape_t *shape = ir_value_shape(in->dest);
+    if (!shape && addressed) {
+        parse_scope_t *scope = record_scope_for_type(
+            tu_state(rewrite->unit)->link_analysis,
+            ir_operand_value(&in->operands[0])->type, nullptr);
+        parse_sym_entry_t *field = scope
+            ? parse_symtab_lookup_in(scope, in->operands[1].name) : nullptr;
+        shape = field && field->is_field ? parse_sym_binding(field,
+            CORE_STRING_STATIC("ir.array-shape")) : nullptr;
+    }
+    if (shape && addressed)
+        addressed = ir_value_set_shape(address->dest, shape);
     ir_instr_t *load = addressed
         ? ir_lower_emit_instruction(context, IR_OP_LOAD, in->span) : nullptr;
     return load && ir_lower_set_temp_dest(context, load,
@@ -590,6 +604,7 @@ n00bb_rewrite_object_field(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         && ir_instr_operand_value(load, address->dest)
         && n00bb_set_reference_access(rewrite->ir_context, load->dest,
                                       member)
+        && (!shape || ir_value_set_shape(load->dest, shape))
         ? load->dest : nullptr;
 }
 

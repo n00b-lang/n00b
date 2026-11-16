@@ -211,4 +211,128 @@ record Shaped_Holder {
 
 var shaped_grid: Array[int][shape_extent()]
 
+// Dimensions without a size are ragged: with no initializer, each of their
+// arrays is zero-sized until one is assigned.
+var ragged_rows: Array[int][2][]
+require ragged_rows.len() == 2 and ragged_rows[0].len() == 0
+ragged_rows[1] = [1, 2, 3]
+require ragged_rows[1].len() == 3 and ragged_rows[1][2] == 3
+require ragged_rows[0].len() == 0
+
+// Rows the same length to start with still stay ragged.
+var even_rows: Array[int][2][] = [[1], [2]]
+even_rows[1] = [4, 5, 6]
+require even_rows[1].len() == 3 and even_rows[0][0] == 1
+
+func ragged_local() -> int {
+    var rows: Array[int][2][][]
+    let empty = rows[1].len()
+    rows[0] = [[1], [2, 3]]
+    return empty + rows[0][1][1] + rows[0].len()
+}
+
+require ragged_local() == 5
+
+// A bounded `let` array gets its storage where it's declared; it is shared,
+// so its elements may be set. One assignment may still replace it.
+func let_storage() -> int {
+    let cells: Array[int][3]
+    cells[1] = 4
+    let grid: Array[int][2][2]
+    grid[1][0] = 2
+    return cells[1] + cells[0] + grid[1][0]
+}
+
+func let_replaced() -> int {
+    let cells: Array[int][3]
+    cells = [1, 2, 3]
+    return cells[1]
+}
+
+require let_storage() == 6
+require let_replaced() == 2
+
+// Without an initializer, an array's elements start zeroed, which is a value
+// for these.
+open enum Zero_Code: i32 { ok = 1, bad = 2 }
+enum Zero_Color { red = 0, green = 1 }
+flagset Zero_Perm { read, write }
+
+record Zero_Point {
+    x: int
+    y: int
+}
+
+record Zero_Built {
+    x: int
+}
+
+func __init(modify self: Zero_Built, x: int) {
+    self.x = x + 1
+}
+
+object Zero_Node {
+    v: int
+    tags: Array[int][2]
+    grid: Array[int][2][3]
+}
+
+var zero_codes: Array[Zero_Code][2]
+var zero_colors: Array[Zero_Color][2]
+var zero_perms: Array[Zero_Perm][2]
+var zero_points: Array[Zero_Point][2]
+var zero_built: Array[Zero_Built][2]
+var zero_text: Array[string][2]
+var zero_nodes: Array[Zero_Node][2]
+var zero_optional: Array[Zero_Node?][2]
+require cast[i32](zero_codes[0]) == 0 and zero_colors[1] == Zero_Color.red
+require zero_perms[0] == zero_perms[1] and zero_points[1].y == 0
+require zero_built[0].x == 0 and zero_text[1] == "" and zero_optional[0] == nil
+zero_nodes[1].tags[0] = 4
+require zero_nodes[0].v == 0 and zero_nodes[1].tags[0] == 4
+require zero_nodes[0] != zero_nodes[1]
+
+// Each zeroed object is a fresh one; its fixed-size array fields are inline.
+func zero_objects() -> int {
+    var nodes: Array[Zero_Node][3]
+    nodes[1].v = 4
+    nodes[2].grid[1][2] = 5
+    let made = new[Zero_Node]()
+    made.tags = [7, 8]
+    let built: Zero_Node = (v = 1, tags = [1, 2],
+                            grid = [[1, 2, 3], [4, 5, 6]])
+    let tags = made.tags
+    return nodes[0].v + nodes[1].v + nodes[2].grid[1][2] + tags[1] + cast[int](made.tags.len()) + built.grid[1][1] + cast[int](made.grid[1].len())
+}
+
+require zero_objects() == 0 + 4 + 5 + 8 + 2 + 5 + 3
+
+// A module array sized when the program runs is allocated by its module's
+// initializer.
+func zero_extent() -> int {
+    return 3
+}
+
+let runtime_cells: Array[int][zero_extent()]
+runtime_cells[1] = 5
+let runtime_replaced: Array[int][zero_extent()]
+runtime_replaced = [7, 8, 9]
+var runtime_grid: Array[int][zero_extent()][2]
+runtime_grid[2][1] = 4
+require runtime_cells.len() == 3 and runtime_cells[1] == 5
+require runtime_replaced[2] == 9 and runtime_grid[2][1] == 4
+require runtime_grid[0][0] == 0
+
+// A `let` array without a size takes its length from its assignment; where
+// that hasn't run, it holds that many zeroes.
+func let_sized(c: bool) -> int {
+    let arr: Array[int]
+    if c {
+        arr = [1, 2, 3]
+    }
+    return cast[int](arr.len()) + arr[0]
+}
+
+require let_sized(false) == 3 and let_sized(true) == 4
+
 __fd_write(2, "ok")

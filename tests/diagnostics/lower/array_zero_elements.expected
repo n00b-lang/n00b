@@ -1,0 +1,21 @@
+tests/diagnostics/lower/array_zero_elements.n:20:5: error N00B-S0098: this array starts zeroed, but `Level` has no zero value
+  help: make the element `Level?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:21:5: error N00B-S0098: this array starts zeroed, but `Shape` has no zero value
+  help: make the element `Shape?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:25:9: error N00B-S0098: this array starts zeroed, but `Built` has no zero value
+  help: make the element `Built?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:26:9: error N00B-S0098: this array of `Holder` starts zeroed, but `Node` within it has no zero value
+  help: make the element `Holder?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:27:16: error N00B-S0098: this array starts zeroed, but `Level` has no zero value
+  help: make the element `Level?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:34:9: error N00B-S0099: `never` can be read before it is assigned, but its assignment gives it no length known here
+  help: assign `never` on every path before reading it, or give it a size, as in `Array[T][n]`
+tests/diagnostics/lower/array_zero_elements.n:39:9: error N00B-S0099: `rows` can be read before it is assigned, but its assignment gives it no length known here
+  help: assign `rows` on every path before reading it, or give it a size, as in `Array[T][n]`
+tests/diagnostics/lower/array_zero_elements.n:50:9: error N00B-S0098: this array starts zeroed, but `Shape` has no zero value
+  help: make the element `Shape?`, or give the array an initializer
+tests/diagnostics/lower/array_zero_elements.n:58:9: warning N00B-S0006: the value assigned to `nodes` here is never read
+tests/diagnostics/lower/array_zero_elements.n:65:9: error N00B-S0052: this initializer reads global `levels` which has no explicit initializer through the call to `len`
+  tests/diagnostics/lower/array_zero_elements.n:20:5: note: `levels` is declared here
+tests/diagnostics/lower/array_zero_elements.n:65:31: error N00B-S0052: this initializer reads global `shapes_made` which has no explicit initializer through the call to `len`
+  tests/diagnostics/lower/array_zero_elements.n:21:5: note: `shapes_made` is declared here

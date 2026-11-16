@@ -10,6 +10,17 @@
 // existing storage after checking the shape, and never rebinds it.
 #define N00BB_FIXED_ARRAY_STORE_KEY CORE_STRING_STATIC("n00bb.fixed-array-store")
 
+// On a zero-initialized `array.new` of objects: the type of the storage to
+// allocate, zeroed, for each element, since a zeroed object is a fresh
+// object with zeroed fields rather than a null handle.
+#define N00BB_ARRAY_ZERO_OBJECTS_KEY CORE_STRING_STATIC("n00bb.array.zero-objects")
+
+// On the zeroed default `array.new` of a `let` array declared without a size
+// or a value: its length (operand 0, a constant) is set from the `let`'s
+// assignment once the function is lowered, and its elements are checked
+// only if the default can be read.
+#define N00BB_LET_DEFAULT_KEY CORE_STRING_STATIC("n00bb.array.let-default")
+
 static inline bool
 n00bb_fixed_array_store(const ir_instr_t *store)
 {

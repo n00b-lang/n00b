@@ -551,3 +551,20 @@ N00B_DIAG(ZEROED_FIELD_UNSET, "N00B-S0097", ERROR,
     "such field, unless it is optional, must be set on every path before the\n"
     "value is otherwise used. Set the field first, or give the type an\n"
     "`__init` that sets it.")
+N00B_DIAG(ARRAY_ELEMENT_NO_ZERO, "N00B-S0098", ERROR,
+    "an array without an initializer holds elements with no zero value",
+    "An array created without a value that sets its elements starts zeroed.\n"
+    "Numbers, strings, flagsets, open enums, closed enums with a member\n"
+    "whose value is 0, and option types are all fine zeroed. So is a record\n"
+    "or object that a field tuple of zeros could build here: it has no\n"
+    "`__init`, or one this package may bypass, no field private to another\n"
+    "module, and no field of an `object` or reference type. Anything else,\n"
+    "a variant among them, has no zero value: make the element an option\n"
+    "type, or give the array an initializer.")
+N00B_DIAG(LET_ARRAY_UNSIZED, "N00B-S0099", ERROR,
+    "a `let` array can be read unassigned, but its assignment gives no size",
+    "A `let` array declared without a size takes its length from its one\n"
+    "assignment; where that assignment hasn't run, it holds that many zeroed\n"
+    "elements. So every assignment must give the same length, one the\n"
+    "compiler can see, such as an array literal's. Assign it on every path\n"
+    "before it is read, give it a size, or assign arrays of one known length.")

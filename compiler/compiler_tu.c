@@ -2799,8 +2799,8 @@ array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
             .kind = IR_SHAPE_EXTENT_STATIC,
             .static_value = value,
         };
-    if (!scope_is_within_function(parse_tree_scope(expression)))
-        return (ir_shape_extent_t){.kind = IR_SHAPE_EXTENT_UNRESOLVED};
+    // At module scope too, the size is computed when the program runs, by the
+    // module's initializer (n00bb_allocate_runtime_global).
     return (ir_shape_extent_t){
         .kind       = IR_SHAPE_EXTENT_RUNTIME,
         .expression = expression,

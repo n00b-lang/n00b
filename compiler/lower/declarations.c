@@ -5,7 +5,8 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
                                ir_shape_t *shape);
 static bool
 n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
-                              ir_shape_t *shape, ir_span_t span);
+                              ir_shape_t *shape, bool initializes,
+                              ir_span_t span);
 static ir_value_t *
 n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
                         th_type *bound_type, ir_span_t span);
@@ -132,9 +133,29 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
     return n00bb_bind_runtime_array_shape(context, shape);
 }
 
+// Writes `array` to `local` as the storage a `let` gets where it's declared:
+// a default, not its one assignment, so a later assignment may still
+// replace it. The write is marked for the check that a `let` is assigned
+// once.
+static bool
+write_declaration_default(ir_lower_context_t *context, ir_local_t *local,
+                          ir_value_t *array, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!lower || !n00bb_emit_local_write(context, local, array, span))
+        return false;
+    ir_block_t *block = context->block;
+    ir_instr_t *write = block && block->n_instrs
+        ? block->instrs[block->n_instrs - 1] : nullptr;
+    return write && ir_annot_set(lower->ir_context, &write->annots,
+        (ir_annot_t){.key = CORE_STRING_STATIC("ir.declaration_default"),
+                     .kind = IR_ANNOT_BOOL, .b = true});
+}
+
 static bool
 n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
-                              ir_shape_t *shape, ir_span_t span)
+                              ir_shape_t *shape, bool initializes,
+                              ir_span_t span)
 {
     ir_shape_storage_t storage;
     if (!local || !shape || !ir_shape_storage(shape, &storage)
@@ -159,11 +180,78 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
         ir_shape_element_type(shape), rank, extents, local->type, span)
         : nullptr;
     core_free(extents);
-    if (array && n00bb_emit_local_write(context, local, array, span))
-        return true;
+    bool written = array && (initializes
+        ? n00bb_emit_local_write(context, local, array, span)
+        : write_declaration_default(context, local, array, span));
+    if (written) return true;
     lower_internal(context, span,
                 "could not allocate the declared array");
     return false;
+}
+
+// A module array declared without a value, whose size is only known when
+// the program runs (n00bb_global_needs_runtime_array), is allocated where
+// it's declared, in its module's initializer. For a `let`, the storage is a
+// default its one assignment may replace.
+bool
+n00bb_allocate_runtime_global(ir_lower_context_t *context,
+                              parse_sym_entry_t *symbol, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    ir_global_t *global = state
+        ? link_ir_global_for_symbol(state->link_analysis, symbol) : nullptr;
+    if (!n00bb_global_needs_runtime_array(global)) return true;
+    // The declaration's shape keeps its size expressions; the variable's is
+    // a copy without them.
+    ir_shape_t *declared = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("ir.array-shape"));
+    ir_shape_t *shape = declared
+        && ir_shape_rank(declared) == ir_shape_rank(global->shape)
+        ? declared : global->shape;
+    ir_shape_storage_t storage;
+    uint32_t rank = ir_shape_rank(shape);
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    th_type *uint_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("uint"));
+    ir_instr_t *one = uint_type ? n00bb_emit_uint_constant(context, uint_type,
+        1, span, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
+    bool ok = one && ir_shape_storage(shape, &storage);
+    // The sizes are computed here, into this initializer's own values; the
+    // variable's shape stays as declared.
+    for (uint32_t i = 0; ok && i < rank; i++) {
+        ok = ir_shape_extent(shape, i, &extents[i]);
+        if (!ok || i >= storage.flat_prefix_rank
+            || extents[i].kind == IR_SHAPE_EXTENT_STATIC) continue;
+        parse_tree_t *expression = (parse_tree_t *)extents[i].expression;
+        extents[i].kind = IR_SHAPE_EXTENT_RUNTIME;
+        extents[i].value = expression
+            ? n00bb_lower_array_dimension_value(context, expression,
+                uint_type, one->dest,
+                lower_span_for_tree(context, expression), true)
+            : nullptr;
+        ok = extents[i].value != nullptr;
+    }
+    ir_value_t *array = ok ? n00bb_emit_array_allocation(context,
+        ir_shape_element_type(shape), rank, extents, global->type, span)
+        : nullptr;
+    core_free(extents);
+    ir_value_t *target = array ? ir_global_address(context->module, global)
+                               : nullptr;
+    ir_instr_t *store = target
+        ? ir_lower_emit_instruction(context, IR_OP_GLOBAL_STORE, span)
+        : nullptr;
+    ok = store && ir_instr_operand_value(store, target)
+        && ir_instr_operand_value(store, array)
+        && ir_instr_set_binding_initialization(store, true)
+        && (symbol->mutability != PARSE_SYM_IMMUTABLE
+            || ir_annot_set(lower->ir_context, &store->annots, (ir_annot_t){
+                   .key = CORE_STRING_STATIC("ir.declaration_default"),
+                   .kind = IR_ANNOT_BOOL, .b = true}));
+    if (!ok)
+        lower_internal(context, span,
+                       "could not allocate the declared module array");
+    return ok;
 }
 
 // True when `type` is a record any of whose fields, or the fields of the
@@ -250,10 +338,37 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
         }
         if (!expression) {
+            ir_span_t span = lower_span_for_tree(context, visit->node);
+            if (!local)
+                return !symbol || symbol->mutability == PARSE_SYM_CONST
+                    || n00bb_allocate_runtime_global(context, symbol, span);
+            // A `let` array is shared, so a bounded one gets its storage
+            // here, as a `var` one does; its elements may then be set.
+            // One without a size gets a zeroed default as long as its
+            // assignment, which its length is taken from (see
+            // n00bb_size_let_defaults).
+            ir_shape_storage_t storage;
+            bool sized = shape && ir_shape_storage(shape, &storage)
+                && storage.flat_prefix_rank;
+            if (symbol && symbol->mutability == PARSE_SYM_IMMUTABLE && sized)
+                return n00bb_allocate_declared_array(context, local, shape,
+                                                     false, span);
+            if (symbol && symbol->mutability == PARSE_SYM_IMMUTABLE) {
+                if (!local
+                    || th_kind_of(th_resolve(local->type)) != TH_SEQUENCE)
+                    return true;
+                ir_value_t *array = n00bb_emit_let_default_array(context,
+                    local->type, span);
+                if (array && write_declaration_default(context, local, array,
+                                                       span)) return true;
+                lower_internal(context, span,
+                               "could not give a `let` array its default");
+                return false;
+            }
             if (!symbol || symbol->mutability != PARSE_SYM_MUTABLE)
                 return true;
-            ir_span_t span = lower_span_for_tree(context, visit->node);
-            return n00bb_allocate_declared_array(context, local, shape, span)
+            return n00bb_allocate_declared_array(context, local, shape, true,
+                                                 span)
                 && zero_declared_record(context, local, span);
         }
         if (!local && symbol && expression) {

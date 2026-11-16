@@ -61,10 +61,185 @@ n00bb_lower_array_dimension_value(ir_lower_context_t *context,
         require_positive);
 }
 
+#include "sequence_transfer.h"
+
+// Whether a closed enum `symbol` has a member whose value is 0.
+static bool
+enum_has_zero(parse_sym_entry_t *symbol)
+{
+    while (symbol && parse_sym_binding_origin(symbol))
+        symbol = parse_sym_binding_origin(symbol);
+    for (parse_sym_entry_t *item = symbol && symbol->member_scope
+             ? symbol->member_scope->first_in_scope : nullptr;
+         item; item = item->next_in_scope) {
+        const n00bb_enum_value_t *value = item->kind == PARSE_SYM_ENUM_CONST
+            && item->has_comptime_value ? item->comptime_value : nullptr;
+        if (value && !value->magnitude) return true;
+    }
+    return false;
+}
+
+// Whether a record or object `type`, zeroed, is a value that code in `site`
+// could build from a field tuple: no `__init` it must run (one outside its
+// package), no field private to another module, and every field zeroable,
+// none of them an `object` or a reference.
+static bool
+record_zero_tolerant(core_translation_unit_t *site, th_type *type,
+                     th_type *record, th_type **blame, uint32_t depth)
+{
+    n00bb_tu_state_t *state = tu_state(site);
+    core_translation_unit_t *owner = nullptr;
+    parse_scope_t *scope = record_scope_for_type(state->link_analysis, type,
+                                                 &owner);
+    for (parse_sym_entry_t *field = scope && owner != site
+             ? scope->first_in_scope : nullptr; field;
+         field = field->next_in_scope)
+        if (field->is_field && member_is_private(field, field->owner_type)) {
+            *blame = type;
+            return false;
+        }
+    if (n00bb_type_has_constructor(site, type)
+        && !n00bb_same_package(owner, site)) {
+        *blame = type;
+        return false;
+    }
+    for (size_t i = 0; i < th_record_len(record); i++) {
+        th_type *field = th_record_member(record, i)->type;
+        th_type *resolved = field ? th_resolve(field) : nullptr;
+        if (resolved && !th_option_item(resolved)
+            && n00bb_object_type(state->types, resolved)) {
+            *blame = resolved;
+            return false;
+        }
+        if (!n00bb_zero_tolerant(site, field, blame, depth + 1))
+            return false;
+    }
+    return true;
+}
+
+bool
+n00bb_zero_tolerant(core_translation_unit_t *site, th_type *type,
+                    th_type **blame, uint32_t depth)
+{
+    n00bb_tu_state_t *state = site ? tu_state(site) : nullptr;
+    type = type ? th_resolve(type) : nullptr;
+    // A type not yet known (a generic's parameter) is checked where it is.
+    if (!state || !type || depth > 16 || th_kind_of(type) == TH_VAR
+        || th_option_item(type) || th_is_nil(type)) return true;
+    *blame = type;
+    switch (th_kind_of(type)) {
+    case TH_SEQUENCE:
+        return n00bb_zero_tolerant(site, th_seq_elem(type), blame, depth + 1);
+    case TH_INDIRECTION: {
+        uint8_t attrs = 0;
+        return th_ind_attrs(type, &attrs) && (attrs & TH_NULLABLE);
+    }
+    default:
+        break;
+    }
+    if (n00bb_flagset_type(site, state, type, nullptr)) return true;
+    parse_sym_entry_t *enumeration = n00bb_enum_type_symbol(
+        state->link_analysis, type);
+    if (enumeration) {
+        const n00bb_enum_range_t *range = parse_sym_binding(enumeration,
+            CORE_STRING_STATIC("n00bb.enum-range"));
+        return (range && range->is_open) || enum_has_zero(enumeration);
+    }
+    bool variant = false;
+    if (th_named_info(type, nullptr, &variant, nullptr) && variant)
+        return false;
+    th_type *record = n00bb_record_shape(state, type);
+    if (record)
+        return record_zero_tolerant(site, type, record, blame, depth);
+    if (th_builtin_kind(state->types, type) == TH_BUILTIN_STRING) return true;
+    ir_class_t category = state->ir_module
+        ? ir_machine_of(state->ir_module, type).class : IR_CLASS_VOID;
+    return category == IR_CLASS_SINT || category == IR_CLASS_UINT
+        || category == IR_CLASS_BOOL || category == IR_CLASS_FLOAT;
+}
+
+// An array whose elements start zeroed must hold elements with a zero
+// value. Reports, and returns false, when `element` has none.
+bool
+n00bb_check_zeroed_elements(ir_lower_context_t *context, th_type *element,
+                            ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *blame = nullptr;
+    if (!lower || n00bb_zero_tolerant(lower->unit, element, &blame, 0))
+        return true;
+    core_string_t element_text = lower_type_text(context, element);
+    core_string_t blame_text = lower_type_text(context, blame);
+    bool inner = !ir_type_eq(context->module, th_resolve(element),
+                             th_resolve(blame));
+    if (inner)
+        lower_report(context, N00B_DIAG_ARRAY_ELEMENT_NO_ZERO, span,
+            N00B_TEXT_ARRAY_ELEMENT_NO_ZERO_IN,
+            N00BB_ARGS(ARG_TEXT(element_text), ARG_TEXT(blame_text)));
+    else
+        lower_report(context, N00B_DIAG_ARRAY_ELEMENT_NO_ZERO, span,
+            N00B_TEXT_ARRAY_ELEMENT_NO_ZERO, N00BB_ARGS(ARG_TEXT(blame_text)));
+    lower_help(context, N00B_TEXT_ARRAY_ELEMENT_NO_ZERO_HELP,
+               N00BB_ARGS(ARG_TEXT(element_text)));
+    core_free(element_text.data);
+    core_free(blame_text.data);
+    return false;
+}
+
+static ir_value_t *
+emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
+                      uint32_t rank, ir_shape_extent_t *extents,
+                      th_type *result_type, ir_span_t span,
+                      bool check_elements);
+
 ir_value_t *
 n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
                             uint32_t rank, ir_shape_extent_t *extents,
                             th_type *result_type, ir_span_t span)
+{
+    return emit_array_allocation(context, leaf, rank, extents, result_type,
+                                 span, true);
+}
+
+// The zeroed default of a `let` array declared without a size or a value,
+// whose length its assignment gives (n00bb_size_let_defaults): `length` is
+// a placeholder constant that it sets, and it checks the elements only if
+// the default can be read.
+ir_value_t *
+n00bb_emit_let_default_array(ir_lower_context_t *context, th_type *type,
+                             ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *uint_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("uint"));
+    uint32_t rank = 0;
+    th_type *leaf = type ? th_resolve(type) : nullptr;
+    while (leaf && th_kind_of(leaf) == TH_SEQUENCE && rank < 64) {
+        leaf = th_resolve(th_seq_elem(leaf));
+        rank++;
+    }
+    ir_instr_t *length = uint_type && rank ? n00bb_emit_uint_constant(context,
+        uint_type, 0, span, CORE_STRING_STATIC("__n00bb_let_length")) : nullptr;
+    if (!length || !lower) return nullptr;
+    ir_shape_extent_t extents[64] = {0};
+    extents[0] = (ir_shape_extent_t){.kind = IR_SHAPE_EXTENT_RUNTIME,
+                                     .value = length->dest};
+    for (uint32_t i = 1; i < rank; i++)
+        extents[i] = (ir_shape_extent_t){.kind = IR_SHAPE_EXTENT_UNRESOLVED};
+    ir_value_t *array = emit_array_allocation(context, leaf, rank, extents,
+                                              type, span, false);
+    return array && array->def
+        && ir_annot_set(lower->ir_context, &array->def->annots, (ir_annot_t){
+               .key = N00BB_LET_DEFAULT_KEY, .kind = IR_ANNOT_BOOL,
+               .b = true})
+        ? array : nullptr;
+}
+
+static ir_value_t *
+emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
+                      uint32_t rank, ir_shape_extent_t *extents,
+                      th_type *result_type, ir_span_t span,
+                      bool check_elements)
 {
     n00bb_lower_context_t *lower = context->user;
     th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
@@ -85,6 +260,11 @@ n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
         known_prefix++;
     for (uint32_t i = known_prefix; i < rank; i++)
         if (extents[i].value) return nullptr;
+    // The elements start zeroed; ragged rows start as empty arrays instead.
+    // A bad element is reported, and the allocation still made, so the
+    // caller goes on as usual.
+    if (check_elements && known_prefix == rank)
+        (void)n00bb_check_zeroed_elements(context, leaf, span);
     ir_shape_t *shape = ir_shape_new(lower->ir_context, leaf, rank);
     bool ok = shape != nullptr;
     for (uint32_t i = 0; ok && i < rank; i++)
@@ -124,6 +304,19 @@ n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
     for (uint32_t i = 0; ok && i < known_prefix; i++)
         ok = ir_instr_operand_value(instruction, extents[i].value);
     ok = ok && ir_value_set_shape(instruction->dest, shape);
+    // A zeroed object is a fresh object with zeroed fields, not a null
+    // handle, so each element gets one: the annotation names the storage to
+    // allocate for it.
+    th_ctx *types = ir_module_types(context->module);
+    th_type *element = leaf ? th_resolve(leaf) : nullptr;
+    th_type *reference = ok && known_prefix == rank && element
+            && !th_option_item(element) && n00bb_object_type(types, element)
+        ? n00bb_reference_definition(types, element) : nullptr;
+    th_type *storage = reference ? th_ind_referent(reference) : nullptr;
+    if (storage)
+        ok = ir_annot_set(lower->ir_context, &instruction->annots,
+            (ir_annot_t){.key = N00BB_ARRAY_ZERO_OBJECTS_KEY,
+                         .kind = IR_ANNOT_TYPE, .t = storage});
     return ok ? instruction->dest : nullptr;
 }
 
