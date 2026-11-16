@@ -1913,6 +1913,9 @@ bool n00bb_reference_dispatch(core_string_t method, bool *writable)
         || core_string_eq(method, CORE_STRING_STATIC("__ref_address"));
 }
 
+static size_t visible_initializers(const n00bb_dispatch_index_t *index,
+                                   th_type                      *receiver);
+
 bool n00bb_dispatch_target(const n00bb_dispatch_index_t *index,
                            th_type *receiver, core_string_t method,
                            n00bb_dispatch_target_t *target)
@@ -2013,6 +2016,19 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     }
     target->function = module_function(index, receiver, method, false, arity,
                                        nullptr);
+    // A type with no `__init` of any arity is built from zeroed storage, so
+    // `new` on it calls nothing, and takes no arguments.
+    if (!target->function && th_kind_of(receiver) == TH_NAMED
+        && core_string_eq(method, CORE_STRING_STATIC("__init"))
+        && !visible_initializers(index, receiver)) {
+        th_param self = {.mode = TH_INOUT, .type = receiver};
+
+        target->kind      = N00BB_TARGET_ZEROED;
+        target->signature = th_func(types,
+                                    th_name(types, CORE_STRING_STATIC("nil")),
+                                    &self, 1, nullptr, nullptr, 0);
+        return true;
+    }
     if (!target->function) {
         n00bb_dispatch_target_t compare = {0};
 
@@ -3022,6 +3038,18 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
 
     if (!method_style && !found) {
         report_overload(types, index, unit, at, method);
+        return true;
+    }
+    if (!found && n00bb_dispatch_target(index, receiver, method, &target)
+        && target.kind == N00BB_TARGET_ZEROED) {
+        core_string_t type = n00bb_print_type(types, receiver);
+
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_NEW_WITHOUT_INIT_ARGUMENTS,
+                         n00bb_span_location(at->span),
+                         N00B_TEXT_NEW_WITHOUT_INIT_TAKES_NO,
+                         N00BB_ARGS(ARG_TEXT(type))))
+            n00bb_report_help(diagnostics, N00B_TEXT_CREATE_IT_WITH_NEW_THEN,
+                              N00BB_ARGS(ARG_TEXT(type)));
         return true;
     }
     if (!found) {

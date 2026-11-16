@@ -3624,11 +3624,9 @@ record_function_signature(parse_grammar_t *grammar,
         if (!constructor_type
             || th_kind_of(constructor_type) != TH_FUNCTION
             || !receiver
-            || (!core_string_eq(receiver->direction,
-                                CORE_STRING_STATIC("modify"))
-                && !(object_receiver
-                     && core_string_eq(receiver->direction,
-                                       CORE_STRING_STATIC("in"))))) {
+            || !core_string_eq(receiver->direction, object_receiver
+                                   ? CORE_STRING_STATIC("in")
+                                   : CORE_STRING_STATIC("modify"))) {
             core_diag_location_t at = receiver && receiver->decl_node
                 ? link_source_location(receiver->decl_node) : name_at;
             if (n00bb_report(diagnostics, unit, N00B_DIAG_INIT_RECEIVER, at,
@@ -3638,23 +3636,6 @@ record_function_signature(parse_grammar_t *grammar,
                 n00bb_report_help(diagnostics, object_receiver
                     ? N00B_TEXT_WRITE_INIT_OBJECT
                     : N00B_TEXT_WRITE_INIT_VALUE, N00BB_NO_ARGS);
-        }
-        const th_param *receiver_parameter = constructor_type
-            && th_kind_of(constructor_type) == TH_FUNCTION
-                ? th_func_param(constructor_type, 0) : nullptr;
-        bool receiver_is_variant = false;
-        if (receiver_parameter && receiver_parameter->type)
-            th_named_info(th_resolve(receiver_parameter->type), nullptr,
-                          &receiver_is_variant, nullptr);
-        if (receiver_is_variant) {
-            core_string_t variant = n00bb_print_type(state->types,
-                                                     receiver_parameter->type);
-            if (n00bb_report(diagnostics, unit, N00B_DIAG_INIT_ON_VARIANT,
-                name_at, N00B_TEXT_VARIANT_CANNOT_DEFINE_INIT,
-                N00BB_ARGS(ARG_TEXT(variant))))
-                n00bb_report_help(diagnostics,
-                    N00B_TEXT_INITIALIZE_THE_ARM_YOU_SELECT,
-                    N00BB_NO_ARGS);
         }
         th_type *nil_type = th_name(state->types, CORE_STRING_STATIC("nil"));
         if (symbol->error_type

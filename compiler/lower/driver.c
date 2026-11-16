@@ -489,6 +489,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = explained_by_errors(&units);
     ok = ok && reintern_unit_types(&units)
         && n00bb_generate_dispatch_adapters(analysis);
+    if (ok && !n00bb_check_required_fields(analysis))
+        ok = explained_by_errors(&units);
     if (ok && !n00bb_check_variant_arms(analysis))
         ok = explained_by_errors(&units);
     n00bb_typing_free(&typing);

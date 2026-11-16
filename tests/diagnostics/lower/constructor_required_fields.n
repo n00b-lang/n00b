@@ -1,0 +1,64 @@
+object Inner {
+    v: int
+}
+
+object Both {
+    inner: Inner
+}
+
+func __init(self: Both, flag: bool) {
+    if flag {
+        self.inner = new[Inner]()
+    } else {
+        self.inner = new[Inner]()
+    }
+}
+
+object One {
+    inner: Inner
+}
+
+func __init(self: One, flag: bool) {
+    if flag {
+        self.inner = new[Inner]()
+    }
+}
+
+object Maybe {
+    inner: Inner?
+}
+
+func __init(self: Maybe, flag: bool) {
+    if flag {
+        self.inner = new[Inner]()
+    }
+}
+
+object Holder {
+    target: Ref[int]
+}
+
+func __init(self: Holder, target: Ref[int], flag: bool) {
+    if flag {
+        return
+    }
+    self.target = target
+}
+
+record Whole {
+    inner: Inner
+}
+
+func __init(modify self: Whole) {
+    self = (inner = new[Inner]())
+}
+
+func make(flag: bool) -> int {
+    var counter = 0
+    let both = new[Both](flag)
+    let one = new[One](flag)
+    let maybe = new[Maybe](flag)
+    let holder = new[Holder](ref counter, flag)
+    let whole = new[Whole]()
+    return both.inner.v + one.inner.v + whole.inner.v
+}

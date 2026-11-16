@@ -1,0 +1,15 @@
+object Box {
+    n: int
+}
+
+func __init(modify self: Box, n: int) {
+    self.n = n
+}
+
+record Point {
+    x: int
+}
+
+func __init(self: Point, x: int) {
+    self.x = x
+}

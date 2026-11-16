@@ -1,0 +1,60 @@
+object Inner {
+    v: int
+}
+
+object Outer {
+    inner: Inner
+}
+
+record Pair {
+    inner: Inner
+    n: int
+}
+
+record Point {
+    x: int
+}
+
+variant Shape {
+    circle: int
+    square: int
+}
+
+func take(o: Outer) -> int {
+    return o.inner.v
+}
+
+func set_first() -> int {
+    var pair = new[Pair]()
+    pair.n = 3
+    pair.inner = new[Inner]()
+    return pair.inner.v + pair.n
+}
+
+func read_first() -> int {
+    let outer = new[Outer]()
+    return outer.inner.v
+}
+
+func one_branch(flag: bool) -> int {
+    let outer = new[Outer]()
+    if flag {
+        outer.inner = new[Inner]()
+    }
+    return take(outer)
+}
+
+func every_branch(flag: bool) -> int {
+    let outer = new[Outer]()
+    if flag {
+        outer.inner = new[Inner]()
+    } else {
+        outer.inner = new[Inner]()
+    }
+    return take(outer)
+}
+
+func arguments() {
+    let point = new[Point](3)
+    let shape = new[Shape](4)
+}

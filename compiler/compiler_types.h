@@ -23,6 +23,7 @@ typedef enum : uint8_t {
     N00BB_TARGET_REF_PLAIN,
     N00BB_TARGET_ASSIGN,
     N00BB_TARGET_PRIMITIVE,
+    N00BB_TARGET_ZEROED,
 } n00bb_target_kind_t;
 
 typedef struct {

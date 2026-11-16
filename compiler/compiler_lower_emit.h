@@ -13,6 +13,7 @@
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")
+#define N00BB_ZEROED_NEW_KEY CORE_STRING_STATIC("n00bb.zeroed-new")
 
 typedef struct n00bb_lower_context n00bb_lower_context_t;
 
@@ -84,6 +85,9 @@ ir_lower_result_t n00bb_emit_cast(ir_lower_context_t *context,
 ir_value_t *n00bb_emit_indirect_read(ir_lower_context_t *context,
                                      ir_value_t *address, th_type *type,
                                      ir_span_t span);
+bool n00bb_emit_indirect_write(ir_lower_context_t *context,
+                               ir_value_t *address, ir_value_t *value,
+                               ir_span_t span);
 bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                      ir_span_t span);
 ir_lower_result_t n00bb_emit_char_array(ir_lower_context_t *context,

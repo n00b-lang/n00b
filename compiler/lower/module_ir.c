@@ -2186,3 +2186,355 @@ n00bb_open_result_variable(ir_lower_context_t *context,
                    context->block->instrs[context->block->n_instrs - 1]);
     return true;
 }
+
+static bool
+self_derived(core_dict_t *derived, const ir_instr_t *in)
+{
+    ir_value_t *value = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    ir_local_t *local = in->n_operands
+        ? ir_operand_local(&in->operands[0]) : nullptr;
+    return (value && core_dict_contains(derived, value))
+        || (local && core_dict_contains(derived, local));
+}
+
+// The values and locals that hold `self`, or its address.
+static void
+collect_self_values(ir_func_t *function, core_dict_t *derived)
+{
+    core_dict_put(derived, function->params[0], function->params[0]);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                bool carries = in->op == IR_OP_COPY || in->op == IR_OP_LOAD
+                    || in->op == IR_OP_ADDRESS_OF
+                    || in->op == IR_OP_NOMINAL_CAST
+                    || in->op == IR_OP_TYPE_NARROW;
+                if (!carries || !self_derived(derived, in)) continue;
+                void *into = in->dest_kind == IR_DEST_LOCAL
+                    ? (void *)in->dest_local : (void *)in->dest;
+                if (into && !core_dict_contains(derived, into)) {
+                    core_dict_put(derived, into, into);
+                    changed = true;
+                }
+            }
+    }
+}
+
+// An object handle or a reference has no meaningful zero value, so unless it
+// is optional, a constructor must set it.
+static bool
+required_field(th_ctx *types, th_type *type)
+{
+    uint8_t attrs = 0;
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || th_option_item(type)) return false;
+    if (th_ind_attrs(type, &attrs)) return !(attrs & TH_NULLABLE);
+    return n00bb_object_type(types, type);
+}
+
+// The fields of `type` that must be set, at most 64 of them.
+static size_t
+required_fields(th_ctx *types, th_type *type, core_string_t *names,
+                th_type **kinds)
+{
+    // A variant's arms are alternatives, so none of them has to be set.
+    bool variant = false;
+    if (type && th_named_info(th_resolve(type), nullptr, &variant, nullptr)
+        && variant)
+        return 0;
+    th_type *shape = type ? th_fields_record(types, type) : nullptr;
+    size_t count = 0;
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape) && count < 64; i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && required_field(types, member->type)) {
+            names[count] = member->name;
+            kinds[count++] = member->type;
+        }
+    }
+    return count;
+}
+
+// The required fields (bits of `wanted`, named by `names`) that `block`
+// stores through `self`. Storing all of `self` sets every field.
+static uint64_t
+fields_set_in(const ir_block_t *block, core_dict_t *derived,
+              const core_string_t *names, size_t count)
+{
+    uint64_t set = 0;
+    for (uint32_t i = 0; i < block->n_instrs; i++) {
+        const ir_instr_t *in = block->instrs[i];
+        const ir_value_t *address = in->op == IR_OP_STORE
+                && in->n_operands == 2
+            ? ir_operand_value(&in->operands[0]) : nullptr;
+        if (!address) continue;
+        if (core_dict_contains(derived, (void *)address)) return ~(uint64_t)0;
+        const ir_instr_t *field = address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
+            || field->operands[1].kind != IR_OPD_NAME
+            || !self_derived(derived, field))
+            continue;
+        for (size_t f = 0; f < count; f++)
+            if (core_string_eq(field->operands[1].name, names[f]))
+                set |= (uint64_t)1 << f;
+    }
+    return set;
+}
+
+static bool
+check_required_fields(core_translation_unit_t *unit, ir_func_t *function)
+{
+    if (!function->n_blocks || !function->n_params
+        || !core_string_starts_with(function->name,
+                                    CORE_STRING_STATIC("__init"))
+        || (function->name.u8_bytes > 6 && function->name.data[6] != '#'))
+        return true;
+    th_ctx *types = ir_module_types(function->owner);
+    th_type *self = th_resolve(function->params[0]->type);
+    if (self && th_kind_of(self) == TH_INDIRECTION && !n00bb_object_type(types, self))
+        self = th_resolve(th_ind_referent(self));
+    core_string_t names[64];
+    th_type *kinds[64];
+    size_t count = required_fields(types, self, names, kinds);
+    if (!count) return true;
+
+    // Forward must-analysis: a field is set at a block's end if it is set at
+    // the end of every predecessor, or in the block itself.
+    core_dict_t derived;
+    core_dict_init(&derived, nullptr, nullptr);
+    collect_self_values(function, &derived);
+    ir_doms_t *doms = ir_doms_of(function);
+    uint64_t all = count == 64 ? ~(uint64_t)0 : ((uint64_t)1 << count) - 1;
+    uint64_t *gen = core_alloc_array(uint64_t, function->n_blocks);
+    uint64_t *out = core_alloc_array(uint64_t, function->n_blocks);
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        gen[b] = fields_set_in(function->blocks[b], &derived, names, count)
+            & all;
+        out[b] = b ? all : gen[b];
+    }
+    for (bool changed = doms != nullptr; changed;) {
+        changed = false;
+        for (uint32_t b = 1; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            uint64_t in = all;
+            for (uint32_t p = 0; p < ir_pred_count(doms, block); p++)
+                in &= out[ir_pred_at(doms, block, p)->index];
+            uint64_t next = in | gen[b];
+            changed |= next != out[b];
+            out[b] = next;
+        }
+    }
+    uint64_t missing = 0;
+    for (uint32_t b = 0; doms && b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        const ir_instr_t *last = block->n_instrs
+            ? block->instrs[block->n_instrs - 1] : nullptr;
+        if (last && last->op == IR_OP_RETURN) missing |= all & ~out[b];
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    for (size_t f = 0; f < count; f++) {
+        if (!(missing >> f & 1)) continue;
+        core_string_t type_text = n00bb_print_type(types, kinds[f]);
+        n00bb_report(diagnostics, unit, N00B_DIAG_REQUIRED_FIELD_UNSET,
+            n00bb_span_location(function->span),
+            N00B_TEXT_REQUIRED_FIELD_UNSET,
+            N00BB_ARGS(ARG_TEXT(names[f]), ARG_TEXT(type_text)));
+        n00bb_report_help(diagnostics, N00B_TEXT_SET_REQUIRED_FIELD,
+                          N00BB_ARGS(ARG_TEXT(names[f])));
+    }
+    if (doms) ir_doms_free(doms);
+    core_free(gen);
+    core_free(out);
+    core_dict_free(&derived);
+    return !missing;
+}
+
+// Whether `value` is the address of a field of the tracked value; sets
+// `*bit` to the field's bit when it is a required one.
+static bool
+tracked_field(core_dict_t *derived, const ir_value_t *value,
+              const core_string_t *names, size_t count, uint64_t *bit)
+{
+    const ir_instr_t *field = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
+        || field->operands[1].kind != IR_OPD_NAME
+        || !self_derived(derived, field))
+        return false;
+    *bit = 0;
+    for (size_t f = 0; f < count; f++)
+        if (core_string_eq(field->operands[1].name, names[f]))
+            *bit = (uint64_t)1 << f;
+    return true;
+}
+
+static bool
+local_slot(const ir_value_t *address)
+{
+    return address && address->kind == IR_VAL_INSTR && address->def
+        && (address->def->op == IR_OP_ALLOC
+            || address->def->op == IR_OP_ALLOCA);
+}
+
+// What `in` does to the tracked value: the required fields it sets, or
+// whether it uses the value, which needs them all set first.
+static uint64_t
+zeroed_effect(const ir_instr_t *in, core_dict_t *derived,
+              const core_string_t *names, size_t count, bool *uses)
+{
+    *uses = false;
+    if (in->op == IR_OP_FIELD || in->op == IR_OP_COPY
+        || in->op == IR_OP_ADDRESS_OF || in->op == IR_OP_NOMINAL_CAST
+        || in->op == IR_OP_TYPE_NARROW)
+        return 0;
+    if (in->op == IR_OP_STORE && in->n_operands == 2) {
+        const ir_value_t *address = ir_operand_value(&in->operands[0]);
+        const ir_value_t *value = ir_operand_value(&in->operands[1]);
+        uint64_t bit = 0;
+        bool carried = value && core_dict_contains(derived, (void *)value);
+        if (carried) {
+            *uses = !local_slot(address);
+            return 0;
+        }
+        if (address && core_dict_contains(derived, (void *)address))
+            return ~(uint64_t)0;
+        if (tracked_field(derived, address, names, count, &bit)) return bit;
+    }
+    uint64_t bit = 0;
+    for (uint32_t o = 0; o < in->n_operands; o++) {
+        const ir_operand_t *operand = &in->operands[o];
+        const ir_value_t *value = operand->kind == IR_OPD_NAMED_ARG
+            ? operand->named.value : ir_operand_value(operand);
+        const ir_local_t *local = ir_operand_local(operand);
+        bool loads = in->op == IR_OP_LOAD && o == 0;
+        if ((value && core_dict_contains(derived, (void *)value) && !loads)
+            || (local && core_dict_contains(derived, (void *)local) && !loads)
+            || tracked_field(derived, value, names, count, &bit))
+            *uses = true;
+    }
+    return 0;
+}
+
+// `new` on a type with no `__init` gives zeroed storage, so fields with no
+// zero value must be set on every path before anything uses the value.
+static bool
+check_zeroed_value(core_translation_unit_t *unit, ir_func_t *function,
+                   ir_instr_t *seed, th_type *built, ir_doms_t *doms)
+{
+    th_ctx *types = ir_module_types(function->owner);
+    core_string_t names[64];
+    th_type *kinds[64];
+    size_t count = required_fields(types, built, names, kinds);
+    if (!count || !doms) return true;
+    core_dict_t derived;
+    core_dict_init(&derived, nullptr, nullptr);
+    core_dict_put(&derived, seed->dest, seed->dest);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                void *into = nullptr;
+                if (in->op == IR_OP_STORE && in->n_operands == 2) {
+                    ir_value_t *value = ir_operand_value(&in->operands[1]);
+                    ir_value_t *address = ir_operand_value(&in->operands[0]);
+                    if (value && core_dict_contains(&derived, value)
+                        && local_slot(address))
+                        into = address;
+                }
+                else if ((in->op == IR_OP_COPY || in->op == IR_OP_LOAD
+                          || in->op == IR_OP_ADDRESS_OF
+                          || in->op == IR_OP_NOMINAL_CAST
+                          || in->op == IR_OP_TYPE_NARROW)
+                         && self_derived(&derived, in))
+                    into = in->dest_kind == IR_DEST_LOCAL
+                        ? (void *)in->dest_local : (void *)in->dest;
+                if (into && !core_dict_contains(&derived, into)) {
+                    core_dict_put(&derived, into, into);
+                    changed = true;
+                }
+            }
+    }
+    uint64_t all = count == 64 ? ~(uint64_t)0 : ((uint64_t)1 << count) - 1;
+    uint64_t *out = core_alloc_array(uint64_t, function->n_blocks);
+    for (uint32_t b = 0; b < function->n_blocks; b++) out[b] = all;
+    // Fields are unset where the value is made, and set everywhere it does
+    // not exist yet, so blocks before it impose nothing.
+    bool ok = true;
+    for (bool changed = true, report = false; changed || report;) {
+        bool reporting = report;
+        changed = report = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            uint64_t set = all;
+            for (uint32_t p = 0; b && p < ir_pred_count(doms, block); p++)
+                set &= out[ir_pred_at(doms, block, p)->index];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                if (in == seed) {
+                    set = 0;
+                    continue;
+                }
+                bool uses = false;
+                set |= zeroed_effect(in, &derived, names, count, &uses) & all;
+                if (!uses || set == all || !reporting || !ok) continue;
+                size_t f = 0;
+                while (set >> f & 1) f++;
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                core_string_t type_text = n00bb_print_type(types, built);
+                n00bb_report(diagnostics, unit, N00B_DIAG_ZEROED_FIELD_UNSET,
+                    n00bb_span_location(in->span),
+                    N00B_TEXT_ZEROED_FIELD_UNSET,
+                    N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(names[f])));
+                n00bb_report_help(diagnostics, N00B_TEXT_SET_ZEROED_FIELD,
+                                  N00BB_ARGS(ARG_TEXT(names[f])));
+                ok = false;
+            }
+            changed |= set != out[b];
+            out[b] = set;
+        }
+        report = !changed && !reporting;
+    }
+    core_free(out);
+    core_dict_free(&derived);
+    return ok;
+}
+
+static bool
+check_zeroed_values(core_translation_unit_t *unit, ir_func_t *function)
+{
+    ir_doms_t *doms = nullptr;
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            ir_annot_t *zeroed = ir_annot_get(&in->annots,
+                                              N00BB_ZEROED_NEW_KEY);
+            if (!zeroed || !in->dest) continue;
+            if (!doms) doms = ir_doms_of(function);
+            ok = check_zeroed_value(unit, function, in, zeroed->t, doms) && ok;
+        }
+    if (doms) ir_doms_free(doms);
+    return ok;
+}
+
+bool
+n00bb_check_required_fields(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *module = state && !state->interface_module
+            ? state->ir_module : nullptr;
+        for (size_t f = 0; module && f < ir_func_count(module); f++)
+            ok = check_required_fields(unit, ir_func_at(module, f))
+                && check_zeroed_values(unit, ir_func_at(module, f)) && ok;
+    }
+    return ok;
+}

@@ -1404,6 +1404,9 @@ bind_missing_external(ir_lower_context_t *context,
                       parse_sym_entry_t *symbol);
 
 bool
+n00bb_check_required_fields(n00bb_link_analysis_t *analysis);
+
+bool
 n00bb_open_result_variable(ir_lower_context_t *context,
                            parse_sym_entry_t *function);
 

@@ -142,61 +142,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_internal(context, span,
                               "`new` has no resolved result type");
     th_type *resolved_type = th_resolve(result_type);
-    bool is_variant = false;
-    if (th_named_info(resolved_type, nullptr, &is_variant, nullptr)
-        && is_variant) {
-        parse_tree_t *call_args = child_nt(visit->grammar, visit->node,
-                                           CORE_STRING_STATIC("call-args"));
-        core_list_t(n00bb_tree_ptr_t) positional =
-            core_list_new(n00bb_tree_ptr_t);
-        collect_positional_nodes(visit->grammar,
-            child_nt(visit->grammar, call_args, CORE_STRING_STATIC("positional-args")),
-            &positional);
-        bool has_keywords = child_nt(visit->grammar, call_args,
-                                     CORE_STRING_STATIC("keyword-args")) != nullptr;
-        if (positional.len || has_keywords) {
-            core_list_free(positional);
-        {
-            core_string_t type_text = lower_type_text(context, result_type);
-            ir_lower_result_t result = lower_report(context,
-                N00B_DIAG_NEW_VARIANT_ARGUMENTS, span,
-                N00B_TEXT_NEW_FOR_VARIANT_TAKES_NO,
-                N00BB_ARGS(ARG_TEXT(type_text)));
-            lower_help(context, N00B_TEXT_CREATE_IT_WITH_NEW_THEN,
-                N00BB_NO_ARGS);
-            core_free(type_text.data);
-            return result;
-        }
-        }
-        core_list_free(positional);
-        ir_instr_t *instruction = ir_lower_emit_instruction(context,
-                                                             IR_OP_VARIANT_NEW,
-                                                             span);
-        if (!instruction
-            || !ir_lower_set_temp_dest(context, instruction,
-                CORE_STRING_STATIC("__n00bb_variant_new_"), resolved_type))
-            return lower_internal(context, span,
-                "could not emit unset variant storage");
-        return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
-    }
     n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
-    n00bb_link_use_site_t *constructor_site = caller
-        ? link_use_site_for_node(caller, visit->node) : nullptr;
-    if (caller && (!constructor_site || !constructor_site->symbol
-            || constructor_site->symbol->kind != PARSE_SYM_FUNCTION)
-        && n00bb_flagset_type(lower->unit, caller, resolved_type, nullptr)) {
-        ir_instr_t *constant = ir_lower_emit_instruction(context,
-                                                          IR_OP_BITSET_CONST,
-                                                          span);
-        if (!constant || !ir_lower_set_temp_dest(context, constant,
-                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
-            || !ir_instr_operand_name(constant, CORE_STRING_STATIC("nil"))
-            || !ir_instr_operand_uint(constant, 0))
-            return lower_internal(context, span,
-                               "could not emit default flagset construction");
-        return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
-    }
     if (th_kind_of(resolved_type) != TH_SEQUENCE)
         return n00bb_lower_constructor_new(context, visit, result_type, span);
 

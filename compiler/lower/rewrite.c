@@ -1291,6 +1291,20 @@ n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     return true;
 }
 
+// A variant from `new` with no `__init` holds no arm yet.
+static ir_value_t *
+n00bb_emit_unset_variant(n00bb_rewrite_t *rewrite, ir_value_t *storage,
+                         th_type *variant, ir_span_t span)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    ir_instr_t *unset = ir_lower_emit_instruction(context, IR_OP_VARIANT_NEW,
+                                                  span);
+    return unset && ir_lower_set_temp_dest(context, unset,
+                CORE_STRING_STATIC("__n00bb_variant_new_"), th_resolve(variant))
+            && n00bb_emit_indirect_write(context, storage, unset->dest, span)
+        ? unset->dest : nullptr;
+}
+
 static bool
 n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                           const n00bb_dispatch_target_t *target)
@@ -2083,6 +2097,34 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (found && (target.kind == N00BB_TARGET_METHOD
                   || target.kind == N00BB_TARGET_FUNCTION))
         return n00bb_rewrite_method_call(rewrite, in, &target);
+    if (target.kind == N00BB_TARGET_ZEROED) {
+        // Zeroed storage needs no call, but an object still needs the record
+        // its handle refers to.
+        ir_value_t *storage = ir_operand_value(&in->operands[1]);
+        th_type *built = in->operands[1].kind == IR_OPD_FRESH
+            ? th_ind_referent(storage->type) : nullptr;
+        th_ctx *types = ir_module_types(rewrite->context.module);
+        bool object = built && n00bb_object_type(types, built);
+        bool variant = false;
+        (void)(built && th_named_info(th_resolve(built), nullptr, &variant,
+                                      nullptr));
+        ir_value_t *made = object ? n00bb_emit_fresh_object(&rewrite->context,
+                                                            storage, built,
+                                                            in->span)
+                         : variant ? n00bb_emit_unset_variant(rewrite, storage,
+                                                              built, in->span)
+                                   : storage;
+        // Marks the zeroed value, so that fields with no zero value are
+        // checked to be set before it is used.
+        return made && made->def
+            && ir_annot_set(ir_module_ctx(rewrite->context.module),
+                            &made->def->annots,
+                            (ir_annot_t){.key = N00BB_ZEROED_NEW_KEY,
+                                         .kind = IR_ANNOT_TYPE,
+                                         .t = built ? built
+                                             : th_ind_referent(storage->type)})
+            && n00bb_rewrite_splice(rewrite, in) && ir_instr_erase(in);
+    }
     if (target.kind == N00BB_TARGET_REF_PLAIN)
         return n00bb_rewrite_replace(rewrite, in, receiver);
     if (target.kind == N00BB_TARGET_REF_CREATE) {
