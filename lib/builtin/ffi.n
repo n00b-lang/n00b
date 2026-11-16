@@ -333,3 +333,73 @@ func __ffi_event(event: string, keys: Array[u64], thread_id: uint) {
 func __ffi_event_key(event: string, key: u64, thread_id: uint) {
     ffi_release_holds(event, nil, key, thread_id)
 }
+
+# A foreign record writ cannot express as `layout(c)` fields keeps its C bytes
+# in an Array[u8]; writ's accessors read and write its fields through these,
+# in the target's own byte order, as C does.
+func ffi_store(modify storage: Array[u8], at: uint, value: 'T) {
+    let place: Ref['T] = unsafe_cast[Ref['T]] (ref storage[at])
+    place.__value = value
+}
+
+func __ffi_read_u8(view storage: Array[u8], at: uint) -> u8 {
+    return (unsafe_cast[Ref[u8]] (ref storage[at])).__value
+}
+func __ffi_read_u16(view storage: Array[u8], at: uint) -> u16 {
+    return (unsafe_cast[Ref[u16]] (ref storage[at])).__value
+}
+func __ffi_read_u32(view storage: Array[u8], at: uint) -> u32 {
+    return (unsafe_cast[Ref[u32]] (ref storage[at])).__value
+}
+func __ffi_read_u64(view storage: Array[u8], at: uint) -> u64 {
+    return (unsafe_cast[Ref[u64]] (ref storage[at])).__value
+}
+func __ffi_read_i8(view storage: Array[u8], at: uint) -> i8 {
+    return (unsafe_cast[Ref[i8]] (ref storage[at])).__value
+}
+func __ffi_read_i16(view storage: Array[u8], at: uint) -> i16 {
+    return (unsafe_cast[Ref[i16]] (ref storage[at])).__value
+}
+func __ffi_read_i32(view storage: Array[u8], at: uint) -> i32 {
+    return (unsafe_cast[Ref[i32]] (ref storage[at])).__value
+}
+func __ffi_read_i64(view storage: Array[u8], at: uint) -> i64 {
+    return (unsafe_cast[Ref[i64]] (ref storage[at])).__value
+}
+func __ffi_read_f32(view storage: Array[u8], at: uint) -> f32 {
+    return (unsafe_cast[Ref[f32]] (ref storage[at])).__value
+}
+func __ffi_read_f64(view storage: Array[u8], at: uint) -> f64 {
+    return (unsafe_cast[Ref[f64]] (ref storage[at])).__value
+}
+
+func __ffi_write_u8(modify storage: Array[u8], at: uint, value: u8) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_u16(modify storage: Array[u8], at: uint, value: u16) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_u32(modify storage: Array[u8], at: uint, value: u32) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_u64(modify storage: Array[u8], at: uint, value: u64) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_i8(modify storage: Array[u8], at: uint, value: i8) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_i16(modify storage: Array[u8], at: uint, value: i16) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_i32(modify storage: Array[u8], at: uint, value: i32) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_i64(modify storage: Array[u8], at: uint, value: i64) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_f32(modify storage: Array[u8], at: uint, value: f32) {
+    ffi_store(storage, at, value)
+}
+func __ffi_write_f64(modify storage: Array[u8], at: uint, value: f64) {
+    ffi_store(storage, at, value)
+}

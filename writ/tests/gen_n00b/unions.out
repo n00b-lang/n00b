@@ -141,27 +141,27 @@ func raw() -> Raw {
 }
 
 func i(self: Raw) -> i64 {
-    return __ffi_read_i64(ref self.storage, 0)
+    return __ffi_read_i64(self.storage, 0)
 }
 
 func set_i(modify self: Raw, value: i64) {
-    __ffi_write_i64(ref self.storage, 0, value)
+    __ffi_write_i64(self.storage, 0, value)
 }
 
 func d(self: Raw) -> f64 {
-    return __ffi_read_f64(ref self.storage, 0)
+    return __ffi_read_f64(self.storage, 0)
 }
 
 func set_d(modify self: Raw, value: f64) {
-    __ffi_write_f64(ref self.storage, 0, value)
+    __ffi_write_f64(self.storage, 0, value)
 }
 
 func p(self: Raw) -> uint {
-    return __ffi_read_u64(ref self.storage, 0)
+    return unsafe_cast[uint](__ffi_read_u64(self.storage, 0))
 }
 
 func set_p(modify self: Raw, value: uint) {
-    __ffi_write_u64(ref self.storage, 0, value)
+    __ffi_write_u64(self.storage, 0, unsafe_cast[u64](value))
 }
 
 record Value layout(c) {
@@ -217,11 +217,11 @@ func cell() -> Cell {
 }
 
 func flag(self: Cell) -> u8 {
-    return __ffi_read_u8(ref self.storage, 8)
+    return __ffi_read_u8(self.storage, 8)
 }
 
 func set_flag(modify self: Cell, value: u8) {
-    __ffi_write_u8(ref self.storage, 8, value)
+    __ffi_write_u8(self.storage, 8, value)
 }
 
 open enum Value_Kind: i32 {

@@ -158,6 +158,26 @@ package builtin {
     export ffi.__ffi_event_key
     export ffi.__ffi_thread_id
     export ffi.__ffi_on_main_thread
+    export ffi.__ffi_read_u8
+    export ffi.__ffi_read_u16
+    export ffi.__ffi_read_u32
+    export ffi.__ffi_read_u64
+    export ffi.__ffi_read_i8
+    export ffi.__ffi_read_i16
+    export ffi.__ffi_read_i32
+    export ffi.__ffi_read_i64
+    export ffi.__ffi_read_f32
+    export ffi.__ffi_read_f64
+    export ffi.__ffi_write_u8
+    export ffi.__ffi_write_u16
+    export ffi.__ffi_write_u32
+    export ffi.__ffi_write_u64
+    export ffi.__ffi_write_i8
+    export ffi.__ffi_write_i16
+    export ffi.__ffi_write_i32
+    export ffi.__ffi_write_i64
+    export ffi.__ffi_write_f32
+    export ffi.__ffi_write_f64
     export panic.panic
     export containers.buffer.Buffer
     export containers.buffer.Buffer_Error

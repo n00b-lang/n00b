@@ -1651,9 +1651,8 @@ field_spec(const n00b_t *g, const writ_record_view_t *record, const writ_slot_vi
     case WRIT_TYPE_INT:
     case WRIT_TYPE_ENUM:
     case WRIT_TYPE_HANDLE:
-        return scalar_type(g, type);
     case WRIT_TYPE_FLOAT:
-        return type->size == 8 ? scalar_type(g, type) : (writ_str_t){0};
+        return scalar_type(g, type);
     case WRIT_TYPE_VIEW: {
         writ_slot_view_t inner = *field;
         inner.type = type->target;
@@ -1774,23 +1773,24 @@ emit_opaque_record(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t 
     writ_emit_close(emit, nullptr);
     for (size_t f = 0; f < record->fields_count; f++) {
         const writ_slot_view_t *field = &record->fields[f];
-        if (field->type && (field->type->kind == WRIT_TYPE_UNION || field->type->kind == WRIT_TYPE_RECORD)) {
+        const writ_type_view_t *t = field->type;
+        if (t && (t->kind == WRIT_TYPE_UNION || t->kind == WRIT_TYPE_RECORD)) {
             continue;
         }
-        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
-        writ_str_t value = field->type && field->type->kind == WRIT_TYPE_FLOAT ? prim(g, "f%u", 64)
-                                                                              : scalar_type(g, field->type);
-        writ_str_t layout = writ_str_format(g->session, "%c%u", field->type && field->type->kind == WRIT_TYPE_FLOAT
-                                                                    ? 'f' : field->type && field->type->is_signed
-                                                                    ? 'i' : 'u',
-                                            field->type ? field->type->size * 8 : 0);
+        writ_str_t name = field_name(g, field), value = scalar_type(g, t);
+        writ_str_t layout = writ_str_format(g->session, "%c%u", t && t->kind == WRIT_TYPE_FLOAT ? 'f'
+                                            : t && t->is_signed ? 'i' : 'u', t ? t->size * 8 : 0);
+        bool same = writ_str_eq(value, layout); // or a uint, bool or enum, cast from its bytes
+        writ_str_t read = writ_str_format(g->session, "__ffi_read_%.*s(self.storage, %u)", S(layout), field->offset);
+        read = same ? read : writ_str_format(g->session, "unsafe_cast[%.*s](%.*s)", S(value), S(read));
+        writ_str_t back = same ? writ_cstr("value") : writ_str_format(g->session, "unsafe_cast[%.*s](value)", S(layout));
         writ_emit_line(emit, "");
         writ_emit_open(emit, "func %.*s(self: %.*s) -> %.*s", S(name), S(type), S(value));
-        writ_emit_line(emit, "return __ffi_read_%.*s(ref self.storage, %u)", S(layout), field->offset);
+        writ_emit_line(emit, "return %.*s", S(read));
         writ_emit_close(emit, nullptr);
         writ_emit_line(emit, "");
         writ_emit_open(emit, "func set_%.*s(modify self: %.*s, value: %.*s)", S(name), S(type), S(value));
-        writ_emit_line(emit, "__ffi_write_%.*s(ref self.storage, %u, value)", S(layout), field->offset);
+        writ_emit_line(emit, "__ffi_write_%.*s(self.storage, %u, %.*s)", S(layout), field->offset, S(back));
         writ_emit_close(emit, nullptr);
     }
 }
