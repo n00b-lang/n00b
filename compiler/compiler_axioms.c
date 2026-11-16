@@ -118,8 +118,6 @@ static const n00bb_axiom_t axioms[] = {
     COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
     NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize",
            NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
-    NATIVE("__finalize_boxed", "n00bb_finalize_boxed",
-           NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
     NATIVE("__ref_address_boxed", "n00bb_ref_address_boxed",
            NATIVE_ENTERS, 0x2, 0),
     NATIVE("__ref_address_mut_boxed", "n00bb_ref_address_mut_boxed",

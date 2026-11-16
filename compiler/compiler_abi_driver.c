@@ -649,12 +649,10 @@ typedef struct {
     size_t metadata_bytes;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
-    const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
     const n00bb_llvm_finalizer_binding_t *boxed_addresses;
     size_t boxed_address_count;
     const n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses;
     size_t boxed_mutable_address_count;
-    size_t boxed_finalizer_count;
 } module_entry_t;
 
 typedef struct {
@@ -745,8 +743,6 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
             emission->global_bindings, emission->global_binding_count)
         && (!entry || (n00bb_llvm_backend_bind_finalizers(backend,
                 entry->finalizers, entry->finalizer_count)
-            && n00bb_llvm_backend_bind_boxed_finalizers(backend,
-                entry->boxed_finalizers, entry->boxed_finalizer_count)
             && n00bb_llvm_backend_bind_boxed_addresses(backend,
                 entry->boxed_addresses, entry->boxed_address_count,
                 entry->boxed_mutable_addresses,
@@ -2160,8 +2156,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t global_binding_count = 0;
     n00bb_llvm_finalizer_binding_t *finalizers = nullptr;
     size_t finalizer_count = 0;
-    n00bb_llvm_finalizer_binding_t *boxed_finalizers = nullptr;
-    size_t boxed_finalizer_count = 0;
     n00bb_llvm_finalizer_binding_t *boxed_addresses = nullptr;
     size_t boxed_address_count = 0;
     n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses = nullptr;
@@ -2212,10 +2206,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
             if (ok) {
                 read_stage = "matching boxed hooks";
-                ok = n00bb_bind_boxed_hooks(&analysis->boxed_hooks.finalizers,
-                        type_indices, type_index_count, &boxed_finalizers,
-                        &boxed_finalizer_count)
-                    && n00bb_bind_boxed_hooks(&analysis->boxed_hooks.addresses,
+                ok = n00bb_bind_boxed_hooks(&analysis->boxed_hooks.addresses,
                         type_indices, type_index_count, &boxed_addresses,
                         &boxed_address_count)
                     && n00bb_bind_boxed_hooks(
@@ -2333,12 +2324,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .initializer_count = initializer_count,
         .metadata_bytes = metadata.size,
         .finalizers = finalizers, .finalizer_count = finalizer_count,
-        .boxed_finalizers = boxed_finalizers,
         .boxed_addresses = boxed_addresses,
         .boxed_address_count = boxed_address_count,
         .boxed_mutable_addresses = boxed_mutable_addresses,
         .boxed_mutable_address_count = boxed_mutable_address_count,
-        .boxed_finalizer_count = boxed_finalizer_count,
     };
     module_emitter_t emitter;
     module_emitter_start(&emitter, &emission,
@@ -2547,7 +2536,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_free(global_bindings[i].native_name.data);
     free(global_bindings);
     free(finalizers);
-    free(boxed_finalizers);
     free(boxed_addresses);
     free(boxed_mutable_addresses);
     free(function_indices);

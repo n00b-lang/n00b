@@ -113,11 +113,5 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
             N00BB_ARGS(ARG_TEXT(symbol->name)));
         return nullptr;
     }
-    ir_value_t *consumed = n00bb_emit_consume_value(context, value, binding,
-                                                    span);
-    n00bb_final_frame_t *frame = symbol
-        ? n00bb_final_frame(context->user, symbol) : nullptr;
-    if (consumed && frame && !n00bb_set_owned(context, frame, false, span))
-        return nullptr;
-    return consumed;
+    return n00bb_emit_consume_value(context, value, binding, span);
 }

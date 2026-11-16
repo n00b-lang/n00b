@@ -320,8 +320,6 @@ struct n00bb_llvm_backend_t {
     size_t global_binding_count;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
-    const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
-    size_t boxed_finalizer_count;
     const n00bb_llvm_finalizer_binding_t *boxed_addresses;
     size_t boxed_address_count;
     const n00bb_llvm_finalizer_binding_t *boxed_mutable_addresses;
@@ -13951,18 +13949,6 @@ n00bb_llvm_backend_bind_finalizers(
 }
 
 bool
-n00bb_llvm_backend_bind_boxed_finalizers(
-    n00bb_llvm_backend_t *backend,
-    const n00bb_llvm_finalizer_binding_t *finalizers, size_t count)
-{
-    if (!backend || (count && !finalizers) || backend->lowered)
-        return false;
-    backend->boxed_finalizers = finalizers;
-    backend->boxed_finalizer_count = count;
-    return true;
-}
-
-bool
 n00bb_llvm_backend_bind_boxed_addresses(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_finalizer_binding_t *addresses, size_t count,
@@ -15138,9 +15124,6 @@ prepare_image(n00bb_llvm_backend_t *backend,
         && (!emit_finalizer_dispatch(backend, "n00b_gc_finalize",
                 backend->finalizers, backend->finalizer_count, true,
                 diagnostics)
-            || !emit_finalizer_dispatch(backend, "n00bb_finalize_boxed",
-                backend->boxed_finalizers, backend->boxed_finalizer_count,
-                false, diagnostics)
             || !emit_address_dispatch(backend, "n00bb_ref_address_boxed",
                 backend->boxed_addresses, backend->boxed_address_count,
                 diagnostics)

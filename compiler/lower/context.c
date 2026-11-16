@@ -416,25 +416,6 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                 with_order = item->order;
             }
         }
-        n00bb_final_frame_t *final = nullptr;
-        for (size_t i = lower->finals.len; i > lower->final_base; i--) {
-            n00bb_final_frame_t *candidate = &lower->finals.data[i - 1];
-            if (candidate->order <= stop_order
-                || candidate->order >= before
-                || !node_is_within(exit_node, candidate->scope)
-                || (handler && node_is_within(handler->node,
-                                              candidate->scope))
-                || (final && candidate->order <= final->order))
-                continue;
-            final = candidate;
-        }
-        if (final && (!loop || final->order > loop->order)
-            && (!with_item || final->order > with_order)) {
-            before = final->order;
-            if (!n00bb_emit_scope_finalize(context, final, exit_node))
-                return false;
-            continue;
-        }
         if (!loop && !with_item) break;
         if (loop && (!with_item || loop->order > with_order)) {
             before = loop->order;

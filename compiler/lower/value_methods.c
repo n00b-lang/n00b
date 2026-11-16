@@ -10,9 +10,6 @@ static ir_func_t *
 n00bb_object_equal_function(ir_lower_context_t *context, th_type *receiver);
 static ir_func_t *
 n00bb_object_hash_function(ir_lower_context_t *context, th_type *receiver);
-static ir_func_t *
-n00bb_record_finalize_function(ir_lower_context_t *context,
-                               th_type *receiver);
 
 bool
 n00bb_emit_panic(ir_lower_context_t *context, ir_value_t *message,
@@ -433,28 +430,6 @@ n00bb_object_hash_function(ir_lower_context_t *context, th_type *receiver)
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
-static ir_func_t *
-n00bb_record_finalize_function(ir_lower_context_t *context,
-                               th_type *receiver)
-{
-    ir_func_t *function = context->function;
-    if (!function || function->n_blocks || !receiver) return nullptr;
-    th_ctx *types = ir_module_types(context->module);
-    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"),
-                                    th_ind(types, 0, receiver));
-    ir_block_t *block = self
-        ? ir_block_add(function, CORE_STRING_STATIC("entry")) : nullptr;
-    if (!block) return nullptr;
-    context->block = block;
-    context->reachable = true;
-    ir_span_t span = ir_module_span(context->module);
-    span.implied = true;
-    if (!n00bb_emit_finalize_fields(context, self, span, 0))
-        return nullptr;
-    ir_instr_t *ret = ir_instr_add(context->block, IR_OP_RETURN);
-    return ret ? function : nullptr;
-}
-
 bool
 n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
 {
@@ -486,9 +461,6 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                 bool scalar_equal = symbol->name.data
                     && core_string_starts_with(symbol->name,
                         CORE_STRING_STATIC("__n00bb_scalar_equal_"));
-                bool finalize = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__finalize#n00bb_"));
                 ir_func_t *function = link_ir_function_for_symbol(analysis, symbol);
                 ir_module_t *module = unit_module(state);
                 n00bb_lower_context_t lower = {
@@ -501,9 +473,7 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                     .user = &lower,
                 };
                 bool generated = function && module
-                    && (finalize
-                        ? n00bb_record_finalize_function(&context, receiver)
-                        : object_hash
+                    && (object_hash
                         ? n00bb_object_hash_function(&context, receiver)
                         : object_equal
                         ? n00bb_object_equal_function(&context, receiver)

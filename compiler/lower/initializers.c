@@ -797,9 +797,6 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
 {
     for (size_t i = 0; i < analysis->specializations.len; i++)
         core_list_push(*roots, analysis->specializations.data[i].instance);
-    for (size_t i = 0; i < analysis->boxed_hooks.finalizers.len; i++)
-        core_list_push(*roots,
-            analysis->boxed_hooks.finalizers.data[i].function);
     for (size_t i = 0; i < analysis->boxed_hooks.addresses.len; i++)
         core_list_push(*roots,
             analysis->boxed_hooks.addresses.data[i].function);

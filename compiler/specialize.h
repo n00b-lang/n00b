@@ -35,7 +35,6 @@ typedef struct {
 core_list_decl(n00bb_boxed_finalizer_t);
 
 typedef struct {
-    core_list_t(n00bb_boxed_finalizer_t) finalizers;
     core_list_t(n00bb_boxed_finalizer_t) addresses;
     core_list_t(n00bb_boxed_finalizer_t) mutable_addresses;
 } n00bb_boxed_hooks_t;
@@ -53,7 +52,6 @@ typedef struct {
     ir_span_t site;
     bool located;
     bool site_located;
-    bool finalized_copy;
     bool missing_implementation;
     bool mismatched_operands;
 } n00bb_specialization_failure_t;

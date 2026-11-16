@@ -70,8 +70,7 @@ collect_sequence_literal_values(ir_lower_context_t *context,
     if (!cached) return false;
     for (size_t i = 0; i < cached->count; i++) {
         ir_value_t *value = ir_lower_node_value(context, cached->nodes[i]);
-        if (!value || !n00bb_move_source(context, visit->grammar,
-                                         cached->nodes[i])) return false;
+        if (!value) return false;
         core_list_push(*values, value);
     }
     return true;
@@ -164,8 +163,7 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
             }
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression) : nullptr;
-            if (!expression || !value
-                || !n00bb_move_source(context, visit->grammar, expression))
+            if (!expression || !value)
                 return false;
             core_list_push(parts->expressions, expression);
             core_list_push(parts->values, value);
@@ -443,9 +441,6 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                         : nullptr;
         core_free(elements);
     }
-    for (size_t i = 0; i < parts->expressions.len; i++)
-        if (!n00bb_move_source(context, visit->grammar,
-                               parts->expressions.data[i])) return false;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_instr_t *aggregate = ir_lower_emit_instruction(context,
                                                        IR_OP_AGGREGATE, span);

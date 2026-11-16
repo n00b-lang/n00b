@@ -3,14 +3,14 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   panics          here (140:33)
   param self      writer, lends
   param key       reader, lends
-  param value     reader, lends
-  detail          may_collect allocates_direct reinterprets finalizes_params
+  param value     untouched, lends
+  detail          may_collect allocates_direct reinterprets
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   allocates       builtin.containers.dict.key_hash (105:67) -> builtin.abi.__n00bb_record_hash_d38c240401a8ee5d (34:12) -> builtin.hashing.hash (0:0) -> builtin.hashing.hash_value (381:12) -> builtin.hashing.xxh3_128_at (344:12) -> builtin.hashing.len_long (330:12) -> here (285:27)
   panics          here (109:34)
   param self      reader
   param key       reader
-  detail          may_collect allocates_direct reinterprets finalizes_params
+  detail          may_collect allocates_direct reinterprets
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   no effects      
   param self      reader
@@ -24,13 +24,13 @@ builtin.containers.list.append: (List['T], 'T, bool) -> nil
   param self      writer, lends
   param value     untouched, lends
   param front     untouched
-  detail          may_collect allocates_direct finalizes_params
+  detail          may_collect allocates_direct
 builtin.containers.list.pop: (List['T], bool) -> 'T?
   allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (187:32)
   param self      writer, lends
   param front     untouched
-  detail          may_collect allocates_direct finalizes_params
+  detail          may_collect allocates_direct
 builtin.containers.list.len: (List['T]) -> uint
   no effects      
   param self      reader

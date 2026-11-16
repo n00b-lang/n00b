@@ -5016,15 +5016,7 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     };
     core_diagnostics_t *failure_diagnostics = site
         ? core_translation_unit_diagnostics(site) : diagnostics;
-    if (!ok && failure.located && failure.finalized_copy) {
-        n00bb_report(failure_diagnostics, site, N00B_DIAG_FINALIZED_COPY,
-            failure_location, N00B_TEXT_GENERIC_FINALIZED_COPY,
-            N00BB_ARGS(ARG_TEXT(failure.function), ARG_TEXT(failure.after),
-                       ARG_TEXT(failure.before)));
-        n00bb_report_help(failure_diagnostics,
-                          N00B_TEXT_MOVE_THE_WHOLE_VARIABLE, N00BB_NO_ARGS);
-    }
-    else if (!ok && failure.located && failure.mismatched_operands) {
+    if (!ok && failure.located && failure.mismatched_operands) {
         n00bb_report(failure_diagnostics, site,
             N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION, failure_location,
             N00B_TEXT_GENERIC_MISMATCHED_OPERANDS,
