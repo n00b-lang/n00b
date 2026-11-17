@@ -2069,6 +2069,7 @@ typedef enum : uint8_t {
     FIT_BOUNDED,
     FIT_GENERIC,
     FIT_CONVERTED,
+    FIT_CHECKED,
     FIT_NONE,
 } overload_fit_t;
 
@@ -2191,7 +2192,12 @@ static overload_fit_t overload_fit(const n00bb_dispatch_index_t *index,
     }
     if (!th_is_closed(types, param)) {
         if (!th_env_type_pattern_subsumes(param, arg)) {
-            return FIT_NONE;
+            th_type *item = th_option_item(param);
+
+            return item && overload_fit(index, module, symbol, item, arg)
+                        != FIT_NONE
+                     ? FIT_CONVERTED
+                     : FIT_NONE;
         }
 
         int bounds = receiver_bounds(types, symbol, param, arg);
@@ -2211,12 +2217,17 @@ static overload_fit_t overload_fit(const n00bb_dispatch_index_t *index,
 
     th_type *item = th_option_item(param);
 
-    if ((item && overload_fit(index, module, symbol, item, arg) != FIT_NONE)
+    if ((item && (th_is_nil(arg)
+                  || overload_fit(index, module, symbol, item, arg)
+                         != FIT_NONE))
         || coerces((void *)index, param, arg)) {
         return FIT_CONVERTED;
     }
 
-    return FIT_NONE;
+    // Any integer passes to an integer parameter through a checked
+    // conversion; that fits worst of all.
+    return integer_type(arg) && integer_type(param) ? FIT_CHECKED
+                                                    : FIT_NONE;
 }
 
 // How two candidates' parameters compare for one argument: -1 when the
@@ -2234,7 +2245,7 @@ static int compare_fit(ir_module_t *module, overload_fit_t first,
     if (th_same_type(first_param, second_param)) {
         return 0;
     }
-    if (first == FIT_PROMOTED || first == FIT_CONVERTED) {
+    if (first == FIT_PROMOTED || first == FIT_CHECKED) {
         bool forward  = numeric_promotes(module, first_param, second_param);
         bool backward = numeric_promotes(module, second_param, first_param);
 
@@ -2472,6 +2483,99 @@ static overload_outcome_t choose_overload(
     return outcome;
 }
 
+// A method call, an operator or a trait method that goes to a module
+// function chooses among the functions of its name that the calling module
+// can see, anywhere in the program, as a call by name does. Those found
+// first (a type's own methods, an enum's or flagset's operators) keep
+// their place.
+static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
+                                          const ir_instr_t *at,
+                                          th_type *shape)
+{
+    n00bb_link_analysis_t *analysis = index->analysis;
+    th_type *receiver = shape && th_kind_of(shape) == TH_FUNCTION
+            && th_func_nparams(shape)
+        ? th_resolve(th_func_param(shape, 0)->type)
+        : nullptr;
+
+    th_ctx    *types    = ir_ctx_types(analysis->ir_context);
+    ir_func_t *function = at && at->block ? at->block->owner : nullptr;
+
+    // A generic function's body leaves its calls to trait requirements; a
+    // compound assignment goes to its type's assigning operator.
+    if (!at || at->op != IR_OP_DISPATCH || !at->n_operands
+        || ir_annot_get((ir_annots_t *)&at->annots, N00BB_COMPOUND_KEY)
+        || at->operands[0].kind != IR_OPD_NAME || !receiver
+        || !th_is_closed(types, receiver) || !function
+        || !th_is_closed(types, function->type)) {
+        return nullptr;
+    }
+
+    core_string_t           method = at->operands[0].name;
+    n00bb_dispatch_target_t target = {0};
+
+    if (!n00bb_dispatch_target_for(index, receiver, method,
+                                   th_func_nparams(shape)
+                                       + th_func_nkw(shape),
+                                   &target)
+        || target.kind != N00BB_TARGET_FUNCTION) {
+        return nullptr;
+    }
+
+    core_translation_unit_t *consumer = unit_of(analysis->units.data,
+                                                analysis->units.len, at);
+    bool                     found    = false;
+    function_list_t         *list     = core_dict_get(
+        (core_dict_t *)&index->functions, &method, &found);
+
+    if (!consumer || !found) {
+        return nullptr;
+    }
+
+    // The candidates are the functions whose first parameter takes the
+    // receiver. With one at most, and none hidden, the call needs no choice.
+    ir_module_t    *module  = function->owner;
+    function_list_t fitting = core_list_new(parse_sym_entry_ptr_t);
+    function_list_t visible = core_list_new(parse_sym_entry_ptr_t);
+
+    for (size_t i = 0; i < list->len; i++) {
+        parse_sym_entry_t *origin    = canonical_symbol(list->data[i]);
+        th_type           *signature = th_resolve(
+            function_signature(index, origin));
+        bool               listed    = false;
+
+        for (size_t j = 0; !listed && j < fitting.len; j++) {
+            listed = fitting.data[j] == origin;
+        }
+        if (listed || th_kind_of(signature) != TH_FUNCTION
+            || !th_func_nparams(signature)
+            || overload_fit(index, module, origin,
+                            th_func_param(signature, 0)->type, receiver)
+                   == FIT_NONE) {
+            continue;
+        }
+        core_list_push(fitting, origin);
+        if (n00bb_member_visible_to(consumer, origin->owner_unit, origin)) {
+            core_list_push(visible, origin);
+        }
+    }
+
+    size_t all = fitting.len;
+
+    core_list_free(fitting);
+    if (visible.len < 2 && visible.len == all) {
+        core_list_free(visible);
+        return nullptr;
+    }
+
+    n00bb_overload_site_t *site = core_alloc(n00bb_overload_site_t);
+
+    site->candidates = visible;
+    core_dict_put(&tu_state(consumer)->overload_sites, (void *)at, site);
+
+    return site;
+}
+
 static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
                                      th_type *call, th_type **signature)
 {
@@ -2479,6 +2583,9 @@ static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
     n00bb_overload_site_t  *site  = overload_site(index, at);
     th_type                *shape = call ? th_resolve(call) : nullptr;
 
+    if (!site) {
+        site = method_site(index, at, shape);
+    }
     if (!site) {
         return TY_OVERLOAD_NONE;
     }

@@ -191,4 +191,30 @@ func second(x: int, y: bool) -> int {
 }
 
 require second(1, "a") == 1 and second(1, true) == 2
+
+// Method calls choose the same way, on every argument.
+record Meter {
+    level: int
+}
+
+func scaled(self: Meter, by: i32) -> int {
+    return 32
+}
+
+func scaled(self: Meter, by: f64) -> int {
+    return 64
+}
+
+func scaled(self: Meter, by: string) -> int {
+    return 0
+}
+
+let meter: Meter = (level = 1)
+require meter.scaled(2) == 32 and meter.scaled(1.5) == 64
+require meter.scaled(narrow) == 32 and meter.scaled("x") == 0
+
+// Another module's private function is no candidate.
+let gauge: overload_imported.Gauge = (level = 1)
+let small_scale: i32 = 2
+require gauge.reading(small_scale) == 1
 __fd_write(2, "ok")

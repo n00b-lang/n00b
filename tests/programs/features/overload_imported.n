@@ -19,3 +19,17 @@ func store(modify buffer: Array[u8]) fail: int {
 func hashed(value: 'T) -> u128 fail: int where 'T : Hash {
     return value.hash()
 }
+
+record Gauge {
+    level: int
+}
+
+func reading(self: Gauge, scale: int) -> int {
+    return 1
+}
+
+# A private function is no candidate outside its module, even where it
+# would fit more closely.
+private func reading(self: Gauge, scale: i32) -> int {
+    return 99
+}
