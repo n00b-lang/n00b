@@ -420,6 +420,46 @@ static const ir_instr_t *rest_call(const ir_instr_t *pack,
     return nullptr;
 }
 
+// A method a `where` constraint requires, such as the `get` of
+// `Getter[string]`, that the argument's type has, but with another type.
+static bool bound_method_failure(const ty_failure_t *failure)
+{
+    return failure->kind == TY_FAIL_PREDICATE
+        && failure->pred.kind == TY_PRED_DISPATCH && failure->pred.bound
+        && failure->pred.subject && failure->pred.name.u8_bytes
+        && failure->why.at;
+}
+
+static bool report_bound_method(th_ctx *types,
+                                core_translation_unit_t *const *units,
+                                size_t count, core_translation_unit_t *unit,
+                                const ty_failure_t *failure)
+{
+    const ir_instr_t *call   = failure->why.at;
+    const ir_func_t  *callee = n00bb_direct_call_target(call);
+
+    if (!bound_method_failure(failure) || !callee) {
+        return false;
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t subject = n00bb_print_type(types,
+        th_resolve(failure->pred.subject));
+    core_string_t wanted = failure->pred.other
+        ? n00bb_print_type(types, failure->pred.other)
+        : (core_string_t){0};
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION,
+                 n00bb_span_location(call->span),
+                 N00B_TEXT_REQUIRED_METHOD_DOES_NOT_FIT,
+                 N00BB_ARGS(ARG_TEXT(subject),
+                            ARG_TEXT(function_name(callee)),
+                            ARG_TEXT(failure->pred.name),
+                            ARG_TEXT(wanted)));
+    note_declared(units, count, unit, callee);
+
+    return true;
+}
+
 static bool report_required_trait(th_ctx *types,
                                   core_translation_unit_t *const *units,
                                   size_t count, core_translation_unit_t *unit,
@@ -1083,6 +1123,7 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         || report_fixed_parameter(types, unit, failure)
         || report_condition(types, unit, failure)
         || report_nil(types, unit, failure)
+        || report_bound_method(types, units, count, unit, failure)
         || report_required_trait(types, units, count, unit, failure)
         || report_argument(types, units, count, unit, failure)
         || report_varargs_array(types, units, count, unit, failure)
@@ -7772,10 +7813,25 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     ok = check_unpropagated_outcomes(types, units, count,
                                      &coverage.outcome_calls, &tainted)
         && ok;
+    // A call whose argument's method doesn't fit a `where` constraint gets
+    // that one error; the mismatches it causes there are not reported.
+    core_dict_t bound_sites;
+    core_dict_init(&bound_sites, nullptr, nullptr);
+    for (size_t i = 0; i < ty_failure_count(solver); i++) {
+        const ty_failure_t *failure = ty_failure_at(solver, i);
+        if (bound_method_failure(failure)) {
+            core_dict_put(&bound_sites, (void *)failure->why.at, (void *)1);
+        }
+    }
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
         const ty_failure_t      *failure = ty_failure_at(solver, i);
         core_translation_unit_t *unit    = unit_of(units, count,
                                                    failure->why.at);
+
+        if (!bound_method_failure(failure) && failure->why.at
+            && core_dict_contains(&bound_sites, (void *)failure->why.at)) {
+            continue;
+        }
 
         const ir_instr_t        *test    = case_test_of(failure->why.at);
 
@@ -7815,6 +7871,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     }
     core_dict_free(&tainted);
     core_dict_free(&reported);
+    core_dict_free(&bound_sites);
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
     for (size_t u = 0; u < count; u++) {

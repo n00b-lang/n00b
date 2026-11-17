@@ -1,0 +1,1 @@
+tests/diagnostics/tu/trait_unknown.n:1:37: error N00B-N0002: cannot find trait `Nonexistent` in this scope

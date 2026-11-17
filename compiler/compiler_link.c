@@ -4374,6 +4374,14 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &selected)
                         == TH_ENV_METHOD_FOUND;
+                // With a `__cmp` and no `__equal`, equality comes from
+                // `__cmp`, and a hash of the fields would disagree with it.
+                bool custom_cmp = !custom_equal && candidate &&
+                    th_env_method_resolve(probe, candidate,
+                        CORE_STRING_STATIC("Comparable"),
+                        CORE_STRING_STATIC("__cmp"), &selected)
+                        == TH_ENV_METHOD_FOUND;
+                custom_equal = custom_equal || custom_cmp;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal

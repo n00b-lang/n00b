@@ -1,0 +1,7 @@
+tests/diagnostics/tu/trait_constraints.n:13:6: warning N00B-N0019: function `key` is never called
+  help: call it or delete it
+tests/diagnostics/tu/trait_constraints.n:23:9: error N00B-T0021: `Box` does not fit what `fetch` requires: its `get` must be `(Box) -> string`
+  tests/diagnostics/tu/trait_constraints.n:16:6: note: `fetch` is declared here
+tests/diagnostics/tu/trait_constraints.n:23:31: error N00B-T0021: `Box` does not implement `Keyed`, which `keyed` requires
+  tests/diagnostics/tu/trait_constraints.n:19:6: note: `keyed` is declared here
+  help: implement `Keyed` for `Box`, or call a function that does not need it

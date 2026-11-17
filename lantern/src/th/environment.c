@@ -1974,10 +1974,36 @@ static bool receiver_cannot_match(const th_env_function_t *function,
       && !core_string_eq(expected->named.name, actual->named.name);
 }
 
+// The trait's own `where` requirements, on the type variables its matched
+// methods have bound (`trait Keyed where 'K: Integer`).
+static bool trait_requirements_hold(th_ctx *ctx, th_type *methods) {
+  th_type *trait = methods ? th_resolve(methods) : nullptr;
+  if (!trait || th_kind_of(trait) != TH_TRAIT) return true;
+  for (size_t i = 0; i < th_trait_requirement_count(trait); i++) {
+    th_trait_requirement requirement = {0};
+    if (!th_trait_requirement_at(trait, i, &requirement)) continue;
+    th_type *subject = requirement.subject
+        ? th_resolve(requirement.subject) : nullptr;
+    if (!subject || th_kind_of(subject) == TH_VAR) continue;
+    if (requirement.kind == TH_CON_IMPLEMENTS
+        && !th_env_implements(ctx, subject, requirement.iface))
+      return false;
+    if (requirement.kind == TH_CON_ONE_OF && requirement.target) {
+      bool member = false;
+      th_type *members = th_resolve(requirement.target);
+      for (size_t a = 0; !member && a < th_sum_len(members); a++)
+        member = th_same_type(subject, th_sum_arm(members, a));
+      if (!member) return false;
+    }
+  }
+  return true;
+}
+
 static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                                 const th_env_trait_t *trait,
                                 th_type *methods, size_t ordinal) {
-  if (ordinal == contract_len(methods)) return true;
+  if (ordinal == contract_len(methods))
+    return trait_requirements_hold(ctx, methods);
   const th_member *method = contract_method(methods, ordinal);
   if (!method) return false;
   core_list_t(th_env_function_ptr_t) candidates =

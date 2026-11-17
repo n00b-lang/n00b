@@ -3387,6 +3387,21 @@ apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return ok;
 }
 
+// A trait the compiler provides without a declaration: `Equal`,
+// `Comparable` and the operator traits.
+static bool
+builtin_trait_name(core_string_t name)
+{
+    if (core_string_eq(name, CORE_STRING_STATIC("Equal"))
+        || core_string_eq(name, CORE_STRING_STATIC("Comparable")))
+        return true;
+    for (size_t i = 0; i < n00bb_binary_operator_count; i++)
+        if (core_string_eq(name, n00bb_binary_operators[i].trait)
+            || core_string_eq(name, n00bb_binary_operators[i].in_place_trait))
+            return true;
+    return false;
+}
+
 static bool
 apply_one_signature_constraint(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
@@ -3414,6 +3429,17 @@ apply_one_signature_constraint(parse_grammar_t *grammar,
             trait_site, &owner, &trait_symbol, &name)) {
         core_buffer_release(&name);
         return false;
+    }
+    // A qualified name may resolve later, by name; an unqualified one that
+    // names no trait here is unknown.
+    if (!trait_symbol && !memchr(name.data, '.', name.byte_len)
+        && !builtin_trait_name(core_buffer_string(&name))) {
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_UNKNOWN_TYPE, n00bb_node_span(trait),
+            N00B_TEXT_CANNOT_FIND_TRAIT_IN_THIS,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&name))));
+        core_buffer_release(&name);
+        return true;
     }
     if (trait_symbol && owner) {
         core_buffer_t qualified = {0};

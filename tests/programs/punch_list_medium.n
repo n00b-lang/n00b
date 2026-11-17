@@ -137,4 +137,56 @@ require chained(chain_i, chain_j) == cast[i:10](2)
 require chained(chain_u, chain_v) == 1
 require flipped_sum(cast[u:10](1), cast[u:10](2)) == cast[u:10](1020)
 
+# Every trait in `'T: A + B` lends its methods (#26).
+trait Named {
+    func name(self: 'N) -> string
+}
+trait Sized {
+    func size(self: 'S) -> int
+}
+record Labeled {
+    v: int
+}
+func name(self: Labeled) -> string {
+    return "box"
+}
+func size(self: Labeled) -> int {
+    return self.v
+}
+func describe(x: 'T) -> int where 'T: Named + Sized {
+    return cast[int](len(x.name())) + x.size()
+}
+require describe(cast[Labeled]((v = 2))) == 5
+
+# With a `__cmp` and no `__equal`, `==` follows `__cmp`; an `__equal` wins
+# over it (#26).
+record By_Value {
+    v: int
+    tag: int
+}
+func __cmp(view a: By_Value, view b: By_Value) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+record By_Tag {
+    v: int
+    tag: int
+}
+func __cmp(view a: By_Tag, view b: By_Tag) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+func __equal(view a: By_Tag, view b: By_Tag) -> bool {
+    return a.tag == b.tag
+}
+let value_one: By_Value = (v = 1, tag = 1)
+let value_two: By_Value = (v = 1, tag = 2)
+require value_one == value_two and !(value_one != value_two)
+let tag_one: By_Tag = (v = 1, tag = 1)
+let tag_two: By_Tag = (v = 1, tag = 2)
+let tag_three: By_Tag = (v = 5, tag = 1)
+require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
+
 __fd_write(2, "ok")

@@ -1,0 +1,23 @@
+trait Getter {
+    func get(self: 'G) -> 'V
+}
+trait Keyed where 'K: Integer {
+    func key(self: 'S) -> 'K
+}
+record Box {
+    v: int
+}
+func get(self: Box) -> int {
+    return self.v
+}
+func key(self: Box) -> string {
+    return "box"
+}
+func fetch(view x: 'T) -> string where 'T: Getter[string] {
+    return x.get()
+}
+func keyed(view x: 'T) -> int where 'T: Keyed {
+    return 1
+}
+let box: Box = (v = 2)
+require fetch(box) == "2" and keyed(box) == 1
