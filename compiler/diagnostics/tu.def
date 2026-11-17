@@ -116,6 +116,12 @@ N00B_DIAG(CONFLICTING_TYPE_DEFINITION, "N00B-N0517", ERROR,
     "one type name is given two different definitions",
     "A type is defined once. Rename one of the definitions, or remove the\n"
     "duplicate.")
+N00B_DIAG(ALIAS_KIND_AMBIGUOUS, "N00B-N0518", ERROR,
+    "an `alias` names both a type and a literal modifier",
+    "An `alias` with no kind aliases a type, or a literal modifier when its\n"
+    "target names one. When the target names both, say which is meant:\n"
+    "    alias type Count = count\n"
+    "    alias litmod tally = count")
 N00B_DIAG(LOOP_BINDS_OUTER_LET, "N00B-N0520", ERROR,
     "a `for` loop names an outer `let` as its loop variable",
     "A name before `in` that is already a `var` outside the loop is assigned\n"

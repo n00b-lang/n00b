@@ -538,6 +538,8 @@ N00B_TEXT(LITERAL_MODIFIER_FOR_LITERALS_IS_2, "literal modifier `'{0}` for {1} l
 N00B_TEXT(LITERAL_MODIFIER_FOR_LITERALS_IS_3, "literal modifier `'{0}` for {1} literals is already declared in this module")
 N00B_TEXT(CHOOSE_A_DIFFERENT_NAME_FOR, "choose a different name for this literal modifier")
 N00B_TEXT(LITERAL_MODIFIER_ALIAS_REFERS_TO, "literal modifier alias `'{0}` refers to `'{1}`, which is not a visible literal modifier")
+N00B_TEXT(ALIAS_NAMES_TYPE_AND_LITMOD, "`alias {0}` could alias the type `{1}` or the literal modifier `'{1}`")
+N00B_TEXT(WRITE_ALIAS_TYPE_OR_LITMOD, "write `alias type {0} = {1}` or `alias litmod {0} = {1}`")
 N00B_TEXT(TYPECASE_NEEDS_A_VARIABLE_OR, "`typecase` needs a variable or parameter to narrow, but its subject is `{0}`")
 N00B_TEXT(STORE_THE_VALUE_IN_A_4, "store the value in a variable first, then `typecase` on the variable")
 N00B_TEXT(IS_DECLARED_AGAIN_INSIDE_THIS, "`{0}` is declared again inside this `typecase` arm, which already narrows `{1}`")

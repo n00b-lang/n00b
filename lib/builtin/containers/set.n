@@ -1,0 +1,386 @@
+import hashing
+import containers.dict
+import containers.hash_index
+import containers.lease
+
+// A set is a dictionary whose keys are its items and whose values are nil.
+//
+// A dictionary's index keeps each item's hash, and finds an item by its
+// hash, so the operations here never hash an item again: they read the
+// hash the index kept and look it up in the other set. Each result is sized
+// once, for as many items as it can hold, and each operation walks
+// whichever operand costs less, so a result's order follows that operand.
+alias Set = containers.dict.Dict['T, nil]
+
+// Items picked from a set, with the hashes the set kept for them. They are
+// copied out one by one, so a set made from them keeps nothing of the set
+// they came from.
+record Picked {
+    items:  Array['T]
+    hashes: Array[u128]
+    count:  uint
+}
+
+// Walks a set's items in insertion order. `for item in set` yields each
+// item, not the (item, nil) pair its dictionary would.
+record Set_Cursor {
+    lease: containers.lease.Lease[containers.dict.Entry['T, nil]]
+    end:   uint
+    index: uint
+}
+
+func __iterator(self: Set['T]) -> Set_Cursor['T] {
+    return new[Set_Cursor['T]](ref self.entries, self.index.used)
+}
+
+func __init(modify self: Set_Cursor['T],
+            consume lease: containers.lease.Lease[containers.dict.Entry['T, nil]],
+            end: uint) {
+    self.lease = lease
+    self.end = end
+    self.index = 0
+}
+
+func __next(modify self: Set_Cursor['T]) -> 'T? {
+    while self.index < self.end {
+        let entry: containers.dict.Entry['T, nil] = self.lease.__value[self.index]
+        self.index += 1
+        if entry.live {
+            return entry.key
+        }
+    }
+    containers.lease.release(self.lease)
+    return nil
+}
+
+func __cleanup(consume self: Set_Cursor['T]) {
+    containers.lease.release(self.lease)
+}
+
+// Whether entry `at` of a set's storage holds an item.
+inline func holds(view self: Set['T], at: uint) -> bool {
+    return !containers.hash_index.is_dead(ref self.index, at)
+}
+
+// The hash the index kept for entry `at`.
+inline func hash_at(view self: Set['T], at: uint) -> u128 {
+    return self.index.hashes[at]
+}
+
+inline func item_at(view self: Set['T], at: uint) -> 'T {
+    return self.entries[cast[int]at].key
+}
+
+inline func has_hash(view self: Set['T], hash: u128) -> bool {
+    return containers.hash_index.find(ref self.index, hash) != nil
+}
+
+// Room for `more` items beyond those the set holds, made at once.
+func reserve(self: Set['T], more: uint) {
+    containers.dict.ensure_entries(self, self.index.used + more)
+    containers.hash_index.reserve(ref self.index, more)
+}
+
+inline func add_hashed(self: Set['T], item: 'T, hash: u128) -> bool {
+    return containers.dict.insert_entry(self, item, nil, hash) == nil
+}
+
+inline func remove_hashed(self: Set['T], hash: u128) {
+    let slot: uint? = containers.hash_index.find_slot(ref self.index, hash)
+    if slot != nil {
+        let removed: uint = containers.hash_index.remove_at(ref self.index,
+                                                            slot)
+        __array_clear(containers.lease.writable(self.entries), removed)
+    }
+}
+
+// `from`'s items: with `filter`, those it holds when `held`, or those it
+// lacks.
+func pick(view from: Set['T], view filter: Set['T]?, held: bool)
+         -> Picked['T] {
+    let room: uint = containers.dict.len(from)
+    var items: Array['T] = new[Array['T]](cast[int]room)
+    var hashes: Array[u128] = new[Array[u128]](cast[int]room)
+    var count: uint = 0
+    let used: uint = from.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(from, at) {
+            let hash: u128 = hash_at(from, at)
+            if filter == nil or has_hash(filter, hash) == held {
+                items[count] = item_at(from, at)
+                hashes[count] = hash
+                count += 1
+            }
+        }
+        at += 1
+    }
+    return (items = items, hashes = hashes, count = count)
+}
+
+func add_picked(self: Set['T], picked: Picked['T]) {
+    var at: uint = 0
+    while at < picked.count {
+        _ = add_hashed(self, picked.items[at], picked.hashes[at])
+        at += 1
+    }
+}
+
+// Adds `item`; whether it was not already there.
+func add(self: Set['T], item: 'T) -> bool where 'T : hashing . Hash {
+    return add_hashed(self, item, containers.dict.key_hash(item))
+}
+
+// The set's items, in insertion order.
+func items(view self: Set['T]) -> Array['T] {
+    // With no filter, each item is picked, filling the array.
+    return pick(self, nil, true).items
+}
+
+func union(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    if containers.dict.len(left) >= containers.dict.len(right) {
+        return union_ordered(left, right)
+    }
+    return union_ordered(right, left)
+}
+
+// The larger set's items first, then those of the smaller it lacks.
+func union_ordered(view larger: Set['T], view smaller: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    let first: Picked['T] = pick(larger, nil, true)
+    let rest: Picked['T] = pick(smaller, larger, false)
+    result = new[Set['T]]()
+    reserve(result, first.count + rest.count)
+    add_picked(result, first)
+    add_picked(result, rest)
+    return result
+}
+
+func intersection(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    // Walk the smaller set, looking each item up in the larger.
+    if containers.dict.len(left) <= containers.dict.len(right) {
+        return made_from(pick(left, right, true))
+    }
+    return made_from(pick(right, left, true))
+}
+
+func made_from(picked: Picked['T]) -> Set['T] where 'T : hashing . Hash {
+    result = new[Set['T]]()
+    reserve(result, picked.count)
+    add_picked(result, picked)
+    return result
+}
+
+func difference(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return made_from(pick(left, right, false))
+}
+
+func symmetric_difference(view left: Set['T], view right: Set['T])
+                         -> Set['T] where 'T : hashing . Hash {
+    let only_left: Picked['T] = pick(left, right, false)
+    let only_right: Picked['T] = pick(right, left, false)
+    result = new[Set['T]]()
+    reserve(result, only_left.count + only_right.count)
+    add_picked(result, only_left)
+    add_picked(result, only_right)
+    return result
+}
+
+func is_subset(view left: Set['T], view right: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    if containers.dict.len(left) > containers.dict.len(right) {
+        return false
+    }
+    return none_lacking(left, right)
+}
+
+// Whether `inner` has no item that `outer` lacks.
+func none_lacking(view inner: Set['T], view outer: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    let used: uint = inner.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(inner, at) and !has_hash(outer, hash_at(inner, at)) {
+            return false
+        }
+        at += 1
+    }
+    return true
+}
+
+func is_superset(view left: Set['T], view right: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    return is_subset(right, left)
+}
+
+func is_disjoint(view left: Set['T], view right: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    if containers.dict.len(left) <= containers.dict.len(right) {
+        return none_shared(left, right)
+    }
+    return none_shared(right, left)
+}
+
+// Whether none of the smaller set's items is in the larger.
+func none_shared(view smaller: Set['T], view larger: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    let used: uint = smaller.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(smaller, at) and has_hash(larger, hash_at(smaller, at)) {
+            return false
+        }
+        at += 1
+    }
+    return true
+}
+
+func __equal(view self: Set['T], view other: Set['T]) -> bool
+    where 'T : hashing . Hash {
+    return containers.dict.len(self) == containers.dict.len(other)
+        and none_lacking(self, other)
+}
+
+// Kept in the trait's form, `hash(self: 'T)`, so a set implements Hash.
+func hash(self: Set['T]) -> u128 where 'T : hashing . Hash {
+    result = containers.dict.len(self)
+    let used: uint = self.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(self, at) {
+            result = result ^ hash_at(self, at)
+        }
+        at += 1
+    }
+    return result
+}
+
+func __add(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return union(left, right)
+}
+
+func __bit_or(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return union(left, right)
+}
+
+func __subtract(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return difference(left, right)
+}
+
+func __bit_and(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return intersection(left, right)
+}
+
+func __bit_xor(view left: Set['T], view right: Set['T]) -> Set['T]
+    where 'T : hashing . Hash {
+    return symmetric_difference(left, right)
+}
+
+// In place: the set itself changes.
+
+func union_update(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    let missing: Picked['T] = pick(other, self, false)
+    reserve(self, missing.count)
+    add_picked(self, missing)
+}
+
+func difference_update(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    // Walk the smaller side: each of `other`'s items leaves, or each of
+    // this set's items that `other` holds. Removing leaves storage in
+    // place, so the walk sees each entry once.
+    if containers.dict.len(other) < containers.dict.len(self) {
+        let used: uint = other.index.used
+        var at: uint = 0
+        while at < used {
+            if holds(other, at) {
+                remove_hashed(self, hash_at(other, at))
+            }
+            at += 1
+        }
+        return
+    }
+    keep_where(self, other, false)
+}
+
+// Keeps the items `other` holds when `held`, or those it lacks.
+func keep_where(self: Set['T], view other: Set['T], held: bool)
+    where 'T : hashing . Hash {
+    let used: uint = self.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(self, at) {
+            let hash: u128 = hash_at(self, at)
+            if has_hash(other, hash) != held {
+                remove_hashed(self, hash)
+            }
+        }
+        at += 1
+    }
+}
+
+func intersection_update(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    keep_where(self, other, true)
+}
+
+func symmetric_difference_update(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    // Pick what to add before removing anything; when both are one set,
+    // nothing is picked and each item leaves.
+    let missing: Picked['T] = pick(other, self, false)
+    let used: uint = other.index.used
+    var at: uint = 0
+    while at < used {
+        if holds(other, at) {
+            remove_hashed(self, hash_at(other, at))
+        }
+        at += 1
+    }
+    reserve(self, missing.count)
+    add_picked(self, missing)
+}
+
+func __add_assign(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    union_update(self, other)
+}
+
+func __bit_or_assign(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    union_update(self, other)
+}
+
+func __subtract_assign(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    difference_update(self, other)
+}
+
+func __bit_and_assign(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    intersection_update(self, other)
+}
+
+func __bit_xor_assign(self: Set['T], view other: Set['T])
+    where 'T : hashing . Hash {
+    symmetric_difference_update(self, other)
+}
+
+alias litmod s = set
+set litmod set(items: Array['K]) -> Set['K] fail: string
+    where 'K : hashing . Hash {
+    result = new[Set['K]]()
+    reserve(result, __array_length(items))
+    for value in items {
+        _ = add(result, value)
+    }
+    return result
+}

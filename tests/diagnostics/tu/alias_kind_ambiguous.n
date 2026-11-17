@@ -1,0 +1,10 @@
+quotes litmod echo(text: string) -> string fail: string {
+    return text
+}
+
+record Shade {
+    x: int
+}
+
+alias litmod Shade = echo
+alias tint = Shade

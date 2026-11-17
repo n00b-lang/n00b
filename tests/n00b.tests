@@ -96,7 +96,7 @@ text-suite	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/pr
 arrays-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/arrays.n"
 records-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/records.n"
 calls-n00b	pr	30	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/calls.n" && sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_modify_by_reference.n"
-generics-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics.n"
+generics-n00b	pr	20	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics.n" && sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/sets.n"
 generics-text-n00b	pr	21	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics_text.n"
 nil-types-n00b	pr	30	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/nil_types.n"
 consts-literals-n00b	pr	5	N00B_PATH="$SRC/tests/programs/consts_literals" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/consts_literals/consts_literals.n"

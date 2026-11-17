@@ -209,12 +209,15 @@
 # Using the `type` keyword creates a 'brand new' type, meaning that
 # name equiv is required for there to be equal types.
 # The `alias` keyword here means that we have one type, with multiple names.
+# A bare `alias` (no `type`) whose target names a literal modifier aliases
+# that modifier instead; the compiler rewrites it before naming begins.
 
 <alias-stmt> @namespace("type") @scope("type", $1) @type($1) @exposes ::=
        <alias-type-keyword> %IDENTIFIER <assign-op> <type-spec>
 <alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <assign-op> <type-spec>
 <alias-type-keyword> ::= %"alias" %"type"
+                       | %"alias"
 
 <litmod-alias-stmt> ::=
        %"alias" %"litmod" <litmod-alias-name> <assign-op> <litmod-alias-target>

@@ -1,6 +1,7 @@
 import containers.array
 import containers.list
 import containers.dict
+import containers.set
 import containers.tree
 import containers.slice
 import containers.view
@@ -179,6 +180,7 @@ package builtin {
     export ffi.__ffi_write_f32
     export ffi.__ffi_write_f64
     export panic.panic
+    export containers.set.Set
     export containers.buffer.Buffer
     export containers.buffer.Buffer_Error
     export containers.buffer.empty_buffer_alloc
@@ -203,10 +205,11 @@ package builtin {
     export containers.list.l
     export containers.dict.Dict
     export containers.dict.Dict_Cursor
+    export containers.set.Set_Cursor
     export containers.dict.dict
     export containers.dict.d
-    export containers.dict.set
-    export containers.dict.s
+    export containers.set.set
+    export containers.set.s
     export containers.tree.Tree
     export containers.slice.Slice
     export containers.view.View

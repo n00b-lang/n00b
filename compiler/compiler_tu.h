@@ -167,6 +167,14 @@ bool register_user_litmod_alias(void *context, core_translation_unit_t *unit,
                                 parse_tree_t *statement, core_string_t alias,
                                 core_string_t target);
 bool validate_litmod_aliases(core_translation_unit_t *unit);
+// An `alias` written without `type` or `litmod` aliases a literal modifier
+// when its target names one; this turns those into literal modifier aliases
+// before names are declared. After naming, one whose target also names a
+// type is reported as ambiguous.
+bool settle_bare_aliases(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit);
+bool check_bare_aliases(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit);
 th_type *n00bb_atomic_element_type(th_type *type);
 
 typedef enum {
@@ -362,6 +370,8 @@ typedef struct {
     core_string_t alias;
     core_string_t target;
     core_diag_location_t location;
+    // Written `alias name = target`, with no kind.
+    bool bare;
 } n00bb_litmod_alias_t;
 core_list_decl(n00bb_litmod_alias_t);
 typedef n00bb_user_litmod_t *n00bb_user_litmod_ptr_t;

@@ -1456,7 +1456,8 @@ imported_module_symbol(const core_link_reference_t *reference,
 
 static bool
 collect_imported_symbol_types(core_link_unit_t *link,
-    const core_translation_unit_t *unit, n00bb_abi_type_index_t *index)
+    const core_translation_unit_t *unit, n00bb_abi_type_index_t *index,
+    th_ctx *types)
 {
     if (!link) return true;
     for (size_t i = 0; i < core_link_unit_reference_count(link); i++) {
@@ -1471,6 +1472,12 @@ collect_imported_symbol_types(core_link_unit_t *link,
         th_type *type = core_link_declaration_binding(target,
             CORE_STRING_STATIC("n00bb.semantic.type"));
         if (!type) return false;
+        // An imported generic alias is expanded where it's applied; its own
+        // type, which names its parameters, is no part of this module.
+        if (kind == N00B_ABI_SYMBOL_TYPE
+            && th_kind_of(th_resolve(type)) != TH_TRAIT
+            && !th_is_closed(types, type))
+            continue;
         bool added = kind == N00B_ABI_SYMBOL_TYPE
             && th_kind_of(th_resolve(type)) == TH_TRAIT
             ? n00bb_abi_type_index_add_imported_trait(index, type)
@@ -1664,10 +1671,16 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             &requirements[next].full_path);
         core_buffer_release(&path);
         core_string_t reason = {};
-        if (valid && kind == N00B_ABI_SYMBOL_FUNCTION)
+        // A generic alias's type names its parameters, as an imported
+        // function's names its type variables.
+        bool binds = kind == N00B_ABI_SYMBOL_FUNCTION
+            || (kind == N00B_ABI_SYMBOL_TYPE
+                && th_kind_of(th_resolve(type)) != TH_TRAIT
+                && !th_is_closed(type_context, type));
+        if (valid && binds)
             valid = n00bb_abi_type_variables_bind_import(index,
                 type_context, symbol, type, (uint32_t)next, types, &reason);
-        if (!valid && kind == N00B_ABI_SYMBOL_FUNCTION) {
+        if (!valid && binds) {
             if (!reason.data)
                 reason = CORE_STRING_STATIC("invalid import requirement");
             core_buffer_t message = {0};
@@ -2029,7 +2042,8 @@ n00bb_abi_emit_unit(
             n00bb_abi_type_index_collect_symbols(type_index, symbols,
                 node_source ? symbol_in_unit : nullptr, &symbol_owner))
         && ABI_STAGE("imported type collection",
-            collect_imported_symbol_types(link, unit, type_index))
+            collect_imported_symbol_types(link, unit, type_index,
+                ir_module_types((ir_module_t *)runtime_ir)))
         && ABI_STAGE("trait type collection",
             collect_environment_traits((ir_module_t *)runtime_ir,
                                        type_index))

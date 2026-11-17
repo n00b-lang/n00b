@@ -1,4 +1,5 @@
 #include "call_plan.h"
+#include "parse/rewrite.h"
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -2984,11 +2985,15 @@ static parse_sym_entry_t *
 typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *owner_node = node;
+    // An alias's type variables are its parameters: `alias Set = Dict['T,
+    // nil]` is used as `Set[int]`.
     while (owner_node && !NT_IS(grammar, owner_node, "func-def")
            && !NT_IS(grammar, owner_node, "trait-decl")
            && !NT_IS(grammar, owner_node, "callback-decl")
            && !field_record_declaration(grammar, owner_node)
-           && !NT_IS(grammar, owner_node, "variant-decl"))
+           && !NT_IS(grammar, owner_node, "variant-decl")
+           && !(NT_IS(grammar, owner_node, "alias-stmt")
+                && alias_declaration_is_transparent(grammar, owner_node)))
         owner_node = parse_tree_parent(owner_node);
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
@@ -8591,6 +8596,157 @@ validate_litmod_aliases(core_translation_unit_t *unit)
     return valid;
 }
 
+static bool
+names_visible_litmod(n00bb_tu_state_t *state, core_string_t name)
+{
+    for (size_t k = 0; k < n00bb_litmod_kind_count; k++)
+        if (litmod_lookup(state, name, n00bb_litmod_kinds[k], nullptr, 1))
+            return true;
+    return false;
+}
+
+// The one token a type written as a single name is, if it is one.
+static parse_tree_t *
+sole_leaf(parse_tree_t *node, parse_tree_t **parent, size_t *index)
+{
+    parse_tree_t *found = nullptr;
+    size_t count = core_tree_num_children(node);
+    for (size_t i = 0; i < count; i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (core_tree_is_leaf(child)) {
+            if (found) return nullptr;
+            found = child;
+            *parent = node;
+            *index = i;
+            continue;
+        }
+        parse_tree_t *inner_parent = nullptr;
+        size_t inner_index = 0;
+        parse_tree_t *inner = sole_leaf(child, &inner_parent, &inner_index);
+        if (!inner && core_tree_num_children(child)) return nullptr;
+        if (!inner) continue;
+        if (found) return nullptr;
+        found = inner;
+        *parent = inner_parent;
+        *index = inner_index;
+    }
+    return found;
+}
+
+// Rebuilds a bare `alias name = target` statement as
+// `alias litmod name = target`.
+static parse_tree_t *
+litmod_alias_from(parse_grammar_t *grammar, parse_tree_t *statement)
+{
+    parse_tree_t *keyword = CHILD_NT(grammar, statement, "alias-type-keyword");
+    parse_tree_t *spec = CHILD_NT(grammar, statement, "type-spec");
+    parse_tree_t *leaf_parent = nullptr;
+    size_t leaf_index = 0;
+    parse_tree_t *target = spec
+        ? sole_leaf(spec, &leaf_parent, &leaf_index) : nullptr;
+    if (!keyword || !target || core_tree_num_children(statement) != 4
+        || core_tree_num_children(keyword) != 1)
+        return nullptr;
+    parse_tree_t *made = parse_tree_make_nt(grammar,
+        CORE_STRING_STATIC("litmod-alias-stmt"), 0);
+    parse_tree_t *name = parse_tree_make_nt(grammar,
+        CORE_STRING_STATIC("litmod-alias-name"), 0);
+    parse_tree_t *aimed = parse_tree_make_nt(grammar,
+        CORE_STRING_STATIC("litmod-alias-target"), 0);
+    parse_tree_t *word = parse_tree_make_synthetic_token(
+        parse_terminal_id(grammar, CORE_STRING_STATIC("litmod")),
+        CORE_STRING_STATIC("litmod"));
+    if (!made || !name || !aimed || !word) {
+        parse_tree_free(made);
+        parse_tree_free(name);
+        parse_tree_free(aimed);
+        parse_tree_free(word);
+        return nullptr;
+    }
+    // Children of the statement: the keyword, the name, `=`, the type.
+    parse_tree_t *alias_word = core_tree_remove_child(keyword, 0);
+    parse_tree_t *assign = core_tree_remove_child(statement, 2);
+    parse_tree_t *identifier = core_tree_remove_child(statement, 1);
+    target = core_tree_remove_child(leaf_parent, leaf_index);
+    bool ok = core_tree_add_child(made, alias_word)
+        && core_tree_add_child(made, word)
+        && core_tree_add_child(name, identifier)
+        && core_tree_add_child(made, name)
+        && core_tree_add_child(made, assign)
+        && core_tree_add_child(aimed, target)
+        && core_tree_add_child(made, aimed);
+    return ok ? made : nullptr;
+}
+
+static bool
+settle_bare_aliases_in(parse_grammar_t *grammar,
+                       core_translation_unit_t *unit,
+                       n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    bool ok = true;
+    for (size_t i = 0; ok && i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (core_tree_is_leaf(child)) continue;
+        if (!NT_IS(grammar, child, "alias-stmt")) {
+            ok = settle_bare_aliases_in(grammar, unit, state, child);
+            continue;
+        }
+        parse_tree_t *keyword = CHILD_NT(grammar, child,
+                                         "alias-type-keyword");
+        parse_tree_t *spec = CHILD_NT(grammar, child, "type-spec");
+        parse_tree_t *leaf_parent = nullptr;
+        size_t leaf_index = 0;
+        parse_tree_t *target = keyword && core_tree_num_children(keyword) == 1
+            && spec ? sole_leaf(spec, &leaf_parent, &leaf_index) : nullptr;
+        core_string_t name = target ? first_token_text(target)
+                                    : (core_string_t){0};
+        if (!name.data || !names_visible_litmod(state, name)) continue;
+        core_string_t alias = core_string_dup(
+            first_token_text(core_tree_child(child, 1)));
+        name = core_string_dup(name);
+        parse_tree_t *made = litmod_alias_from(grammar, child);
+        ok = made && core_tree_set_child(node, i, made)
+            && register_user_litmod_alias(nullptr, unit, made, alias, name);
+        if (ok) state->litmod_aliases.data[state->litmod_aliases.len - 1]
+                    .bare = true;
+        core_free(alias.data);
+        core_free(name.data);
+    }
+    return ok;
+}
+
+bool
+settle_bare_aliases(parse_grammar_t *grammar, core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_tree_t *tree = state ? n00bb_tu_parsed_tree(state) : nullptr;
+    return !tree || settle_bare_aliases_in(grammar, unit, state, tree);
+}
+
+bool
+check_bare_aliases(parse_grammar_t *grammar, core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    bool ok = true;
+    for (size_t a = 0; symtab && a < state->litmod_aliases.len; a++) {
+        n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[a];
+        if (!alias->bare || !lookup_named_type_reference(grammar, state,
+                symtab, type_module_scope(state), alias->target))
+            continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ALIAS_KIND_AMBIGUOUS,
+                alias->location, N00B_TEXT_ALIAS_NAMES_TYPE_AND_LITMOD,
+                N00BB_ARGS(ARG_TEXT(alias->alias), ARG_TEXT(alias->target))))
+            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_ALIAS_TYPE_OR_LITMOD,
+                N00BB_ARGS(ARG_TEXT(alias->alias), ARG_TEXT(alias->target)));
+        ok = false;
+    }
+    return ok;
+}
+
 static n00bb_user_litmod_t *
 litmod_lookup(n00bb_tu_state_t *state, core_string_t modifier,
               core_string_t kind, bool *ambiguous, uint32_t depth)
@@ -9266,6 +9422,66 @@ compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return result;
 }
 
+// The alias a type name refers to, when the alias has type parameters.
+static parse_sym_entry_t *
+generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : parse_tree_sym(type_node);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    bool alias = symbol && symbol->kind == PARSE_SYM_TYPEDEF && symbol->type
+        && (symbol->decl_node
+                ? NT_IS(grammar, symbol->decl_node, "alias-stmt")
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
+                : core_string_eq(symbol->adt_kind,
+                                 CORE_STRING_STATIC("alias")));
+    return alias ? symbol : nullptr;
+}
+
+// `Alias[args]` for an alias with type parameters: the aliased type with
+// each parameter, in the order the target first names it, replaced by its
+// argument.
+static th_type *
+generic_alias_application(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          parse_tree_t *type_node, parse_tree_t *application)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *alias = generic_alias_named(grammar, type_node);
+    parse_tree_t *list = CHILD_NT(grammar, application, "tspec-list");
+    th_type **variables = nullptr;
+    size_t count = alias && list
+        ? th_free_vars(state->types, th_resolve(alias->type), &variables) : 0;
+    if (!count) return nullptr;
+    core_list_t(th_arg) arguments = core_list_new(th_arg);
+    bool valid = append_type_argument_pack(parse_tree_type(list), &arguments);
+    for (size_t i = 0; valid && i < arguments.len; i++)
+        valid = arguments.data[i].kind == TH_ARG_TYPE;
+    if (valid && arguments.len != count) {
+        report_generic_arity(unit, application,
+                             th_name(state->types, alias->name), count,
+                             arguments.len, alias);
+        core_list_free(arguments);
+        return th_poison(state->types);
+    }
+    th_type **to = core_alloc_array(th_type *, count + 1);
+    for (size_t i = 0; valid && i < count; i++)
+        to[i] = arguments.data[i].type;
+    th_type *expanded = valid
+        ? th_type_clone_replacing(state->types, th_resolve(alias->type),
+                                  (const th_type *const *)variables, to,
+                                  count)
+        : nullptr;
+    core_free(to);
+    core_list_free(arguments);
+    // The alias's name, applied here, stands for the applied type; left
+    // with the alias's own type, it would carry the alias's parameters.
+    if (expanded) parse_tree_set_type(type_node, expanded);
+    return expanded;
+}
+
 static th_type *
 compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *node)
@@ -9346,6 +9562,9 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *fields = CHILD_NT(grammar, application, "tspec-field-list");
     if (fields)
         return compose_field_tuple(grammar, unit, type_node, fields, tuple);
+    th_type *expanded = generic_alias_application(grammar, unit, type_node,
+                                                  application);
+    if (expanded) return expanded;
     core_string_t name = {};
     bool is_variant = false;
     size_t declared_arity = 0;

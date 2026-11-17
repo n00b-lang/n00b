@@ -592,13 +592,46 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
+    // A generic alias's type variables are its parameters, in the order its
+    // target names them; the target type owns them.
+    for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
+        parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
+            (uint32_t)i);
+        uint32_t owner_index = 0;
+        if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
+            || !core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("alias"))
+            || !n00bb_abi_type_index_find(index, th_resolve(symbol->type),
+                                          &owner_index))
+            continue;
+        th_type **variables = nullptr;
+        size_t count = th_free_vars(types, th_resolve(symbol->type),
+                                    &variables);
+        for (size_t ordinal = 0; ordinal < count && ordinal <= UINT32_MAX;
+             ordinal++) {
+            uint32_t variable_index = 0;
+            if (!n00bb_abi_type_index_find(index, variables[ordinal],
+                                           &variable_index)) continue;
+            n00b_abi_type_v1 *row = &rows->rows[variable_index];
+            if (row->kind != N00B_ABI_TYPE_VARIABLE
+                || row->typevar_owner_type_index
+                || row->typevar_owner_scope_index
+                || row->typevar_import_requirement_index) continue;
+            row->typevar_owner_type_index = owner_index;
+            row->typevar_ordinal = (uint32_t)ordinal;
+        }
+    }
     for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
         if (!symbol) return false;
         n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
             N00BB_SIGNATURE_TYPEVARS_KEY);
-        if (!variables || !variables->len) continue;
+        // An alias's type variables are owned by its target, above.
+        if (!variables || !variables->len
+            || (symbol->kind == PARSE_SYM_TYPEDEF
+                && core_string_eq(symbol->adt_kind,
+                                  CORE_STRING_STATIC("alias"))))
+            continue;
         if (!symbol->decl_node || !variables->data
             || variables->len > UINT32_MAX) return false;
         parse_scope_t *scope = parse_tree_scope(symbol->decl_node);

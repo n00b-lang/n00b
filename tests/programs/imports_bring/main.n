@@ -1,5 +1,14 @@
 import forms
 import bring_all
 import brought_type
+import generic_alias
+
+// Another module's generic alias, applied here.
+var bag: generic_alias.Bag[string] = new[generic_alias.Bag[string]]()
+bag["x"] = nil
+var pairs: generic_alias.Pairing[string, int] =
+    new[generic_alias.Pairing[string, int]]()
+pairs["k"] = [1, 2]
+require bag.len() == 1 and pairs.len() == 1
 
 __fd_write(2, "ok")
