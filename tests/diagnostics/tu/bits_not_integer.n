@@ -1,0 +1,5 @@
+func from_bits_of(x: 'T, bits: u128) -> 'T where 'T : Integer {
+    return x.from_bits(bits)
+}
+let raw: bits:10 = cast[bits:10](3)
+let made = from_bits_of(raw, 1)

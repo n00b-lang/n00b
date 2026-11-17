@@ -25,6 +25,9 @@ struct n00bb_native_inputs {
     void *select_context;
 };
 
+bool n00bb_check_start_signature(core_link_unit_t *link,
+                                 n00bb_link_analysis_t *analysis,
+                                 core_diagnostics_t *diagnostics);
 bool n00bb_build_executable(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
                             parse_cmdr_result_t *args,

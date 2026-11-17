@@ -852,6 +852,10 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                         core_string_t method, ir_value_t *left,
                         ir_value_t *right)
 {
+    // `from_bits` takes its `u128` as is; widening it would be wrong.
+    if (right && core_string_eq(method, CORE_STRING_STATIC("from_bits")))
+        return n00bb_emit_primitive(&rewrite->context, method,
+                                    in->dest->type, left, right, in->span);
     const n00bb_binary_operator_t *binary = right
         ? n00bb_binary_operator_method(method) : nullptr;
     if (binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR)
@@ -2012,6 +2016,36 @@ n00bb_rewrite_equal_by_cmp(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && n00bb_rewrite_dispatch(rewrite, compare);
 }
 
+// `==` on a distinct type compares the values as the type it was made from.
+static bool
+n00bb_rewrite_distinct_equal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             ir_value_t *left, ir_value_t *right)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    th_type *shape = n00bb_distinct_underlying(
+        ir_module_types(context->module), left->type);
+    ir_value_t *operands[2] = {left, right};
+    for (size_t i = 0; shape && i < 2; i++) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context,
+            IR_OP_NOMINAL_CAST, in->span);
+        if (!cast || !ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_distinct_"), shape)
+            || !ir_instr_operand_value(cast, operands[i]))
+            return false;
+        operands[i] = cast->dest;
+    }
+    ir_instr_t *equal = shape
+        ? ir_lower_emit_instruction(context, IR_OP_DISPATCH, in->span)
+        : nullptr;
+    bool ok = equal && ir_lower_set_temp_dest(context, equal,
+            CORE_STRING_STATIC("__n00bb_equal_"), in->dest->type)
+        && ir_instr_operand_name(equal, CORE_STRING_STATIC("__equal"))
+        && ir_instr_operand_value(equal, operands[0])
+        && ir_instr_operand_value(equal, operands[1]);
+    return ok && n00bb_rewrite_replace(rewrite, in, equal->dest)
+        && n00bb_rewrite_dispatch(rewrite, equal);
+}
+
 static bool
 n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
@@ -2158,7 +2192,8 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         return n00bb_rewrite_callback(rewrite, in, receiver_type);
     if (target.kind == N00BB_TARGET_TRAIT)
         return n00bb_rewrite_trait_call(rewrite, in, method, &target);
-    if (target.kind == N00BB_TARGET_ENUM && other)
+    if ((target.kind == N00BB_TARGET_ENUM
+         || target.kind == N00BB_TARGET_PRIMITIVE) && other)
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_primitive(rewrite, in, method, receiver, other));
     if (target.kind == N00BB_TARGET_FLAGSET && other)
@@ -2166,6 +2201,8 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             n00bb_rewrite_flagset(rewrite, in, method, receiver, other));
     if (target.kind == N00BB_TARGET_EQUAL_BY_CMP && other)
         return n00bb_rewrite_equal_by_cmp(rewrite, in, receiver, other);
+    if (target.kind == N00BB_TARGET_DISTINCT_EQUAL && other)
+        return n00bb_rewrite_distinct_equal(rewrite, in, receiver, other);
     if (th_kind_of(receiver_type) != TH_VAR) return false;
     n00bb_report_unknown_method(rewrite, in, method, receiver,
                                 receiver_type);

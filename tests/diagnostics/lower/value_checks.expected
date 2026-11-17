@@ -56,7 +56,7 @@ tests/diagnostics/lower/value_checks.n:193:12: error N00B-S0004: `x` is read on 
   tests/diagnostics/lower/value_checks.n:189:9: note: `x` is declared here
 tests/diagnostics/lower/value_checks.n:198:12: error N00B-S0004: `value` is read on a path where it has no value
   tests/diagnostics/lower/value_checks.n:197:9: note: `value` is declared here
-tests/diagnostics/lower/value_checks.n:208:9: error N00B-S0026: `abs` cannot fail, so this `!` has nothing to propagate
+tests/diagnostics/lower/value_checks.n:208:9: error N00B-S0026: `abs` can't fail, so there's nothing for this `!` to pass along
   tests/diagnostics/lower/value_checks.n:204:1: note: `abs` is declared here
   help: remove the `!`
 tests/diagnostics/lower/value_checks.n:210:8: warning N00B-N0023: type `Tuple_Target` is never used

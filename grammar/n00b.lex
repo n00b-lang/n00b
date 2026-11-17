@@ -18,7 +18,7 @@
 @lex-sigil("'", before_string, unless_closed, as("TYPE_VAR"),
 	   attach_after("]", "}", ")", "STRING_LIT", "INT_LIT",
 			"HEX_LIT", "FLOAT_LIT", "EMBED", "true", "false",
-			"nil"))
+			"True", "False", "nil"))
 @lex-number(digits("0123456789"),
 	    sep("_"),
 	    point("leading", "trailing"),
@@ -26,7 +26,8 @@
 	    sign("-"),
 	    sign_not_after("IDENTIFIER", "INT_LIT", "HEX_LIT", "FLOAT_LIT",
 			   "STRING_LIT", "CHAR_LIT", "EMBED", "TYPE_VAR",
-			   "true", "false", "nil", ")", "]", "}", "!"),
+			   "true", "false", "True", "False", "nil", ")", "]",
+			   "}", "!"),
 	    int("INT_LIT"),
 	    float("FLOAT_LIT"))
 @lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), sep("_"),
@@ -39,7 +40,7 @@
                    "fn", "function", "not", "null", "None",
                    "elseif", "effect", "handled_by", "mark",
                    "cleared_by", "rejected_by", "carries",
-                   "rejects", "scope", "open", "has", "is")
+                   "rejects", "scope", "open", "has", "is", "default")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),
@@ -49,7 +50,6 @@
 @lex-fence("[", "]",
 	   fill("-"),
 	   pad("required"),
-	   label,
 	   bidi("warn"),
 	   as("EMBED"))
 @lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE", "each"),

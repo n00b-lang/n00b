@@ -1,0 +1,1 @@
+tests/diagnostics/front/pass_placement.n:1:1: error N00B-P0009: `pass` can only be the whole body of a block

@@ -94,7 +94,7 @@ func check_hints() {
     sys.threads.thread_yield()
     sys.threads.cpu_relax()
     sys.threads.thread_fence()
-    when target_arch() == "x86" and target_os() != "windows" {
+    when target_arch() == "x86_64" and target_os() != "windows" {
         require sys.threads.stack_red_zone_bytes() == 128
     } else when target_os() == "macos" {
         require sys.threads.stack_red_zone_bytes() == 128

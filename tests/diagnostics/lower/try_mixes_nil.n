@@ -1,0 +1,11 @@
+func parse(s: string) -> int fail: string {
+    if s == "" { fail "empty" }
+    return 1
+}
+func both(x: int?) -> int {
+    return try {
+        let a = parse("1")!
+        -> a + x!
+    } fail (e) { -> 0 }
+}
+require both(nil) == 0

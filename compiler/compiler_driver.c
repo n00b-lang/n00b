@@ -4151,8 +4151,8 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                 || memcmp(source.data + start,
                           symbol->name.data, symbol->name.u8_bytes))
                 continue;
-            core_string_t printed = n00bb_print_type_qualified(state->types,
-                                                     symbol->type);
+            core_string_t printed = n00bb_print_type_source(state->types,
+                                                            symbol->type);
             if (!printed.data || !printed.u8_bytes
                 || core_string_find_byte(printed, '<') >= 0
                 || core_string_find_byte(printed, '$') >= 0
@@ -5649,6 +5649,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         located = (!specializing || analyzed_late
                    || n00bb_recompute_summaries(link_analysis))
             && check_post_specialization(link_analysis);
+    // `check` reports what `build` would about `main`'s signature.
+    if (located && check_command && link_analysis)
+        located = n00bb_check_start_signature(link, link_analysis,
+                                              cli_diagnostics);
     if (located && emit_program && specialize
         && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--report-specialization-gaps")))

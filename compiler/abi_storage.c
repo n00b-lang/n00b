@@ -158,6 +158,12 @@ encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
         else if (machine.width < 128 && magnitude >> machine.width)
             return false;
         ir_uint_t bits = negative ? (~magnitude + 1) : magnitude;
+        // A structural bit integer (`i:10`) is an LLVM `i10`, whose bits
+        // past its width read as zero in memory; storing them sign-extended
+        // lets an optimized load see the wrong value. Named bit integers
+        // live at their full storage width and stay sign-extended.
+        if (th_kind_of(th_resolve(type)) == TH_BITINT && machine.width < 128)
+            bits &= ((ir_uint_t)1 << machine.width) - 1;
         for (size_t i = 0; i < size_bits / 8; i++) {
             bytes[i] = (uint8_t)bits;
             bits >>= 8;

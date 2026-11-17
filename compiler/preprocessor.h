@@ -100,6 +100,10 @@ typedef enum {
     PP_SPELL_STRUCT,
     PP_SPELL_ARROW,
     PP_SPELL_RETURN_COLON,
+    PP_SPELL_TRUE,
+    PP_SPELL_PY_TRUE,
+    PP_SPELL_CASE_ELSE,
+    PP_SPELL_CASE_DEFAULT,
     PP_SPELL_COUNT,
 } pp_spelling_t;
 

@@ -1,0 +1,3 @@
+import hidden_alias
+let shown: hidden_alias.Shown = 1
+let hidden: hidden_alias.Hidden = 2

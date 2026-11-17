@@ -1,0 +1,2 @@
+tests/diagnostics/tu/record_option_cycle.n:1:1: error N00B-T0576: `Node` contains itself by value through `Node.next -> Node?.value -> Node`
+  help: break the cycle with a reference, such as a `Ref[...]` field, or make one of the types an `object`

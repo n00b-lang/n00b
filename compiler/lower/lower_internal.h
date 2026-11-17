@@ -431,6 +431,13 @@ typedef struct {
     bool active;
     // Lowering is still in the try's body, so failures go to its handler.
     bool in_body;
+    // An option's `x!` routed `nil` here (with that option's source text
+    // and span); and the first failure routed here that `nil` doesn't fit.
+    // A handler that binds the error can't hold both.
+    bool routes_nil;
+    core_string_t nil_text;
+    ir_span_t nil_span;
+    th_type *other_failure;
 } n00bb_try_frame_t;
 
 core_list_decl(n00bb_try_frame_t);

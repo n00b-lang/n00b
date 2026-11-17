@@ -261,7 +261,7 @@ func thread_suspend(control: uint,
             return -1
         }
         var count: u32 = 0
-        when target_arch() == "arm" {
+        when target_arch() == "arm64" {
             var state: Arm_Thread_State
             count = arm_thread_state_count
             if mach_thread_get_state_raw(port, arm_thread_state,

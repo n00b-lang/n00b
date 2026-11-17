@@ -1,0 +1,2 @@
+tests/diagnostics/lower/option_bang.n:2:12: error N00B-S0100: `x` is an option, so this `!` fails with `nil`, but this function cannot fail
+  help: declare an option failure type, as in `fail: string?`, or compare against `nil`

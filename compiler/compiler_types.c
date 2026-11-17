@@ -1148,9 +1148,23 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
                               shown(types, failure->pred.other))));
     }
     else if (failure->actual) {
+        th_type *underlying = n00bb_distinct_underlying(types,
+                                                        failure->actual);
+
         n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_REQUIREMENT, at,
                      N00B_TEXT_CANNOT_BE_USED_HERE,
                      N00BB_ARGS(ARG_TEXT(shown(types, failure->actual))));
+        // A distinct type keeps only equality from the type it was made
+        // from; say so, rather than leave the error opaque.
+        if (underlying) {
+            n00bb_report_note(diagnostics,
+                N00B_TEXT_DISTINCT_TYPE_HAS_ONLY_EQUALITY,
+                N00BB_ARGS(ARG_TEXT(shown(types, failure->actual)),
+                           ARG_TEXT(shown(types, underlying))));
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_CAST_TO_USE_ITS_OPERATORS,
+                N00BB_ARGS(ARG_TEXT(shown(types, underlying))));
+        }
     }
     else {
         n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_MISMATCH, at,
@@ -1386,13 +1400,22 @@ static th_type *bitint_operator(th_ctx *types, th_type *receiver,
         method);
     bool shift = binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR);
 
-    if (!th_bitint_info(receiver, nullptr, nullptr)) {
+    th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+
+    if (!th_bitint_info(receiver, nullptr, &flavor)) {
         return nullptr;
     }
     if (binary) {
         return contract(types, receiver, receiver,
                         shift ? th_name(types, CORE_STRING_STATIC("uint"))
                               : receiver);
+    }
+    // `i:N` and `u:N` are integers (the `Integer` trait); `bits:N` is not.
+    if (core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
+        return flavor == TH_BITINT_BITS
+                 ? nullptr
+                 : contract(types, receiver, receiver,
+                            th_name(types, CORE_STRING_STATIC("u128")));
     }
     if (core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
         return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
@@ -1434,6 +1457,46 @@ static th_type *enum_operator(n00bb_link_analysis_t *analysis, th_ctx *types,
     }
 
     return nullptr;
+}
+
+th_type *n00bb_distinct_underlying(th_ctx *types, th_type *type)
+{
+    core_string_t            name = {0};
+    th_env_type_shape_kind_t kind = {0};
+
+    type = th_resolve(type);
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, nullptr)) {
+        return nullptr;
+    }
+
+    th_type *shape = th_env_type_shape(types, name, &kind);
+
+    return shape && kind == TH_ENV_TYPE_SHAPE_NOMINAL ? th_resolve(shape)
+                                                      : nullptr;
+}
+
+// A distinct type gets the default equality of the type it was made from,
+// when that type has one, but none of its other operators.
+static th_type *distinct_equality(const n00bb_dispatch_index_t *index,
+                                  th_ctx *types, th_type *receiver,
+                                  core_string_t method)
+{
+    if (!core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
+        return nullptr;
+    }
+
+    th_type                *shape = n00bb_distinct_underlying(types,
+                                                              receiver);
+    n00bb_dispatch_target_t inner = {0};
+
+    if (!shape || !n00bb_dispatch_target_for(index, shape, method, 2, &inner)
+        || !inner.signature) {
+        return nullptr;
+    }
+
+    return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
+                    receiver, receiver);
 }
 
 static th_type *trait_requirement(const n00bb_dispatch_index_t *index,
@@ -1975,6 +2038,16 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
         target->kind = N00BB_TARGET_FLAGSET;
         return true;
     }
+    // A bit integer's `from_bits` is registered so it implements `Integer`,
+    // but has no body: it is a wrapping cast, chosen before that function.
+    if (th_kind_of(receiver) == TH_BITINT
+        && core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
+        target->signature = bitint_operator(types, receiver, method);
+        if (target->signature) {
+            target->kind = N00BB_TARGET_PRIMITIVE;
+            return true;
+        }
+    }
     target->function = module_function(index, receiver, method, true, arity,
                                        &target->rival);
     if (target->function) {
@@ -1997,6 +2070,11 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     target->signature = bitint_operator(types, receiver, method);
     if (target->signature) {
         target->kind = N00BB_TARGET_PRIMITIVE;
+        return true;
+    }
+    target->signature = distinct_equality(index, types, receiver, method);
+    if (target->signature) {
+        target->kind = N00BB_TARGET_DISTINCT_EQUAL;
         return true;
     }
     target->signature = trait_requirement(index, types, receiver, method,
@@ -5878,6 +5956,68 @@ static ir_instr_t *unmatched_jump(ir_func_t *f, uint64_t id)
     return nullptr;
 }
 
+// The constant a scalar `case` compares against, when it is one.
+static const ir_value_t *case_constant(const case_test_t *test, ir_lit_t *out)
+{
+    const ir_instr_t *in    = test->test;
+    const ir_value_t *value = in->n_operands == 3
+                                ? ir_operand_value(&in->operands[2])
+                                : nullptr;
+    const ir_instr_t *def   = value ? value->def : nullptr;
+
+    if (!def || def->op != IR_OP_CONST || !def->n_operands
+        || def->operands[0].kind != IR_OPD_CONST
+        || def->operands[0].lit.is_float || def->operands[0].lit.text.data
+        || !core_string_eq(in->operands[0].name,
+                           CORE_STRING_STATIC("__equal"))) {
+        return nullptr;
+    }
+    *out = def->operands[0].lit.i;
+    return value;
+}
+
+// Two `case`s of a scalar `switch` that match the same value: the first
+// always wins, so the second is dead and almost certainly a mistake.
+static bool switch_constants_distinct(core_translation_unit_t *unit,
+                                      const case_test_t       *tests,
+                                      size_t                   count)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool                ok          = true;
+
+    for (size_t i = 0; i < count; i++) {
+        ir_lit_t          value = {0};
+        const ir_value_t *found = case_constant(&tests[i], &value);
+
+        for (size_t j = 0; found && j < i; j++) {
+            ir_lit_t earlier = {0};
+
+            if (tests[j].case_index == tests[i].case_index
+                || !case_constant(&tests[j], &earlier)
+                || earlier.mag != value.mag
+                || (earlier.neg != value.neg && value.mag)) {
+                continue;
+            }
+
+            ir_span_t span = tests[i].test->span;
+
+            n00bb_report(diagnostics, unit, N00B_DIAG_DUPLICATE_SWITCH_CASE,
+                         n00bb_span_location(span),
+                         N00B_TEXT_VALUE_ALREADY_HAS_A_CASE,
+                         N00BB_ARGS(ARG_TEXT(n00bb_value_text(unit, found,
+                                                              span))));
+            n00bb_report_secondary(diagnostics, unit,
+                                   n00bb_span_location(tests[j].test->span),
+                                   N00B_TEXT_FIRST_HANDLED_HERE,
+                                   N00BB_NO_ARGS);
+            ok = false;
+            break;
+        }
+    }
+
+    return ok;
+}
+
 static bool switch_fits(const n00bb_dispatch_index_t *index,
                         core_translation_unit_t *unit, ir_func_t *f,
                         const case_test_t *tests, size_t count)
@@ -5900,7 +6040,7 @@ static bool switch_fits(const n00bb_dispatch_index_t *index,
             || n00bb_scalar_role_is(kind, IR_ROLE_CHAR)
             || th_hash(types, kind)
                    == th_hash(types, th_name(types, CORE_STRING_STATIC("bool")))) {
-            return true;
+            return switch_constants_distinct(unit, tests, count);
         }
         n00bb_report(diagnostics, unit, N00B_DIAG_SWITCH_SUBJECT_UNSUPPORTED,
                      n00bb_span_location(subject->def ? subject->def->span

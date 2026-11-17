@@ -773,9 +773,9 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                                  "could not emit a literal value");
         bool emitted = false;
         if (core_string_eq(kind, CORE_STRING_STATIC("bool"))) {
-            if (core_string_eq(text, CORE_STRING_STATIC("true")))
+            if (n00bb_true_spelling(text))
                 emitted = ir_instr_operand_int(instruction, 1);
-            else if (core_string_eq(text, CORE_STRING_STATIC("false")))
+            else if (n00bb_false_spelling(text))
                 emitted = ir_instr_operand_int(instruction, 0);
         }
         else if (core_string_eq(kind, CORE_STRING_STATIC("int"))) {

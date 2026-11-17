@@ -1,0 +1,6 @@
+tests/diagnostics/tu/unknown_litmods.n:1:9: error N00B-N0513: no literal modifier `'zzz` is defined for `int` literals
+tests/diagnostics/tu/unknown_litmods.n:2:9: error N00B-N0513: no literal modifier `'zzz` is defined for `sequence` literals
+tests/diagnostics/tu/unknown_litmods.n:3:9: error N00B-N0513: no literal modifier `'zzz` is defined for `fence` literals
+tests/diagnostics/tu/unknown_litmods.n:4:9: error N00B-N0513: no literal modifier `'zzz` is defined for `quotes` literals
+tests/diagnostics/tu/unknown_litmods.n:5:9: error N00B-N0513: no literal modifier `'zzz` is defined for `tuple` literals
+tests/diagnostics/tu/unknown_litmods.n:6:9: error N00B-N0513: no literal modifier `'zzz` is defined for `nil` literals

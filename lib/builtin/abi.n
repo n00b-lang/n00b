@@ -280,6 +280,17 @@ func tls_relocate() {
     }
 }
 
+private const type_flag_signed: u32 = 1
+
+# Whether the type at `type_index` is a signed integer, `i:N` included.
+func __type_is_signed(type_index: u32) -> bool {
+    let row: Ref[Type_Record]? = __abi_type(type_index & 0x7fffffff)
+    if row == nil {
+        return false
+    }
+    return row.__value.flags & type_flag_signed != 0
+}
+
 func __type_has_kind(type_field: u32, kind: u32) -> i32 {
     let row: Ref[Type_Record]? = __abi_type(type_field & 0x7fffffff)
     if row == nil {

@@ -31,3 +31,5 @@ tests/diagnostics/lower/effect_checks.n:71:1: error N00B-S0073: this check is fa
 tests/diagnostics/lower/effect_checks.n:72:16: error N00B-S0075: the first argument of `forbids_effect` must name a function
 tests/diagnostics/lower/effect_checks.n:81:6: warning N00B-N0019: function `sum_items` is never called
   help: call it or delete it
+tests/diagnostics/lower/effect_checks.n:82:5: error N00B-S0073: this check is false: `sum_items` may write `items`
+  help: change the code so the check holds, or change the check

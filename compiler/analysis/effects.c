@@ -367,6 +367,11 @@ implementations(n00bb_link_analysis_t *analysis, core_string_t trait,
     *found = core_list_new(n00bb_ir_func_ptr_t);
     bool known = count != 0;
     for (size_t i = 0; known && i < count; i++) {
+        // A bit integer's `Integer.from_bits` is a cast with no body and no
+        // effects (see register_bit_integer_from_bits).
+        if (core_string_starts_with(methods[i].qualified_name,
+                                    CORE_STRING_STATIC("builtins.Integer.")))
+            continue;
         parse_sym_entry_t *symbol = initializer_declaration_symbol(
             linked_method_declaration(link, &methods[i]));
         ir_func_t *target = symbol ? n00bb_cached_body(

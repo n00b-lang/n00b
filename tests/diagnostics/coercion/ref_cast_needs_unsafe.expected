@@ -1,0 +1,2 @@
+tests/diagnostics/coercion/ref_cast_needs_unsafe.n:2:12: error N00B-T1005: cannot cast `Ref[byte]?` to `uint`: no conversion is defined between them
+  help: reinterpreting a reference needs `unsafe_cast`

@@ -1,0 +1,4 @@
+tests/diagnostics/tu/bits_not_integer.n:1:19: note N00B-S0064: parameter `x` could be `view`: `from_bits_of` never writes anything reachable from it
+tests/diagnostics/tu/bits_not_integer.n:5:12: error N00B-T0021: `bits:10` does not implement `Integer`, which `from_bits_of` requires
+  tests/diagnostics/tu/bits_not_integer.n:1:6: note: `from_bits_of` is declared here
+  help: implement `Integer` for `bits:10`, or call a function that does not need it

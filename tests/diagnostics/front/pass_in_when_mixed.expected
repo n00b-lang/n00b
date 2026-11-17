@@ -1,0 +1,1 @@
+tests/diagnostics/front/pass_in_when_mixed.n:2:5: error N00B-P0009: `pass` must be the only statement in its block

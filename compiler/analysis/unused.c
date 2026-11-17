@@ -908,6 +908,10 @@ typedef struct {
     core_dict_t by_link;
     core_dict_t bodies;
     core_dict_t scanned;
+    // A specialized instance -> the generic function it was made from, so
+    // a call that reaches only the instance (as `new` reaches a generic
+    // `__init`) still counts as a call of the function the user wrote.
+    core_dict_t generics;
     core_list_t(size_t) work;
     core_list_t(n00bb_ir_func_ptr_t) scan;
     core_buffer_t text;
@@ -952,6 +956,11 @@ mark_linked(liveness_t *liveness, const ir_func_t *function)
     put_link(&liveness->text, function->owner, function->name);
     core_string_t link = core_buffer_string(&liveness->text);
     mark_live(liveness, find_item(&liveness->by_link, link));
+    bool found = false;
+    const ir_func_t *generic = core_dict_get(&liveness->generics,
+                                             (void *)function, &found);
+    if (found && generic && generic != function)
+        mark_linked(liveness, generic);
 }
 
 static void
@@ -1168,10 +1177,16 @@ n00bb_report_unused_items(n00bb_link_analysis_t *analysis)
     core_dict_init_string(&liveness.by_link);
     core_dict_init_string(&liveness.bodies);
     core_dict_init(&liveness.scanned, nullptr, nullptr);
+    core_dict_init(&liveness.generics, nullptr, nullptr);
+    for (size_t s = 0; s < analysis->specializations.len; s++)
+        core_dict_put(&liveness.generics,
+                      analysis->specializations.data[s].instance,
+                      analysis->specializations.data[s].generic);
     solve_liveness(analysis, &liveness, entry_unit, whole_program);
     core_list_free(liveness.scan);
     core_list_free(liveness.work);
     core_dict_free(&liveness.scanned);
+    core_dict_free(&liveness.generics);
     core_dict_foreach(&liveness.bodies, item)
         core_dict_string_key_free(item->key);
     core_dict_free(&liveness.bodies);

@@ -180,6 +180,7 @@ package builtin {
     export ffi.__ffi_write_f32
     export ffi.__ffi_write_f64
     export panic.panic
+    export panic.unreachable
     export containers.set.Set
     export containers.buffer.Buffer
     export containers.buffer.Buffer_Error
