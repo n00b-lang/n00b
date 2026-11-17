@@ -2872,8 +2872,8 @@ resolved_bound(const known_range_t *bound, int64_t n, bool inclusive_end,
 
 // A slice of an array of known length (a `__slice` or `__write_slice`
 // call: the receiver, each bound as an option, whether `to` includes the
-// end) whose bounds can only fall outside it, or only be in the wrong
-// order.
+// end) whose start can only come after its end. (Bounds past the array's
+// ends just stop there, as in Python.)
 static bool
 check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
                   ir_abcd_t *abcd, ir_instr_t *in)
@@ -2901,27 +2901,8 @@ check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
         known[b] = bound && value_range(abcd, bound, in, &bounds[b]);
     }
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    // Each bound may be from -n to n, or, for `to`, -n to n - 1.
-    for (int b = 0; b < 2; b++) {
-        if (!written[b] || !known[b]) continue;
-        int64_t top = b && inclusive ? n - 1 : n;
-        bool below = bounds[b].has_hi && bounds[b].hi < -n;
-        bool above = bounds[b].has_lo && bounds[b].lo > top;
-        if (!below && !above) continue;
-        known_range_t at = bounds[b];
-        resolved_bound(&bounds[b], n, b && inclusive, &at);
-        if (n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
-                n00bb_span_location(in->span),
-                N00B_TEXT_CONSTANT_SLICE_BOUND_OUT_OF_RANGE,
-                N00BB_ARGS(ARG_TEXT(b ? CORE_STRING_STATIC("end")
-                                      : CORE_STRING_STATIC("start")),
-                           ARG_NUMBER(below ? at.hi : at.lo),
-                           ARG_NUMBER(length))))
-            n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_SLICE_RANGE_HELP,
-                              N00BB_ARGS(ARG_NUMBER(length)));
-        return false;
-    }
-    // The start always after the end.
+    // The start always after the end, before either stops at the array's
+    // ends.
     known_range_t start = bounds[0], end = bounds[1];
     if (!known[0] || !known[1]
         || (written[0] && !resolved_bound(&bounds[0], n, false, &start))

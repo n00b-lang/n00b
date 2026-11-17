@@ -18,6 +18,8 @@ func indexes() -> int {
     return low + row + column + tag + fine
 }
 
+// Slice bounds past the array's ends stop there; only a start after the end
+// is an error.
 func slices() -> uint {
     let mixed = fixed[2:-2]
     let past = fixed[4:4]
