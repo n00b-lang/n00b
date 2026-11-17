@@ -4536,6 +4536,53 @@ static core_string_t stored_name(core_translation_unit_t *unit,
     return text;
 }
 
+// True when `store` initializes a `var` or `let` that has no declared type,
+// so the literal is what gave the variable its type.
+static bool untyped_declaration(core_translation_unit_t *unit,
+                                const ir_instr_t        *store,
+                                const ir_instr_t        *literal)
+{
+    if (!ir_span_known(store->span) || !ir_span_known(literal->span)
+        || store->span.start_byte >= literal->span.start_byte) {
+        return false;
+    }
+
+    ir_span_t lhs = store->span;
+
+    lhs.end_byte = literal->span.start_byte;
+
+    core_string_t text = span_text(unit, lhs);
+
+    for (size_t i = 0; i < text.u8_bytes; i++) {
+        if (text.data[i] == ':') {
+            return false;
+        }
+    }
+
+    // The store's span starts at the name; the keyword comes before it.
+    ir_span_t before = store->span;
+
+    before.start_byte = store->span.start_byte > 16
+                          ? store->span.start_byte - 16 : 0;
+    before.end_byte   = store->span.start_byte;
+    text              = span_text(unit, before);
+    while (text.u8_bytes
+           && (text.data[text.u8_bytes - 1] == ' '
+               || text.data[text.u8_bytes - 1] == '\t')) {
+        text.u8_bytes--;
+    }
+    if (text.u8_bytes < 3) {
+        return false;
+    }
+
+    const char *keyword = text.data + text.u8_bytes - 3;
+
+    return (!memcmp(keyword, "var", 3) || !memcmp(keyword, "let", 3))
+        && (text.u8_bytes == 3 || keyword[-1] == ' ' || keyword[-1] == '\t'
+            || keyword[-1] == '\n' || keyword[-1] == '{'
+            || keyword[-1] == ';');
+}
+
 static bool report_literal_store(th_ctx *types, core_translation_unit_t *unit,
                                  const ty_failure_t *failure)
 {
@@ -4593,6 +4640,20 @@ static bool report_literal_store(th_ctx *types, core_translation_unit_t *unit,
             n00bb_report_secondary(diagnostics, unit, declared,
                                    N00B_TEXT_THE_RETURN_TYPE_OF_IS,
                                    N00BB_ARGS(ARG_TEXT(name)));
+        }
+    }
+    else if (target.u8_bytes
+             && core_string_eq(kind, CORE_STRING_STATIC("integer"))
+             && untyped_declaration(unit, user, literal)) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_VALUE_TYPE_MISMATCH,
+                     n00bb_span_location(literal->span),
+                     N00B_TEXT_INFERRED_INTEGER_USED_AS,
+                     N00BB_ARGS(ARG_TEXT(target), ARG_TEXT(text),
+                                ARG_TEXT(expected)));
+        if (float_type(th_resolve(failure->pred.subject))) {
+            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_A_FLOAT_LITERAL,
+                              N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(target),
+                                         ARG_TEXT(expected)));
         }
     }
     else {

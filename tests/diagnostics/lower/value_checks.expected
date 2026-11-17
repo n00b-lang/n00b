@@ -1,5 +1,5 @@
 tests/diagnostics/lower/value_checks.n:5:16: error N00B-S0055: the divisor is always invalid: 0
-tests/diagnostics/lower/value_checks.n:10:12: error N00B-S0053: this operation always overflows: 128
+tests/diagnostics/lower/value_checks.n:10:12: error N00B-S0053: this operation always overflows: 127 and 1
 tests/diagnostics/lower/value_checks.n:17:9: warning N00B-S0005: this code can never run: no path reaches it
 tests/diagnostics/lower/value_checks.n:26:9: warning N00B-S0005: this code can never run: no path reaches it
 tests/diagnostics/lower/value_checks.n:32:5: warning N00B-S0005: this code can never run: no path reaches it

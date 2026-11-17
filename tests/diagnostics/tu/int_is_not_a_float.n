@@ -3,3 +3,7 @@ func g(x: float) -> float {
     return x
 }
 let r = g(2)
+func inferred() -> float {
+    var n = 2
+    return g(n)
+}
