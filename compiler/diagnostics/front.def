@@ -212,14 +212,20 @@ N00B_DIAG(WHEN_CONDITION_NOT_BOOL, "N00B-P0029", ERROR,
     "`when` selects code while compiling, so its condition must be a\n"
     "compile-time `bool`, for example `when target_os() == \"linux\" { }`.")
 N00B_DIAG(MODULE_LITERAL_PLACEMENT, "N00B-P0030", ERROR,
-    "a module literal is used somewhere other than a module-level `const`",
-    "A module literal such as an `'ffi` block generates a module, so it can\n"
-    "only initialize one `const` declared at module level:\n"
-    "`const zlib = 'ffi[--- ... ---]`.")
+    "a module literal is used somewhere other than standing alone at module level",
+    "A module literal such as an `'ffi` block declares its names into the\n"
+    "module that contains it, so it stands alone as a module-level\n"
+    "statement rather than initializing a variable:\n"
+    "    [-\n"
+    "        use <zlib.writ>\n"
+    "    -]'ffi\n"
+    "To give the names their own namespace, put the literal in a module of\n"
+    "its own and import that module.")
 N00B_DIAG(LITMOD_UNKNOWN_KIND, "N00B-P0031", ERROR,
     "a literal modifier names a literal kind that does not exist",
     "A literal modifier is declared as `<kind> litmod <name>`, where kind is\n"
-    "a literal kind such as `string`, `int`, `float`, `list` or `record`.")
+    "one of the literal kinds: `quotes`, `int`, `hex`, `float`, `bool`,\n"
+    "`nil`, `sequence`, `dict`, `set`, `record`, `tuple` or `fence`.")
 N00B_DIAG(LITMOD_DUPLICATE, "N00B-P0032", ERROR,
     "a module declares the same literal modifier twice",
     "Each module may declare one literal modifier per name and literal kind.\n"
@@ -362,6 +368,11 @@ N00B_DIAG(MODULE_DIRECTORY_AMBIGUOUS, "N00B-M0023", ERROR,
     "a module file and a directory have the same name",
     "A package's names follow its files, so `x.n` next to a directory `x/`\n"
     "makes `x` mean two things. Rename the module or the directory.")
+N00B_DIAG(EXPORT_OUTSIDE_PACKAGE, "N00B-M0024", ERROR,
+    "an `export` appears outside a `package` block",
+    "Only a manifest's `package` block can export names; a module makes\n"
+    "a declaration visible by leaving it public. Move the `export` into\n"
+    "the package's `package` block, or remove it.")
 N00B_DIAG(INPUT_NOT_FOUND, "N00B-B0001", ERROR,
     "a module or file named on the command line cannot be found",
     "Pass a path to a `.n` file or the name of a module on the search path.\n"

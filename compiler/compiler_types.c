@@ -1148,9 +1148,23 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
                               shown(types, failure->pred.other))));
     }
     else if (failure->actual) {
+        th_type *underlying = n00bb_distinct_underlying(types,
+                                                        failure->actual);
+
         n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_REQUIREMENT, at,
                      N00B_TEXT_CANNOT_BE_USED_HERE,
                      N00BB_ARGS(ARG_TEXT(shown(types, failure->actual))));
+        // A distinct type keeps only equality from the type it was made
+        // from; say so, rather than leave the error opaque.
+        if (underlying) {
+            n00bb_report_note(diagnostics,
+                N00B_TEXT_DISTINCT_TYPE_HAS_ONLY_EQUALITY,
+                N00BB_ARGS(ARG_TEXT(shown(types, failure->actual)),
+                           ARG_TEXT(shown(types, underlying))));
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_CAST_TO_USE_ITS_OPERATORS,
+                N00BB_ARGS(ARG_TEXT(shown(types, underlying))));
+        }
     }
     else {
         n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_MISMATCH, at,
@@ -1243,6 +1257,9 @@ struct n00bb_dispatch_index {
     core_dict_t            functions;
     core_list_t(function_list_ptr_t) lists;
     core_list_t(th_trait_requirement) bounds;
+    // While typing, before literals are sized: an operator meeting an
+    // unbound operand waits for sizing (integer_promotion).
+    bool                   sizing_pending;
 };
 
 static parse_sym_entry_t *nominal_symbol(n00bb_link_analysis_t *analysis,
@@ -1386,13 +1403,22 @@ static th_type *bitint_operator(th_ctx *types, th_type *receiver,
         method);
     bool shift = binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR);
 
-    if (!th_bitint_info(receiver, nullptr, nullptr)) {
+    th_bitint_flavor flavor = TH_BITINT_UNSIGNED;
+
+    if (!th_bitint_info(receiver, nullptr, &flavor)) {
         return nullptr;
     }
     if (binary) {
         return contract(types, receiver, receiver,
                         shift ? th_name(types, CORE_STRING_STATIC("uint"))
                               : receiver);
+    }
+    // `i:N` and `u:N` are integers (the `Integer` trait); `bits:N` is not.
+    if (core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
+        return flavor == TH_BITINT_BITS
+                 ? nullptr
+                 : contract(types, receiver, receiver,
+                            th_name(types, CORE_STRING_STATIC("u128")));
     }
     if (core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
         return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
@@ -1434,6 +1460,46 @@ static th_type *enum_operator(n00bb_link_analysis_t *analysis, th_ctx *types,
     }
 
     return nullptr;
+}
+
+th_type *n00bb_distinct_underlying(th_ctx *types, th_type *type)
+{
+    core_string_t            name = {0};
+    th_env_type_shape_kind_t kind = {0};
+
+    type = th_resolve(type);
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, nullptr)) {
+        return nullptr;
+    }
+
+    th_type *shape = th_env_type_shape(types, name, &kind);
+
+    return shape && kind == TH_ENV_TYPE_SHAPE_NOMINAL ? th_resolve(shape)
+                                                      : nullptr;
+}
+
+// A distinct type gets the default equality of the type it was made from,
+// when that type has one, but none of its other operators.
+static th_type *distinct_equality(const n00bb_dispatch_index_t *index,
+                                  th_ctx *types, th_type *receiver,
+                                  core_string_t method)
+{
+    if (!core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
+        return nullptr;
+    }
+
+    th_type                *shape = n00bb_distinct_underlying(types,
+                                                              receiver);
+    n00bb_dispatch_target_t inner = {0};
+
+    if (!shape || !n00bb_dispatch_target_for(index, shape, method, 2, &inner)
+        || !inner.signature) {
+        return nullptr;
+    }
+
+    return contract(types, th_name(types, CORE_STRING_STATIC("bool")),
+                    receiver, receiver);
 }
 
 static th_type *trait_requirement(const n00bb_dispatch_index_t *index,
@@ -1975,6 +2041,16 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
         target->kind = N00BB_TARGET_FLAGSET;
         return true;
     }
+    // A bit integer's `from_bits` is registered so it implements `Integer`,
+    // but has no body: it is a wrapping cast, chosen before that function.
+    if (th_kind_of(receiver) == TH_BITINT
+        && core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
+        target->signature = bitint_operator(types, receiver, method);
+        if (target->signature) {
+            target->kind = N00BB_TARGET_PRIMITIVE;
+            return true;
+        }
+    }
     target->function = module_function(index, receiver, method, true, arity,
                                        &target->rival);
     if (target->function) {
@@ -1997,6 +2073,11 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     target->signature = bitint_operator(types, receiver, method);
     if (target->signature) {
         target->kind = N00BB_TARGET_PRIMITIVE;
+        return true;
+    }
+    target->signature = distinct_equality(index, types, receiver, method);
+    if (target->signature) {
+        target->kind = N00BB_TARGET_DISTINCT_EQUAL;
         return true;
     }
     target->signature = trait_requirement(index, types, receiver, method,
@@ -2576,10 +2657,375 @@ static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
     return site;
 }
 
+static th_type *best_integer_fit(th_ctx *types, ir_abcd_range_t found);
+
+// A built-in integer type an operation can promote: a named integer type, or
+// an `i:N` / `u:N` (not `bits:N`, and not a distinct type or enum).
+static bool promotable_integer(th_ctx *types, th_type *type,
+                               ir_interval_t *range)
+{
+    uint64_t         width  = 0;
+    th_bitint_flavor flavor = TH_BITINT_BITS;
+
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) {
+        return false;
+    }
+    if (th_bitint_info(type, &width, &flavor)) {
+        if (flavor == TH_BITINT_BITS) {
+            return false;
+        }
+        *range = ir_interval_of_width(width, flavor == TH_BITINT_SIGNED);
+        return true;
+    }
+    // Compare names, not hashes: this runs each time the solver judges an
+    // operator, and building and hashing the twelve names there is costly.
+    core_string_t name      = {0};
+    size_t        arguments = 0;
+
+    (void)types;
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, &arguments) || arguments) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(integer_names) / sizeof(*integer_names);
+         i++) {
+        if (core_string_eq(name, integer_names[i])) {
+            return n00bb_type_interval(type, range);
+        }
+    }
+    return false;
+}
+
+// The smallest integer type holding every value of both operand types. It
+// stops at 64 bits unless an operand is 128-bit: `uint` with `int` is
+// `int`, and converting the `uint` operand is checked.
+static th_type *promoted_integer(th_ctx *types, ir_interval_t left,
+                                 ir_interval_t right)
+{
+    // An operand is 128-bit: that is the explicit evidence to go past 64.
+    bool wide = left.lo < (ir_int_t)INT64_MIN
+             || left.hi > (ir_int_t)UINT64_MAX
+             || right.lo < (ir_int_t)INT64_MIN
+             || right.hi > (ir_int_t)UINT64_MAX;
+    ir_interval_t both = ir_interval_join(left, right);
+
+    if (!wide && (both.lo < (ir_int_t)INT64_MIN
+                  || both.hi > (ir_int_t)INT64_MAX)
+        && both.lo < 0) {
+        return th_name(types, CORE_STRING_STATIC("int"));
+    }
+    return best_integer_fit(types, (ir_abcd_range_t){.seen = both});
+}
+
+th_type *n00bb_integer_promotion(th_ctx *types, th_type *left,
+                                 th_type *right)
+{
+    ir_interval_t lr = {0}, rr = {0};
+
+    if (!left || !right || !promotable_integer(types, left, &lr)
+        || !promotable_integer(types, right, &rr)
+        || th_hash(types, th_resolve(left)) == th_hash(types,
+                                                       th_resolve(right))) {
+        return nullptr;
+    }
+    return promoted_integer(types, lr, rr);
+}
+
+typedef enum {
+    PROMOTION_NONE,
+    PROMOTION_WAIT,
+    PROMOTION_CHOSEN,
+    PROMOTION_FAILS,
+} promotion_t;
+
+// A built-in integer operator whose operands have different types runs at
+// a type holding both, and never narrows an operand: `u8 + u16` is a `u16`
+// addition and `u8 + i8` an `i16` one. An operand that is still an open
+// literal is sized from its own values first (`a + 1000` with `a: u8`
+// sizes `1000` as `u16`), so the call waits until it is.
+// A float literal, whose type is still open while typing starts.
+static bool float_constant(const ir_value_t *value)
+{
+    const ir_instr_t *def = value ? value->def : nullptr;
+
+    return def && def->op == IR_OP_CONST && def->n_operands == 1
+        && def->operands[0].kind == IR_OPD_CONST
+        && def->operands[0].lit.is_float;
+}
+
+// An integer literal (not a string or float one).
+static bool integer_constant(const ir_value_t *value)
+{
+    const ir_instr_t *def = value ? value->def : nullptr;
+
+    return def && def->op == IR_OP_CONST && def->n_operands == 1
+        && def->operands[0].kind == IR_OPD_CONST
+        && !def->operands[0].lit.is_float
+        && !def->operands[0].lit.text.data;
+}
+
+// The smallest integer type holding an integer literal's value, and that
+// value as a range; null past 128 bits.
+static th_type *literal_integer_type(th_ctx *types, const ir_value_t *value,
+                                     ir_interval_t *range)
+{
+    ir_lit_t literal = value->def->operands[0].lit.i;
+    ir_int_t point   = 0;
+
+    if (!literal.neg && literal.mag > (ir_uint_t)ir_int_max) {
+        point = ir_int_max;
+    }
+    else if (literal.neg && literal.mag > (ir_uint_t)ir_int_max + 1) {
+        return nullptr;
+    }
+    else {
+        point = literal.neg
+            ? (literal.mag == (ir_uint_t)ir_int_max + 1
+                   ? ir_int_min : -(ir_int_t)literal.mag)
+            : (ir_int_t)literal.mag;
+    }
+    *range = ir_interval_point(point);
+    return best_integer_fit(types, (ir_abcd_range_t){.seen = *range});
+}
+
+// Whether an open value comes from a float literal (or, with `!real`, an
+// integer one): directly, or through copies, a local's slot or a module
+// variable's stores (`var x = 0.5` then `x + 1`; `var n = 2` then
+// `f + n`). Only asked where an open value meets a literal or a float, so
+// the few steps of search stay off typing's hot path.
+static bool literal_origin(const ir_func_t *function, const ir_value_t *value,
+                           bool real, int depth)
+{
+    if (!value || depth > 4) {
+        return false;
+    }
+    if (real ? float_constant(value) : integer_constant(value)) {
+        return true;
+    }
+
+    const ir_instr_t *def = value->def;
+    const ir_value_t *slot = def && def->op == IR_OP_LOAD
+                               ? ir_value_operand(def, 0)
+                               : nullptr;
+    const ir_global_t *global = value->kind == IR_VAL_GLOBAL
+                                  ? value->global
+                                  : nullptr;
+    const ir_local_t  *local  = value->kind == IR_VAL_LOCAL ? value->local
+                                                            : nullptr;
+
+    if (!slot && !global && !local) {
+        return def && def->op == IR_OP_COPY
+            && literal_origin(function, ir_value_operand(def, 0), real,
+                              depth + 1);
+    }
+    // The values written to the local, slot or module variable.
+    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in      = function->blocks[b]->instrs[i];
+            const ir_value_t *written = nullptr;
+
+            if (local && in->op == IR_OP_COPY && in->dest_local == local) {
+                written = ir_value_operand(in, 0);
+            }
+            else if (slot && in->op == IR_OP_STORE
+                     && ir_value_operand(in, 0) == slot) {
+                written = ir_value_operand(in, 1);
+            }
+            else if (global && in->op == IR_OP_GLOBAL_STORE) {
+                const ir_value_t *target = ir_value_operand(in, 0);
+
+                if (target && target->kind == IR_VAL_GLOBAL
+                    && target->global == global) {
+                    written = ir_value_operand(in, 1);
+                }
+            }
+            if (written && literal_origin(function, written, real,
+                                          depth + 1)) {
+                return true;
+            }
+        }
+    }
+    // A module variable is set in its module's initializer, which is
+    // usually not the function reading it.
+    ir_module_t *owner = global ? global->owner : nullptr;
+
+    for (size_t f = 0; owner && f < ir_func_count(owner); f++) {
+        const ir_func_t *other = ir_func_at(owner, f);
+
+        for (uint32_t b = 0; other != function && b < other->n_blocks; b++) {
+            for (uint32_t i = 0; i < other->blocks[b]->n_instrs; i++) {
+                const ir_instr_t *in     = other->blocks[b]->instrs[i];
+                const ir_value_t *target = in->op == IR_OP_GLOBAL_STORE
+                                             ? ir_value_operand(in, 0)
+                                             : nullptr;
+
+                if (target && target->kind == IR_VAL_GLOBAL
+                    && target->global == global
+                    && literal_origin(other, ir_value_operand(in, 1), real,
+                                      depth + 1)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool float_origin(const ir_func_t *function, const ir_value_t *value,
+                         int depth)
+{
+    return literal_origin(function, value, true, depth);
+}
+
+static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
+                                     const ir_instr_t *at, th_type **out)
+{
+    th_ctx *types = ir_ctx_types(index->analysis->ir_context);
+
+    // A `switch` case test is not a mixed operation: a case must have the
+    // switch value's type (`case 1.5` on a `uint` is an error).
+    if (!at || at->op != IR_OP_DISPATCH || at->n_operands != 3
+        || at->operands[0].kind != IR_OPD_NAME
+        || ir_annot_get((ir_annots_t *)&at->annots, N00BB_SWITCH_KEY)) {
+        return PROMOTION_NONE;
+    }
+
+    core_string_t                  method = at->operands[0].name;
+    const n00bb_binary_operator_t *binary = n00bb_binary_operator_method(
+        method);
+    bool equal   = core_string_eq(method, CORE_STRING_STATIC("__equal"));
+    bool compare = core_string_eq(method, CORE_STRING_STATIC("__cmp"));
+
+    if ((!binary && !equal && !compare)
+        || (binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR))) {
+        return PROMOTION_NONE;
+    }
+
+    const ir_value_t *left  = ir_value_operand(at, 1);
+    const ir_value_t *right = ir_value_operand(at, 2);
+    th_type          *lt    = left && left->type ? th_resolve(left->type)
+                                                 : nullptr;
+    th_type          *rt    = right && right->type ? th_resolve(right->type)
+                                                   : nullptr;
+    ir_interval_t     lr = {0}, rr = {0};
+    bool              lp = lt && promotable_integer(types, lt, &lr);
+    bool              rp = rt && promotable_integer(types, rt, &rr);
+    bool              lf = lt && float_type(lt);
+    bool              rf = rt && float_type(rt);
+    bool              l_open = lt && th_kind_of(lt) == TH_VAR
+                            && !th_var_ref(lt);
+    bool              r_open = rt && th_kind_of(rt) == TH_VAR
+                            && !th_var_ref(rt);
+
+    // An integer literal beside a declared operand needs no waiting: its
+    // value is in the IR. If it fits the declared integer type it simply
+    // takes that type (the usual lookup); otherwise it is the smallest type
+    // holding its value, and the operation promotes now. Waiting would
+    // leave everything downstream unresolved through sizing.
+    if ((lp || lf) && r_open && integer_constant(right)) {
+        rt = literal_integer_type(types, right, &rr);
+        if (!rt || (lp && rr.lo >= lr.lo && rr.hi <= lr.hi)) {
+            return PROMOTION_NONE;
+        }
+        rp     = true;
+        r_open = false;
+    }
+    else if ((rp || rf) && l_open && integer_constant(left)) {
+        lt = literal_integer_type(types, left, &lr);
+        if (!lt || (rp && lr.lo >= rr.lo && lr.hi <= rr.hi)) {
+            return PROMOTION_NONE;
+        }
+        lp     = true;
+        l_open = false;
+    }
+
+    // Before literals are sized, an unbound operand may be one: wait. After
+    // sizing anything still unbound (a generic's type) resolves as usual.
+    // Two unbound operands where one is a float literal wait too, so the
+    // float settles before the integer is unified with it (`1.5 + 2`).
+    // A float operand only waits for an open integer, a literal or a value
+    // assigned one (`var n = 2` then `f + n`); an open float (`0.0` beside
+    // an `f32`) unifies with it as usual.
+    const ir_func_t *function = at->block ? at->block->owner : nullptr;
+
+    if (index->sizing_pending
+        && ((lp && r_open) || (rp && l_open)
+            || (lf && r_open && literal_origin(function, right, false, 0))
+            || (rf && l_open && literal_origin(function, left, false, 0))
+            || (l_open && r_open
+                && (float_constant(left) || float_constant(right)))
+            || (l_open && r_open && integer_constant(right)
+                && float_origin(at->block ? at->block->owner : nullptr,
+                                left, 0))
+            || (l_open && r_open && integer_constant(left)
+                && float_origin(at->block ? at->block->owner : nullptr,
+                                right, 0)))) {
+        return PROMOTION_WAIT;
+    }
+
+    // An integer meeting a float in an arithmetic or comparison operator
+    // converts to the float's type: mixing ints and floats gives a float.
+    // Only here; an int is not otherwise a float.
+    if ((lf && rp) || (rf && lp)) {
+        if (binary && (binary->unsigned_only || binary->op == IR_OP_REM)) {
+            return PROMOTION_NONE;
+        }
+
+        th_type *real = lf ? lt : rt;
+
+        // Each operand keeps its own type here: the solver never turns an
+        // int into a float, and the rewrite converts the integer operand.
+        *out = contract(types,
+                        equal ? th_name(types, CORE_STRING_STATIC("bool"))
+                        : compare
+                            ? th_name(types, CORE_STRING_STATIC("Comparison"))
+                            : real,
+                        lt, rt);
+        return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
+    }
+    if (!lp || !rp || th_hash(types, lt) == th_hash(types, rt)) {
+        return PROMOTION_NONE;
+    }
+
+    th_type      *promoted = promoted_integer(types, lr, rr);
+    ir_interval_t bounds   = {0};
+
+    // Bitwise operators exist only on unsigned integers. With a signed left
+    // operand the usual lookup reports that; with only a signed right one
+    // it would narrow that operand to the left's type, so fail here.
+    if (binary && binary->unsigned_only
+        && (!n00bb_type_interval(promoted, &bounds) || bounds.lo < 0)) {
+        return lr.lo < 0 ? PROMOTION_NONE : PROMOTION_FAILS;
+    }
+
+    th_type *result   = equal ? th_name(types, CORE_STRING_STATIC("bool"))
+                      : compare
+                          ? th_name(types, CORE_STRING_STATIC("Comparison"))
+                          : promoted;
+
+    *out = contract(types, result, promoted, promoted);
+    return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
+}
+
 static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
                                      th_type *call, th_type **signature)
 {
     n00bb_dispatch_index_t *index = context;
+    th_type                *promoted = nullptr;
+
+    switch (integer_promotion(index, at, &promoted)) {
+    case PROMOTION_WAIT:
+        return TY_OVERLOAD_WAIT;
+    case PROMOTION_CHOSEN:
+        *signature = promoted;
+        return TY_OVERLOAD_CHOSEN;
+    case PROMOTION_FAILS:
+        return TY_OVERLOAD_FAILS;
+    case PROMOTION_NONE:
+        break;
+    }
+
     n00bb_overload_site_t  *site  = overload_site(index, at);
     th_type                *shape = call ? th_resolve(call) : nullptr;
 
@@ -3057,6 +3503,40 @@ static bool report_operator(th_ctx *types,
 
     const ir_value_t *left  = dispatch_operand(at, 1);
     const ir_value_t *right = binary ? dispatch_operand(at, 2) : nullptr;
+    ir_interval_t     right_bounds = {0};
+
+    // A bitwise operator with a signed right operand (integer_promotion
+    // refuses it): the operand types may differ, but neither may be signed.
+    if (binary && binary->unsigned_only && right && right->type
+        && n00bb_integer_promotion(types, receiver, right->type)
+        && n00bb_type_interval(th_resolve(right->type), &right_bounds)
+        && right_bounds.lo < 0) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        source_t            source = value_source(unit, right, at->span);
+        core_string_t       signed_name = n00bb_print_type(types,
+                                                           right->type);
+        core_buffer_t       unsigned_name = {0};
+        size_t              skip = signed_name.u8_bytes > 1
+            && signed_name.data[0] == 'i' && signed_name.data[1] >= '0'
+            && signed_name.data[1] <= '9';
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_BITWISE_NEGATIVE,
+                     source.at, N00B_TEXT_BITWISE_SIGNED_OPERAND,
+                     N00BB_ARGS(ARG_TEXT(source.text),
+                                ARG_TEXT(signed_name)));
+        core_buffer_puts(&unsigned_name, "u");
+        core_buffer_append_string(&unsigned_name,
+            skip ? core_string_slice(signed_name, 1,
+                                     signed_name.u8_bytes - 1)
+                 : CORE_STRING_STATIC("int"));
+        n00bb_report_help(diagnostics, N00B_TEXT_CONVERT_IT_WITH_CAST,
+                          N00BB_ARGS(ARG_TEXT(core_buffer_string(
+                              &unsigned_name))));
+        core_buffer_release(&unsigned_name);
+        return true;
+    }
+
     core_string_t     first = right
         ? operand_phrase(types, unit, left, at->span,
                          flows_from(literal, left) ? literal : nullptr)
@@ -4056,6 +4536,53 @@ static core_string_t stored_name(core_translation_unit_t *unit,
     return text;
 }
 
+// True when `store` initializes a `var` or `let` that has no declared type,
+// so the literal is what gave the variable its type.
+static bool untyped_declaration(core_translation_unit_t *unit,
+                                const ir_instr_t        *store,
+                                const ir_instr_t        *literal)
+{
+    if (!ir_span_known(store->span) || !ir_span_known(literal->span)
+        || store->span.start_byte >= literal->span.start_byte) {
+        return false;
+    }
+
+    ir_span_t lhs = store->span;
+
+    lhs.end_byte = literal->span.start_byte;
+
+    core_string_t text = span_text(unit, lhs);
+
+    for (size_t i = 0; i < text.u8_bytes; i++) {
+        if (text.data[i] == ':') {
+            return false;
+        }
+    }
+
+    // The store's span starts at the name; the keyword comes before it.
+    ir_span_t before = store->span;
+
+    before.start_byte = store->span.start_byte > 16
+                          ? store->span.start_byte - 16 : 0;
+    before.end_byte   = store->span.start_byte;
+    text              = span_text(unit, before);
+    while (text.u8_bytes
+           && (text.data[text.u8_bytes - 1] == ' '
+               || text.data[text.u8_bytes - 1] == '\t')) {
+        text.u8_bytes--;
+    }
+    if (text.u8_bytes < 3) {
+        return false;
+    }
+
+    const char *keyword = text.data + text.u8_bytes - 3;
+
+    return (!memcmp(keyword, "var", 3) || !memcmp(keyword, "let", 3))
+        && (text.u8_bytes == 3 || keyword[-1] == ' ' || keyword[-1] == '\t'
+            || keyword[-1] == '\n' || keyword[-1] == '{'
+            || keyword[-1] == ';');
+}
+
 static bool report_literal_store(th_ctx *types, core_translation_unit_t *unit,
                                  const ty_failure_t *failure)
 {
@@ -4113,6 +4640,20 @@ static bool report_literal_store(th_ctx *types, core_translation_unit_t *unit,
             n00bb_report_secondary(diagnostics, unit, declared,
                                    N00B_TEXT_THE_RETURN_TYPE_OF_IS,
                                    N00BB_ARGS(ARG_TEXT(name)));
+        }
+    }
+    else if (target.u8_bytes
+             && core_string_eq(kind, CORE_STRING_STATIC("integer"))
+             && untyped_declaration(unit, user, literal)) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_VALUE_TYPE_MISMATCH,
+                     n00bb_span_location(literal->span),
+                     N00B_TEXT_INFERRED_INTEGER_USED_AS,
+                     N00BB_ARGS(ARG_TEXT(target), ARG_TEXT(text),
+                                ARG_TEXT(expected)));
+        if (float_type(th_resolve(failure->pred.subject))) {
+            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_A_FLOAT_LITERAL,
+                              N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(target),
+                                         ARG_TEXT(expected)));
         }
     }
     else {
@@ -5300,6 +5841,18 @@ static void note_integer_value(core_list_t(integer_evidence_t) *evidence,
         ir_abcd_range_t range = unknown_integer();
 
         (void)ir_abcd_range_of(abcd, value, nullptr, &range);
+        // Without explicit evidence, the range analysis caps at 64 bits: a
+        // range past 64 bits that is not an exact constant (say, a product
+        // of loop-bounded values) counts as unbounded there, which sizes as
+        // a 64-bit type with overflow checks.
+        if (range.seen.lo != range.seen.hi) {
+            if (range.seen.hi > (ir_int_t)UINT64_MAX) {
+                range.unbounded_max = true;
+            }
+            if (range.seen.lo < (ir_int_t)INT64_MIN) {
+                range.unbounded_min = true;
+            }
+        }
         if (entry->seen) {
             ir_abcd_range_t prior = entry->range;
 
@@ -5715,6 +6268,155 @@ static bool report_bitwise_negative(core_translation_unit_t *const *units,
     return true;
 }
 
+static size_t met_root(size_t *meets, size_t at)
+{
+    while (meets[at] != at) {
+        meets[at] = meets[meets[at]];
+        at        = meets[at];
+    }
+    return at;
+}
+
+static size_t evidence_index(core_list_t(integer_evidence_t) *evidence,
+                             th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    for (size_t i = 0; type && i < evidence->len; i++) {
+        if (evidence->data[i].var == type) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+// Two open integer types in the same position of operands that must have
+// one type, as `Set[A]` and `Set[B]` in `s + t`, meet: sized apart they
+// could differ (u8 and u16), and the call would not type. Typing resolves
+// such a call after sizing, so sizing joins them here.
+static void note_meeting_types(core_list_t(integer_evidence_t) *evidence,
+                               size_t *meets, const ir_instr_t *in)
+{
+    const ir_value_t *left  = in->op == IR_OP_DISPATCH && in->n_operands == 3
+                                  ? ir_value_operand(in, 1)
+                                  : nullptr;
+    const ir_value_t *right = left ? ir_value_operand(in, 2) : nullptr;
+    th_type *a = left && left->type ? th_resolve(left->type) : nullptr;
+    th_type *b = right && right->type ? th_resolve(right->type) : nullptr;
+    core_string_t a_name = {0}, b_name = {0};
+    size_t        a_args = 0, b_args = 0;
+
+    if (!a || !b || !th_named_info(a, &a_name, nullptr, &a_args)
+        || !th_named_info(b, &b_name, nullptr, &b_args)
+        || a_args != b_args || !core_string_eq(a_name, b_name)) {
+        return;
+    }
+    for (size_t i = 0; i < a_args; i++) {
+        const th_arg *x = th_named_arg(a, i);
+        const th_arg *y = th_named_arg(b, i);
+        size_t        p = x && x->kind == TH_ARG_TYPE
+                              ? evidence_index(evidence, x->type)
+                              : SIZE_MAX;
+        size_t        q = y && y->kind == TH_ARG_TYPE
+                              ? evidence_index(evidence, y->type)
+                              : SIZE_MAX;
+        if (p != SIZE_MAX && q != SIZE_MAX) {
+            meets[met_root(meets, p)] = met_root(meets, q);
+        }
+    }
+}
+
+// An inferred integer that is an operand of a built-in integer operator
+// alongside a declared integer type is widened to hold that type too, and
+// again for each such type it meets. A literal constant is not: it stays
+// the smallest type holding its value, and the operation promotes.
+static void note_declared_meeting(core_list_t(integer_evidence_t) *evidence,
+                                  th_ctx *types, const ir_instr_t *in)
+{
+    if (in->op != IR_OP_DISPATCH || in->n_operands != 3
+        || in->operands[0].kind != IR_OPD_NAME) {
+        return;
+    }
+
+    core_string_t                  method = in->operands[0].name;
+    const n00bb_binary_operator_t *binary = n00bb_binary_operator_method(
+        method);
+
+    if ((!binary || binary->op == IR_OP_SHL || binary->op == IR_OP_SHR)
+        && !core_string_eq(method, CORE_STRING_STATIC("__equal"))
+        && !core_string_eq(method, CORE_STRING_STATIC("__cmp"))) {
+        return;
+    }
+    for (int side = 1; side <= 2; side++) {
+        const ir_value_t *open   = ir_value_operand(in, side);
+        const ir_value_t *other  = ir_value_operand(in, 3 - side);
+        size_t            at     = open ? evidence_index(evidence, open->type)
+                                        : SIZE_MAX;
+        ir_interval_t     bounds = {0};
+
+        if (at == SIZE_MAX || !other || !other->type
+            || (open->def && open->def->op == IR_OP_CONST)
+            || !promotable_integer(types, other->type, &bounds)) {
+            continue;
+        }
+
+        integer_evidence_t *entry = &evidence->data[at];
+
+        if (!entry->seen) {
+            entry->range = (ir_abcd_range_t){.seen = bounds};
+            entry->seen  = true;
+            continue;
+        }
+        // A side with no fixpoint stays unbounded (and so 64-bit); only a
+        // bounded side widens to hold the declared type.
+        if (!entry->range.unbounded_min) {
+            entry->range.seen.lo = ir_int_lesser(entry->range.seen.lo,
+                                                 bounds.lo);
+        }
+        if (!entry->range.unbounded_max) {
+            entry->range.seen.hi = ir_int_greater(entry->range.seen.hi,
+                                                  bounds.hi);
+        }
+    }
+}
+
+// Every open type gets the joined range of the types it meets.
+static void join_met_evidence(core_list_t(integer_evidence_t) *evidence,
+                              size_t *meets)
+{
+    for (size_t i = 0; i < evidence->len; i++) {
+        size_t root = met_root(meets, i);
+        if (root == i || !evidence->data[i].seen) {
+            continue;
+        }
+        integer_evidence_t *into = &evidence->data[root];
+        ir_abcd_range_t     from = evidence->data[i].range;
+        if (!into->seen) {
+            into->range = from;
+            into->seen  = true;
+            continue;
+        }
+        ir_abcd_range_t *range = &into->range;
+        range->unbounded_min = from.seen.lo < range->seen.lo
+                                 ? from.unbounded_min
+                             : from.seen.lo == range->seen.lo
+                                 ? range->unbounded_min || from.unbounded_min
+                                 : range->unbounded_min;
+        range->unbounded_max = from.seen.hi > range->seen.hi
+                                 ? from.unbounded_max
+                             : from.seen.hi == range->seen.hi
+                                 ? range->unbounded_max || from.unbounded_max
+                                 : range->unbounded_max;
+        range->seen = ir_interval_join(range->seen, from.seen);
+    }
+    for (size_t i = 0; i < evidence->len; i++) {
+        size_t root = met_root(meets, i);
+        if (root != i && evidence->data[root].seen) {
+            evidence->data[i].range = evidence->data[root].range;
+            evidence->data[i].seen  = true;
+        }
+    }
+}
+
 static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
                                  const n00bb_dispatch_index_t *index,
                                  core_list_t(n00bb_ir_func_ptr_t) *functions,
@@ -5739,8 +6441,13 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
         core_dict_put(&view.open, ty_open_at(solver, i),
                       ty_open_at(solver, i));
     }
+    // Union-find over the entries: open types that meet are sized together.
+    size_t *meets = core_alloc_array(size_t, count);
+    for (size_t i = 0; i < count; i++) meets[i] = i;
 
-    ir_abcd_hooks_t hooks = {.context = &view, .view = integer_view};
+    // Sizing literals, not proving checks (ir_abcd_hooks_t.literal_sizing).
+    ir_abcd_hooks_t hooks = {.context = &view, .view = integer_view,
+                             .literal_sizing = true};
 
     for (size_t f = 0; f < functions->len; f++) {
         ir_func_t *function = functions->data[f];
@@ -5765,10 +6472,16 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 note_overload_evidence(&evidence, index, function->owner,
                                        function->blocks[b]->instrs[i]);
+                note_meeting_types(&evidence, meets,
+                                   function->blocks[b]->instrs[i]);
+                note_declared_meeting(&evidence, types,
+                                      function->blocks[b]->instrs[i]);
             }
         }
     }
     core_dict_free(&view.open);
+    join_met_evidence(&evidence, meets);
+    core_free(meets);
     for (size_t i = 0; i < evidence.len; i++) {
         integer_evidence_t *entry = &evidence.data[i];
         ir_abcd_range_t     range = entry->seen ? entry->range
@@ -5878,6 +6591,68 @@ static ir_instr_t *unmatched_jump(ir_func_t *f, uint64_t id)
     return nullptr;
 }
 
+// The constant a scalar `case` compares against, when it is one.
+static const ir_value_t *case_constant(const case_test_t *test, ir_lit_t *out)
+{
+    const ir_instr_t *in    = test->test;
+    const ir_value_t *value = in->n_operands == 3
+                                ? ir_operand_value(&in->operands[2])
+                                : nullptr;
+    const ir_instr_t *def   = value ? value->def : nullptr;
+
+    if (!def || def->op != IR_OP_CONST || !def->n_operands
+        || def->operands[0].kind != IR_OPD_CONST
+        || def->operands[0].lit.is_float || def->operands[0].lit.text.data
+        || !core_string_eq(in->operands[0].name,
+                           CORE_STRING_STATIC("__equal"))) {
+        return nullptr;
+    }
+    *out = def->operands[0].lit.i;
+    return value;
+}
+
+// Two `case`s of a scalar `switch` that match the same value: the first
+// always wins, so the second is dead and almost certainly a mistake.
+static bool switch_constants_distinct(core_translation_unit_t *unit,
+                                      const case_test_t       *tests,
+                                      size_t                   count)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool                ok          = true;
+
+    for (size_t i = 0; i < count; i++) {
+        ir_lit_t          value = {0};
+        const ir_value_t *found = case_constant(&tests[i], &value);
+
+        for (size_t j = 0; found && j < i; j++) {
+            ir_lit_t earlier = {0};
+
+            if (tests[j].case_index == tests[i].case_index
+                || !case_constant(&tests[j], &earlier)
+                || earlier.mag != value.mag
+                || (earlier.neg != value.neg && value.mag)) {
+                continue;
+            }
+
+            ir_span_t span = tests[i].test->span;
+
+            n00bb_report(diagnostics, unit, N00B_DIAG_DUPLICATE_SWITCH_CASE,
+                         n00bb_span_location(span),
+                         N00B_TEXT_VALUE_ALREADY_HAS_A_CASE,
+                         N00BB_ARGS(ARG_TEXT(n00bb_value_text(unit, found,
+                                                              span))));
+            n00bb_report_secondary(diagnostics, unit,
+                                   n00bb_span_location(tests[j].test->span),
+                                   N00B_TEXT_FIRST_HANDLED_HERE,
+                                   N00BB_NO_ARGS);
+            ok = false;
+            break;
+        }
+    }
+
+    return ok;
+}
+
 static bool switch_fits(const n00bb_dispatch_index_t *index,
                         core_translation_unit_t *unit, ir_func_t *f,
                         const case_test_t *tests, size_t count)
@@ -5900,7 +6675,7 @@ static bool switch_fits(const n00bb_dispatch_index_t *index,
             || n00bb_scalar_role_is(kind, IR_ROLE_CHAR)
             || th_hash(types, kind)
                    == th_hash(types, th_name(types, CORE_STRING_STATIC("bool")))) {
-            return true;
+            return switch_constants_distinct(unit, tests, count);
         }
         n00bb_report(diagnostics, unit, N00B_DIAG_SWITCH_SUBJECT_UNSUPPORTED,
                      n00bb_span_location(subject->def ? subject->def->span
@@ -6943,6 +7718,9 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                        th_apply(types,
                                 CORE_STRING_STATIC("builtin.containers.dict.Dict"),
                                 entry, 2));
+    // Until literals are sized, an operator meeting an unbound operand
+    // waits (integer_promotion). Constraining already judges some calls.
+    typing->dispatch->sizing_pending = true;
     ty_constrain_group(solver, group, &coverage);
     ty_solve(solver);
     bool bitwise_negative = false;
@@ -6952,6 +7730,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         ir_group_pdg_free(group);
         group = ir_group_pdg_of(functions.data, functions.len, nullptr);
     }
+    typing->dispatch->sizing_pending = false;
     ty_solve(solver);
 
     bool switched = switches_fit(typing->dispatch, units, count, &functions);

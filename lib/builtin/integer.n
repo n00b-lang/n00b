@@ -1,3 +1,4 @@
+import abi
 import bitptr
 import io.format
 
@@ -5,15 +6,12 @@ trait Integer {
     func from_bits(self: 'T, bits: u128) -> 'T
 }
 
+// The type table knows the signedness of every integer type, `i:N`
+// included, which a `typecase` over the named types cannot cover.
 private func is_signed(value: 'T) -> bool {
-    typecase value {
-        case i8 { return true }
-        case i16 { return true }
-        case i32 { return true }
-        case int { return true }
-        case i128 { return true }
-        else { return false }
-    }
+    var copy: 'T = value
+    let place: bitptr.Bitptr = bitptr.bitptr(ref copy)
+    return abi.__type_is_signed(place.type_index)
 }
 
 private func integer_text(value: 'T, as_hex: bool) -> string {

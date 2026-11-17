@@ -330,6 +330,17 @@ n00bb_emit_primitive(ir_lower_context_t *context, core_string_t method,
     if (right && core_string_eq(method, CORE_STRING_STATIC("__equal")))
         return n00bb_emit_binary_ir(context, IR_OP_EQ, result, left, right,
                                     span);
+    // A bit integer's `from_bits` (`Integer`): the low bits of the `u128`,
+    // unchecked, as `unsafe_cast` would take them.
+    if (right && core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
+                                                     span);
+        return cast && ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_"), result)
+            && ir_instr_operand_value(cast, right)
+            && ir_instr_add_mod(cast, CORE_STRING_STATIC("wrap"))
+            ? cast->dest : nullptr;
+    }
     if (!right && core_string_eq(method, CORE_STRING_STATIC("__not"))) {
         ir_instr_t *no = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                    span);
@@ -639,6 +650,8 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
     if (site)
         return n00bb_lower_user_literal(context, visit, site, result_type,
                                         span);
+    if (visit && n00bb_literal_modifier_rejected(visit->node))
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     if (operand_count)
         return lower_internal(context, span,
                               "nil literal has child values");
@@ -783,8 +796,14 @@ report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
         return report_syscall_errno_type(context, target, span);
     core_string_t from_text = n00bb_print_type(types, from);
     core_string_t target_text = n00bb_print_type(types, target);
-    bool references = th_kind_of(th_resolve(from)) == TH_INDIRECTION
-        && th_kind_of(th_resolve(target)) == TH_INDIRECTION;
+    // Any cast into or out of a reference (or an option of one) reads its
+    // address as something else, which only `unsafe_cast` may do.
+    th_type *from_item = th_option_item(th_resolve(from));
+    th_type *target_item = th_option_item(th_resolve(target));
+    bool references = th_kind_of(th_resolve(from_item ? from_item : from))
+            == TH_INDIRECTION
+        || th_kind_of(th_resolve(target_item ? target_item : target))
+            == TH_INDIRECTION;
     ir_lower_result_t result = lower_report(context, N00B_DIAG_CAST_NOT_DEFINED,
         span, N00B_TEXT_CANNOT_CAST_TO_NO_CONVERSION,
         N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_text)));

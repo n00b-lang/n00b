@@ -1,0 +1,3 @@
+func fails_with_string(x: int?) -> int fail: string {
+    return x!
+}

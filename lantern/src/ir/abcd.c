@@ -98,6 +98,8 @@ struct ir_abcd_t {
     core_dict_t                 trap_uses;
     bool                        narrowing;
     bool                        clamps_known;
+    // ir_abcd_hooks_t.literal_sizing.
+    bool                        literal_sizing;
     core_list_t(length_t)       lengths;
     core_list_t(instr_ptr_t)    effects;
     core_list_t(callee_bound_t) callees;
@@ -339,11 +341,50 @@ global_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
     return true;
 }
 
+static bool range_at(ir_abcd_t *a, const ir_value_t *value,
+                     const ir_instr_t *at, ir_abcd_range_t *out);
+
 static bool
 constant_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
 {
     ir_int_t constant = 0;
     ir_interval_t type;
+    // Sizing literals: an immutable module variable holds its static
+    // initializer. (Not a fact to prove checks with: a module initializer
+    // with run-time work may set it again.)
+    const ir_global_t *global = a->literal_sizing
+            && value->kind == IR_VAL_GLOBAL && value->global
+        ? ir_global_identity((ir_global_t *)value->global) : nullptr;
+    const ir_global_init_value_t *init = global
+            && global->mutability != IR_MUT_MUTABLE
+            && global->has_static_initializer
+        ? global->static_initializer : nullptr;
+    if (init && init->kind == IR_GLOBAL_INIT_INT
+        && init->integer.mag <= (ir_uint_t)ir_int_max) {
+        constant = init->integer.neg ? -(ir_int_t)init->integer.mag
+                                     : (ir_int_t)init->integer.mag;
+        *out = seen_range(ir_interval_point(constant));
+        return true;
+    }
+    // Before static initializers exist, the module initializer sets an
+    // immutable module variable with one `global.store`: it holds that
+    // value's range.
+    const ir_instr_t *store = nullptr;
+    for (uint32_t b = 0; global && global->mutability != IR_MUT_MUTABLE
+         && b < a->f->n_blocks; b++)
+        for (uint32_t i = 0; i < a->f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = a->f->blocks[b]->instrs[i];
+            const ir_value_t *target = in->op == IR_OP_GLOBAL_STORE
+                ? ir_value_operand(in, 0) : nullptr;
+            if (!target || target->kind != IR_VAL_GLOBAL || !target->global
+                || ir_global_identity((ir_global_t *)target->global)
+                       != global) continue;
+            if (store) return false;
+            store = in;
+        }
+    const ir_value_t *stored = store ? ir_value_operand(store, 1) : nullptr;
+    if (stored && stored != value && range_at(a, stored, store, out))
+        return true;
     if (value->kind != IR_VAL_INSTR || !value->def
         || !constant_of(value->def, &constant)
         || !value_bounds(a->f, value, &type)
@@ -1614,6 +1655,22 @@ zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
         if (constant_of(in, &constant) && constant >= type.lo
             && constant <= type.hi)
             return seen_range(ir_interval_point(constant));
+        // Sizing a literal past 2^126: a non-negative one up to 2^128 - 1
+        // saturates, which sizes it as `u128`; a negative one down to
+        // -2^127 is exact, which sizes it as `i128`.
+        if (a->literal_sizing && in->n_operands == 1
+            && in->operands[0].kind == IR_OPD_CONST
+            && !in->operands[0].lit.is_float) {
+            ir_lit_t literal = in->operands[0].lit.i;
+            if (!literal.neg)
+                return seen_range(ir_interval_point(
+                    literal.mag > (ir_uint_t)ir_int_max
+                        ? ir_int_max : (ir_int_t)literal.mag));
+            if (literal.mag <= (ir_uint_t)ir_int_max + 1)
+                return seen_range(ir_interval_point(
+                    literal.mag == (ir_uint_t)ir_int_max + 1
+                        ? ir_int_min : -(ir_int_t)literal.mag));
+        }
         return unknown_range(type);
     case IR_OP_CAST:
         if (!range_at(a, first, at, &x)) return unknown_range(type);
@@ -2125,6 +2182,7 @@ ir_abcd_build_with(ir_func_t *f, const ir_abcd_hooks_t *hooks)
     core_dict_init(&a->trap_uses, nullptr, nullptr);
     core_dict_init(&a->offsets_of, nullptr, nullptr);
     core_dict_init(&a->checks_of, nullptr, nullptr);
+    a->literal_sizing = hooks && hooks->literal_sizing;
     build_views(a, hooks);
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];

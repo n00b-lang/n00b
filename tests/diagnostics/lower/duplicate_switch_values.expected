@@ -1,0 +1,4 @@
+tests/diagnostics/lower/duplicate_switch_values.n:4:14: error N00B-S0030: `'a'` already has a `case` in this `switch`, so this one never matches
+  tests/diagnostics/lower/duplicate_switch_values.n:3:14: note: first handled here
+tests/diagnostics/lower/duplicate_switch_values.n:9:14: error N00B-S0030: `0x1` already has a `case` in this `switch`, so this one never matches
+  tests/diagnostics/lower/duplicate_switch_values.n:8:14: note: first handled here

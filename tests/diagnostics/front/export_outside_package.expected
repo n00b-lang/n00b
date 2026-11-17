@@ -1,0 +1,1 @@
+tests/diagnostics/front/export_outside_package.n:3:5: error N00B-M0024: `export` can only appear in a `package` block

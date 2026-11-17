@@ -1,0 +1,5 @@
+tests/diagnostics/tu/distinct_ordering.n:1:6: warning N00B-N0023: type `Meters` is never used
+  help: remove it
+tests/diagnostics/tu/distinct_ordering.n:3:12: error N00B-T0049: `distinct_ordering.Meters` cannot be used here
+  note: `distinct_ordering.Meters` is a distinct type made from `int`; it has `==` and `!=`, but none of `int`'s other operators
+  help: cast the values to `int` to use its operators, as in `cast[int](x)`

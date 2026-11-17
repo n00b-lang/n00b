@@ -1281,6 +1281,13 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
                                             p->pred.name, p->pred.other)
                                : nullptr;
 
+        // A receiver with an unsettled variable inside (`Set[A]` with `A`
+        // a literal not yet sized) may find its method once that variable
+        // settles, as a `where 'T : Hash` on `A` then can hold.
+        if (!signature && !th_is_closed(s->types, subject)) {
+            return OPEN;
+        }
+
         return signature && dispatch_call(s, p, signature) ? HOLDS : FAILS;
     }
     case TY_PRED_CONDITION: {

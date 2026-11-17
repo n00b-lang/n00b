@@ -1,0 +1,6 @@
+tests/diagnostics/lower/bang_on_option_call.n:1:6: warning N00B-N0019: function `lookup` is never called
+  help: call it or delete it
+tests/diagnostics/lower/bang_on_option_call.n:6:12: error N00B-S0026: `lookup` can't fail, so there's nothing for this `!` to pass along
+  tests/diagnostics/lower/bang_on_option_call.n:1:6: note: `lookup` is declared here
+  note: `lookup` returns `int?`, which may be `nil`; a `!` after a call only passes its failures along, so it won't unwrap that option
+  help: save the result in a variable and check it against `nil`; or, if this function can fail with `nil`, put the `!` on that variable instead

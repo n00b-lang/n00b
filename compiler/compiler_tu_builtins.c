@@ -1513,6 +1513,42 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
     return true;
 }
 
+// `i:N` and `u:N` are integers, so they implement `Integer` through its
+// `from_bits`; `bits:N` is not. The library writes `from_bits` for each
+// named integer type, which can't cover every width; these have no body, as
+// dispatch turns a call into a wrapping cast (see bitint_operator).
+static bool
+register_bit_integer_from_bits(th_env *environment, th_ctx *types)
+{
+    th_type *bits = th_name(types, CORE_STRING_STATIC("u128"));
+    for (uint64_t width = 1; width <= 128; width++) {
+        for (int is_signed = 0; is_signed <= 1; is_signed++) {
+            th_type *self = th_bitint(types, width, is_signed);
+            // The modes `trait Integer` declares `from_bits` with.
+            th_param parameters[] = {
+                {.mode = TH_IN, .type = self},
+                {.mode = TH_IN, .type = bits},
+            };
+            th_type *signature = self && bits
+                ? th_func_with_error(types, self,
+                    th_name(types, CORE_STRING_STATIC("nil")), parameters, 2,
+                    nullptr, nullptr, 0) : nullptr;
+            core_buffer_t qualified = {0};
+            core_buffer_printf(&qualified, "builtins.Integer.%c%llu.from_bits",
+                is_signed ? 'i' : 'u', (unsigned long long)width);
+            bool registered = signature && qualified.data
+                && th_env_register_function(environment,
+                    core_buffer_string(&qualified),
+                    CORE_STRING_STATIC("from_bits"),
+                    CORE_STRING_STATIC("builtins"),
+                    CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, signature);
+            core_buffer_release(&qualified);
+            if (!registered) return false;
+        }
+    }
+    return true;
+}
+
 static bool
 register_builtin_comparison_operators(th_env *environment, th_ctx *types)
 {
@@ -1664,6 +1700,7 @@ register_builtin_traits(th_env *environment, th_ctx *types)
         return false;
     if (!register_builtin_unary_operators(environment, types)) return false;
     if (!register_builtin_comparison_operators(environment, types)) return false;
+    if (!register_bit_integer_from_bits(environment, types)) return false;
     th_type *source = th_var(types);
     th_type *cursor = th_var(types);
     th_type *iter_error = th_var(types);

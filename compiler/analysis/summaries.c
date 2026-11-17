@@ -243,6 +243,52 @@ n00bb_bookkeeping_receiver(const ir_func_t *function)
     return type && th_kind_of(type) == TH_NAMED ? type : nullptr;
 }
 
+// A field holding a reference to storage of its own: a `Ref` or an
+// `object`.
+static bool
+n00bb_field_refers_elsewhere(n00bb_link_analysis_t *analysis, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) return true;
+    if (th_kind_of(type) == TH_INDIRECTION) return true;
+    parse_sym_entry_t *symbol = th_kind_of(type) == TH_NAMED
+        ? n00bb_nominal_symbol(analysis, type, nullptr) : nullptr;
+    return symbol && core_string_eq(symbol->adt_kind,
+                                    CORE_STRING_STATIC("object"));
+}
+
+// Whether a finalizer writes through its receiver into another object,
+// rather than only into the receiver's own fields (inline records included).
+// A path it can't follow counts as reaching another object.
+static bool
+n00bb_finalizer_reaches_other(n00bb_link_analysis_t *analysis,
+                              const ir_summary_t *summary,
+                              parse_scope_t *fields)
+{
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if (path->root != IR_SPLACE_PARAM || path->param
+            || !(path->flags & IR_SPATH_WRITE)) continue;
+        parse_scope_t *scope = fields;
+        bool through_reference = false;
+        for (uint32_t step = 0; step < path->depth; step++) {
+            // Any step past a field that refers elsewhere lands in the
+            // storage it refers to.
+            if (through_reference) return true;
+            if (n00bb_builtin_member(path->steps[step])) continue;
+            parse_sym_entry_t *field = scope
+                ? parse_symtab_lookup_in(scope, path->steps[step]) : nullptr;
+            if (!field) return true;
+            through_reference = n00bb_field_refers_elsewhere(analysis,
+                                                             field->type);
+            th_type *next = field->type ? th_resolve(field->type) : nullptr;
+            scope = next && th_kind_of(next) == TH_NAMED
+                ? record_scope_for_type(analysis, next, nullptr) : nullptr;
+        }
+    }
+    return false;
+}
+
 static uint64_t
 n00bb_summary_bookkeeping(void *context, const ir_func_t *function,
                           const ir_summary_t *summary)
@@ -260,6 +306,13 @@ n00bb_summary_bookkeeping(void *context, const ir_func_t *function,
     th_type *receiver = n00bb_bookkeeping_receiver(function);
     parse_scope_t *fields = receiver
         ? record_scope_for_type(analysis, receiver, nullptr) : nullptr;
+    // Nothing observes the fields of a value being finalized, so writes to
+    // them are free. A write that reaches another object (past a reference
+    // or `object` field) is a real effect: then none of the finalizer's
+    // writes count as reads.
+    if (core_string_eq(root, CORE_STRING_STATIC("__finalize")))
+        return n00bb_finalizer_reaches_other(analysis, summary, fields)
+            ? 0 : 1;
     for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
         const ir_spath_t *path = ir_summary_path_at(summary, i);
         if (path->root != IR_SPLACE_PARAM || path->param

@@ -264,9 +264,10 @@ N00B_DIAG(C_LAYOUT_FIELD_TYPE, "N00B-T0569", ERROR,
     "records.")
 N00B_DIAG(TYPE_CONTAINS_ITSELF, "N00B-T0576", ERROR,
     "a type contains itself by value",
-    "A value cannot contain a copy of itself. Break the cycle with a\n"
-    "reference, such as a `Ref[...]` or option field, or make one of the\n"
-    "types an `object`.")
+    "A value cannot contain a copy of itself. An option holds its value\n"
+    "inline, so an option field does not break the cycle. Break it with a\n"
+    "reference, such as a `Ref[...]` field, or make one of the types an\n"
+    "`object`.")
 N00B_DIAG(ATOMIC_UNSUPPORTED, "N00B-T0577", ERROR,
     "the target has no atomic operations for a type",
     "Atomic values must fit the atomic instructions of the target. Use a\n"

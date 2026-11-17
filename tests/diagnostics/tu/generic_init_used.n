@@ -1,0 +1,14 @@
+record Holder {
+    n: u8
+}
+
+func __init(modify self: Holder, seed: 'T) {
+    self.n = 1
+}
+
+func unused_generic(x: 'T) -> int {
+    return 1
+}
+
+let h: Holder = new[Holder](seed = 3)
+require h.n == 1

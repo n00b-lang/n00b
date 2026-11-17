@@ -2081,19 +2081,21 @@ emit_runtime_objects(core_link_unit_t *link,
     return ok;
 }
 
+// `main` takes no parameters, returns nil and cannot fail (N00B-B0105).
 bool
-n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
-                       parse_cmdr_result_t *args, bool debug_enabled,
-                       bool native_cpu,
-                       const n00bb_native_inputs_t *native,
-                       core_diagnostics_t *diagnostics)
+n00bb_check_start_signature(core_link_unit_t *link,
+                            n00bb_link_analysis_t *analysis,
+                            core_diagnostics_t *diagnostics)
 {
     ir_func_t *start = analysis
         ? n00bb_root_entry(analysis, CORE_STRING_STATIC(N00BB_START_NAME))
         : nullptr;
     th_type *start_type = start ? th_resolve(start->type) : nullptr;
+    th_type *error = start_type ? th_func_error(start_type) : nullptr;
+    error = error ? th_resolve(error) : nullptr;
     if (start_type && (th_func_nparams(start_type)
-                       || !th_is_nil(th_func_ret(start_type)))) {
+                       || !th_is_nil(th_func_ret(start_type))
+                       || (error && !th_is_nil(error)))) {
         core_translation_unit_t *root = core_link_unit_root(link, 0);
         parse_scope_t *scope = root ? module_scope(tu_state(root)) : nullptr;
         parse_sym_entry_t *symbol = scope ? parse_symtab_lookup_in(scope,
@@ -2114,6 +2116,18 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             N00BB_NO_ARGS);
         return false;
     }
+    return true;
+}
+
+bool
+n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
+                       parse_cmdr_result_t *args, bool debug_enabled,
+                       bool native_cpu,
+                       const n00bb_native_inputs_t *native,
+                       core_diagnostics_t *diagnostics)
+{
+    if (!n00bb_check_start_signature(link, analysis, diagnostics))
+        return false;
     const n00bb_native_inputs_t no_native = {0};
     if (!native) native = &no_native;
     core_list_t(core_translation_unit_ptr_t) order =

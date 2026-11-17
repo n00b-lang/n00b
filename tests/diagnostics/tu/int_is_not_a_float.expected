@@ -1,0 +1,5 @@
+tests/diagnostics/tu/int_is_not_a_float.n:1:16: error N00B-T0500: `2` is an integer, which does not convert to `f64`
+tests/diagnostics/tu/int_is_not_a_float.n:5:11: error N00B-T0005: parameter 1 (`x`) of `g` is `f64`, but this argument is an integer
+  tests/diagnostics/tu/int_is_not_a_float.n:2:6: note: `g` is declared here
+tests/diagnostics/tu/int_is_not_a_float.n:7:13: error N00B-T0500: `n` holds an integer, since it starts as `2`, but it's used as `f64`
+  help: write `2.0` if `n` should be a float, or convert where it's used with `cast[f64](n)`

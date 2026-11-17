@@ -724,8 +724,7 @@ user_literal_kind(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             ? CORE_STRING_STATIC("hex")
         : core_string_eq(scalar_kind, CORE_STRING_STATIC("FLOAT_LIT"))
             ? CORE_STRING_STATIC("float")
-        : core_string_eq(scalar_kind, CORE_STRING_STATIC("true"))
-            || core_string_eq(scalar_kind, CORE_STRING_STATIC("false"))
+        : n00bb_bool_spelling(scalar_kind)
             ? CORE_STRING_STATIC("bool")
         : n00bb_nil_spelling(first_token_text(node))
             ? CORE_STRING_STATIC("nil")
@@ -748,6 +747,8 @@ user_literal_kind(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return kind;
 }
 
+static bool builtin_litmod_name(core_string_t modifier, core_string_t kind);
+
 n00bb_litmod_site_t *
 n00bb_explicit_literal_site(parse_grammar_t *grammar,
                             core_translation_unit_t *unit, parse_tree_t *node)
@@ -763,15 +764,37 @@ n00bb_explicit_literal_site(parse_grammar_t *grammar,
     bool ambiguous = false;
     n00bb_user_litmod_t *registration = kind.data
         ? user_litmod(state, modifier, kind, &ambiguous) : nullptr;
-    if (!registration && ambiguous) {
+    // A fence with no modifier reads as `'string`; `'ffi` fences are
+    // module literals the driver handles before lowering.
+    bool fence = NT_IS(grammar, node, "embed-lit");
+    // With no literal kind there is nothing to check the modifier against.
+    bool unknown = kind.data && !registration && !ambiguous
+        && !builtin_litmod_name(modifier, kind)
+        && !(fence && (core_string_eq(modifier, CORE_STRING_STATIC("string"))
+                       || core_string_eq(modifier, CORE_STRING_STATIC("ffi"))));
+    if (!registration && (ambiguous || unknown)) {
+        n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
+        if (facts && facts->literal_modifier_rejected) return nullptr;
+        if (facts) facts->literal_modifier_rejected = true;
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
-        if (n00bb_report(diagnostics, unit,
-            N00B_DIAG_AMBIGUOUS_LITERAL_MODIFIER, link_source_location(node),
-            N00B_TEXT_LITERAL_MODIFIER_FOR_LITERALS_IS,
-            N00BB_ARGS(ARG_TEXT(modifier), ARG_TEXT(kind))))
-            n00bb_report_help(diagnostics, N00B_TEXT_IMPORT_ONLY_ONE_OF_THE,
-                N00BB_ARGS(ARG_TEXT(modifier)));
+        if (ambiguous) {
+            if (n00bb_report(diagnostics, unit,
+                N00B_DIAG_AMBIGUOUS_LITERAL_MODIFIER,
+                link_source_location(node),
+                N00B_TEXT_LITERAL_MODIFIER_FOR_LITERALS_IS,
+                N00BB_ARGS(ARG_TEXT(modifier), ARG_TEXT(kind))))
+                n00bb_report_help(diagnostics,
+                    N00B_TEXT_IMPORT_ONLY_ONE_OF_THE,
+                    N00BB_ARGS(ARG_TEXT(modifier)));
+        }
+        else
+            n00bb_report(diagnostics, unit,
+                N00B_DIAG_UNKNOWN_LITERAL_MODIFIER,
+                link_source_location(node),
+                N00B_TEXT_NO_LITERAL_MODIFIER_IS_DEFINED,
+                N00BB_ARGS(ARG_TEXT(modifier), ARG_TEXT(kind)));
+        return nullptr;
     }
     parse_sym_entry_t *function = registration
         ? n00bb_litmod_handler(registration) : nullptr;
@@ -2692,8 +2715,7 @@ n00bb_trivial_static_value(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     }
     if (NT_IS(grammar, node, "bool-lit")) {
         *out = (n00bb_static_value_t){.kind = N00BB_STATIC_VALUE_BOOL,
-            .as.boolean = core_string_eq(first_token_text(node),
-                                         CORE_STRING_STATIC("true"))};
+            .as.boolean = n00bb_true_spelling(first_token_text(node))};
         return true;
     }
     parse_token_info_t *token = node && core_tree_is_leaf(node)
@@ -3808,6 +3830,32 @@ n00bb_print_type(th_ctx *types, th_type *type)
     if (!types || !type) return CORE_STRING_STATIC("_");
     th_print_options_t options = {
         .named = short_type_name,
+        .sequence = CORE_STRING_STATIC("Array"),
+        .reference = CORE_STRING_STATIC("Ref"),
+        .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_nil_failure = true,
+        .source_spelling = true,
+    };
+    return th_print_with_options(types, type, &options);
+}
+
+// Builtin types are in scope everywhere under their short names, and their
+// qualified names (`builtin.containers.dict.Dict`) do not resolve.
+static core_string_t
+source_type_name(core_string_t name, void *context)
+{
+    name = object_of_shape(name, context);
+    return core_string_starts_with(name, CORE_STRING_STATIC("builtin."))
+        ? short_type_name(name, context) : name;
+}
+
+// Qualified, and spelled as source would write it (`Tuple[u8, u8]`), for
+// text the formatter puts back into a program.
+core_string_t
+n00bb_print_type_source(th_ctx *types, th_type *type)
+{
+    th_print_options_t options = {
+        .named = source_type_name,
         .sequence = CORE_STRING_STATIC("Array"),
         .reference = CORE_STRING_STATIC("Ref"),
         .option_suffix = CORE_STRING_STATIC("?"),
@@ -5813,6 +5861,13 @@ n00bb_node_literal_site(parse_tree_t *node)
     return facts ? facts->literal_site : nullptr;
 }
 
+bool
+n00bb_literal_modifier_rejected(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts && facts->literal_modifier_rejected;
+}
+
 th_type *
 n00bb_reference_definition(th_ctx *types, th_type *type)
 {
@@ -7519,6 +7574,14 @@ cache_package_export_syntax(parse_grammar_t *grammar,
             package_node = parent;
             break;
         }
+    // The grammar accepts `export` in any block, so a `when` inside a
+    // `package` block can hold one; anywhere else it is an error.
+    if (!package_node) {
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_EXPORT_OUTSIDE_PACKAGE, link_source_location(node),
+            N00B_TEXT_EXPORT_ONLY_IN_PACKAGE, N00BB_NO_ARGS);
+        return false;
+    }
     n00bb_package_declaration_t *package = nullptr;
     for (size_t i = 0; state && package_node
             && i < state->package_declarations.len; i++)
@@ -8369,16 +8432,6 @@ n00bb_literal_handler(core_string_t prefix, n00bb_literal_shape_t shape)
     return nullptr;
 }
 
-bool
-n00bb_literal_prefix_registered(core_string_t prefix)
-{
-    for (size_t i = 0; i < sizeof(N00BB_LITERAL_HANDLERS)
-                            / sizeof(N00BB_LITERAL_HANDLERS[0]); i++)
-        if (core_string_eq(prefix, N00BB_LITERAL_HANDLERS[i].prefix))
-            return true;
-    return false;
-}
-
 static parse_sym_entry_t *
 n00bb_litmod_handler(const n00bb_user_litmod_t *registration)
 {
@@ -8941,8 +8994,7 @@ literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
     if (NT_IS(grammar, parent, "nil-keyword"))
         return n00bb_nil_spelling(first_token_text(leaf));
     if (NT_IS(grammar, parent, "bool-lit"))
-        return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("true"))
-            || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("false"));
+        return n00bb_bool_spelling(first_token_text(leaf));
     if (NT_IS(grammar, parent, "embed-lit"))
         return core_string_eq(terminal, CORE_STRING_STATIC("EMBED"));
     if (NT_IS(grammar, parent, "list-lit"))

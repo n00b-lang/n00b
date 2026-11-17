@@ -1,0 +1,2 @@
+tests/diagnostics/tu/bitwise_signed_right.n:2:17: error N00B-T0592: `b` is `i8`, but bitwise operators work only on unsigned integers
+  help: convert it with `cast[u8](...)`

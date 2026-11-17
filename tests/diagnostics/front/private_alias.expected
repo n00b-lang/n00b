@@ -1,0 +1,5 @@
+tests/diagnostics/front/private_alias.n:2:5: warning N00B-N0024: `shown` is never used
+  help: remove it
+tests/diagnostics/front/private_alias.n:3:26: error N00B-N0004: `Hidden` is private to module `hidden_alias`
+  tests/diagnostics/modules/private_alias/hidden_alias.n:1:15: note: private `Hidden` is declared here
+  help: remove `private` from `Hidden` to use it from other modules

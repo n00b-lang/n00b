@@ -1953,6 +1953,117 @@ declared_callee_location(ir_lower_context_t *context, const ir_func_t *callee,
     return at;
 }
 
+// For `f()!` where `f` cannot fail but returns an option: explain that `!`
+// passes failures along rather than unwrapping. False when the call's
+// result isn't an option.
+static bool
+infallible_option_help(ir_lower_context_t *context, core_string_t name,
+                       th_type *result)
+{
+    if (!result || !th_option_item(th_resolve(result))) return false;
+    n00bb_report_note(lower_diagnostics(context),
+        N00B_TEXT_CALL_RETURNS_OPTION,
+        N00BB_ARGS(ARG_TEXT(name),
+                   ARG_TEXT(lower_type_text(context, result))));
+    lower_help(context, N00B_TEXT_SAVE_THE_OPTION_FIRST, N00BB_NO_ARGS);
+    return true;
+}
+
+// `x!` on an option: the item when `x` holds one; otherwise fail with
+// `nil`, which needs an option failure type (or an enclosing `try`).
+static bool
+unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
+              ir_value_t *option, th_type *item, ir_span_t span,
+              ir_value_t **success)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *failure = lower && lower->function_symbol
+        ? th_func_error(lower->function_symbol->type) : nullptr;
+    failure = failure ? th_resolve(failure) : nullptr;
+    // The `try` whose handler a failure here goes to, as
+    // n00bb_route_try_error finds it.
+    n00bb_try_frame_t *frame = nullptr;
+    for (size_t i = lower ? lower->tries.len : 0; i > 0 && !frame; i--)
+        if (lower->tries.data[i - 1].active && lower->tries.data[i - 1].in_body)
+            frame = &lower->tries.data[i - 1];
+    bool in_try = frame != nullptr;
+    bool accepts = failure && !th_is_nil(failure)
+        && (th_kind_of(failure) == TH_VAR || th_option_item(failure));
+    parse_tree_t *operand = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    core_string_t text = operand
+        ? source_text_of(lower_unit(context), operand)
+        : CORE_STRING_STATIC("this value");
+    if (frame && !frame->routes_nil) {
+        frame->routes_nil = true;
+        frame->nil_text = text;
+        frame->nil_span = span;
+    }
+    if (!in_try && !accepts) {
+        if (failure && !th_is_nil(failure))
+            lower_report(context, N00B_DIAG_PROPAGATE_OPTION_NIL, span,
+                N00B_TEXT_OPTION_BANG_NEEDS_NIL_FAILURE,
+                N00BB_ARGS(ARG_TEXT(text),
+                           ARG_TEXT(lower_type_text(context, failure))));
+        else
+            lower_report(context, N00B_DIAG_PROPAGATE_OPTION_NIL, span,
+                N00B_TEXT_OPTION_BANG_FUNCTION_CANNOT_FAIL,
+                N00BB_ARGS(ARG_TEXT(text)));
+        lower_help(context, N00B_TEXT_DECLARE_AN_OPTION_FAILURE_TYPE,
+                   N00BB_NO_ARGS);
+        return false;
+    }
+    th_type *bool_type = th_name(types, CORE_STRING_STATIC("bool"));
+    ir_value_t *present = option_present(context, option, bool_type, span);
+    uint64_t block_id = context->next_value_id++;
+    char ok_buffer[48], nil_buffer[48];
+    ir_block_t *ok_block = ir_block_add(context->function,
+        n00bb_format_name(ok_buffer, sizeof(ok_buffer),
+            "__n00bb_unwrap_some_%llu", (unsigned long long)block_id));
+    ir_block_t *nil_block = ir_block_add(context->function,
+        n00bb_format_name(nil_buffer, sizeof(nil_buffer),
+            "__n00bb_unwrap_nil_%llu", (unsigned long long)block_id));
+    ir_instr_t *branch = present && ok_block && nil_block
+        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+    if (!branch || !ir_instr_operand_value(branch, present)
+        || !ir_instr_operand_block(branch, ok_block)
+        || !ir_instr_operand_block(branch, nil_block))
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not branch on the option");
+    branch->span = span;
+
+    context->block = nil_block;
+    ir_instr_t *nil = ir_lower_emit_instruction(context, IR_OP_NIL, span);
+    if (!nil || !ir_lower_set_temp_dest(context, nil,
+            CORE_STRING_STATIC("__n00bb_"), th_nil(types))
+        || !n00bb_emit_with_failure(context, visit->node))
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not fail with nil");
+    int routed = n00bb_route_try_error(context, nil->dest, span);
+    if (routed < 0) return false;
+    if (!routed) {
+        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
+        if (!fail || !ir_instr_operand_value(fail, nil->dest))
+            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                "could not fail with nil");
+        fail->span = span;
+        context->reachable = false;
+    }
+
+    context->block = ok_block;
+    context->reachable = true;
+    ir_instr_t *get = ir_lower_emit_instruction(context, IR_OP_OPTION_GET,
+                                                span);
+    if (!get || !ir_lower_set_temp_dest(context, get,
+            CORE_STRING_STATIC("__n00bb_"), item)
+        || !ir_instr_operand_value(get, option))
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "could not take the option's item");
+    if (success) *success = get->dest;
+    return true;
+}
+
 bool
 n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *outcome, ir_span_t span,
@@ -1982,6 +2093,11 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                                    lower_unit(context), declared,
                                    N00B_TEXT_IS_DECLARED_HERE,
                                    N00BB_ARGS(ARG_TEXT(name)));
+        // `f()!` on a call that returns an option: `!` doesn't unwrap a
+        // call's option, so say how to get at the value instead. Stop here,
+        // or the option flowing on as its item reports a second error.
+        if (infallible_option_help(context, name, outcome->type))
+            return false;
         lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
         if (success) *success = outcome;
         return true;
@@ -1996,10 +2112,17 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                      N00BB_ARGS(ARG_TEXT(infallible->name)));
         n00bb_diag_declared_here(lower_diagnostics(context), infallible,
                                  N00B_TEXT_IS_DECLARED_HERE);
-        lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
+        if (!infallible_option_help(context, infallible->name,
+                                    outcome ? outcome->type : nullptr))
+            lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
         return false;
     }
     if (!complete && ir_diags_failed(context->diagnostics)) return false;
+    th_type *option_item = !complete && outcome && outcome->type
+        ? th_option_item(th_resolve(outcome->type)) : nullptr;
+    if (option_item)
+        return unwrap_option(context, visit, outcome, option_item, span,
+                             success);
     if (!complete)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "failure propagation has no complete call outcome");

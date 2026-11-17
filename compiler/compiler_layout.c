@@ -95,9 +95,14 @@ inline_layout_cycle(ir_module_t *module, th_type *type, core_string_t via,
     if (th_kind_of(type) == TH_NAMED) {
         th_type *definition = ir_type_definition(module, type);
         size_t argument_count = th_named_nargs(type);
-        bool inline_wrapper = th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC;
+        // An option stores its item inline (see publish_option_layout),
+        // so `record R { next: R? }` contains itself just as `R` would.
+        bool inline_wrapper = th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC
+            || th_builtin_kind_of(type) == TH_BUILTIN_OPTION;
         if (!definition && !inline_wrapper) return false;
-        for (size_t i = 0; i < active->len; i++) {
+        // Every cycle passes through a defined type, so report it there
+        // rather than at a wrapper such as `R?`.
+        for (size_t i = 0; definition && i < active->len; i++) {
             if (active->data[i] != type) continue;
             core_string_t printed = n00bb_print_type(
                 ir_module_types(module), type);

@@ -21,3 +21,11 @@ func range_out_of_bounds(start: int, end: int, length: uint,
 func os_failure(message: string, code: int) {
     __report_failure(failure_os, unsafe_cast[u64] code, 0, 0, message)
 }
+
+private const failure_unreachable: u32 = 3
+
+# Marks code that can never run; reaching it stops the program.
+func unreachable() {
+    __report_failure(failure_unreachable, 0, 0, 0,
+                     "reached code marked `unreachable()`")
+}

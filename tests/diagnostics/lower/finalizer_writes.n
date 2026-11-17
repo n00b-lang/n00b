@@ -1,0 +1,25 @@
+# A finalizer may write any field of the value it finalizes, and its
+# writes into other objects are ordinary writes: neither is an error.
+object Owner {
+    live: int
+}
+
+object Handle {
+    count: int
+    owner: Owner
+}
+
+func __init(self: Handle, owner: Owner) {
+    self.count = 1
+    self.owner = owner
+    owner.live += 1
+}
+
+func __finalize(consume self: Ref[Handle]) {
+    self.__value.count = 0
+    self.__value.owner.live -= 1
+}
+
+func make(owner: Owner) -> Handle {
+    return new[Handle](owner)
+}

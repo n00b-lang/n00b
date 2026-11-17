@@ -1,0 +1,3 @@
+tests/diagnostics/tu/generic_init_used.n:9:6: warning N00B-N0019: function `unused_generic` is never called
+  help: call it or delete it
+tests/diagnostics/tu/generic_init_used.n:9:21: note N00B-S0064: parameter `x` could be `view`: `unused_generic` never writes anything reachable from it

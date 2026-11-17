@@ -159,7 +159,6 @@ typedef struct {
 } n00bb_literal_registration_t;
 const n00bb_literal_registration_t *n00bb_literal_handler(
     core_string_t prefix, n00bb_literal_shape_t shape);
-bool n00bb_literal_prefix_registered(core_string_t prefix);
 bool register_user_litmod(void *context, core_translation_unit_t *unit,
                           parse_tree_t *declaration,
                           core_string_t modifier, core_string_t kind);
@@ -349,6 +348,8 @@ typedef struct {
     size_t last_link_use_site;
     bool static_literal;
     bool selected_when_body;
+    // The literal's modifier was unknown or ambiguous, and was reported.
+    bool literal_modifier_rejected;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -898,6 +899,9 @@ bool callback_protocol_name(core_string_t type_name, core_string_t marker,
 n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
 n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
+// True when the literal's modifier was unknown or ambiguous; the error is
+// already reported, so lowering should stop rather than drop the modifier.
+bool n00bb_literal_modifier_rejected(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_explicit_literal_site(parse_grammar_t *grammar,
                                                  core_translation_unit_t *unit,
                                                  parse_tree_t *node);
@@ -959,6 +963,7 @@ bool simple_identifier_expression(parse_grammar_t *grammar,
                                   parse_tree_t *node, core_string_t *name);
 core_string_t n00bb_print_type(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_qualified(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_source(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_for_user(th_ctx *types, th_type *type);
 core_string_t n00bb_hide_reserved_segments(core_string_t printed);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
@@ -1115,6 +1120,27 @@ first_token_text(parse_tree_t *node)
         ? parse_token_value(token) : core_option_none(core_string_t);
     return core_option_is_set(value) ? core_option_get(value)
                                      : (core_string_t){0};
+}
+
+// Boolean literal spellings, including the `True` / `False` syntax skin.
+static inline bool
+n00bb_true_spelling(core_string_t spelling)
+{
+    return core_string_eq(spelling, CORE_STRING_STATIC("true"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("True"));
+}
+
+static inline bool
+n00bb_false_spelling(core_string_t spelling)
+{
+    return core_string_eq(spelling, CORE_STRING_STATIC("false"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("False"));
+}
+
+static inline bool
+n00bb_bool_spelling(core_string_t spelling)
+{
+    return n00bb_true_spelling(spelling) || n00bb_false_spelling(spelling);
 }
 
 static inline bool

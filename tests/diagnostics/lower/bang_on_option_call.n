@@ -1,0 +1,7 @@
+func lookup(k: int) -> int? {
+    if k > 0 { return k }
+    return nil
+}
+func use() -> int fail: string? {
+    return lookup(3)!
+}

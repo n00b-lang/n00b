@@ -277,6 +277,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
         ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node) : nullptr;
+    if (!site && n00bb_literal_modifier_rejected(visit->node)) return false;
     if (site) {
         if ((lower->has_active_literal
                 && lower->active_literal.node == visit->node)
@@ -568,11 +569,8 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (user_site)
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
-    if (modifier.data && !registration
-        && !n00bb_literal_prefix_registered(modifier))
-        return lower_report(context, N00B_DIAG_UNKNOWN_LITERAL_MODIFIER, span,
-            N00B_TEXT_NO_LITERAL_MODIFIER_IS_DEFINED,
-            N00BB_ARGS(ARG_TEXT(modifier)));
+    if (n00bb_literal_modifier_rejected(visit->node))
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     if (!result_type)
         return lower_internal(context, span,
                               "string literal has no inferred result type");
@@ -797,6 +795,8 @@ n00bb_lower_sequence_literal(ir_lower_context_t *context,
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_litmod_site_t *site = tu
         ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node) : nullptr;
+    if (!site && n00bb_literal_modifier_rejected(visit->node))
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     return site
         ? n00bb_lower_user_literal(context, visit, site, result_type, span)
         : n00bb_lower_sequence_aggregate(context, visit, operands,
@@ -860,6 +860,8 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     if (site)
         return n00bb_lower_user_literal(context, visit, site,
                                         result_type, span);
+    if (n00bb_literal_modifier_rejected(visit->node))
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     return n00bb_lower_open_brace_literal(context, visit, result_type, span);
 }
 
@@ -1096,8 +1098,8 @@ user_literal_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? parse_token_value(token) : core_option_none(core_string_t);
         core_string_t spelling = core_option_is_set(literal)
             ? core_option_get(literal) : (core_string_t){0};
-        bool value = core_string_eq(spelling, CORE_STRING_STATIC("true"));
-        if (value || core_string_eq(spelling, CORE_STRING_STATIC("false"))) {
+        bool value = n00bb_true_spelling(spelling);
+        if (value || n00bb_false_spelling(spelling)) {
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_CONST, span);
             if (constant && ir_lower_set_temp_dest(context, constant,
@@ -1381,6 +1383,8 @@ n00bb_lower_scalar_litmod(ir_lower_context_t *context, parse_visit_t *visit,
             && (scalar || fence)
         ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node)
         : nullptr;
+    if (!site && visit->node && n00bb_literal_modifier_rejected(visit->node))
+        return false;
     if (!site || !context->reachable
         || ir_lower_node_value(context, visit->node)) return true;
     ir_lower_result_t result = n00bb_lower_user_literal(context, visit, site,

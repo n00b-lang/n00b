@@ -1,0 +1,2 @@
+tests/diagnostics/build/start_signature_fail.n:1:1: error N00B-B0105: `main` must take no parameters, return nil and not fail, but it is `() -> nil fail: string`
+  help: declare it as `func main() -> nil`

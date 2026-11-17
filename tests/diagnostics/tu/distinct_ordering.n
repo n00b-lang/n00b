@@ -1,0 +1,4 @@
+type Meters = int
+func f(a: Meters, b: Meters) -> bool {
+    return a < b
+}

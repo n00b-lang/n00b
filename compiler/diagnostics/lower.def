@@ -122,8 +122,9 @@ N00B_DIAG(TOP_LEVEL_FAILURE, "N00B-S0027", ERROR,
     "propagated with `!`. Handle it with `try`, or move the code into a\n"
     "function that declares a failure type.")
 N00B_DIAG(DUPLICATE_SWITCH_CASE, "N00B-S0030", ERROR,
-    "a `switch` handles the same arm twice",
-    "Each arm can appear in only one `case`. Remove or merge the duplicate.")
+    "a `switch` handles the same arm or value twice",
+    "Each arm or value can appear in only one `case`; the first match wins,\n"
+    "so a later duplicate never runs. Remove or merge the duplicate.")
 N00B_DIAG(SUBJECT_NOT_VARIABLE, "N00B-S0031", ERROR,
     "a `typecase` or variant `switch` subject is not a variable",
     "`typecase` and `switch` on a variant narrow their subject inside each\n"
@@ -269,11 +270,12 @@ N00B_DIAG(REFERENCE_ADDRESS_ESCAPES, "N00B-S0070", ERROR,
     "out. That address is only valid while the access lasts, so it can be\n"
     "passed directly to a call, but not stored or returned.")
 N00B_DIAG(BOOKKEEPING_WRITE, "N00B-S0071", ERROR,
-    "`__ref_create` or `__finalize` writes visible state",
-    "Taking a reference and finalizing a value don't count as writes to the\n"
-    "value, so `__ref_create` and `__finalize` may only update private\n"
-    "bookkeeping fields of their own type. Make the field private, or move\n"
-    "the change out of the hook.")
+    "`__ref_create` writes visible state",
+    "Taking a reference doesn't count as a write to the value, so\n"
+    "`__ref_create` may only update private bookkeeping fields of its own\n"
+    "type. Make the field private, or move the change out of the hook.\n"
+    "(`__finalize` has no such limit: nothing sees the fields of a value\n"
+    "being finalized, and its writes to other objects count as writes.)")
 N00B_DIAG(LEASE_STORAGE, "N00B-S0088", ERROR,
     "a lease's array is shared outside its owner",
     "The analysis treats the array in a `Leasable` or `Lease` as owned by\n"
@@ -582,3 +584,15 @@ N00B_DIAG(LET_ARRAY_UNSIZED, "N00B-S0099", ERROR,
     "elements. So every assignment must give the same length, one the\n"
     "compiler can see, such as an array literal's. Assign it on every path\n"
     "before it is read, give it a size, or assign arrays of one known length.")
+N00B_DIAG(INTEGER_LITERAL_TOO_LARGE, "N00B-S0101", ERROR,
+    "an integer literal is larger than any integer type",
+    "The widest integer types are 128 bits: `u128` holds values up to\n"
+    "2^128 - 1 (340282366920938463463374607431768211455), and `i128` from\n"
+    "-2^127 to 2^127 - 1. Use a smaller value, or keep a value this large as\n"
+    "a string or in a big-number type.")
+N00B_DIAG(PROPAGATE_OPTION_NIL, "N00B-S0100", ERROR,
+    "`!` on an option needs a function that can fail with `nil`",
+    "A trailing `!` on an option gives its value when it holds one, and\n"
+    "otherwise fails with `nil`. That needs the function's failure type to\n"
+    "be an option, as in `fail: string?`. Change the failure type, or test\n"
+    "the option against `nil` instead.")

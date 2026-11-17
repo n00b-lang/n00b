@@ -852,17 +852,70 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                         core_string_t method, ir_value_t *left,
                         ir_value_t *right)
 {
+    // `from_bits` takes its `u128` as is; widening it would be wrong.
+    if (right && core_string_eq(method, CORE_STRING_STATIC("from_bits")))
+        return n00bb_emit_primitive(&rewrite->context, method,
+                                    in->dest->type, left, right, in->span);
     const n00bb_binary_operator_t *binary = right
         ? n00bb_binary_operator_method(method) : nullptr;
+    // An integer operand of a float operation (typing chose the float's
+    // type for it) converts to that float, rounding to nearest.
+    ir_class_t left_class = ir_machine_of(rewrite->context.module,
+                                          left->type).class;
+    ir_class_t right_class = right ? ir_machine_of(rewrite->context.module,
+                                                   right->type).class
+                                   : IR_CLASS_VOID;
+    bool left_integer = left_class == IR_CLASS_SINT
+        || left_class == IR_CLASS_UINT;
+    bool right_integer = right_class == IR_CLASS_SINT
+        || right_class == IR_CLASS_UINT;
+    if (right && ((left_class == IR_CLASS_FLOAT && right_integer)
+                  || (right_class == IR_CLASS_FLOAT && left_integer))) {
+        ir_value_t **integer = left_integer ? &left : &right;
+        th_type *real = left_integer ? right->type : left->type;
+        ir_instr_t *cast = ir_lower_emit_instruction(&rewrite->context,
+                                                     IR_OP_CAST, in->span);
+        if (!cast || !ir_lower_set_temp_dest(&rewrite->context, cast,
+                CORE_STRING_STATIC("__n00bb_"), real)
+            || !ir_instr_operand_value(cast, *integer)
+            || !ir_instr_add_mod(cast, CORE_STRING_STATIC("nearest")))
+            return nullptr;
+        *integer = cast->dest;
+    }
     if (binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR)
         && is_integer_type(left->type) && is_integer_type(right->type)) {
         right = n00bb_rewrite_shift_count(rewrite, in, left->type, right);
         if (!right) return nullptr;
     }
     else if (right && is_integer_type(left->type)
-             && is_integer_type(right->type))
-        right = n00bb_widen_integer_operand(&rewrite->context, right,
-                                            left->type, in->span);
+             && is_integer_type(right->type)) {
+        // Operands of different integer types run at the type holding
+        // both (n00bb_integer_promotion): neither is ever narrowed.
+        th_type *promoted = n00bb_integer_promotion(
+            ir_module_types(rewrite->context.module), left->type,
+            right->type);
+        if (promoted) {
+            left = n00bb_widen_integer_operand(&rewrite->context, left,
+                                               promoted, in->span);
+            right = n00bb_widen_integer_operand(&rewrite->context, right,
+                                                promoted, in->span);
+            if (!left || !right) return nullptr;
+            // Arithmetic runs at the promoted type; a smaller declared
+            // destination gets a checked conversion of the result.
+            if (binary && is_integer_type(in->dest->type)
+                && !ir_type_eq(rewrite->context.module, in->dest->type,
+                               promoted)) {
+                ir_value_t *wide = n00bb_emit_primitive(&rewrite->context,
+                    method, promoted, left, right, in->span);
+                return wide ? n00bb_widen_integer_operand(&rewrite->context,
+                                  wide, in->dest->type, in->span)
+                            : nullptr;
+            }
+        }
+        else
+            right = n00bb_widen_integer_operand(&rewrite->context, right,
+                                                left->type, in->span);
+    }
     if (right && core_string_eq(method, CORE_STRING_STATIC("__cmp")))
         return n00bb_rewrite_three_way(rewrite, in, left, right);
     return n00bb_emit_primitive(&rewrite->context, method, in->dest->type,
@@ -2012,6 +2065,36 @@ n00bb_rewrite_equal_by_cmp(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && n00bb_rewrite_dispatch(rewrite, compare);
 }
 
+// `==` on a distinct type compares the values as the type it was made from.
+static bool
+n00bb_rewrite_distinct_equal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             ir_value_t *left, ir_value_t *right)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    th_type *shape = n00bb_distinct_underlying(
+        ir_module_types(context->module), left->type);
+    ir_value_t *operands[2] = {left, right};
+    for (size_t i = 0; shape && i < 2; i++) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context,
+            IR_OP_NOMINAL_CAST, in->span);
+        if (!cast || !ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_distinct_"), shape)
+            || !ir_instr_operand_value(cast, operands[i]))
+            return false;
+        operands[i] = cast->dest;
+    }
+    ir_instr_t *equal = shape
+        ? ir_lower_emit_instruction(context, IR_OP_DISPATCH, in->span)
+        : nullptr;
+    bool ok = equal && ir_lower_set_temp_dest(context, equal,
+            CORE_STRING_STATIC("__n00bb_equal_"), in->dest->type)
+        && ir_instr_operand_name(equal, CORE_STRING_STATIC("__equal"))
+        && ir_instr_operand_value(equal, operands[0])
+        && ir_instr_operand_value(equal, operands[1]);
+    return ok && n00bb_rewrite_replace(rewrite, in, equal->dest)
+        && n00bb_rewrite_dispatch(rewrite, equal);
+}
+
 static bool
 n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
@@ -2158,7 +2241,8 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         return n00bb_rewrite_callback(rewrite, in, receiver_type);
     if (target.kind == N00BB_TARGET_TRAIT)
         return n00bb_rewrite_trait_call(rewrite, in, method, &target);
-    if (target.kind == N00BB_TARGET_ENUM && other)
+    if ((target.kind == N00BB_TARGET_ENUM
+         || target.kind == N00BB_TARGET_PRIMITIVE) && other)
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_primitive(rewrite, in, method, receiver, other));
     if (target.kind == N00BB_TARGET_FLAGSET && other)
@@ -2166,6 +2250,8 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             n00bb_rewrite_flagset(rewrite, in, method, receiver, other));
     if (target.kind == N00BB_TARGET_EQUAL_BY_CMP && other)
         return n00bb_rewrite_equal_by_cmp(rewrite, in, receiver, other);
+    if (target.kind == N00BB_TARGET_DISTINCT_EQUAL && other)
+        return n00bb_rewrite_distinct_equal(rewrite, in, receiver, other);
     if (th_kind_of(receiver_type) != TH_VAR) return false;
     n00bb_report_unknown_method(rewrite, in, method, receiver,
                                 receiver_type);

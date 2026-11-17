@@ -110,7 +110,7 @@ func stack_address() -> uint {
 # The bytes below the stack pointer that a function may use without moving
 # it, which the platform's ABI promises signal handlers leave alone.
 func stack_red_zone_bytes() -> uint {
-    when target_arch() == "x86" and target_os() != "windows" {
+    when target_arch() == "x86_64" and target_os() != "windows" {
         return 128
     } else when target_os() == "macos" {
         return 128

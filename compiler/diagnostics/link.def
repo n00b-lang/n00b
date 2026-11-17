@@ -194,8 +194,9 @@ N00B_DIAG(NO_TRAIT_PROVIDES, "N00B-T0017", ERROR,
     "a dispatched call names something no trait of the value's type provides",
     "`value.name(...)` dispatches through the traits the value's type\n"
     "implements, and none of them provides `name`. Check the spelling, or\n"
-    "implement a trait that provides it. Plain functions are called as\n"
-    "`name(value)`.")
+    "implement a trait that provides it. A plain function can also be\n"
+    "called this way, as long as one named `name` is visible here and its\n"
+    "first parameter accepts the value.")
 N00B_DIAG(GENERIC_MISSING_IMPLEMENTATION, "N00B-T0021", ERROR,
     "a generic function is used with a type that lacks a trait it needs",
     "A generic function can require traits of its type parameters, either\n"

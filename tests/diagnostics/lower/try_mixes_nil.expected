@@ -1,0 +1,2 @@
+tests/diagnostics/lower/try_mixes_nil.n:8:16: error N00B-T1008: `x!` fails with `nil` when `x` is `nil`, but the other failures in this `try` are `string`, so the handler's `e` can't hold both
+  help: check `x` against `nil` before the `try`, or write `fail ()` if the handler doesn't need the error

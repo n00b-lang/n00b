@@ -24,6 +24,8 @@ typedef enum : uint8_t {
     N00BB_TARGET_ASSIGN,
     N00BB_TARGET_PRIMITIVE,
     N00BB_TARGET_ZEROED,
+    // `==` on a distinct type: the underlying type's equality.
+    N00BB_TARGET_DISTINCT_EQUAL,
 } n00bb_target_kind_t;
 
 typedef struct {
@@ -36,6 +38,14 @@ typedef struct {
 } n00bb_dispatch_target_t;
 
 bool n00bb_reference_dispatch(core_string_t method, bool *writable);
+// The type a built-in integer operation on operands of these two types runs
+// at: the smallest holding both, stopping at 64 bits unless one is 128-bit.
+// Null when they are the same type, or either is not a promotable integer.
+th_type *n00bb_integer_promotion(th_ctx *types, th_type *left,
+                                 th_type *right);
+// The type a distinct type (`type Meters = int`) was made from, or null
+// when `type` is not a distinct type.
+th_type *n00bb_distinct_underlying(th_ctx *types, th_type *type);
 th_type *n00bb_integer_fit(th_ctx *types, __int128 value);
 core_string_t n00bb_value_text(core_translation_unit_t *unit,
                                const ir_value_t *value, ir_span_t within);

@@ -1,0 +1,10 @@
+let a = true
+let b = True
+switch 3 {
+    case 1 { pass }
+    else { pass }
+}
+switch 2 {
+    case 1 { pass }
+    default { pass }
+}

@@ -1,0 +1,12 @@
+tests/diagnostics/front/syntax_skins.n:1:5: warning N00B-N0024: `a` is never used
+  help: remove it
+tests/diagnostics/front/syntax_skins.n:2:5: warning N00B-N0024: `b` is never used
+  help: remove it
+tests/diagnostics/front/syntax_skins.n:2:9: warning N00B-P0011: inconsistent spelling for boolean literals: `True` here, but `true` elsewhere in this file
+  tests/diagnostics/front/syntax_skins.n:1:9: note: `true` is used here
+  help: use one spelling for boolean literals throughout the file
+tests/diagnostics/front/syntax_skins.n:4:10: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/front/syntax_skins.n:8:10: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/front/syntax_skins.n:9:5: warning N00B-P0011: inconsistent spelling for default cases: `default` here, but `else` elsewhere in this file
+  tests/diagnostics/front/syntax_skins.n:5:5: note: `else` is used here
+  help: use one spelling for default cases throughout the file

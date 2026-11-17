@@ -1,0 +1,5 @@
+tests/diagnostics/lower/finalizer_writes.n:8:5: warning N00B-N0021: field `count` of `Handle` is set but never read
+tests/diagnostics/lower/finalizer_writes.n:12:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/finalizer_writes.n:23:6: warning N00B-N0019: function `make` is never called
+  help: call it or delete it

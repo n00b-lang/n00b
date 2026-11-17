@@ -1,0 +1,5 @@
+func f() -> int {
+    let y = 3
+    export y
+    return y
+}

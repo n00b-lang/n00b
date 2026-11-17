@@ -1055,6 +1055,12 @@ n00bb_route_try_error(ir_lower_context_t *context, ir_value_t *error,
         }
     }
     if (!frame) return 0;
+    th_type *failure = error && error->type ? th_resolve(error->type)
+                                            : nullptr;
+    if (failure && !frame->other_failure && !th_is_nil(failure)
+        && !th_option_item(failure)
+        && th_kind_of(failure) != TH_VAR)
+        frame->other_failure = failure;
     if (frame->error_symbol
         && !n00bb_store_try_error(context, lower, frame, error, span))
         return -1;
@@ -1214,6 +1220,20 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (frame->body != visit->node) return true;
         frame->in_body = false;
         if (!frame->active) return true;
+        // `x!` sent this handler `nil`, and something else sent it a
+        // failure `nil` doesn't fit; a handler that names the error can't
+        // hold both.
+        if (frame->routes_nil && frame->other_failure
+            && frame->error_symbol) {
+            lower_report(context, N00B_DIAG_TRY_FAILURE_TYPES_DIFFER,
+                frame->nil_span, N00B_TEXT_TRY_MIXES_NIL_AND_FAILURE,
+                N00BB_ARGS(ARG_TEXT(frame->nil_text),
+                    ARG_TEXT(lower_type_text(context, frame->other_failure)),
+                    ARG_TEXT(frame->error_symbol->name)));
+            lower_help(context, N00B_TEXT_TRY_MIXES_NIL_AND_FAILURE_HELP,
+                N00BB_ARGS(ARG_TEXT(frame->nil_text)));
+            return false;
+        }
         if (context->reachable) {
             if (frame->expression
                 && !n00bb_store_try_value(context, frame, visit->grammar,
@@ -2816,8 +2836,7 @@ n00bb_switch_test(ir_lower_context_t *context, n00bb_lower_context_t *lower,
             : core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))
                 ? CORE_STRING_STATIC("`f64`")
             :
-            core_string_eq(text, CORE_STRING_STATIC("true"))
-                || core_string_eq(text, CORE_STRING_STATIC("false"))
+            n00bb_bool_spelling(text)
                 ? CORE_STRING_STATIC("a boolean")
             : n00bb_switch_case_is_char(lower->grammar, pattern->node)
                 ? CORE_STRING_STATIC("a character")

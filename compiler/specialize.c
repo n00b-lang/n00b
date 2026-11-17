@@ -1115,7 +1115,13 @@ lower_primitive_trait_call(const n00bb_trait_binder_t *binder,
         return false;
     bool flagset = binder && binder->flagset
         && binder->flagset(binder->context, receiver->type);
-    if (!flagset && !n00bb_primitive_operator(
+    // `Integer.from_bits` on `i:N` / `u:N` has no body; it is a cast.
+    th_bitint_flavor flavor = TH_BITINT_BITS;
+    bool bit_integer_from_bits = !flagset
+        && core_string_eq(method, CORE_STRING_STATIC("from_bits"))
+        && th_bitint_info(th_resolve(receiver->type), nullptr, &flavor)
+        && flavor != TH_BITINT_BITS;
+    if (!flagset && !bit_integer_from_bits && !n00bb_primitive_operator(
             ir_machine_of(module, receiver->type).class, method))
         return false;
     bool compare = !flagset

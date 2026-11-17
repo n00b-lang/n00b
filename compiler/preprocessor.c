@@ -47,6 +47,8 @@ typedef enum {
     PP_STYLE_BLOCK,
     PP_STYLE_RECORD,
     PP_STYLE_RETURN,
+    PP_STYLE_BOOL,
+    PP_STYLE_CASE_DEFAULT,
     PP_STYLE_SET_COUNT,
 } pp_style_set_t;
 
@@ -81,6 +83,10 @@ static const pp_spelling_info_t pp_spellings[PP_SPELL_COUNT] = {
     [PP_SPELL_STRUCT]       = {PP_STYLE_RECORD, S("record"), S("struct"), S("record declarations"), false},
     [PP_SPELL_ARROW]        = {PP_STYLE_RETURN, S("return-type"), S("->"), S("function return types"), true},
     [PP_SPELL_RETURN_COLON] = {PP_STYLE_RETURN, S("return-type"), S("return:"), S("function return types"), false},
+    [PP_SPELL_TRUE]         = {PP_STYLE_BOOL, S("bool"), S("true"), S("boolean literals"), true},
+    [PP_SPELL_PY_TRUE]      = {PP_STYLE_BOOL, S("bool"), S("True"), S("boolean literals"), false},
+    [PP_SPELL_CASE_ELSE]    = {PP_STYLE_CASE_DEFAULT, S("case-default"), S("else"), S("default cases"), true},
+    [PP_SPELL_CASE_DEFAULT] = {PP_STYLE_CASE_DEFAULT, S("case-default"), S("default"), S("default cases"), false},
 };
 #undef S
 
@@ -260,6 +266,16 @@ decode_quoted_literal(core_string_t raw, char quote, core_buffer_t *buffer)
         case '\\': core_buffer_putc(buffer, '\\'); break;
         case '"': core_buffer_putc(buffer, '"'); break;
         case '\'': core_buffer_putc(buffer, '\''); break;
+        // The lexer's `escape_literal` set: the escaped character itself.
+        // `«` (C2 AB) and `»` (C2 BB) are two bytes in UTF-8.
+        case '[': core_buffer_putc(buffer, '['); break;
+        case 0xc2:
+            if (i + 2 >= raw.u8_bytes) goto invalid;
+            if ((unsigned char)raw.data[i + 1] != 0xab
+                && (unsigned char)raw.data[i + 1] != 0xbb) goto invalid;
+            core_buffer_append(buffer, raw.data + i, 2);
+            i++;
+            break;
         case 'x':
         case 'u':
         case 'U': {
@@ -904,9 +920,14 @@ find_external_definition(pp_context_t *ctx, core_string_t name,
         core_string_t definition = ctx->options->definitions[i - 1];
         int64_t equals = definition.data
             ? core_string_find_byte(definition, '=') : -1;
-        if (equals < 0
-            || !core_string_eq(core_string_slice(definition, 0,
-                                                 (size_t)equals), name))
+        // A bare `-D NAME` defines NAME as `true`.
+        if (equals < 0) {
+            if (!core_string_eq(definition, name)) continue;
+            *raw = CORE_STRING_STATIC("true");
+            return true;
+        }
+        if (!core_string_eq(core_string_slice(definition, 0,
+                                              (size_t)equals), name))
             continue;
         *raw = core_string_slice(definition, (size_t)equals + 1,
                                  definition.u8_bytes - (size_t)equals - 1);
@@ -997,21 +1018,20 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             pp_internal(ctx, node, "could not decode a string literal");
             return false;
         }
-        if (core_string_eq(terminal, CORE_STRING_STATIC("true"))
-            || core_string_eq(terminal, CORE_STRING_STATIC("false"))) {
+        if (n00bb_bool_spelling(terminal)) {
             *out = (pp_value_t){.kind = PP_BOOL,
-                .as.boolean = core_string_eq(terminal, CORE_STRING_STATIC("true"))};
+                .as.boolean = n00bb_true_spelling(terminal)};
             return true;
         }
         return false;
     }
     if (is_name(ctx->grammar, node, "bool-lit")) {
         core_string_t value = first_leaf_text(ctx, node);
-        if (core_string_eq(value, CORE_STRING_STATIC("true"))) {
+        if (n00bb_true_spelling(value)) {
             *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = true};
             return true;
         }
-        if (core_string_eq(value, CORE_STRING_STATIC("false"))) {
+        if (n00bb_false_spelling(value)) {
             *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = false};
             return true;
         }
@@ -1202,8 +1222,7 @@ const_literal_kind(pp_context_t *ctx, parse_tree_t *node)
             return PP_FLOAT;
         if (core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT")))
             return PP_STRING;
-        if (core_string_eq(terminal, CORE_STRING_STATIC("true"))
-            || core_string_eq(terminal, CORE_STRING_STATIC("false")))
+        if (n00bb_bool_spelling(terminal))
             return PP_BOOL;
         return PP_INVALID;
     }
@@ -1370,9 +1389,12 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("target_arch"))) {
-        if (core_string_starts_with(target.triple,
-                CORE_STRING_STATIC("x86_64-"))) PP_STRING("x86");
-        PP_STRING("arm");
+        // Triples are `arch-os` (`arm64-macos`, `x86_64-linux`).
+        int64_t dash = core_string_find_byte(target.triple, '-');
+        size_t length = dash < 0 ? target.triple.u8_bytes : (size_t)dash;
+        *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx,
+            core_string_dup(core_string_slice(target.triple, 0, length)))};
+        return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("target_alu")))
         PP_INT(target.alu_bits);
@@ -1974,7 +1996,9 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         S("tuple-or-paren"), S("simple-lit"), S("bool-lit"), S("int-lit"),
         S("float-lit"), S("string-lit"), S("call-args"),
         S("positional-args"), S("equality-op"), S("compare-op"),
-        S("shift-op"), S("add-op"), S("mul-op"), S("or-op"), S("and-op"),
+        S("plus-op"), S("minus-op"), S("multiply-op"), S("divide-op"),
+        S("remainder-op"), S("amp-op"), S("pipe-op"), S("xor-op"),
+        S("left-shift-op"), S("right-shift-op"), S("or-op"), S("and-op"),
         S("not-op"), S("nil-keyword"),
     };
 #undef S
@@ -3430,6 +3454,14 @@ style_spelling(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "return-type"))
         return core_string_eq(text, CORE_STRING_STATIC("->"))
             ? PP_SPELL_ARROW : PP_SPELL_RETURN_COLON;
+    // `true` / `false` versus `True` / `False`: one style per pair.
+    if (is_name(ctx->grammar, node, "bool-lit"))
+        return core_string_eq(text, CORE_STRING_STATIC("True"))
+            || core_string_eq(text, CORE_STRING_STATIC("False"))
+            ? PP_SPELL_PY_TRUE : PP_SPELL_TRUE;
+    if (is_name(ctx->grammar, node, "case-default-keyword"))
+        return core_string_eq(text, CORE_STRING_STATIC("default"))
+            ? PP_SPELL_CASE_DEFAULT : PP_SPELL_CASE_ELSE;
     return PP_SPELL_COUNT;
 }
 
@@ -3726,6 +3758,7 @@ block_item(pp_context_t *ctx, parse_tree_t *node)
         || is_name(ctx->grammar, node, "value-stmt")
         || is_name(ctx->grammar, node, "context-hook")
         || is_name(ctx->grammar, node, "package-item")
+        || is_name(ctx->grammar, node, "top-level-stmt")
         || is_name(ctx->grammar, node, "pass-stmt");
 }
 
