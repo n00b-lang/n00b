@@ -1,0 +1,4 @@
+let last = 2
+for i from 0 to last: int {
+    require i >= 0
+}

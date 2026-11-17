@@ -1,0 +1,2 @@
+tests/diagnostics/front/annotation_in_set.n:2:16: error N00B-P0043: `:` here separates, so this type annotation needs parentheses
+  help: write `(key: int)` to annotate the expression

@@ -937,6 +937,10 @@ ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
                  th_type *result_type, ir_span_t span, void *state);
+ir_lower_result_t
+n00bb_lower_type_annotation(ir_lower_context_t *context, parse_visit_t *visit,
+                            ir_value_t *const *operands, size_t operand_count,
+                            th_type *result_type, ir_span_t span, void *state);
 
 ir_lower_result_t
 n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,

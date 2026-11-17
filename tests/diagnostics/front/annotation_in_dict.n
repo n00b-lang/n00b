@@ -1,0 +1,3 @@
+let key = 1
+let value = 2
+let entries = {key: value: int}

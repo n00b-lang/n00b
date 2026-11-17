@@ -1,0 +1,2 @@
+tests/diagnostics/front/annotation_in_range.n:2:17: error N00B-P0043: `:` here separates, so this type annotation needs parentheses
+  help: write `(last: int)` to annotate the expression

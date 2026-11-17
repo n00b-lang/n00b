@@ -37,6 +37,14 @@ N00B_DIAG(COMPTIME_IN_WHEN, "N00B-P0042", ERROR,
     "is a value of the running program: it is true while the module's\n"
     "build-time initializer runs and false at runtime. Write\n"
     "`if comptime() { ... }` instead.")
+N00B_DIAG(ANNOTATION_AMONG_SEPARATORS, "N00B-P0043", ERROR,
+    "a type annotation appears where `:` separates",
+    "In a dict or set literal, a slice, a range or a `case` range, `:`\n"
+    "separates a key from its value, or one bound from the other, so a\n"
+    "second `:` there is not read as a type annotation. Put the annotated\n"
+    "expression in parentheses:\n"
+    "    {(key: u8): value}\n"
+    "    items[(start: uint):end]")
 N00B_DIAG(SYNTAX_BLANK_LINE_IN_STATEMENT, "N00B-P0006", ERROR,
     "a statement continues across a blank line",
     "A statement may continue onto the next line, but a blank line always\n"
@@ -233,15 +241,17 @@ N00B_DIAG(AMBIGUOUS_OPERATORS, "N00B-P0035", ERROR,
     "guess. `%` does not mix with `*`, `/` or another `%`; `/` does not take\n"
     "a `*` or `/` after it; `&`, `|` and `^` each chain only with\n"
     "themselves; shifts do not chain; bitwise operators do not mix with\n"
-    "arithmetic; and `and` does not mix with `or`. Add parentheses to say\n"
-    "which reading you mean.")
+    "arithmetic; and `and` does not mix with `or`. A type annotation\n"
+    "`: T` after an operator's last operand could type that operand or the\n"
+    "whole operation: `a + b: int` is `(a + b): int` or `a + (b: int)`.\n"
+    "Add parentheses to say which reading you mean.")
 N00B_DIAG(AMBIGUOUS_PREFIX, "N00B-P0036", ERROR,
     "a prefix operator could apply to more than one operand",
     "`not` before a comparison could negate just the left side or the\n"
     "whole comparison. `cast[T]`, `unsafe_cast[T]` and `ref` read like\n"
-    "function calls, so when one is followed by a binary operator it could\n"
-    "apply to just the next operand or to the whole operation. Add\n"
-    "parentheses to say which reading you mean.")
+    "function calls, so when one is followed by a binary operator or a\n"
+    "type annotation it could apply to just the next operand or to the\n"
+    "whole operation. Add parentheses to say which reading you mean.")
 N00B_DIAG(CHAINED_COMPARISON, "N00B-P0037", ERROR,
     "comparisons are chained",
     "A comparison produces a `bool`, so `a < b < c` would compare that\n"

@@ -226,4 +226,37 @@ alias Lane_List = List[Lane_Count]
 let lanes_seen: Lane_List = [1, 2]
 let plain_text: string = "x\ty"'plain
 require byte_len(plain_text) == 4 and lanes_seen[1] == 2
+
+// `expr: T` annotates any expression's type. With no `let` or `var`,
+// `name: T = value` is an implicit declaration of that type. Where `:`
+// separates (dict and set literals, slices, ranges), an annotation needs
+// parentheses.
+let annotated_byte = 5: u8
+let annotated_list = [1, 2]: List[u16]
+let narrow_value: i32 = 4
+let widened = narrow_value: i64
+implicit_wide: i64 = narrow_value
+implicit_byte: u8 = 200
+func annotated_local() -> int {
+    counter: int = 3
+    counter += (1: int)
+    return counter
+}
+let keyed = {(1: u8): "one"}
+let sliced_annotated = [10, 20, 30][(1: int):3]
+annotated_loop: for item in [1, 2] {
+    break annotated_loop
+}
+require annotated_byte == 5 and annotated_list.len() == 2 and widened == 4
+require implicit_wide == 4 and implicit_byte == 200 and annotated_local() == 4
+require keyed.len() == 1 and sliced_annotated[0] == 20
+
+// An annotation after an operator's last operand needs parentheses; one
+// that is the whole left operand, or follows a sign, does not.
+let summed_whole = (narrow_value + 1): i32
+let summed_part = narrow_value + (1: i32)
+let left_annotated = narrow_value: i32 + 1
+let negative_byte = -5: i8
+require summed_whole == 5 and summed_part == 5 and left_annotated == 5
+require negative_byte == -5
 __fd_write(2, "ok")
