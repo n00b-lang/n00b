@@ -523,6 +523,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             ir_summary_t previous = *summary;
             *summary = *next;
             *next    = previous;
+            summary->revision = previous.revision + 1;
             summary_free(next);
         }
         if (!cyclic) break;

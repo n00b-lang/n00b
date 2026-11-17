@@ -464,9 +464,11 @@ sources_at(pt_t *pt, pt_loc_t at, site_sources_t *entry, pt_set_t *next)
         bool                 narrow = !under && !held->deep
             && held->flow <= PT_COPY && held->kind == PT_CONTENTS
             && !slot_pointer(pt, held);
-        const core_string_t *rest   = at.path.steps + held->depth;
         uint32_t             count  = narrow
             ? at.path.depth - held->depth : 0;
+        // A path with no steps has none to point into (`steps` may be null).
+        const core_string_t *rest   = count ? at.path.steps + held->depth
+                                            : nullptr;
         if (held->loc.site != PT_EXTERNAL) {
             pt_loc_t reached = held->loc;
             if (held->flow == PT_SAME && !narrow) {

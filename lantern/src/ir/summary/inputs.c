@@ -594,6 +594,7 @@ decode_stored_body(ir_summary_t *summary)
     summary->stored     = true;
     summary->proof_free = shell.proof_free;
     summary->bookkept   = shell.bookkept;
+    summary->revision   = shell.revision + 1;
     *decoded        = shell;
     decoded->deps   = core_list_new(summary_dep_t);
     decoded->inputs = core_list_new(summary_input_t);

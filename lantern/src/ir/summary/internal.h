@@ -122,6 +122,9 @@ struct ir_summary_t {
     bool                       proof_free;
     bool                       bookkept;
     bool                       explained;
+    // Bumped whenever the contents are replaced (a solving round, decoding
+    // a stored body), which frees the lists a callee view shares with them.
+    uint64_t                   revision;
 };
 
 struct ir_summaries_t {
