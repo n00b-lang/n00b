@@ -1,5 +1,6 @@
 import containers.list
 import containers.dict
+import containers.set
 import containers.tree
 import containers.slice
 import containers.view
@@ -39,10 +40,24 @@ package containers.dict {
     export containers.dict.__iterator
     export containers.dict.keys
     export containers.dict.values
-    export containers.dict.set
-    export containers.dict.is_subset
-    export containers.dict.is_superset
-    export containers.dict.is_disjoint
+}
+
+package containers.set {
+    export containers.set.Set
+    export containers.set.set
+    export containers.set.add
+    export containers.set.items
+    export containers.set.union
+    export containers.set.intersection
+    export containers.set.difference
+    export containers.set.symmetric_difference
+    export containers.set.union_update
+    export containers.set.intersection_update
+    export containers.set.difference_update
+    export containers.set.symmetric_difference_update
+    export containers.set.is_subset
+    export containers.set.is_superset
+    export containers.set.is_disjoint
 }
 
 package containers.tree {

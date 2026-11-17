@@ -207,8 +207,8 @@ package builtin {
     export containers.dict.Dict_Cursor
     export containers.dict.dict
     export containers.dict.d
-    export containers.dict.set
-    export containers.dict.s
+    export containers.set.set
+    export containers.set.s
     export containers.tree.Tree
     export containers.slice.Slice
     export containers.view.View

@@ -1,0 +1,74 @@
+func has_all(s: Set[int], items: Array[int]) -> bool {
+    for item in items {
+        if !s.contains(item) {
+            return false
+        }
+    }
+    return true
+}
+
+let small: Set[int] = {1, 2, 3}
+let big: Set[int] = {2, 3, 4, 5, 6}
+let none: Set[int] = new[Set[int]]()
+
+let u = small | big
+let u2 = big + small
+require u.len() == 6 and has_all(u, [1, 2, 3, 4, 5, 6]) and u == u2
+require small.union(big) == u
+let i = small & big
+let i2 = big.intersection(small)
+require i.len() == 2 and has_all(i, [2, 3]) and i == i2
+let d = small - big
+let d2 = big - small
+require d.len() == 1 and d.contains(1) and d2.len() == 3 and has_all(d2, [4, 5, 6])
+require small.difference(big) == d
+let x = small ^ big
+require x.len() == 4 and has_all(x, [1, 4, 5, 6])
+require x == big.symmetric_difference(small)
+
+require (small | none) == small and (small & none).len() == 0
+require (none - small).len() == 0 and (small - none) == small
+require (small | small) == small and (small & small) == small
+require (small - small).len() == 0 and (small ^ small).len() == 0
+
+require i.is_subset(small) and i.is_subset(big) and !big.is_subset(small)
+require big.is_superset(i) and none.is_subset(small)
+require d.is_disjoint(d2) and !small.is_disjoint(big)
+require none.is_disjoint(none)
+require u.hash() == u2.hash() and small.hash() != big.hash()
+
+var grow: Set[int] = {1}
+grow |= small
+grow += {10}
+require grow.len() == 4 and has_all(grow, [1, 2, 3, 10])
+grow -= {1, 99}
+require grow.len() == 3 and !grow.contains(1)
+grow &= big
+require grow.len() == 2 and has_all(grow, [2, 3])
+grow ^= {3, 7}
+require grow.len() == 2 and has_all(grow, [2, 7])
+grow ^= grow
+require grow.len() == 0
+
+var many: Set[int] = new[Set[int]]()
+var n = 0
+while n < 1000 {
+    _ = many.add(n)
+    n += 1
+}
+var evens: Set[int] = new[Set[int]]()
+n = 0
+while n < 1000 {
+    _ = evens.add(n * 2)
+    n += 1
+}
+require (many & evens).len() == 500 and (many | evens).len() == 1500
+require (many - evens).len() == 500 and (many ^ evens).len() == 1000
+many -= evens
+require many.len() == 500 and !many.contains(4) and many.contains(5)
+
+let words: Set[string] = {"a", "b"}
+var more = words | {"c"}
+require more.len() == 3 and more.items().len() == 3
+require more.add("d") and !more.add("a") and more.len() == 4
+__fd_write(2, "ok")
