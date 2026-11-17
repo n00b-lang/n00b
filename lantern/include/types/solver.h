@@ -120,8 +120,7 @@ bool ty_declare_trait_method(ty_solver_t *s, core_string_t trait,
                              core_string_t method, th_type *contract);
 bool ty_declare_default(ty_solver_t *s, core_string_t trait, th_type *type);
 size_t   ty_open_count(ty_solver_t *s, core_string_t trait);
-th_type *ty_open_at(const ty_solver_t *s, size_t i);
-bool     ty_settle_open(ty_solver_t *s, core_string_t trait, th_type *var,
+th_type *ty_open_at(const ty_solver_t *s, size_t i);bool     ty_settle_open(ty_solver_t *s, core_string_t trait, th_type *var,
                         th_type *type);
 bool ty_declare_operator(ty_solver_t *s, core_string_t op, th_type *left,
                          th_type *right, th_type *result);

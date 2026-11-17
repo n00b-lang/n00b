@@ -76,3 +76,34 @@ grep -q 'let scaled: *uint ' "$tmp/sizing.n"
 grep -q 'let huge: *u128 ' "$tmp/sizing.n"
 grep -q 'let small: *Dict\[u16, nil\]' "$tmp/sizing.n"
 grep -q 'let large: *Dict\[u16, nil\]' "$tmp/sizing.n"
+
+# A result that doesn't fit a smaller declared target fails its checked
+# narrowing rather than wrapping.
+cat >"$tmp/narrow.n" <<'EOF'
+func narrowed(a: u16, b: u8) -> u8 {
+    let r: u8 = a + b
+    return r
+}
+let n = narrowed(300, 20)
+EOF
+"$compiler" build --output "$tmp/narrow" "$tmp/narrow.n" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err"
+status=0
+(ulimit -c 0; "$tmp/narrow") >"$tmp/stdout" 2>"$tmp/stderr" || status=$?
+test "$status" -eq 101
+grep -q 'overflows `u8`' "$tmp/stderr"
+
+# A loop counter bounded by a declared `uint` stays 64-bit even when a
+# product of it passes 64 bits: without explicit evidence the range
+# analysis caps at 64.
+cat >"$tmp/counter.n" <<'EOF'
+func g(n: uint) -> uint {
+    var i = 4
+    while i < n {
+        i += 1
+    }
+    return 32 * (i - 4)
+}
+EOF
+"$compiler" fmt --normalize "$tmp/counter.n"
+grep -q 'var i: *uint ' "$tmp/counter.n"

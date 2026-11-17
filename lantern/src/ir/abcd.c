@@ -1656,13 +1656,21 @@ zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
             && constant <= type.hi)
             return seen_range(ir_interval_point(constant));
         // Sizing a literal past 2^126: a non-negative one up to 2^128 - 1
-        // saturates, which sizes it as `u128`.
+        // saturates, which sizes it as `u128`; a negative one down to
+        // -2^127 is exact, which sizes it as `i128`.
         if (a->literal_sizing && in->n_operands == 1
             && in->operands[0].kind == IR_OPD_CONST
-            && !in->operands[0].lit.is_float && !in->operands[0].lit.i.neg)
-            return seen_range(ir_interval_point(
-                in->operands[0].lit.i.mag > (ir_uint_t)ir_int_max
-                    ? ir_int_max : (ir_int_t)in->operands[0].lit.i.mag));
+            && !in->operands[0].lit.is_float) {
+            ir_lit_t literal = in->operands[0].lit.i;
+            if (!literal.neg)
+                return seen_range(ir_interval_point(
+                    literal.mag > (ir_uint_t)ir_int_max
+                        ? ir_int_max : (ir_int_t)literal.mag));
+            if (literal.mag <= (ir_uint_t)ir_int_max + 1)
+                return seen_range(ir_interval_point(
+                    literal.mag == (ir_uint_t)ir_int_max + 1
+                        ? ir_int_min : -(ir_int_t)literal.mag));
+        }
         return unknown_range(type);
     case IR_OP_CAST:
         if (!range_at(a, first, at, &x)) return unknown_range(type);

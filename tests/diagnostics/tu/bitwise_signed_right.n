@@ -1,0 +1,4 @@
+func f(a: u8, b: i8) -> u8 {
+    let r = a ^ b
+    return 0
+}

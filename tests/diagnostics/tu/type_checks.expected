@@ -1,6 +1,5 @@
 tests/diagnostics/tu/type_checks.n:2:21: error N00B-S0053: this operation always overflows: 200 and 100
-tests/diagnostics/tu/type_checks.n:10:18: error N00B-T0524: integer constant 18446744073709551616 does not fit in `uint`
-  help: use a wider integer type, or a value inside the range of `uint`
+tests/diagnostics/tu/type_checks.n:10:9: warning N00B-S0059: this condition is always true, so the other branch never runs
 tests/diagnostics/tu/type_checks.n:16:5: warning N00B-N0021: field `count` of `Counter_2` is set but never read
 tests/diagnostics/tu/type_checks.n:25:5: error N00B-T0501: cannot write through constant `bytes`; nothing reachable from a constant is writable
   tests/diagnostics/tu/type_checks.n:20:7: note: `bytes` is declared here

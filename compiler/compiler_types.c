@@ -1257,6 +1257,9 @@ struct n00bb_dispatch_index {
     core_dict_t            functions;
     core_list_t(function_list_ptr_t) lists;
     core_list_t(th_trait_requirement) bounds;
+    // While typing, before literals are sized: an operator meeting an
+    // unbound operand waits for sizing (integer_promotion).
+    bool                   sizing_pending;
 };
 
 static parse_sym_entry_t *nominal_symbol(n00bb_link_analysis_t *analysis,
@@ -2654,10 +2657,173 @@ static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
     return site;
 }
 
+static th_type *best_integer_fit(th_ctx *types, ir_abcd_range_t found);
+
+// A built-in integer type an operation can promote: a named integer type, or
+// an `i:N` / `u:N` (not `bits:N`, and not a distinct type or enum).
+static bool promotable_integer(th_ctx *types, th_type *type,
+                               ir_interval_t *range)
+{
+    uint64_t         width  = 0;
+    th_bitint_flavor flavor = TH_BITINT_BITS;
+
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) {
+        return false;
+    }
+    if (th_bitint_info(type, &width, &flavor)) {
+        if (flavor == TH_BITINT_BITS) {
+            return false;
+        }
+        *range = ir_interval_of_width(width, flavor == TH_BITINT_SIGNED);
+        return true;
+    }
+    // Compare names, not hashes: this runs each time the solver judges an
+    // operator, and building and hashing the twelve names there is costly.
+    core_string_t name      = {0};
+    size_t        arguments = 0;
+
+    (void)types;
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, &arguments) || arguments) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(integer_names) / sizeof(*integer_names);
+         i++) {
+        if (core_string_eq(name, integer_names[i])) {
+            return n00bb_type_interval(type, range);
+        }
+    }
+    return false;
+}
+
+// The smallest integer type holding every value of both operand types. It
+// stops at 64 bits unless an operand is 128-bit: `uint` with `int` is
+// `int`, and converting the `uint` operand is checked.
+static th_type *promoted_integer(th_ctx *types, ir_interval_t left,
+                                 ir_interval_t right)
+{
+    // An operand is 128-bit: that is the explicit evidence to go past 64.
+    bool wide = left.lo < (ir_int_t)INT64_MIN
+             || left.hi > (ir_int_t)UINT64_MAX
+             || right.lo < (ir_int_t)INT64_MIN
+             || right.hi > (ir_int_t)UINT64_MAX;
+    ir_interval_t both = ir_interval_join(left, right);
+
+    if (!wide && (both.lo < (ir_int_t)INT64_MIN
+                  || both.hi > (ir_int_t)INT64_MAX)
+        && both.lo < 0) {
+        return th_name(types, CORE_STRING_STATIC("int"));
+    }
+    return best_integer_fit(types, (ir_abcd_range_t){.seen = both});
+}
+
+th_type *n00bb_integer_promotion(th_ctx *types, th_type *left,
+                                 th_type *right)
+{
+    ir_interval_t lr = {0}, rr = {0};
+
+    if (!left || !right || !promotable_integer(types, left, &lr)
+        || !promotable_integer(types, right, &rr)
+        || th_hash(types, th_resolve(left)) == th_hash(types,
+                                                       th_resolve(right))) {
+        return nullptr;
+    }
+    return promoted_integer(types, lr, rr);
+}
+
+typedef enum {
+    PROMOTION_NONE,
+    PROMOTION_WAIT,
+    PROMOTION_CHOSEN,
+    PROMOTION_FAILS,
+} promotion_t;
+
+// A built-in integer operator whose operands have different types runs at
+// a type holding both, and never narrows an operand: `u8 + u16` is a `u16`
+// addition and `u8 + i8` an `i16` one. An operand that is still an open
+// literal is sized from its own values first (`a + 1000` with `a: u8`
+// sizes `1000` as `u16`), so the call waits until it is.
+static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
+                                     const ir_instr_t *at, th_type **out)
+{
+    th_ctx *types = ir_ctx_types(index->analysis->ir_context);
+
+    if (!at || at->op != IR_OP_DISPATCH || at->n_operands != 3
+        || at->operands[0].kind != IR_OPD_NAME) {
+        return PROMOTION_NONE;
+    }
+
+    core_string_t                  method = at->operands[0].name;
+    const n00bb_binary_operator_t *binary = n00bb_binary_operator_method(
+        method);
+    bool equal   = core_string_eq(method, CORE_STRING_STATIC("__equal"));
+    bool compare = core_string_eq(method, CORE_STRING_STATIC("__cmp"));
+
+    if ((!binary && !equal && !compare)
+        || (binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR))) {
+        return PROMOTION_NONE;
+    }
+
+    const ir_value_t *left  = ir_value_operand(at, 1);
+    const ir_value_t *right = ir_value_operand(at, 2);
+    th_type          *lt    = left && left->type ? th_resolve(left->type)
+                                                 : nullptr;
+    th_type          *rt    = right && right->type ? th_resolve(right->type)
+                                                   : nullptr;
+    ir_interval_t     lr = {0}, rr = {0};
+    bool              lp = lt && promotable_integer(types, lt, &lr);
+    bool              rp = rt && promotable_integer(types, rt, &rr);
+    // Before literals are sized, an unbound operand may be one: wait. After
+    // sizing anything still unbound (a generic's type) resolves as usual.
+    if (index->sizing_pending
+        && ((lp && !rp && th_kind_of(rt) == TH_VAR && !th_var_ref(rt))
+            || (rp && !lp && th_kind_of(lt) == TH_VAR
+                && !th_var_ref(lt)))) {
+        return PROMOTION_WAIT;
+    }
+    if (!lp || !rp || th_hash(types, lt) == th_hash(types, rt)) {
+        return PROMOTION_NONE;
+    }
+
+    th_type      *promoted = promoted_integer(types, lr, rr);
+    ir_interval_t bounds   = {0};
+
+    // Bitwise operators exist only on unsigned integers. With a signed left
+    // operand the usual lookup reports that; with only a signed right one
+    // it would narrow that operand to the left's type, so fail here.
+    if (binary && binary->unsigned_only
+        && (!n00bb_type_interval(promoted, &bounds) || bounds.lo < 0)) {
+        return lr.lo < 0 ? PROMOTION_NONE : PROMOTION_FAILS;
+    }
+
+    th_type *result   = equal ? th_name(types, CORE_STRING_STATIC("bool"))
+                      : compare
+                          ? th_name(types, CORE_STRING_STATIC("Comparison"))
+                          : promoted;
+
+    *out = contract(types, result, promoted, promoted);
+    return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
+}
+
 static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
                                      th_type *call, th_type **signature)
 {
     n00bb_dispatch_index_t *index = context;
+    th_type                *promoted = nullptr;
+
+    switch (integer_promotion(index, at, &promoted)) {
+    case PROMOTION_WAIT:
+        return TY_OVERLOAD_WAIT;
+    case PROMOTION_CHOSEN:
+        *signature = promoted;
+        return TY_OVERLOAD_CHOSEN;
+    case PROMOTION_FAILS:
+        return TY_OVERLOAD_FAILS;
+    case PROMOTION_NONE:
+        break;
+    }
+
     n00bb_overload_site_t  *site  = overload_site(index, at);
     th_type                *shape = call ? th_resolve(call) : nullptr;
 
@@ -3135,6 +3301,40 @@ static bool report_operator(th_ctx *types,
 
     const ir_value_t *left  = dispatch_operand(at, 1);
     const ir_value_t *right = binary ? dispatch_operand(at, 2) : nullptr;
+    ir_interval_t     right_bounds = {0};
+
+    // A bitwise operator with a signed right operand (integer_promotion
+    // refuses it): the operand types may differ, but neither may be signed.
+    if (binary && binary->unsigned_only && right && right->type
+        && n00bb_integer_promotion(types, receiver, right->type)
+        && n00bb_type_interval(th_resolve(right->type), &right_bounds)
+        && right_bounds.lo < 0) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        source_t            source = value_source(unit, right, at->span);
+        core_string_t       signed_name = n00bb_print_type(types,
+                                                           right->type);
+        core_buffer_t       unsigned_name = {0};
+        size_t              skip = signed_name.u8_bytes > 1
+            && signed_name.data[0] == 'i' && signed_name.data[1] >= '0'
+            && signed_name.data[1] <= '9';
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_BITWISE_NEGATIVE,
+                     source.at, N00B_TEXT_BITWISE_SIGNED_OPERAND,
+                     N00BB_ARGS(ARG_TEXT(source.text),
+                                ARG_TEXT(signed_name)));
+        core_buffer_puts(&unsigned_name, "u");
+        core_buffer_append_string(&unsigned_name,
+            skip ? core_string_slice(signed_name, 1,
+                                     signed_name.u8_bytes - 1)
+                 : CORE_STRING_STATIC("int"));
+        n00bb_report_help(diagnostics, N00B_TEXT_CONVERT_IT_WITH_CAST,
+                          N00BB_ARGS(ARG_TEXT(core_buffer_string(
+                              &unsigned_name))));
+        core_buffer_release(&unsigned_name);
+        return true;
+    }
+
     core_string_t     first = right
         ? operand_phrase(types, unit, left, at->span,
                          flows_from(literal, left) ? literal : nullptr)
@@ -5378,6 +5578,18 @@ static void note_integer_value(core_list_t(integer_evidence_t) *evidence,
         ir_abcd_range_t range = unknown_integer();
 
         (void)ir_abcd_range_of(abcd, value, nullptr, &range);
+        // Without explicit evidence, the range analysis caps at 64 bits: a
+        // range past 64 bits that is not an exact constant (say, a product
+        // of loop-bounded values) counts as unbounded there, which sizes as
+        // a 64-bit type with overflow checks.
+        if (range.seen.lo != range.seen.hi) {
+            if (range.seen.hi > (ir_int_t)UINT64_MAX) {
+                range.unbounded_max = true;
+            }
+            if (range.seen.lo < (ir_int_t)INT64_MIN) {
+                range.unbounded_min = true;
+            }
+        }
         if (entry->seen) {
             ir_abcd_range_t prior = entry->range;
 
@@ -5850,6 +6062,60 @@ static void note_meeting_types(core_list_t(integer_evidence_t) *evidence,
     }
 }
 
+// An inferred integer that is an operand of a built-in integer operator
+// alongside a declared integer type is widened to hold that type too, and
+// again for each such type it meets. A literal constant is not: it stays
+// the smallest type holding its value, and the operation promotes.
+static void note_declared_meeting(core_list_t(integer_evidence_t) *evidence,
+                                  th_ctx *types, const ir_instr_t *in)
+{
+    if (in->op != IR_OP_DISPATCH || in->n_operands != 3
+        || in->operands[0].kind != IR_OPD_NAME) {
+        return;
+    }
+
+    core_string_t                  method = in->operands[0].name;
+    const n00bb_binary_operator_t *binary = n00bb_binary_operator_method(
+        method);
+
+    if ((!binary || binary->op == IR_OP_SHL || binary->op == IR_OP_SHR)
+        && !core_string_eq(method, CORE_STRING_STATIC("__equal"))
+        && !core_string_eq(method, CORE_STRING_STATIC("__cmp"))) {
+        return;
+    }
+    for (int side = 1; side <= 2; side++) {
+        const ir_value_t *open   = ir_value_operand(in, side);
+        const ir_value_t *other  = ir_value_operand(in, 3 - side);
+        size_t            at     = open ? evidence_index(evidence, open->type)
+                                        : SIZE_MAX;
+        ir_interval_t     bounds = {0};
+
+        if (at == SIZE_MAX || !other || !other->type
+            || (open->def && open->def->op == IR_OP_CONST)
+            || !promotable_integer(types, other->type, &bounds)) {
+            continue;
+        }
+
+        integer_evidence_t *entry = &evidence->data[at];
+
+        if (!entry->seen) {
+            entry->range = (ir_abcd_range_t){.seen = bounds};
+            entry->seen  = true;
+            continue;
+        }
+        // A side with no fixpoint stays unbounded (and so 64-bit); only a
+        // bounded side widens to hold the declared type.
+        if (!entry->range.unbounded_min) {
+            entry->range.seen.lo = ir_int_lesser(entry->range.seen.lo,
+                                                 bounds.lo);
+        }
+        if (!entry->range.unbounded_max) {
+            entry->range.seen.hi = ir_int_greater(entry->range.seen.hi,
+                                                  bounds.hi);
+        }
+    }
+}
+
 // Every open type gets the joined range of the types it meets.
 static void join_met_evidence(core_list_t(integer_evidence_t) *evidence,
                               size_t *meets)
@@ -5945,6 +6211,8 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
                                        function->blocks[b]->instrs[i]);
                 note_meeting_types(&evidence, meets,
                                    function->blocks[b]->instrs[i]);
+                note_declared_meeting(&evidence, types,
+                                      function->blocks[b]->instrs[i]);
             }
         }
     }
@@ -7187,6 +7455,9 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                        th_apply(types,
                                 CORE_STRING_STATIC("builtin.containers.dict.Dict"),
                                 entry, 2));
+    // Until literals are sized, an operator meeting an unbound operand
+    // waits (integer_promotion). Constraining already judges some calls.
+    typing->dispatch->sizing_pending = true;
     ty_constrain_group(solver, group, &coverage);
     ty_solve(solver);
     bool bitwise_negative = false;
@@ -7196,6 +7467,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         ir_group_pdg_free(group);
         group = ir_group_pdg_of(functions.data, functions.len, nullptr);
     }
+    typing->dispatch->sizing_pending = false;
     ty_solve(solver);
 
     bool switched = switches_fit(typing->dispatch, units, count, &functions);

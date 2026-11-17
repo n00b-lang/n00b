@@ -38,6 +38,11 @@ typedef struct {
 } n00bb_dispatch_target_t;
 
 bool n00bb_reference_dispatch(core_string_t method, bool *writable);
+// The type a built-in integer operation on operands of these two types runs
+// at: the smallest holding both, stopping at 64 bits unless one is 128-bit.
+// Null when they are the same type, or either is not a promotable integer.
+th_type *n00bb_integer_promotion(th_ctx *types, th_type *left,
+                                 th_type *right);
 // The type a distinct type (`type Meters = int`) was made from, or null
 // when `type` is not a distinct type.
 th_type *n00bb_distinct_underlying(th_ctx *types, th_type *type);

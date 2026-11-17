@@ -864,9 +864,34 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         if (!right) return nullptr;
     }
     else if (right && is_integer_type(left->type)
-             && is_integer_type(right->type))
-        right = n00bb_widen_integer_operand(&rewrite->context, right,
-                                            left->type, in->span);
+             && is_integer_type(right->type)) {
+        // Operands of different integer types run at the type holding
+        // both (n00bb_integer_promotion): neither is ever narrowed.
+        th_type *promoted = n00bb_integer_promotion(
+            ir_module_types(rewrite->context.module), left->type,
+            right->type);
+        if (promoted) {
+            left = n00bb_widen_integer_operand(&rewrite->context, left,
+                                               promoted, in->span);
+            right = n00bb_widen_integer_operand(&rewrite->context, right,
+                                                promoted, in->span);
+            if (!left || !right) return nullptr;
+            // Arithmetic runs at the promoted type; a smaller declared
+            // destination gets a checked conversion of the result.
+            if (binary && is_integer_type(in->dest->type)
+                && !ir_type_eq(rewrite->context.module, in->dest->type,
+                               promoted)) {
+                ir_value_t *wide = n00bb_emit_primitive(&rewrite->context,
+                    method, promoted, left, right, in->span);
+                return wide ? n00bb_widen_integer_operand(&rewrite->context,
+                                  wide, in->dest->type, in->span)
+                            : nullptr;
+            }
+        }
+        else
+            right = n00bb_widen_integer_operand(&rewrite->context, right,
+                                                left->type, in->span);
+    }
     if (right && core_string_eq(method, CORE_STRING_STATIC("__cmp")))
         return n00bb_rewrite_three_way(rewrite, in, left, right);
     return n00bb_emit_primitive(&rewrite->context, method, in->dest->type,
