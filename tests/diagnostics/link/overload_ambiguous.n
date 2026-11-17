@@ -1,0 +1,10 @@
+func two(a: i32, b: i64) -> int {
+    return 1
+}
+
+func two(a: i64, b: i32) -> int {
+    return 2
+}
+
+let small: i32 = 1
+require two(small, small) == 1

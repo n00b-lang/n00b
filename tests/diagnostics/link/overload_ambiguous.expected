@@ -1,0 +1,5 @@
+tests/diagnostics/link/overload_ambiguous.n:1:6: warning N00B-N0019: function `two` is never called
+  help: call it or delete it
+tests/diagnostics/link/overload_ambiguous.n:10:9: error N00B-T0012: 2 overloads of `two` fit arguments (i32, i32) equally well
+  tests/diagnostics/link/overload_ambiguous.n:5:6: note: candidate `overload_ambiguous.two(int, i32) -> int` is declared here
+  tests/diagnostics/link/overload_ambiguous.n:1:6: note: candidate `overload_ambiguous.two(i32, int) -> int` is declared here

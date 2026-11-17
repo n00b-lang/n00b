@@ -62,14 +62,29 @@ typedef th_type *(*ty_method_fn)(void *context, th_type *receiver,
                                  core_string_t method);
 typedef th_type *(*ty_call_method_fn)(void *context, th_type *receiver,
                                       core_string_t method, th_type *call);
-typedef size_t (*ty_requirements_fn)(void *context, th_type *receiver,
-                                     core_string_t method, th_type *call,
-                                     th_type *signature,
+typedef size_t (*ty_requirements_fn)(void *context, const ir_instr_t *at,
+                                     th_type *receiver, core_string_t method,
+                                     th_type *call, th_type *signature,
                                      th_trait_requirement *requirements,
                                      size_t max_requirements);
 typedef bool (*ty_coerce_fn)(void *context, th_type *to, th_type *from);
-typedef core_string_t (*ty_param_name_fn)(void *context, th_type *receiver,
+typedef core_string_t (*ty_param_name_fn)(void *context, const ir_instr_t *at,
+                                          th_type *receiver,
                                           core_string_t method, size_t index);
+
+// An overloaded call names several functions. Asked about the dispatch at
+// `at`, with `call` the shape of its arguments, the hook says that the call
+// is not overloaded, that it must wait for its arguments' types, that it
+// chose a function (setting `signature`), or that no function fits.
+typedef enum : uint8_t {
+    TY_OVERLOAD_NONE,
+    TY_OVERLOAD_WAIT,
+    TY_OVERLOAD_CHOSEN,
+    TY_OVERLOAD_FAILS,
+} ty_overload_t;
+
+typedef ty_overload_t (*ty_overload_fn)(void *context, const ir_instr_t *at,
+                                        th_type *call, th_type **signature);
 typedef bool (*ty_constant_index_fn)(void *context, const ir_instr_t *at,
                                      uint64_t *index);
 typedef bool (*ty_omittable_fn)(void *context, th_type *record,
@@ -81,6 +96,8 @@ void         ty_solver_set_methods(ty_solver_t *s, ty_call_method_fn methods,
 void         ty_solver_set_requirements(ty_solver_t *s,
                                         ty_requirements_fn requirements,
                                         void *context);
+void         ty_solver_set_overloads(ty_solver_t *s, ty_overload_fn overloads,
+                                     void *context);
 void         ty_solver_set_fields(ty_solver_t *s, ty_method_fn fields,
                                   void *context);
 void         ty_solver_set_coercion(ty_solver_t *s, ty_coerce_fn coerces,

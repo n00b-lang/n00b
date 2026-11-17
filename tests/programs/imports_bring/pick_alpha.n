@@ -1,0 +1,3 @@
+func pick(x: int) -> int {
+    return 10
+}

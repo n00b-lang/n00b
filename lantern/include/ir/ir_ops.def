@@ -134,4 +134,4 @@ IR_OP(UNREACHABLE,     "unreachable",     0, 0,  NONE,        "",    0,         
 IR_OP(TYPE_INDEX,      "type.index",      1, 1,  ANNOTATED,   "t",   0,                              HASRESULT, NOMEM)
 IR_OP(BOX_RAW,        "box.raw",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
 IR_OP(BOX_FROM_RAW,    "box.from_raw",    1, 1,  ANNOTATED,   "v",   0,                              HASRESULT, NOMEM)
-IR_OP(DISPATCH,        "dispatch",        2, VAR, ANNOTATED,   "nk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)
+IR_OP(DISPATCH,        "dispatch",        1, VAR, ANNOTATED,   "nk*", 0,                              HASRESULT | SIDEEFFECT, NOMEM)

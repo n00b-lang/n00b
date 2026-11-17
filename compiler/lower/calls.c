@@ -10,7 +10,8 @@ static ir_lower_result_t
 n00bb_lower_overloaded_call(ir_lower_context_t *context,
                             parse_grammar_t *grammar, parse_tree_t *call_node,
                             parse_tree_t *arguments, core_string_t name,
-                            th_type *result_type, ir_span_t span);
+                            th_type *result_type, ir_span_t span,
+                            core_list_t(parse_sym_entry_ptr_t) candidates);
 static ir_lower_result_t
 n00bb_lower_dispatch_call(ir_lower_context_t *context, parse_visit_t *visit,
                           parse_tree_t *call_node,
@@ -308,7 +309,8 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
 
 bool
 n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                 parse_tree_t *call_node, parse_sym_entry_t *symbol)
+                 parse_tree_t *call_node, parse_sym_entry_t *symbol,
+                 core_list_t(parse_sym_entry_ptr_t) *candidates)
 {
     (void)grammar;
     parse_node_facts_t *facts = parse_tree_call_facts(call_node);
@@ -319,12 +321,17 @@ n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         : symbol ? symbol->name : (core_string_t){0};
     n00bb_link_use_site_t *site = state && !unqualified
         ? link_use_site_for_node(state, callee) : nullptr;
-    return state && symbol && n00bb_function_has_overloads(state, symbol,
-        (n00bb_call_lookup_t){
+    if (!state || !symbol) return false;
+    core_list_t(parse_sym_entry_ptr_t) found = n00bb_call_candidates(state,
+        symbol, (n00bb_call_lookup_t){
             .unqualified = unqualified,
             .origin_module = site ? site->origin_module : (core_string_t){0},
             .name = spelled,
         });
+    bool overloaded = found.len > 1;
+    if (overloaded && candidates) *candidates = found;
+    else core_list_free(found);
+    return overloaded;
 }
 
 // A method's receiver is written back when the method takes it by
@@ -345,9 +352,11 @@ static ir_lower_result_t
 n00bb_lower_overloaded_call(ir_lower_context_t *context,
                             parse_grammar_t *grammar, parse_tree_t *call_node,
                             parse_tree_t *arguments, core_string_t name,
-                            th_type *result_type, ir_span_t span)
+                            th_type *result_type, ir_span_t span,
+                            core_list_t(parse_sym_entry_ptr_t) candidates)
 {
     th_ctx *types = ir_module_types(context->module);
+    n00bb_lower_context_t *lower = context->user;
     parse_node_facts_t *facts = parse_tree_call_facts(call_node);
     if (facts && facts->call_propagated)
         result_type = ir_call_outcome_type(context->module,
@@ -359,7 +368,7 @@ n00bb_lower_overloaded_call(ir_lower_context_t *context,
         &nodes);
     ir_value_t **values = core_alloc_array(ir_value_t *,
                                            nodes.len ? nodes.len : 1);
-    bool ok = nodes.len > 0;
+    bool ok = true;
     for (size_t i = 0; ok && i < nodes.len; i++) {
         values[i] = ir_lower_node_value(context, nodes.data[i]);
         ok = values[i] != nullptr;
@@ -371,6 +380,15 @@ n00bb_lower_overloaded_call(ir_lower_context_t *context,
     if (value && !n00bb_dispatch_keywords(context, grammar, call_node,
                                           arguments, value->def))
         value = nullptr;
+    // Typing chooses among the functions this call names.
+    if (value && lower->unit) {
+        n00bb_overload_site_t *site = core_alloc(n00bb_overload_site_t);
+        site->candidates = candidates;
+        candidates = (core_list_t(parse_sym_entry_ptr_t)){0};
+        core_dict_put(&tu_state(lower->unit)->overload_sites, value->def,
+                      site);
+    }
+    core_list_free(candidates);
     if (value && !mark_write_back(context, grammar,
                                   nodes.len ? nodes.data[0] : nullptr, value))
         value = nullptr;
@@ -919,14 +937,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_entry_t *bound = symbol;
     if (symbol) symbol = canonical_symbol(symbol);
     if (symbol && symbol->kind != PARSE_SYM_FUNCTION) symbol = nullptr;
+    core_list_t(parse_sym_entry_ptr_t) candidates = {0};
     if (symbol && n00bb_overloaded(visit->grammar, caller_state, call_node,
-            bound->kind == PARSE_SYM_FUNCTION ? bound : symbol)) {
+            bound->kind == PARSE_SYM_FUNCTION ? bound : symbol,
+            &candidates)) {
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
             : call_arguments_node(visit->grammar, call_node);
         return n00bb_lower_overloaded_call(context, visit->grammar, call_node,
                                            arguments, symbol->name,
-                                           result_type, span);
+                                           result_type, span, candidates);
     }
     if (!symbol && !bound && core_diagnostics_failed(lower_diagnostics(context)))
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};

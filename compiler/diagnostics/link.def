@@ -98,9 +98,11 @@ N00B_DIAG(DUPLICATE_DEFINITION, "N00B-N0017", ERROR,
     "parameter types so it becomes a distinct overload.")
 N00B_DIAG(OVERLAPPING_IMPORT, "N00B-N0018", WARNING,
     "a local function overlaps an imported function of the same name",
-    "When both functions accept a call, the call binds to the local one.\n"
-    "Rename the local function if the imported one was meant, or call the\n"
-    "imported one by its qualified path.")
+    "When both functions accept a call, the call goes to the one whose\n"
+    "parameters fit its arguments more closely, and to the local one when\n"
+    "the two take the same parameter types. Rename the local function if\n"
+    "the imported one was meant, or call the imported one by its qualified\n"
+    "path.")
 N00B_DIAG(UNUSED_FUNCTION, "N00B-N0019", WARNING,
     "a function is never called",
     "Nothing in the program calls this function, directly or through a\n"
@@ -174,6 +176,15 @@ N00B_DIAG(OVERLOAD_NO_MATCH, "N00B-T0011", ERROR,
     "Each overload was checked against the call's argument types and none\n"
     "accepted them. Compare the argument types with the candidate signatures\n"
     "listed with the error.")
+N00B_DIAG(OVERLOAD_AMBIGUOUS, "N00B-T0012", ERROR,
+    "more than one overload of a function fits a call equally well",
+    "A call goes to the overload whose parameters fit its arguments most\n"
+    "closely: an exact type beats a promotion, a smaller promotion beats a\n"
+    "larger one, and a concrete type beats a generic one. Here no candidate\n"
+    "fit at least as well as each other one in every argument. Convert an\n"
+    "argument, or call the function through its module, to pick one:\n"
+    "    pick(cast[i32](n))\n"
+    "    beta.pick(n)")
 N00B_DIAG(CONSUME_UNOWNED_PARAMETER, "N00B-T0015", ERROR,
     "a parameter the caller still owns is passed to a `consume` parameter",
     "A `consume` parameter takes ownership of its argument. An `in`,\n"

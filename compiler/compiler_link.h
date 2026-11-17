@@ -241,6 +241,11 @@ core_string_t n00bb_describe_candidates(parse_grammar_t *grammar,
     const core_list_t(parse_sym_entry_ptr_t) *symbols);
 bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
+// The functions a call names: those in the callee's scope and, for an
+// unqualified call, those its unqualified imports provide.
+core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(
+    n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+    n00bb_call_lookup_t lookup);
 const core_list_t(n00bb_import_source_t) *unqualified_import_sources(
     core_translation_unit_t *unit);
 typedef n00bb_trait_specialization_t *n00bb_trait_specialization_ptr_t;

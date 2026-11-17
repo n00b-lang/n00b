@@ -2050,6 +2050,456 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     return true;
 }
 
+// Overloaded calls. A call to an overloaded function goes to the candidate
+// whose parameters fit its arguments most closely. Each argument fits its
+// parameter exactly, by a promotion, by a generic parameter (one with a
+// trait or `where` bound before one without), or by a conversion. One
+// candidate is chosen when it fits each argument at least as well as each
+// other candidate, and one argument better (or needs no defaults where the
+// other does).
+
+static bool coerces(void *context, th_type *to, th_type *from);
+static core_string_t function_parameter_name(
+    const n00bb_dispatch_index_t *dispatch, parse_sym_entry_t *function,
+    size_t index);
+
+typedef enum : uint8_t {
+    FIT_EXACT,
+    FIT_PROMOTED,
+    FIT_BOUNDED,
+    FIT_GENERIC,
+    FIT_CONVERTED,
+    FIT_NONE,
+} overload_fit_t;
+
+typedef struct {
+    parse_sym_entry_t *symbol;
+    th_type           *signature;
+    overload_fit_t    *fits;
+    th_type          **params;
+    bool               defaulted;
+} overload_option_t;
+core_list_decl(overload_option_t);
+
+typedef enum : uint8_t {
+    OVERLOAD_CHOSEN,
+    OVERLOAD_WAIT,
+    OVERLOAD_NO_MATCH,
+    OVERLOAD_AMBIGUOUS,
+} overload_outcome_t;
+
+static n00bb_overload_site_t *overload_site(
+    const n00bb_dispatch_index_t *index, const ir_instr_t *at)
+{
+    n00bb_link_analysis_t *analysis = index ? index->analysis : nullptr;
+
+    for (size_t u = 0; at && analysis && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        bool              found = false;
+        void             *site  = state
+            ? core_dict_get(&state->overload_sites, (void *)at, &found)
+            : nullptr;
+
+        if (found) {
+            return site;
+        }
+    }
+
+    return nullptr;
+}
+
+bool n00bb_overload_target(const n00bb_dispatch_index_t *index,
+                           const ir_instr_t *at,
+                           n00bb_dispatch_target_t *target)
+{
+    n00bb_overload_site_t *site = overload_site(index, at);
+
+    if (!site || !site->chosen) {
+        return false;
+    }
+    *target           = (n00bb_dispatch_target_t){0};
+    target->kind      = N00BB_TARGET_FUNCTION;
+    target->function  = site->chosen;
+    target->signature = function_signature(index, site->chosen);
+
+    return true;
+}
+
+static bool named_in(th_type *type, const core_string_t *names, size_t count)
+{
+    core_string_t name = {0};
+
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, nullptr)) {
+        return false;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (core_string_eq(name, names[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool integer_type(th_type *type)
+{
+    return th_kind_of(type) == TH_BITINT
+        || named_in(type, integer_names,
+                    sizeof(integer_names) / sizeof(*integer_names));
+}
+
+static bool float_type(th_type *type)
+{
+    return named_in(type, float_names,
+                    sizeof(float_names) / sizeof(*float_names));
+}
+
+// Whether a `from` value widens to `to` without loss: an integer to a wider
+// one of its signedness, or an unsigned one to a strictly wider signed one;
+// a float to a wider float. Integers never become floats.
+static bool numeric_promotes(ir_module_t *module, th_type *from, th_type *to)
+{
+    from = th_resolve(from);
+    to   = th_resolve(to);
+    if (!module || !from || !to) {
+        return false;
+    }
+
+    ir_machine_t source      = ir_machine_of(module, from);
+    ir_machine_t destination = ir_machine_of(module, to);
+
+    if (integer_type(from) && integer_type(to)) {
+        return n00bb_machine_promotes(source, destination);
+    }
+
+    return float_type(from) && float_type(to)
+        && destination.width >= source.width;
+}
+
+static overload_fit_t overload_fit(const n00bb_dispatch_index_t *index,
+                                   ir_module_t *module,
+                                   parse_sym_entry_t *symbol, th_type *param,
+                                   th_type *arg)
+{
+    th_ctx *types = ir_ctx_types(index->analysis->ir_context);
+
+    param = th_resolve(param);
+    arg   = th_resolve(arg);
+    if (!param || !arg) {
+        return FIT_NONE;
+    }
+    if (!th_is_closed(types, param)) {
+        if (!th_env_type_pattern_subsumes(param, arg)) {
+            return FIT_NONE;
+        }
+
+        int bounds = receiver_bounds(types, symbol, param, arg);
+
+        return bounds < 0                                     ? FIT_NONE
+             : th_kind_of(param) == TH_VAR && bounds == 0     ? FIT_GENERIC
+                                                              : FIT_BOUNDED;
+    }
+    if (th_same_type(param, arg) || th_hash(types, param) == th_hash(types, arg)
+        || (!th_is_closed(types, arg)
+            && th_env_type_pattern_subsumes(arg, param))) {
+        return FIT_EXACT;
+    }
+    if (numeric_promotes(module, arg, param)) {
+        return FIT_PROMOTED;
+    }
+
+    th_type *item = th_option_item(param);
+
+    if ((item && overload_fit(index, module, symbol, item, arg) != FIT_NONE)
+        || coerces((void *)index, param, arg)) {
+        return FIT_CONVERTED;
+    }
+
+    return FIT_NONE;
+}
+
+// How two candidates' parameters compare for one argument: -1 when the
+// first fits better, 1 when the second does, 0 when they fit alike, and 2
+// when neither is more specific than the other.
+static int compare_fit(ir_module_t *module, overload_fit_t first,
+                       th_type *first_param, overload_fit_t second,
+                       th_type *second_param)
+{
+    if (first != second) {
+        return first < second ? -1 : 1;
+    }
+    first_param  = th_resolve(first_param);
+    second_param = th_resolve(second_param);
+    if (th_same_type(first_param, second_param)) {
+        return 0;
+    }
+    if (first == FIT_PROMOTED || first == FIT_CONVERTED) {
+        bool forward  = numeric_promotes(module, first_param, second_param);
+        bool backward = numeric_promotes(module, second_param, first_param);
+
+        return forward && backward ? 0
+             : forward             ? -1
+             : backward            ? 1
+                                   : 2;
+    }
+    if (first == FIT_BOUNDED || first == FIT_GENERIC) {
+        bool forward  = th_env_type_pattern_subsumes(second_param,
+                                                     first_param);
+        bool backward = th_env_type_pattern_subsumes(first_param,
+                                                     second_param);
+
+        return forward == backward ? 0 : forward ? -1 : 1;
+    }
+
+    return 0;
+}
+
+// Whether `first` is at least as specific as `second` for every argument
+// and more specific for one.
+static bool overload_beats(ir_module_t *module, const overload_option_t *first,
+                           const overload_option_t *second, size_t count)
+{
+    bool better = false;
+
+    for (size_t i = 0; i < count; i++) {
+        int order = compare_fit(module, first->fits[i], first->params[i],
+                                second->fits[i], second->params[i]);
+
+        if (order > 0) {
+            return false;
+        }
+        better = better || order < 0;
+    }
+
+    return better || (!first->defaulted && second->defaulted);
+}
+
+// Whether a candidate takes `count` positional arguments and the call's
+// keywords, and whether it needs a default for a parameter the call leaves
+// out.
+static bool overload_takes(const n00bb_dispatch_index_t *index,
+                           parse_sym_entry_t *symbol, th_type *signature,
+                           th_type *call, size_t count, bool *defaulted)
+{
+    ir_func_t *function = link_ir_function_for_symbol(index->analysis,
+                                                      symbol);
+    size_t     params   = th_func_nparams(signature);
+    bool       rest     = th_func_rest(signature) != nullptr;
+
+    *defaulted = rest && count <= params;
+    if (count > params && !rest) {
+        return false;
+    }
+    // A parameter with a default is a keyword parameter: no positional
+    // argument fills it.
+    for (size_t p = 0; function && p < count && p < params; p++) {
+        if (ir_func_parameter_is_optional(function, p)) {
+            return false;
+        }
+    }
+
+    size_t keywords = th_func_nkw(call);
+    bool  *named    = core_alloc_array(bool, params + 1);
+    bool   ok       = true;
+
+    for (size_t k = 0; ok && k < keywords; k++) {
+        core_string_t name = th_func_kw(call, k)->name;
+        bool          found = th_func_kw_lookup(signature, name) != nullptr;
+
+        for (size_t p = count; !found && p < params; p++) {
+            found    = core_string_eq(function_parameter_name(index, symbol,
+                                                              p),
+                                      name);
+            named[p] = named[p] || found;
+        }
+        ok = found;
+    }
+    for (size_t p = count; ok && p < params; p++) {
+        bool optional = !function || ir_func_parameter_is_optional(function, p);
+
+        ok         = named[p] || optional;
+        *defaulted = *defaulted || !named[p];
+    }
+    core_free(named);
+
+    return ok;
+}
+
+static th_type *overload_param(th_type *signature, size_t i)
+{
+    const th_param *rest = th_func_rest(signature);
+
+    return i < th_func_nparams(signature) ? th_func_param(signature, i)->type
+         : rest                           ? rest->type
+                                          : nullptr;
+}
+
+static void overload_options_free(core_list_t(overload_option_t) *options)
+{
+    for (size_t i = 0; i < options->len; i++) {
+        core_free(options->data[i].fits);
+        core_free(options->data[i].params);
+    }
+    core_list_free(*options);
+}
+
+// Chooses among an overloaded call's candidates. `call` is the shape of its
+// arguments. On an ambiguity, `tied` gets the candidates none beats.
+static overload_outcome_t choose_overload(
+    const n00bb_dispatch_index_t *index, const n00bb_overload_site_t *site,
+    const ir_instr_t *at, th_type *call, parse_sym_entry_t **chosen,
+    core_list_t(parse_sym_entry_ptr_t) *tied)
+{
+    ir_module_t *module = at && at->block && at->block->owner
+        ? at->block->owner->owner : nullptr;
+    size_t       count  = th_func_nparams(call);
+    core_list_t(overload_option_t) options = core_list_new(overload_option_t);
+
+    *chosen = nullptr;
+    for (size_t c = 0; c < site->candidates.len; c++) {
+        parse_sym_entry_t *symbol    = canonical_symbol(
+            site->candidates.data[c]);
+        th_type           *signature = th_resolve(
+            function_signature(index, symbol));
+        overload_option_t  option    = {.symbol = symbol,
+                                        .signature = signature};
+
+        if (th_kind_of(signature) != TH_FUNCTION
+            || !overload_takes(index, symbol, signature, call, count,
+                               &option.defaulted)) {
+            continue;
+        }
+        option.fits   = core_alloc_array(overload_fit_t, count + 1);
+        option.params = core_alloc_array(th_type *, count + 1);
+        for (size_t i = 0; i < count; i++) {
+            option.params[i] = overload_param(signature, i);
+        }
+        core_list_push(options, option);
+    }
+
+    // An argument whose type is not yet known can only be passed over when
+    // each candidate takes the same type for it.
+    for (size_t i = 0; i < count; i++) {
+        th_type *arg = th_resolve(th_func_param(call, i)->type);
+
+        if (th_kind_of(arg) != TH_VAR) {
+            continue;
+        }
+        for (size_t o = 1; o < options.len; o++) {
+            if (!th_same_type(th_resolve(options.data[o].params[i]),
+                              th_resolve(options.data[0].params[i]))) {
+                overload_options_free(&options);
+                return OVERLOAD_WAIT;
+            }
+        }
+    }
+
+    size_t kept = 0;
+
+    for (size_t o = 0; o < options.len; o++) {
+        overload_option_t *option = &options.data[o];
+        bool               fits   = true;
+
+        for (size_t i = 0; fits && i < count; i++) {
+            th_type *arg = th_resolve(th_func_param(call, i)->type);
+
+            option->fits[i] = th_kind_of(arg) == TH_VAR
+                ? FIT_EXACT
+                : overload_fit(index, module, option->symbol,
+                               option->params[i], arg);
+            fits = option->fits[i] != FIT_NONE;
+        }
+        for (size_t k = 0; fits && k < th_func_nkw(call); k++) {
+            const th_kwparam *given = th_func_kw(call, k);
+            const th_kwparam *taken = th_func_kw_lookup(option->signature,
+                                                        given->name);
+            th_type          *want  = taken ? taken->type : nullptr;
+
+            for (size_t p = count;
+                 !want && p < th_func_nparams(option->signature); p++) {
+                if (core_string_eq(function_parameter_name(index,
+                                                           option->symbol, p),
+                                   given->name)) {
+                    want = th_func_param(option->signature, p)->type;
+                }
+            }
+            fits = !want || th_kind_of(th_resolve(given->type)) == TH_VAR
+                || overload_fit(index, module, option->symbol, want,
+                                given->type) != FIT_NONE;
+        }
+        if (fits) {
+            options.data[kept++] = *option;
+        }
+        else {
+            core_free(option->fits);
+            core_free(option->params);
+        }
+    }
+    options.len = kept;
+
+    overload_outcome_t outcome = options.len ? OVERLOAD_AMBIGUOUS
+                                             : OVERLOAD_NO_MATCH;
+
+    for (size_t o = 0; o < options.len && !*chosen; o++) {
+        bool best = true;
+
+        for (size_t other = 0; best && other < options.len; other++) {
+            best = other == o
+                || overload_beats(module, &options.data[o],
+                                  &options.data[other], count);
+        }
+        if (best) {
+            *chosen = options.data[o].symbol;
+            outcome = OVERLOAD_CHOSEN;
+        }
+    }
+    for (size_t o = 0; tied && outcome == OVERLOAD_AMBIGUOUS
+         && o < options.len; o++) {
+        bool beaten = false;
+
+        for (size_t other = 0; !beaten && other < options.len; other++) {
+            beaten = other != o
+                && overload_beats(module, &options.data[other],
+                                  &options.data[o], count);
+        }
+        if (!beaten) {
+            core_list_push(*tied, options.data[o].symbol);
+        }
+    }
+    overload_options_free(&options);
+
+    return outcome;
+}
+
+static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
+                                     th_type *call, th_type **signature)
+{
+    n00bb_dispatch_index_t *index = context;
+    n00bb_overload_site_t  *site  = overload_site(index, at);
+    th_type                *shape = call ? th_resolve(call) : nullptr;
+
+    if (!site) {
+        return TY_OVERLOAD_NONE;
+    }
+    if (!site->chosen && shape && th_kind_of(shape) == TH_FUNCTION) {
+        switch (choose_overload(index, site, at, shape, &site->chosen,
+                                nullptr)) {
+        case OVERLOAD_WAIT:
+            return TY_OVERLOAD_WAIT;
+        case OVERLOAD_NO_MATCH:
+        case OVERLOAD_AMBIGUOUS:
+            return TY_OVERLOAD_FAILS;
+        case OVERLOAD_CHOSEN:
+            break;
+        }
+    }
+    *signature = site->chosen ? function_signature(index, site->chosen)
+                              : nullptr;
+
+    return *signature ? TY_OVERLOAD_CHOSEN : TY_OVERLOAD_FAILS;
+}
+
 bool n00bb_assign_target(const n00bb_dispatch_index_t *index,
                          th_type *receiver, core_string_t method,
                          n00bb_dispatch_target_t *target)
@@ -2597,6 +3047,28 @@ static bool report_literal_operator(th_ctx *types,
                            th_resolve(left->type), failure->why.at);
 }
 
+static void describe_arguments(th_ctx *types, const ir_instr_t *at,
+                               core_buffer_t *arguments)
+{
+    core_buffer_puts(arguments, "(");
+    for (uint32_t i = 1; i < at->n_operands; i++) {
+        const ir_value_t *value = dispatch_operand(at, i);
+
+        if (!value) {
+            continue;
+        }
+        if (arguments->byte_len > 1) {
+            core_buffer_puts(arguments, ", ");
+        }
+        core_buffer_append_string(arguments,
+                                  n00bb_print_type(types, value->type));
+    }
+    core_buffer_puts(arguments, ")");
+}
+
+static void note_candidates(th_ctx *types, core_diagnostics_t *diagnostics,
+                            const function_list_t *list);
+
 static void report_overload(th_ctx *types, const n00bb_dispatch_index_t *index,
                             core_translation_unit_t *unit,
                             const ir_instr_t *at, core_string_t method)
@@ -2604,20 +3076,7 @@ static void report_overload(th_ctx *types, const n00bb_dispatch_index_t *index,
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     core_buffer_t       arguments   = {0};
 
-    core_buffer_puts(&arguments, "(");
-    for (uint32_t i = 1; i < at->n_operands; i++) {
-        const ir_value_t *value = dispatch_operand(at, i);
-
-        if (!value) {
-            continue;
-        }
-        if (arguments.byte_len > 1) {
-            core_buffer_puts(&arguments, ", ");
-        }
-        core_buffer_append_string(&arguments,
-                                  n00bb_print_type(types, value->type));
-    }
-    core_buffer_puts(&arguments, ")");
+    describe_arguments(types, at, &arguments);
     n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_NO_MATCH,
                  n00bb_span_location(at->span),
                  N00B_TEXT_NO_OVERLOAD_OF_ACCEPTS_ARGUMENTS,
@@ -2629,7 +3088,133 @@ static void report_overload(th_ctx *types, const n00bb_dispatch_index_t *index,
     function_list_t   *list  = core_dict_get((core_dict_t *)&index->functions,
                                              &method, &found);
 
-    for (size_t i = 0; found && i < list->len; i++) {
+    if (found) {
+        note_candidates(types, diagnostics, list);
+    }
+}
+
+// The shape of a dispatch's arguments, as the call's type constraint has it.
+static th_type *dispatch_shape(th_ctx *types, const ir_instr_t *at)
+{
+    th_param   *params = core_alloc_array(th_param, at->n_operands + 1);
+    th_kwparam *kws    = core_alloc_array(th_kwparam, at->n_operands + 1);
+    size_t      n      = 0;
+    size_t      nkw    = 0;
+
+    for (uint32_t o = 1; o < at->n_operands; o++) {
+        const ir_operand_t *operand = &at->operands[o];
+
+        if (operand->kind == IR_OPD_NAMED_ARG) {
+            kws[nkw++] = (th_kwparam){
+                .name = operand->named.name,
+                .type = operand->named.value ? operand->named.value->type
+                                             : th_var(types)};
+            continue;
+        }
+
+        const ir_value_t *value = dispatch_operand(at, o);
+        th_type          *type  = value ? th_resolve(value->type) : nullptr;
+
+        if (operand->kind == IR_OPD_FRESH && type
+            && th_kind_of(type) == TH_INDIRECTION) {
+            type = th_ind_referent(type);
+        }
+        params[n++] = (th_param){.type = type ? type : th_var(types)};
+    }
+
+    th_type *shape = th_func(types, at->dest ? at->dest->type : th_var(types),
+                             params, n, nullptr, kws, nkw);
+
+    core_free(params);
+    core_free(kws);
+
+    return shape;
+}
+
+// Reports an overloaded call typing could not send to one function.
+static bool report_overload_site(th_ctx *types,
+                                 const n00bb_dispatch_index_t *index,
+                                 core_translation_unit_t *unit,
+                                 const ir_instr_t *at, core_string_t method)
+{
+    n00bb_overload_site_t *site = overload_site(index, at);
+
+    if (!site || site->chosen) {
+        return false;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_buffer_t       arguments   = {0};
+    parse_sym_entry_t  *chosen      = nullptr;
+    function_list_t     tied        = core_list_new(parse_sym_entry_ptr_t);
+    overload_outcome_t  outcome     = choose_overload(
+        index, site, at, dispatch_shape(types, at), &chosen, &tied);
+
+    describe_arguments(types, at, &arguments);
+    if (outcome == OVERLOAD_AMBIGUOUS) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_AMBIGUOUS,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_OVERLOADS_OF_FIT_EQUALLY,
+                     N00BB_ARGS(ARG_NUMBER(tied.len), ARG_TEXT(method),
+                                ARG_TEXT(core_buffer_string(&arguments))));
+        note_candidates(types, diagnostics, &tied);
+    }
+    else if (outcome == OVERLOAD_WAIT) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_AMBIGUOUS,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_OVERLOAD_ARGUMENTS_UNKNOWN,
+                     N00BB_ARGS(ARG_TEXT(method)));
+        note_candidates(types, diagnostics, &site->candidates);
+    }
+    else {
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_NO_MATCH,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_NO_OVERLOAD_OF_ACCEPTS_ARGUMENTS,
+                     N00BB_ARGS(ARG_TEXT(method),
+                                ARG_TEXT(core_buffer_string(&arguments))));
+        note_candidates(types, diagnostics, &site->candidates);
+    }
+    core_buffer_release(&arguments);
+    core_list_free(tied);
+
+    return true;
+}
+
+// Reports each overloaded call typing left waiting on its arguments' types.
+static bool check_overload_sites(th_ctx *types,
+                                 const n00bb_dispatch_index_t *index,
+                                 core_translation_unit_t *const *units,
+                                 size_t count, ty_solver_t *solver)
+{
+    core_dict_t failed;
+    bool        ok = true;
+
+    core_dict_init(&failed, nullptr, nullptr);
+    for (size_t i = 0; i < ty_failure_count(solver); i++) {
+        core_dict_put(&failed, (void *)ty_failure_at(solver, i)->why.at,
+                      (void *)1);
+    }
+    for (size_t u = 0; u < count; u++) {
+        core_dict_foreach(&tu_state(units[u])->overload_sites, item) {
+            n00bb_overload_site_t *site = item->value;
+
+            if (!site->chosen && !core_dict_contains(&failed, item->key)) {
+                ok = !report_overload_site(types, index, units[u], item->key,
+                                           ((const ir_instr_t *)item->key)
+                                               ->operands[0].name)
+                  && ok;
+            }
+        }
+    }
+    core_dict_free(&failed);
+
+    return ok;
+}
+
+static void note_candidates(th_ctx *types, core_diagnostics_t *diagnostics,
+                            const function_list_t *list)
+{
+    for (size_t i = 0; i < list->len; i++) {
         parse_sym_entry_t   *origin = canonical_symbol(list->data[i]);
         core_diag_location_t where  = n00bb_symbol_location(origin);
         core_buffer_t        shown  = {0};
@@ -2728,12 +3313,19 @@ static bool report_method_argument(th_ctx *types, parse_grammar_t *grammar,
 }
 
 static bool dispatch_callee(const n00bb_dispatch_index_t *index,
-                            core_translation_unit_t *unit, th_type *receiver,
+                            core_translation_unit_t *unit,
+                            const ir_instr_t *at, th_type *receiver,
                             core_string_t method, size_t arity,
                             n00bb_dispatch_target_t *target)
 {
     n00bb_link_analysis_t *analysis = index->analysis;
 
+    if (n00bb_overload_target(index, at, target)) {
+        return true;
+    }
+    if (!receiver) {
+        return false;
+    }
     receiver = th_resolve(receiver);
     if ((n00bb_dispatch_target_for(index, receiver, method, arity, target)
          && target->function)
@@ -2997,6 +3589,9 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
     core_string_t method   = failure->pred.name;
     th_type      *receiver = th_resolve(failure->pred.subject);
 
+    if (report_overload_site(types, index, unit, at, method)) {
+        return true;
+    }
     if (report_iteration(types, unit, at, method, receiver)
         || report_tuple_index(unit, at, method, receiver)
         || report_missing_operator(types, index, unit, at, method, receiver)
@@ -3018,7 +3613,7 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
         != nullptr;
 
     n00bb_dispatch_target_t target = {0};
-    bool found = dispatch_callee(index, unit, receiver, method,
+    bool found = dispatch_callee(index, unit, at, receiver, method,
                                  at->n_operands - 1, &target);
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
 
@@ -3200,7 +3795,7 @@ static bool report_literal_argument(th_ctx *types,
     const ir_func_t        *callee = n00bb_direct_call_target(user);
 
     if (!callee && (!self
-                    || !dispatch_callee(index, unit, self->type, method,
+                    || !dispatch_callee(index, unit, user, self->type, method,
                                         user->n_operands - 1, &target))) {
         core_string_t trait = self ? index_trait(method)
                                    : (core_string_t){0};
@@ -4131,7 +4726,8 @@ static bool check_dispatch_call(th_ctx *types,
 {
     const ir_value_t *self = dispatch_operand(at, 1);
 
-    if (!self || at->operands[0].kind != IR_OPD_NAME) {
+    if ((!self && !overload_site(index, at))
+        || at->operands[0].kind != IR_OPD_NAME) {
         return true;
     }
 
@@ -4141,8 +4737,9 @@ static bool check_dispatch_call(th_ctx *types,
     bool method_style = ir_annot_get((ir_annots_t *)&at->annots,
                                      N00BB_DISPATCH_IMPLICIT_SELF_KEY)
         != nullptr;
-    if (!dispatch_callee(index, unit, self->type, at->operands[0].name,
-                         at->n_operands - 1, &target)) {
+    if (!dispatch_callee(index, unit, at, self ? self->type : nullptr,
+                         at->operands[0].name, at->n_operands - 1,
+                         &target)) {
         return true;
     }
 
@@ -4196,9 +4793,9 @@ static th_type *method_signature(void *context, th_type *receiver,
              : nullptr;
 }
 
-static size_t dispatch_requirements(void *context, th_type *receiver,
-                                    core_string_t method, th_type *call,
-                                    th_type *signature,
+static size_t dispatch_requirements(void *context, const ir_instr_t *at,
+                                    th_type *receiver, core_string_t method,
+                                    th_type *call, th_type *signature,
                                     th_trait_requirement *requirements,
                                     size_t max_requirements)
 {
@@ -4211,7 +4808,9 @@ static size_t dispatch_requirements(void *context, th_type *receiver,
                                              + th_func_nkw(shape)
                                        : SIZE_MAX;
 
-    if (!n00bb_dispatch_target_for(context, receiver, method, arity, &target)) {
+    if (!n00bb_overload_target(index, at, &target)
+        && !n00bb_dispatch_target_for(context, receiver, method, arity,
+                                      &target)) {
         return 0;
     }
 
@@ -4253,15 +4852,13 @@ static size_t dispatch_requirements(void *context, th_type *receiver,
     return count;
 }
 
-static core_string_t parameter_name(void *context, th_type *receiver,
-                                    core_string_t method, size_t index)
+static core_string_t function_parameter_name(
+    const n00bb_dispatch_index_t *dispatch, parse_sym_entry_t *function,
+    size_t index)
 {
-    n00bb_dispatch_target_t            target = {0};
-    n00bb_function_parameter_facts_t *facts  =
-        n00bb_dispatch_target(context, receiver, method, &target)
-                && target.function
-            ? parse_sym_binding(target.function, N00BB_PARAMETER_FACTS_KEY)
-            : nullptr;
+    n00bb_function_parameter_facts_t *facts  = function
+        ? parse_sym_binding(function, N00BB_PARAMETER_FACTS_KEY)
+        : nullptr;
     parse_sym_entry_t                 *formal =
         facts && index < facts->param_count && facts->params[index].node
             ? parse_tree_sym(facts->params[index].node)
@@ -4273,18 +4870,31 @@ static core_string_t parameter_name(void *context, th_type *receiver,
 
     // A function from an interface (an imported module's cached build) has
     // no parse tree; its parameter names come from the interface.
-    n00bb_dispatch_index_t *dispatch = context;
-    core_string_t           name     = {0};
+    core_string_t name = {0};
 
-    if (target.function && dispatch && dispatch->analysis) {
+    if (function && dispatch && dispatch->analysis) {
         parse_grammar_t *grammar = dispatch->analysis->grammar;
 
-        (void)function_parameter_info(grammar, target.function,
-            callable_formal_parameters(grammar, target.function), index,
+        (void)function_parameter_info(grammar, function,
+            callable_formal_parameters(grammar, function), index,
             nullptr, &name, nullptr, nullptr);
     }
 
     return name;
+}
+
+static core_string_t parameter_name(void *context, const ir_instr_t *at,
+                                    th_type *receiver, core_string_t method,
+                                    size_t index)
+{
+    n00bb_dispatch_target_t target = {0};
+
+    if (!n00bb_overload_target(context, at, &target)
+        && !n00bb_dispatch_target(context, receiver, method, &target)) {
+        return (core_string_t){0};
+    }
+
+    return function_parameter_name(context, target.function, index);
 }
 
 static bool coerces(void *context, th_type *to, th_type *from)
@@ -4297,6 +4907,12 @@ static bool coerces(void *context, th_type *to, th_type *from)
         return n00bb_declared_flagset(index->analysis, to);
     }
     if (n00bb_reference_views(from, to)) {
+        return true;
+    }
+    // A float widens to a wider float; f32 is the only narrower one.
+    if (float_type(th_resolve(from)) && float_type(th_resolve(to))
+        && th_named_info(th_resolve(from), &name, nullptr, nullptr)
+        && core_string_eq(name, CORE_STRING_STATIC("f32"))) {
         return true;
     }
 
@@ -4544,6 +5160,11 @@ typedef struct {
     bool            bitwise;
     const ir_instr_t *negative_at;
     ir_int_t        negative;
+    // The integer types the overloaded calls it is passed to take for it.
+    ir_module_t    *module;
+    th_type        *choices[8];
+    size_t          choice_count;
+    bool            choices_overflow;
 } integer_evidence_t;
 
 core_list_decl(integer_evidence_t);
@@ -4760,10 +5381,111 @@ static bool integer_bounds(ir_module_t *module, th_type *type,
     return true;
 }
 
+static void note_choice(integer_evidence_t *entry, ir_module_t *module,
+                        th_type *type)
+{
+    for (size_t i = 0; i < entry->choice_count; i++) {
+        if (ir_type_eq(module, entry->choices[i], type)) {
+            return;
+        }
+    }
+    if (entry->choice_count == sizeof(entry->choices) / sizeof(*entry->choices)) {
+        entry->choices_overflow = true;
+        return;
+    }
+    entry->module                          = module;
+    entry->choices[entry->choice_count++] = type;
+}
+
+// An integer literal passed to an overloaded call notes the integer type
+// each candidate takes in its place.
+static bool note_overload_site(core_list_t(integer_evidence_t) *evidence,
+                               const n00bb_dispatch_index_t *index,
+                               ir_module_t *module, const ir_instr_t *in)
+{
+    n00bb_overload_site_t *site = overload_site(index, in);
+
+    if (!site) {
+        return false;
+    }
+
+    uint32_t position = 0;
+
+    for (uint32_t o = 1; o < in->n_operands; o++) {
+        const ir_value_t *value = dispatch_operand(in, o);
+
+        if (!value) {
+            continue;
+        }
+
+        th_type *type = value->type ? th_resolve(value->type) : nullptr;
+
+        for (size_t e = 0; type && e < evidence->len; e++) {
+            integer_evidence_t *entry = &evidence->data[e];
+
+            if (entry->var != type) {
+                continue;
+            }
+            for (size_t c = 0; c < site->candidates.len; c++) {
+                th_type *signature = th_resolve(function_signature(
+                    index, canonical_symbol(site->candidates.data[c])));
+                th_type *param = th_kind_of(signature) == TH_FUNCTION
+                    ? overload_param(signature, position) : nullptr;
+
+                param = param ? th_resolve(param) : nullptr;
+                if (param && integer_type(param)) {
+                    note_choice(entry, module, param);
+                }
+            }
+        }
+        position++;
+    }
+
+    return true;
+}
+
+// Of the noted integer types that hold the literal's range, the one that
+// promotes to each other one, if there is one.
+static th_type *chosen_integer(const integer_evidence_t *entry,
+                               ir_abcd_range_t range)
+{
+    th_type *fitting[8];
+    size_t   count = 0;
+
+    for (size_t i = 0; !entry->choices_overflow && i < entry->choice_count;
+         i++) {
+        ir_interval_t bounds = {0};
+
+        if (integer_bounds(entry->module, entry->choices[i], &bounds)
+            && !range.unbounded_min && !range.unbounded_max
+            && range.seen.lo >= bounds.lo && range.seen.hi <= bounds.hi) {
+            fitting[count++] = entry->choices[i];
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        bool narrowest = true;
+
+        for (size_t j = 0; narrowest && j < count; j++) {
+            narrowest = i == j
+                || numeric_promotes(entry->module, fitting[i], fitting[j]);
+        }
+        if (narrowest) {
+            return fitting[i];
+        }
+    }
+
+    return nullptr;
+}
+
 static void note_overload_evidence(core_list_t(integer_evidence_t) *evidence,
                                    const n00bb_dispatch_index_t *index,
                                    ir_module_t *module, const ir_instr_t *in)
 {
+    if (in->op == IR_OP_DISPATCH
+        && note_overload_site(evidence, index, module, in)) {
+        return;
+    }
+
     const ir_value_t *receiver = in->op == IR_OP_DISPATCH
             && in->n_operands >= 2 && in->operands[0].kind == IR_OPD_NAME
         ? ir_value_operand(in, 1) : nullptr;
@@ -4960,9 +5682,12 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
         bool fits = entry->overload && !entry->overloads_differ
             && range.seen.lo >= entry->overload_bounds.lo
             && range.seen.hi <= entry->overload_bounds.hi;
+        th_type *chosen = chosen_integer(entry, range);
 
         ty_settle_open(solver, CORE_STRING_STATIC("Some_Integer"), entry->var,
-                       fits ? entry->overload : best_integer_fit(types, range));
+                       chosen ? chosen
+                       : fits ? entry->overload
+                              : best_integer_fit(types, range));
     }
     core_list_free(evidence);
 
@@ -6055,6 +6780,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
 
     typing->dispatch = dispatch_index_new(analysis);
     ty_solver_set_methods(solver, method_signature, typing->dispatch);
+    ty_solver_set_overloads(solver, overload_choice, typing->dispatch);
     ty_solver_set_requirements(solver, dispatch_requirements,
                                typing->dispatch);
     ty_solver_set_fields(solver, field_signature, typing->dispatch);
@@ -6124,6 +6850,10 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     bool switched = switches_fit(typing->dispatch, units, count, &functions);
     bool arities  = check_dispatch_arities(types, typing->dispatch, units,
                                            count, solver);
+
+    arities = check_overload_sites(types, typing->dispatch, units, count,
+                                   solver)
+           && arities;
     bool writable = check_write_sites(units, count);
     bool visible  = check_field_privacy(types, typing->dispatch->analysis,
                                         units, count);
