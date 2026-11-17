@@ -858,6 +858,30 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                     in->dest->type, left, right, in->span);
     const n00bb_binary_operator_t *binary = right
         ? n00bb_binary_operator_method(method) : nullptr;
+    // An integer operand of a float operation (typing chose the float's
+    // type for it) converts to that float, rounding to nearest.
+    ir_class_t left_class = ir_machine_of(rewrite->context.module,
+                                          left->type).class;
+    ir_class_t right_class = right ? ir_machine_of(rewrite->context.module,
+                                                   right->type).class
+                                   : IR_CLASS_VOID;
+    bool left_integer = left_class == IR_CLASS_SINT
+        || left_class == IR_CLASS_UINT;
+    bool right_integer = right_class == IR_CLASS_SINT
+        || right_class == IR_CLASS_UINT;
+    if (right && ((left_class == IR_CLASS_FLOAT && right_integer)
+                  || (right_class == IR_CLASS_FLOAT && left_integer))) {
+        ir_value_t **integer = left_integer ? &left : &right;
+        th_type *real = left_integer ? right->type : left->type;
+        ir_instr_t *cast = ir_lower_emit_instruction(&rewrite->context,
+                                                     IR_OP_CAST, in->span);
+        if (!cast || !ir_lower_set_temp_dest(&rewrite->context, cast,
+                CORE_STRING_STATIC("__n00bb_"), real)
+            || !ir_instr_operand_value(cast, *integer)
+            || !ir_instr_add_mod(cast, CORE_STRING_STATIC("nearest")))
+            return nullptr;
+        *integer = cast->dest;
+    }
     if (binary && (binary->op == IR_OP_SHL || binary->op == IR_OP_SHR)
         && is_integer_type(left->type) && is_integer_type(right->type)) {
         right = n00bb_rewrite_shift_count(rewrite, in, left->type, right);

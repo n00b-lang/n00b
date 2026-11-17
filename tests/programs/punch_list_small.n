@@ -176,4 +176,39 @@ require counter_product(6) == 64
 let small_byte: u8 = 200
 let wide_word: u16 = 1000
 require small_byte < wide_word and !(small_byte == wide_word)
+
+# Mixing an int and a float in an operation gives a float (#6); the int
+# converts, rounding to nearest. Only in such an operation: an int is not
+# otherwise a float. `cast[]` converts explicitly by the same rule.
+let mixed_literals = 1.5 + 2
+let half = 0.5
+var float_count = 0.5
+float_count = float_count + 1
+let int_two = 2
+func float_plus_int(f: float, n: int) -> float {
+    return f + n
+}
+func int_times_float(n: int, f: float) -> float {
+    return n * f
+}
+func inferred_int_meets_float(f: float) -> float {
+    var n = 2
+    return f + n
+}
+func module_int_meets_float(f: float) -> float {
+    return f + int_two
+}
+func narrow_float_mix(f: f32, n: i16) -> f32 {
+    return f + n
+}
+require mixed_literals == 3.5
+require half + 1 == 1.5 and float_count == 1.5
+require float_plus_int(0.5, 2) == 2.5 and int_times_float(3, 0.5) == 1.5
+require inferred_int_meets_float(0.5) == 2.5
+require module_int_meets_float(0.5) == 2.5
+require narrow_float_mix(cast[f32](0.5), 2) == cast[f32](2.5)
+require half < 3 and 2.0 == int_two
+require cast[float](-3) == -3.0
+require cast[f32](cast[u8](200)) == cast[f32](200.0)
+require cast[float](cast[i128](9007199254740993)) == 9007199254740992.0
 __fd_write(2, "ok")

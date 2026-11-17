@@ -2744,13 +2744,150 @@ typedef enum {
 // addition and `u8 + i8` an `i16` one. An operand that is still an open
 // literal is sized from its own values first (`a + 1000` with `a: u8`
 // sizes `1000` as `u16`), so the call waits until it is.
+// A float literal, whose type is still open while typing starts.
+static bool float_constant(const ir_value_t *value)
+{
+    const ir_instr_t *def = value ? value->def : nullptr;
+
+    return def && def->op == IR_OP_CONST && def->n_operands == 1
+        && def->operands[0].kind == IR_OPD_CONST
+        && def->operands[0].lit.is_float;
+}
+
+// An integer literal (not a string or float one).
+static bool integer_constant(const ir_value_t *value)
+{
+    const ir_instr_t *def = value ? value->def : nullptr;
+
+    return def && def->op == IR_OP_CONST && def->n_operands == 1
+        && def->operands[0].kind == IR_OPD_CONST
+        && !def->operands[0].lit.is_float
+        && !def->operands[0].lit.text.data;
+}
+
+// The smallest integer type holding an integer literal's value, and that
+// value as a range; null past 128 bits.
+static th_type *literal_integer_type(th_ctx *types, const ir_value_t *value,
+                                     ir_interval_t *range)
+{
+    ir_lit_t literal = value->def->operands[0].lit.i;
+    ir_int_t point   = 0;
+
+    if (!literal.neg && literal.mag > (ir_uint_t)ir_int_max) {
+        point = ir_int_max;
+    }
+    else if (literal.neg && literal.mag > (ir_uint_t)ir_int_max + 1) {
+        return nullptr;
+    }
+    else {
+        point = literal.neg
+            ? (literal.mag == (ir_uint_t)ir_int_max + 1
+                   ? ir_int_min : -(ir_int_t)literal.mag)
+            : (ir_int_t)literal.mag;
+    }
+    *range = ir_interval_point(point);
+    return best_integer_fit(types, (ir_abcd_range_t){.seen = *range});
+}
+
+// Whether an open value comes from a float literal (or, with `!real`, an
+// integer one): directly, or through copies, a local's slot or a module
+// variable's stores (`var x = 0.5` then `x + 1`; `var n = 2` then
+// `f + n`). Only asked where an open value meets a literal or a float, so
+// the few steps of search stay off typing's hot path.
+static bool literal_origin(const ir_func_t *function, const ir_value_t *value,
+                           bool real, int depth)
+{
+    if (!value || depth > 4) {
+        return false;
+    }
+    if (real ? float_constant(value) : integer_constant(value)) {
+        return true;
+    }
+
+    const ir_instr_t *def = value->def;
+    const ir_value_t *slot = def && def->op == IR_OP_LOAD
+                               ? ir_value_operand(def, 0)
+                               : nullptr;
+    const ir_global_t *global = value->kind == IR_VAL_GLOBAL
+                                  ? value->global
+                                  : nullptr;
+    const ir_local_t  *local  = value->kind == IR_VAL_LOCAL ? value->local
+                                                            : nullptr;
+
+    if (!slot && !global && !local) {
+        return def && def->op == IR_OP_COPY
+            && literal_origin(function, ir_value_operand(def, 0), real,
+                              depth + 1);
+    }
+    // The values written to the local, slot or module variable.
+    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in      = function->blocks[b]->instrs[i];
+            const ir_value_t *written = nullptr;
+
+            if (local && in->op == IR_OP_COPY && in->dest_local == local) {
+                written = ir_value_operand(in, 0);
+            }
+            else if (slot && in->op == IR_OP_STORE
+                     && ir_value_operand(in, 0) == slot) {
+                written = ir_value_operand(in, 1);
+            }
+            else if (global && in->op == IR_OP_GLOBAL_STORE) {
+                const ir_value_t *target = ir_value_operand(in, 0);
+
+                if (target && target->kind == IR_VAL_GLOBAL
+                    && target->global == global) {
+                    written = ir_value_operand(in, 1);
+                }
+            }
+            if (written && literal_origin(function, written, real,
+                                          depth + 1)) {
+                return true;
+            }
+        }
+    }
+    // A module variable is set in its module's initializer, which is
+    // usually not the function reading it.
+    ir_module_t *owner = global ? global->owner : nullptr;
+
+    for (size_t f = 0; owner && f < ir_func_count(owner); f++) {
+        const ir_func_t *other = ir_func_at(owner, f);
+
+        for (uint32_t b = 0; other != function && b < other->n_blocks; b++) {
+            for (uint32_t i = 0; i < other->blocks[b]->n_instrs; i++) {
+                const ir_instr_t *in     = other->blocks[b]->instrs[i];
+                const ir_value_t *target = in->op == IR_OP_GLOBAL_STORE
+                                             ? ir_value_operand(in, 0)
+                                             : nullptr;
+
+                if (target && target->kind == IR_VAL_GLOBAL
+                    && target->global == global
+                    && literal_origin(other, ir_value_operand(in, 1), real,
+                                      depth + 1)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool float_origin(const ir_func_t *function, const ir_value_t *value,
+                         int depth)
+{
+    return literal_origin(function, value, true, depth);
+}
+
 static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
                                      const ir_instr_t *at, th_type **out)
 {
     th_ctx *types = ir_ctx_types(index->analysis->ir_context);
 
+    // A `switch` case test is not a mixed operation: a case must have the
+    // switch value's type (`case 1.5` on a `uint` is an error).
     if (!at || at->op != IR_OP_DISPATCH || at->n_operands != 3
-        || at->operands[0].kind != IR_OPD_NAME) {
+        || at->operands[0].kind != IR_OPD_NAME
+        || ir_annot_get((ir_annots_t *)&at->annots, N00BB_SWITCH_KEY)) {
         return PROMOTION_NONE;
     }
 
@@ -2774,13 +2911,78 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
     ir_interval_t     lr = {0}, rr = {0};
     bool              lp = lt && promotable_integer(types, lt, &lr);
     bool              rp = rt && promotable_integer(types, rt, &rr);
+    bool              lf = lt && float_type(lt);
+    bool              rf = rt && float_type(rt);
+    bool              l_open = lt && th_kind_of(lt) == TH_VAR
+                            && !th_var_ref(lt);
+    bool              r_open = rt && th_kind_of(rt) == TH_VAR
+                            && !th_var_ref(rt);
+
+    // An integer literal beside a declared operand needs no waiting: its
+    // value is in the IR. If it fits the declared integer type it simply
+    // takes that type (the usual lookup); otherwise it is the smallest type
+    // holding its value, and the operation promotes now. Waiting would
+    // leave everything downstream unresolved through sizing.
+    if ((lp || lf) && r_open && integer_constant(right)) {
+        rt = literal_integer_type(types, right, &rr);
+        if (!rt || (lp && rr.lo >= lr.lo && rr.hi <= lr.hi)) {
+            return PROMOTION_NONE;
+        }
+        rp     = true;
+        r_open = false;
+    }
+    else if ((rp || rf) && l_open && integer_constant(left)) {
+        lt = literal_integer_type(types, left, &lr);
+        if (!lt || (rp && lr.lo >= rr.lo && lr.hi <= rr.hi)) {
+            return PROMOTION_NONE;
+        }
+        lp     = true;
+        l_open = false;
+    }
+
     // Before literals are sized, an unbound operand may be one: wait. After
     // sizing anything still unbound (a generic's type) resolves as usual.
+    // Two unbound operands where one is a float literal wait too, so the
+    // float settles before the integer is unified with it (`1.5 + 2`).
+    // A float operand only waits for an open integer, a literal or a value
+    // assigned one (`var n = 2` then `f + n`); an open float (`0.0` beside
+    // an `f32`) unifies with it as usual.
+    const ir_func_t *function = at->block ? at->block->owner : nullptr;
+
     if (index->sizing_pending
-        && ((lp && !rp && th_kind_of(rt) == TH_VAR && !th_var_ref(rt))
-            || (rp && !lp && th_kind_of(lt) == TH_VAR
-                && !th_var_ref(lt)))) {
+        && ((lp && r_open) || (rp && l_open)
+            || (lf && r_open && literal_origin(function, right, false, 0))
+            || (rf && l_open && literal_origin(function, left, false, 0))
+            || (l_open && r_open
+                && (float_constant(left) || float_constant(right)))
+            || (l_open && r_open && integer_constant(right)
+                && float_origin(at->block ? at->block->owner : nullptr,
+                                left, 0))
+            || (l_open && r_open && integer_constant(left)
+                && float_origin(at->block ? at->block->owner : nullptr,
+                                right, 0)))) {
         return PROMOTION_WAIT;
+    }
+
+    // An integer meeting a float in an arithmetic or comparison operator
+    // converts to the float's type: mixing ints and floats gives a float.
+    // Only here; an int is not otherwise a float.
+    if ((lf && rp) || (rf && lp)) {
+        if (binary && (binary->unsigned_only || binary->op == IR_OP_REM)) {
+            return PROMOTION_NONE;
+        }
+
+        th_type *real = lf ? lt : rt;
+
+        // Each operand keeps its own type here: the solver never turns an
+        // int into a float, and the rewrite converts the integer operand.
+        *out = contract(types,
+                        equal ? th_name(types, CORE_STRING_STATIC("bool"))
+                        : compare
+                            ? th_name(types, CORE_STRING_STATIC("Comparison"))
+                            : real,
+                        lt, rt);
+        return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
     }
     if (!lp || !rp || th_hash(types, lt) == th_hash(types, rt)) {
         return PROMOTION_NONE;

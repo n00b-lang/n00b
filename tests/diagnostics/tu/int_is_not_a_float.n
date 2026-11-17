@@ -1,0 +1,5 @@
+let a: float = 2
+func g(x: float) -> float {
+    return x
+}
+let r = g(2)

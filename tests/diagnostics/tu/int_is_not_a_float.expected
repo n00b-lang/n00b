@@ -1,0 +1,3 @@
+tests/diagnostics/tu/int_is_not_a_float.n:1:16: error N00B-T0500: `2` is an integer, which does not convert to `f64`
+tests/diagnostics/tu/int_is_not_a_float.n:5:11: error N00B-T0005: parameter 1 (`x`) of `g` is `f64`, but this argument is an integer
+  tests/diagnostics/tu/int_is_not_a_float.n:2:6: note: `g` is declared here
