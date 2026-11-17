@@ -1349,7 +1349,8 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
     if (!validate_litmod_aliases(unit)
         || !report_shadowed_litmods(unit, state)) return false;
     bool annotated = run_semantic_walk(grammar, types, unit, tree, nullptr,
-                                       0, 0, true);
+                                       0, 0, true)
+        && check_bare_aliases(grammar, unit);
     const core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(unit);
     bool reported = core_diagnostics_failed(diagnostics);
@@ -1535,6 +1536,10 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
                    core_list_t(core_translation_unit_ptr_t) *members,
                    const n00bb_semantic_hooks_t *hooks)
 {
+    // Before anything is declared, a bare `alias` naming a literal modifier
+    // becomes a literal modifier alias.
+    for (size_t i = 0; i < members->len; i++)
+        if (!settle_bare_aliases(grammar, members->data[i])) return false;
     for (size_t i = 0; i < members->len; i++)
         if (!declare_unit(grammar, types, members->data[i])) return false;
     if (!bind_imported_module_scopes(members)) return false;
