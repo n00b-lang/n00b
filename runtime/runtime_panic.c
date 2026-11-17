@@ -572,7 +572,11 @@ put_runtime_message(const failure_record_t *failure)
         put_signed((int64_t)failure->first);
         put(TEXT(".."));
         put_signed((int64_t)failure->second);
-        put(TEXT(" is out of bounds for "));
+        // A slice's bounds past the ends stop there; what fails is a start
+        // after the end.
+        put((int64_t)failure->first > (int64_t)failure->second
+            ? TEXT(" starts after its end, for ")
+            : TEXT(" is out of bounds for "));
         put(text);
         put(TEXT(" of length "));
         put_unsigned(failure->third);

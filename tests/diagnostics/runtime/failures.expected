@@ -10,4 +10,3 @@ tests/diagnostics/runtime/failures.n:55:11: note N00B-S0064: parameter `a` could
 tests/diagnostics/runtime/failures.n:97:6: warning N00B-N0019: function `read_value` is never called
   help: call it or delete it
 tests/diagnostics/runtime/failures.n:137:17: warning N00B-S0059: this condition is always false, so the other branch never runs
-tests/diagnostics/runtime/failures.n:175:18: note N00B-S0064: parameter `items` could be `view`: `empty_slice` never writes anything reachable from it
