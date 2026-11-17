@@ -604,9 +604,12 @@ static th_type *result_of(gen_t *g, ir_instr_t *in, bool *handled)
         }
         return nullptr;
     case IR_OP_OPTION_GET:
+        // The operand is an option of the result: equate rather than flow,
+        // since a flow would accept a plain value as the operand and type
+        // the result as the whole option.
         if (in->dest) {
-            ty_unify(g->s, th_option(g->types, in->dest->type),
-                     operand_type(in, 0), why_of(in, 11));
+            ty_equate(g->s, th_option(g->types, in->dest->type),
+                      operand_type(in, 0), why_of(in, 11));
         }
         return nullptr;
     case IR_OP_OPTION_SOME:
