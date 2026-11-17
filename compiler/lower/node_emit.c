@@ -81,6 +81,8 @@ emit_unary(parse_grammar_t *grammar, parse_tree_t *node, n00bb_emit_t *emit)
     else if (child_is(node, 0, S("cast"))) emit_set(emit, S("cast"), 1, 4, 0);
     else if (child_is(node, 0, S("unsafe_cast")))
         emit_set(emit, S("unsafe_cast"), 1, 4, 0);
+    else if (child_is(node, 1, S(":")))
+        emit_set(emit, S("type_annotation"), 1, 0, 0);
     else if (core_tree_num_children(node) == 1
              && !core_tree_is_leaf(core_tree_child(node, 0)))
         emit_set(emit, S("identity"), 1, 0, 0);

@@ -2540,6 +2540,126 @@ process_import(pp_context_t *ctx, parse_tree_t *import,
     return succeeded;
 }
 
+// The type annotation (`expr: T`) an operand holds outside any bracket, if
+// it holds one: only the operator chain and a postfix's base are searched.
+static parse_tree_t *
+bare_annotation(pp_context_t *ctx, parse_tree_t *node)
+{
+    static const char *const chain[] = {
+        "expression", "or-expr", "and-expr", "or-rhs", "and-rhs",
+        "equality-expr", "compare-expr", "bitor-expr", "bitxor-expr",
+        "bitand-expr", "shift-expr", "add-expr", "mul-expr", "unary-expr",
+    };
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    if (is_name(ctx->grammar, node, "unary-expr")
+        && core_tree_num_children(node) == 3
+        && parse_tree_leaf_is(core_tree_child(node, 1),
+                              CORE_STRING_STATIC(":")))
+        return node;
+    bool operator_chain = false;
+    for (size_t i = 0; !operator_chain && i < sizeof(chain) / sizeof(*chain);
+         i++)
+        operator_chain = node_named(ctx->grammar, node,
+            core_string_borrow(chain[i], strlen(chain[i])));
+    for (size_t i = 0; operator_chain && i < core_tree_num_children(node);
+         i++) {
+        parse_tree_t *found = bare_annotation(ctx,
+                                              core_tree_child(node, i));
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+// Where `:` separates (dict and set literals, slices, ranges, `case`
+// ranges), an operand may not hold an unparenthesized type annotation.
+static bool
+check_separated_operands(pp_context_t *ctx, parse_tree_t *node)
+{
+    bool separated = is_name(ctx->grammar, node, "dict-entry")
+        || is_name(ctx->grammar, node, "set-entries")
+        || is_name(ctx->grammar, node, "slice-contents")
+        || is_name(ctx->grammar, node, "range-parts")
+        || is_name(ctx->grammar, node, "case-expr-item");
+    bool ok = true;
+    for (size_t i = 0; separated && i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (!is_name(ctx->grammar, child, "expression")) continue;
+        parse_tree_t *annotation = bare_annotation(ctx, child);
+        if (!annotation) continue;
+        pp_error(ctx, annotation, N00B_DIAG_ANNOTATION_AMONG_SEPARATORS,
+                 N00B_TEXT_ANNOTATION_AMONG_SEPARATORS, N00BB_NO_ARGS);
+        n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+            N00B_TEXT_PARENTHESIZE_THE_ANNOTATED_EXPRESSION,
+            N00BB_ARGS(ARG_TEXT(node_text(ctx, annotation))));
+        ok = false;
+    }
+    return ok;
+}
+
+static parse_tree_t *
+wrap_node(pp_context_t *ctx, const char *name, int32_t rule,
+          parse_tree_t *child)
+{
+    parse_tree_t *node = child ? parse_tree_make_nt(ctx->grammar,
+        core_string_borrow(name, strlen(name)), rule) : nullptr;
+    if (node && core_tree_add_child(node, child)) return node;
+    parse_tree_free(node);
+    return nullptr;
+}
+
+// `place: T = value` assigns `(value): T` to `place`: the statement is
+// rewritten in that form, so an assignment's checks and an implicit
+// declaration's typing apply to it unchanged. The productions named are
+// those of an expression that is just a parenthesized, annotated value.
+static bool
+rewrite_annotated_assignment(pp_context_t *ctx, parse_tree_t *node)
+{
+    if (!is_name(ctx->grammar, node, "assign-stmt")
+        || core_tree_num_children(node) != 5
+        || !parse_tree_leaf_is(core_tree_child(node, 1),
+                               CORE_STRING_STATIC(":")))
+        return true;
+    parse_tree_t *value = core_tree_remove_child(node, 4);
+    parse_tree_t *type = core_tree_remove_child(node, 2);
+    parse_tree_t *colon = core_tree_remove_child(node, 1);
+    parse_tree_t *open = parse_tree_make_synthetic_token(
+        parse_terminal_id(ctx->grammar, CORE_STRING_STATIC("(")),
+        CORE_STRING_STATIC("("));
+    parse_tree_t *close = parse_tree_make_synthetic_token(
+        parse_terminal_id(ctx->grammar, CORE_STRING_STATIC(")")),
+        CORE_STRING_STATIC(")"));
+    parse_tree_t *paren = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("tuple-or-paren"), 1);
+    parse_tree_t *annotated = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("unary-expr"), 8);
+    bool ok = value && type && colon && open && close && paren && annotated
+        && core_tree_add_child(paren, open)
+        && core_tree_add_child(paren, value)
+        && core_tree_add_child(paren, close);
+    parse_tree_t *base = ok ? wrap_node(ctx, "postfix-expr", 6,
+        wrap_node(ctx, "primary", 13, paren)) : nullptr;
+    ok = base && core_tree_add_child(annotated, base)
+        && core_tree_add_child(annotated, colon)
+        && core_tree_add_child(annotated, type);
+    static const struct { const char *name; int32_t rule; } levels[] = {
+        {"mul-expr", 3}, {"add-expr", 2},
+        {"shift-expr", 2}, {"bitand-expr", 1}, {"bitxor-expr", 1},
+        {"bitor-expr", 1}, {"compare-expr", 1}, {"equality-expr", 1},
+        {"and-expr", 1}, {"or-expr", 1}, {"expression", 0},
+    };
+    parse_tree_t *expression = ok ? annotated : nullptr;
+    for (size_t i = 0; expression && i < sizeof(levels) / sizeof(*levels);
+         i++)
+        expression = wrap_node(ctx, levels[i].name, levels[i].rule,
+                               expression);
+    if (!expression || !core_tree_add_child(node, expression)) {
+        pp_internal(ctx, node, "could not rewrite an annotated assignment");
+        return false;
+    }
+    core_tree_node_value(node).rule_index = 0;
+    return true;
+}
+
 typedef struct {
     parse_tree_t *selected_import_body;
     parse_tree_t *current_body;
@@ -2597,6 +2717,8 @@ preprocess_prepare(parse_visit_t *visit)
         && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
     if (is_name(ctx->grammar, node, "litmod-alias-stmt")
         && !register_litmod_alias(ctx, node)) return PARSE_VISIT_ERROR;
+    if (!rewrite_annotated_assignment(ctx, node)) return PARSE_VISIT_ERROR;
+    (void)check_separated_operands(ctx, node);
     if (is_name(ctx->grammar, node, "import-stmt")) {
         if (frame->current_body
             && frame->current_body != frame->selected_import_body) {
@@ -2776,11 +2898,25 @@ bare_operand(parse_tree_t *node)
     return node;
 }
 
+// A type annotation, `operand: T`: a `unary-expr` whose second child is
+// the `:`.
+static bool
+annotation_node(pp_context_t *ctx, parse_tree_t *node)
+{
+    return node && !core_tree_is_leaf(node)
+        && nonterm_class(ctx, node) == PP_OP_PREFIX
+        && core_tree_num_children(node) == 3
+        && core_tree_is_leaf(core_tree_child(node, 1))
+        && core_string_eq(leaf_text(ctx, core_tree_child(node, 1)),
+                          CORE_STRING_STATIC(":"));
+}
+
 static pp_class_t
 prefix_operator(pp_context_t *ctx, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node) || core_tree_num_children(node) < 2
-        || nonterm_class(ctx, node) != PP_OP_PREFIX)
+        || nonterm_class(ctx, node) != PP_OP_PREFIX
+        || annotation_node(ctx, node))
         return PP_OP_NONE;
     parse_tree_t *first = core_tree_child(node, 0);
     if (nonterm_class(ctx, first) == PP_OP_NOT) return PP_OP_NOT;
@@ -2979,6 +3115,42 @@ report_prefix_mix(pp_discovery_t *discovery, parse_tree_t *parent,
                      grouped_left, grouped_right);
 }
 
+// The annotation that ends an operand, unparenthesized: `b: int` in
+// `a + b: int`, seen through any sign or `not` before it. A sign or `not`
+// leaves the type alone, so either reading of `-x: int` is the same.
+static parse_tree_t *
+trailing_annotation(pp_context_t *ctx, parse_tree_t *node)
+{
+    for (node = bare_operand(node); node;) {
+        if (annotation_node(ctx, node)) return node;
+        pp_class_t prefix = prefix_operator(ctx, node);
+        if (prefix != PP_OP_SYMBOL && prefix != PP_OP_NOT) return nullptr;
+        node = bare_operand(prefix_operand(node));
+    }
+    return nullptr;
+}
+
+// An annotation after an operator could type the operator's last operand
+// or the whole operation: `a + b: int` is `(a + b): int` or `a + (b: int)`.
+static void
+report_annotation_mix(pp_discovery_t *discovery, n00bb_diag_t id,
+                      parse_tree_t *owner, parse_tree_t *op,
+                      parse_tree_t *annotation)
+{
+    pp_context_t *ctx = discovery->ctx;
+    parse_tree_t *colon = core_tree_child(annotation, 1);
+    size_t start = node_start(owner);
+    pp_fix_t whole = parenthesize(start, start,
+                                  node_end(core_tree_child(annotation, 0)));
+    pp_fix_t last = parenthesize(node_start(annotation),
+                                 node_start(annotation),
+                                 node_end(annotation));
+    report_ambiguity(discovery, id, node_location(op), node_location(colon),
+                     id == N00B_DIAG_AMBIGUOUS_PREFIX
+                         ? first_leaf_text(ctx, owner) : node_text(ctx, op),
+                     CORE_STRING_STATIC(":"), whole, last);
+}
+
 static void
 check_operator_mix(pp_discovery_t *discovery, parse_tree_t *node)
 {
@@ -3003,9 +3175,30 @@ check_operator_mix(pp_discovery_t *discovery, parse_tree_t *node)
     }
     parse_tree_t *right = bare_operand(core_tree_child(node, 2));
     pp_class_t right_op = binary_operator(ctx, right);
-    if (right_op && operator_mix[op][right_op])
+    if (right_op && operator_mix[op][right_op]) {
         report_operator_mix(discovery, node, right, false,
                             operator_mix[op][right_op]);
+        return;
+    }
+    parse_tree_t *annotation = trailing_annotation(ctx,
+                                                   core_tree_child(node, 2));
+    if (annotation)
+        report_annotation_mix(discovery, N00B_DIAG_AMBIGUOUS_OPERATORS, node,
+                              core_tree_child(node, 1), annotation);
+}
+
+// A word prefix (`cast[T]`, `unsafe_cast[T]`, `ref`) before an annotated
+// operand could apply before or after the annotation.
+static void
+check_prefixed_annotation(pp_discovery_t *discovery, parse_tree_t *node)
+{
+    pp_context_t *ctx = discovery->ctx;
+    if (prefix_operator(ctx, node) != PP_OP_WORD) return;
+    parse_tree_t *annotation = trailing_annotation(ctx,
+                                                   prefix_operand(node));
+    if (annotation)
+        report_annotation_mix(discovery, N00B_DIAG_AMBIGUOUS_PREFIX, node,
+                              core_tree_child(node, 0), annotation);
 }
 
 static void
@@ -3400,6 +3593,7 @@ preprocess_discover(parse_visit_t *visit)
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
     check_operator_mix(discovery, node);
+    check_prefixed_annotation(discovery, node);
     if (nonterm_class(ctx, node) == PP_FORMALS) check_formals(discovery, node);
     if (is_name(ctx->grammar, node, "variable-decl")
         || is_name(ctx->grammar, node, "import-stmt"))

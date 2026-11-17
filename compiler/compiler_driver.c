@@ -1039,7 +1039,9 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
     return core_string_eq(predicate,
                CORE_STRING_STATIC("n00bb_prefer_type_application"))
         || core_string_eq(predicate,
-               CORE_STRING_STATIC("n00bb_prefer_dict_entries"));
+               CORE_STRING_STATIC("n00bb_prefer_dict_entries"))
+        || core_string_eq(predicate,
+               CORE_STRING_STATIC("n00bb_type_annotation_colon"));
 }
 
 static bool

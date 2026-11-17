@@ -1009,6 +1009,36 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
 }
 
+// `value: T`: the value, as a T. The value is stored in a T and read back,
+// as a declaration `let x: T = value` would hold it: a literal takes the
+// type, a value that converts to it (an integer that widens) converts, and
+// any other value is an error.
+ir_lower_result_t
+n00bb_lower_type_annotation(ir_lower_context_t *context, parse_visit_t *visit,
+                            ir_value_t *const *operands, size_t operand_count,
+                            th_type *result_type, ir_span_t span, void *state)
+{
+    (void)state;
+    (void)result_type;
+    parse_tree_t *spec = child_nt(visit->grammar, visit->node,
+                                  CORE_STRING_STATIC("type-spec"));
+    th_type *target = spec ? parse_tree_type(spec) : nullptr;
+    if (operand_count != 1 || !operands || !operands[0] || !target
+        || !context->function)
+        return lower_internal(context, span,
+                              "an annotated value or its type is incomplete");
+    char name_buffer[48];
+    core_string_t name = n00bb_format_name(name_buffer, sizeof(name_buffer),
+        "__n00bb_annotated_%llu",
+        (unsigned long long)context->next_value_id++);
+    ir_local_t *slot = ir_local_add(context->function, name, target);
+    ir_value_t *value = slot
+        && n00bb_emit_local_assign(context, slot, operands[0], true, span)
+        ? n00bb_emit_local_read(context, slot, span) : nullptr;
+    return value ? (ir_lower_result_t){IR_LOWER_VALUE, value}
+        : lower_internal(context, span, "could not emit an annotated value");
+}
+
 ir_lower_result_t
 n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
                 parse_tree_t *operand_node, ir_value_t *const *operands,

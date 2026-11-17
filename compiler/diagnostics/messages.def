@@ -612,6 +612,8 @@ N00B_TEXT(CANNOT_BE_USED_IN_A_5, "`{0}` cannot be used in a compile-time express
 N00B_TEXT(A_MODULE_LITERAL_MUST_INITIALIZE, "a module literal declares its names into this module, so it stands alone: it can't initialize a variable")
 N00B_TEXT(A_MODULE_LITERAL_MUST_INITIALIZE_2, "a module literal declares names into its module, so it must stand alone at module level")
 N00B_TEXT(IMPORT_MUST_BE_AT_MODULE, "`import` must be at module level or directly inside a `when` branch")
+N00B_TEXT(ANNOTATION_AMONG_SEPARATORS, "`:` here separates, so this type annotation needs parentheses")
+N00B_TEXT(PARENTHESIZE_THE_ANNOTATED_EXPRESSION, "write `({0})` to annotate the expression")
 N00B_TEXT(A_MODULE_LITERAL_CAN_ONLY, "a module literal can only stand alone at module level")
 N00B_TEXT(INCONSISTENT_SPELLING_FOR_HERE_BUT, "inconsistent spelling for {0}: `{1}` here, but {2} elsewhere in this file")
 N00B_TEXT(IS_USED_HERE, "`{0}` is used here")

@@ -1,0 +1,5 @@
+let a = 1
+let b = 2
+let sum = a + b: int
+let product = a * -b: int
+let narrowed = cast[u8] a: int

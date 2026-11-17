@@ -1,0 +1,2 @@
+let items = [1, 2, 3]
+let middle = items[1: int:2]

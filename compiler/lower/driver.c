@@ -271,6 +271,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                                nullptr)
         && ir_lowerer_register(lowerer, CORE_STRING_STATIC("typeof"), n00bb_lower_typeof,
                                nullptr)
+        && ir_lowerer_register(lowerer,
+                               CORE_STRING_STATIC("type_annotation"),
+                               n00bb_lower_type_annotation, nullptr)
         && ir_lowerer_register(lowerer, CORE_STRING_STATIC("effect_query"),
                                n00bb_lower_effect_query, nullptr)
         && ir_lowerer_register(lowerer, CORE_STRING_STATIC("bool_not"), n00bb_lower_bool_not,

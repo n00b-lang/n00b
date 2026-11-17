@@ -356,7 +356,6 @@
 
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <binding-pattern> <assign-op> <expression>
-
 <visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
 
 <declaration-prefix> ::= <storage-class>? <binding-kind>
@@ -533,6 +532,10 @@
 
 <assign-stmt> @assigns($0, $2) ::= <place> <assign-op> <expression>
 <assign-stmt> ::= <assign-pattern> <assign-op> <expression>
+# `x: T = value` annotates the place assigned; with no `let` or `var` it
+# declares `x` as an implicit declaration does. The preprocessor rewrites it
+# as `x = (value): T`.
+<assign-stmt> @nospace($1) ::= <place> %":" <type-spec> <assign-op> <expression>
 <assign-pattern> @nospace($1) ::= %"(" <assign-pattern-items> %")"
 <assign-pattern-items> ::= <assign-pattern-item> %"," <assign-pattern-items>
                         | <assign-pattern-item> %"," <assign-pattern-item>
@@ -640,6 +643,12 @@
 <unary-expr> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @nospace($1) @nospace($2) @nospace($3) ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> ::= <postfix-expr>
+# A type annotation on any expression: `5: u8`, `items: List[int]`. It
+# binds as tightly as a postfix, but no postfix follows it unless it is
+# parenthesized. Inside a dict or set literal, a slice or a range, a `:`
+# separates instead; the cost makes those readings win wherever both fit.
+<unary-expr> @nospace($1) @disambig(n00bb_type_annotation_colon, 100) ::=
+    <postfix-expr> %":" <type-spec>
 
 <postfix-expr> @nospace ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @nospace ::= <postfix-expr> %"[" <index-contents> %"]"
@@ -678,14 +687,6 @@
             | <typeof-expr>
             | <effect-query>
             | <tuple-or-paren>
-
-<primary> ::= <literal-expr> %":" <type-spec>
-
-<literal-expr> ::= <simple-lit>
-                 | <embed-lit>
-                 | <list-lit>
-                 | <dict-or-set-lit>
-                 | <tuple-or-paren>
 
 <primary> @varref($0) @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
