@@ -3937,8 +3937,12 @@ static bool continue_number(parse_scanner_t *s) {
         }
         bool next_digit = number_digit(
             lex, scan_peek(s, 1), form->digits);
+        // A trailing point (`5.`) ends the number unless what follows is
+        // another point (`5..`) or could start a name (`5.abs()`, a member
+        // of the integer, as in Rust).
         bool trailing = (form->flags & SCAN_LEX_NUM_TRAILING_POINT) &&
-                        scan_peek(s, 1) != '.';
+                        scan_peek(s, 1) != '.' &&
+                        !id_start_here(lex, scan_peek(s, 1));
         if (next_digit || trailing) {
           run->pending_number_float = true;
           run->pending_number_point = true;

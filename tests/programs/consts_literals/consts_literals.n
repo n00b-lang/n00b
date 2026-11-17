@@ -204,4 +204,17 @@ const static_words = ["static", "litmod"]
 require primes[3] == 7 and primes.len() == 5
 require names["b"].get_or_else(0) == 2
 require static_words[1] == "litmod"
+
+// A trailing point makes a float, as long as no name follows it: `5.abs()`
+// is a method call on the integer 5. (Kept last: the `'located` test above
+// checks its own line.)
+func doubled_whole(self: int) -> int {
+    return self * 2
+}
+
+let trailing: f64 = 5.
+let trailing_sum: f64 = 1_000. + 2.
+let trailing_items = [1., 2., 3.]
+require trailing == 5.0 and trailing_sum == 1002.0 and trailing_items[2] == 3.0
+require 5.doubled_whole() == 10
 __fd_write(2, "ok")
