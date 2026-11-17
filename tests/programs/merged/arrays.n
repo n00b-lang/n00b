@@ -233,6 +233,16 @@ func ragged_local() -> int {
 
 require ragged_local() == 5
 
+// A ragged array given a literal of rows, inside a function.
+func ragged_literal() -> int {
+    var rows: Array[int][2][] = [[1], [2]]
+    rows[1] = [4, 5, 6]
+    var uneven: Array[int][2][] = [[1], [2, 3]]
+    return rows[1][2] + rows[0][0] + uneven[1][1] + cast[int](rows.len())
+}
+
+require ragged_literal() == 6 + 1 + 3 + 2
+
 // A bounded `let` array gets its storage where it's declared; it is shared,
 // so its elements may be set. One assignment may still replace it.
 func let_storage() -> int {
