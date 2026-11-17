@@ -694,12 +694,15 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
 // A callee's summary as `caller` sees it when some of the globals it
 // touches lie behind a barrier for the caller: the paths and flows through
 // those globals are left out. Everything else is shared with the callee's
-// summary, which the view only reads.
+// summary, which the view only reads. So a view is only good for the
+// revision of the summary it was made from: replacing the summary's contents
+// frees the lists the view shares.
 typedef struct {
     ir_summary_t *view;
     const ir_summary_t *source;
     const ir_module_t  *module;
     uint64_t      stamp;
+    uint64_t      revision;
 } summary_view_t;
 
 static uint8_t
@@ -814,7 +817,7 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
     summary_view_t *cached = core_dict_get(&summaries->views, key, nullptr);
     uint64_t stamp = view_stamp(callee);
     if (cached && cached->source == callee && cached->module == caller->owner
-        && cached->stamp == stamp)
+        && cached->stamp == stamp && cached->revision == callee->revision)
         return cached->view ? cached->view : callee;
     bool hides = false;
     for (size_t i = 0; !hides && i < callee->paths.len; i++)
@@ -846,7 +849,8 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
     }
     else view_release(cached->view);
     *cached = (summary_view_t){.view = view, .source = callee,
-                               .module = caller->owner, .stamp = stamp};
+                               .module = caller->owner, .stamp = stamp,
+                               .revision = callee->revision};
     return view ? view : callee;
 }
 

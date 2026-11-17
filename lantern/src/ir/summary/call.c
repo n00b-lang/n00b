@@ -88,9 +88,10 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
         set_add(pt, into, item_at(loc));
         if (!through) return;
     }
-    const core_string_t *tail  = path->steps + slot + 1;
     uint32_t             count = slot < path->depth
         ? path->depth - slot - 1 : 0;
+    // A path with no steps has none to point into (`steps` may be null).
+    const core_string_t *tail  = count ? path->steps + slot + 1 : nullptr;
     uint8_t              flags = path->flags
         & (uint8_t)(IR_SPATH_DEEP | SPATH_INLINE);
     pt_depend(pt, contents_key(loc.site));
@@ -112,8 +113,9 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
             resolve_through(pt, &held, into, seen);
             continue;
         }
-        const core_string_t *inner = path->steps + held.depth;
         uint32_t             within = slot - held.depth;
+        const core_string_t *inner = within ? path->steps + held.depth
+                                            : nullptr;
         pt_loc_t             next   = held.loc;
         if (held.kind == PT_CONTENTS) {
             loc_extend(pt, &next, inner, within, false);
