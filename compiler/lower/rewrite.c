@@ -2671,6 +2671,26 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (open_cast && in->dest && operand)
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_cast(rewrite, in, open_cast));
+    ir_annot_t *trait_cast = in->op == IR_OP_COPY
+        ? ir_annot_get(&in->annots, N00BB_TRAIT_CAST_KEY) : nullptr;
+    if (trait_cast && operand) {
+        if (th_env_implements(types, th_resolve(operand->type), trait_cast->s))
+            return true;
+        core_string_t from = n00bb_print_type(types, operand->type);
+        core_string_t trait = trait_cast->s;
+        for (size_t i = trait.u8_bytes; i > 0; i--)
+            if (trait.data[i - 1] == '.') {
+                trait = core_string_borrow(trait.data + i,
+                                           trait.u8_bytes - i);
+                break;
+            }
+        n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
+            rewrite->unit, N00B_DIAG_CAST_NOT_DEFINED,
+            n00bb_span_location(in->span),
+            N00B_TEXT_CANNOT_CAST_TO_NOT_IMPLEMENTED,
+            N00BB_ARGS(ARG_TEXT(from), ARG_TEXT(trait)));
+        return false;
+    }
     if (in->op == IR_OP_CALLBACK_CREATE)
         return n00bb_rewrite_callback_setup(rewrite, in);
     bool arm_store = false;

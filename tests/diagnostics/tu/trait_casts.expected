@@ -1,0 +1,5 @@
+tests/diagnostics/tu/trait_casts.n:8:13: error N00B-T1005: cannot cast `Plain` to `Scales`: `Plain` does not implement `Scales`
+tests/diagnostics/tu/trait_casts.n:11:15: error N00B-T0600: `Scales` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Scales` here instead
+tests/diagnostics/tu/trait_casts.n:12:5: warning N00B-N0024: `checked` is never used
+  help: remove it

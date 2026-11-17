@@ -2168,6 +2168,67 @@ record_type_bound(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
     return true;
 }
 
+// The type a `cast[...]` names, when `node` lies inside it.
+static parse_tree_t *
+enclosing_cast_type(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *up = parse_tree_parent(at);
+        parse_tree_t *keyword = up && core_tree_num_children(up)
+            ? core_tree_child(up, 0) : nullptr;
+        if (up && NT_IS(grammar, at, "type-spec")
+            && NT_IS(grammar, up, "unary-expr") && keyword
+            && (parse_tree_leaf_is(keyword, CORE_STRING_STATIC("cast"))
+                || parse_tree_leaf_is(keyword,
+                                      CORE_STRING_STATIC("unsafe_cast"))))
+            return at;
+        if (NT_IS(grammar, at, "func-def")) return nullptr;
+    }
+    return nullptr;
+}
+
+// The trait `spec`, the type of a `cast[...]`, names directly.
+static parse_sym_entry_t *
+first_named_symbol(parse_tree_t *node)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(node);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        && resolution.target.symbol)
+        return resolution.target.symbol;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        parse_sym_entry_t *found = core_tree_is_leaf(child) ? nullptr
+                                                            : first_named_symbol(child);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+// The trait `spec`, the type of a `cast[...]`, names: its first name, so
+// `List[Trait]` names no trait.
+parse_sym_entry_t *
+n00bb_cast_trait(parse_grammar_t *grammar, parse_tree_t *spec)
+{
+    parse_sym_entry_t *symbol = spec ? first_named_symbol(spec) : nullptr;
+    return symbol && is_trait_type_symbol(grammar, symbol) ? symbol : nullptr;
+}
+
+// The qualified name a trait's implementations are recorded under.
+void
+n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
+                           parse_sym_entry_t *symbol, core_buffer_t *out)
+{
+    n00bb_export_origin_t *origin = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.export-origin"));
+    if (symbol->decl_node && declaration_unit)
+        append_module_type_name(declaration_unit, symbol->name, out);
+    else if (origin)
+        core_buffer_printf(out, "%.*s",
+            (int)origin->declaration.u8_bytes, origin->declaration.data);
+    else core_buffer_printf(out, "%.*s", (int)symbol->name.u8_bytes,
+                            symbol->name.data);
+}
+
 th_type *
 trait_type_reference(parse_grammar_t *grammar,
                      core_translation_unit_t *use_unit,
@@ -2175,19 +2236,26 @@ trait_type_reference(parse_grammar_t *grammar,
                      parse_sym_entry_t *symbol, parse_tree_t *reference)
 {
     n00bb_tu_state_t *state = tu_state(use_unit);
-    parse_sym_entry_t *owner = reference
-        ? typevar_owner(grammar, reference) : nullptr;    if (!state || !state->types || !declaration_unit || !owner
+    // A cast to a trait checks the value implements it; it is no type
+    // parameter of the function the cast is in.
+    bool cast = reference && enclosing_cast_type(grammar, reference);
+    parse_sym_entry_t *owner = reference && !cast
+        ? typevar_owner(grammar, reference) : nullptr;
+    if (reference && !cast && !owner && state && !parse_tree_type(reference)
+        && is_trait_type_symbol(grammar, symbol)) {
+        n00bb_report(core_translation_unit_diagnostics(use_unit), use_unit,
+            N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION,
+            n00bb_node_span(reference),
+            N00B_TEXT_TRAIT_TYPE_OUTSIDE_FUNCTION,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+        n00bb_report_help(core_translation_unit_diagnostics(use_unit),
+            N00B_TEXT_NAME_THE_IMPLEMENTING_TYPE,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+    }
+    if (!state || !state->types || !declaration_unit || !owner
         || !is_trait_type_symbol(grammar, symbol)) return nullptr;
     core_buffer_t qualified = {0};
-    n00bb_export_origin_t *origin = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.export-origin"));
-    if (symbol->decl_node)
-        append_module_type_name(declaration_unit, symbol->name, &qualified);
-    else if (origin)
-        core_buffer_printf(&qualified, "%.*s",
-            (int)origin->declaration.u8_bytes, origin->declaration.data);
-    else core_buffer_printf(&qualified, "%.*s", (int)symbol->name.u8_bytes,
-                            symbol->name.data);
+    n00bb_trait_qualified_name(declaration_unit, symbol, &qualified);
     core_diag_location_t at = n00bb_node_span(reference);
     core_buffer_t name = {0};
     core_buffer_printf(&name, "%.*s@%u:%u", (int)symbol->name.u8_bytes,

@@ -245,6 +245,11 @@ th_type *trait_type_reference(parse_grammar_t *grammar,
                               core_translation_unit_t *declaration_unit,
                               parse_sym_entry_t *symbol,
                               parse_tree_t *reference);
+parse_sym_entry_t *n00bb_cast_trait(parse_grammar_t *grammar,
+                                    parse_tree_t *spec);
+void n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
+                                parse_sym_entry_t *symbol,
+                                core_buffer_t *out);
 void resolve_local_type_reference(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit,
                                   parse_tree_t *node, parse_tree_t *parent);

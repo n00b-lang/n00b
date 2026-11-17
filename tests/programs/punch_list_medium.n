@@ -84,4 +84,24 @@ require style_weight(plain_style) == 1 and style_weight(ref plain_style) == 1
 require viewed_local() == 9 and viewed_field() == 4
 require style_weight(make_style(7)) == 7
 
+# A value casts to a trait its type implements (#5); the cast checks the
+# implementation and keeps the value.
+trait Scales {
+    func scale(self: 'S, by: int) -> int
+}
+record Scaled_Box {
+    v: int
+}
+func scale(self: Scaled_Box, by: int) -> int {
+    return self.v * by
+}
+let module_box: Scaled_Box = (v = 3)
+let module_scales = cast[Scales](module_box)
+func cast_in_function() -> int {
+    let b: Scaled_Box = (v = 5)
+    let s = cast[Scales](b)
+    return s.scale(2)
+}
+require module_scales.scale(2) == 6 and cast_in_function() == 10
+
 __fd_write(2, "ok")

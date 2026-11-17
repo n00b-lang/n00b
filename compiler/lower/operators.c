@@ -1010,6 +1010,34 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     (void)result_type;
     parse_tree_t *spec = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("type-spec"));
     th_type *target = spec ? parse_tree_type(spec) : nullptr;
+    parse_sym_entry_t *trait = spec ? n00bb_cast_trait(visit->grammar, spec)
+                                    : nullptr;
+    // A cast to a trait keeps the value as it is; once its type is known,
+    // the rewrite checks that type implements the trait.
+    if (trait && operand_count == 1 && operands && operands[0]) {
+        n00bb_lower_context_t *lower = context->user;
+        core_buffer_t name = {0};
+        n00bb_trait_qualified_name(trait->decl_node ? trait->owner_unit
+                                                    : lower->unit,
+                                   trait, &name);
+        ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY,
+                                                     span);
+        bool ok = copy && name.data
+            && ir_lower_set_temp_dest(context, copy,
+                   CORE_STRING_STATIC("__n00bb_cast_"),
+                   th_var(ir_module_types(context->module)))
+            && ir_instr_operand_value(copy, operands[0])
+            && ir_annot_set(lower->ir_context, &copy->annots,
+                   (ir_annot_t){.key = N00BB_TRAIT_CAST_KEY,
+                                .kind = IR_ANNOT_STR,
+                                .s = ir_strdup(lower->ir_context,
+                                               core_buffer_string(&name))});
+        core_buffer_release(&name);
+        if (!ok) return lower_internal(context, span,
+                                       "could not emit a cast to a trait");
+        n00bb_rewrite_later(context, copy);
+        return (ir_lower_result_t){IR_LOWER_VALUE, copy->dest};
+    }
     if (operand_count != 1 || !operands || !operands[0] || !target)
         return lower_internal(context, span,
                            "cast target and expression type are incomplete");
