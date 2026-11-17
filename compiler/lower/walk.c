@@ -50,6 +50,8 @@ typedef struct ir_lower_skip_frame_t {
     parse_tree_t *owner;
     parse_tree_t *reference;
     struct ir_lower_skip_frame_t *next;
+    // The walk is inside `reference`.
+    bool open;
 } ir_lower_skip_frame_t;
 
 struct ir_lowerer_t {
@@ -71,9 +73,13 @@ typedef struct {
     core_dict_t values;
     core_dict_t pruned_nodes;
     core_dict_t custom_assignments;
+    // Assignment targets read before the rest of their assignment runs.
+    core_dict_t snapshots;
     core_dict_t handled_assignments;
     core_dict_t suppressed_emits;
     ir_lower_skip_frame_t *skip_values;
+    // How many skipped references enclose the walk.
+    size_t suppressed_depth;
     parse_tree_t *active_node;
     bool active_entering;
     bool failed;
@@ -142,7 +148,9 @@ lower_active_tree(ir_lower_context_t *context)
     return state ? state->tree : nullptr;
 }
 
-static parse_tree_t *lower_tree_simple_lvalue(parse_tree_t *node);
+static bool lower_tree_declares(parse_visit_t *visit);
+static bool lower_symbol_defines_at(const parse_sym_entry_t *symbol,
+                                    parse_tree_t *node);
 static ir_span_t span_of_tree(ir_lower_context_t *context, parse_tree_t *node);
 static ir_lower_symbol_binding_t *lower_find_binding(
     ir_lower_context_t *context, parse_sym_entry_t *symbol);
@@ -280,21 +288,6 @@ ir_lower_handle_assignment(ir_lower_context_t *context,
     return true;
 }
 
-bool
-ir_lower_finish_assignment(ir_lower_context_t *context,
-                           parse_tree_t *assignment,
-                           parse_tree_t *completed_node)
-{
-    ir_lower_tree_state_t *state = lower_active_tree(context);
-    if (!state || !assignment || !completed_node) return false;
-    for (parse_tree_t *node = completed_node; node;
-         node = parse_tree_parent(node)) {
-        if (node != assignment) continue;
-        core_dict_put(&state->handled_assignments, assignment, (void *)1);
-        return true;
-    }
-    return false;
-}
 
 bool
 ir_lower_evaluate_assignment_target(ir_lower_context_t *context,
@@ -516,6 +509,35 @@ ir_lower_local_address(ir_lower_context_t *context, ir_local_t *local)
     return binding ? binding->address : nullptr;
 }
 
+// Whether `symbol` was bound after `checkpoint` was taken.
+bool
+ir_lower_bound_since(ir_lower_context_t *context,
+                     const parse_sym_entry_t *symbol, void *checkpoint)
+{
+    ir_lower_private_t *private = context ? lower_private(context) : nullptr;
+    for (ir_lower_symbol_binding_t *binding = private ? private->bindings
+                                                      : nullptr;
+         binding && binding != checkpoint; binding = binding->next)
+        if (binding->symbol == symbol) return true;
+    return false;
+}
+
+// The symbol bound to `local`, or to `value` as its value or storage address.
+parse_sym_entry_t *
+ir_lower_binding_symbol(ir_lower_context_t *context, const ir_local_t *local,
+                        const ir_value_t *value)
+{
+    ir_lower_private_t *private = context ? lower_private(context) : nullptr;
+    for (ir_lower_symbol_binding_t *binding = private ? private->bindings
+                                                      : nullptr;
+         binding; binding = binding->next)
+        if ((local && binding->local == local)
+            || (value && (binding->value == value
+                          || binding->address == value)))
+            return binding->symbol;
+    return nullptr;
+}
+
 ir_value_t *
 ir_lower_bound_value(ir_lower_context_t *context, parse_sym_entry_t *symbol)
 {
@@ -705,6 +727,7 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                 ? n00bb_emit_indirect_read(context, binding->address,
                                            binding->local->type, span)
                 : n00bb_emit_local_read(context, binding->local, span);
+
         if (!value)
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not emit a local read");
@@ -825,16 +848,25 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
 {
     if (annotation->kind != PARSE_ANNOT_ASSIGNS) return true;
     if (entering) {
+        // A declaration's target names a variable that does not exist
+        // yet, so it is not read. Any other target is read like any
+        // expression, before the value assigned is computed; the write goes
+        // to where it was read from.
+        if (!lower_tree_declares(visit)) {
+            parse_tree_t *read = parse_tree_resolve_child_ref(
+                visit->grammar, visit->node, annotation->name_ref);
+            if (read) core_dict_put(&state->snapshots, read, visit->node);
+            return true;
+        }
         if (core_dict_contains(&state->custom_assignments, visit->node))
             return true;
         parse_tree_t *target = parse_tree_resolve_child_ref(
             visit->grammar, visit->node, annotation->name_ref);
-        parse_tree_t *reference = lower_tree_simple_lvalue(target);
-        if (!reference) return true;
+        if (!target) return true;
         ir_lower_skip_frame_t *frame = core_alloc(ir_lower_skip_frame_t);
         *frame = (ir_lower_skip_frame_t){
             .owner = visit->node,
-            .reference = reference,
+            .reference = target,
             .next = state->skip_values,
         };
         state->skip_values = frame;
@@ -845,9 +877,13 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
     if (*at) {
         ir_lower_skip_frame_t *frame = *at;
         *at = frame->next;
+        if (frame->open && state->suppressed_depth) state->suppressed_depth--;
         core_free(frame);
     }
     core_dict_remove(&state->custom_assignments, visit->node);
+    parse_tree_t *target = parse_tree_resolve_child_ref(
+        visit->grammar, visit->node, annotation->name_ref);
+    if (target) core_dict_remove(&state->snapshots, target);
     return true;
 }
 
@@ -908,37 +944,6 @@ static bool lower_tree_nt_post(parse_visit_t *visit)
     return lower_tree_run_visit(visit, false, true);
 }
 
-static parse_tree_t *
-lower_only_nonterminal_child(parse_tree_t *node)
-{
-    parse_tree_t *only = nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (core_tree_is_leaf(child)) continue;
-        if (only) return nullptr;
-        only = child;
-    }
-    return only;
-}
-
-static parse_tree_t *
-lower_discarded_expression(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        n00bb_emit_t emit;
-        bool emits = n00bb_node_emit(grammar, node, &emit);
-        parse_tree_t *inner = nullptr;
-        if (emits && core_string_eq(emit.action,
-                                    CORE_STRING_STATIC("identity")))
-            inner = core_tree_child(node, emit.operands[0]);
-        else if (!emits)
-            inner = lower_only_nonterminal_child(node);
-        if (!inner || core_tree_is_leaf(inner)) return node;
-        node = inner;
-    }
-    return node;
-}
-
 static bool lower_literal_handler_call(parse_tree_t *node)
 {
     while (node && !core_tree_is_leaf(node)) {
@@ -959,18 +964,18 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     if (state->failed || !state->context->reachable
         || !state->context->diagnostics)
         return true;
-    parse_tree_t *expression = lower_discarded_expression(visit->grammar,
+    // A discarded `f()!` discards the call's successful value.
+    parse_tree_t *expression = parse_tree_core(
         parse_tree_resolve_child_ref(visit->grammar, visit->node,
                                      visit->annot->value_ref));
-    const parse_rule_t *rule = expression && !core_tree_is_leaf(expression)
-        ? parse_tree_rule(visit->grammar, expression) : nullptr;
+    while (parse_tree_unwrapped(expression))
+        expression = parse_tree_core(parse_tree_unwrapped(expression));
     bool found = false;
     ir_value_t *value = expression
         ? core_dict_get(&state->values, expression, &found) : nullptr;
     th_type *type = found && value ? value->type : nullptr;
     if (!expression || lower_literal_handler_call(expression)) return true;
-    if (rule && parse_rule_find_annot(visit->grammar, rule,
-                                      PARSE_ANNOT_CALL)) {
+    if (parse_tree_is_call(expression)) {
         ir_instr_t *call  = found && value && value->kind == IR_VAL_INSTR
                               ? value->def : nullptr;
         if (call && (call->op == IR_OP_CALL || call->op == IR_OP_DISPATCH
@@ -1031,16 +1036,58 @@ span_of_tree(ir_lower_context_t *context, parse_tree_t *node)
                         parse_token_endline(last), parse_token_endcol(last));
 }
 
-static parse_tree_t *
-lower_tree_simple_lvalue(parse_tree_t *node)
+// Whether the assignment at `visit` declares the variable it assigns: a
+// declaration, or an assignment name resolution found introduces its name.
+static bool
+lower_tree_declares(parse_visit_t *visit)
 {
-    while (node && !core_tree_is_leaf(node)) {
-        parse_sym_entry_t *symbol = parse_tree_sym(node);
-        if (symbol) return node;
-        if (core_tree_num_children(node) != 1) return nullptr;
-        node = core_tree_child(node, 0);
-    }
+    return core_string_eq(parse_tree_nt_name(visit->grammar, visit->node),
+                          CORE_STRING_STATIC("sym-decl"))
+        || parse_tree_declares_binding(visit->node)
+        || parse_tree_discards_value(visit->node)
+        || lower_find_annotation(visit, PARSE_ANNOT_DECLARES);
+}
+
+bool
+ir_lower_symbol_defined_at(const parse_sym_entry_t *symbol,
+                           parse_tree_t *node)
+{
+    return lower_symbol_defines_at(symbol, node);
+}
+
+// The variable whose storage is at `address`: a variable kept in memory, or
+// a parameter passed by reference. A reference held as a variable's value
+// is not its storage.
+static parse_sym_entry_t *
+lower_storage_symbol(ir_lower_context_t *context, const ir_value_t *address)
+{
+    ir_lower_private_t *private = context ? lower_private(context) : nullptr;
+    for (ir_lower_symbol_binding_t *binding = private ? private->bindings
+                                                      : nullptr;
+         binding; binding = binding->next)
+        if (binding->address == address) return binding->symbol;
     return nullptr;
+}
+
+// The variable a value was read from whole: a local, the storage a variable
+// is bound to (its own, or a by-reference parameter's), or a global. Returns
+// its symbol, or null for any other value.
+parse_sym_entry_t *
+ir_lower_read_variable(ir_lower_context_t *context, const ir_value_t *value)
+{
+    const ir_instr_t *read = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    const ir_value_t *source = read && read->n_operands
+        ? ir_operand_value(&read->operands[0]) : nullptr;
+    if (read && read->op == IR_OP_COPY && read->n_operands == 1) {
+        const ir_local_t *local = ir_operand_local(&read->operands[0]);
+        if (local) return ir_lower_binding_symbol(context, local, nullptr);
+        value = source;
+    }
+    else if (read && read->op == IR_OP_LOAD && read->n_operands == 1)
+        return source ? lower_storage_symbol(context, source) : nullptr;
+    return value && value->kind == IR_VAL_GLOBAL
+        ? ir_lower_binding_symbol(context, nullptr, value) : nullptr;
 }
 
 static bool
@@ -1053,26 +1100,9 @@ lower_symbol_defines_at(const parse_sym_entry_t *symbol, parse_tree_t *node)
 }
 
 static bool
-lower_tree_is_suppressed_value(ir_lower_tree_state_t *state,
-                                parse_tree_t *node)
+lower_tree_is_suppressed_value(ir_lower_tree_state_t *state)
 {
-    for (ir_lower_skip_frame_t *target = state->skip_values;
-         target; target = target->next)
-        for (parse_tree_t *ancestor = node; ancestor;
-             ancestor = parse_tree_parent(ancestor))
-            if (target->reference == ancestor) return true;
-    return false;
-}
-
-static bool
-inside_effect_query(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    for (parse_tree_t *ancestor = node ? parse_tree_parent(node) : nullptr;
-         ancestor; ancestor = parse_tree_parent(ancestor))
-        if (core_string_eq(parse_tree_nt_name(grammar, ancestor),
-                           CORE_STRING_STATIC("effect-query")))
-            return true;
-    return false;
+    return state->suppressed_depth > 0;
 }
 
 static void
@@ -1086,6 +1116,7 @@ lower_tree_clear_lvalues(ir_lower_tree_state_t *state, parse_tree_t *owner)
         }
         ir_lower_skip_frame_t *mark = *at;
         *at = mark->next;
+        if (mark->open && state->suppressed_depth) state->suppressed_depth--;
         core_free(mark);
     }
 }
@@ -1169,17 +1200,13 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
         visit->grammar, visit->node, annotation->name_ref);
     parse_tree_t *source = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, annotation->value_ref);
-    parse_sym_entry_t *symbol = nullptr;
+    (void)target;
+    // Only a declaration reaches here: other assignments are lowered where
+    // their target was read (n00bb_check_assignment).
+    parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
     bool initializes = core_string_eq(
         parse_tree_nt_name(visit->grammar, visit->node),
         CORE_STRING_STATIC("sym-decl"));
-    if (initializes)
-        symbol = parse_tree_sym(visit->node);
-    else {
-        parse_tree_t *lvalue = lower_tree_simple_lvalue(target);
-        symbol = lvalue ? parse_tree_sym(lvalue) : nullptr;
-        if (!symbol) symbol = parse_tree_sym(visit->node);
-    }
     initializes = initializes
         || (symbol && (symbol->decl_node == visit->node
             || lower_find_annotation(visit, PARSE_ANNOT_DECLARES)
@@ -1209,8 +1236,60 @@ lower_tree_recover(ir_lower_tree_state_t *state, parse_visit_t *visit,
         span_of_tree(state->context, visit->node));
 }
 
+static bool lower_tree_node_value(parse_visit_t *visit);
+
+// A global used as a value is read where the value is used, so an assignment
+// target that is a global is read (copied) as soon as it is lowered, before
+// the assigned value can change it.
+static bool
+lower_tree_node_lowered(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    if (!lower_tree_node_value(visit)) return false;
+    if (!core_dict_contains(&state->snapshots, visit->node)) return true;
+    ir_value_t *value = ir_lower_node_value(state->context, visit->node);
+    if (!value || value->kind != IR_VAL_GLOBAL || !state->context->reachable)
+        return true;
+    ir_instr_t *read = ir_lower_emit_instruction(state->context, IR_OP_COPY,
+        span_of_tree(state->context, visit->node));
+    return read && ir_lower_set_temp_dest(state->context, read,
+            CORE_STRING_STATIC("__n00bb_"), value->type)
+        && ir_instr_operand_value(read, value)
+        && ir_lower_set_node_value(state->context, visit->node, read->dest);
+}
+
+// Entering a reference that is not lowered as a value (the part of a call
+// that names the function, an assignment's target) suppresses the values
+// inside it until the walk leaves it.
+static bool
+lower_tree_node_enter(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    for (ir_lower_skip_frame_t *frame = state->skip_values; frame;
+         frame = frame->next)
+        if (frame->reference == visit->node && !frame->open) {
+            frame->open = true;
+            state->suppressed_depth++;
+        }
+    return true;
+}
+
 static bool
 lower_tree_node(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    bool ok = lower_tree_node_lowered(visit);
+    for (ir_lower_skip_frame_t *frame = state->skip_values; frame;
+         frame = frame->next)
+        if (frame->reference == visit->node && frame->open) {
+            frame->open = false;
+            if (state->suppressed_depth) state->suppressed_depth--;
+        }
+    return ok;
+}
+
+static bool
+lower_tree_node_value(parse_visit_t *visit)
 {
     ir_lower_tree_state_t *state = visit->user;
     if (core_dict_contains(&state->pruned_nodes, visit->node)) {
@@ -1228,7 +1307,7 @@ lower_tree_node(parse_visit_t *visit)
         return true;
     }
     if (core_dict_contains(&state->suppressed_emits, visit->node)
-        || inside_effect_query(visit->grammar, visit->node)) {
+        || parse_tree_in_effect_query(visit->node)) {
         core_dict_put(&state->values, visit->node, (void *)0);
         return true;
     }
@@ -1240,7 +1319,7 @@ lower_tree_node(parse_visit_t *visit)
         : lower_find_annotation(visit, PARSE_ANNOT_ASSIGNS);
 
     if (emits && core_string_eq(emit.action, CORE_STRING_STATIC("reference"))
-        && lower_tree_is_suppressed_value(state, visit->node)) {
+        && lower_tree_is_suppressed_value(state)) {
         _core_dict_put(&state->values, visit->node, nullptr);
         return true;
     }
@@ -1316,6 +1395,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     core_dict_init(&state.values, nullptr, nullptr);
     core_dict_init(&state.pruned_nodes, nullptr, nullptr);
     core_dict_init(&state.custom_assignments, nullptr, nullptr);
+    core_dict_init(&state.snapshots, nullptr, nullptr);
     core_dict_init(&state.handled_assignments, nullptr, nullptr);
     core_dict_init(&state.suppressed_emits, nullptr, nullptr);
     private->tree = &state;
@@ -1347,7 +1427,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
             break;
         }
     }
-    parse_walk_on_node(walk, nullptr, lower_tree_node, nullptr);
+    parse_walk_on_node(walk, lower_tree_node_enter, lower_tree_node, nullptr);
     parse_tree_t *parent = nullptr;
     int32_t child_index = -1;
     int32_t depth = 0;
@@ -1374,6 +1454,7 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     core_dict_free(&state.values);
     core_dict_free(&state.pruned_nodes);
     core_dict_free(&state.custom_assignments);
+    core_dict_free(&state.snapshots);
     core_dict_free(&state.handled_assignments);
     core_dict_free(&state.suppressed_emits);
     while (state.skip_values) {

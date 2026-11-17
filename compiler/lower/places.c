@@ -1,8 +1,6 @@
 #include "lower_internal.h"
 
 static bool
-n00bb_referent_written(parse_grammar_t *grammar, parse_tree_t *node);
-static bool
 n00bb_mark_reference_address(ir_lower_context_t *context, ir_value_t *address,
                              bool writable);
 static ir_value_t *
@@ -67,22 +65,6 @@ n00bb_emit_hook_call(ir_lower_context_t *context,
         && ir_instr_set_call_signature(call, signature) ? call->dest : nullptr;
 }
 
-static bool
-n00bb_referent_written(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    if (n00bb_reference_target(grammar, node)) return true;
-    parse_tree_t *at = node;
-    for (parse_tree_t *parent = parse_tree_parent(at); parent;
-         at = parent, parent = parse_tree_parent(at)) {
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("assign-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("binop-assign-stmt")))
-            return core_tree_child(parent, 0) == at;
-        bool receiver = n00bb_postfix_node(grammar, parent)
-            && core_tree_child(parent, 0) == at;
-        if (!receiver && core_tree_num_children(parent) != 1) return false;
-    }
-    return false;
-}
 
 static bool
 n00bb_mark_reference_address(ir_lower_context_t *context, ir_value_t *address,
@@ -132,9 +114,12 @@ n00bb_custom_reference_address(ir_lower_context_t *context,
                                ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    return n00bb_reference_hook_address(context, reference,
-        lower->reference_write || n00bb_referent_written(grammar, referent),
-        span);
+    // A read; a write through it makes the hook writable where it is
+    // recovered as a place (see writable_hook).
+    (void)grammar;
+    (void)referent;
+    (void)lower;
+    return n00bb_reference_hook_address(context, reference, false, span);
 }
 
 ir_value_t *
@@ -181,8 +166,8 @@ n00bb_open_reference_address(ir_lower_context_t *context,
     th_ctx *types = ir_module_types(context->module);
     th_type *target = n00bb_node_type(context, referent);
     th_type *address_type = th_ind(types, 0, target ? target : th_var(types));
-    bool writable = lower->reference_write
-        || n00bb_referent_written(grammar, referent);
+    bool writable = false;
+    (void)grammar;
     if (lower->solved)
         return n00bb_reference_placeholder(context, reference, address_type,
                                            writable, span);
@@ -210,331 +195,725 @@ n00bb_from_reference_address(ir_value_t *value)
     return false;
 }
 
-bool
-n00bb_call_argument(parse_grammar_t *grammar, parse_tree_t *node)
+
+// The address the referent of `node`, a `reference.__value`, is reached at:
+// the reference itself, for a `Ref`, or what its type's `__ref_address`
+// hook returns. Reached for reading; a write makes the hook writable where
+// the place is recovered (see writable_hook).
+ir_value_t *
+n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *node, ir_span_t span)
 {
-    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
-        parse_tree_t *parent = parse_tree_parent(at);
-        if (!parent) return false;
-        if (nt_is(grammar, at, CORE_STRING_STATIC("expression")))
-            return nt_is(grammar, parent, CORE_STRING_STATIC("positional-args"))
-                || nt_is(grammar, parent, CORE_STRING_STATIC("keyword-arg"));
-        if (core_tree_num_children(parent) != 1) return false;
+    parse_tree_t *referent = referent_access_node(grammar, node);
+    parse_tree_t *receiver = referent ? core_tree_child(referent, 0)
+                                      : nullptr;
+    ir_value_t *pointer = receiver ? ir_lower_node_value(context, receiver)
+                                   : nullptr;
+    // A global holding the reference is read for it: a bare global names
+    // the global's own storage.
+    if (pointer && pointer->kind == IR_VAL_GLOBAL) {
+        ir_instr_t *read = ir_lower_emit_instruction(context, IR_OP_COPY,
+                                                     span);
+        pointer = read && ir_lower_set_temp_dest(context, read,
+                CORE_STRING_STATIC("__n00bb_"), pointer->type)
+            && ir_instr_operand_value(read, pointer) ? read->dest : nullptr;
     }
-    return false;
+    th_type *held = pointer ? th_resolve(pointer->type) : nullptr;
+    if (!held) return nullptr;
+    if (th_kind_of(held) == TH_VAR || th_option_item(held))
+        return n00bb_open_reference_address(context, grammar, referent,
+                                            pointer, span);
+    if (th_kind_of(held) == TH_NAMED)
+        return n00bb_custom_reference_address(context, grammar, referent,
+                                              pointer, span);
+    return th_kind_of(held) == TH_INDIRECTION ? pointer : nullptr;
 }
 
-ir_value_t *
-n00bb_record_field_address(ir_lower_context_t *context,
-                           parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           parse_tree_t *node, ir_span_t span)
+static ir_value_t *
+emit_address(ir_lower_context_t *context, ir_op_t op, th_type *referent,
+             ir_value_t *base, ir_local_t *local, core_string_t member,
+             ir_span_t span)
+{
+    th_type *type = referent
+        ? th_ind(ir_module_types(context->module), 0, referent) : nullptr;
+    ir_instr_t *in = type ? ir_lower_emit_instruction(context, op, span)
+                          : nullptr;
+    bool ok = in && ir_lower_set_temp_dest(context, in,
+                                           CORE_STRING_STATIC("__n00bb_place_"),
+                                           type)
+        && (local ? ir_instr_operand_local(in, local)
+                  : ir_instr_operand_value(in, base))
+        && (!member.data || ir_instr_operand_name(in, member));
+    return ok ? in->dest : nullptr;
+}
+
+static bool
+element_read(ir_lower_context_t *context, const ir_instr_t *read);
+
+// Remembers that `value` reads the field named at `node`, so that writing
+// the place it was read from is recorded on that field use.
+void
+n00bb_note_field_read(ir_lower_context_t *context, ir_value_t *value,
+                      parse_tree_t *node)
 {
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    if (!context || !lower || !unit || !node) return nullptr;
-    parse_tree_t *referent = referent_access_node(grammar, node);
-    if (referent) {
-        parse_tree_t *receiver = core_tree_child(referent, 0);
-        ir_value_t *pointer = nullptr;
-        for (parse_tree_t *at = receiver; at && !core_tree_is_leaf(at);) {
-            pointer = ir_lower_node_value(context, at);
-            if (pointer) break;
-            if (nt_is(grammar, at, CORE_STRING_STATIC("tuple-or-paren"))
-                && core_tree_num_children(at) == 3)
-                at = core_tree_child(at, 1);
-            else if (core_tree_num_children(at) == 1)
-                at = core_tree_child(at, 0);
-            else
-                break;
-        }
-        if (pointer && (th_kind_of(th_resolve(pointer->type)) == TH_VAR
-                        || th_option_item(th_resolve(pointer->type))))
-            return n00bb_open_reference_address(context, grammar, referent,
-                                                pointer, span);
-        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_NAMED)
-            return n00bb_custom_reference_address(context, grammar,
-                                                  referent, pointer, span);
-        parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
-        if ((!pointer || th_kind_of(th_resolve(pointer->type))
-                != TH_INDIRECTION) && symbol)
-            pointer = ir_lower_bound_value(context, symbol);
-        if (pointer && pointer->kind == IR_VAL_GLOBAL) pointer = nullptr;
-        if (pointer && th_option_item(th_resolve(pointer->type))) {
-            ir_local_t *local = symbol
-                ? ir_lower_bound_local(context, symbol) : nullptr;
-            ir_value_t *read = local
-                ? n00bb_emit_local_read(context, local, span) : pointer;
-            return read ? n00bb_open_reference_address(context, grammar,
-                                                       referent, read, span)
-                        : nullptr;
-        }
-        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_INDIRECTION)
-            return pointer;
-        if (pointer && th_kind_of(th_resolve(pointer->type)) == TH_NAMED)
-            return n00bb_custom_reference_address(context, grammar,
-                                                  referent, pointer, span);
-        ir_value_t *storage = n00bb_addressable_expression_address(context,
-            grammar, unit, receiver, span);
-        th_type *stored = storage
-            ? th_resolve(th_ind_referent(th_resolve(storage->type))) : nullptr;
-        if (stored && (th_kind_of(stored) == TH_NAMED
-                       || th_kind_of(stored) == TH_VAR
-                       || th_option_item(stored))) {
-            ir_value_t *reference = n00bb_emit_indirect_read(context, storage,
-                                                             stored, span);
-            if (reference && (th_kind_of(stored) == TH_VAR
-                              || th_option_item(stored)))
-                return n00bb_open_reference_address(context, grammar,
-                    referent, reference, span);
-            return reference ? n00bb_custom_reference_address(context,
-                grammar, referent, reference, span) : nullptr;
-        }
-        return stored && th_kind_of(stored) == TH_INDIRECTION
-            ? n00bb_emit_indirect_read(context, storage, stored, span)
-            : nullptr;
+    if (!lower || !value || !node) return;
+    if (!lower->field_reads_ready) {
+        core_dict_init(&lower->field_reads, nullptr, nullptr);
+        lower->field_reads_ready = true;
     }
-    parse_tree_t *member = member_access_node(grammar, node);
-    if (member) {
-        parse_tree_t *base_node = core_tree_num_children(member)
-            ? core_tree_child(member, 0) : nullptr;
-        parse_sym_entry_t *field = attached_symbol(grammar, unit, member);
-        ir_value_t *base = n00bb_reference_view(context,
-            ir_lower_node_value(context, base_node), span);
-        parse_sym_entry_t *base_symbol = attached_symbol(grammar, unit,
-                                                         base_node);
-        ir_value_t *binding = base_symbol
-            ? ir_lower_bound_value(context, base_symbol) : nullptr;
-        if (binding && binding->type
-            && th_kind_of(th_resolve(binding->type)) == TH_INDIRECTION)
-            base = binding;
-        if (!base || th_kind_of(th_resolve(base->type)) != TH_INDIRECTION)
-            base = n00bb_addressable_expression_address(
-                context, grammar, unit, base_node, span);
-        while (base && th_kind_of(th_resolve(base->type)) == TH_INDIRECTION) {
-            th_type *referent = th_resolve(th_ind_referent(base->type));
-            bool nominal = referent && n00bb_reference_definition(
-                ir_module_types(context->module), referent);
-            if (!referent || (th_kind_of(referent) != TH_INDIRECTION
-                              && !nominal)) break;
-            ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD,
-                                                          span);
-            if (!load || !ir_lower_set_temp_dest(context, load,
-                CORE_STRING_STATIC("__n00bb_deref_"), referent)
-                || !ir_instr_operand_value(load, base)
-                || !n00bb_set_reference_access(lower->ir_context,
-                    load->dest, referent)) return nullptr;
-            base = nominal ? n00bb_reference_view(context, load->dest, span)
-                           : load->dest;
-        }
-        if ((field && (!field->is_field || !field->type)) || !base
-            || th_option_item(th_ind_referent(th_resolve(base->type))))
-            return nullptr;
-        core_string_t field_name = field ? field->name
-            : first_token_text(core_tree_child(member,
-                  core_tree_num_children(member) - 1));
-        th_type *member_type = n00bb_node_type(context, member);
-        if (!member_type)
-            member_type = th_var(ir_module_types(context->module));
-        th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
-                                       member_type);
-        ir_instr_t *address = pointer_type
-            ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
-        if (!address || !ir_lower_set_temp_dest(context, address,
-            CORE_STRING_STATIC("__n00bb_field_address_"), pointer_type)
-            || !ir_instr_operand_value(address, base)
-            || !ir_instr_operand_name(address, field_name))
-            return nullptr;
-        ir_shape_t *field_shape = field ? parse_sym_binding(field,
-            CORE_STRING_STATIC("ir.array-shape")) : nullptr;
-        if (field_shape && !ir_value_set_shape(address->dest, field_shape))
-            return nullptr;
-        if (n00bb_open_type(context, th_ind_referent(th_resolve(base->type))))
-            n00bb_rewrite_later(context, address);
-        return address->dest;
-    }
-
-    parse_sym_entry_t *symbol = attached_symbol(grammar, unit, node);
-    ir_value_t *address = symbol
-        ? ir_lower_bound_address(context, symbol) : nullptr;
-    ir_local_t *local = symbol
-        ? ir_lower_bound_local(context, symbol) : nullptr;
-    if (!address && local) address = ir_lower_local_address(context, local);
-    if (address) return address;
-    if (local) {
-        th_type *pointer_type = th_ind(
-            ir_module_types(context->module), 0, local->type);
-        ir_instr_t *take = pointer_type
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-            : nullptr;
-        return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_local_address_"), pointer_type)
-            && ir_instr_operand_local(take, local) ? take->dest : nullptr;
-    }
-    ir_value_t *binding = symbol
-        ? ir_lower_bound_value(context, symbol) : nullptr;
-    if (binding && binding->kind == IR_VAL_GLOBAL && binding->global) {
-        th_type *pointer_type = th_ind(
-            ir_module_types(context->module), 0, binding->type);
-        ir_instr_t *take = pointer_type
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-            : nullptr;
-        return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_global_address_"), pointer_type)
-            && ir_instr_operand_value(take, binding) ? take->dest : nullptr;
-    }
-    if (binding && th_kind_of(th_resolve(binding->type)) == TH_INDIRECTION)
-        return binding;
-    if (binding && symbol && symbol->type
-        && (binding->kind == IR_VAL_PARAM
-            || binding->kind == IR_VAL_GLOBAL)) {
-        th_type *pointer_type = th_ind(
-            ir_module_types(context->module), 0, symbol->type);
-        ir_instr_t *take = pointer_type
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-            : nullptr;
-        return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_value_address_"), pointer_type)
-            && ir_instr_operand_value(take, binding) ? take->dest : nullptr;
-    }
-    return nullptr;
+    core_dict_put(&lower->field_reads, value, node);
 }
 
-ir_value_t *
-n00bb_index_writeback_place(ir_lower_context_t *context,
-                            parse_grammar_t *grammar,
-                            core_translation_unit_t *unit, parse_tree_t *node,
-                            n00bb_index_writeback_t *writeback, ir_span_t span)
+static parse_tree_t *
+field_read_node(n00bb_lower_context_t *lower, const ir_value_t *value)
 {
-    parse_tree_t *index = n00bb_index_expression_node(grammar, node);
-    if (index) {
-        ir_value_t *element = ir_lower_node_value(context, index);
-        th_type *element_type = element ? element->type : nullptr;
-        char name_buffer[48];
-        core_string_t name = n00bb_format_name(name_buffer,
-            sizeof(name_buffer), "__n00bb_index_element_%llu",
-            (unsigned long long)context->next_value_id++);
-        ir_local_t *local = element
-            ? ir_local_add(context->function, name, element_type) : nullptr;
-        if (!local || !n00bb_emit_local_write(context, local, element, span))
-            return nullptr;
-        writeback->index_node = index;
-        writeback->element = local;
-        th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
-                                       element_type);
-        ir_instr_t *take = pointer_type
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-            : nullptr;
-        return take && ir_lower_set_temp_dest(context, take,
-                CORE_STRING_STATIC("__n00bb_element_address_"), pointer_type)
-            && ir_instr_operand_local(take, local) ? take->dest : nullptr;
+    return lower && lower->field_reads_ready && value
+        ? core_dict_get(&lower->field_reads, (void *)value, nullptr)
+        : nullptr;
+}
+
+// Records that the place `target` names (a value read from it, or its
+// address) is written, on each field use that place was formed from: a
+// write to `a.b.c` writes `c`, and `b` and `a` through it. `reads` when the
+// write also reads the old value (`+=`).
+void
+n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
+                         bool reads)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    for (size_t depth = 0; lower && lower->field_reads_ready && target
+         && depth < 64; depth++) {
+        parse_tree_t *node = field_read_node(lower, target);
+        parse_node_facts_t *facts = node
+            ? parse_tree_facts_for_update(node) : nullptr;
+            if (facts) {
+            facts->field_written = true;
+            facts->field_write_reads |= reads;
+        }
+        ir_instr_t *step = target->kind == IR_VAL_INSTR ? target->def
+                                                        : nullptr;
+        if (!step) return;
+        uint32_t base = 0;
+        switch (step->op) {
+        case IR_OP_EXTRACT: case IR_OP_LOAD: case IR_OP_FIELD:
+        case IR_OP_INDEX: case IR_OP_SEQUENCE_GET: case IR_OP_NOMINAL_CAST:
+            break;
+        case IR_OP_DISPATCH: {
+            // A reference made from the address, or an element of a sequence
+            // kept in the place. Writing an element of any other container
+            // (a list) reads the place to find the container.
+            ir_value_t *source = step->n_operands > 1
+                ? ir_operand_value(&step->operands[1]) : nullptr;
+            th_type *held = source ? th_resolve(source->type) : nullptr;
+            bool reference = step->operands[0].kind == IR_OPD_NAME
+                && core_string_starts_with(step->operands[0].name,
+                                           CORE_STRING_STATIC("__ref"));
+            if (!reference && !(element_read(context, step) && held
+                                && th_kind_of(held) == TH_SEQUENCE))
+                return;
+            base = 1;
+            break;
+        }
+        default:
+            return;
+        }
+        target = step->n_operands > base
+            ? ir_operand_value(&step->operands[base]) : nullptr;
     }
-    parse_tree_t *member = member_access_node(grammar, node);
-    size_t children = member ? core_tree_num_children(member) : 0;
-    if (children < 3) return nullptr;
-    ir_value_t *base = n00bb_index_writeback_place(context, grammar, unit,
-        core_tree_child(member, 0), writeback, span);
-    th_ctx *types = ir_module_types(context->module);
-    ir_instr_t *address = base
-        ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
-    return address && ir_lower_set_temp_dest(context, address,
-            CORE_STRING_STATIC("__n00bb_field_address_"),
-            th_ind(types, 0, th_var(types)))
-        && ir_instr_operand_value(address, base)
-        && ir_instr_operand_name(address,
-               first_token_text(core_tree_child(member, children - 1)))
-        ? address->dest : nullptr;
+}
+
+// Erases the read that produced `value` once nothing else uses it, and the
+// reads it was made from, so that an operand used only as a place is never
+// read.
+static void
+drop_read(ir_lower_context_t *context, ir_value_t *value, ir_value_t *place)
+{
+    for (size_t depth = 0; value && value != place
+         && value->kind == IR_VAL_INSTR && value->def && depth < 64; depth++) {
+        ir_instr_t *read = value->def;
+        bool pure = read->op == IR_OP_LOAD || read->op == IR_OP_COPY
+            || read->op == IR_OP_EXTRACT || read->op == IR_OP_NOMINAL_CAST
+            || read->op == IR_OP_FIELD || read->op == IR_OP_SEQUENCE_GET
+            || (depth == 0 && element_read(context, read));
+        if (!pure || ir_value_has_uses(context->function, value)) return;
+        uint32_t from = read->op == IR_OP_DISPATCH ? 1 : 0;
+        ir_value_t *source = read->n_operands > from
+            ? ir_operand_value(&read->operands[from]) : nullptr;
+        if (!ir_instr_erase(read)) return;
+        value = source;
+    }
+}
+
+// An element read through `__read` of one index. It names stored elements
+// when the container is a sequence or an indexable reference; any other
+// container computes the element in its `__read`.
+static bool
+element_read(ir_lower_context_t *context, const ir_instr_t *read)
+{
+    (void)context;
+    return read && read->op == IR_OP_DISPATCH && read->n_operands == 3
+        && read->operands[0].kind == IR_OPD_NAME
+        && core_string_eq(read->operands[0].name, CORE_STRING_STATIC("__read"))
+        && read->operands[1].kind == IR_OPD_VALUE
+        && read->operands[2].kind == IR_OPD_VALUE;
 }
 
 bool
-n00bb_index_writeback_finish(ir_lower_context_t *context,
-                             parse_grammar_t *grammar, parse_tree_t *site,
-                             const n00bb_index_writeback_t *writeback,
-                             ir_span_t span)
+n00bb_accessed_element(const ir_value_t *value, ir_value_t **container,
+                       ir_value_t **index)
 {
-    if (!writeback->index_node) return true;
-    ir_value_t *updated = n00bb_emit_local_read(context, writeback->element,
-                                                span);
-    return updated && n00bb_lower_index_store_at(context, grammar, site,
-        writeback->index_node, nullptr, updated);
+    const ir_instr_t *read = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    if (!element_read(nullptr, read)) return false;
+    *container = ir_operand_value(&read->operands[1]);
+    *index = ir_operand_value(&read->operands[2]);
+    return true;
+}
+
+// Whether a place may be written: one in a `let` or `const`, or in a
+// parameter passed by value, may not. A field or element is writable when the
+// place holding it is; storage reached through a reference or an object
+// handle is the referent's, which may be written.
+bool
+n00bb_place_writable(const ir_value_t *place)
+{
+    for (size_t depth = 0; place && depth < 64; depth++) {
+        const ir_instr_t *at = place->kind == IR_VAL_INSTR ? place->def
+                                                            : nullptr;
+        if (!at) return true;
+        if (at->op == IR_OP_ALLOC)
+            return !ir_annot_get((ir_annots_t *)&at->annots,
+                                 N00BB_IMMUTABLE_STORAGE_KEY);
+        if (at->op == IR_OP_ADDRESS_OF && at->n_operands == 1) {
+            const ir_local_t *local = ir_operand_local(&at->operands[0]);
+            const ir_value_t *storage = ir_operand_value(&at->operands[0]);
+            if (local) return local->mutability == IR_MUT_MUTABLE;
+            if (storage && storage->kind == IR_VAL_PARAM) return false;
+            return !storage || !storage->global
+                || storage->global->mutability == IR_MUT_MUTABLE;
+        }
+        if ((at->op != IR_OP_FIELD && at->op != IR_OP_INDEX)
+            || !at->n_operands)
+            return true;
+        place = ir_operand_value(&at->operands[0]);
+    }
+    return true;
+}
+
+// Whether `place` is a whole variable: the address of a local, parameter or
+// global, or the storage a local is kept in. Sets `local` or `storage` to
+// the variable.
+bool
+n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage)
+{
+    const ir_instr_t *take = place && place->kind == IR_VAL_INSTR
+        ? place->def : nullptr;
+    *local = nullptr;
+    *storage = nullptr;
+    if (take && take->op == IR_OP_ALLOC) {
+        *storage = place;
+        return true;
+    }
+    if (!take || take->op != IR_OP_ADDRESS_OF || take->n_operands != 1)
+        return false;
+    *local = ir_operand_local(&take->operands[0]);
+    *storage = *local ? nullptr : ir_operand_value(&take->operands[0]);
+    return true;
+}
+
+// The declared shape of the array a place holds: the variable's own, for a
+// whole variable, or the one recorded on the place.
+ir_shape_t *
+n00bb_place_shape(ir_value_t *place)
+{
+    ir_local_t *local = nullptr;
+    ir_value_t *storage = nullptr;
+    ir_shape_t *shape = nullptr;
+    if (n00bb_place_root(place, &local, &storage))
+        shape = local ? ir_local_shape(local)
+            : storage && storage->kind == IR_VAL_GLOBAL && storage->global
+            ? ir_global_shape(storage->global) : nullptr;
+    return shape ? shape : ir_value_shape(place);
+}
+
+// A place about to be written that is reached through a custom reference's
+// read-only `__ref_address` is reached through the writable hook instead:
+// the hook is changed where it was called, so every use of the address
+// sees the writable one. Reports and returns false when the reference type
+// has no writable hook.
+static bool
+writable_hook(ir_lower_context_t *context, ir_value_t *place, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    ir_value_t *address = place;
+    for (size_t depth = 0; address && address->kind == IR_VAL_INSTR
+         && address->def && (address->def->op == IR_OP_FIELD
+                             || address->def->op == IR_OP_INDEX)
+         && address->def->n_operands && depth < 64; depth++)
+        address = ir_operand_value(&address->def->operands[0]);
+    ir_instr_t *hook = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    if (!hook || hook->n_operands < 2
+        || !ir_annot_get(ir_value_annots(address),
+                         CORE_STRING_STATIC("n00bb.reference_address"))
+        || ir_value_indirect_access(address) == IR_INDIRECT_ACCESS_READ_WRITE)
+        return true;
+    ir_value_t *reference = ir_operand_value(&hook->operands[1]);
+    th_type *held = reference ? th_resolve(reference->type) : nullptr;
+    if (hook->op == IR_OP_DISPATCH)
+        hook->operands[0].name = CORE_STRING_STATIC("__ref_address_mut");
+    else if (held && th_kind_of(held) == TH_NAMED) {
+        th_env_method_t method = {0};
+        if (!n00bb_reference_method(types, held, true, &method, nullptr)) {
+            core_string_t text = lower_type_text(context, held);
+            lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+                N00B_TEXT_READ_ONLY_REFERENCE, N00BB_ARGS(ARG_TEXT(text)));
+            core_free(text.data);
+            return false;
+        }
+        ir_module_t *owner = nullptr;
+        ir_func_t *function = n00bb_record_field_method(context, &method,
+                                                        &owner);
+        ir_value_t *callee = owner && function
+            ? ir_func_address(owner, function) : nullptr;
+        if (!callee) return false;
+        hook->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                           .value = callee};
+    }
+    else {
+        ir_value_t *writable = held
+            ? n00bb_reference_placeholder(context, reference, address->type,
+                                          true, span)
+            : nullptr;
+        ir_instr_t *made = writable ? writable->def : nullptr;
+        if (!made) return false;
+        hook->operands[0] = made->operands[0];
+        (void)ir_instr_erase(made);
+    }
+    ir_instr_uses_changed(hook);
+    (void)lower;
+    return n00bb_mark_reference_address(context, address, true);
+}
+
+static ir_value_t *
+place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
+         core_list_t(n00bb_element_writeback_t) *writebacks);
+
+// A copy of an element a container reaches through `__read`, to write part
+// of it: `element` was read from `container` at `index`. Returns the copy's
+// address, and records that it is stored back afterwards.
+static ir_value_t *
+element_copy(ir_lower_context_t *context, ir_value_t *element,
+             ir_value_t *container, ir_value_t *index, ir_span_t span,
+             core_list_t(n00bb_element_writeback_t) *writebacks)
+{
+    n00bb_element_writeback_t back = {
+        .container = container,
+        .container_place = place_in(context, container, span, writebacks),
+        .index = index,
+    };
+    char buffer[48];
+    back.element = ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_element_%llu",
+                          (unsigned long long)context->next_value_id++),
+        element->type);
+    if (!back.element) return nullptr;
+    back.element->synthetic = true;
+    if (!n00bb_emit_local_write(context, back.element, element, span))
+        return nullptr;
+    core_list_push(*writebacks, back);
+    return emit_address(context, IR_OP_ADDRESS_OF, element->type, nullptr,
+                        back.element, (core_string_t){0}, span);
+}
+
+// Where the fields or elements of `value` are kept. A reference, or an object
+// (a handle to its fields), already says where; any other value holds them
+// itself, so they are wherever the value is kept: its place, when `writing`,
+// or the address it was just loaded from, when only reading.
+static ir_value_t *
+storage_of(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
+           core_list_t(n00bb_element_writeback_t) *writebacks, bool writing)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *held = value ? th_resolve(value->type) : nullptr;
+    // A value loaded before its type is solved has the type of what its
+    // address refers to.
+    ir_value_t *from = held && th_kind_of(held) == TH_VAR
+            && value->kind == IR_VAL_INSTR && value->def
+            && value->def->op == IR_OP_LOAD && value->def->n_operands == 1
+        ? ir_operand_value(&value->def->operands[0]) : nullptr;
+    th_type *address = from ? th_resolve(from->type) : nullptr;
+    if (address && th_kind_of(address) == TH_INDIRECTION) {
+        held = th_resolve(th_ind_referent(address));
+        value->type = th_ind_referent(address);
+    }
+    th_type *referent = held && th_kind_of(held) == TH_INDIRECTION
+        ? th_resolve(th_ind_referent(held)) : nullptr;
+    // A reference to an object refers to the handle, so the fields are
+    // where the handle it holds refers to.
+    if (referent && n00bb_reference_definition(types, referent)) {
+        ir_value_t *handle = n00bb_emit_indirect_read(context, value,
+                                                      referent, span);
+        return handle ? n00bb_reference_view(context, handle, span) : nullptr;
+    }
+    if (referent) return value;
+    if (held && n00bb_reference_definition(types, held))
+        return n00bb_reference_view(context, value, span);
+    if (writing) return place_in(context, value, span, writebacks);
+    // Read through a reference, the value's fields are read where it refers
+    // to; a variable's own value is read whole.
+    ir_value_t *loaded = value && value->kind == IR_VAL_INSTR && value->def
+            && value->def->op == IR_OP_LOAD && value->def->n_operands == 1
+        ? ir_operand_value(&value->def->operands[0]) : nullptr;
+    ir_instr_t *source = loaded && loaded->kind == IR_VAL_INSTR
+        ? loaded->def : nullptr;
+    return loaded && loaded->kind != IR_VAL_GLOBAL
+            && (!source || (source->op != IR_OP_ALLOC
+                            && source->op != IR_OP_ADDRESS_OF))
+        ? loaded : nullptr;
+}
+
+// The address of field `name` of `base` when the field is read from
+// storage rather than out of a value: through a reference or object handle,
+// or at the address `base` was just loaded from (which is then not loaded
+// whole). Returns null when `base` is a value that holds the field itself.
+ir_value_t *
+n00bb_field_storage(ir_lower_context_t *context, ir_value_t *base,
+                    core_string_t name, th_type *type, ir_span_t span)
+{
+    ir_value_t *storage = base
+        ? storage_of(context, base, span, nullptr, false) : nullptr;
+    th_type *held = storage ? th_resolve(storage->type) : nullptr;
+    if (!held || th_kind_of(held) != TH_INDIRECTION
+        || th_option_item(th_resolve(th_ind_referent(held))))
+        return nullptr;
+    ir_value_t *field = emit_address(context, IR_OP_FIELD, type, storage,
+                                     nullptr, name, span);
+    if (field && n00bb_open_type(context, th_ind_referent(held)))
+        n00bb_rewrite_later(context, field->def);
+    if (field && base->kind == IR_VAL_INSTR && base->def
+        && !ir_value_has_uses(context->function, base))
+        drop_read(context, base, storage);
+    return field;
+}
+
+// The address `value` was read from, when an expression names storage: a
+// variable, a field of storage, or an element reached through an address.
+// The operand was lowered as a value; a place is recovered from how that
+// value was read, so it does not matter how the expression was written.
+// Returns null for a temporary value, which has no address.
+static ir_value_t *
+place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
+         core_list_t(n00bb_element_writeback_t) *writebacks)
+{
+    if (!context || !value) return nullptr;
+    if (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL)
+        return emit_address(context, IR_OP_ADDRESS_OF, value->type, value,
+                            nullptr, (core_string_t){0}, span);
+    ir_instr_t *read = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+    ir_value_t *place = nullptr;
+    n00bb_lower_context_t *noting = context->user;
+    parse_tree_t *field_use = field_read_node(noting, value);
+    if (read && read->op == IR_OP_LOAD && read->n_operands == 1) {
+        place = ir_operand_value(&read->operands[0]);
+        if (field_use && !field_read_node(noting, place))
+            n00bb_note_field_read(context, place, field_use);
+        drop_read(context, value, place);
+        return place;
+    }
+    else if (read && read->op == IR_OP_COPY && read->n_operands == 1) {
+        ir_local_t *local = ir_operand_local(&read->operands[0]);
+        ir_value_t *source = ir_operand_value(&read->operands[0]);
+        place = local
+            ? emit_address(context, IR_OP_ADDRESS_OF, local->type, nullptr,
+                           local, (core_string_t){0}, span)
+            : place_in(context, source, span, writebacks);
+    }
+    else if (read && read->op == IR_OP_EXTRACT && read->n_operands == 2
+             && read->operands[1].kind == IR_OPD_NAME) {
+        ir_value_t *base = storage_of(context,
+            ir_operand_value(&read->operands[0]), span, writebacks, true);
+        place = base ? emit_address(context, IR_OP_FIELD, value->type, base,
+                                    nullptr, read->operands[1].name, span)
+                     : nullptr;
+        ir_shape_t *shape = place ? ir_value_shape(value) : nullptr;
+        if (shape && !ir_value_set_shape(place, shape)) place = nullptr;
+        if (place && n00bb_open_type(context,
+                th_ind_referent(th_resolve(base->type))))
+            n00bb_rewrite_later(context, place->def);
+    }
+    else if ((read && read->op == IR_OP_SEQUENCE_GET && read->n_operands == 2)
+             || element_read(context, read)) {
+        uint32_t first = read->op == IR_OP_DISPATCH ? 1 : 0;
+        ir_value_t *source = ir_operand_value(&read->operands[first]);
+        ir_value_t *offset = ir_operand_value(&read->operands[first + 1]);
+        // A sequence keeps its elements in its own storage, and an indexable
+        // reference in the storage it refers to. A container whose type is
+        // not known yet is taken to be a sequence, unless the caller writes
+        // elements back through `__write` instead.
+        n00bb_lower_context_t *lower = context->user;
+        th_type *held = source ? th_resolve(source->type) : nullptr;
+        uint8_t attrs = 0;
+        bool through = held && th_ind_attrs(held, &attrs)
+            && ((attrs & TH_INDEXABLE)
+                || th_kind_of(th_resolve(th_ind_referent(held)))
+                    == TH_SEQUENCE);
+        bool stored = through || (held && (th_kind_of(held) == TH_SEQUENCE
+            || (th_kind_of(held) == TH_VAR && !lower->write_back_open_index)));
+        if (!stored && writebacks && element_read(context, read))
+            return element_copy(context, value, source, offset, span,
+                                writebacks);
+        ir_value_t *base = !stored ? nullptr : through ? source
+            : place_in(context, source, span, writebacks);
+        place = base && offset
+            ? emit_address(context, IR_OP_INDEX, value->type, base, nullptr,
+                           (core_string_t){0}, span)
+            : nullptr;
+        ir_shape_t *shape = place ? ir_value_shape(base) : nullptr;
+        if (place && !ir_instr_operand_value(place->def, offset)) place = nullptr;
+        if (place && shape
+            && th_kind_of(th_resolve(value->type)) == TH_SEQUENCE) {
+            ir_shape_t *suffix = ir_shape_suffix(lower->ir_context, shape, 1);
+            if (!suffix || !ir_value_set_shape(place, suffix)) place = nullptr;
+        }
+    }
+    if (place && field_use && !field_read_node(noting, place))
+        n00bb_note_field_read(context, place, field_use);
+    if (place) drop_read(context, value, place);
+    return place;
+}
+
+// The place `value` was read from (see place_in). One about to be written,
+// when `writing`, is reached through a writable reference hook.
+ir_value_t *
+n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
+               ir_span_t span)
+{
+    ir_value_t *place = place_in(context, value, span, nullptr);
+    return place && (!writing || writable_hook(context, place, span))
+        ? place : nullptr;
 }
 
 ir_value_t *
-n00bb_addressable_expression_address(ir_lower_context_t *context,
-                                     parse_grammar_t *grammar,
-                                     core_translation_unit_t *unit,
-                                     parse_tree_t *node, ir_span_t span)
+n00bb_place_for_write(ir_lower_context_t *context, ir_value_t *value,
+                      ir_span_t span,
+                      core_list_t(n00bb_element_writeback_t) *writebacks)
 {
-    if (!context || !grammar || !unit || !node) return nullptr;
-    n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *member = member_access_node(grammar, node);
-    parse_sym_entry_t *resolved = attached_symbol(grammar, unit, node);
-    if (member && resolved && !resolved->is_field) {
-        ir_value_t *binding = ir_lower_bound_value(context, resolved);
-        ir_value_t *address = ir_lower_bound_address(context, resolved);
-        ir_local_t *local = ir_lower_bound_local(context, resolved);
-        th_type *type = local ? local->type
-            : binding ? binding->type : resolved->type;
-        if (address) return address;
-        if (!local && (!binding
-            || (binding->kind != IR_VAL_PARAM
-                && binding->kind != IR_VAL_GLOBAL))) return nullptr;
-        th_type *address_type = type
-            ? th_ind(ir_module_types(context->module), 0, type) : nullptr;
-        ir_instr_t *take = address_type
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-            : nullptr;
-        return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_member_address_"), address_type)
-            && (local ? ir_instr_operand_local(take, local)
-                      : binding && ir_instr_operand_value(take, binding))
-            ? take->dest : nullptr;
-    }
-    if (member)
-        return n00bb_record_field_address(context, grammar, unit, member,
-                                           span);
+    ir_value_t *place = place_in(context, value, span, writebacks);
+    return place && writable_hook(context, place, span) ? place : nullptr;
+}
 
-    parse_tree_t *index = n00bb_index_expression_node(grammar, node);
-    if (index) {
-        parse_tree_t *receiver = core_tree_num_children(index)
-            ? core_tree_child(index, 0) : nullptr;
-        parse_tree_t *contents = core_tree_num_children(index) > 2
-            ? core_tree_child(index, 2) : nullptr;
-        parse_tree_t *subscript = child_nt(grammar, contents, CORE_STRING_STATIC("expression"));
-        ir_value_t *base = n00bb_addressable_expression_address(
-            context, grammar, unit, receiver, span);
-        ir_value_t *offset = subscript
-            ? ir_lower_node_value(context, subscript) : nullptr;
-        th_type *container = base
-            ? th_ind_referent(th_resolve(base->type)) : nullptr;
-        container = container ? th_resolve(container) : nullptr;
-        uint8_t address_attrs = 0;
-        bool open = container && th_kind_of(container) == TH_VAR;
-        if (open && lower && lower->write_back_open_index) return nullptr;
-        if (!container || (!open && th_kind_of(container) != TH_SEQUENCE
-                && (!th_ind_attrs(base->type, &address_attrs)
-                    || !(address_attrs & TH_INDEXABLE))))
-            return nullptr;
-        th_type *element = open ? th_var(ir_module_types(context->module))
-            : th_kind_of(container) == TH_SEQUENCE ? th_seq_elem(container)
-            : n00bb_node_type(context, index);
-        th_type *address_type = element
-            ? th_ind(ir_module_types(context->module), 0, element) : nullptr;
-        ir_instr_t *address = base && offset && address_type
-            ? ir_lower_emit_instruction(context, IR_OP_INDEX, span) : nullptr;
-        if (!address || !ir_lower_set_temp_dest(context, address,
-            CORE_STRING_STATIC("__n00bb_index_address_"), address_type)
-            || !ir_instr_operand_value(address, base)
-            || !ir_instr_operand_value(address, offset)) return nullptr;
-        if (lower && element
-            && th_kind_of(th_resolve(element)) == TH_SEQUENCE) {
-            ir_shape_t *base_shape = ir_value_shape(base);
-            ir_shape_t *suffix = base_shape
-                ? ir_shape_suffix(lower->ir_context, base_shape, 1) : nullptr;
-            if (base_shape && (!suffix
-                    || !ir_value_set_shape(address->dest, suffix)))
-                return nullptr;
-        }
-        return address->dest;
+bool
+n00bb_emit_writebacks(ir_lower_context_t *context,
+                      core_list_t(n00bb_element_writeback_t) *writebacks,
+                      ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *nil = th_name(ir_module_types(context->module),
+                           CORE_STRING_STATIC("nil"));
+    // Innermost first: an element copied out of another copy is stored back
+    // into that copy before it is stored back in turn.
+    for (size_t i = writebacks->len; i > 0; i--) {
+        n00bb_element_writeback_t *back = &writebacks->data[i - 1];
+        ir_value_t *container = back->container_place
+            ? n00bb_emit_indirect_read(context, back->container_place,
+                th_ind_referent(th_resolve(back->container_place->type)),
+                span)
+            : back->container;
+        ir_value_t *element = n00bb_emit_local_read(context, back->element,
+                                                    span);
+        ir_value_t *operands[] = {container, back->index, element};
+        ir_value_t *written = container && element
+            ? n00bb_dispatch(context, CORE_STRING_STATIC("__write"), operands,
+                             3, nil, span)
+            : nullptr;
+        if (!written || !ir_annot_set(lower->ir_context, &written->def->annots,
+                (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
+                             .kind = IR_ANNOT_BOOL, .b = true}))
+            return false;
     }
-    return n00bb_record_field_address(context, grammar, unit, node, span);
+    return true;
+}
+
+// Erases a slice bound computed only for a read that was dropped: constants,
+// the `+ 1` of an included end, and the container length of an absent one.
+// Stores `value` to the place `target` was read from. An element a
+// container reaches through `__read` is stored with `__write` instead, and
+// the read is dropped unless something else uses it. Returns false when
+// `target` names no place, or, when `checked`, no writable one.
+bool
+n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
+               ir_value_t *value, bool checked, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    // The fields this writes, read as well when the old value is still used.
+    n00bb_note_place_written(context, target,
+        target && ir_value_has_uses(context->function, target));
+    // A local or global read whole is written as itself, rather than
+    // through an address that would make it live in memory.
+    ir_instr_t *read = target && target->kind == IR_VAL_INSTR ? target->def
+                                                              : nullptr;
+    ir_local_t *local = read && read->op == IR_OP_COPY && read->n_operands == 1
+        ? ir_operand_local(&read->operands[0]) : nullptr;
+    ir_value_t *global = target && target->kind == IR_VAL_GLOBAL ? target
+        : read && read->op == IR_OP_COPY && read->n_operands == 1
+            && ir_operand_value(&read->operands[0])
+            && ir_operand_value(&read->operands[0])->kind == IR_VAL_GLOBAL
+        ? ir_operand_value(&read->operands[0]) : nullptr;
+    if (local || global) {
+        if (read && !ir_value_has_uses(context->function, target))
+            (void)ir_instr_erase(read);
+        if (local)
+            return (!checked || local->mutability == IR_MUT_MUTABLE)
+                && n00bb_emit_local_write(context, local, value, span);
+        ir_instr_t *store = ir_lower_emit_instruction(context,
+                                                      IR_OP_GLOBAL_STORE, span);
+        return store && ir_instr_operand_value(store, global)
+            && ir_instr_operand_value(store, value);
+    }
+    // Assigning a variant's arm selects that arm: the variant is replaced.
+    if (read && read->op == IR_OP_EXTRACT && read->n_operands == 2
+        && read->operands[1].kind == IR_OPD_NAME
+        && ir_annot_get(&read->annots, N00BB_VARIANT_ARM_KEY)) {
+        ir_value_t *holder = ir_operand_value(&read->operands[0]);
+        core_string_t arm = read->operands[1].name;
+        th_type *variant = holder ? th_resolve(holder->type) : nullptr;
+        parse_sym_entry_t *named = variant && th_kind_of(variant) == TH_VAR
+            ? ir_lower_read_variable(context, holder) : nullptr;
+        if (named && named->type)
+            variant = th_apply_subst(ir_module_types(context->module),
+                                     named->type);
+        if (!ir_value_has_uses(context->function, target))
+            (void)ir_instr_erase(read);
+        ir_instr_t *make = holder && variant
+            ? ir_lower_emit_instruction(context, IR_OP_VARIANT_MAKE, span)
+            : nullptr;
+        return make && ir_lower_set_temp_dest(context, make,
+                CORE_STRING_STATIC("__n00bb_variant_"), variant)
+            && ir_instr_operand_name(make, arm)
+            && ir_instr_operand_value(make, value)
+            && n00bb_store_to(context, holder, make->dest, checked, span);
+    }
+    // A flag field is a read-only slice of its flagset.
+    ir_value_t *mask = read && read->op == IR_OP_BITSET_INTERSECTION
+            && read->n_operands == 2
+        ? ir_operand_value(&read->operands[1]) : nullptr;
+    if (mask && mask->kind == IR_VAL_INSTR && mask->def
+        && mask->def->op == IR_OP_BITSET_CONST && mask->def->n_operands
+        && mask->def->operands[0].kind == IR_OPD_NAME) {
+        core_string_t flag = mask->def->operands[0].name;
+        core_string_t owner = lower_type_text(context, mask->type);
+        lower_report(context, N00B_DIAG_FLAGSET_FIELD_READ_ONLY, span,
+                     N00B_TEXT_FLAGSET_FIELD_IS_READ_ONLY,
+                     N00BB_ARGS(ARG_TEXT(flag), ARG_TEXT(owner)));
+        lower_help(context, N00B_TEXT_FLAGSET_FIELD_ASSIGN_WHOLE_HELP,
+                   N00BB_ARGS(ARG_TEXT(flag), ARG_TEXT(owner)));
+        core_free(owner.data);
+        return false;
+    }
+    // A slice is written through `__write_slice` with the bounds it was
+    // read with (`__slice(container, start?, end?, inclusive)`, see
+    // n00bb_lower_slice_read); the read is dropped.
+    ir_annot_t *slice = read && read->op == IR_OP_DISPATCH
+            && read->n_operands == 5
+        ? ir_annot_get(&read->annots, N00BB_SLICE_TARGET_KEY) : nullptr;
+    if (slice) {
+        th_ctx *types = ir_module_types(context->module);
+        ir_value_t *container = ir_operand_value(&read->operands[1]);
+        ir_value_t *bounds[] = {ir_operand_value(&read->operands[2]),
+                                ir_operand_value(&read->operands[3]),
+                                ir_operand_value(&read->operands[4])};
+        if (!ir_value_has_uses(context->function, target))
+            (void)ir_instr_erase(read);
+        core_list_t(n00bb_element_writeback_t) writebacks =
+            core_list_new(n00bb_element_writeback_t);
+        ir_value_t *holder = place_in(context, container, span, &writebacks);
+        ir_value_t *operands[] = {
+            holder ? n00bb_emit_indirect_read(context, holder,
+                         th_ind_referent(th_resolve(holder->type)), span)
+                   : container,
+            bounds[0], bounds[1], bounds[2], value};
+        bool complete = true;
+        for (size_t i = 0; i < 5; i++) complete &= operands[i] != nullptr;
+        th_type *nil = th_name(types, CORE_STRING_STATIC("nil"));
+        ir_value_t *stored = complete
+            ? n00bb_dispatch(context, CORE_STRING_STATIC("__write_slice"),
+                             operands, 5, nil, span)
+            : nullptr;
+        bool ok = stored && ir_annot_set(lower->ir_context,
+                &stored->def->annots,
+                (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
+                             .kind = IR_ANNOT_BOOL, .b = true})
+            && n00bb_emit_writebacks(context, &writebacks, span);
+        core_list_free(writebacks);
+        return ok;
+    }
+    ir_value_t *container = nullptr, *index = nullptr;
+    if (n00bb_accessed_element(target, &container, &index)) {
+        th_type *held = container ? th_resolve(container->type) : nullptr;
+        uint8_t attrs = 0;
+        bool stored = held && (th_kind_of(held) == TH_SEQUENCE
+            || (th_ind_attrs(held, &attrs) && ((attrs & TH_INDEXABLE)
+                || th_kind_of(th_resolve(th_ind_referent(held)))
+                    == TH_SEQUENCE)));
+        if (!stored) {
+            // The container is written back to as well, so it is read from
+            // its own place when it has one.
+            core_list_t(n00bb_element_writeback_t) writebacks =
+                core_list_new(n00bb_element_writeback_t);
+            bool erase = !ir_value_has_uses(context->function, target);
+            if (erase) (void)ir_instr_erase(target->def);
+            ir_value_t *holder = place_in(context, container, span,
+                                          &writebacks);
+            ir_value_t *operands[] = {
+                holder ? n00bb_emit_indirect_read(context, holder,
+                             th_ind_referent(th_resolve(holder->type)), span)
+                       : container,
+                index, value};
+            th_type *nil = th_name(ir_module_types(context->module),
+                                   CORE_STRING_STATIC("nil"));
+            ir_value_t *written = operands[0]
+                ? n00bb_dispatch(context, CORE_STRING_STATIC("__write"),
+                                 operands, 3, nil, span)
+                : nullptr;
+            bool ok = written && ir_annot_set(lower->ir_context,
+                    &written->def->annots,
+                    (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
+                                 .kind = IR_ANNOT_BOOL, .b = true})
+                && n00bb_emit_writebacks(context, &writebacks, span);
+            core_list_free(writebacks);
+            return ok;
+        }
+    }
+    core_list_t(n00bb_element_writeback_t) writebacks =
+        core_list_new(n00bb_element_writeback_t);
+    bool saved = lower->write_back_open_index;
+    lower->write_back_open_index = true;
+    ir_value_t *place = place_in(context, target, span, &writebacks);
+    lower->write_back_open_index = saved;
+    // An atomic value is updated whole, never one field or element at a time.
+    for (ir_value_t *at = place; at && at->kind == IR_VAL_INSTR && at->def
+         && (at->def->op == IR_OP_FIELD || at->def->op == IR_OP_INDEX)
+         && at->def->n_operands;) {
+        ir_value_t *base = ir_operand_value(&at->def->operands[0]);
+        th_type *held = base ? th_resolve(base->type) : nullptr;
+        if (held && th_kind_of(held) == TH_INDIRECTION
+            && n00bb_atomic_element_type(th_ind_referent(held))) {
+            lower_report(context, N00B_DIAG_ATOMIC_PART_UPDATE, span,
+                         N00B_TEXT_AN_ATOMIC_VALUE_CANNOT_BE, N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_BUILD_THE_NEW_VALUE_AND,
+                       N00BB_NO_ARGS);
+            core_list_free(writebacks);
+            return false;
+        }
+        at = base;
+    }
+    bool ok = place && writable_hook(context, place, span)
+        && (!checked || n00bb_place_writable(place))
+        && n00bb_emit_indirect_write(context, place, value, span)
+        && n00bb_emit_writebacks(context, &writebacks, span);
+    core_list_free(writebacks);
+    return ok;
 }

@@ -830,9 +830,17 @@ resolve_into(ir_places_t *places, const ir_value_t *address,
             break;
         case IR_OP_COPY:
         case IR_OP_CONSUME:
-        case IR_OP_RETAIN_REF:
-            push_operand(&pending, in, 0, path);
+        case IR_OP_RETAIN_REF: {
+            // A copy of a global reads the address the global holds, which
+            // can be anywhere; a bare global names the global's own storage.
+            const ir_value_t *source = in->n_operands
+                ? ir_operand_value(&in->operands[0]) : nullptr;
+            if (source && source->kind == IR_VAL_GLOBAL)
+                add_id(ids, unknown_place(places));
+            else
+                push_operand(&pending, in, 0, path);
             break;
+        }
         case IR_OP_CAST:
         case IR_OP_BITCAST:
         case IR_OP_BOX_RAW:

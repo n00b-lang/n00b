@@ -1290,10 +1290,9 @@ static parse_sym_entry_t *n00bb_case_owner(const n00bb_dispatch_index_t *index,
     return symbol;
 }
 
-static bool case_member_of(n00bb_link_analysis_t *analysis,
-                           parse_sym_entry_t *member, bool variant)
+static bool case_member_of(parse_sym_entry_t *member, bool variant)
 {
-    return variant ? n00bb_variant_arm_symbol(analysis->grammar, member)
+    return variant ? n00bb_variant_arm_symbol(member)
                    : member->kind == PARSE_SYM_ENUM_CONST
                          && !n00bb_flagset_member(member);
 }
@@ -1312,7 +1311,7 @@ parse_sym_entry_t *n00bb_case_member(const n00bb_dispatch_index_t *index,
         *variant = arms;
     }
 
-    return member && case_member_of(index->analysis, member, arms) ? member
+    return member && case_member_of(member, arms) ? member
                                                                    : nullptr;
 }
 
@@ -2101,17 +2100,6 @@ static const ir_value_t *dispatch_operand(const ir_instr_t *in, uint32_t i)
              : nullptr;
 }
 
-static uint32_t dispatch_positional(const ir_instr_t *in)
-{
-    uint32_t count = 0;
-
-    for (uint32_t i = 1; i < in->n_operands; i++) {
-        count += dispatch_operand(in, i) != nullptr;
-    }
-
-    return count;
-}
-
 static const void *read_variable(const ir_value_t *value)
 {
     const ir_instr_t *read    = value ? value->def : nullptr;
@@ -2856,19 +2844,24 @@ static bool report_tuple_index(core_translation_unit_t *unit,
 
 static bool dispatch_plan_reports(parse_grammar_t         *grammar,
                                   core_translation_unit_t *unit,
-                                  parse_tree_t            *call,
+                                  const n00bb_written_call_t *site,
                                   const n00bb_dispatch_target_t *target,
                                   bool                     method_style)
 {
     n00bb_call_plan_t plan  = {0};
-    bool              bound = n00bb_plan_call(
+    bool              bound = n00bb_call_plan_init(
         &plan, grammar, target->function, target->signature,
-        child_nt(grammar, call, CORE_STRING_STATIC("call-args")),
         method_style ? 1 : 0);
+
+    if (bound) {
+        n00bb_call_plan_use(&plan, site);
+        bound = n00bb_call_plan_bind(&plan);
+    }
 
     if (!bound) {
         n00bb_call_plan_report(&plan, unit,
-                               core_translation_unit_diagnostics(unit), call);
+                               core_translation_unit_diagnostics(unit),
+                               site->span);
     }
     n00bb_call_plan_free(&plan);
 
@@ -3012,24 +3005,17 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
         return true;
     }
 
-    parse_tree_t *call = core_dict_get(&tu_state(unit)->dispatch_calls,
-                                       (void *)at, nullptr);
+    const n00bb_written_call_t *call = core_dict_get(
+        &tu_state(unit)->dispatch_calls, (void *)at, nullptr);
 
     if (!call) {
         return false;
     }
 
     parse_grammar_t  *grammar   = index->analysis->grammar;
-    parse_tree_t     *arguments = child_nt(grammar, call,
-                                           CORE_STRING_STATIC("call-args"));
-    n00bb_call_plan_t probe     = {0};
-
-    n00bb_call_plan_init(&probe, grammar, nullptr, nullptr, 0);
-    n00bb_call_plan_collect(&probe, arguments);
-
-    bool method_style = dispatch_positional(at) > probe.positional.len;
-
-    n00bb_call_plan_free(&probe);
+    bool method_style = ir_annot_get((ir_annots_t *)&at->annots,
+                                     N00BB_DISPATCH_IMPLICIT_SELF_KEY)
+        != nullptr;
 
     n00bb_dispatch_target_t target = {0};
     bool found = dispatch_callee(index, unit, receiver, method,
@@ -3195,16 +3181,15 @@ static bool report_literal_argument(th_ctx *types,
                                         : (core_string_t){0};
 
     if (self && core_string_eq(method, CORE_STRING_STATIC("__init"))) {
-        parse_tree_t *call  = core_dict_get(&tu_state(unit)->dispatch_calls,
-                                            (void *)user, nullptr);
+        const n00bb_written_call_t *call = core_dict_get(
+            &tu_state(unit)->dispatch_calls, (void *)user, nullptr);
         th_type      *built = th_resolve(self->type);
 
         if (th_kind_of(built) == TH_INDIRECTION) {
             built = th_resolve(th_ind_referent(built));
         }
         n00bb_report(diagnostics, unit, N00B_DIAG_CONSTRUCTOR_NO_MATCH,
-                     call ? n00bb_node_span(call)
-                          : n00bb_span_location(user->span),
+                     call ? call->span : n00bb_span_location(user->span),
                      N00B_TEXT_NONE_OF_THE_VISIBLE_INIT,
                      N00BB_ARGS(ARG_NUMBER(visible_initializers(index, built)),
                                 ARG_TEXT(n00bb_print_type(types, built))));
@@ -3836,7 +3821,11 @@ static bool check_empty_lists(th_ctx *types,
     return ok;
 }
 
-static bool reaches_root(const ir_value_t *address)
+// Whether a store to `address` writes the variable it starts from. A field
+// of an object is in the storage its handle refers to, not in the variable
+// holding the handle, so a field taken where an object is kept leaves the
+// variable unchanged.
+static bool reaches_root(th_ctx *types, const ir_value_t *address)
 {
     while (address && address->kind != IR_VAL_GLOBAL) {
         const ir_instr_t *def = address->def;
@@ -3851,6 +3840,14 @@ static bool reaches_root(const ir_value_t *address)
             return false;
         }
         address = ir_operand_value(&def->operands[0]);
+
+        th_type *held = address ? th_resolve(address->type) : nullptr;
+
+        if (held && th_kind_of(held) == TH_INDIRECTION
+            && n00bb_reference_definition(
+                types, th_resolve(th_ind_referent(held)))) {
+            return false;
+        }
     }
 
     return address != nullptr;
@@ -3916,7 +3913,8 @@ static bool check_write_site(core_translation_unit_t  *unit,
               || root->mutability == PARSE_SYM_CONST;
 
     if (!frozen || site->store->n_operands != 2
-        || !reaches_root(ir_operand_value(&site->store->operands[0]))) {
+        || !reaches_root(tu_state(unit)->types,
+                         ir_operand_value(&site->store->operands[0]))) {
         return true;
     }
 
@@ -4129,7 +4127,7 @@ static bool check_field_privacy(th_ctx *types, n00bb_link_analysis_t *analysis,
 static bool check_dispatch_call(th_ctx *types,
                                 const n00bb_dispatch_index_t *index,
                                 core_translation_unit_t *unit,
-                                const ir_instr_t *at, parse_tree_t *call)
+                                const ir_instr_t *at, const n00bb_written_call_t *call)
 {
     const ir_value_t *self = dispatch_operand(at, 1);
 
@@ -4138,17 +4136,11 @@ static bool check_dispatch_call(th_ctx *types,
     }
 
     parse_grammar_t        *grammar   = index->analysis->grammar;
-    parse_tree_t           *arguments = child_nt(
-        grammar, call, CORE_STRING_STATIC("call-args"));
-    n00bb_call_plan_t       probe     = {0};
     n00bb_dispatch_target_t target    = {0};
 
-    n00bb_call_plan_init(&probe, grammar, nullptr, nullptr, 0);
-    n00bb_call_plan_collect(&probe, arguments);
-
-    bool method_style = dispatch_positional(at) > probe.positional.len;
-
-    n00bb_call_plan_free(&probe);
+    bool method_style = ir_annot_get((ir_annots_t *)&at->annots,
+                                     N00BB_DISPATCH_IMPLICIT_SELF_KEY)
+        != nullptr;
     if (!dispatch_callee(index, unit, self->type, at->operands[0].name,
                          at->n_operands - 1, &target)) {
         return true;
@@ -6207,6 +6199,8 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
+        core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
+            n00bb_written_call_free(item->value);
         core_dict_free(&tu_state(units[u])->dispatch_calls);
         core_dict_init(&tu_state(units[u])->dispatch_calls, nullptr, nullptr);
     }

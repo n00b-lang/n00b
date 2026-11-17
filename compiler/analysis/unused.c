@@ -441,9 +441,7 @@ record_symbol_uses(recorder_t *recorder, parse_sym_entry_t *symbol)
         parse_tree_t *node = symbol->use_nodes[u];
         uint8_t access = UNUSED_READ;
         bool also_reads = false;
-        if (target->is_field
-            && n00bb_field_use_is_write(recorder->grammar, target, node,
-                                        &also_reads))
+        if (target->is_field && parse_tree_field_written(node, &also_reads))
             access = UNUSED_WRITE | (also_reads ? UNUSED_READ : 0);
         record_use(recorder, target, node, access);
     }

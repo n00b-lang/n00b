@@ -258,6 +258,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             state->link_analysis = analysis;
         }
     }
+    ok = ok && n00bb_classify_calls(grammar, units.data, units.len);
     ir_lowerer_t *lowerer = ir_lowerer_new(ir_context);
     ok = ok && lowerer
         && ir_lowerer_register(lowerer, CORE_STRING_STATIC("binary"), n00bb_lower_binary,
@@ -338,8 +339,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                      n00bb_lower_try_scope, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        CORE_STRING_STATIC("new-expr"), n00bb_mark_constructor_lvalues, nullptr);
-    ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("assert-stmt"), n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("expression-stmt"), n00bb_lower_effect_check,
@@ -350,11 +349,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("mark-decl"), n00bb_lower_mark_declaration,
         nullptr);
-    ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        CORE_STRING_STATIC("expression"), n00bb_capture_compound_target, nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("place"), n00bb_capture_compound_target,
-            nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("case-expr-item"), n00bb_prune_case_name, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
@@ -379,13 +373,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("variable-decl"), n00bb_lower_pattern, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("postfix-expr"), n00bb_lower_field_receiver,
-            nullptr)
-        && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("place"), n00bb_lower_field_receiver,
-            nullptr);
+            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,

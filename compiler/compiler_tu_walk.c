@@ -176,6 +176,140 @@ declare_result_variable(n00bb_tu_state_t *state, parse_tree_t *function)
     (void)parse_sym_set_binding(owner, N00BB_RESULT_KEY, result);
 }
 
+static bool
+value_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return NT_IS(grammar, node, "body") || NT_IS(grammar, node, "value-body")
+        || NT_IS(grammar, node, "block-value-expr");
+}
+
+// Records the control-flow shape of `node` that lowering reads: which
+// expression it wraps, `and`/`or` junctions, comparisons, labels, which
+// construct a value statement belongs to, and effect-query operands.
+static void
+record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                     parse_tree_t *node, bool entering)
+{
+    if (core_tree_is_leaf(node)) return;
+    if (entering) {
+        if (state->effect_query_depth) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts) facts->in_effect_query = true;
+        }
+        if (NT_IS(grammar, node, "effect-query")) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts && state->function_defs.len)
+                facts->query_function = parse_tree_sym(
+                    state->function_defs.data[state->function_defs.len - 1]);
+            state->effect_query_depth++;
+        }
+        if (NT_IS(grammar, node, "func-def"))
+            core_list_push(state->function_defs, node);
+        if (NT_IS(grammar, node, "pos-param")
+            || NT_IS(grammar, node, "type-decl-one")
+            || NT_IS(grammar, node, "record-decl"))
+            core_list_push(state->mark_owners, node);
+        if (NT_IS(grammar, node, "binding-pattern")) state->pattern_depth++;
+        if (state->pattern_depth) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts) facts->in_pattern = true;
+        }
+        if (NT_IS(grammar, node, "value-stmt")) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts) facts->value_owner = state->value_owners.len
+                ? state->value_owners.data[state->value_owners.len - 1]
+                : nullptr;
+        }
+        if (value_owner_node(grammar, node))
+            core_list_push(state->value_owners, node);
+        return;
+    }
+    if (NT_IS(grammar, node, "effect-query") && state->effect_query_depth)
+        state->effect_query_depth--;
+    if (NT_IS(grammar, node, "func-def") && state->function_defs.len
+        && state->function_defs.data[state->function_defs.len - 1] == node)
+        state->function_defs.len--;
+    if (NT_IS(grammar, node, "mark-annotation") && state->mark_owners.len) {
+        parse_tree_t *owner =
+            state->mark_owners.data[state->mark_owners.len - 1];
+        n00bb_mark_annotation_t mark = {
+            .annotation = node,
+            .kind = NT_IS(grammar, owner, "pos-param") ? N00BB_MARKS_PARAMETER
+                : NT_IS(grammar, owner, "type-decl-one") ? N00BB_MARKS_FIELD
+                : N00BB_MARKS_TYPE,
+            .owner = parse_tree_sym(owner),
+            .function = state->function_defs.len
+                ? parse_tree_sym(
+                      state->function_defs.data[state->function_defs.len - 1])
+                : nullptr,
+        };
+        for (size_t i = state->mark_owners.len; i > 0 && !mark.record; i--)
+            if (NT_IS(grammar, state->mark_owners.data[i - 1], "record-decl"))
+                mark.record = parse_tree_sym(state->mark_owners.data[i - 1]);
+        core_list_push(state->mark_annotations, mark);
+    }
+    else if (NT_IS(grammar, node, "mark-annotation")) {
+        core_list_push(state->mark_annotations,
+            ((n00bb_mark_annotation_t){.annotation = node}));
+    }
+    if ((NT_IS(grammar, node, "pos-param")
+         || NT_IS(grammar, node, "type-decl-one")
+         || NT_IS(grammar, node, "record-decl")) && state->mark_owners.len
+        && state->mark_owners.data[state->mark_owners.len - 1] == node)
+        state->mark_owners.len--;
+    if (NT_IS(grammar, node, "binding-pattern") && state->pattern_depth)
+        state->pattern_depth--;
+    if (NT_IS(grammar, node, "unary-expr")) {
+        bool negative = false, saw_sign = false;
+        parse_tree_t *literal = n00bb_simple_switch_literal(grammar, node,
+            &negative, &saw_sign);
+        parse_node_facts_t *facts = literal && negative && saw_sign
+            ? parse_tree_facts_for_update(literal) : nullptr;
+        if (facts) facts->negated_literal = true;
+    }
+    if (NT_IS(grammar, node, "case-expr-item")) {
+        parse_tree_t *expression = CHILD_NT(grammar, node, "expression");
+        core_string_t text = {0};
+        if (expression && !CHILD_NT(grammar, node, "range-sep")
+            && simple_identifier_expression(grammar, expression, &text)) {
+            parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+            if (facts) facts->case_spelled = text;
+        }
+    }
+    if (value_owner_node(grammar, node) && state->value_owners.len
+        && state->value_owners.data[state->value_owners.len - 1] == node)
+        state->value_owners.len--;
+    size_t count = core_tree_num_children(node);
+    parse_tree_t *inner = count == 1 && !core_tree_is_leaf(core_tree_child(node, 0))
+        ? core_tree_child(node, 0)
+        : NT_IS(grammar, node, "tuple-or-paren") && count == 3
+        ? core_tree_child(node, 1) : nullptr;
+    if (inner) (void)parse_tree_set_core(node, parse_tree_core(inner));
+    parse_junction_t junction = count != 3 ? PARSE_JUNCTION_NONE
+        : NT_IS(grammar, node, "and-expr") ? PARSE_JUNCTION_AND
+        : NT_IS(grammar, node, "or-expr") ? PARSE_JUNCTION_OR
+        : PARSE_JUNCTION_NONE;
+    bool comparison = count == 3
+        && (NT_IS(grammar, node, "equality-expr")
+            || NT_IS(grammar, node, "compare-expr"));
+    if (junction || comparison) {
+        parse_node_facts_t *facts = parse_tree_facts_for_update(node);
+        if (facts) {
+            facts->junction = junction;
+            facts->comparison = comparison;
+        }
+    }
+    if ((NT_IS(grammar, node, "labeled-for")
+         || NT_IS(grammar, node, "labeled-while")
+         || NT_IS(grammar, node, "labeled-typecase")
+         || NT_IS(grammar, node, "labeled-switch")) && count == 2) {
+        parse_node_facts_t *facts =
+            parse_tree_facts_for_update(core_tree_child(node, 1));
+        if (facts) facts->control_label = first_token_text(
+            CHILD_NT(grammar, node, "label"));
+    }
+}
+
 static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
@@ -190,6 +324,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     parse_grammar_t *grammar = annotation_context->grammar;
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !node) return;
+    if (step == SEMANTIC_PREPARE_ENTER || step == SEMANTIC_AFTER_EXIT)
+        record_control_shape(grammar, state, node,
+                             step == SEMANTIC_PREPARE_ENTER);
     if (before_annotations) {
     if (entering && !validate_package_body_statement(
             grammar, unit, node, parent))
@@ -392,6 +529,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             "could not cache array type dimensions");
         return;
     }
+    n00bb_emit_t emit;
+    if (!entering && (n00bb_call_operator_node(grammar, node)
+                      || (n00bb_node_emit(grammar, node, &emit)
+                          && core_string_eq(emit.action,
+                                            CORE_STRING_STATIC("call")))))
+        core_list_push(state->call_nodes, node);
+    if (!entering && (NT_IS(grammar, node, "switch-stmt")
+                      || NT_IS(grammar, node, "switch-value-expr")
+                      || NT_IS(grammar, node, "typecase-stmt")
+                      || NT_IS(grammar, node, "typecase-value-expr")))
+        (void)n00bb_narrowed_subject(grammar, unit, node);
     if (!entering && !cache_typecase_arm_types(grammar, state, node)) {
         n00bb_tu_internal_error(unit, node, "checking declarations",
             "could not cache typecase arm types");
@@ -541,8 +689,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (!NT_IS(grammar, statement, "top-when-body"))
                 core_list_push(state->module_top_level_statements, statement);
         }
-        if (NT_IS(grammar, node, "mark-annotation"))
-            core_list_push(state->mark_annotations, node);
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);
@@ -590,7 +736,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
         }
         if (NT_IS(grammar, node, "variant-decl")
-            && !finalize_variant_symbol_type(grammar, node, unit, state)) {
+            && !finalize_variant_symbol_type(node, unit, state)) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "checking declarations",
                 "could not resolve the declared variant type");

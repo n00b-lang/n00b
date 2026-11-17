@@ -1,0 +1,20 @@
+tests/diagnostics/lower/places.n:2:5: warning N00B-N0021: field `n` of `Point` is set but never read
+tests/diagnostics/lower/places.n:5:8: warning N00B-N0023: type `Box` is never used
+  help: remove it
+tests/diagnostics/lower/places.n:9:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/places.n:13:6: warning N00B-N0019: function `make` is never called
+  help: call it or delete it
+tests/diagnostics/lower/places.n:18:5: error N00B-S0019: `make().n` is a temporary value, so it cannot be assigned
+  help: store the value in a `var`, change that, and use it
+tests/diagnostics/lower/places.n:22:17: error N00B-S0065: `ref` needs a variable, field or element, but `(1 + 2)` is a temporary value
+  help: store the value in a `var` and take a `ref` to that
+tests/diagnostics/lower/places.n:27:5: error N00B-S0019: `p` is a `let`, so its field `n` cannot be assigned
+  tests/diagnostics/lower/places.n:26:9: note: `p` is declared here
+  help: declare `p` with `var` to allow changes
+tests/diagnostics/lower/places.n:30:6: warning N00B-N0019: function `let_object` is never called
+  help: call it or delete it
+tests/diagnostics/lower/places.n:36:5: warning N00B-N0024: `atomic_point` is never used
+  help: remove it
+tests/diagnostics/lower/places.n:39:5: error N00B-S0038: an atomic value cannot be updated one field at a time
+  help: build the new value and assign the whole atomic at once

@@ -168,6 +168,7 @@ parse_tree_copy_semantic(parse_tree_t *dst, const parse_tree_t *src)
     parse_node_facts_t *facts = to->facts;
     *to = *from;
     to->facts = facts;
+    to->core = nullptr;
     if (!from->facts) {
         core_free(to->facts);
         to->facts = nullptr;

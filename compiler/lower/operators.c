@@ -1452,25 +1452,13 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
         return true;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     if (!lower || !lower->grammar) return true;
-    bool negative = false;
-    bool saw_sign = false;
     ir_lit_t magnitude = {0};
-    parse_tree_t *literal = nullptr;
-    for (parse_tree_t *ancestor = parse_tree_parent(visit->node);
-         ancestor && !literal;
-         ancestor = parse_tree_parent(ancestor)) {
-        if (!nt_is(lower->grammar, ancestor, CORE_STRING_STATIC("unary-expr"))) continue;
-        bool candidate_negative = false;
-        bool candidate_saw_sign = false;
-        parse_tree_t *candidate = n00bb_simple_switch_literal(
-            lower->grammar, ancestor, &candidate_negative,
-            &candidate_saw_sign);
-        if (!candidate || !candidate_saw_sign) continue;
-        literal = candidate;
-        negative = candidate_negative;
-        saw_sign = candidate_saw_sign;
-        break;
-    }
+    // The literal is the operand of a negation (recorded by the front end),
+    // so its magnitude may be one past the type's largest positive value.
+    if (!parse_tree_negated_literal(visit->node)) return true;
+    parse_tree_t *literal = visit->node;
+    bool negative = true;
+    bool saw_sign = true;
     if (!literal || !negative || !saw_sign
         || literal_modifier(lower->grammar, literal).data
         || !n00bb_parse_switch_integer(first_token_text(literal), &magnitude))
@@ -1488,10 +1476,13 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     return ir_lower_set_node_value(context, visit->node, constant->dest);
 }
 
+// The function `ref` names, when its operand names one (recorded by name
+// resolution); the operand is returned in `operand_out`.
 static parse_sym_entry_t *
 referenced_function(ir_lower_context_t *context, parse_visit_t *visit,
                     parse_tree_t **operand_out)
 {
+    (void)context;
     parse_tree_t *operand = nullptr;
     for (size_t i = 0; !operand && i < core_tree_num_children(visit->node);
          i++) {
@@ -1499,17 +1490,8 @@ referenced_function(ir_lower_context_t *context, parse_visit_t *visit,
         if (!core_tree_is_leaf(child)) operand = child;
     }
     *operand_out = operand;
-    n00bb_lower_context_t *lower = context->user;
-    parse_sym_entry_t *target = operand && lower
-        ? attached_symbol(visit->grammar, lower->unit, operand) : nullptr;
-    if (!target || target->kind != PARSE_SYM_FUNCTION) return nullptr;
-    if (names_symbol_directly(operand)) return target;
-    parse_tree_t *member = member_access_node(visit->grammar, operand);
-    parse_tree_t *receiver = member && core_tree_num_children(member)
-        ? core_tree_child(member, 0) : nullptr;
-    return receiver && call_receiver_is_module(visit->grammar, lower->unit,
-                                               receiver)
-        ? target : nullptr;
+    parse_node_facts_t *facts = parse_tree_call_facts(visit->node);
+    return facts ? facts->call_function : nullptr;
 }
 
 bool
@@ -1523,15 +1505,15 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (is_ref) {
         if (entering) {
             parse_tree_t *operand = nullptr;
+            // A function is named, not read; any other operand is lowered
+            // as a value, and its place recovered from how it was read.
             bool function_reference =
                 referenced_function(context, visit, &operand) != nullptr;
             if (!operand || (function_reference
-                    ? !ir_lower_skip_value(context, visit->node, operand)
-                    : !n00bb_mark_reference_target(context,
-                        visit->grammar, visit->node, operand)))
+                    && !ir_lower_skip_value(context, visit->node, operand)))
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL,
                     lower_span_for_tree(context, visit->node),
-                    "could not mark a reference target as an lvalue");
+                    "could not mark a function reference");
             return true;
         }
 
@@ -1567,44 +1549,13 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                 ? ir_func_reference(module, function) : nullptr;
         }
         else if (operand && lower)
-            storage = n00bb_addressable_expression_address(context,
-                visit->grammar, lower->unit, operand, span);
-        ir_value_t *root = storage;
-        while (root && root->def && (root->def->op == IR_OP_FIELD
-                                     || root->def->op == IR_OP_INDEX)
-               && root->def->n_operands)
-            root = ir_operand_value(&root->def->operands[0]);
-        bool escapes = storage && n00bb_from_reference_address(storage)
-            && !n00bb_call_argument(visit->grammar, visit->node);
-        if (escapes && root && root->def && root->def->op == IR_OP_DISPATCH) {
-            if (!ir_annot_set(lower->ir_context, &root->def->annots,
-                    (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
-                                 .kind = IR_ANNOT_STR,
-                                 .s = ir_strdup(lower->ir_context,
-                                     source_text_of(lower->unit, operand))}))
-                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                    "could not defer the reference escape check");
-            escapes = false;
-        }
-        if (escapes) {
-            lower_report(context, N00B_DIAG_REFERENCE_ADDRESS_ESCAPES, span,
-                N00B_TEXT_REFERENCE_ADDRESS_ESCAPES,
-                N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, operand))));
-            lower_help(context, N00B_TEXT_PASS_THE_REFERENCE_DIRECTLY,
-                       N00BB_NO_ARGS);
-            return false;
-        }
+            storage = n00bb_place_of(context,
+                ir_lower_node_value(context, operand), true, span);
         if (storage && storage->def && storage->def->op == IR_OP_INDEX
             && storage->def->n_operands
             && storage->def->operands[0].kind == IR_OPD_VALUE) {
-            ir_shape_t *shape = ir_value_shape(
+            ir_shape_t *shape = n00bb_place_shape(
                 storage->def->operands[0].value);
-            if (!shape) {
-                parse_sym_entry_t *root = n00bb_assignment_root_symbol(
-                    visit->grammar, lower->unit, operand);
-                shape = root ? parse_sym_binding(root,
-                    CORE_STRING_STATIC("ir.array-shape")) : nullptr;
-            }
             ir_shape_storage_t layout = {0};
             if (shape && ir_shape_storage(shape, &layout)
                 && layout.classification_known
@@ -1643,6 +1594,15 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                     th_var(ir_module_types(context->module)))
                 && ir_instr_operand_name(open, N00BB_REF_METHOD)
                 && ir_instr_operand_fresh(open, storage)
+                // An address a reference type lends may only be passed
+                // straight to a call; rewrite checks how the `ref` is used
+                // once the reference types are known.
+                && ir_annot_set(lower->ir_context, &open->annots,
+                       (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
+                                    .kind = IR_ANNOT_STR,
+                                    .s = ir_strdup(lower->ir_context,
+                                        source_text_of(lower->unit,
+                                                       operand))})
                 ? open->dest : nullptr;
             if (referenced) n00bb_rewrite_later(context, open);
         }
@@ -1674,12 +1634,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (!n00bb_unwrap_call_outcome(context, visit, outcome, span, &value,
                                    false))
         return false;
-    n00bb_lower_context_t *lower = context->user;
-    parse_tree_t *callee = operand_node
-        && core_tree_num_children(operand_node)
-            ? core_tree_child(operand_node, 0) : nullptr;
-    parse_sym_entry_t *callee_symbol = lower && callee
-        ? attached_symbol(visit->grammar, lower->unit, callee) : nullptr;
+    parse_node_facts_t *unwrap_facts = parse_tree_call_facts(visit->node);
+    parse_sym_entry_t *callee_symbol = unwrap_facts
+        ? unwrap_facts->call_function : nullptr;
     ir_shape_t *return_shape = callee_symbol
         ? parse_sym_binding(callee_symbol,
             CORE_STRING_STATIC("ir.return-shape")) : nullptr;

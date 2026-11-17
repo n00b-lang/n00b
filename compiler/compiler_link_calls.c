@@ -42,28 +42,6 @@ call_units_failed(core_translation_unit_t *const *units, size_t unit_count)
     return false;
 }
 
-parse_tree_t *
-call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
-                           parse_sym_entry_t *function, size_t target,
-                           bool trait_dispatch)
-{
-    if (trait_dispatch && target == 0) {
-        parse_tree_t *member = member_access_node(grammar, call);
-        if (!member && core_tree_num_children(call))
-            member = member_access_node(grammar,
-                                         core_tree_child(call, 0));
-        return member && core_tree_num_children(member)
-            ? core_tree_child(member, 0) : nullptr;
-    }
-    n00bb_call_plan_t plan;
-    (void)n00bb_plan_call(&plan, grammar, function,
-        n00bb_symbol_signature(function),
-        call_arguments_node(grammar, call), trait_dispatch ? 1 : 0);
-    parse_tree_t *found = n00bb_call_plan_parameter_argument(&plan, target);
-    n00bb_call_plan_free(&plan);
-    return found;
-}
-
 bool
 publish_link_call_dependencies(core_link_unit_t *link,
                                n00bb_link_analysis_t *analysis,

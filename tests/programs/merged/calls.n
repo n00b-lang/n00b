@@ -84,6 +84,40 @@ func total(c: bool) -> uint {
 require total(true) == 15
 require total(false) == 9
 
+// A value statement gives the value of the innermost construct it is in: an
+// `if` or `try` used as a value inside a block value keeps its own value.
+func block_of_if(c: bool) -> int {
+    let y = {
+        -> if c { -> 10 } else { -> 20 }
+    }
+    -> y
+}
+func block_around_if(c: bool) -> int {
+    let y = {
+        let z = if c { -> 10 } else { -> 20 }
+        -> z + 1
+    }
+    -> y
+}
+func may_fail(c: bool) -> int fail: string {
+    if c { fail "no" }
+    return 3
+}
+func block_around_try(c: bool) -> int {
+    let y = {
+        let z = try { -> may_fail(c)! } fail(e) { -> 7 }
+        -> z * 2
+    }
+    -> y
+}
+
+require block_of_if(true) == 10
+require block_of_if(false) == 20
+require block_around_if(true) == 11
+require block_around_if(false) == 21
+require block_around_try(true) == 14
+require block_around_try(false) == 6
+
 trait Measured {
     func measure(self: 'T, scale: u8) -> u8
 }

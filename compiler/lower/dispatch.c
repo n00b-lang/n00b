@@ -59,38 +59,49 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
                    ir_value_t *value)
 {
     if (!context || !argument || !value) return nullptr;
-    parse_tree_t *index = n00bb_index_expression_node(grammar, argument);
-    parse_tree_t *member = index ? nullptr
-        : member_access_node(grammar, argument);
-    if (index || member) {
+    (void)grammar;
+    // What is consumed is decided by how the argument was read: a whole
+    // variable gives up its value, a part of one cannot be taken out of it,
+    // and anything else is a temporary already owned by the call.
+    ir_instr_t *read = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+    ir_value_t *address = read && read->op == IR_OP_LOAD
+            && read->n_operands == 1
+        ? ir_operand_value(&read->operands[0]) : nullptr;
+    ir_instr_t *step = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    ir_value_t *container = nullptr, *at = nullptr;
+    bool element = (read && read->op == IR_OP_SEQUENCE_GET)
+        || n00bb_accessed_element(value, &container, &at)
+        || (step && step->op == IR_OP_INDEX);
+    bool field = (read && read->op == IR_OP_EXTRACT)
+        || (step && step->op == IR_OP_FIELD);
+    if (element || field) {
         core_string_t text = source_text_of(unit, argument);
         lower_report(context, N00B_DIAG_CONSUME_PART,
             lower_span_for_tree(context, argument),
-            index ? N00B_TEXT_CONSUME_ELEMENT : N00B_TEXT_CONSUME_FIELD,
+            element ? N00B_TEXT_CONSUME_ELEMENT : N00B_TEXT_CONSUME_FIELD,
             N00BB_ARGS(ARG_TEXT(text)));
         lower_help(context, N00B_TEXT_CONSUME_THE_WHOLE_VALUE_OR,
             N00BB_NO_ARGS);
         return nullptr;
     }
-
-    parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
-    parse_sym_entry_t *symbol = lvalue
-        ? attached_symbol(grammar, unit, lvalue) : nullptr;
-    ir_value_t *binding = nullptr;
-    if (symbol && (symbol->kind == PARSE_SYM_VARIABLE
-                   || symbol->kind == PARSE_SYM_PARAM)) {
-        binding = ir_lower_bound_address(context, symbol);
-        if (!binding) {
-            ir_local_t *local = ir_lower_bound_local(context, symbol);
-            binding = local ? ir_local_value(context->function, local)
-                            : ir_lower_bound_value(context, symbol);
-        }
-        if (!binding) {
-            lower_internal(context,
-                lower_span_for_tree(context, argument),
-                "consumed binding has no lowered semantic identity");
-            return nullptr;
-        }
+    ir_local_t *local = read && read->op == IR_OP_COPY && read->n_operands == 1
+        ? ir_operand_local(&read->operands[0]) : nullptr;
+    ir_value_t *copied = read && read->op == IR_OP_COPY && !local
+            && read->n_operands == 1
+        ? ir_operand_value(&read->operands[0]) : value;
+    ir_value_t *binding = local ? ir_local_value(context->function, local)
+        : step && step->op == IR_OP_ALLOC ? address
+        : copied && (copied->kind == IR_VAL_PARAM
+                     || copied->kind == IR_VAL_GLOBAL) ? copied
+        : nullptr;
+    parse_sym_entry_t *symbol = binding
+        ? ir_lower_binding_symbol(context, local, local ? nullptr : binding)
+        : nullptr;
+    if (symbol && symbol->kind != PARSE_SYM_VARIABLE
+        && symbol->kind != PARSE_SYM_PARAM) {
+        symbol = nullptr;
+        binding = nullptr;
     }
 
     ir_span_t span = lower_span_for_tree(context, argument);

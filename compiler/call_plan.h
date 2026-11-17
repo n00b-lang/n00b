@@ -2,9 +2,34 @@
 
 #include "compiler_tu.h"
 
+// One argument of a call as written. Lowering and name resolution collect
+// these from the call they are working on; a dispatch keeps them (without
+// the value) so that typing can bind and report its arguments once its
+// target is known, without going back to the call.
+typedef struct {
+    // The value, while the call is being lowered.
+    parse_tree_t *expression;
+    // A keyword argument's name; empty for a positional one.
+    core_string_t name;
+    // The argument's first token, and all of it.
+    core_diag_location_t first;
+    core_diag_location_t span;
+    // Its source bytes, and its value's, when known.
+    size_t start, end, value_start, value_end;
+    bool placed, value_placed;
+} n00bb_call_argument_t;
+core_list_decl(n00bb_call_argument_t);
+
+// A call's arguments and where it is, as a dispatch keeps them.
+typedef struct {
+    core_diag_location_t span;
+    core_list_t(n00bb_call_argument_t) positional;
+    core_list_t(n00bb_call_argument_t) keywords;
+} n00bb_written_call_t;
+
 typedef struct {
     parse_tree_t *argument;
-    parse_tree_t *site;
+    const n00bb_call_argument_t *site;
     bool by_name;
 } n00bb_call_slot_t;
 
@@ -29,11 +54,11 @@ typedef struct {
     n00bb_call_slot_t *slots;
     bool *optional;
     size_t *argument_slots;
-    core_list_t(n00bb_tree_ptr_t) positional;
-    core_list_t(n00bb_tree_ptr_t) keywords;
+    core_list_t(n00bb_call_argument_t) positional;
+    core_list_t(n00bb_call_argument_t) keywords;
     core_list_t(n00bb_tree_ptr_t) rest;
     n00bb_call_plan_status_t status;
-    parse_tree_t *problem;
+    const n00bb_call_argument_t *problem;
     size_t problem_index;
 } n00bb_call_plan_t;
 
@@ -41,6 +66,14 @@ bool n00bb_call_plan_init(n00bb_call_plan_t *plan, parse_grammar_t *grammar,
                           parse_sym_entry_t *callee, th_type *signature,
                           size_t offset);
 void n00bb_call_plan_collect(n00bb_call_plan_t *plan, parse_tree_t *call_args);
+// Uses a dispatch's recorded arguments instead of collecting them.
+void n00bb_call_plan_use(n00bb_call_plan_t *plan, const n00bb_written_call_t *site);
+// Records a call's arguments and span for a dispatch; freed with
+// n00bb_written_call_free.
+n00bb_written_call_t *n00bb_written_call_record(parse_grammar_t *grammar,
+                                          parse_tree_t *call,
+                                          parse_tree_t *call_args);
+void n00bb_written_call_free(n00bb_written_call_t *site);
 bool n00bb_call_plan_bind(n00bb_call_plan_t *plan);
 bool n00bb_plan_call(n00bb_call_plan_t *plan, parse_grammar_t *grammar,
                      parse_sym_entry_t *callee, th_type *signature,
@@ -56,4 +89,4 @@ parse_tree_t *n00bb_call_plan_parameter_argument(const n00bb_call_plan_t *plan,
 void n00bb_call_plan_report(const n00bb_call_plan_t *plan,
                             const core_translation_unit_t *unit,
                             core_diagnostics_t *diagnostics,
-                            parse_tree_t *site);
+                            core_diag_location_t site);
