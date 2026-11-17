@@ -7206,6 +7206,12 @@ free_tu_state(void *data)
     core_dict_foreach(&state->dispatch_calls, item)
         n00bb_written_call_free(item->value);
     core_dict_free(&state->dispatch_calls);
+    core_dict_foreach(&state->overload_sites, item) {
+        n00bb_overload_site_t *site = item->value;
+        core_list_free(site->candidates);
+        core_free(site);
+    }
+    core_dict_free(&state->overload_sites);
     core_dict_free(&state->declarations_typed_ahead);
     free_type_symbol_index(state);
     core_buffer_release(&state->declaration_sites);
@@ -7257,6 +7263,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
     core_dict_init(&state->integer_tracked_symbols, nullptr, nullptr);
     core_dict_init(&state->dispatch_calls, nullptr, nullptr);
+    core_dict_init(&state->overload_sites, nullptr, nullptr);
     core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
     state->lex = lex;
     state->unit = unit;

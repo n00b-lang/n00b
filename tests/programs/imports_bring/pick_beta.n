@@ -1,0 +1,11 @@
+func pick(x: int) -> int {
+    return 20
+}
+
+func pick(x: string) -> int {
+    return 21
+}
+
+func same(x: int) -> int {
+    return 22
+}

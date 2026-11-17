@@ -1,0 +1,7 @@
+func pick(x: bool) -> int {
+    return 30
+}
+
+func same(x: int) -> int {
+    return 32
+}

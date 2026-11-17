@@ -1,0 +1,15 @@
+func r(x: int) -> int {
+    return x
+}
+
+func r(x: int) -> string {
+    return "a"
+}
+
+func m(x: int) -> int {
+    return x
+}
+
+func m(modify x: int) -> int {
+    return x
+}

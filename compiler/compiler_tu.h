@@ -323,6 +323,12 @@ typedef struct {
     th_type **types;
     size_t count;
 } n00bb_typecase_arm_types_t;
+// A call to an overloaded function: the functions it names, and the one
+// typing chose for it.
+typedef struct {
+    core_list_t(parse_sym_entry_ptr_t) candidates;
+    parse_sym_entry_t *chosen;
+} n00bb_overload_site_t;
 typedef struct n00bb_ordered_nodes_t n00bb_ordered_nodes_t;
 typedef struct n00bb_iteration_plan_t n00bb_iteration_plan_t;
 typedef struct n00bb_litmod_site_t n00bb_litmod_site_t;
@@ -546,6 +552,8 @@ typedef struct {
     core_dict_t constructor_types;
     core_dict_t integer_tracked_symbols;
     core_dict_t dispatch_calls;
+    // Each overloaded call's dispatch to its n00bb_overload_site_t.
+    core_dict_t overload_sites;
     core_list_t(parse_tree_ptr_t) integer_shift_sites;
     core_dict_t integer_shift_seen;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;

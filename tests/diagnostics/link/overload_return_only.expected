@@ -1,0 +1,10 @@
+tests/diagnostics/link/overload_return_only.n:1:6: warning N00B-N0019: function `r` is never called
+  help: call it or delete it
+tests/diagnostics/link/overload_return_only.n:5:6: error N00B-N0017: function `r` is defined more than once
+  tests/diagnostics/link/overload_return_only.n:1:6: note: `r` is first defined here
+  help: remove one definition, rename it, or give it different parameter types
+tests/diagnostics/link/overload_return_only.n:9:6: warning N00B-N0019: function `m` is never called
+  help: call it or delete it
+tests/diagnostics/link/overload_return_only.n:13:6: error N00B-N0017: function `m` is defined more than once
+  tests/diagnostics/link/overload_return_only.n:9:6: note: `m` is first defined here
+  help: remove one definition, rename it, or give it different parameter types

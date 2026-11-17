@@ -197,15 +197,15 @@ static th_type *call_result(gen_t *g, ir_instr_t *call)
 
 static void dispatch_constraints(gen_t *g, ir_instr_t *in)
 {
-    if (in->n_operands < 2 || in->operands[0].kind != IR_OPD_NAME
+    if (in->n_operands < 1 || in->operands[0].kind != IR_OPD_NAME
         || !in->dest) {
         skip(g, in);
         return;
     }
 
     uint32_t    count  = in->n_operands - 1;
-    th_param   *params = core_alloc_array(th_param, count);
-    th_kwparam *kws    = core_alloc_array(th_kwparam, count);
+    th_param   *params = core_alloc_array(th_param, count + 1);
+    th_kwparam *kws    = core_alloc_array(th_kwparam, count + 1);
     uint32_t    n      = 0;
     uint32_t    nkw    = 0;
 
@@ -230,7 +230,9 @@ static void dispatch_constraints(gen_t *g, ir_instr_t *in)
                                               params, n, nullptr, kws, nkw)
                          : th_func(g->types, in->dest->type, params, n,
                                    nullptr, kws, nkw);
-    th_type *subject = params[0].type;
+    // A call with no positional arguments (an overloaded function's) has no
+    // receiver; nil stands in for one.
+    th_type *subject = n ? params[0].type : th_nil(g->types);
 
     core_free(params);
     core_free(kws);

@@ -114,4 +114,107 @@ require shared_type(1, "a") == 2
 require constrained(1) == 2
 require constrained("a") == 1
 require imported_overloads_hold()
+
+// Overloads may differ in how many arguments they take, none included.
+func arity() -> int {
+    return 0
+}
+
+func arity(x: int) -> int {
+    return 1
+}
+
+func arity(x: string, y: int) -> int {
+    return 2
+}
+
+require arity() == 0 and arity(5) == 1 and arity("a", 1) == 2
+
+// An exact type beats a promotion, and a smaller promotion a larger one.
+// Integers widen within their signedness, or from unsigned to a wider
+// signed type; f32 widens to f64; integers never become floats.
+func width(x: i32) -> int {
+    return 32
+}
+
+func width(x: i64) -> int {
+    return 64
+}
+
+func widened(x: i64) -> int {
+    return 1
+}
+
+func real(x: f64) -> int {
+    return 1
+}
+
+let narrow: i32 = 1
+let wide: i64 = 1
+let tiny: u8 = 1
+let single: f32 = 1.5
+require width(narrow) == 32 and width(wide) == 64
+require widened(narrow) == 1 and widened(tiny) == 1
+require real(single) == 1
+
+// An integer literal takes the narrowest overload's type that holds it.
+func fitted(x: u8) -> int {
+    return 8
+}
+
+func fitted(x: i16) -> int {
+    return 16
+}
+
+require width(5) == 32 and fitted(5) == 8 and fitted(300) == 16
+require fitted(-1) == 16
+
+// A parameter with a default is a keyword parameter; a call that needs no
+// default beats one that does.
+func defaults(x: int, y: int = 0) -> int {
+    return 2
+}
+
+func defaults(x: int) -> int {
+    return 1
+}
+
+require defaults(1) == 1 and defaults(1, y = 2) == 2
+
+// Each argument counts, not just the first.
+func second(x: int, y: string) -> int {
+    return 1
+}
+
+func second(x: int, y: bool) -> int {
+    return 2
+}
+
+require second(1, "a") == 1 and second(1, true) == 2
+
+// Method calls choose the same way, on every argument.
+record Meter {
+    level: int
+}
+
+func scaled(self: Meter, by: i32) -> int {
+    return 32
+}
+
+func scaled(self: Meter, by: f64) -> int {
+    return 64
+}
+
+func scaled(self: Meter, by: string) -> int {
+    return 0
+}
+
+let meter: Meter = (level = 1)
+require meter.scaled(2) == 32 and meter.scaled(1.5) == 64
+require meter.scaled(narrow) == 32 and meter.scaled("x") == 0
+
+// Another module's private function is no candidate.
+let gauge: overload_imported.Gauge = (level = 1)
+let small_scale: i32 = 2
+require gauge.reading(small_scale) == 1
 __fd_write(2, "ok")

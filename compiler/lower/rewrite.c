@@ -1323,11 +1323,15 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                                         &function);
     if (!callee) return false;
     ir_lower_context_t *context = &rewrite->context;
-    ir_value_t *receiver = ir_operand_value(&in->operands[1]);
+    // An overloaded call may pass no positional arguments.
+    bool positional = in->n_operands > 1
+        && in->operands[1].kind != IR_OPD_NAMED_ARG;
+    ir_value_t *receiver = positional
+        ? ir_operand_value(&in->operands[1]) : nullptr;
     th_type *signature = th_resolve(function->type);
     const th_param *self = th_kind_of(signature) == TH_FUNCTION
         && th_func_nparams(signature) ? th_func_param(signature, 0) : nullptr;
-    th_type *constructed = in->operands[1].kind == IR_OPD_FRESH
+    th_type *constructed = positional && in->operands[1].kind == IR_OPD_FRESH
         ? th_ind_referent(receiver->type) : nullptr;
     if (constructed
         && n00bb_object_type(ir_module_types(context->module), constructed)) {
@@ -1340,7 +1344,8 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             ir_instr_use_added(in, 1);
         }
     }
-    bool by_reference = self && th_mode_by_reference(self->mode)
+    bool by_reference = self && positional
+        && th_mode_by_reference(self->mode)
         && in->operands[1].kind == IR_OPD_VALUE
         && ir_annot_get(&in->annots, N00BB_WRITE_BACK_KEY);
     ir_value_t *place = by_reference
@@ -2011,7 +2016,12 @@ static bool
 n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
     core_string_t method = in->operands[0].name;
-    ir_value_t *receiver = ir_operand_value(&in->operands[1]);
+    // An overloaded call goes to the function typing chose for it.
+    n00bb_dispatch_target_t chosen = {0};
+    if (n00bb_overload_target(rewrite->dispatch, in, &chosen))
+        return n00bb_rewrite_method_call(rewrite, in, &chosen);
+    ir_value_t *receiver = in->n_operands > 1
+        ? ir_operand_value(&in->operands[1]) : nullptr;
     ir_value_t *other = in->n_operands == 3
         ? ir_operand_value(&in->operands[2]) : nullptr;
     if (!receiver) return true;
@@ -2584,7 +2594,7 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     }
     if (in->op == IR_OP_RETURN)
         return n00bb_rewrite_return_layout(rewrite, in);
-    if (in->op == IR_OP_DISPATCH && in->dest && in->n_operands >= 2
+    if (in->op == IR_OP_DISPATCH && in->dest && in->n_operands >= 1
         && in->operands[0].kind == IR_OPD_NAME)
         return n00bb_rewrite_dispatch(rewrite, in);
     if ((in->op == IR_OP_CALL || in->op == IR_OP_LOAD

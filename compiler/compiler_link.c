@@ -1056,6 +1056,28 @@ push_import_functions(core_translation_unit_t *unit, core_string_t name,
     }
 }
 
+static bool
+same_parameter_types(th_ctx *types, th_type *first, th_type *second)
+{
+    first = first ? th_resolve(first) : nullptr;
+    second = second ? th_resolve(second) : nullptr;
+    if (!types || th_kind_of(first) != TH_FUNCTION
+        || th_kind_of(second) != TH_FUNCTION
+        || th_func_nparams(first) != th_func_nparams(second)
+        || !th_func_rest(first) != !th_func_rest(second))
+        return false;
+    for (size_t i = 0; i < th_func_nparams(first); i++)
+        if (th_hash(types, th_resolve(th_func_param(first, i)->type))
+            != th_hash(types, th_resolve(th_func_param(second, i)->type)))
+            return false;
+    return !th_func_rest(first)
+        || th_hash(types, th_resolve(th_func_rest(first)->type))
+            == th_hash(types, th_resolve(th_func_rest(second)->type));
+}
+
+static parse_sym_entry_t *
+earlier_same_parameters(n00bb_tu_state_t *state, parse_sym_entry_t *symbol);
+
 static core_list_t(parse_sym_entry_ptr_t)
 function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
                     n00bb_call_lookup_t lookup)
@@ -1069,10 +1091,34 @@ function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
     }
     push_scope_functions(symbol->scope, symbol->name, lookup.origin_module,
                          nullptr, nullptr, &candidates);
-    if (lookup.unqualified)
-        push_import_functions(state->unit,
-            lookup.name.data ? lookup.name : symbol->name, false,
-            &candidates);
+    // A function defined twice is reported where it is defined; calls see
+    // its first definition.
+    size_t distinct = 0;
+    for (size_t i = 0; i < candidates.len; i++)
+        if (!earlier_same_parameters(state, canonical_symbol(
+                candidates.data[i])))
+            candidates.data[distinct++] = candidates.data[i];
+    candidates.len = distinct;
+    if (!lookup.unqualified) return candidates;
+    size_t scoped = candidates.len;
+    push_import_functions(state->unit,
+        lookup.name.data ? lookup.name : symbol->name, false, &candidates);
+    // This module's function hides an imported one that takes the same
+    // parameters.
+    size_t kept = scoped;
+    for (size_t i = scoped; i < candidates.len; i++) {
+        parse_sym_entry_t *imported = candidates.data[i];
+        bool hidden = false;
+        for (size_t j = 0; !hidden && j < scoped; j++)
+            hidden = symbol_is_local(state, candidates.data[j])
+                && !symbol_is_local(state, imported)
+                && same_parameter_types(state->types,
+                       n00bb_symbol_signature(canonical_symbol(
+                           candidates.data[j])),
+                       n00bb_symbol_signature(canonical_symbol(imported)));
+        if (!hidden) candidates.data[kept++] = imported;
+    }
+    candidates.len = kept;
     return candidates;
 }
 
@@ -1123,6 +1169,13 @@ n00bb_describe_candidates(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     for (size_t i = 0; i < items.len; i++) core_free(items.data[i].data);
     core_list_free(items);
     return described;
+}
+
+core_list_t(parse_sym_entry_ptr_t)
+n00bb_call_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                      n00bb_call_lookup_t lookup)
+{
+    return function_candidates(state, symbol, lookup);
 }
 
 bool
@@ -2034,8 +2087,19 @@ report_brought(core_translation_unit_t *unit, parse_tree_t *node,
     return diagnostics;
 }
 
+// Functions of one name from this module and from brings are overloads of
+// each other: a call chooses among them. Any other pair conflicts.
+static bool
+overloads_of_each_other(const parse_sym_entry_t *first,
+                        const parse_sym_entry_t *second)
+{
+    return first && second && first->kind == PARSE_SYM_FUNCTION
+        && second->kind == PARSE_SYM_FUNCTION;
+}
+
 static bool
 brought_name_declared_locally(bring_check_t *check, core_string_t name,
+                              parse_sym_entry_t *declaration,
                               const n00bb_import_source_t *source)
 {
     parse_scope_t *scopes[] = {module_scope(check->state),
@@ -2044,7 +2108,8 @@ brought_name_declared_locally(bring_check_t *check, core_string_t name,
         parse_sym_entry_t *local = n00bb_scope_named_next(scopes[s], name,
                                                           nullptr);
         if (!local || local->kind == PARSE_SYM_MODULE || !local->decl_node
-            || canonical_symbol(local) != local) continue;
+            || canonical_symbol(local) != local
+            || overloads_of_each_other(local, declaration)) continue;
         core_diagnostics_t *diagnostics = report_brought(check->unit,
             source->brought->node, N00B_TEXT_DECLARED_AND_BROUGHT,
             N00BB_ARGS(ARG_TEXT(name)));
@@ -2071,10 +2136,12 @@ add_brought_entry(bring_check_t *check, const core_string_t *local,
         core_list_push(check->entries, ((brought_entry_t){
             .declaration = declaration, .source = source,
         }));
-        return !brought_name_declared_locally(check, *local, source);
+        return !brought_name_declared_locally(check, *local, declaration,
+                                              source);
     }
     brought_entry_t *prior = &check->entries.data[index];
     if (prior->declaration == declaration
+        || overloads_of_each_other(prior->declaration, declaration)
         || (prior->source == source
             && prior->declaration->owner_unit == declaration->owner_unit))
         return true;
@@ -3470,6 +3537,56 @@ report_duplicate_definition(core_translation_unit_t *unit,
 }
 
 static bool
+has_declared_bounds(parse_sym_entry_t *symbol)
+{
+    core_list_t(th_trait_requirement) bounds = n00bb_declared_bounds(symbol);
+    bool bounded = bounds.len != 0;
+    core_list_free(bounds);
+    return bounded;
+}
+
+// Literal modifiers of different kinds share names; their kind tells them
+// apart.
+static bool
+registered_literal_modifier(n00bb_tu_state_t *state,
+                            parse_sym_entry_t *symbol)
+{
+    for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *registration = &state->literal_modifiers.data[i];
+        if (registration->declaration
+                ? registration->declaration == symbol->decl_node
+                : registration->function == symbol)
+            return true;
+    }
+    return false;
+}
+
+// A function declared before `symbol` in its scope, with its name and its
+// parameter types, when neither has `where` bounds.
+static parse_sym_entry_t *
+earlier_same_parameters(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
+{
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !symbol->scope
+        || !symbol->decl_node || canonical_symbol(symbol) != symbol
+        || has_declared_bounds(symbol)
+        || registered_literal_modifier(state, symbol))
+        return nullptr;
+    for (parse_sym_entry_t *candidate = symbol->scope->first_in_scope;
+         candidate && candidate != symbol;
+         candidate = candidate->next_in_scope)
+        if (candidate->kind == PARSE_SYM_FUNCTION && candidate->decl_node
+            && candidate->decl_node != symbol->decl_node
+            && canonical_symbol(candidate) == candidate
+            && core_string_eq(candidate->name, symbol->name)
+            && !has_declared_bounds(candidate)
+            && same_parameter_types(state->types,
+                   n00bb_symbol_signature(candidate),
+                   n00bb_symbol_signature(symbol)))
+            return candidate;
+    return nullptr;
+}
+
+static bool
 register_link_declaration(core_link_unit_t *link,
                           core_translation_unit_t *unit,
                           parse_grammar_t *grammar,
@@ -3516,6 +3633,17 @@ register_link_declaration(core_link_unit_t *link,
         : nullptr;
     bool alias_declaration = aliased != nullptr;
     if (aliased) metadata.contract = core_link_declaration_contract(aliased);
+    // Overloads differ in their parameter types (or `where` bounds); two
+    // functions that differ only in return type, failure type or parameter
+    // modes are one function defined twice.
+    parse_sym_entry_t *same_parameters = state && !state->interface_module
+        ? earlier_same_parameters(state, symbol) : nullptr;
+    if (same_parameters) {
+        report_duplicate_definition(unit, symbol, same_parameters);
+        core_buffer_release(&key);
+        core_buffer_release(&overload_group);
+        return false;
+    }
     if (!state || !state->interface_module) {
         core_link_declaration_t *existing = core_link_unit_find_declaration(
             link, declaration_module, declaration_key);

@@ -864,7 +864,8 @@ n00bb_enter_case_patterns(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *opaque);
 bool
 n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                 parse_tree_t *callee, parse_sym_entry_t *symbol);
+                 parse_tree_t *callee, parse_sym_entry_t *symbol,
+                 core_list_t(parse_sym_entry_ptr_t) *candidates);
 bool
 n00bb_prune_case_name(ir_lower_context_t *context, parse_visit_t *visit,
                       bool entering, void *opaque);

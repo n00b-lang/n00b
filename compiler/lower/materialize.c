@@ -315,6 +315,17 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     ir_value_t *integer = n00bb_typed_integer_value(context, node, value,
                                                     target, span);
     if (integer != value) return integer;
+    // A float passed where a wider float is wanted widens.
+    ir_machine_t from = ir_machine_of(context->module, value->type);
+    ir_machine_t to = ir_machine_of(context->module, target);
+    if (from.class == IR_CLASS_FLOAT && to.class == IR_CLASS_FLOAT
+        && to.width > from.width) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
+                                                     span);
+        return cast && ir_lower_set_temp_dest(context, cast,
+                           CORE_STRING_STATIC("__n00bb_"), target)
+            && ir_instr_operand_value(cast, value) ? cast->dest : nullptr;
+    }
     if (n00bb_union_admits(context->module, target, value->type))
         return n00bb_emit_wrapping(context, IR_OP_BOX, value, target, span);
     if (tuple_widens(context->module, value->type, target))

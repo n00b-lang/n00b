@@ -109,6 +109,8 @@ struct ty_solver {
     core_list_t(ty_instr_cptr_t) conversions;
     ty_call_method_fn          methods;
     void                      *methods_context;
+    ty_overload_fn             overloads;
+    void                      *overloads_context;
     ty_requirements_fn         requirements;
     void                      *requirements_context;
     ty_method_fn               fields;
@@ -124,6 +126,7 @@ struct ty_solver {
 };
 
 static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why);
+static void free_vars(th_type *t, core_list_t(ty_type_ptr_t) *out);
 static bool integral(ty_solver_t *s, th_type *t);
 static th_type *renamed(ty_solver_t *s, th_type *t);
 static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why);
@@ -1035,8 +1038,8 @@ static const th_param *named_param(ty_solver_t *s, pending_t *p,
     th_type *receiver = th_resolve(p->pred.subject);
 
     for (size_t i = 0; s->param_names && i < th_func_nparams(signature); i++) {
-        if (core_string_eq(s->param_names(s->param_names_context, receiver,
-                                          p->pred.name, i),
+        if (core_string_eq(s->param_names(s->param_names_context, p->why.at,
+                                          receiver, p->pred.name, i),
                            name)) {
             return th_func_param(signature, i);
         }
@@ -1095,8 +1098,8 @@ static bool dispatch_call(ty_solver_t *s, pending_t *p, th_type *signature)
 {
     th_type *receiver = th_resolve(p->pred.subject);
     size_t   count    = s->requirements
-        ? s->requirements(s->requirements_context, receiver, p->pred.name,
-                          p->pred.other, signature, nullptr, 0)
+        ? s->requirements(s->requirements_context, p->why.at, receiver,
+                          p->pred.name, p->pred.other, signature, nullptr, 0)
         : 0;
 
     if (!count) {
@@ -1107,7 +1110,7 @@ static bool dispatch_call(ty_solver_t *s, pending_t *p, th_type *signature)
         core_alloc_array(th_trait_requirement, count);
     th_type **items = core_alloc_array(th_type *, count + 1);
 
-    count    = s->requirements(s->requirements_context, receiver,
+    count    = s->requirements(s->requirements_context, p->why.at, receiver,
                                p->pred.name, p->pred.other, signature,
                                requirements, count);
     items[0] = signature;
@@ -1186,6 +1189,23 @@ th_type *ty_dispatch_instance(ty_solver_t *s, const ir_instr_t *at)
 static verdict_t judge(ty_solver_t *s, pending_t *p)
 {
     th_type *subject = th_resolve(p->pred.subject);
+
+    if (p->pred.kind == TY_PRED_DISPATCH && !p->pred.bound && s->overloads
+        && p->why.at) {
+        th_type      *chosen = nullptr;
+        ty_overload_t answer = s->overloads(s->overloads_context, p->why.at,
+                                            p->pred.other, &chosen);
+
+        if (answer == TY_OVERLOAD_WAIT) {
+            return OPEN;
+        }
+        if (answer == TY_OVERLOAD_FAILS) {
+            return FAILS;
+        }
+        if (answer == TY_OVERLOAD_CHOSEN) {
+            return chosen && dispatch_call(s, p, chosen) ? HOLDS : FAILS;
+        }
+    }
 
     if (unbound(subject)) {
         th_type *method = p->pred.kind == TY_PRED_DISPATCH && !p->pred.bound
@@ -1457,6 +1477,20 @@ bool ty_require(ty_solver_t *s, ty_pred_t pred, ty_why_t why)
     if (unbound(other)) {
         link_pred(s, other, index);
     }
+    // An overloaded call waits on each of its arguments' types, not just
+    // its first.
+    if (pred.kind == TY_PRED_DISPATCH && s->overloads && other
+        && th_kind_of(other) == TH_FUNCTION) {
+        core_list_t(ty_type_ptr_t) vars = core_list_new(ty_type_ptr_t);
+
+        free_vars(other, &vars);
+        for (size_t i = 0; i < vars.len; i++) {
+            if (vars.data[i] != subject) {
+                link_pred(s, vars.data[i], index);
+            }
+        }
+        core_list_free(vars);
+    }
     settle(s, index);
 
     return s->failures.len == before;
@@ -1548,6 +1582,15 @@ void ty_solver_set_requirements(ty_solver_t *s,
     if (s) {
         s->requirements         = requirements;
         s->requirements_context = context;
+    }
+}
+
+void ty_solver_set_overloads(ty_solver_t *s, ty_overload_fn overloads,
+                             void *context)
+{
+    if (s) {
+        s->overloads         = overloads;
+        s->overloads_context = context;
     }
 }
 

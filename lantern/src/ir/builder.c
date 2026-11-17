@@ -93,7 +93,8 @@ ir_lower_dispatch(ir_lower_context_t *context, core_string_t method,
                   ir_value_t *const *operands, size_t count,
                   th_type *result_type, ir_span_t span)
 {
-    if (!context || !method.data || !count || !result_type) return nullptr;
+    if (!context || !method.data || (count && !operands) || !result_type)
+        return nullptr;
     ir_instr_t *instruction = ir_lower_emit_instruction(context,
         IR_OP_DISPATCH, span);
     if (!instruction
