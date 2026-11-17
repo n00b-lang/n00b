@@ -2985,11 +2985,15 @@ static parse_sym_entry_t *
 typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *owner_node = node;
+    // An alias's type variables are its parameters: `alias Set = Dict['T,
+    // nil]` is used as `Set[int]`.
     while (owner_node && !NT_IS(grammar, owner_node, "func-def")
            && !NT_IS(grammar, owner_node, "trait-decl")
            && !NT_IS(grammar, owner_node, "callback-decl")
            && !field_record_declaration(grammar, owner_node)
-           && !NT_IS(grammar, owner_node, "variant-decl"))
+           && !NT_IS(grammar, owner_node, "variant-decl")
+           && !(NT_IS(grammar, owner_node, "alias-stmt")
+                && alias_declaration_is_transparent(grammar, owner_node)))
         owner_node = parse_tree_parent(owner_node);
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
@@ -9418,6 +9422,66 @@ compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return result;
 }
 
+// The alias a type name refers to, when the alias has type parameters.
+static parse_sym_entry_t *
+generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : parse_tree_sym(type_node);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    bool alias = symbol && symbol->kind == PARSE_SYM_TYPEDEF && symbol->type
+        && (symbol->decl_node
+                ? NT_IS(grammar, symbol->decl_node, "alias-stmt")
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
+                : core_string_eq(symbol->adt_kind,
+                                 CORE_STRING_STATIC("alias")));
+    return alias ? symbol : nullptr;
+}
+
+// `Alias[args]` for an alias with type parameters: the aliased type with
+// each parameter, in the order the target first names it, replaced by its
+// argument.
+static th_type *
+generic_alias_application(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          parse_tree_t *type_node, parse_tree_t *application)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *alias = generic_alias_named(grammar, type_node);
+    parse_tree_t *list = CHILD_NT(grammar, application, "tspec-list");
+    th_type **variables = nullptr;
+    size_t count = alias && list
+        ? th_free_vars(state->types, th_resolve(alias->type), &variables) : 0;
+    if (!count) return nullptr;
+    core_list_t(th_arg) arguments = core_list_new(th_arg);
+    bool valid = append_type_argument_pack(parse_tree_type(list), &arguments);
+    for (size_t i = 0; valid && i < arguments.len; i++)
+        valid = arguments.data[i].kind == TH_ARG_TYPE;
+    if (valid && arguments.len != count) {
+        report_generic_arity(unit, application,
+                             th_name(state->types, alias->name), count,
+                             arguments.len, alias);
+        core_list_free(arguments);
+        return th_poison(state->types);
+    }
+    th_type **to = core_alloc_array(th_type *, count + 1);
+    for (size_t i = 0; valid && i < count; i++)
+        to[i] = arguments.data[i].type;
+    th_type *expanded = valid
+        ? th_type_clone_replacing(state->types, th_resolve(alias->type),
+                                  (const th_type *const *)variables, to,
+                                  count)
+        : nullptr;
+    core_free(to);
+    core_list_free(arguments);
+    // The alias's name, applied here, stands for the applied type; left
+    // with the alias's own type, it would carry the alias's parameters.
+    if (expanded) parse_tree_set_type(type_node, expanded);
+    return expanded;
+}
+
 static th_type *
 compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *node)
@@ -9498,6 +9562,9 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *fields = CHILD_NT(grammar, application, "tspec-field-list");
     if (fields)
         return compose_field_tuple(grammar, unit, type_node, fields, tuple);
+    th_type *expanded = generic_alias_application(grammar, unit, type_node,
+                                                  application);
+    if (expanded) return expanded;
     core_string_t name = {};
     bool is_variant = false;
     size_t declared_arity = 0;

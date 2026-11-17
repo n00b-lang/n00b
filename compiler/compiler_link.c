@@ -644,6 +644,33 @@ report_unknown_type(core_translation_unit_t *unit, parse_scope_t *scope,
         (void)n00bb_explain_hidden_name(diagnostics, unit, scope, name, true);
 }
 
+// A use of an alias with type parameters, applied to arguments: the use
+// takes the applied type where its type is composed, not the alias's own.
+static bool
+applied_generic_alias(parse_grammar_t *grammar, th_ctx *types,
+                      parse_sym_entry_t *symbol, parse_tree_t *reference)
+{
+    // A qualified name (`coll.Bag`) is nested in its member chain.
+    parse_tree_t *core = reference ? parse_tree_parent(reference) : nullptr;
+    while (core && !nt_is(grammar, core, CORE_STRING_STATIC("base-tspec-core"))
+           && (nt_is(grammar, core, CORE_STRING_STATIC("member-chain"))
+               || nt_is(grammar, core, CORE_STRING_STATIC("dotted-name"))
+               || nt_is(grammar, core, CORE_STRING_STATIC("member-tail"))))
+        core = parse_tree_parent(core);
+    bool alias = symbol && symbol->kind == PARSE_SYM_TYPEDEF
+        && (symbol->decl_node
+                ? nt_is(grammar, symbol->decl_node,
+                        CORE_STRING_STATIC("alias-stmt"))
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
+                : core_string_eq(symbol->adt_kind,
+                                 CORE_STRING_STATIC("alias")));
+    return alias && symbol->type && !th_is_closed(types, symbol->type)
+        && core && nt_is(grammar, core, CORE_STRING_STATIC("base-tspec-core"))
+        && parse_tree_find_flat_child_by_nt_name(grammar, core,
+               CORE_STRING_STATIC("tspec-application"));
+}
+
 static void
 report_type_reference_conflict(core_translation_unit_t *unit, th_ctx *types,
                                parse_tree_t *reference, th_type *declared,
@@ -746,6 +773,14 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     reference)
                 : symbol->type;
             th_type *previous_type = parse_tree_type(reference);
+            // A generic alias applied to arguments already holds the
+            // applied type; filling it from the alias's own type would bind
+            // the alias's parameters.
+            if (applied_generic_alias(grammar, state->types, symbol,
+                                      reference)) {
+                refresh_cached_type_path(grammar, unit, reference);
+                continue;
+            }
             th_type *resolved_type = previous_type && target_type
                 ? th_fill(previous_type, target_type)
                 : target_type ? target_type : previous_type;
@@ -833,7 +868,10 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                             ? trait_type_reference(grammar, owner, unit,
                                                    symbol, reference)
                             : type;
-                        if (!reference_type) continue;
+                        if (!reference_type
+                            || applied_generic_alias(grammar, state->types,
+                                   symbol, reference))
+                            continue;
                         th_type *previous_reference_type =
                             parse_tree_type(reference);
                         bool reference_changed =
@@ -2411,7 +2449,9 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                     parse_tree_resolution(site->node);
                 if (type_resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                     && type_resolution.target.symbol
-                    && type_resolution.target.symbol->type) {
+                    && type_resolution.target.symbol->type
+                    && !applied_generic_alias(grammar, state->types,
+                           type_resolution.target.symbol, site->node)) {
                     parse_sym_entry_t *type_symbol =
                         type_resolution.target.symbol;
                     bool trait = is_trait_type_symbol(grammar, type_symbol);

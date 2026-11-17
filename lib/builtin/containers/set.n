@@ -1,0 +1,4 @@
+import containers.dict
+
+// A set is a dictionary whose keys are its items and whose values are nil.
+alias Set = containers.dict.Dict['T, nil]

@@ -1,0 +1,2 @@
+alias Bag = Dict['T, nil]
+alias Pairing = Dict['K, List['V]]
