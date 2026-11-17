@@ -584,6 +584,12 @@ N00B_DIAG(LET_ARRAY_UNSIZED, "N00B-S0099", ERROR,
     "elements. So every assignment must give the same length, one the\n"
     "compiler can see, such as an array literal's. Assign it on every path\n"
     "before it is read, give it a size, or assign arrays of one known length.")
+N00B_DIAG(INTEGER_LITERAL_TOO_LARGE, "N00B-S0101", ERROR,
+    "an integer literal is larger than any integer type",
+    "The widest integer types are 128 bits: `u128` holds values up to\n"
+    "2^128 - 1 (340282366920938463463374607431768211455), and `i128` from\n"
+    "-2^127 to 2^127 - 1. Use a smaller value, or keep a value this large as\n"
+    "a string or in a big-number type.")
 N00B_DIAG(PROPAGATE_OPTION_NIL, "N00B-S0100", ERROR,
     "`!` on an option needs a function that can fail with `nil`",
     "A trailing `!` on an option gives its value when it holds one, and\n"

@@ -780,8 +780,12 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
         }
         else if (core_string_eq(kind, CORE_STRING_STATIC("int"))) {
             ir_lit_t value;
-            if (n00bb_parse_switch_integer(text, &value))
-                emitted = ir_instr_operand_int_lit(instruction, value);
+            // An integer spelling that doesn't parse is one past 128 bits.
+            if (!n00bb_parse_switch_integer(text, &value))
+                return lower_report(context, N00B_DIAG_INTEGER_LITERAL_TOO_LARGE,
+                    span, N00B_TEXT_INTEGER_LITERAL_TOO_LARGE,
+                    N00BB_ARGS(ARG_TEXT(text)));
+            emitted = ir_instr_operand_int_lit(instruction, value);
         }
         else if (core_string_eq(kind, CORE_STRING_STATIC("f64"))) {
             char *digits = core_alloc_array(char, text.u8_bytes + 1);

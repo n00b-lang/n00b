@@ -53,3 +53,26 @@ fi
     cat "$tmp/check.err" >&2
     exit 1
 }
+
+# Literal sizing: a product of literals fits its value; a module constant
+# sizes what it meets; set literals that meet get one element type; a
+# literal past 2^127 is `u128`.
+cat >"$tmp/sizing.n" <<'EOF'
+let product = 2_000_000_000 * 3
+let base = 2_000_000_000
+let scaled = base * 3
+let huge = 170141183460469231731687303715884105728
+func meet() {
+    let small = {1, 2}
+    let large = {300, 4}
+    let both = small + large
+}
+EOF
+"$compiler" fmt --normalize "$tmp/sizing.n"
+# The formatter aligns the declarations, so allow spaces after the colon.
+grep -q 'let product: *uint ' "$tmp/sizing.n"
+grep -q 'let base: *uint ' "$tmp/sizing.n"
+grep -q 'let scaled: *uint ' "$tmp/sizing.n"
+grep -q 'let huge: *u128 ' "$tmp/sizing.n"
+grep -q 'let small: *Dict\[u16, nil\]' "$tmp/sizing.n"
+grep -q 'let large: *Dict\[u16, nil\]' "$tmp/sizing.n"

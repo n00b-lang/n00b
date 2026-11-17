@@ -1,0 +1,1 @@
+tests/diagnostics/lower/integer_literal_too_large.n:1:9: error N00B-S0101: `340282366920938463463374607431768211456` is too large for any integer type; the largest is `u128`, up to 2^128 - 1

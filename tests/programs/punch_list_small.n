@@ -107,4 +107,23 @@ require decimal(unsigned_ten) == "1000"
 require hex(unsigned_ten) == "0x3e8"
 require from_bits_of(ten, 0x3ff) == cast[i:10](-1)
 require from_bits_of(unsigned_ten, 0x401) == cast[u:10](1)
+
+# Literals up to 2^128 - 1 size as `u128` and compute at that width.
+let widest = 340282366920938463463374607431768211455
+require widest - 1 == 340282366920938463463374607431768211454
+
+# A module constant's value sizes the literals it meets: 6_000_000_000
+# fits a `uint`.
+let two_billion = 2_000_000_000
+let six_billion = two_billion * 3
+require six_billion == 6_000_000_000
+
+# Set literals that meet are sized together (`u16` for both here), so
+# their union types.
+func union_size() -> uint {
+    let small = {1, 2}
+    let large = {300, 4}
+    return len(small + large)
+}
+require union_size() == 4
 __fd_write(2, "ok")

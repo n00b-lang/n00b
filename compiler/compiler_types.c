@@ -5793,6 +5793,101 @@ static bool report_bitwise_negative(core_translation_unit_t *const *units,
     return true;
 }
 
+static size_t met_root(size_t *meets, size_t at)
+{
+    while (meets[at] != at) {
+        meets[at] = meets[meets[at]];
+        at        = meets[at];
+    }
+    return at;
+}
+
+static size_t evidence_index(core_list_t(integer_evidence_t) *evidence,
+                             th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    for (size_t i = 0; type && i < evidence->len; i++) {
+        if (evidence->data[i].var == type) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+// Two open integer types in the same position of operands that must have
+// one type, as `Set[A]` and `Set[B]` in `s + t`, meet: sized apart they
+// could differ (u8 and u16), and the call would not type. Typing resolves
+// such a call after sizing, so sizing joins them here.
+static void note_meeting_types(core_list_t(integer_evidence_t) *evidence,
+                               size_t *meets, const ir_instr_t *in)
+{
+    const ir_value_t *left  = in->op == IR_OP_DISPATCH && in->n_operands == 3
+                                  ? ir_value_operand(in, 1)
+                                  : nullptr;
+    const ir_value_t *right = left ? ir_value_operand(in, 2) : nullptr;
+    th_type *a = left && left->type ? th_resolve(left->type) : nullptr;
+    th_type *b = right && right->type ? th_resolve(right->type) : nullptr;
+    core_string_t a_name = {0}, b_name = {0};
+    size_t        a_args = 0, b_args = 0;
+
+    if (!a || !b || !th_named_info(a, &a_name, nullptr, &a_args)
+        || !th_named_info(b, &b_name, nullptr, &b_args)
+        || a_args != b_args || !core_string_eq(a_name, b_name)) {
+        return;
+    }
+    for (size_t i = 0; i < a_args; i++) {
+        const th_arg *x = th_named_arg(a, i);
+        const th_arg *y = th_named_arg(b, i);
+        size_t        p = x && x->kind == TH_ARG_TYPE
+                              ? evidence_index(evidence, x->type)
+                              : SIZE_MAX;
+        size_t        q = y && y->kind == TH_ARG_TYPE
+                              ? evidence_index(evidence, y->type)
+                              : SIZE_MAX;
+        if (p != SIZE_MAX && q != SIZE_MAX) {
+            meets[met_root(meets, p)] = met_root(meets, q);
+        }
+    }
+}
+
+// Every open type gets the joined range of the types it meets.
+static void join_met_evidence(core_list_t(integer_evidence_t) *evidence,
+                              size_t *meets)
+{
+    for (size_t i = 0; i < evidence->len; i++) {
+        size_t root = met_root(meets, i);
+        if (root == i || !evidence->data[i].seen) {
+            continue;
+        }
+        integer_evidence_t *into = &evidence->data[root];
+        ir_abcd_range_t     from = evidence->data[i].range;
+        if (!into->seen) {
+            into->range = from;
+            into->seen  = true;
+            continue;
+        }
+        ir_abcd_range_t *range = &into->range;
+        range->unbounded_min = from.seen.lo < range->seen.lo
+                                 ? from.unbounded_min
+                             : from.seen.lo == range->seen.lo
+                                 ? range->unbounded_min || from.unbounded_min
+                                 : range->unbounded_min;
+        range->unbounded_max = from.seen.hi > range->seen.hi
+                                 ? from.unbounded_max
+                             : from.seen.hi == range->seen.hi
+                                 ? range->unbounded_max || from.unbounded_max
+                                 : range->unbounded_max;
+        range->seen = ir_interval_join(range->seen, from.seen);
+    }
+    for (size_t i = 0; i < evidence->len; i++) {
+        size_t root = met_root(meets, i);
+        if (root != i && evidence->data[root].seen) {
+            evidence->data[i].range = evidence->data[root].range;
+            evidence->data[i].seen  = true;
+        }
+    }
+}
+
 static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
                                  const n00bb_dispatch_index_t *index,
                                  core_list_t(n00bb_ir_func_ptr_t) *functions,
@@ -5817,8 +5912,13 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
         core_dict_put(&view.open, ty_open_at(solver, i),
                       ty_open_at(solver, i));
     }
+    // Union-find over the entries: open types that meet are sized together.
+    size_t *meets = core_alloc_array(size_t, count);
+    for (size_t i = 0; i < count; i++) meets[i] = i;
 
-    ir_abcd_hooks_t hooks = {.context = &view, .view = integer_view};
+    // Sizing literals, not proving checks (ir_abcd_hooks_t.literal_sizing).
+    ir_abcd_hooks_t hooks = {.context = &view, .view = integer_view,
+                             .literal_sizing = true};
 
     for (size_t f = 0; f < functions->len; f++) {
         ir_func_t *function = functions->data[f];
@@ -5843,10 +5943,14 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 note_overload_evidence(&evidence, index, function->owner,
                                        function->blocks[b]->instrs[i]);
+                note_meeting_types(&evidence, meets,
+                                   function->blocks[b]->instrs[i]);
             }
         }
     }
     core_dict_free(&view.open);
+    join_met_evidence(&evidence, meets);
+    core_free(meets);
     for (size_t i = 0; i < evidence.len; i++) {
         integer_evidence_t *entry = &evidence.data[i];
         ir_abcd_range_t     range = entry->seen ? entry->range

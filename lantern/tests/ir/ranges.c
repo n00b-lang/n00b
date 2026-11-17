@@ -956,8 +956,33 @@ static void test_element_reads_see_their_own_store(void)
     ir_ctx_free(ctx);
 }
 
+// Interval bounds for bitwise operators and left shifts must hold with a
+// negative operand, where the operands' magnitudes are no bound at all.
+static void test_negative_bitwise_and_shift_bounds(void)
+{
+    struct {
+        const char   *what;
+        ir_op_t       op;
+        ir_interval_t a, b;
+        ir_int_t      result;
+    } cases[] = {
+        {"4 ^ -4 is -8", IR_OP_XOR, {4, 4}, {-4, -4}, 4 ^ -4},
+        {"xor of ranges with a negative", IR_OP_XOR, {0, 4}, {-4, -1}, 4 ^ -4},
+        {"-2 & -3 is -4", IR_OP_AND, {-2, -1}, {-3, -1}, -2 & -3},
+        {"or with a negative", IR_OP_OR, {0, 8}, {-9, -1}, 8 | -9},
+        {"-3 << 4 is -48", IR_OP_SHL, {-3, -1}, {0, 4}, -3 * 16},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ir_interval_t range = ir_interval_apply(cases[i].op, cases[i].a,
+                                                cases[i].b);
+        check(cases[i].what, range.lo <= cases[i].result
+                                 && cases[i].result <= range.hi);
+    }
+}
+
 int main(void)
 {
+    test_negative_bitwise_and_shift_bounds();
     test_element_reads_see_their_own_store();
     test_branch_guard_proves_index();
     test_trapping_add_bounds();
