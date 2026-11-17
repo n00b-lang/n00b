@@ -257,7 +257,7 @@ n00bb_propagate_context_hook_failure(ir_lower_context_t *context,
 {
     if (!n00bb_emit_with_failure_before(context, source, before_order))
         return false;
-    int routed = n00bb_route_try_error(context, source, error, span);
+    int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (routed) return true;
     if (!n00bb_failure_channel_accepts(context, error->type))
@@ -393,22 +393,18 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                 || !candidate->cleanup_active
                 || candidate->order <= stop_order
                 || candidate->order >= before
-                || !node_is_within(exit_node, candidate->node)
-                || (handler && node_is_within(handler->node,
-                                              candidate->node)))
+                || (handler && candidate->order < handler->order))
                 continue;
             if (!loop || candidate->order > loop->order) loop = candidate;
         }
         for (size_t i = lower->withs.len; i > 0; i--) {
             n00bb_with_frame_t *candidate = &lower->withs.data[i - 1];
-            if (!candidate->active
-                || !node_is_within(exit_node, candidate->node)
-                || (handler && node_is_within(handler->node,
-                                              candidate->node)))
-                continue;
+            if (!candidate->active) continue;
             for (size_t j = candidate->items.len; j > 0; j--) {
                 n00bb_with_item_t *item = &candidate->items.data[j - 1];
+                // A context opened outside the handling try stays open.
                 if (!item->active || item->order <= stop_order
+                    || (handler && item->order < handler->order)
                     || item->order >= before
                     || (with_item && item->order <= with_order))
                     continue;
@@ -466,8 +462,7 @@ n00bb_emit_with_failure_before(ir_lower_context_t *context,
     n00bb_try_frame_t *handler = nullptr;
     for (size_t i = lower->tries.len; i > 0; i--) {
         n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
-        if (candidate->active && candidate->body
-            && node_is_within(exit_node, candidate->body)) {
+        if (candidate->active && candidate->in_body) {
             handler = candidate;
             break;
         }
@@ -485,7 +480,7 @@ n00bb_propagate_context_computation_failure(ir_lower_context_t *context,
 {
     if (!error || !error_type
         || !n00bb_emit_with_failure(context, source)) return false;
-    int routed = n00bb_route_try_error(context, source, error, span);
+    int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (routed) return true;
     if (!n00bb_failure_channel_accepts(context, error_type))
@@ -795,13 +790,10 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!lower || !lower->withs.len)
         return 0;
     n00bb_with_frame_t *frame = &lower->withs.data[lower->withs.len - 1];
-    if (!frame->active || !node_is_within(visit->node, frame->node))
-        return 0;
+    if (!frame->active) return 0;
 
-    parse_tree_t *callee = core_tree_num_children(visit->node)
-        ? core_tree_child(visit->node, 0) : nullptr;
-    parse_sym_entry_t *symbol = attached_symbol(visit->grammar, lower->unit,
-                                                 callee);
+    parse_node_facts_t *facts = parse_tree_call_facts(visit->node);
+    parse_sym_entry_t *symbol = facts ? facts->call_function : nullptr;
     if (!context_symbol(visit->grammar, symbol)) return 0;
     core_translation_unit_t *owner = unit_for_symbol(visit->grammar,
                                                       lower->units, symbol);
@@ -878,7 +870,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                                   args, 0);
     if (!mapped)
         n00bb_call_plan_report(&plan, lower_unit(context),
-                               lower_diagnostics(context), visit->node);
+                               lower_diagnostics(context),
+                               n00bb_node_span(visit->node));
     for (size_t i = 0; mapped && i < n00bb_call_plan_argument_count(&plan);
          i++) {
         size_t index = 0;
@@ -1164,8 +1157,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                         "could not unwind active contexts after failed enter");
             return -1;
         }
-        int routed = n00bb_route_try_error(context, visit->node,
-                                            enter_error, span);
+        int routed = n00bb_route_try_error(context, enter_error, span);
         if (routed < 0) return -1;
         if (!routed && !n00bb_failure_channel_accepts(context, error_type)) {
             if (!report_uncaught_failure(context, span, error_type,

@@ -480,6 +480,8 @@ N00B_TEXT(ENUM_STORAGE_SIGNED_HELP, "use a signed storage type, or remove `: {0}
 N00B_TEXT(CANNOT_BE_DECLARED_HERE_BECAUSE_2, "`{0}` cannot be declared here because this module imports module `{1}`")
 N00B_TEXT(MODULE_IS_IMPORTED_HERE, "module `{0}` is imported here")
 N00B_TEXT(RENAME_THIS_DECLARATION_OR_IMPORT, "rename this declaration, or import the module under another name with `import {0} as other`")
+N00B_TEXT(ASSIGNS_A_TEMPORARY, "`{0}` is a temporary value, so it cannot be assigned")
+N00B_TEXT(ASSIGNS_A_TEMPORARY_HELP, "store the value in a `var`, change that, and use it")
 N00B_TEXT(PLACE_LITERAL, "this assigns into a literal value, which nothing can read afterward")
 N00B_TEXT(PLACE_LITERAL_HELP, "store the value in a variable first, then assign into the variable")
 N00B_TEXT(LITERAL_MODIFIER_FOR_LITERALS_IS, "literal modifier `'{0}` for {1} literals is exported by more than one imported module")

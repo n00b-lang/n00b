@@ -17,12 +17,6 @@ n00bb_lower_dispatch_call(ir_lower_context_t *context, parse_visit_t *visit,
                           parse_tree_t *receiver_node, parse_tree_t *arguments,
                           bool index_call, core_string_t method,
                           th_type *result_type, ir_span_t span);
-static void
-n00bb_constructor_assignment_target(ir_lower_context_t *context,
-                                    parse_visit_t *visit,
-                                    th_type *result_type,
-                                    parse_tree_t **assignment,
-                                    ir_value_t **address);
 static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
                          th_type *result_type, ir_span_t span);
@@ -43,28 +37,6 @@ n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
         ? take->dest : nullptr;
 }
 
-// Whether an element passed by reference has an address of its own: one
-// in an array, as opposed to one a container reaches through `__read` and
-// `__write`.
-static bool
-n00bb_element_has_address(ir_lower_context_t *context,
-                          parse_grammar_t *grammar, parse_tree_t *index)
-{
-    parse_tree_t *receiver = index && core_tree_num_children(index)
-        ? core_tree_child(index, 0) : nullptr;
-    th_type *container = receiver ? n00bb_node_type(context, receiver)
-                                  : nullptr;
-    container = container ? th_resolve(container) : nullptr;
-    if (!container) return false;
-    if (th_kind_of(container) == TH_INDIRECTION) {
-        uint8_t attrs = 0;
-        return th_ind_attrs(container, &attrs) && (attrs & TH_INDEXABLE);
-    }
-    if (th_kind_of(container) != TH_SEQUENCE) return false;
-    parse_tree_t *inner = n00bb_index_expression_node(grammar, receiver);
-    return !inner || n00bb_element_has_address(context, grammar, inner);
-}
-
 // Whether `shape` has a size for every dimension.
 static bool
 fully_sized(ir_shape_t *shape)
@@ -81,23 +53,18 @@ fully_sized(ir_shape_t *shape)
 // aren't. A field whose record isn't known yet is checked once types are
 // solved.
 static bool
-fixed_reference_sizes_match(ir_lower_context_t *context,
-                            const n00bb_out_location_t *location,
+fixed_reference_sizes_match(ir_lower_context_t *context, ir_value_t *address,
                             ir_shape_t *required_shape, parse_tree_t *argument,
                             ir_span_t span)
 {
-    if (th_kind_of(th_resolve(location->type)) != TH_SEQUENCE) return true;
-    ir_shape_t *declared = location->local ? ir_local_shape(location->local)
-                                           : nullptr;
-    if (!declared && location->symbol)
-        declared = parse_sym_binding(location->symbol,
-                                     CORE_STRING_STATIC("ir.array-shape"));
+    th_type *type = th_ind_referent(th_resolve(address->type));
+    if (th_kind_of(th_resolve(type)) != TH_SEQUENCE) return true;
+    ir_shape_t *declared = n00bb_place_shape(address);
     core_buffer_t argument_size = {0}, parameter_size = {0};
     bool argument_sized = n00bb_shape_size_text(declared, &argument_size);
     bool parameter_sized = n00bb_shape_size_text(required_shape,
                                                  &parameter_size);
-    bool unresolved_field = !location->symbol && !location->local
-        && !location->index_target;
+    bool unresolved_field = address->def && address->def->op == IR_OP_FIELD;
     bool same = argument_sized == parameter_sized
         && (!argument_sized || core_string_eq(
                core_buffer_string(&argument_size),
@@ -107,8 +74,8 @@ fixed_reference_sizes_match(ir_lower_context_t *context,
         core_buffer_release(&parameter_size);
         return true;
     }
-    core_string_t name = location->symbol ? location->symbol->name
-        : first_token_text(argument);
+    n00bb_lower_context_t *lower = context->user;
+    core_string_t name = source_text_of(lower->unit, argument);
     if (!parameter_sized)
         lower_report(context, N00B_DIAG_FIXED_ARRAY_REFERENCE, span,
             N00B_TEXT_FIXED_ARRAY_TO_UNSIZED_REFERENCE,
@@ -130,11 +97,13 @@ fixed_reference_sizes_match(ir_lower_context_t *context,
     return false;
 }
 
-// Lowers the place `argument` names for an `out` or `modify` parameter and
-// returns its address, which the call passes. A place with no address is
-// passed through a temporary that n00bb_write_back_references stores back.
-// Returns nullptr after reporting when the argument is not a writable
-// place, or is a place the call already receives.
+// Returns the address an `out` or `modify` parameter is passed for
+// `argument`. The argument was lowered as a value, and its place recovered
+// from how that value was read. An element a container reaches through its
+// `__read` has no address, so a temporary is passed instead, and
+// n00bb_write_back_references stores it back through `__write`. Returns
+// nullptr after reporting when the argument is not a writable place, or is a
+// variable the call already receives.
 static ir_value_t *
 n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
                          parse_tree_t *argument, th_mode mode,
@@ -143,120 +112,110 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
                          ir_shape_t *required_shape,
                          core_list_t(n00bb_reference_argument_t) *places)
 {
+    (void)visit;
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, argument);
-    n00bb_out_location_t location = n00bb_out_argument_location(context,
-        visit->grammar, argument);
-    if (!location.type) {
-        report_unwritable_output(context, visit->grammar, argument, mode,
-                                 callee, parameter_name);
-        return nullptr;
-    }
-    if (!fixed_reference_sizes_match(context, &location, required_shape,
-                                     argument, span)) return nullptr;
-    // A parameter declared with the argument's size needs no shape check:
-    // the sizes matched above.
-    if (fully_sized(required_shape)) required_shape = nullptr;
-    for (size_t previous = 0; location.symbol && location.lvalue
-            && previous < places->len; previous++) {
-        n00bb_reference_argument_t *prior = &places->data[previous];
-        if (prior->symbol != location.symbol || prior->local != location.local
-            || prior->global != location.global) continue;
-        lower_report(context, N00B_DIAG_SAME_OUTPUT_TWICE, span,
-            N00B_TEXT_IS_PASSED_TO_MORE_THAN,
-            N00BB_ARGS(ARG_TEXT(location.symbol->name),
-                       ARG_TEXT(callee->name)));
-        lower_secondary(context,
-            lower_span_for_tree(context, prior->source_node),
-            N00B_TEXT_FIRST_PASSED_HERE, N00BB_NO_ARGS);
-        lower_help(context, N00B_TEXT_PASS_A_SEPARATE_VARIABLE_TO,
-            N00BB_NO_ARGS);
-        return nullptr;
-    }
+    ir_value_t *value = ir_lower_node_value(context, argument);
     n00bb_reference_argument_t place = {
-        .symbol = location.symbol,
-        .local = location.local,
-        .global = location.global,
-        .grammar = visit->grammar,
-        .site_node = visit->node,
-        .index_target = location.index_target,
         .source_node = argument,
         .required_shape = required_shape,
     };
-    ir_value_t *address = location.address;
-    if (!address && location.lvalue)
-        address = location.symbol
-            ? ir_lower_bound_address(context, location.symbol) : nullptr;
-    if (!address && location.local)
-        address = n00bb_take_address(context, location.local, nullptr,
-                                     location.local->type, span);
-    else if (!address && location.global
-             && location.global->kind == IR_VAL_GLOBAL)
-        address = n00bb_take_address(context, nullptr, location.global,
-                                     location.global->type, span);
-    else if (!address && location.index_target
-             && n00bb_element_has_address(context, visit->grammar,
-                    location.index_target)) {
-        lower->reference_write = true;
-        address = n00bb_addressable_expression_address(context,
-            visit->grammar, lower->unit, argument, span);
-        lower->reference_write = false;
+    bool accessed = value && n00bb_accessed_element(value, &place.container,
+                                                    &place.index);
+    bool saved = lower->write_back_open_index;
+    lower->write_back_open_index = true;
+    ir_value_t *address = value ? n00bb_place_of(context, value, true, span)
+                                : nullptr;
+    lower->write_back_open_index = saved;
+    if ((!address && !accessed)
+        || (address && !n00bb_place_writable(address))) {
+        ir_local_t *local = nullptr;
+        ir_value_t *storage = nullptr;
+        parse_sym_entry_t *variable = address
+                && n00bb_place_root(address, &local, &storage)
+            ? ir_lower_binding_symbol(context, local, storage)
+            : value ? ir_lower_read_variable(context, value) : nullptr;
+        report_unwritable_output(context, variable, argument, mode, callee,
+                                 parameter_name);
+        return nullptr;
     }
     if (address) {
-        if (mode == TH_INOUT && required_shape) {
+        place.container = place.index = nullptr;
+        if (!fixed_reference_sizes_match(context, address, required_shape,
+                                         argument, span)) return nullptr;
+        if (fully_sized(required_shape)) place.required_shape = nullptr;
+        bool whole = n00bb_place_root(address, &place.local, &place.storage);
+        for (size_t previous = 0; whole && previous < places->len;
+             previous++) {
+            n00bb_reference_argument_t *prior = &places->data[previous];
+            if (prior->container || prior->local != place.local
+                || prior->storage != place.storage) continue;
+            lower_report(context, N00B_DIAG_SAME_OUTPUT_TWICE, span,
+                N00B_TEXT_IS_PASSED_TO_MORE_THAN,
+                N00BB_ARGS(ARG_TEXT(source_text_of(lower->unit, argument)),
+                           ARG_TEXT(callee->name)));
+            lower_secondary(context,
+                lower_span_for_tree(context, prior->source_node),
+                N00B_TEXT_FIRST_PASSED_HERE, N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_PASS_A_SEPARATE_VARIABLE_TO,
+                N00BB_NO_ARGS);
+            return nullptr;
+        }
+        if (!whole) place.local = nullptr, place.storage = nullptr;
+        if (mode == TH_INOUT && place.required_shape) {
             ir_value_t *current = n00bb_emit_indirect_read(context, address,
                 th_ind_referent(th_resolve(address->type)), span);
             if (!current || !n00bb_emit_sequence_shape_check(context,
-                    current, required_shape, span)) return nullptr;
+                    current, place.required_shape, span)) return nullptr;
         }
         core_list_push(*places, place);
         return address;
-    }
-    if (!location.index_target) {
-        report_unwritable_output(context, visit->grammar, argument, mode,
-                                 callee, parameter_name);
-        return nullptr;
     }
     char buffer[48];
     core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
         "__n00bb_reference_%llu",
         (unsigned long long)context->next_value_id++);
-    place.temporary = ir_local_add(context->function, name, location.type);
+    place.temporary = ir_local_add(context->function, name, value->type);
     if (!place.temporary) return nullptr;
     place.temporary->synthetic = true;
-    if (mode == TH_INOUT) {
-        ir_value_t *initial = n00bb_out_location_read(context, argument,
-                                                      &location, span);
-        if (!initial
-            || !n00bb_emit_sequence_shape_check(context, initial,
-                                                required_shape, span)
-            || !n00bb_emit_local_write(context, place.temporary, initial,
-                                       span)) return nullptr;
-    }
+    // An `out` parameter never reads the element, which may not exist yet.
+    if (mode != TH_INOUT) (void)ir_instr_erase(value->def);
+    else if (!n00bb_emit_sequence_shape_check(context, value, required_shape,
+                                              span)
+             || !n00bb_emit_local_write(context, place.temporary, value,
+                                        span)) return nullptr;
     address = n00bb_take_address(context, place.temporary, nullptr,
-                                 location.type, span);
+                                 value->type, span);
     if (address) core_list_push(*places, place);
     return address;
 }
 
-// Stores each temporary passed for a place with no address back to that
-// place. Runs right after the call, so the callee's writes reach the place
-// whether the call succeeded or failed.
+// Stores each temporary passed for an element with no address back through
+// its container's `__write`. Runs right after the call, so the callee's
+// writes reach the element whether the call succeeded or failed.
 static bool
 n00bb_write_back_references(ir_lower_context_t *context,
                             const core_list_t(n00bb_reference_argument_t)
                                 *places, ir_span_t span)
 {
+    n00bb_lower_context_t *lower = context->user;
+    th_type *nil = th_name(ir_module_types(context->module),
+                           CORE_STRING_STATIC("nil"));
     for (size_t i = 0; i < places->len; i++) {
         const n00bb_reference_argument_t *place = &places->data[i];
         if (!place->temporary) continue;
         ir_value_t *value = n00bb_emit_local_read(context, place->temporary,
                                                   span);
-        if (!value || !n00bb_emit_sequence_shape_check(context, value,
-                place->required_shape, span)
-            || !n00bb_lower_index_store_at(context, place->grammar,
-                place->site_node, place->index_target, place->source_node,
-                value)) return false;
+        ir_value_t *operands[] = {place->container, place->index, value};
+        ir_value_t *written = value && n00bb_emit_sequence_shape_check(
+                context, value, place->required_shape, span)
+            ? n00bb_dispatch(context, CORE_STRING_STATIC("__write"), operands,
+                             3, nil, span)
+            : nullptr;
+        if (!written || !ir_annot_set(lower->ir_context, &written->def->annots,
+                (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
+                             .kind = IR_ANNOT_BOOL, .b = true}))
+            return false;
     }
     return true;
 }
@@ -314,6 +273,23 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
         child_nt(grammar, arguments, CORE_STRING_STATIC("keyword-args")),
         &keywords);
     bool ok = dispatch != nullptr;
+    // More positional operands than written arguments: the receiver is
+    // implicit, so argument diagnostics count from the second operand.
+    core_list_t(n00bb_tree_ptr_t) written = core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, arguments, CORE_STRING_STATIC("positional-args")),
+        &written);
+    uint32_t positional = 0;
+    for (uint32_t i = 1; dispatch && i < dispatch->n_operands; i++)
+        positional += dispatch->operands[i].kind != IR_OPD_NAME
+            && dispatch->operands[i].kind != IR_OPD_NAMED_ARG
+            && ir_operand_value(&dispatch->operands[i]) != nullptr;
+    n00bb_lower_context_t *annotating = context->user;
+    if (ok && positional > written.len)
+        ok = ir_annot_set(annotating->ir_context, &dispatch->annots,
+            (ir_annot_t){.key = N00BB_DISPATCH_IMPLICIT_SELF_KEY,
+                         .kind = IR_ANNOT_BOOL, .b = true});
+    core_list_free(written);
     for (size_t i = 0; ok && i < keywords.len; i++) {
         parse_tree_t *expression = child_nt(grammar, keywords.data[i],
             CORE_STRING_STATIC("expression"));
@@ -325,16 +301,22 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
     core_list_free(keywords);
     n00bb_lower_context_t *lower = context->user;
     if (ok && call)
-        core_dict_put(&tu_state(lower->unit)->dispatch_calls, dispatch, call);
+        core_dict_put(&tu_state(lower->unit)->dispatch_calls, dispatch,
+                      n00bb_written_call_record(grammar, call, arguments));
     return ok;
 }
 
 bool
 n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                 parse_tree_t *callee, parse_sym_entry_t *symbol)
+                 parse_tree_t *call_node, parse_sym_entry_t *symbol)
 {
-    core_string_t spelled = symbol ? symbol->name : (core_string_t){0};
-    bool unqualified = simple_identifier_expression(grammar, callee, &spelled);
+    (void)grammar;
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    parse_tree_t *callee = core_tree_num_children(call_node)
+        ? core_tree_child(call_node, 0) : nullptr;
+    bool unqualified = facts && facts->call_unqualified;
+    core_string_t spelled = unqualified ? facts->call_spelled
+        : symbol ? symbol->name : (core_string_t){0};
     n00bb_link_use_site_t *site = state && !unqualified
         ? link_use_site_for_node(state, callee) : nullptr;
     return state && symbol && n00bb_function_has_overloads(state, symbol,
@@ -345,15 +327,16 @@ n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         });
 }
 
+// A method's receiver is written back when the method takes it by
+// reference: rewrite passes the place the receiver was read from, or a
+// temporary when it names none.
 static bool
 mark_write_back(ir_lower_context_t *context, parse_grammar_t *grammar,
                 parse_tree_t *receiver, ir_value_t *value)
 {
-    bool place = receiver && (n00bb_simple_lvalue(receiver)
-        || member_access_node(grammar, receiver)
-        || n00bb_index_expression_node(grammar, receiver));
+    (void)grammar;
     n00bb_lower_context_t *lower = context->user;
-    return !place || ir_annot_set(lower->ir_context, &value->def->annots,
+    return !receiver || ir_annot_set(lower->ir_context, &value->def->annots,
         (ir_annot_t){.key = N00BB_WRITE_BACK_KEY, .kind = IR_ANNOT_BOOL,
                      .b = true});
 }
@@ -365,7 +348,8 @@ n00bb_lower_overloaded_call(ir_lower_context_t *context,
                             th_type *result_type, ir_span_t span)
 {
     th_ctx *types = ir_module_types(context->module);
-    if (n00bb_call_is_error_propagated(grammar, call_node))
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    if (facts && facts->call_propagated)
         result_type = ir_call_outcome_type(context->module,
             th_func_with_error(types, result_type, th_var(types), nullptr, 0,
                                nullptr, nullptr, 0));
@@ -406,7 +390,8 @@ n00bb_lower_dispatch_call(ir_lower_context_t *context, parse_visit_t *visit,
 {
     parse_grammar_t *grammar = visit->grammar;
     th_ctx *types = ir_module_types(context->module);
-    bool propagated = n00bb_call_is_error_propagated(grammar, call_node);
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    bool propagated = facts && facts->call_propagated;
     th_type *outcome = propagated
         ? ir_call_outcome_type(context->module,
               th_func_with_error(types, result_type, th_var(types), nullptr,
@@ -869,40 +854,37 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_tu_state_t *caller_state = lower
         ? tu_state(lower->unit) : nullptr;
     parse_tree_t *call_node = visit->node;
-    core_string_t index_trait = {0}, index_method = {0};
-    bool index_call = index_dispatch_for_node(visit->grammar, call_node,
-                                               &index_trait, &index_method);
-    if (index_call && n00bb_reference_target(visit->grammar, call_node))
-        return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
-    if (index_call
-        && (core_string_eq(index_trait, CORE_STRING_STATIC("Index_Write"))
-            || core_string_eq(index_trait,
-                              CORE_STRING_STATIC("Index_Slice_Write"))))
-        return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+    // An element or slice is read the same wherever it appears; an
+    // assignment stores to the place the read names (n00bb_store_to).
+    bool slice = false;
+    bool index_call = n00bb_index_node(visit->grammar, call_node, &slice);
+    core_string_t index_method = CORE_STRING_STATIC("__read");
+    if (index_call && slice) {
+        parse_tree_t *receiver = core_tree_child(call_node, 0);
+        ir_value_t *container = ir_lower_node_value(context, receiver);
+        size_t failures = lower_failures(context);
+        ir_value_t *read = container ? n00bb_lower_slice_read(context,
+            visit->grammar, call_node, container, result_type, span)
+            : nullptr;
+        if (read) return (ir_lower_result_t){IR_LOWER_VALUE, read};
+        // A reported problem with the bounds (a reversed slice, say).
+        if (lower_failures(context) > failures)
+            return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+        return lower_internal(context, span, "could not lower a slice");
+    }
     parse_cf_label_t *call_label = lower && caller_state
         ? parse_cf_label_lookup(caller_state->annotations, call_node) : nullptr;
-    parse_tree_t *callee = core_tree_num_children(call_node)
-        ? core_tree_child(call_node, 0) : nullptr;
-    parse_tree_t *member = member_access_node(visit->grammar, callee);
+    // Name resolution recorded what this call calls (n00bb_classify_calls).
+    parse_node_facts_t *facts = parse_tree_call_facts(call_node);
+    if (!facts)
+        return lower_internal(context, span,
+                              "name resolution did not classify this call");
     parse_tree_t *receiver_node = index_call
-        ? (core_tree_num_children(call_node)
-            ? core_tree_child(call_node, 0) : nullptr)
-        : member && core_tree_num_children(member)
-            ? core_tree_child(member, 0) : nullptr;
-    bool member_call = member
-        && !call_receiver_is_module(visit->grammar, lower->unit,
-                                    receiver_node);
-    n00bb_link_use_site_t *member_site = member && caller_state
-        ? link_use_site_for_node(caller_state, member) : nullptr;
+        ? core_tree_child(call_node, 0) : facts->call_receiver;
+    bool member_call = !index_call && facts->call_receiver;
     n00bb_link_use_site_t *call_site = caller_state
         ? link_use_site_for_node(caller_state, call_node) : nullptr;
-    parse_sym_entry_t *symbol = index_call ? nullptr
-        : call_site && call_site->init_call ? call_site->symbol
-        : member_site && member_site->symbol
-            && member_site->symbol->kind == PARSE_SYM_FUNCTION
-            ? member_site->symbol
-        : callee && lower
-        ? attached_symbol(visit->grammar, lower->unit, callee) : nullptr;
+    parse_sym_entry_t *symbol = index_call ? nullptr : facts->call_function;
     bool callback_call = member_call
         && n00bb_builtin_callback_function(symbol);
     th_type *callback_type = callback_call && receiver_node && caller_state
@@ -916,26 +898,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             context->module, callback_type))
         return lower_internal(context, span,
             "callback call has no registered value representation");
-    // A slice's bounds are each optional, and `to` includes the end, so
-    // `__slice` takes them as written rather than as plain arguments.
-    if (index_call && core_string_eq(index_method,
-                                     CORE_STRING_STATIC("__slice"))) {
-        ir_value_t *operands[4] = {
-            receiver_node ? ir_lower_node_value(context, receiver_node)
-                          : nullptr,
-        };
-        if (!operands[0] || !n00bb_lower_slice_arguments(context,
-                visit->grammar, core_tree_child(call_node, 2), &operands[1]))
-            return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-        ir_value_t *sliced = n00bb_dispatch(context,
-            CORE_STRING_STATIC("__slice"), operands, 4, result_type, span);
-        return sliced ? (ir_lower_result_t){IR_LOWER_VALUE, sliced}
-            : lower_internal(context, span, "could not lower a slice");
-    }
     if (index_call || (member_call && !callback_call)) {
         core_string_t method = index_call ? index_method
-            : first_token_text(core_tree_child(member,
-                  core_tree_num_children(member) - 1));
+                                          : facts->call_method;
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
             : call_arguments_node(visit->grammar, call_node);
@@ -954,9 +919,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_entry_t *bound = symbol;
     if (symbol) symbol = canonical_symbol(symbol);
     if (symbol && symbol->kind != PARSE_SYM_FUNCTION) symbol = nullptr;
-    if (symbol && n00bb_overloaded(visit->grammar, caller_state,
-            core_tree_num_children(call_node) ? core_tree_child(call_node, 0)
-                                              : nullptr,
+    if (symbol && n00bb_overloaded(visit->grammar, caller_state, call_node,
             bound->kind == PARSE_SYM_FUNCTION ? bound : symbol)) {
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
@@ -1126,7 +1089,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (mapped) n00bb_call_plan_collect(&plan, args);
     if (mapped && !n00bb_call_plan_bind(&plan)) {
         n00bb_call_plan_report(&plan, lower_unit(context),
-                               lower_diagnostics(context), call_node);
+                               lower_diagnostics(context),
+                               n00bb_node_span(call_node));
         mapped = false;
     }
     for (size_t i = 0; mapped && i < n00bb_call_plan_argument_count(&plan);
@@ -1339,14 +1303,28 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (array) core_list_push(values, array);
         else collected = false;
     }
+    // A builtin that writes its first argument (an atomic store) writes the
+    // place that argument refers to; it reads it too only if the axiom says.
+    const n00bb_axiom_t *axiom = collected && values.len
+        ? n00bb_axiom_of_symbol(symbol) : nullptr;
+    if (axiom && (axiom->writes & N00BB_AXIOM_PARAM(0)))
+        n00bb_note_place_written(context, values.data[0],
+                                 axiom->roles & N00BB_AXIOM_READS_TARGET);
     bool query = native_builtin && effects_query_builtin(symbol);
     ir_value_t *query_subject = query && parameter_count
         && argument_by_parameter[0]
         ? ir_lower_node_value(context, argument_by_parameter[0]) : nullptr;
     core_string_t query_name = {0};
-    if (query && parameter_count == 2)
-        (void)n00bb_call_literal_argument(visit->grammar, caller_state,
-                                          call_node, 1, 2, &query_name);
+    ir_value_t *query_named = query && parameter_count == 2
+            && argument_by_parameter[1]
+        ? ir_lower_node_value(context, argument_by_parameter[1]) : nullptr;
+    size_t query_name_len = 0;
+    const uint8_t *query_name_bytes = query_named && query_named->def
+            && query_named->def->op == IR_OP_CONST
+        ? ir_instr_const_bytes(query_named->def, &query_name_len) : nullptr;
+    if (query_name_bytes)
+        query_name = core_string_borrow((const char *)query_name_bytes,
+                                        query_name_len);
     core_free(argument_types);
     core_list_free(actuals);
     core_list_free(rest_values);
@@ -1535,49 +1513,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
-static void
-n00bb_constructor_assignment_target(ir_lower_context_t *context,
-                                    parse_visit_t *visit,
-                                    th_type *result_type,
-                                    parse_tree_t **assignment,
-                                    ir_value_t **address)
-{
-    parse_tree_t *child = visit->node;
-    for (parse_tree_t *parent = parse_tree_parent(child);
-         parent && !core_tree_is_leaf(parent);
-         child = parent, parent = parse_tree_parent(parent)) {
-        if (nt_is(visit->grammar, parent, CORE_STRING_STATIC("sym-decl"))) {
-            if (child_nt(visit->grammar, parent, CORE_STRING_STATIC("expression")) != child)
-                break;
-            parse_sym_entry_t *symbol = parse_tree_sym(parent);
-            ir_value_t *storage = symbol
-                ? ir_lower_bound_address(context, symbol) : nullptr;
-            th_type *referent = storage
-                ? th_ind_referent(storage->type) : nullptr;
-            if (referent && ir_type_eq(context->module, referent,
-                                       result_type)) {
-                *assignment = parent;
-                *address = storage;
-            }
-            break;
-        }
-        if (core_tree_num_children(parent) != 1) break;
-        if (!n00bb_primary_node(visit->grammar, parent)
-            && !n00bb_postfix_node(visit->grammar, parent)
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("unary-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("mul-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("add-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("shift-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitand-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitxor-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("bitor-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("compare-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("equality-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("and-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("or-expr"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("expression"))) break;
-    }
-}
 
 static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
@@ -1807,15 +1742,10 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_t(n00bb_ir_value_ptr_t) values =
         core_list_new(n00bb_ir_value_ptr_t);
     ir_value_t *allocation_address = nullptr;
-    parse_tree_t *direct_assignment = nullptr;
     ir_value_t *fresh_object = collected && object
         ? n00bb_object_allocate(context, result_type, nullptr, span)
         : nullptr;
     if (object && !fresh_object) collected = false;
-    if (collected && !object_in)
-        n00bb_constructor_assignment_target(context, visit, result_type,
-                                            &direct_assignment,
-                                            &allocation_address);
     if (collected && !object_in && !allocation_address) {
         th_type *address_type = n00bb_indirect_type(types, result_type);
         char allocation_buffer[48];
@@ -1938,11 +1868,6 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     if (!written)
         return lower_internal(context, span,
             "could not write a constructor's by-reference temporary back");
-    if (direct_assignment
-        && !ir_lower_finish_assignment(context, direct_assignment,
-                                       visit->node))
-        return lower_internal(context, span,
-            "could not complete direct constructor initialization");
     ir_value_t *constructed = object_in ? fresh_object
         : n00bb_emit_indirect_read(context, allocation_address, result_type,
                                    span);
@@ -1974,17 +1899,6 @@ n00bb_operator_error_text(ir_lower_context_t *context, ir_diagcode_t code,
                           ir_span_t span, core_string_t message)
 {
     lower_error_text(context, code, span, message);
-    return false;
-}
-
-bool
-names_symbol_directly(parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        if (parse_tree_is_direct_symbol_reference(node)) return true;
-        if (core_tree_num_children(node) != 1) return false;
-        node = core_tree_child(node, 0);
-    }
     return false;
 }
 
@@ -2052,13 +1966,10 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         if (success) *success = outcome;
         return true;
     }
-    n00bb_lower_context_t *unwrap_lower = context->user;
-    parse_tree_t *operand = !complete && core_tree_num_children(visit->node)
-        ? core_tree_child(visit->node, 0) : nullptr;
-    parse_sym_entry_t *infallible = operand && unwrap_lower
-            && core_tree_num_children(operand)
-        ? attached_symbol(visit->grammar, unwrap_lower->unit,
-                          core_tree_child(operand, 0)) : nullptr;
+    parse_node_facts_t *unwrap_facts = !complete
+        ? parse_tree_call_facts(visit->node) : nullptr;
+    parse_sym_entry_t *infallible = unwrap_facts
+        ? unwrap_facts->call_function : nullptr;
     if (infallible && infallible->kind == PARSE_SYM_FUNCTION) {
         lower_report(context, N00B_DIAG_PROPAGATE_INFALLIBLE, span,
                      N00B_TEXT_CANNOT_FAIL_SO_THIS_HAS,
@@ -2105,7 +2016,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     if (!error || !n00bb_emit_with_failure(context, visit->node))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not unwind active context managers");
-    int routed = n00bb_route_try_error(context, visit->node, error, span);
+    int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (!routed) {
         n00bb_lower_context_t *lower = context->user;

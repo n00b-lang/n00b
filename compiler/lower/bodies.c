@@ -770,6 +770,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
 
 cleanup:
     if (lower_data.node_types_ready) core_dict_free(&lower_data.node_types);
+    if (lower_data.field_reads_ready) core_dict_free(&lower_data.field_reads);
     for (size_t i = 0; i < lower_data.branches.len; i++)
         core_list_free(lower_data.branches.data[i].arms);
     core_list_free(lower_data.branches);
@@ -796,6 +797,7 @@ cleanup:
     for (size_t i = 0; i < lower_data.tuple_parts.len; i++) {
         core_list_free(lower_data.tuple_parts.data[i].expressions);
         core_list_free(lower_data.tuple_parts.data[i].values);
+        core_list_free(lower_data.tuple_parts.data[i].names);
     }
     core_list_free(lower_data.tuple_parts);
     ir_lower_context_release(&context);
@@ -934,7 +936,7 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
                                      CORE_STRING_STATIC("assert"));
     parse_tree_t *expression = child_nt(visit->grammar, node, CORE_STRING_STATIC("expression"));
     bool jumping = expression
-        && jumping_condition(visit->grammar, expression);
+        && jumping_condition(expression);
     if (entering) {
         if (!jumping || !context->reachable) return true;
         ir_block_t *join = n00bb_branch_block(context, lower,

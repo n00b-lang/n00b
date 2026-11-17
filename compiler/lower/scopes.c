@@ -154,6 +154,12 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                                           symbol->storage_class_required))
         && ir_lower_bind_local_storage(context, symbol, local,
                                        allocation->dest)
+        // Storage for a `let` or `const` keeps saying so, since writes reach
+        // it through its address rather than the local.
+        && (local->mutability == IR_MUT_MUTABLE
+            || ir_annot_set(ir_module_ctx(context->module), &allocation->annots,
+                            (ir_annot_t){.key = N00BB_IMMUTABLE_STORAGE_KEY,
+                                         .kind = IR_ANNOT_BOOL, .b = true}))
         && n00bb_mark_open_storage(context, allocation, local, storage_class)
         && n00bb_mark_binding_reentry(context, symbol);
 }

@@ -1,0 +1,40 @@
+record Point {
+    n: int
+}
+
+object Box {
+    p: Point
+}
+
+func __init(self: Box) {
+    self.p = (n = 0)
+}
+
+func make() -> Point {
+    return (n = 1)
+}
+
+func temporary() {
+    make().n = 3
+}
+
+func temporary_ref() {
+    let r = ref (1 + 2)
+}
+
+func let_record() {
+    let p: Point = (n = 1)
+    (p).n = 3
+}
+
+func let_object() -> int {
+    let b = new[Box]()
+    b.p.n = 3
+    return b.p.n
+}
+
+var atomic_point: Atomic[Point]
+
+func atomic_part() {
+    atomic_point.n = 3
+}

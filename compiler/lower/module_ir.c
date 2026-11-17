@@ -835,10 +835,8 @@ initialize_static_global(parse_grammar_t *grammar,
         if (symbol->mutability == PARSE_SYM_CONST) {
             ir_lower_context_t span_context = {
                 .file_id = file_id, .diagnostics = diagnostics};
-            for (parse_tree_t *at = declaration; at;
-                 at = parse_tree_parent(at))
-                if (nt_is(grammar, at, CORE_STRING_STATIC("binding-pattern")))
-                    return true;
+            // A destructured constant is set where it is unpacked.
+            if (parse_tree_in_pattern(declaration)) return true;
             lower_report(&span_context, N00B_DIAG_CONST_WITHOUT_VALUE,
                 lower_symbol_name_span(&span_context, symbol),
                 N00B_TEXT_IS_A_CONST_SO_IT,

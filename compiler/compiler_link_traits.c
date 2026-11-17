@@ -100,62 +100,6 @@ trait_method_requirement_symbol(parse_grammar_t *grammar,
 }
 
 bool
-n00bb_field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
-                         parse_tree_t *use, bool *also_reads)
-{
-    for (parse_tree_t *parent = parse_tree_parent(use);
-         parent; parent = parse_tree_parent(parent)) {
-        const parse_rule_t *rule = parse_tree_rule(grammar, parent);
-        if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
-            && core_tree_num_children(parent)) {
-            parse_sym_entry_t *callee = bound_function_symbol(
-                core_tree_child(parent, 0));
-            const n00bb_axiom_t *axiom = n00bb_axiom_of_symbol(callee);
-            parse_tree_t *first = axiom
-                && (axiom->writes & N00BB_AXIOM_PARAM(0))
-                ? call_argument_for_parameter(grammar, parent, callee,
-                                              0, false) : nullptr;
-            if (first && node_is_within(use, first)
-                && core_string_eq(first_token_text(first),
-                                  CORE_STRING_STATIC("ref"))) {
-                *also_reads = axiom->roles & N00BB_AXIOM_READS_TARGET;
-                return true;
-            }
-        }
-        if (!nt_is(grammar, parent, CORE_STRING_STATIC("assign-stmt"))
-            && !nt_is(grammar, parent, CORE_STRING_STATIC("binop-assign-stmt"))) continue;
-        if (core_tree_num_children(parent) < 2
-            || !node_is_within(use, core_tree_child(parent, 0)))
-            continue;
-        for (parse_tree_t *path = use; path != parent;
-             path = parse_tree_parent(path)) {
-            parse_tree_t *ancestor = parse_tree_parent(path);
-            if (n00bb_postfix_node(grammar, ancestor)
-                && core_tree_num_children(ancestor) > 1
-                && core_tree_child(ancestor, 0) == path) {
-                core_string_t trait = {0}, method = {0};
-                if (!field->type
-                    || th_kind_of(th_resolve(field->type)) != TH_SEQUENCE
-                    || !index_dispatch_for_node(grammar, ancestor,
-                                                &trait, &method)
-                    || (!core_string_eq(trait,
-                        CORE_STRING_STATIC("Index_Write"))
-                        && !core_string_eq(trait,
-                            CORE_STRING_STATIC("Index_Slice_Write"))))
-                    return false;
-            }
-        }
-        *also_reads = nt_is(grammar, parent, CORE_STRING_STATIC("binop-assign-stmt"));
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("assign-stmt"))) {
-            core_string_t op = first_token_text(core_tree_child(parent, 1));
-            *also_reads = !core_string_eq(op, CORE_STRING_STATIC("="));
-        }
-        return true;
-    }
-    return false;
-}
-
-bool
 n00bb_field_shared_outside(parse_sym_entry_t *field)
 {
     n00bb_record_layout_request_t *request = field->owner_type

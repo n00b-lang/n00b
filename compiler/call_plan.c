@@ -18,8 +18,8 @@ n00bb_call_plan_init(n00bb_call_plan_t *plan, parse_grammar_t *grammar,
                           : nullptr,
         .signature = signature,
         .offset = offset,
-        .positional = core_list_new(n00bb_tree_ptr_t),
-        .keywords = core_list_new(n00bb_tree_ptr_t),
+        .positional = core_list_new(n00bb_call_argument_t),
+        .keywords = core_list_new(n00bb_call_argument_t),
         .rest = core_list_new(n00bb_tree_ptr_t),
     };
     if (!signature || th_kind_of(signature) != TH_FUNCTION) return false;
@@ -40,15 +40,99 @@ n00bb_call_plan_init(n00bb_call_plan_t *plan, parse_grammar_t *grammar,
     return true;
 }
 
+static n00bb_call_argument_t
+call_argument(parse_tree_t *node, parse_tree_t *expression, core_string_t name)
+{
+    n00bb_call_argument_t argument = {
+        .expression = expression,
+        .name = name,
+        .first = link_source_location(node),
+        .span = n00bb_node_span(node),
+    };
+    argument.placed = n00bb_node_bytes(node, &argument.start, &argument.end);
+    argument.value_placed = expression && n00bb_node_bytes(expression,
+        &argument.value_start, &argument.value_end);
+    return argument;
+}
+
+static void
+collect_arguments(parse_grammar_t *grammar, parse_tree_t *call_args,
+                  core_list_t(n00bb_call_argument_t) *positional,
+                  core_list_t(n00bb_call_argument_t) *keywords)
+{
+    core_list_t(n00bb_tree_ptr_t) nodes = core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, call_args, CORE_STRING_STATIC("positional-args")),
+        &nodes);
+    for (size_t i = 0; i < nodes.len; i++)
+        core_list_push(*positional, call_argument(nodes.data[i],
+                                                  nodes.data[i],
+                                                  (core_string_t){0}));
+    nodes.len = 0;
+    collect_keyword_nodes(grammar,
+        child_nt(grammar, call_args, CORE_STRING_STATIC("keyword-args")),
+        &nodes);
+    for (size_t i = 0; i < nodes.len; i++)
+        core_list_push(*keywords, call_argument(nodes.data[i],
+            child_nt(grammar, nodes.data[i], CORE_STRING_STATIC("expression")),
+            call_keyword_name(nodes.data[i])));
+    core_list_free(nodes);
+}
+
 void
 n00bb_call_plan_collect(n00bb_call_plan_t *plan, parse_tree_t *call_args)
 {
-    collect_positional_nodes(plan->grammar,
-        child_nt(plan->grammar, call_args,
-                 CORE_STRING_STATIC("positional-args")), &plan->positional);
-    collect_keyword_nodes(plan->grammar,
-        child_nt(plan->grammar, call_args, CORE_STRING_STATIC("keyword-args")),
-        &plan->keywords);
+    collect_arguments(plan->grammar, call_args, &plan->positional,
+                      &plan->keywords);
+}
+
+void
+n00bb_call_plan_use(n00bb_call_plan_t *plan, const n00bb_written_call_t *site)
+{
+    for (size_t i = 0; site && i < site->positional.len; i++)
+        core_list_push(plan->positional, site->positional.data[i]);
+    for (size_t i = 0; site && i < site->keywords.len; i++)
+        core_list_push(plan->keywords, site->keywords.data[i]);
+}
+
+n00bb_written_call_t *
+n00bb_written_call_record(parse_grammar_t *grammar, parse_tree_t *call,
+                       parse_tree_t *call_args)
+{
+    n00bb_written_call_t *site = core_alloc(n00bb_written_call_t);
+    if (!site) return nullptr;
+    *site = (n00bb_written_call_t){
+        .span = n00bb_node_span(call),
+        .positional = core_list_new(n00bb_call_argument_t),
+        .keywords = core_list_new(n00bb_call_argument_t),
+    };
+    collect_arguments(grammar, call_args, &site->positional, &site->keywords);
+    // The values belong to lowering; typing reports from the rest.
+    for (size_t i = 0; i < site->positional.len; i++)
+        site->positional.data[i].expression = nullptr;
+    for (size_t i = 0; i < site->keywords.len; i++)
+        site->keywords.data[i].expression = nullptr;
+    return site;
+}
+
+void
+n00bb_written_call_free(n00bb_written_call_t *site)
+{
+    if (!site) return;
+    core_list_free(site->positional);
+    core_list_free(site->keywords);
+    core_free(site);
+}
+
+static core_string_t
+source_bytes(const core_translation_unit_t *unit, bool placed, size_t start,
+             size_t end)
+{
+    core_string_t contents = unit && placed
+        ? core_source_file_contents(&unit->source) : (core_string_t){0};
+    return placed && end <= contents.u8_bytes
+        ? core_string_slice(contents, start, end - start)
+        : (core_string_t){0};
 }
 
 void
@@ -78,8 +162,8 @@ n00bb_call_plan_argument(const n00bb_call_plan_t *plan, size_t position,
     *index = plan->argument_slots ? plan->argument_slots[position] : SIZE_MAX;
     if (*index != SIZE_MAX) return plan->slots[*index].argument;
     return position < plan->positional.len
-        ? plan->positional.data[position]
-        : plan->keywords.data[position - plan->positional.len];
+        ? plan->positional.data[position].expression
+        : plan->keywords.data[position - plan->positional.len].expression;
 }
 
 parse_tree_t *
@@ -128,7 +212,7 @@ n00bb_call_plan_rest_name(const n00bb_call_plan_t *plan)
 
 static bool
 fail(n00bb_call_plan_t *plan, n00bb_call_plan_status_t status,
-     parse_tree_t *problem, size_t index)
+     const n00bb_call_argument_t *problem, size_t index)
 {
     plan->status = status;
     plan->problem = problem;
@@ -149,23 +233,23 @@ n00bb_call_plan_bind(n00bb_call_plan_t *plan)
     for (size_t i = 0; i < plan->positional.len; i++) {
         while (next < plan->parameter_count
                && n00bb_call_plan_optional(plan, next)) next++;
-        parse_tree_t *argument = plan->positional.data[i];
+        const n00bb_call_argument_t *argument = &plan->positional.data[i];
         if (next < plan->parameter_count) {
             plan->argument_slots[i] = next;
-            plan->slots[next++] = (n00bb_call_slot_t){argument, argument,
-                                                       false};
+            plan->slots[next++] = (n00bb_call_slot_t){argument->expression,
+                                                       argument, false};
             by_position++;
         }
         else if (th_func_rest(plan->signature))
-            core_list_push(plan->rest, argument);
+            core_list_push(plan->rest, argument->expression);
         else return fail(plan, N00BB_CALL_PLAN_TOO_MANY, argument, i);
     }
     core_string_t varargs = n00bb_call_plan_rest_name(plan);
-    parse_tree_t *named_positional = nullptr;
+    const n00bb_call_argument_t *named_positional = nullptr;
     size_t named_index = 0;
     for (size_t i = 0; i < plan->keywords.len; i++) {
-        parse_tree_t *keyword = plan->keywords.data[i];
-        core_string_t name = call_keyword_name(keyword);
+        const n00bb_call_argument_t *keyword = &plan->keywords.data[i];
+        core_string_t name = keyword->name;
         size_t index = 0;
         if (varargs.data && core_string_eq(name, varargs))
             return fail(plan, N00BB_CALL_PLAN_VARARGS_BY_NAME, keyword, 0);
@@ -176,9 +260,8 @@ n00bb_call_plan_bind(n00bb_call_plan_t *plan)
         if (index < plan->offset || plan->slots[index].site)
             return fail(plan, N00BB_CALL_PLAN_REPEATED, keyword, index);
         plan->argument_slots[plan->positional.len + i] = index;
-        plan->slots[index] = (n00bb_call_slot_t){
-            child_nt(plan->grammar, keyword, CORE_STRING_STATIC("expression")),
-            keyword, true};
+        plan->slots[index] = (n00bb_call_slot_t){keyword->expression, keyword,
+                                                 true};
         if (!named_positional && !n00bb_call_plan_optional(plan, index)) {
             named_positional = keyword;
             named_index = index;
@@ -256,9 +339,9 @@ report_too_many(const n00bb_call_plan_t *plan, const core_translation_unit_t *un
                 core_diagnostics_t *diagnostics)
 {
     size_t first = plan->problem_index;
-    core_diag_location_t at = n00bb_node_span(plan->positional.data[first]);
-    core_diag_location_t last = n00bb_node_span(
-        plan->positional.data[plan->positional.len - 1]);
+    core_diag_location_t at = plan->positional.data[first].span;
+    core_diag_location_t last =
+        plan->positional.data[plan->positional.len - 1].span;
     at.end_line = last.end_line;
     at.end_column = last.end_column;
     size_t extra = plan->positional.len - first;
@@ -285,9 +368,10 @@ report_too_many(const n00bb_call_plan_t *plan, const core_translation_unit_t *un
     core_list_t(core_string_t) owned = core_list_new(core_string_t);
     bool placed = true;
     for (size_t i = 0; placed && i < extra; i++) {
-        size_t start = 0, end = 0;
-        placed = n00bb_node_bytes(plan->positional.data[first + i], &start,
-                                  &end);
+        const n00bb_call_argument_t *extra_argument =
+            &plan->positional.data[first + i];
+        size_t start = extra_argument->start;
+        placed = extra_argument->placed;
         core_buffer_t *prefix = core_buffer_empty();
         core_buffer_append_string(prefix, names.data[i]);
         core_buffer_puts(prefix, " = ");
@@ -303,7 +387,7 @@ report_too_many(const n00bb_call_plan_t *plan, const core_translation_unit_t *un
 
 static void
 report_missing(const n00bb_call_plan_t *plan, const core_translation_unit_t *unit,
-               core_diagnostics_t *diagnostics, parse_tree_t *site)
+               core_diagnostics_t *diagnostics, core_diag_location_t site)
 {
     core_list_t(core_string_t) missing = core_list_new(core_string_t);
     for (size_t i = plan->offset; i < plan->parameter_count; i++) {
@@ -315,7 +399,7 @@ report_missing(const n00bb_call_plan_t *plan, const core_translation_unit_t *uni
                          N00BB_ARGS(ARG_NUMBER(i - plan->offset + 1))));
     }
     report_arity(plan, unit, diagnostics, N00B_DIAG_CALL_MISSING_ARGUMENT,
-                 n00bb_node_span(site));
+                 site);
     n00bb_report_label(diagnostics, N00B_TEXT_MISSING,
                        N00BB_ARGS(ARG_LIST(missing.data, missing.len)));
     for (size_t i = 0; i < missing.len; i++) core_free(missing.data[i].data);
@@ -327,16 +411,16 @@ static void
 report_unknown(const n00bb_call_plan_t *plan, const core_translation_unit_t *unit,
                core_diagnostics_t *diagnostics)
 {
-    core_string_t name = call_keyword_name(plan->problem);
+    core_string_t name = plan->problem->name;
     core_string_t callee = callee_display_name(plan->callee);
     if (callee.u8_bytes)
         n00bb_report(diagnostics, unit, N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
-            link_source_location(plan->problem),
+            plan->problem->first,
             N00B_TEXT_HAS_NO_PARAMETER_NAMED,
             N00BB_ARGS(ARG_TEXT(callee), ARG_TEXT(name)));
     else
         n00bb_report(diagnostics, unit, N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
-            link_source_location(plan->problem),
+            plan->problem->first,
             N00B_TEXT_THIS_FUNCTION_HAS_NO_PARAMETER,
             N00BB_ARGS(ARG_TEXT(name)));
     n00bb_report_label(diagnostics, N00B_TEXT_UNKNOWN_PARAMETER, N00BB_NO_ARGS);
@@ -357,16 +441,16 @@ static void
 report_repeated(const n00bb_call_plan_t *plan, const core_translation_unit_t *unit,
                 core_diagnostics_t *diagnostics)
 {
-    core_string_t name = call_keyword_name(plan->problem);
+    core_string_t name = plan->problem->name;
     n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_REPEATED,
-        link_source_location(plan->problem),
+        plan->problem->first,
         N00B_TEXT_PARAMETER_IS_GIVEN_AN_ARGUMENT, N00BB_ARGS(ARG_TEXT(name)));
     n00bb_report_label(diagnostics, N00B_TEXT_SECOND_ARGUMENT_FOR,
                        N00BB_ARGS(ARG_TEXT(name)));
-    parse_tree_t *first = plan->problem_index < plan->slot_count
+    const n00bb_call_argument_t *first = plan->problem_index < plan->slot_count
         ? plan->slots[plan->problem_index].site : nullptr;
     if (first)
-        n00bb_report_secondary(diagnostics, nullptr, n00bb_node_span(first),
+        n00bb_report_secondary(diagnostics, nullptr, first->span,
             N00B_TEXT_IS_FIRST_GIVEN_HERE, N00BB_ARGS(ARG_TEXT(name)));
 }
 
@@ -383,18 +467,21 @@ arguments_text(const n00bb_call_plan_t *plan, const core_translation_unit_t *uni
                 n00bb_call_plan_parameter_name(plan, i));
             core_buffer_puts(text, " = ");
         }
-        core_buffer_append_string(text, n00bb_node_source_text(unit,
-            plan->slots[i].argument, (core_string_t){0}));
+        const n00bb_call_argument_t *site = plan->slots[i].site;
+        if (site)
+            core_buffer_append_string(text, source_bytes(unit,
+                site->value_placed, site->value_start, site->value_end));
     }
     for (size_t i = 0; i < plan->keywords.len; i++) {
         size_t index = 0;
+        const n00bb_call_argument_t *keyword = &plan->keywords.data[i];
         if (function_parameter_named(plan->grammar, plan->callee,
-                plan->formals, call_keyword_name(plan->keywords.data[i]),
-                &index) && !n00bb_call_plan_optional(plan, index))
+                plan->formals, keyword->name, &index)
+            && !n00bb_call_plan_optional(plan, index))
             continue;
         if (text->byte_len) core_buffer_puts(text, ", ");
-        core_buffer_append_string(text, n00bb_node_source_text(unit,
-            plan->keywords.data[i], (core_string_t){0}));
+        core_buffer_append_string(text, source_bytes(unit, keyword->placed,
+            keyword->start, keyword->end));
     }
     return core_buffer_take_string(text);
 }
@@ -404,28 +491,28 @@ report_mixed_styles(const n00bb_call_plan_t *plan,
                     const core_translation_unit_t *unit,
                     core_diagnostics_t *diagnostics)
 {
-    core_string_t name = call_keyword_name(plan->problem);
+    core_string_t name = plan->problem->name;
     if (!n00bb_report(diagnostics, unit, N00B_DIAG_CALL_MIXED_ARGUMENT_STYLES,
-            link_source_location(plan->problem),
+            plan->problem->first,
             N00B_TEXT_MIXED_ARGUMENT_STYLES,
             N00BB_ARGS(ARG_TEXT(name),
                        ARG_TEXT(callee_display_name(plan->callee)))))
         return;
-    core_diag_mark(diagnostics, n00bb_node_span(plan->positional.data[0]));
+    core_diag_mark(diagnostics, plan->positional.data[0].span);
     n00bb_report_help(diagnostics, N00B_TEXT_MIXED_ARGUMENT_STYLES_HELP,
                       N00BB_NO_ARGS);
     for (size_t i = plan->offset; i < plan->parameter_count; i++)
         if (!plan->slots[i].site && !n00bb_call_plan_optional(plan, i))
             return;
     size_t start = SIZE_MAX, end = 0;
-    const core_list_t(n00bb_tree_ptr_t) *groups[] = {&plan->positional,
-                                                     &plan->keywords};
+    const core_list_t(n00bb_call_argument_t) *groups[] = {&plan->positional,
+                                                          &plan->keywords};
     for (size_t g = 0; g < 2; g++)
         for (size_t i = 0; i < groups[g]->len; i++) {
-            size_t first = 0, last = 0;
-            if (!n00bb_node_bytes(groups[g]->data[i], &first, &last)) return;
-            if (first < start) start = first;
-            if (last > end) end = last;
+            const n00bb_call_argument_t *argument = &groups[g]->data[i];
+            if (!argument->placed) return;
+            if (argument->start < start) start = argument->start;
+            if (argument->end > end) end = argument->end;
         }
     for (int by_name = 0; by_name < 2; by_name++) {
         core_string_t text = arguments_text(plan, unit, by_name);
@@ -441,8 +528,8 @@ report_varargs_by_name(const n00bb_call_plan_t *plan,
                        core_diagnostics_t *diagnostics)
 {
     if (!n00bb_report(diagnostics, unit, N00B_DIAG_CALL_VARARGS_BY_NAME,
-            link_source_location(plan->problem), N00B_TEXT_VARARGS_BY_NAME,
-            N00BB_ARGS(ARG_TEXT(call_keyword_name(plan->problem)),
+            plan->problem->first, N00B_TEXT_VARARGS_BY_NAME,
+            N00BB_ARGS(ARG_TEXT(plan->problem->name),
                        ARG_TEXT(callee_display_name(plan->callee)))))
         return;
     n00bb_report_help(diagnostics, N00B_TEXT_VARARGS_BY_NAME_HELP,
@@ -453,7 +540,8 @@ report_varargs_by_name(const n00bb_call_plan_t *plan,
 void
 n00bb_call_plan_report(const n00bb_call_plan_t *plan,
                        const core_translation_unit_t *unit,
-                       core_diagnostics_t *diagnostics, parse_tree_t *site)
+                       core_diagnostics_t *diagnostics,
+                       core_diag_location_t site)
 {
     switch (plan->status) {
     case N00BB_CALL_PLAN_OK: return;

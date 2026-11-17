@@ -908,4 +908,103 @@ require ctor_zeroed() == 2
 require ctor_shape() == 7
 let ctor_perm = new[Ctor_Perm](true)
 require ctor_perm.read and ctor_perm.write
+
+// A place is whatever storage an expression was read from, however it is
+// written: grouping parentheses, `__value`, elements a container reaches
+// through `__read`, and fields of objects held by a `let`.
+record Place_Point {
+    n: int
+    q: Array[int][3]
+}
+
+object Place_Box {
+    p: Place_Point
+    m: int
+}
+
+func __init(self: Place_Box) {
+    self.p = (n = 0, q = [0, 0, 0])
+}
+
+func place_bump(modify n: int) {
+    n += 1
+}
+
+func place_take(consume xs: List[int]) -> int {
+    return xs.len()
+}
+
+func place_cases(consume own: List[int]) -> int {
+    var p: Place_Point = (n = 1, q = [1, 2, 3])
+    (p).n = 2
+    (p.q)[1] = 9
+    p.q[2] += 5
+    let r: Ref[Place_Point] = ref(p)
+    (r.__value).n += 1
+    place_bump((p.q[0]))
+    let held: Ref[int] = ref (p.q[1])
+    held.__value += 1
+    var items: List[Place_Point] = [(n = 1, q = [0, 0, 0])]
+    items[0].n = 5
+    items[0].q[1] += 2
+    var counts: Dict[string, int] = {"a": 1}
+    counts["a"] = 3
+    counts["b"] = 4
+    let b = new[Place_Box]()
+    b.p.n = 4
+    b.m = 5
+    let got = counts["b"]
+    require got != nil
+    return p.n + p.q[0] + p.q[1] + p.q[2] + items[0].n + items[0].q[1] +
+        b.p.n + b.m + place_take((own))
+}
+
+variant Place_Shape {
+    circle: int
+    square: int
+}
+
+func place_more() -> int {
+    var xs: List[int] = [1, 2, 3, 4, 5]
+    xs[1:3] = [7, 8]
+    (xs)[3 to 4] = [9, 9]
+    var shape: Place_Shape = (circle = 1)
+    (shape).square = 6
+    var total = 0
+    switch (shape) {
+        case circle { total = 100 }
+        case square { total = 7 }
+    }
+    (total) += xs[1] + xs[2] + xs[3] + xs[4]
+    return total
+}
+
+func place_slices() -> int {
+    var xs: List[int] = [1, 2, 3, 4, 5]
+    let head = xs[:2]
+    let tail = xs[3:]
+    let middle = xs[1 to 3]
+    xs[:1] = [10]
+    return head.len() + tail.len() + middle.len() + xs[0]
+}
+
+var place_counter: Atomic[int]
+
+func place_atomics() -> int {
+    place_counter = 5
+    place_counter += 2
+    _ = place_slices()
+    var total = 0
+    for i from 1 to 3 {
+        let step: int
+        step = i
+        total += step
+    }
+    return place_counter + total
+}
+
+require place_slices() == 2 + 2 + 3 + 10
+require place_atomics() == 7 + 6
+require place_more() == 7 + 7 + 8 + 9 + 9
+require place_cases([1, 2]) == 3 + 2 + 10 + 8 + 5 + 2 + 4 + 5 + 2
 __fd_write(2, "ok")

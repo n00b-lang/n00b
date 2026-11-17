@@ -38,7 +38,6 @@ typedef struct {
 #define N00BB_MARK_QUERY "n00bb_mark_query#"
 
 typedef struct {
-    parse_tree_t  *node;
     ir_instr_t    *call;
     core_string_t  mark;
     uint64_t       marks;

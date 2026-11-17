@@ -46,6 +46,9 @@ bool context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
 size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
 bool context_interface_parameter_named(parse_sym_entry_t *symbol,
                                        core_string_t target, size_t *index);
+bool n00bb_call_operator_node(parse_grammar_t *grammar, parse_tree_t *node);
+bool n00bb_classify_calls(parse_grammar_t *grammar,
+                         core_translation_unit_t *const *units, size_t count);
 bool call_receiver_is_module(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
                              parse_tree_t *receiver);
@@ -90,9 +93,6 @@ bool call_units_failed(core_translation_unit_t *const *units,
 bool publish_link_call_dependencies(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis, uint32_t producer_stage,
     core_link_contribution_state_t *state_out);
-parse_tree_t *call_argument_for_parameter(parse_grammar_t *grammar,
-    parse_tree_t *call, parse_sym_entry_t *function, size_t target,
-    bool trait_dispatch);
 core_link_declaration_t *linked_method_declaration(core_link_unit_t *link,
     const th_env_method_t *method);
 typedef enum {
@@ -105,8 +105,6 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     core_translation_unit_t *caller, core_string_t qualified_trait,
     core_string_t method_name);
 bool n00bb_field_shared_outside(parse_sym_entry_t *field);
-bool n00bb_field_use_is_write(parse_grammar_t *grammar,
-    parse_sym_entry_t *field, parse_tree_t *use, bool *also_reads);
 th_type *constructor_signature_instance(th_ctx *types,
     parse_sym_entry_t *symbol);
 th_type *link_semantic_type_for_symbol(parse_grammar_t *grammar,
@@ -279,10 +277,42 @@ enum {
     N00BB_PHASE_FINAL   = 3,
 };
 
+typedef enum : uint8_t {
+    N00BB_CHECK_CONSTANT,
+    N00BB_CHECK_QUERY,
+    N00BB_CHECK_AND,
+    N00BB_CHECK_OR,
+    N00BB_CHECK_NOT,
+} n00bb_check_term_kind_t;
+
+// A `check` statement's condition, as lowering translated it: constants and
+// effect queries joined by `and`, `or` and `not`. A query carries what
+// lowering resolved for it, so it is answered once summaries exist without
+// going back to the source.
+typedef struct n00bb_check_term_t {
+    n00bb_check_term_kind_t kind;
+    bool constant;
+    struct n00bb_check_term_t *left;
+    struct n00bb_check_term_t *right;
+    n00bb_query_t query;
+    // The effect, mark or parameter named, and the effect resolved to its
+    // declaration (qualified) when the query is about an effect or a mark.
+    core_string_t name;
+    core_string_t effect;
+    // The function asked about, as written, and its symbol.
+    core_string_t function_text;
+    parse_sym_entry_t *subject;
+    // The callback parameter asked about, or -1.
+    int64_t callback;
+    // A `may_carry` query's question to the mark analysis.
+    struct ir_instr_t *question;
+    core_diag_location_t location;
+} n00bb_check_term_t;
+
 typedef struct {
     core_translation_unit_t *unit;
-    parse_tree_t *statement;
-    parse_tree_t *expression;
+    core_diag_location_t location;
+    n00bb_check_term_t *condition;
 } n00bb_effect_check_t;
 core_list_decl(n00bb_effect_check_t);
 
@@ -317,6 +347,13 @@ typedef struct {
     core_translation_unit_t *unit;
 } n00bb_nominal_hit_t;
 core_list_decl(n00bb_nominal_hit_t);
+
+typedef struct {
+    parse_tree_t *node;
+    struct ir_value_t *receiver;
+    core_string_t name;
+} n00bb_lowered_field_use_t;
+core_list_decl(n00bb_lowered_field_use_t);
 
 typedef struct n00bb_link_analysis_t {
     parse_grammar_t *grammar;
@@ -415,6 +452,9 @@ typedef struct n00bb_link_analysis_t {
     bool keep_summaries;
     n00bb_resolver_t *resolver;
     struct n00bb_cache_t *cache;
+    // Field uses name resolution could not type, with the IR value lowering
+    // read the field from (see n00bb_note_lowered_field_use).
+    core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
 } n00bb_link_analysis_t;
 
 void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
@@ -452,6 +492,10 @@ parse_scope_t *record_scope_for_type(n00bb_link_analysis_t *analysis,
 bool resolve_type_member_references(core_link_unit_t *link,
                                     n00bb_link_analysis_t *analysis);
 bool bind_field_member_uses(n00bb_link_analysis_t *analysis);
+void n00bb_note_lowered_field_use(n00bb_link_analysis_t *analysis,
+                                  parse_tree_t *node,
+                                  struct ir_value_t *receiver,
+                                  core_string_t name);
 bool diagnose_reserved_declarations(core_translation_unit_t *unit,
                                     const th_env *environment);
 

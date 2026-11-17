@@ -81,7 +81,10 @@ void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
 parse_tree_t *n00bb_pattern_owner(parse_grammar_t *grammar,
                                   parse_tree_t *node);
-bool n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *target,
+// The projections that take a value destructured by `pattern` to `target`,
+// one of the pattern's bindings.
+bool n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *pattern,
+                        parse_tree_t *target,
                         core_list_t(n00bb_projection_step_t) *path);
 bool measure_static_shape_prefix(ir_shape_t *shape,
                                  uint32_t flat_prefix_rank);
@@ -214,16 +217,14 @@ bool n00bb_trap_integer_arithmetic(ir_instr_t *instruction, ir_class_t class);
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
 parse_tree_t *referent_access_node(parse_grammar_t *grammar,
                                    parse_tree_t *node);
+bool n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node,
+                      bool *slice);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
 bool n00bb_index_reference_storage(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
                                           parse_tree_t *node);
-parse_tree_t *n00bb_addressable_root_lvalue(parse_grammar_t *grammar,
-                                            parse_tree_t *target);
-parse_sym_entry_t *direct_ref_target(parse_grammar_t *grammar,
-                                     parse_tree_t *node);
 core_string_t canonical_builtin_type_name(core_string_t name);
 bool dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node);
 int builtin_generic_type_arity(core_string_t name);
@@ -302,13 +303,12 @@ bool n00bb_bitwise_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
+parse_sym_entry_t *n00bb_narrowed_subject(parse_grammar_t *grammar,
+                                          core_translation_unit_t *unit,
+                                          parse_tree_t *node);
 ir_summary_t *n00bb_native_axiom(ir_summaries_t *summaries,
                                  const ir_func_t *function);
 bool n00bb_native_calls_n00b(const ir_func_t *function);
-parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
-    parse_grammar_t *grammar, core_translation_unit_t *unit,
-    parse_tree_t *target);
-bool n00bb_reference_target(parse_grammar_t *grammar, parse_tree_t *node);
 parse_sym_entry_t *n00bb_atomic_load_symbol(parse_grammar_t *grammar,
                                             core_translation_unit_t *unit,
                                             parse_tree_t *node);
@@ -493,13 +493,42 @@ typedef struct {
 } n00bb_write_site_t;
 core_list_decl(n00bb_write_site_t);
 
+typedef enum : uint8_t {
+    N00BB_MARKS_PARAMETER,
+    N00BB_MARKS_FIELD,
+    N00BB_MARKS_TYPE,
+} n00bb_mark_owner_kind_t;
+
+// A mark annotation and what it is written on, recorded by the front end:
+// a parameter (of `function`), a field (of `record`), or a record type.
+typedef struct {
+    parse_tree_t *annotation;
+    n00bb_mark_owner_kind_t kind;
+    parse_sym_entry_t *owner;
+    parse_sym_entry_t *record;
+    parse_sym_entry_t *function;
+} n00bb_mark_annotation_t;
+core_list_decl(n00bb_mark_annotation_t);
+
 typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
-    core_list_t(parse_tree_ptr_t) mark_annotations;
+    core_list_t(n00bb_mark_annotation_t) mark_annotations;
+    // The parameters, fields and record types enclosing the walk.
+    core_list_t(parse_tree_ptr_t) mark_owners;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
+    // Calls, `ref`s and unwraps, classified once names are resolved
+    // (n00bb_classify_calls).
+    core_list_t(parse_tree_ptr_t) call_nodes;
+    // The constructs a value statement may give the value of, innermost
+    // last, and how many effect queries enclose the walk.
+    core_list_t(parse_tree_ptr_t) value_owners;
+    size_t effect_query_depth;
+    size_t pattern_depth;
+    // The function definitions enclosing the walk, innermost last.
+    core_list_t(parse_tree_ptr_t) function_defs;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
@@ -579,10 +608,9 @@ bool identifier_is_variant_case_expression(parse_grammar_t *grammar,
 parse_scope_t *n00bb_variant_scope_for_type(core_translation_unit_t *unit,
                                             n00bb_tu_state_t *state,
                                             th_type *type);
-bool n00bb_variant_arm_symbol(parse_grammar_t *grammar,
-                              parse_sym_entry_t *symbol);
+bool n00bb_variant_arm_symbol(const parse_sym_entry_t *symbol);
 core_list_t(parse_sym_entry_ptr_t) variant_arms_in_source_order(
-    parse_grammar_t *grammar, parse_scope_t *scope);
+    parse_scope_t *scope);
 bool report_shadowed_litmods(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state);
 bool n00bb_declares_litmod(n00bb_tu_state_t *state,
@@ -613,10 +641,6 @@ void collect_positional_nodes(parse_grammar_t *grammar,
 parse_tree_t *n00bb_call_positional_argument(parse_grammar_t *grammar,
                                              parse_tree_t *call, size_t index,
                                              size_t arity);
-bool n00bb_call_literal_argument(parse_grammar_t *grammar,
-                                 n00bb_tu_state_t *state, parse_tree_t *call,
-                                 size_t index, size_t arity,
-                                 core_string_t *out);
 bool n00bb_scalar_role_is(th_type *type, ir_role_t role);
 bool n00bb_flagset_type(core_translation_unit_t *unit,
                         n00bb_tu_state_t *state, th_type *type,
@@ -628,9 +652,6 @@ bool module_initializer_declaration(parse_grammar_t *grammar,
 bool is_module_initializer_use(parse_grammar_t *grammar,
                                parse_tree_t *node,
                                parse_sym_entry_t *initializer_owner);
-bool initializer_node_is_reference_store_target(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *node,
-    parse_sym_entry_t *symbol);
 void validate_builtin_generic_type_arity(parse_grammar_t *grammar,
                                          parse_tree_t *node,
                                          core_translation_unit_t *unit,
@@ -715,8 +736,7 @@ bool record_function_parameter_fact(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state);
 void append_module_type_name(core_translation_unit_t *unit,
                              core_string_t name, core_buffer_t *buffer);
-bool finalize_variant_symbol_type(parse_grammar_t *grammar,
-                                  parse_tree_t *node,
+bool finalize_variant_symbol_type(parse_tree_t *node,
                                   core_translation_unit_t *unit,
                                   n00bb_tu_state_t *state);
 bool finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,

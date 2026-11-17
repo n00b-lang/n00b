@@ -110,8 +110,6 @@ initializer_write_precedes_read(
     n00bb_runtime_init_analysis_t *runtime,
     core_list_t(core_translation_unit_ptr_t) *initializer_order,
     const n00bb_initializer_read_t *read);
-static parse_tree_t *
-initializer_read_node(const n00bb_initializer_read_t *read);
 static bool
 global_has_writer(n00bb_link_analysis_t *analysis,
                   n00bb_runtime_init_analysis_t *runtime, ir_global_t *global);
@@ -1907,22 +1905,6 @@ initializer_write_precedes_read(
                &place, IR_PATH_UNPASSED, read->read) == IR_PATH_PASSED;
 }
 
-static parse_tree_t *
-initializer_read_node(const n00bb_initializer_read_t *read)
-{
-    n00bb_tu_state_t *state = tu_state(read->source);
-    for (size_t i = 0; state && i < state->link_use_sites.len; i++) {
-        n00bb_link_use_site_t *use = &state->link_use_sites.data[i];
-        parse_token_info_t *token = use->symbol == read->symbol
-                && use->in_module_initializer
-            ? parse_tree_find_first_terminal(use->node) : nullptr;
-        if (token && span_covers(read->read->span, parse_token_line(token),
-                                 parse_token_column(token)))
-            return use->node;
-    }
-    return nullptr;
-}
-
 static bool
 global_has_writer(n00bb_link_analysis_t *analysis,
                   n00bb_runtime_init_analysis_t *runtime, ir_global_t *global)
@@ -1932,6 +1914,36 @@ global_has_writer(n00bb_link_analysis_t *analysis,
                                                 (ir_func_t *)item->key),
                                   global))
             return true;
+    return false;
+}
+
+// Whether `read` only stores to `global`: it is a call to a builtin that
+// writes its first argument without reading it (an atomic store), given the
+// address of the global or of a part of it.
+static bool
+read_only_stores(const ir_instr_t *read, const ir_global_t *global)
+{
+    const ir_func_t *callee = read ? ir_call_function(read) : nullptr;
+    const n00bb_axiom_t *axiom = callee
+        ? n00bb_axiom_of_function(callee) : nullptr;
+    if (!axiom || !(axiom->writes & N00BB_AXIOM_PARAM(0))
+        || (axiom->roles & N00BB_AXIOM_READS_TARGET))
+        return false;
+    ir_call_arg_t target = ir_call_argument(read, 0);
+    const ir_value_t *address = target.role == IR_ARG_VALUE
+        ? target.value : nullptr;
+    for (uint32_t depth = 0; address && depth < 64; depth++) {
+        if (address->kind == IR_VAL_GLOBAL)
+            return ir_global_identity(address->global)
+                == ir_global_identity(global);
+        const ir_instr_t *step = address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        if (!step || !step->n_operands
+            || (step->op != IR_OP_ADDRESS_OF && step->op != IR_OP_FIELD
+                && step->op != IR_OP_INDEX && step->op != IR_OP_COPY))
+            return false;
+        address = ir_operand_value(&step->operands[0]);
+    }
     return false;
 }
 
@@ -1959,7 +1971,6 @@ validate_uninitialized_global_reads(
     for (size_t i = 0; i < reads->len; i++) {
         const n00bb_initializer_read_t *read = &reads->data[i];
         parse_sym_entry_t *target = read->symbol;
-        parse_tree_t *node = initializer_read_node(read);
         bool explicit_initializer = global_has_explicit_initializer(
             analysis->grammar, target);
         if (read->source == read->target && explicit_initializer
@@ -1991,8 +2002,7 @@ validate_uninitialized_global_reads(
             continue;
         }
         if (explicit_initializer
-            || (node && initializer_node_is_reference_store_target(
-                    analysis->grammar, read->source, node, target))
+            || read_only_stores(read->read, read->global)
             || initializer_write_precedes_read(runtime, initializer_order,
                                                read))
             continue;
