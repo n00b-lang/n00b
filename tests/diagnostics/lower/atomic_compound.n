@@ -1,0 +1,6 @@
+var m: Atomic[int] = 2
+func f() -> int {
+    m *= 3
+    return __atomic_load(ref m)
+}
+require f() == 6

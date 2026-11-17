@@ -394,6 +394,8 @@ N00B_TEXT(GIVE_A_CONCRETE_TYPE_OR, "give `{0}` a concrete type, or declare a var
 N00B_TEXT(HAS_AN_INIT_SO_A, "`{0}` has an `__init`, so a field tuple outside its package cannot build it")
 N00B_TEXT(VALUE_WRITES_THROUGH_A_REFERENCE, "`__value` writes through a reference, but this is not a `Ref` or `Foreign` value")
 N00B_TEXT(AN_ATOMIC_VALUE_CANNOT_BE, "an atomic value cannot be updated one field at a time")
+N00B_TEXT(NO_ATOMIC_FORM, "`{0}` has no atomic form, so it cannot update an atomic value")
+N00B_TEXT(UPDATE_ATOMIC_WITH_COMPARE_EXCHANGE, "`+=`, `-=`, `&=` and `|=` update atomically; for anything else, retry `__atomic_compare_exchange` until it succeeds")
 N00B_TEXT(BUILD_THE_NEW_VALUE_AND, "build the new value and assign the whole atomic at once")
 N00B_TEXT(NOT_SUPPORTED_YET_THIS_COMPOUND, "not supported yet: this compound assignment operator")
 N00B_TEXT(IS_A_CONST_SO_IT, "`{0}` is a `const`, so it needs a value known when the program is built")
