@@ -10763,20 +10763,34 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             rank_slot, "array.shape.rank");
         uint32_t expected_rank = ir_shape_rank(instruction->shape_constraint);
         if (!expected_rank) break;
-        LLVMValueRef wanted_rank = LLVMConstInt(i32, expected_rank, false);
-        failure_operand_t ranks[] = {
-            unsigned_operand(wanted_rank), unsigned_operand(rank),
-        };
-        emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-            rank, wanted_rank, "array.shape.rank.mismatch"), &(failure_t){
-                .kind = N00BB_FAILURE_SHAPE,
-                .text = CORE_STRING_STATIC(
-                    "the array has a different number of dimensions"),
-                .operands = ranks, .operand_count = 2,
-            });
+        // A shape ending in dimensions without a size is ragged: its rows
+        // are arrays of their own, and how many dimensions the outer
+        // descriptor counts depends on how the array was made (`new` counts
+        // them all, a literal of rows only its own). Only the outer length
+        // is held there for certain, so that's what is checked.
+        ir_shape_storage_t storage = {0};
+        bool ragged = ir_shape_storage(instruction->shape_constraint,
+                                       &storage)
+            && storage.classification_known
+            && storage.flat_prefix_rank < expected_rank;
+        uint32_t checked_rank = ragged ? 1 : expected_rank;
+        if (!ragged) {
+            LLVMValueRef wanted_rank = LLVMConstInt(i32, expected_rank,
+                                                    false);
+            failure_operand_t ranks[] = {
+                unsigned_operand(wanted_rank), unsigned_operand(rank),
+            };
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+                rank, wanted_rank, "array.shape.rank.mismatch"), &(failure_t){
+                    .kind = N00BB_FAILURE_SHAPE,
+                    .text = CORE_STRING_STATIC(
+                        "the array has a different number of dimensions"),
+                    .operands = ranks, .operand_count = 2,
+                });
+        }
         LLVMValueRef first_extent = LLVMBuildStructGEP2(state->builder,
             descriptor_type, descriptor, 5, "array.shape.extents");
-        for (uint32_t i = 0; i < expected_rank; i++) {
+        for (uint32_t i = 0; i < checked_rank; i++) {
             ir_shape_extent_t expected = {0};
             if (!ir_shape_extent(instruction->shape_constraint,
                     i, &expected)) return unsupported(state, instruction);
