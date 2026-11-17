@@ -1,0 +1,6 @@
+tests/diagnostics/lower/slice_reversed.n:4:27: error N00B-T1048: this slice starts at 3, after its end at 1, so it can only fail
+  help: write the smaller bound first; bounds that meet give an empty slice
+tests/diagnostics/lower/slice_reversed.n:5:26: error N00B-T1048: this slice starts at -1, after its end at -3, so it can only fail
+  help: write the smaller bound first; bounds that meet give an empty slice
+tests/diagnostics/lower/slice_reversed.n:6:25: error N00B-T1048: this slice starts at 3, after its end at 1, so it can only fail
+  help: write the smaller bound first; bounds that meet give an empty slice

@@ -179,12 +179,8 @@ N00B_DIAG(PARAMETER_TYPE_CONFLICT, "N00B-T0547", ERROR,
 N00B_DIAG(INIT_RECEIVER, "N00B-T0548", ERROR,
     "`__init` does not take the constructed value as its first parameter",
     "An `__init` function receives the value being constructed as its first\n"
-    "parameter: `modify self: T` for a record, `self: T` or `modify self: T`\n"
-    "for an object.")
-N00B_DIAG(INIT_ON_VARIANT, "N00B-T0549", ERROR,
-    "a variant type declares `__init`",
-    "Variants are constructed by selecting an arm and giving its payload, so\n"
-    "they cannot declare `__init`. Initialize the arm's payload type instead.")
+    "parameter: `self: T` for an object, which is a handle to the storage\n"
+    "being filled in, and `modify self: T` for any other type.")
 N00B_DIAG(INIT_CANNOT_FAIL, "N00B-T0550", ERROR,
     "`__init` declares or raises a failure",
     "Construction cannot fail. Write a factory function that can fail and\n"

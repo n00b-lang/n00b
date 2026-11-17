@@ -916,6 +916,22 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             context->module, callback_type))
         return lower_internal(context, span,
             "callback call has no registered value representation");
+    // A slice's bounds are each optional, and `to` includes the end, so
+    // `__slice` takes them as written rather than as plain arguments.
+    if (index_call && core_string_eq(index_method,
+                                     CORE_STRING_STATIC("__slice"))) {
+        ir_value_t *operands[4] = {
+            receiver_node ? ir_lower_node_value(context, receiver_node)
+                          : nullptr,
+        };
+        if (!operands[0] || !n00bb_lower_slice_arguments(context,
+                visit->grammar, core_tree_child(call_node, 2), &operands[1]))
+            return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+        ir_value_t *sliced = n00bb_dispatch(context,
+            CORE_STRING_STATIC("__slice"), operands, 4, result_type, span);
+        return sliced ? (ir_lower_result_t){IR_LOWER_VALUE, sliced}
+            : lower_internal(context, span, "could not lower a slice");
+    }
     if (index_call || (member_call && !callback_call)) {
         core_string_t method = index_call ? index_method
             : first_token_text(core_tree_child(member,

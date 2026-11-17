@@ -360,8 +360,16 @@ array_shape_build(th_type *type, const ir_global_init_value_t *value,
     facts->seen = core_alloc_array(bool, facts->rank);
     facts->uniform = core_alloc_array(bool, facts->rank);
     if (!scan_array_shape(value, type, 0, facts)) return false;
+    // A dimension after the first that the declaration leaves without a
+    // size is ragged, even when the rows it starts with happen to be the
+    // same length: each row may later be replaced by one of another length.
+    ir_shape_storage_t storage = {0};
+    uint32_t limit = declared && ir_shape_storage(declared, &storage)
+            && storage.classification_known
+        ? (storage.flat_prefix_rank ? storage.flat_prefix_rank : 1)
+        : facts->rank;
     facts->total_count = 1;
-    for (uint32_t i = 0; i < facts->rank; i++) {
+    for (uint32_t i = 0; i < facts->rank && i < limit; i++) {
         if (!facts->seen[i] || !facts->uniform[i]) break;
         uint64_t extent = facts->extents[i];
         if (extent && facts->total_count > UINT64_MAX / extent) return false;

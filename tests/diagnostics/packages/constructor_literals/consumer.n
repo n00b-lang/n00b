@@ -1,0 +1,19 @@
+import shapes
+import sealed
+
+// `shapes` is in this package, and `Built` has no private field, so a field
+// tuple may build it, bypassing its `__init`.
+let made: shapes.Built = new[shapes.Built](1)
+let local: shapes.Built = (x = 1)
+require made.x == 2 and local.x == 1 and shapes.raw_built(1).x == 1
+
+// In this package too, but `hidden` is private to module `sealed`.
+let built: sealed.Sealed = new[sealed.Sealed](1)
+let hidden: sealed.Sealed = (shown = 1, hidden = 2)
+require built.shown == hidden.shown
+
+// `cast` follows the same rules; `unsafe_cast` is the back door.
+let casted = cast[shapes.Built]((x = 1))
+let sealed_cast = cast[sealed.Sealed]((shown = 1, hidden = 2))
+let reinterpreted = unsafe_cast[sealed.Sealed]((shown = 1, hidden = 2))
+require casted.x == sealed_cast.shown and reinterpreted.shown == 1

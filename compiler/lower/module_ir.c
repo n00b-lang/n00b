@@ -35,7 +35,8 @@ zero_fixed_shape_release_items(ir_global_init_value_t *value);
 static void
 zero_fixed_shape_release(ir_global_init_value_t *value);
 static ir_global_init_value_t *
-zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
+zero_fixed_shape_initializer(core_translation_unit_t *unit,
+                             ir_module_t *module, th_type *type,
                              const ir_shape_t *shape, uint32_t dimension);
 static ir_global_init_value_t *
 zero_record_initializer(core_translation_unit_t *unit, ir_module_t *module,
@@ -648,7 +649,8 @@ zero_fixed_shape_release(ir_global_init_value_t *value)
 }
 
 static ir_global_init_value_t *
-zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
+zero_fixed_shape_initializer(core_translation_unit_t *unit,
+                             ir_module_t *module, th_type *type,
                              const ir_shape_t *shape, uint32_t dimension)
 {
     type = type ? th_resolve(type) : nullptr;
@@ -669,12 +671,26 @@ zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
         .aggregate = {.items = items, .count = count},
     };
     bool nested = th_kind_of(element) == TH_SEQUENCE;
+    // A dimension past the declared rectangular prefix is ragged: each of
+    // its arrays starts zero-sized, until an `Array` is assigned to it.
+    ir_shape_storage_t storage = {0};
+    bool ragged = nested && ir_shape_storage(shape, &storage)
+        && storage.classification_known
+        && dimension + 1 >= storage.flat_prefix_rank;
     ir_class_t category = ir_machine_of(module, element).class;
     bool valid = true;
     for (size_t i = 0; valid && i < count; i++) {
-        if (nested) {
+        if (ragged) {
+            ir_global_init_value_t *empty =
+                core_alloc_array(ir_global_init_value_t, 1);
+            items[i] = (ir_global_init_value_t){
+                .kind = IR_GLOBAL_INIT_SEQUENCE,
+                .aggregate = {.items = empty, .count = 0},
+            };
+        }
+        else if (nested) {
             ir_global_init_value_t *inner = zero_fixed_shape_initializer(
-                module, element, shape, dimension + 1);
+                unit, module, element, shape, dimension + 1);
             valid = inner != nullptr;
             if (valid) {
                 items[i] = *inner;
@@ -689,6 +705,14 @@ zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
             items[i].kind = IR_GLOBAL_INIT_FLOAT;
         else if (category == IR_CLASS_VOID)
             items[i].kind = IR_GLOBAL_INIT_NIL;
+        // Each zeroed object is a fresh one, which static storage can't
+        // hold: the module's initializer allocates such an array.
+        else if (unit && !th_option_item(element)
+                 && !n00bb_object_type(ir_module_types(module), element)) {
+            bool shaped = false;
+            valid = zero_member_initializer(unit, module, element, nullptr,
+                                            1, &shaped, &items[i]);
+        }
         else valid = false;
     }
     if (!valid) {
@@ -748,8 +772,8 @@ zero_member_initializer(core_translation_unit_t *unit, ir_module_t *module,
     th_type *resolved = type ? th_resolve(type) : nullptr;
     if (!resolved) return false;
     if (th_kind_of(resolved) == TH_SEQUENCE) {
-        ir_global_init_value_t *array = zero_fixed_shape_initializer(module,
-            resolved, shape, 0);
+        ir_global_init_value_t *array = zero_fixed_shape_initializer(unit,
+            module, resolved, shape, 0);
         if (!array) return false;
         *out = *array;
         core_free(array);
@@ -776,6 +800,16 @@ zero_member_initializer(core_translation_unit_t *unit, ir_module_t *module,
     if (th_builtin_kind(ir_module_types(module), resolved)
             == TH_BUILTIN_STRING) {
         *out = (ir_global_init_value_t){.kind = IR_GLOBAL_INIT_STRING};
+        return true;
+    }
+    // Enums and flagsets are stored as their integers.
+    th_type *definition = category == IR_CLASS_OPAQUE
+        && th_kind_of(resolved) == TH_NAMED
+        ? ir_type_definition(module, resolved) : nullptr;
+    ir_class_t defined = definition && th_resolve(definition) != resolved
+        ? ir_machine_of(module, definition).class : IR_CLASS_OPAQUE;
+    if (defined == IR_CLASS_SINT || defined == IR_CLASS_UINT) {
+        *out = (ir_global_init_value_t){.kind = IR_GLOBAL_INIT_INT};
         return true;
     }
     ir_global_init_value_t *record = zero_record_initializer(unit, module,
@@ -813,8 +847,22 @@ initialize_static_global(parse_grammar_t *grammar,
                 N00BB_ARGS(ARG_TEXT(symbol->name)));
             return false;
         }
-        ir_global_init_value_t *zero = zero_fixed_shape_initializer(module,
-            global->type, global->shape, 0);
+        // An array whose elements have no zero value gets no static storage:
+        // its module's initializer allocates it, which reports them.
+        th_type *element = global->type ? th_resolve(global->type) : nullptr;
+        ir_shape_storage_t storage = {0};
+        uint32_t prefix = global->shape
+            && ir_shape_storage(global->shape, &storage)
+            ? storage.flat_prefix_rank : 0;
+        for (uint32_t d = 0; element && d < prefix
+             && th_kind_of(element) == TH_SEQUENCE; d++)
+            element = th_resolve(th_seq_elem(element));
+        th_type *blame = nullptr;
+        if (prefix && element && th_kind_of(element) != TH_SEQUENCE
+            && !n00bb_zero_tolerant(unit, element, &blame, 0))
+            return true;
+        ir_global_init_value_t *zero = zero_fixed_shape_initializer(unit,
+            module, global->type, global->shape, 0);
         bool shaped = false;
         if (!zero) zero = zero_record_initializer(unit, module, global->type,
                                                   0, &shaped);
@@ -2185,4 +2233,750 @@ n00bb_open_result_variable(ir_lower_context_t *context,
     core_list_push(tu_state(lower->unit)->result_defaults,
                    context->block->instrs[context->block->n_instrs - 1]);
     return true;
+}
+
+static bool
+self_derived(core_dict_t *derived, const ir_instr_t *in)
+{
+    ir_value_t *value = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    ir_local_t *local = in->n_operands
+        ? ir_operand_local(&in->operands[0]) : nullptr;
+    return (value && core_dict_contains(derived, value))
+        || (local && core_dict_contains(derived, local));
+}
+
+// The values and locals that hold `self`, or its address.
+static void
+collect_self_values(ir_func_t *function, core_dict_t *derived)
+{
+    core_dict_put(derived, function->params[0], function->params[0]);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                bool carries = in->op == IR_OP_COPY || in->op == IR_OP_LOAD
+                    || in->op == IR_OP_ADDRESS_OF
+                    || in->op == IR_OP_NOMINAL_CAST
+                    || in->op == IR_OP_TYPE_NARROW;
+                if (!carries || !self_derived(derived, in)) continue;
+                void *into = in->dest_kind == IR_DEST_LOCAL
+                    ? (void *)in->dest_local : (void *)in->dest;
+                if (into && !core_dict_contains(derived, into)) {
+                    core_dict_put(derived, into, into);
+                    changed = true;
+                }
+            }
+    }
+}
+
+// An object handle or a reference has no meaningful zero value, so unless it
+// is optional, a constructor must set it.
+static bool
+required_field(th_ctx *types, th_type *type)
+{
+    uint8_t attrs = 0;
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || th_option_item(type)) return false;
+    if (th_ind_attrs(type, &attrs)) return !(attrs & TH_NULLABLE);
+    return n00bb_object_type(types, type);
+}
+
+// The fields of `type` that must be set, at most 64 of them.
+static size_t
+required_fields(th_ctx *types, th_type *type, core_string_t *names,
+                th_type **kinds)
+{
+    // A variant's arms are alternatives, so none of them has to be set.
+    bool variant = false;
+    if (type && th_named_info(th_resolve(type), nullptr, &variant, nullptr)
+        && variant)
+        return 0;
+    th_type *shape = type ? th_fields_record(types, type) : nullptr;
+    size_t count = 0;
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape) && count < 64; i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && required_field(types, member->type)) {
+            names[count] = member->name;
+            kinds[count++] = member->type;
+        }
+    }
+    return count;
+}
+
+// The required fields (bits of `wanted`, named by `names`) that `block`
+// stores through `self`. Storing all of `self` sets every field.
+static uint64_t
+fields_set_in(const ir_block_t *block, core_dict_t *derived,
+              const core_string_t *names, size_t count)
+{
+    uint64_t set = 0;
+    for (uint32_t i = 0; i < block->n_instrs; i++) {
+        const ir_instr_t *in = block->instrs[i];
+        const ir_value_t *address = in->op == IR_OP_STORE
+                && in->n_operands == 2
+            ? ir_operand_value(&in->operands[0]) : nullptr;
+        if (!address) continue;
+        if (core_dict_contains(derived, (void *)address)) return ~(uint64_t)0;
+        const ir_instr_t *field = address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
+            || field->operands[1].kind != IR_OPD_NAME
+            || !self_derived(derived, field))
+            continue;
+        for (size_t f = 0; f < count; f++)
+            if (core_string_eq(field->operands[1].name, names[f]))
+                set |= (uint64_t)1 << f;
+    }
+    return set;
+}
+
+static bool
+check_required_fields(core_translation_unit_t *unit, ir_func_t *function)
+{
+    if (!function->n_blocks || !function->n_params
+        || !core_string_starts_with(function->name,
+                                    CORE_STRING_STATIC("__init"))
+        || (function->name.u8_bytes > 6 && function->name.data[6] != '#'))
+        return true;
+    th_ctx *types = ir_module_types(function->owner);
+    th_type *self = th_resolve(function->params[0]->type);
+    if (self && th_kind_of(self) == TH_INDIRECTION && !n00bb_object_type(types, self))
+        self = th_resolve(th_ind_referent(self));
+    core_string_t names[64];
+    th_type *kinds[64];
+    size_t count = required_fields(types, self, names, kinds);
+    if (!count) return true;
+
+    // Forward must-analysis: a field is set at a block's end if it is set at
+    // the end of every predecessor, or in the block itself.
+    core_dict_t derived;
+    core_dict_init(&derived, nullptr, nullptr);
+    collect_self_values(function, &derived);
+    ir_doms_t *doms = ir_doms_of(function);
+    uint64_t all = count == 64 ? ~(uint64_t)0 : ((uint64_t)1 << count) - 1;
+    uint64_t *gen = core_alloc_array(uint64_t, function->n_blocks);
+    uint64_t *out = core_alloc_array(uint64_t, function->n_blocks);
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        gen[b] = fields_set_in(function->blocks[b], &derived, names, count)
+            & all;
+        out[b] = b ? all : gen[b];
+    }
+    for (bool changed = doms != nullptr; changed;) {
+        changed = false;
+        for (uint32_t b = 1; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            uint64_t in = all;
+            for (uint32_t p = 0; p < ir_pred_count(doms, block); p++)
+                in &= out[ir_pred_at(doms, block, p)->index];
+            uint64_t next = in | gen[b];
+            changed |= next != out[b];
+            out[b] = next;
+        }
+    }
+    uint64_t missing = 0;
+    for (uint32_t b = 0; doms && b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        const ir_instr_t *last = block->n_instrs
+            ? block->instrs[block->n_instrs - 1] : nullptr;
+        if (last && last->op == IR_OP_RETURN) missing |= all & ~out[b];
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    for (size_t f = 0; f < count; f++) {
+        if (!(missing >> f & 1)) continue;
+        core_string_t type_text = n00bb_print_type(types, kinds[f]);
+        n00bb_report(diagnostics, unit, N00B_DIAG_REQUIRED_FIELD_UNSET,
+            n00bb_span_location(function->span),
+            N00B_TEXT_REQUIRED_FIELD_UNSET,
+            N00BB_ARGS(ARG_TEXT(names[f]), ARG_TEXT(type_text)));
+        n00bb_report_help(diagnostics, N00B_TEXT_SET_REQUIRED_FIELD,
+                          N00BB_ARGS(ARG_TEXT(names[f])));
+    }
+    if (doms) ir_doms_free(doms);
+    core_free(gen);
+    core_free(out);
+    core_dict_free(&derived);
+    return !missing;
+}
+
+// Whether `value` is the address of a field of the tracked value; sets
+// `*bit` to the field's bit when it is a required one.
+static bool
+tracked_field(core_dict_t *derived, const ir_value_t *value,
+              const core_string_t *names, size_t count, uint64_t *bit)
+{
+    const ir_instr_t *field = value && value->kind == IR_VAL_INSTR
+        ? value->def : nullptr;
+    if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
+        || field->operands[1].kind != IR_OPD_NAME
+        || !self_derived(derived, field))
+        return false;
+    *bit = 0;
+    for (size_t f = 0; f < count; f++)
+        if (core_string_eq(field->operands[1].name, names[f]))
+            *bit = (uint64_t)1 << f;
+    return true;
+}
+
+static bool
+local_slot(const ir_value_t *address)
+{
+    return address && address->kind == IR_VAL_INSTR && address->def
+        && (address->def->op == IR_OP_ALLOC
+            || address->def->op == IR_OP_ALLOCA);
+}
+
+// What `in` does to the tracked value: the required fields it sets, or
+// whether it uses the value, which needs them all set first.
+static uint64_t
+zeroed_effect(const ir_instr_t *in, core_dict_t *derived,
+              const core_string_t *names, size_t count, bool *uses)
+{
+    *uses = false;
+    if (in->op == IR_OP_FIELD || in->op == IR_OP_COPY
+        || in->op == IR_OP_ADDRESS_OF || in->op == IR_OP_NOMINAL_CAST
+        || in->op == IR_OP_TYPE_NARROW)
+        return 0;
+    if (in->op == IR_OP_STORE && in->n_operands == 2) {
+        const ir_value_t *address = ir_operand_value(&in->operands[0]);
+        const ir_value_t *value = ir_operand_value(&in->operands[1]);
+        uint64_t bit = 0;
+        bool carried = value && core_dict_contains(derived, (void *)value);
+        if (carried) {
+            *uses = !local_slot(address);
+            return 0;
+        }
+        if (address && core_dict_contains(derived, (void *)address))
+            return ~(uint64_t)0;
+        if (tracked_field(derived, address, names, count, &bit)) return bit;
+    }
+    uint64_t bit = 0;
+    for (uint32_t o = 0; o < in->n_operands; o++) {
+        const ir_operand_t *operand = &in->operands[o];
+        const ir_value_t *value = operand->kind == IR_OPD_NAMED_ARG
+            ? operand->named.value : ir_operand_value(operand);
+        const ir_local_t *local = ir_operand_local(operand);
+        bool loads = in->op == IR_OP_LOAD && o == 0;
+        if ((value && core_dict_contains(derived, (void *)value) && !loads)
+            || (local && core_dict_contains(derived, (void *)local) && !loads)
+            || tracked_field(derived, value, names, count, &bit))
+            *uses = true;
+    }
+    return 0;
+}
+
+// `new` on a type with no `__init` gives zeroed storage, so fields with no
+// zero value must be set on every path before anything uses the value.
+static bool
+check_zeroed_value(core_translation_unit_t *unit, ir_func_t *function,
+                   ir_instr_t *seed, th_type *built, ir_doms_t *doms)
+{
+    th_ctx *types = ir_module_types(function->owner);
+    core_string_t names[64];
+    th_type *kinds[64];
+    size_t count = required_fields(types, built, names, kinds);
+    if (!count || !doms) return true;
+    core_dict_t derived;
+    core_dict_init(&derived, nullptr, nullptr);
+    core_dict_put(&derived, seed->dest, seed->dest);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                void *into = nullptr;
+                if (in->op == IR_OP_STORE && in->n_operands == 2) {
+                    ir_value_t *value = ir_operand_value(&in->operands[1]);
+                    ir_value_t *address = ir_operand_value(&in->operands[0]);
+                    if (value && core_dict_contains(&derived, value)
+                        && local_slot(address))
+                        into = address;
+                }
+                else if ((in->op == IR_OP_COPY || in->op == IR_OP_LOAD
+                          || in->op == IR_OP_ADDRESS_OF
+                          || in->op == IR_OP_NOMINAL_CAST
+                          || in->op == IR_OP_TYPE_NARROW)
+                         && self_derived(&derived, in))
+                    into = in->dest_kind == IR_DEST_LOCAL
+                        ? (void *)in->dest_local : (void *)in->dest;
+                if (into && !core_dict_contains(&derived, into)) {
+                    core_dict_put(&derived, into, into);
+                    changed = true;
+                }
+            }
+    }
+    uint64_t all = count == 64 ? ~(uint64_t)0 : ((uint64_t)1 << count) - 1;
+    uint64_t *out = core_alloc_array(uint64_t, function->n_blocks);
+    for (uint32_t b = 0; b < function->n_blocks; b++) out[b] = all;
+    // Fields are unset where the value is made, and set everywhere it does
+    // not exist yet, so blocks before it impose nothing.
+    bool ok = true;
+    for (bool changed = true, report = false; changed || report;) {
+        bool reporting = report;
+        changed = report = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            uint64_t set = all;
+            for (uint32_t p = 0; b && p < ir_pred_count(doms, block); p++)
+                set &= out[ir_pred_at(doms, block, p)->index];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                if (in == seed) {
+                    set = 0;
+                    continue;
+                }
+                bool uses = false;
+                set |= zeroed_effect(in, &derived, names, count, &uses) & all;
+                if (!uses || set == all || !reporting || !ok) continue;
+                size_t f = 0;
+                while (set >> f & 1) f++;
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                core_string_t type_text = n00bb_print_type(types, built);
+                n00bb_report(diagnostics, unit, N00B_DIAG_ZEROED_FIELD_UNSET,
+                    n00bb_span_location(in->span),
+                    N00B_TEXT_ZEROED_FIELD_UNSET,
+                    N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(names[f])));
+                n00bb_report_help(diagnostics, N00B_TEXT_SET_ZEROED_FIELD,
+                                  N00BB_ARGS(ARG_TEXT(names[f])));
+                ok = false;
+            }
+            changed |= set != out[b];
+            out[b] = set;
+        }
+        report = !changed && !reporting;
+    }
+    core_free(out);
+    core_dict_free(&derived);
+    return ok;
+}
+
+static bool
+check_zeroed_values(core_translation_unit_t *unit, ir_func_t *function)
+{
+    ir_doms_t *doms = nullptr;
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            ir_annot_t *zeroed = ir_annot_get(&in->annots,
+                                              N00BB_ZEROED_NEW_KEY);
+            if (!zeroed || !in->dest) continue;
+            if (!doms) doms = ir_doms_of(function);
+            ok = check_zeroed_value(unit, function, in, zeroed->t, doms) && ok;
+        }
+    if (doms) ir_doms_free(doms);
+    return ok;
+}
+
+// The length an array value written to a `let` is known to have.
+static bool
+known_array_length(const ir_value_t *value, uint64_t *length)
+{
+    for (int hops = 0; value && hops < 8; hops++) {
+        ir_shape_t *shape = ir_value_shape((ir_value_t *)value);
+        ir_shape_extent_t extent;
+        if (shape && ir_shape_extent(shape, 0, &extent)
+            && extent.kind == IR_SHAPE_EXTENT_STATIC) {
+            *length = extent.static_value;
+            return true;
+        }
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                            : nullptr;
+        if (def && def->op == IR_OP_AGGREGATE && !shape) {
+            *length = def->n_operands;
+            return true;
+        }
+        value = def && def->n_operands
+                && (def->op == IR_OP_COPY || def->op == IR_OP_NOMINAL_CAST)
+            ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return false;
+}
+
+static bool
+declaration_default(const ir_instr_t *in)
+{
+    ir_annot_t *mark = ir_annot_get((ir_annots_t *)&in->annots,
+        CORE_STRING_STATIC("ir.declaration_default"));
+    return mark && mark->kind == IR_ANNOT_BOOL && mark->b;
+}
+
+// A `let` array declared without a size or a value takes its length from
+// its assignment; where the assignment hasn't run, it holds that many
+// zeroed elements (the default `made`, given a placeholder length when
+// lowered). When some read can come before the assignment, this sets the
+// length, which every assignment must agree on, and checks that the
+// elements have a zero value.
+static bool
+size_let_default(core_translation_unit_t *unit, ir_func_t *function,
+                 ir_instr_t *made, ir_doms_t *doms)
+{
+    ir_local_t *local = nullptr;
+    const ir_instr_t *made_write = nullptr;
+    core_dict_t addresses;
+    core_dict_init(&addresses, nullptr, nullptr);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            if (made_write || !declaration_default(in)) continue;
+            if (in->op == IR_OP_COPY && in->dest_kind == IR_DEST_LOCAL
+                && in->n_operands
+                && ir_operand_value(&in->operands[0]) == made->dest) {
+                made_write = in;
+                local = in->dest_local;
+            }
+            else if (in->op == IR_OP_STORE && in->n_operands == 2
+                     && ir_operand_value(&in->operands[1]) == made->dest) {
+                made_write = in;
+                ir_value_t *address = ir_operand_value(&in->operands[0]);
+                if (address) core_dict_put(&addresses, address, address);
+                const ir_instr_t *taken = address
+                        && address->kind == IR_VAL_INSTR ? address->def
+                                                         : nullptr;
+                if (taken && taken->op == IR_OP_ADDRESS_OF
+                    && taken->n_operands)
+                    local = ir_operand_local(&taken->operands[0]);
+            }
+        }
+    if (!made_write || !local || !doms) {
+        core_dict_free(&addresses);
+        return true;
+    }
+    // The values that are the local's address.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[b]->instrs[i];
+                if (!in->dest || !in->n_operands) continue;
+                const ir_local_t *of = ir_operand_local(&in->operands[0]);
+                ir_value_t *from = ir_operand_value(&in->operands[0]);
+                bool carries = (in->op == IR_OP_ADDRESS_OF && of == local)
+                    || ((in->op == IR_OP_COPY || in->op == IR_OP_NOMINAL_CAST)
+                        && from && core_dict_contains(&addresses, from));
+                if (carries && !core_dict_contains(&addresses, in->dest)) {
+                    core_dict_put(&addresses, in->dest, in->dest);
+                    changed = true;
+                }
+            }
+    }
+    // Each instruction's part: an assignment of the whole local, or a use.
+    uint64_t length = 0;
+    bool lengths_known = true, any_assignment = false;
+    uint32_t n = function->n_blocks;
+    bool *out = core_alloc_array(bool, n ? n : 1);
+    for (uint32_t b = 0; b < n; b++) out[b] = b != 0;
+    bool read_unassigned = false;
+    for (int pass = 0; pass < 2; pass++)
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (uint32_t b = 0; b < n; b++) {
+                ir_block_t *block = function->blocks[b];
+                bool state = b != 0;
+                for (uint32_t p = 0; b && p < ir_pred_count(doms, block); p++)
+                    state = state && out[ir_pred_at(doms, block, p)->index];
+                for (uint32_t i = 0; i < block->n_instrs; i++) {
+                    ir_instr_t *in = block->instrs[i];
+                    if (in == made_write) continue;
+                    ir_value_t *target = in->n_operands
+                        ? ir_operand_value(&in->operands[0]) : nullptr;
+                    bool assigns = ir_instr_is_binding_initialization(in)
+                        && ((in->op == IR_OP_COPY
+                             && in->dest_kind == IR_DEST_LOCAL
+                             && in->dest_local == local)
+                            || (in->op == IR_OP_STORE && in->n_operands == 2
+                                && target
+                                && core_dict_contains(&addresses, target)));
+                    if (assigns) {
+                        if (pass) {
+                            uint64_t got = 0;
+                            ir_value_t *value = ir_operand_value(
+                                &in->operands[in->op == IR_OP_STORE ? 1 : 0]);
+                            if (!known_array_length(value, &got)
+                                || (any_assignment && got != length))
+                                lengths_known = false;
+                            length = got;
+                            any_assignment = true;
+                        }
+                        state = true;
+                        continue;
+                    }
+                    bool carrier = in->dest
+                        && core_dict_contains(&addresses, in->dest);
+                    bool uses = false;
+                    for (uint32_t o = 0; !carrier && o < in->n_operands; o++) {
+                        ir_value_t *value = ir_operand_value(&in->operands[o]);
+                        uses |= ir_operand_local(&in->operands[o]) == local
+                            || (value && core_dict_contains(&addresses, value));
+                    }
+                    if (pass && uses && !state) read_unassigned = true;
+                }
+                if (!pass) {
+                    changed |= out[b] != state;
+                    out[b] = state;
+                }
+            }
+            if (pass) break;
+        }
+    core_free(out);
+    core_dict_free(&addresses);
+    if (!read_unassigned) return true;
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    th_ctx *types = ir_module_types(function->owner);
+    core_string_t name = local->source_name.data ? local->source_name
+                                                 : local->name;
+    if (!lengths_known || !any_assignment) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_LET_ARRAY_UNSIZED,
+                n00bb_span_location(made->span), N00B_TEXT_LET_ARRAY_UNSIZED,
+                N00BB_ARGS(ARG_TEXT(name))))
+            n00bb_report_help(diagnostics, N00B_TEXT_LET_ARRAY_UNSIZED_HELP,
+                              N00BB_ARGS(ARG_TEXT(name)));
+        return false;
+    }
+    th_type *element = th_resolve(th_seq_elem(th_resolve(made->dest->type)));
+    th_type *blame = nullptr;
+    if (element && th_kind_of(element) != TH_SEQUENCE
+        && !n00bb_zero_tolerant(unit, element, &blame, 0)) {
+        core_string_t element_text = n00bb_print_type(types, element);
+        core_string_t blame_text = n00bb_print_type(types, blame);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ARRAY_ELEMENT_NO_ZERO,
+                n00bb_span_location(made->span), N00B_TEXT_ARRAY_ELEMENT_NO_ZERO,
+                N00BB_ARGS(ARG_TEXT(blame_text))))
+            n00bb_report_help(diagnostics, N00B_TEXT_ARRAY_ELEMENT_NO_ZERO_HELP,
+                              N00BB_ARGS(ARG_TEXT(element_text)));
+        return false;
+    }
+    ir_value_t *extent = made->n_operands
+        ? ir_operand_value(&made->operands[0]) : nullptr;
+    ir_instr_t *constant = extent && extent->kind == IR_VAL_INSTR
+        ? extent->def : nullptr;
+    if (!constant || constant->op != IR_OP_CONST || !constant->n_operands
+        || constant->operands[0].kind != IR_OPD_CONST) return false;
+    constant->operands[0].lit.i = (ir_lit_t){.mag = length};
+    return true;
+}
+
+// An integer constant, through copies and casts that keep its value.
+static bool
+constant_index(const ir_value_t *value, int64_t *out)
+{
+    for (int hops = 0; value && hops < 8; hops++) {
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                            : nullptr;
+        if (!def || !def->n_operands) return false;
+        if (def->op == IR_OP_CONST) {
+            const ir_operand_t *literal = &def->operands[0];
+            if (literal->kind != IR_OPD_CONST || literal->lit.is_float
+                || literal->lit.i.mag > (ir_uint_t)INT64_MAX) return false;
+            *out = (int64_t)ir_lit_signed(literal->lit.i);
+            return true;
+        }
+        if (def->op != IR_OP_COPY && def->op != IR_OP_NOMINAL_CAST)
+            return false;
+        value = ir_operand_value(&def->operands[0]);
+    }
+    return false;
+}
+
+// The values `value` can take at `at`, as far as range analysis can tell:
+// each end, and whether it is bounded.
+typedef struct {
+    int64_t lo, hi;
+    bool    has_lo, has_hi;
+} known_range_t;
+
+static int64_t
+clamp_int(ir_int_t value)
+{
+    return value > INT64_MAX ? INT64_MAX
+         : value < INT64_MIN ? INT64_MIN : (int64_t)value;
+}
+
+static bool
+value_range(ir_abcd_t *abcd, const ir_value_t *value, const ir_instr_t *at,
+            known_range_t *out)
+{
+    int64_t constant = 0;
+    if (constant_index(value, &constant)) {
+        *out = (known_range_t){constant, constant, true, true};
+        return true;
+    }
+    ir_abcd_range_t range = {0};
+    if (!abcd || !value || !ir_abcd_range_of(abcd, value, at, &range))
+        return false;
+    *out = (known_range_t){
+        .lo = clamp_int(range.seen.lo), .hi = clamp_int(range.seen.hi),
+        .has_lo = !range.unbounded_min, .has_hi = !range.unbounded_max,
+    };
+    return out->has_lo || out->has_hi;
+}
+
+// An index into an array whose length is known without running the
+// program, that can only be out of range: every value range analysis
+// allows for it is outside -length .. length - 1.
+static bool
+check_index_range(core_translation_unit_t *unit, ir_func_t *function,
+                  ir_abcd_t *abcd, ir_instr_t *in)
+{
+    uint64_t length = 0;
+    known_range_t index = {0};
+    if (in->n_operands < 2 || !ir_span_known(in->span)
+        || !n00bb_static_array_length(function,
+               ir_operand_value(&in->operands[0]), &length)
+        || length > INT64_MAX
+        || !value_range(abcd, ir_operand_value(&in->operands[1]), in, &index))
+        return true;
+    int64_t n = (int64_t)length;
+    bool below = index.has_hi && index.hi < -n;
+    bool above = index.has_lo && index.lo >= n;
+    if (!below && !above) return true;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool reported = index.has_lo && index.has_hi && index.lo == index.hi
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+              n00bb_span_location(in->span),
+              N00B_TEXT_CONSTANT_INDEX_OUT_OF_RANGE,
+              N00BB_ARGS(ARG_NUMBER(index.lo), ARG_NUMBER(length)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+              n00bb_span_location(in->span),
+              N00B_TEXT_INDEX_ALWAYS_OUT_OF_RANGE,
+              N00BB_ARGS(ARG_NUMBER(below ? index.hi : index.lo),
+                         ARG_TEXT(below ? CORE_STRING_STATIC("at most")
+                                        : CORE_STRING_STATIC("at least")),
+                         ARG_NUMBER(length)));
+    if (reported)
+        n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_INDEX_RANGE_HELP,
+                          N00BB_ARGS(ARG_NUMBER(length ? length - 1 : 0),
+                                     ARG_NUMBER(length)));
+    return false;
+}
+
+// A slice bound's values once resolved against the array's length `n`:
+// negative ones count from the end, and `to` takes the end item too. Only
+// when they all count from the same end can they be resolved as a range.
+static bool
+resolved_bound(const known_range_t *bound, int64_t n, bool inclusive_end,
+               known_range_t *out)
+{
+    if (!bound->has_lo || !bound->has_hi
+        || (bound->lo < 0 && bound->hi >= 0)) return false;
+    int64_t shift = bound->hi < 0 ? n : 0;
+    int64_t plus = inclusive_end ? 1 : 0;
+    *out = (known_range_t){bound->lo + shift + plus, bound->hi + shift + plus,
+                           true, true};
+    return true;
+}
+
+// A slice of an array of known length (a `__slice` or `__write_slice`
+// call: the receiver, each bound as an option, whether `to` includes the
+// end) whose start can only come after its end. (Bounds past the array's
+// ends just stop there, as in Python.)
+static bool
+check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
+                  ir_abcd_t *abcd, ir_instr_t *in)
+{
+    uint64_t length = 0;
+    int64_t inclusive = 0;
+    if (in->n_operands < 5 || !ir_span_known(in->span)
+        || !n00bb_static_array_length(function,
+               ir_operand_value(&in->operands[1]), &length)
+        || length > INT64_MAX
+        || !constant_index(ir_operand_value(&in->operands[4]), &inclusive))
+        return true;
+    int64_t n = (int64_t)length;
+    known_range_t bounds[2] = {{0, 0, true, true}, {n, n, true, true}};
+    bool written[2] = {false, false}, known[2] = {true, true};
+    for (int b = 0; b < 2; b++) {
+        ir_value_t *option = ir_operand_value(&in->operands[2 + b]);
+        const ir_instr_t *def = option && option->kind == IR_VAL_INSTR
+            ? option->def : nullptr;
+        if (def && def->op == IR_OP_OPTION_NONE) continue;
+        written[b] = true;
+        ir_value_t *bound = def && def->op == IR_OP_OPTION_SOME
+                && def->n_operands
+            ? ir_operand_value(&def->operands[0]) : nullptr;
+        known[b] = bound && value_range(abcd, bound, in, &bounds[b]);
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    // The start always after the end, before either stops at the array's
+    // ends.
+    known_range_t start = bounds[0], end = bounds[1];
+    if (!known[0] || !known[1]
+        || (written[0] && !resolved_bound(&bounds[0], n, false, &start))
+        || (written[1] && !resolved_bound(&bounds[1], n, inclusive, &end))
+        || start.lo <= end.hi) return true;
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_CONSTANT_OUT_OF_RANGE,
+            n00bb_span_location(in->span),
+            N00B_TEXT_CONSTANT_SLICE_OUT_OF_RANGE,
+            N00BB_ARGS(ARG_NUMBER(start.lo), ARG_NUMBER(end.hi),
+                       ARG_NUMBER(length))))
+        n00bb_report_help(diagnostics, N00B_TEXT_CONSTANT_SLICE_RANGE_HELP,
+                          N00BB_ARGS(ARG_NUMBER(length)));
+    return false;
+}
+
+// Indexes and slices that range analysis shows can only be out of range,
+// for arrays of known length, are reported here rather than panicking
+// when the program runs.
+static bool
+check_known_ranges(core_translation_unit_t *unit, ir_func_t *function)
+{
+    ir_abcd_t *abcd = nullptr;
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            ir_func_t *callee = in->op == IR_OP_CALL
+                ? ir_call_function(in) : nullptr;
+            bool slice = callee
+                && (core_string_eq(callee->name, CORE_STRING_STATIC("__slice"))
+                    || core_string_eq(callee->name,
+                                      CORE_STRING_STATIC("__write_slice")));
+            if (!slice && in->op != IR_OP_INDEX
+                && in->op != IR_OP_SEQUENCE_GET) continue;
+            if (!abcd) abcd = ir_abcd_build(function);
+            ok = (slice ? check_slice_range(unit, function, abcd, in)
+                        : check_index_range(unit, function, abcd, in)) && ok;
+        }
+    if (abcd) ir_abcd_free(abcd);
+    return ok;
+}
+
+static bool
+size_let_defaults(core_translation_unit_t *unit, ir_func_t *function)
+{
+    ir_doms_t *doms = nullptr;
+    bool ok = true;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            ir_annot_t *mark = in->op == IR_OP_ARRAY_NEW
+                ? ir_annot_get(&in->annots, N00BB_LET_DEFAULT_KEY) : nullptr;
+            if (!mark || !in->dest) continue;
+            if (!doms) doms = ir_doms_of(function);
+            ok = size_let_default(unit, function, in, doms) && ok;
+        }
+    if (doms) ir_doms_free(doms);
+    return ok;
+}
+
+bool
+n00bb_check_required_fields(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *module = state && !state->interface_module
+            ? state->ir_module : nullptr;
+        for (size_t f = 0; module && f < ir_func_count(module); f++)
+            ok = size_let_defaults(unit, ir_func_at(module, f))
+                && check_known_ranges(unit, ir_func_at(module, f))
+                && check_required_fields(unit, ir_func_at(module, f))
+                && check_zeroed_values(unit, ir_func_at(module, f)) && ok;
+    }
+    return ok;
 }

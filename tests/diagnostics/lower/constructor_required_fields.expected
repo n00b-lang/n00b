@@ -1,0 +1,26 @@
+tests/diagnostics/lower/constructor_required_fields.n:1:8: warning N00B-N0023: type `Inner` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:5:8: warning N00B-N0023: type `Both` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:9:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constructor_required_fields.n:17:8: warning N00B-N0023: type `One` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:21:1: error N00B-S0096: `__init` can return without setting `inner`, a field of type `Inner`, which has no zero value
+  help: set `self.inner` on every path through `__init`, or make the field optional
+tests/diagnostics/lower/constructor_required_fields.n:27:8: warning N00B-N0023: type `Maybe` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:31:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constructor_required_fields.n:37:8: warning N00B-N0023: type `Holder` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:41:1: error N00B-S0096: `__init` can return without setting `target`, a field of type `Ref[int]`, which has no zero value
+  help: set `self.target` on every path through `__init`, or make the field optional
+tests/diagnostics/lower/constructor_required_fields.n:48:8: warning N00B-N0023: type `Whole` is never used
+  help: remove it
+tests/diagnostics/lower/constructor_required_fields.n:52:6: warning N00B-N0019: function `__init` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constructor_required_fields.n:56:6: warning N00B-N0019: function `make` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constructor_required_fields.n:60:9: warning N00B-S0006: the value assigned to `maybe` here is never read
+tests/diagnostics/lower/constructor_required_fields.n:61:9: warning N00B-S0006: the value assigned to `holder` here is never read

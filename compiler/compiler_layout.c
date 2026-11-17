@@ -681,8 +681,14 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                     : nullptr;
                 bool ready = (!count || members != nullptr)
                     && (!variant || !count || arms != nullptr);
+                // An object's fields (`T.__fields`) are declared on `T`;
+                // a fixed-size array among them is stored inline there too.
                 parse_scope_t *member_scope = record_scope_for_type(
                     analysis, type, nullptr);
+                if (!member_scope)
+                    member_scope = record_scope_for_type(analysis,
+                        n00bb_shape_object(ir_module_types(module), type),
+                        nullptr);
                 for (size_t j = 0; ready && j < count; j++) {
                     const th_member *member = th_record_member(definition,
                                                                 j);

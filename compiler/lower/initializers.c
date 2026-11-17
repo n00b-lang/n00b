@@ -96,8 +96,17 @@ collect_dynamic_sym_declarations(parse_grammar_t *grammar,
     if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))) {
         parse_sym_entry_t *symbol = nullptr;
         ir_global_t *global = declared_global(grammar, state, node, &symbol);
-        if (global && (!global->has_static_initializer
-                       || n00bb_static_declaration(grammar, state, node)))
+        // An array declared without a value whose size is only known when
+        // the program runs is allocated by the initializer, too.
+        parse_sym_entry_t *declared = !global && state && state->ir_module
+            ? parse_tree_sym(node) : nullptr;
+        ir_global_t *sized = declared
+            && declared->mutability != PARSE_SYM_CONST
+            ? link_ir_global_for_symbol(state->link_analysis, declared)
+            : nullptr;
+        if ((global && (!global->has_static_initializer
+                        || n00bb_static_declaration(grammar, state, node)))
+            || n00bb_global_needs_runtime_array(sized))
             core_list_push(*roots, node);
         return;
     }

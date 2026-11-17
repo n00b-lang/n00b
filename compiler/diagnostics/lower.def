@@ -438,9 +438,11 @@ N00B_DIAG(TRY_FAILURE_TYPES_DIFFER, "N00B-T1008", ERROR,
     "failures with different types reach the same `try` handler",
     "All failures handled by one `fail` handler must have one type. Convert\n"
     "them to a common type before they reach the handler.")
-N00B_DIAG(NEW_VARIANT_ARGUMENTS, "N00B-T1017", ERROR,
-    "`new` for a variant is given arguments",
-    "`new` creates an empty variant; assign the arm you want afterwards.")
+N00B_DIAG(NEW_WITHOUT_INIT_ARGUMENTS, "N00B-T1017", ERROR,
+    "`new` is given arguments for a type with no `__init`",
+    "Without an `__init`, `new` gives zeroed storage (a variant holds no arm\n"
+    "yet), so there is nothing to pass arguments to. Set the value\n"
+    "afterwards, or define an `__init` that takes the arguments.")
 N00B_DIAG(ARRAY_DIMENSIONS, "N00B-T1018", ERROR,
     "`new` for an array is given the wrong dimensions",
     "Pass one positional size for each dimension of the array type that\n"
@@ -471,6 +473,20 @@ N00B_DIAG(FIXED_REFERENCE_FUNCTION_VALUE, "N00B-T1047", ERROR,
     "which a function value's type can't say, so the function can only be\n"
     "called directly. Call it from a function without the sized parameter\n"
     "and use that one as the value.")
+N00B_DIAG(SLICE_REVERSED, "N00B-T1048", ERROR,
+    "a slice's constant start is after its end",
+    "A slice runs from its start to its end, which may meet for an empty\n"
+    "slice, but the start may not come after the end. When both bounds are\n"
+    "constants counting from the same end of the sequence, that is known\n"
+    "without running the program. Write the smaller bound first.")
+N00B_DIAG(CONSTANT_OUT_OF_RANGE, "N00B-T1049", ERROR,
+    "an index can only be out of range, or a slice can only start after its end",
+    "An array of length n has the indexes 0 through n - 1, and -n through -1\n"
+    "counting from the end. A slice's bounds past the array's ends just stop\n"
+    "there, but its start may not come after its end. When the array's\n"
+    "length is known without running the program, and range analysis shows\n"
+    "an index can only be outside it, or a slice's start can only come after\n"
+    "its end, that is reported here rather than when the program runs.")
 N00B_DIAG(BUILTIN_ARGUMENTS, "N00B-T1026", ERROR,
     "a builtin function is given arguments it does not take",
     "The message says what the builtin takes.")
@@ -495,10 +511,11 @@ N00B_DIAG(UNION_VARIABLE, "N00B-T1033", ERROR,
     "alternatives.")
 N00B_DIAG(RECORD_HAS_CONSTRUCTOR, "N00B-T1034", ERROR,
     "a field tuple builds a record or object that has an `__init`",
-    "A type with an `__init` is built through its constructor, so neither a\n"
-    "field tuple nor `cast[T]` fills it in field by field. Call the\n"
-    "constructor, or write `unsafe_cast[T](...)` when skipping it is\n"
-    "intended.")
+    "Outside the package that defines it, a type with an `__init` is built\n"
+    "through its constructor, so neither a field tuple nor `cast[T]` fills\n"
+    "it in field by field. Within its package, either may build it unless a\n"
+    "field is private to another module. Call the constructor, or write\n"
+    "`unsafe_cast[T](...)` when skipping it is intended.")
 N00B_DIAG(TYPE_PARAMETER_FIXED, "N00B-T1039", ERROR,
     "a function body fixes a declared type parameter to one type",
     "A declared type parameter must work for any type. Use the concrete\n"
@@ -535,3 +552,33 @@ N00B_DIAG(UNKNOWN_JUMP_LABEL, "N00B-N1002", ERROR,
     "`break` or `continue` names a label that does not enclose it",
     "The label must belong to an enclosing loop, or for `break`, an\n"
     "enclosing `switch` or `typecase`.")
+N00B_DIAG(REQUIRED_FIELD_UNSET, "N00B-S0096", ERROR,
+    "`__init` can return without setting a field that has no zero value",
+    "Storage starts zeroed, which is a valid value for most fields, but not\n"
+    "for an `object` or a reference: there is nothing for a zero handle to\n"
+    "refer to. So `__init` must set every such field, unless it is optional,\n"
+    "on every path through its body.")
+N00B_DIAG(ZEROED_FIELD_UNSET, "N00B-S0097", ERROR,
+    "a value from `new` is used before a field with no zero value is set",
+    "A type with no `__init` is built from zeroed storage. That is a valid\n"
+    "value for most fields, but not for an `object` or a reference, so each\n"
+    "such field, unless it is optional, must be set on every path before the\n"
+    "value is otherwise used. Set the field first, or give the type an\n"
+    "`__init` that sets it.")
+N00B_DIAG(ARRAY_ELEMENT_NO_ZERO, "N00B-S0098", ERROR,
+    "an array without an initializer holds elements with no zero value",
+    "An array created without a value that sets its elements starts zeroed.\n"
+    "Numbers, strings, flagsets, open enums, closed enums with a member\n"
+    "whose value is 0, and option types are all fine zeroed. So is a record\n"
+    "or object that a field tuple of zeros could build here: it has no\n"
+    "`__init`, or one this package may bypass, no field private to another\n"
+    "module, and no field of an `object` or reference type. Anything else,\n"
+    "a variant among them, has no zero value: make the element an option\n"
+    "type, or give the array an initializer.")
+N00B_DIAG(LET_ARRAY_UNSIZED, "N00B-S0099", ERROR,
+    "a `let` array can be read unassigned, but its assignment gives no size",
+    "A `let` array declared without a size takes its length from its one\n"
+    "assignment; where that assignment hasn't run, it holds that many zeroed\n"
+    "elements. So every assignment must give the same length, one the\n"
+    "compiler can see, such as an array literal's. Assign it on every path\n"
+    "before it is read, give it a size, or assign arrays of one known length.")

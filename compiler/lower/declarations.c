@@ -5,7 +5,8 @@ n00bb_bind_runtime_array_shape(ir_lower_context_t *context,
                                ir_shape_t *shape);
 static bool
 n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
-                              ir_shape_t *shape, ir_span_t span);
+                              ir_shape_t *shape, bool initializes,
+                              ir_span_t span);
 static ir_value_t *
 n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
                         th_type *bound_type, ir_span_t span);
@@ -132,9 +133,29 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
     return n00bb_bind_runtime_array_shape(context, shape);
 }
 
+// Writes `array` to `local` as the storage a `let` gets where it's declared:
+// a default, not its one assignment, so a later assignment may still
+// replace it. The write is marked for the check that a `let` is assigned
+// once.
+static bool
+write_declaration_default(ir_lower_context_t *context, ir_local_t *local,
+                          ir_value_t *array, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!lower || !n00bb_emit_local_write(context, local, array, span))
+        return false;
+    ir_block_t *block = context->block;
+    ir_instr_t *write = block && block->n_instrs
+        ? block->instrs[block->n_instrs - 1] : nullptr;
+    return write && ir_annot_set(lower->ir_context, &write->annots,
+        (ir_annot_t){.key = CORE_STRING_STATIC("ir.declaration_default"),
+                     .kind = IR_ANNOT_BOOL, .b = true});
+}
+
 static bool
 n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
-                              ir_shape_t *shape, ir_span_t span)
+                              ir_shape_t *shape, bool initializes,
+                              ir_span_t span)
 {
     ir_shape_storage_t storage;
     if (!local || !shape || !ir_shape_storage(shape, &storage)
@@ -159,11 +180,78 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
         ir_shape_element_type(shape), rank, extents, local->type, span)
         : nullptr;
     core_free(extents);
-    if (array && n00bb_emit_local_write(context, local, array, span))
-        return true;
+    bool written = array && (initializes
+        ? n00bb_emit_local_write(context, local, array, span)
+        : write_declaration_default(context, local, array, span));
+    if (written) return true;
     lower_internal(context, span,
                 "could not allocate the declared array");
     return false;
+}
+
+// A module array declared without a value, whose size is only known when
+// the program runs (n00bb_global_needs_runtime_array), is allocated where
+// it's declared, in its module's initializer. For a `let`, the storage is a
+// default its one assignment may replace.
+bool
+n00bb_allocate_runtime_global(ir_lower_context_t *context,
+                              parse_sym_entry_t *symbol, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    ir_global_t *global = state
+        ? link_ir_global_for_symbol(state->link_analysis, symbol) : nullptr;
+    if (!n00bb_global_needs_runtime_array(global)) return true;
+    // The declaration's shape keeps its size expressions; the variable's is
+    // a copy without them.
+    ir_shape_t *declared = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("ir.array-shape"));
+    ir_shape_t *shape = declared
+        && ir_shape_rank(declared) == ir_shape_rank(global->shape)
+        ? declared : global->shape;
+    ir_shape_storage_t storage;
+    uint32_t rank = ir_shape_rank(shape);
+    ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
+    th_type *uint_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("uint"));
+    ir_instr_t *one = uint_type ? n00bb_emit_uint_constant(context, uint_type,
+        1, span, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
+    bool ok = one && ir_shape_storage(shape, &storage);
+    // The sizes are computed here, into this initializer's own values; the
+    // variable's shape stays as declared.
+    for (uint32_t i = 0; ok && i < rank; i++) {
+        ok = ir_shape_extent(shape, i, &extents[i]);
+        if (!ok || i >= storage.flat_prefix_rank
+            || extents[i].kind == IR_SHAPE_EXTENT_STATIC) continue;
+        parse_tree_t *expression = (parse_tree_t *)extents[i].expression;
+        extents[i].kind = IR_SHAPE_EXTENT_RUNTIME;
+        extents[i].value = expression
+            ? n00bb_lower_array_dimension_value(context, expression,
+                uint_type, one->dest,
+                lower_span_for_tree(context, expression), true)
+            : nullptr;
+        ok = extents[i].value != nullptr;
+    }
+    ir_value_t *array = ok ? n00bb_emit_array_allocation(context,
+        ir_shape_element_type(shape), rank, extents, global->type, span)
+        : nullptr;
+    core_free(extents);
+    ir_value_t *target = array ? ir_global_address(context->module, global)
+                               : nullptr;
+    ir_instr_t *store = target
+        ? ir_lower_emit_instruction(context, IR_OP_GLOBAL_STORE, span)
+        : nullptr;
+    ok = store && ir_instr_operand_value(store, target)
+        && ir_instr_operand_value(store, array)
+        && ir_instr_set_binding_initialization(store, true)
+        && (symbol->mutability != PARSE_SYM_IMMUTABLE
+            || ir_annot_set(lower->ir_context, &store->annots, (ir_annot_t){
+                   .key = CORE_STRING_STATIC("ir.declaration_default"),
+                   .kind = IR_ANNOT_BOOL, .b = true}));
+    if (!ok)
+        lower_internal(context, span,
+                       "could not allocate the declared module array");
+    return ok;
 }
 
 // True when `type` is a record any of whose fields, or the fields of the
@@ -250,10 +338,37 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
         }
         if (!expression) {
+            ir_span_t span = lower_span_for_tree(context, visit->node);
+            if (!local)
+                return !symbol || symbol->mutability == PARSE_SYM_CONST
+                    || n00bb_allocate_runtime_global(context, symbol, span);
+            // A `let` array is shared, so a bounded one gets its storage
+            // here, as a `var` one does; its elements may then be set.
+            // One without a size gets a zeroed default as long as its
+            // assignment, which its length is taken from (see
+            // n00bb_size_let_defaults).
+            ir_shape_storage_t storage;
+            bool sized = shape && ir_shape_storage(shape, &storage)
+                && storage.flat_prefix_rank;
+            if (symbol && symbol->mutability == PARSE_SYM_IMMUTABLE && sized)
+                return n00bb_allocate_declared_array(context, local, shape,
+                                                     false, span);
+            if (symbol && symbol->mutability == PARSE_SYM_IMMUTABLE) {
+                if (!local
+                    || th_kind_of(th_resolve(local->type)) != TH_SEQUENCE)
+                    return true;
+                ir_value_t *array = n00bb_emit_let_default_array(context,
+                    local->type, span);
+                if (array && write_declaration_default(context, local, array,
+                                                       span)) return true;
+                lower_internal(context, span,
+                               "could not give a `let` array its default");
+                return false;
+            }
             if (!symbol || symbol->mutability != PARSE_SYM_MUTABLE)
                 return true;
-            ir_span_t span = lower_span_for_tree(context, visit->node);
-            return n00bb_allocate_declared_array(context, local, shape, span)
+            return n00bb_allocate_declared_array(context, local, shape, true,
+                                                 span)
                 && zero_declared_record(context, local, span);
         }
         if (!local && symbol && expression) {
@@ -352,6 +467,89 @@ n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
     return ir_lower_node_value(context, node);
 }
 
+// A slice bound written as an integer literal, possibly negated.
+static bool
+constant_slice_bound(parse_grammar_t *grammar, parse_tree_t *node,
+                     int64_t *value)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
+            ir_lit_t literal = {0};
+            if (!n00bb_parse_switch_integer(first_token_text(node), &literal)
+                || literal.mag > (ir_uint_t)INT64_MAX) return false;
+            *value = (int64_t)ir_lit_signed(literal);
+            return true;
+        }
+        if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr"))
+            && core_tree_num_children(node) == 2
+            && parse_tree_leaf_is(core_tree_child(node, 0),
+                                  CORE_STRING_STATIC("-"))) {
+            int64_t inner = 0;
+            if (!constant_slice_bound(grammar, core_tree_child(node, 1),
+                                      &inner)) return false;
+            *value = -inner;
+            return true;
+        }
+        if (core_tree_num_children(node) != 1) return false;
+        node = core_tree_child(node, 0);
+    }
+    return false;
+}
+
+bool
+n00bb_lower_slice_arguments(ir_lower_context_t *context,
+                            parse_grammar_t *grammar, parse_tree_t *contents,
+                            ir_value_t *arguments[3])
+{
+    parse_tree_t *bounds[2] = {0};
+    size_t position = 0;
+    bool inclusive = false;
+    for (size_t i = 0; contents && i < core_tree_num_children(contents);
+         i++) {
+        parse_tree_t *part = core_tree_child(contents, i);
+        if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
+            || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
+            position = 1;
+            inclusive = core_string_eq(first_token_text(part),
+                                       CORE_STRING_STATIC("to"));
+        }
+        else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
+            bounds[position] = part;
+    }
+    ir_span_t span = lower_span_for_tree(context, contents);
+    // Constant bounds counting from the same end of the sequence are
+    // ordered whatever its length: a start after the end can only fail.
+    int64_t start = 0, end = 0;
+    if (bounds[0] && bounds[1]
+        && constant_slice_bound(grammar, bounds[0], &start)
+        && constant_slice_bound(grammar, bounds[1], &end)
+        && (start < 0) == (end < 0)
+        && start > (inclusive ? end + 1 : end)) {
+        lower_report(context, N00B_DIAG_SLICE_REVERSED, span,
+            N00B_TEXT_SLICE_REVERSED,
+            N00BB_ARGS(ARG_NUMBER(start), ARG_NUMBER(end)));
+        lower_help(context, N00B_TEXT_SLICE_REVERSED_HELP, N00BB_NO_ARGS);
+        return false;
+    }
+    th_type *integer = n00bb_ir_builtin_type(context->module,
+                                             CORE_STRING_STATIC("int"));
+    th_type *bound_type = integer
+        ? th_option(ir_module_types(context->module), integer) : nullptr;
+    arguments[0] = n00bb_lower_slice_bound(context, bounds[0], bound_type,
+                                           span);
+    arguments[1] = n00bb_lower_slice_bound(context, bounds[1], bound_type,
+                                           span);
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    ir_instr_t *flag = bool_type
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
+    arguments[2] = flag && ir_lower_set_temp_dest(context, flag,
+            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
+        && ir_instr_operand_int(flag, inclusive ? 1 : 0)
+        ? flag->dest : nullptr;
+    return arguments[0] && arguments[1] && arguments[2];
+}
+
 bool
 n00bb_lower_index_store_at(ir_lower_context_t *context,
                            parse_grammar_t *grammar,
@@ -383,48 +581,15 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             ? ir_lower_node_value(context, index_arg) : nullptr;
         arguments[2] = arguments[4];
     }
-    else {
-        parse_tree_t *bounds[2] = {0};
-        size_t position = 0;
-        bool inclusive = false, separator_seen = false;
-        for (size_t i = 0; contents && i < core_tree_num_children(contents);
-             i++) {
-            parse_tree_t *part = core_tree_child(contents, i);
-            if (nt_is(grammar, part, CORE_STRING_STATIC("range-sep"))
-                || parse_tree_leaf_is(part, CORE_STRING_STATIC(":"))) {
-                position = 1;
-                separator_seen = true;
-                inclusive = core_string_eq(first_token_text(part),
-                                           CORE_STRING_STATIC("to"));
-            }
-            else if (nt_is(grammar, part, CORE_STRING_STATIC("expression")))
-                bounds[position] = part;
-        }
-        th_type *integer = n00bb_ir_builtin_type(context->module,
-                                                 CORE_STRING_STATIC("int"));
-        th_type *bound_type = integer
-            ? th_option(ir_module_types(context->module), integer) : nullptr;
-        ir_span_t span = lower_span_for_tree(context, contents);
-        arguments[1] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[0], bound_type, span)
-            : nullptr;
-        arguments[2] = separator_seen
-            ? n00bb_lower_slice_bound(context, bounds[1], bound_type, span)
-            : nullptr;
-        th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
-        ir_instr_t *flag = separator_seen && bool_type
-            ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
-        if (flag && ir_lower_set_temp_dest(context, flag,
-            CORE_STRING_STATIC("__n00bb_slice_inclusive_"), bool_type)
-            && ir_instr_operand_int(flag, inclusive ? 1 : 0)) {
-            arguments[3] = flag->dest;
-        }
-    }
-    ir_value_t *operands[4] = {arguments[0], arguments[1], arguments[2],
-                               arguments[3]};
+    else if (!n00bb_lower_slice_arguments(context, grammar, contents,
+                                          &arguments[1]))
+        return false;
+    // `__write(self, index, value)`, or `__write_slice(self, start, end,
+    // inclusive, values)`.
+    ir_value_t *operands[5] = {arguments[0], arguments[1], arguments[2],
+                               arguments[3], arguments[4]};
     if (!slice) operands[2] = arguments[4];
-    else operands[3] = arguments[4];
-    size_t count = slice ? 4 : 3;
+    size_t count = slice ? 5 : 3;
     bool complete = lower != nullptr;
     for (size_t i = 0; i < count; i++) complete &= operands[i] != nullptr;
     ir_value_t *written = complete

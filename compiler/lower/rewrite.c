@@ -583,6 +583,20 @@ n00bb_rewrite_object_field(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             th_ind(ir_module_types(context->module), 0, member))
         && ir_instr_operand_value(address, base)
         && ir_instr_operand_name(address, in->operands[1].name);
+    // An array field keeps its declared shape, which says how one held
+    // inline is laid out (a multi-dimensional one is rows of its elements).
+    ir_shape_t *shape = ir_value_shape(in->dest);
+    if (!shape && addressed) {
+        parse_scope_t *scope = record_scope_for_type(
+            tu_state(rewrite->unit)->link_analysis,
+            ir_operand_value(&in->operands[0])->type, nullptr);
+        parse_sym_entry_t *field = scope
+            ? parse_symtab_lookup_in(scope, in->operands[1].name) : nullptr;
+        shape = field && field->is_field ? parse_sym_binding(field,
+            CORE_STRING_STATIC("ir.array-shape")) : nullptr;
+    }
+    if (shape && addressed)
+        addressed = ir_value_set_shape(address->dest, shape);
     ir_instr_t *load = addressed
         ? ir_lower_emit_instruction(context, IR_OP_LOAD, in->span) : nullptr;
     return load && ir_lower_set_temp_dest(context, load,
@@ -590,6 +604,7 @@ n00bb_rewrite_object_field(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         && ir_instr_operand_value(load, address->dest)
         && n00bb_set_reference_access(rewrite->ir_context, load->dest,
                                       member)
+        && (!shape || ir_value_set_shape(load->dest, shape))
         ? load->dest : nullptr;
 }
 
@@ -1289,6 +1304,20 @@ n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             return false;
     }
     return true;
+}
+
+// A variant from `new` with no `__init` holds no arm yet.
+static ir_value_t *
+n00bb_emit_unset_variant(n00bb_rewrite_t *rewrite, ir_value_t *storage,
+                         th_type *variant, ir_span_t span)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    ir_instr_t *unset = ir_lower_emit_instruction(context, IR_OP_VARIANT_NEW,
+                                                  span);
+    return unset && ir_lower_set_temp_dest(context, unset,
+                CORE_STRING_STATIC("__n00bb_variant_new_"), th_resolve(variant))
+            && n00bb_emit_indirect_write(context, storage, unset->dest, span)
+        ? unset->dest : nullptr;
 }
 
 static bool
@@ -2083,6 +2112,34 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (found && (target.kind == N00BB_TARGET_METHOD
                   || target.kind == N00BB_TARGET_FUNCTION))
         return n00bb_rewrite_method_call(rewrite, in, &target);
+    if (target.kind == N00BB_TARGET_ZEROED) {
+        // Zeroed storage needs no call, but an object still needs the record
+        // its handle refers to.
+        ir_value_t *storage = ir_operand_value(&in->operands[1]);
+        th_type *built = in->operands[1].kind == IR_OPD_FRESH
+            ? th_ind_referent(storage->type) : nullptr;
+        th_ctx *types = ir_module_types(rewrite->context.module);
+        bool object = built && n00bb_object_type(types, built);
+        bool variant = false;
+        (void)(built && th_named_info(th_resolve(built), nullptr, &variant,
+                                      nullptr));
+        ir_value_t *made = object ? n00bb_emit_fresh_object(&rewrite->context,
+                                                            storage, built,
+                                                            in->span)
+                         : variant ? n00bb_emit_unset_variant(rewrite, storage,
+                                                              built, in->span)
+                                   : storage;
+        // Marks the zeroed value, so that fields with no zero value are
+        // checked to be set before it is used.
+        return made && made->def
+            && ir_annot_set(ir_module_ctx(rewrite->context.module),
+                            &made->def->annots,
+                            (ir_annot_t){.key = N00BB_ZEROED_NEW_KEY,
+                                         .kind = IR_ANNOT_TYPE,
+                                         .t = built ? built
+                                             : th_ind_referent(storage->type)})
+            && n00bb_rewrite_splice(rewrite, in) && ir_instr_erase(in);
+    }
     if (target.kind == N00BB_TARGET_REF_PLAIN)
         return n00bb_rewrite_replace(rewrite, in, receiver);
     if (target.kind == N00BB_TARGET_REF_CREATE) {
@@ -2381,20 +2438,25 @@ n00bb_record_literal_buildable(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             && member_is_private(field, field->owner_type))
             hidden = field;
     }
+    bool constructed = n00bb_type_has_constructor(rewrite->unit, type);
     if (hidden) {
         n00bb_report(diagnostics, rewrite->unit, N00B_DIAG_FIELD_NOT_VISIBLE,
                      n00bb_span_location(in->span),
                      N00B_TEXT_RECORD_HAS_PRIVATE_FIELD,
                      N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(hidden->name),
                                 ARG_TEXT(owner->module.identifier)));
-        n00bb_report_help(diagnostics, N00B_TEXT_BUILD_IT_IN_MODULE,
-                          N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
+        if (constructed)
+            n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                              N00BB_ARGS(ARG_TEXT(text)));
+        else
+            n00bb_report_help(diagnostics, N00B_TEXT_BUILD_IT_IN_MODULE,
+                              N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
         return false;
     }
-    // The module that defines a type may build it field by field, bypassing
-    // its constructor.
-    if (owner == rewrite->unit
-        || !n00bb_type_has_constructor(rewrite->unit, type)) return true;
+    // Within the package that defines a type, a field tuple may build it,
+    // bypassing its constructor, unless a field is private to another
+    // module (checked above). Outside the package, its constructor is used.
+    if (!constructed || n00bb_same_package(owner, rewrite->unit)) return true;
     n00bb_report(diagnostics, rewrite->unit,
                  N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
                  n00bb_span_location(in->span), N00B_TEXT_HAS_AN_INIT_SO_A,

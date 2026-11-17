@@ -844,4 +844,68 @@ require lease_list_break()
 require lease_list_cursor() == 9
 require lease_rows_append() == 4
 require lease_dict_writes() == 60
+// `new` on a type with no `__init` gives zeroed storage; any user type may
+// define an `__init`.
+record Ctor_Point {
+    x: int
+    y: int
+}
+
+object Ctor_Box {
+    n: int
+}
+
+enum Ctor_Color {
+    red = 1,
+    green = 2
+}
+
+record Ctor_Pair {
+    box: Ctor_Box
+    n: int
+}
+
+variant Ctor_Shape {
+    circle: int
+    square: int
+}
+
+func __init(modify self: Ctor_Shape, side: int) {
+    self = (square = side)
+}
+
+flagset Ctor_Perm {
+    read,
+    write
+}
+
+func __init(modify self: Ctor_Perm, writable: bool) {
+    self = Ctor_Perm.read
+    if writable {
+        self = self + Ctor_Perm.write
+    }
+}
+
+func ctor_zeroed() -> int {
+    let point = new[Ctor_Point]()
+    let box = new[Ctor_Box]()
+    let color = new[Ctor_Color]()
+    var pair = new[Ctor_Pair]()
+    pair.n = 2
+    pair.box = box
+    return point.x + point.y + box.n + cast[int](color) + pair.box.n + pair.n
+}
+
+func ctor_shape() -> int {
+    let shape = new[Ctor_Shape](7)
+    switch shape {
+        case circle { return 0 }
+        case square { return shape.square }
+    }
+}
+
+require ctor_zeroed() == 2
+require ctor_shape() == 7
+let ctor_perm = new[Ctor_Perm](true)
+require ctor_perm.read and ctor_perm.write
 __fd_write(2, "ok")

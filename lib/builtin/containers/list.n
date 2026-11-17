@@ -36,12 +36,6 @@ func checked_index(self: List['T], index: int) -> int {
     return at
 }
 
-private func check_range(self: List['T], start: int, end: int) {
-    if start < 0 or end < start or cast[uint](end) > self.count {
-        panic.range_out_of_bounds(start, end, self.count, "a list")
-    }
-}
-
 func __read(self: List['T], index: int) -> 'T {
     return self.items[checked_index(self, index)]
 }
@@ -51,14 +45,17 @@ func __write(self: List['T], index: int, value: 'T) {
     self.items[at] = value
 }
 
-func __slice(self: List['T], start_ix: int,
-                    end_ix: int) -> containers.slice.Slice['T] {
-    check_range(self, start_ix, end_ix)
-    let length: int       = end_ix - start_ix
+func __slice(self: List['T], start_ix: int?, end_ix: int?,
+             inclusive: bool) -> containers.slice.Slice['T] {
+    let start: int = containers.slice.slice_start(start_ix, end_ix,
+                                                  inclusive, self.count,
+                                                  "a list")
+    let end: int = containers.slice.slice_end(end_ix, inclusive, self.count)
+    let length: int       = end - start
     var items:  Array['T] = new[Array['T]](length)
     var at:     int       = 0
     while at < length {
-        items[at] = self.items[start_ix + at]
+        items[at] = self.items[start + at]
         at += 1
     }
     return new[containers.slice.Slice['T]](items, 0, length)
@@ -67,24 +64,10 @@ func __slice(self: List['T], start_ix: int,
 func __write_slice(self: List['T], start_ix: int?,
                           end_ix: int?, inclusive: bool,
                           values: List['T]) {
-    var start: int = 0
-    if start_ix != nil {
-        start = start_ix
-    }
-    var end: int = cast[int]self.count
-    if end_ix != nil {
-        end = end_ix
-        if end < 0 {
-            end += cast[int]self.count
-        }
-        if inclusive {
-            end += 1
-        }
-    }
-    if start < 0 {
-        start += cast[int]self.count
-    }
-    check_range(self, start, end)
+    let start: int = containers.slice.slice_start(start_ix, end_ix,
+                                                  inclusive, self.count,
+                                                  "a list")
+    let end: int = containers.slice.slice_end(end_ix, inclusive, self.count)
 
     let incoming: uint      = values.count
     var snapshot: Array['T] = new[Array['T]](cast[int]incoming)

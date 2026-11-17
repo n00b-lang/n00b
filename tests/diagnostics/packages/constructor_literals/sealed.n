@@ -1,0 +1,9 @@
+record Sealed {
+    shown: int
+    private hidden: int
+}
+
+func __init(modify self: Sealed, shown: int) {
+    self.shown = shown
+    self.hidden = shown * 2
+}

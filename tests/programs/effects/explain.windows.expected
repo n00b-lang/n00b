@@ -19,15 +19,15 @@ builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
   param self      reader, lends
   detail          may_collect allocates_direct
 builtin.containers.list.append: (List['T], 'T, bool) -> nil
-  allocates       builtin.containers.list.ensure_capacity (150:5) -> here (138:28)
-  panics          here (150:27)
+  allocates       builtin.containers.list.ensure_capacity (133:5) -> here (121:28)
+  panics          here (133:27)
   param self      writer, lends
   param value     untouched, lends
   param front     untouched
   detail          may_collect allocates_direct
 builtin.containers.list.pop: (List['T], bool) -> 'T?
-  allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
-  panics          here (187:32)
+  allocates       builtin.containers.lease.__write (173:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
+  panics          here (170:32)
   param self      writer, lends
   param front     untouched
   detail          may_collect allocates_direct
@@ -35,7 +35,7 @@ builtin.containers.list.len: (List['T]) -> uint
   no effects      
   param self      reader
 builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
-  allocates       builtin.containers.lease.__ref_create (264:41) -> here (35:28)
+  allocates       builtin.containers.lease.__ref_create (247:41) -> here (35:28)
   param self      reader, lends
   detail          may_collect allocates_direct
 sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno

@@ -11,3 +11,12 @@ func __init(modify self: Built, x: int) {
 func raw_built(x: int) -> Built {
     return (x = x)
 }
+
+// With no `__init`, a field tuple from any package may build it.
+record Plain {
+    x: int
+}
+
+record Holder {
+    built: Built
+}

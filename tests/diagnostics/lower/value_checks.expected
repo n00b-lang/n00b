@@ -68,8 +68,8 @@ tests/diagnostics/lower/value_checks.n:218:6: warning N00B-N0019: function `__in
 tests/diagnostics/lower/value_checks.n:223:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
   help: use a field tuple, which names each field: `(name = value, ...)`
 tests/diagnostics/lower/value_checks.n:228:21: error N00B-T0585: cannot cast `Tuple[y: u8]` to `Tuple_Target`: field `y` does not match
-tests/diagnostics/lower/value_checks.n:233:21: error N00B-T1034: `cast` cannot build `Tuple_Built` from a field tuple, because `Tuple_Built` has an `__init`
-  help: call its constructor, or write `unsafe_cast[Tuple_Built](...)` to build it without running the constructor
+tests/diagnostics/lower/value_checks.n:232:6: warning N00B-N0019: function `constructed_cast` is never called
+  help: call it or delete it
 tests/diagnostics/lower/value_checks.n:237:6: warning N00B-N0019: function `constructed_literal` is never called
   help: call it or delete it
 tests/diagnostics/lower/value_checks.n:242:6: warning N00B-N0019: function `append_unread` is never called

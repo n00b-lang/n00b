@@ -1,0 +1,65 @@
+// An array without an initializer starts zeroed, so its elements must have
+// a zero value.
+import shapes
+
+enum Level { low = 1, high = 2 }
+
+variant Shape {
+    circle: int
+    square: int
+}
+
+object Node {
+    v: int
+}
+
+record Holder {
+    node: Node
+}
+
+var levels: Array[Level][2]
+var shapes_made: Array[Shape][2]
+var plain: Array[shapes.Plain][2]
+
+func local_arrays() -> uint {
+    var built: Array[shapes.Built][2]
+    var holders: Array[Holder][2]
+    let made = new[Array[Level][3]]()
+    var optional: Array[Holder?][2]
+    return built.len() + holders.len() + made.len() + optional.len()
+}
+
+// A `let` array without a size takes its length from its assignment.
+func unassigned() -> uint {
+    let never: Array[int]
+    return never.len()
+}
+
+func mismatched(c: bool) -> uint {
+    let rows: Array[int]
+    if c {
+        rows = [1, 2]
+    }
+    elif not c {
+        rows = [1, 2, 3]
+    }
+    return rows.len()
+}
+
+func unzeroable(c: bool) -> uint {
+    let arms: Array[Shape]
+    if c {
+        arms = [(circle = 1)]
+    }
+    return arms.len()
+}
+
+func assigned() -> int {
+    let nodes: Array[Holder]
+    nodes = [(node = (v = 4))]
+    return nodes[0].node.v
+}
+
+require local_arrays() == 9 and unassigned() == 0 and mismatched(true) == 2
+require unzeroable(true) == 1 and assigned() == 4 and plain.len() == 2
+require levels.len() == 2 and shapes_made.len() == 2

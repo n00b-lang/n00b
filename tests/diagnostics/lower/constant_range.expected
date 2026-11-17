@@ -1,0 +1,24 @@
+tests/diagnostics/lower/constant_range.n:4:5: warning N00B-N0020: field `tags` of `Holder` is read but never set
+tests/diagnostics/lower/constant_range.n:12:5: error N00B-T1049: index 3 is out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:13:15: error N00B-T1049: index -4 is out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:14:15: error N00B-T1049: index 2 is out of range for this array of length 2
+  help: its indexes run from 0 to 1, or from -2 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:15:18: error N00B-T1049: index 3 is out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:16:15: error N00B-T1049: index 2 is out of range for this array of length 2
+  help: its indexes run from 0 to 1, or from -2 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:24:17: error N00B-T1049: this slice starts at 2, after its end at 1, in this array of length 3, so it can only fail
+  help: a slice's start may not come after its end; bounds past the array's ends stop at them
+tests/diagnostics/lower/constant_range.n:27:17: error N00B-T1049: this slice starts at 0, after its end at -1, in this array of length 3, so it can only fail
+  help: a slice's start may not come after its end; bounds past the array's ends stop at them
+tests/diagnostics/lower/constant_range.n:38:16: error N00B-T1049: index 3 is out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:40:16: error N00B-T1049: index 4 is out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:45:18: error N00B-T1049: this index is always at least 3, out of range for this array of length 3
+  help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
+tests/diagnostics/lower/constant_range.n:46:21: error N00B-T1049: this slice starts at 3, after its end at 2, in this array of length 3, so it can only fail
+  help: a slice's start may not come after its end; bounds past the array's ends stop at them
+tests/diagnostics/lower/constant_range.n:63:14: note N00B-S0064: parameter `items` could be `view`: `unknown` never writes anything reachable from it

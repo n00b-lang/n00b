@@ -4261,6 +4261,133 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
         : array;
 }
 
+// A new, empty one-dimensional array of type `row`, allocated like any other
+// (so that compile-time state holding it can be baked into the program).
+static LLVMValueRef
+empty_heap_array(lower_state_t *state, th_type *row, LLVMTypeRef row_type)
+{
+    ir_module_t *source = state->function->owner;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    row = th_resolve(row);
+    th_type *item = th_kind_of(th_resolve(row)) == TH_SEQUENCE
+        ? th_seq_elem(th_resolve(row)) : nullptr;
+    const ir_final_layout_t *layout = item
+        ? ir_layout_final(source, item, ir_module_target(source)) : nullptr;
+    uint32_t type_index = 0;
+    if (!item || !runtime_type_index(state, row, &type_index)) return nullptr;
+    // There are no elements, so their alignment only places the (empty)
+    // data; without their layout here, use the largest one.
+    uint64_t alignment = !layout || !layout->alignment_bytes ? 16
+        : layout->alignment_bytes > 8 ? layout->alignment_bytes : 8;
+    uint64_t descriptor_bytes = sizeof(n00b_abi_array_descriptor_header_v1)
+        + sizeof(uint64_t);
+    uint64_t data_offset = (descriptor_bytes + alignment - 1)
+        / alignment * alignment;
+    LLVMTypeRef descriptor_type = array_descriptor_type(context);
+    LLVMValueRef descriptor = LLVMBuildArrayAlloca(state->builder, i8,
+        LLVMConstInt(i64, descriptor_bytes, false), "array.empty.descriptor");
+    LLVMSetAlignment(descriptor, 8);
+    LLVMBuildMemSet(state->builder, descriptor, LLVMConstNull(i8),
+        LLVMConstInt(i64, descriptor_bytes, false), 8);
+    LLVMBuildStore(state->builder, LLVMConstInt(i32, 1, false),
+        LLVMBuildStructGEP2(state->builder, descriptor_type, descriptor, 1,
+                            "array.empty.rank.slot"));
+    LLVMBuildStore(state->builder, LLVMConstInt(i32, 1, false),
+        LLVMBuildStructGEP2(state->builder, descriptor_type, descriptor, 2,
+                            "array.empty.flat.slot"));
+    LLVMValueRef storage = gc_array_storage(state,
+        runtime_type_index_value(state, row),
+        LLVMConstInt(i64, data_offset + 1, false), (uint32_t)alignment,
+        descriptor);
+    if (!storage) return nullptr;
+    LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
+    LLVMValueRef data = LLVMBuildGEP2(state->builder, i8, storage, &offset, 1,
+                                      "array.empty.data");
+    LLVMValueRef array = LLVMBuildInsertValue(state->builder,
+        LLVMGetUndef(row_type), data, 0, "array.empty.with.data");
+    return LLVMBuildInsertValue(state->builder, array, storage, 1,
+                                "array.empty.with.descriptor");
+}
+
+static LLVMValueRef mutator_allocation(lower_state_t *state,
+                                       LLVMValueRef type_index,
+                                       LLVMValueRef bytes, uint32_t alignment,
+                                       bool finalizable);
+
+// A fresh object's zeroed storage, of type `storage` (the object's fields).
+static LLVMValueRef
+zero_object(lower_state_t *state, th_type *storage)
+{
+    ir_module_t *source = state->function->owner;
+    const ir_final_layout_t *layout = ir_layout_final(source, storage,
+        ir_module_target(source));
+    uint64_t typehash = th_hash(ir_module_types(source), storage);
+    const n00bb_llvm_type_index_t *binding = nullptr;
+    for (size_t i = 0; i < state->type_index_count; i++)
+        if (state->type_indices[i].typehash == typehash) {
+            binding = &state->type_indices[i];
+            break;
+        }
+    uint64_t stride_bits = 0;
+    if (!layout || !binding || !binding->index || !layout->alignment_bytes
+        || !ir_layout_final_stride_bits(layout, &stride_bits)
+        || stride_bits % 8) return nullptr;
+    return mutator_allocation(state, runtime_type_index_value(state, storage),
+        LLVMConstInt(LLVMInt64TypeInContext(
+            LLVMGetModuleContext(state->module)), stride_bits / 8, false),
+        layout->alignment_bytes, binding->finalizable);
+}
+
+// Fills the `count` slots at `data` of a new array whose elements aren't
+// plain zeroes. In a ragged dimension, each holds an empty array of type
+// `row`, rather than a null handle, so indexing one fails its bounds check;
+// the slots share one, which has no elements to change, and assigning a row
+// replaces it. For objects (`storage` set, the type of their fields), each
+// holds a fresh object with zeroed fields.
+static bool
+fill_new_slots(lower_state_t *state, LLVMValueRef data, LLVMValueRef count,
+               th_type *row, th_type *storage, LLVMTypeRef element_type)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMValueRef empty = storage ? nullptr
+        : empty_heap_array(state, row, element_type);
+    if (!storage && !empty) return false;
+
+    LLVMBasicBlockRef entry = LLVMGetInsertBlock(state->builder);
+    LLVMValueRef function = LLVMGetBasicBlockParent(entry);
+    LLVMBasicBlockRef test = LLVMAppendBasicBlockInContext(context, function,
+        "array.new.ragged.test");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(context, function,
+        "array.new.ragged.fill");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context, function,
+        "array.new.ragged.done");
+    LLVMBuildBr(state->builder, test);
+    LLVMPositionBuilderAtEnd(state->builder, test);
+    LLVMValueRef index = LLVMBuildPhi(state->builder, i64,
+                                      "array.new.ragged.index");
+    LLVMBuildCondBr(state->builder, LLVMBuildICmp(state->builder, LLVMIntULT,
+        index, count, "array.new.ragged.more"), body, done);
+    LLVMPositionBuilderAtEnd(state->builder, body);
+    LLVMValueRef slot = LLVMBuildInBoundsGEP2(state->builder, element_type,
+        data, &index, 1, "array.new.ragged.slot");
+    LLVMValueRef value = storage ? zero_object(state, storage) : empty;
+    if (!value || LLVMTypeOf(value) != element_type) return false;
+    LLVMBuildStore(state->builder, value, slot);
+    LLVMValueRef next = LLVMBuildAdd(state->builder, index,
+        LLVMConstInt(i64, 1, false), "array.new.ragged.next");
+    LLVMBasicBlockRef body_end = LLVMGetInsertBlock(state->builder);
+    LLVMBuildBr(state->builder, test);
+    LLVMValueRef incoming[] = {LLVMConstNull(i64), next};
+    LLVMBasicBlockRef from[] = {entry, body_end};
+    LLVMAddIncoming(index, incoming, from, 2);
+    LLVMPositionBuilderAtEnd(state->builder, done);
+    return true;
+}
+
 static LLVMValueRef
 new_array(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -4413,6 +4540,14 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
         : LLVMBuildGEP2(state->builder, i8, storage, &offset, 1,
                         "array.new.data");
     if (!data) return nullptr;
+    ir_annot_t *objects = ir_annot_get(&instruction->annots,
+                                       N00BB_ARRAY_ZERO_OBJECTS_KEY);
+    th_type *object_storage = objects && objects->kind == IR_ANNOT_TYPE
+        ? objects->t : nullptr;
+    if ((object_storage || th_kind_of(th_resolve(element)) == TH_SEQUENCE)
+        && !fill_new_slots(state, data, count, element, object_storage,
+                           element_type))
+        return nullptr;
     LLVMValueRef array = LLVMBuildInsertValue(state->builder,
         LLVMGetUndef(result_type), data, 0, "array.new.with.data");
     return LLVMBuildInsertValue(state->builder, array, storage, 1,
@@ -9898,6 +10033,21 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             state->failure_detail =
                 FAILURE_DETAIL("boxed reference read was not rewritten");
             break;
+        }
+        // A one-dimensional array field held inline (an object's, or a
+        // record's reached through a reference) is read whole as a new
+        // array of its elements, as `extract` reads one from a record value.
+        uint64_t inline_count = 0;
+        LLVMTypeRef inline_items = !instruction->n_mods
+            && th_kind_of(th_resolve(instruction->dest->type)) == TH_SEQUENCE
+            ? inline_index_base_type(state, operands[0].value, &inline_count)
+            : nullptr;
+        if (inline_items) {
+            LLVMValueRef items = LLVMBuildLoad2(state->builder, inline_items,
+                                                address, "field.inline.items");
+            result = array_from_inline(state, items, instruction->dest->type,
+                ir_value_shape(instruction->dest), 0);
+            return result && save_result(state, instruction, result);
         }
         th_type *storage = th_ind_referent(operands[0].value->type);
         if (uses_bitptr(state->function->owner,

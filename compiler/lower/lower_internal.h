@@ -1404,6 +1404,58 @@ bind_missing_external(ir_lower_context_t *context,
                       parse_sym_entry_t *symbol);
 
 bool
+n00bb_check_required_fields(n00bb_link_analysis_t *analysis);
+
+// Whether module variable `global`, an array with a declared size, has no
+// static storage: its size is only known when the program runs, or its
+// elements can't be zeroed statically (objects, which each need one). Its
+// module's initializer then allocates it.
+static inline bool
+n00bb_global_needs_runtime_array(const ir_global_t *global)
+{
+    ir_shape_storage_t storage;
+    return global && !global->has_static_initializer && global->shape
+        && ir_global_storage_duration(global) == IR_STORAGE_DURATION_MODULE
+        && ir_shape_storage(global->shape, &storage)
+        && storage.flat_prefix_rank;
+}
+
+bool
+n00bb_allocate_runtime_global(ir_lower_context_t *context,
+                              parse_sym_entry_t *symbol, ir_span_t span);
+
+// Whether the zero representation of `type` is one of its values, for code
+// in `site`: what an array's elements hold when it is created without a
+// value for them. When not, `*blame` is the type (it, or a part of it) whose
+// zero isn't a value.
+bool
+n00bb_zero_tolerant(core_translation_unit_t *site, th_type *type,
+                    th_type **blame, uint32_t depth);
+bool
+n00bb_check_zeroed_elements(ir_lower_context_t *context, th_type *element,
+                            ir_span_t span);
+ir_value_t *
+n00bb_emit_let_default_array(ir_lower_context_t *context, th_type *type,
+                             ir_span_t span);
+
+// The bounds of slice `contents` (`a:b`, `a until b`, `a to b`, with either
+// bound left out) as `__slice` and `__write_slice` take them: each an
+// `int?`, nil when left out, then whether `to` includes the end. Reports
+// constant bounds in the wrong order, and returns false. (Bounds outside an
+// array of known length are checked on the IR: n00bb_check_known_ranges.)
+bool
+n00bb_lower_slice_arguments(ir_lower_context_t *context,
+                            parse_grammar_t *grammar, parse_tree_t *contents,
+                            ir_value_t *arguments[3]);
+
+// The length of array `value`, in `function`, when it is known without
+// running the program: a declared size, a literal's, or the one every whole
+// assignment to the variable holding it gives.
+bool
+n00bb_static_array_length(const ir_func_t *function, const ir_value_t *value,
+                          uint64_t *length);
+
+bool
 n00bb_open_result_variable(ir_lower_context_t *context,
                            parse_sym_entry_t *function);
 

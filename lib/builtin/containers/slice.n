@@ -14,15 +14,66 @@ func __init(modify self: Slice['T], consume items: Array['T],
     self.end_ix = end_ix
 }
 
-func __slice(self: Array['T], start_ix: int, end_ix: int) -> Slice['T] {
-    let available: uint = __array_length(self)
-    if start_ix < 0 or start_ix > end_ix
-        or (cast[uint] end_ix) > available {
-        panic.index_out_of_range(end_ix, available, "an array")
+// A bound of a slice of something `length` long, as written: left out, it
+// is `missing` (the start or the end); negative, it counts from the end.
+func slice_bound(bound: int?, missing: int, length: uint) -> int {
+    if bound == nil {
+        return missing
     }
-    let count: uint = cast[uint](end_ix - start_ix)
+    var at: int = bound
+    if at < 0 {
+        at += cast[int] length
+    }
+    return at
+}
+
+// The end of a slice as written: `to` (inclusive) takes the end item too.
+func written_end(bound: int?, inclusive: bool, length: uint) -> int {
+    let at: int = slice_bound(bound, cast[int] length, length)
+    if inclusive and bound != nil {
+        return at + 1
+    }
+    return at
+}
+
+// A bound past either end of something `length` long stops there, as in
+// Python, so a slice reaching past the end just takes what there is.
+func clamp_bound(at: int, length: uint) -> int {
+    if at < 0 {
+        return 0
+    }
+    if cast[uint](at) > length {
+        return cast[int] length
+    }
+    return at
+}
+
+// Where a slice starts. Its start may not come after its end, which can
+// only be a mistake; that panics.
+func slice_start(start_ix: int?, end_ix: int?, inclusive: bool,
+                 length: uint, container: string) -> int {
+    let start: int = slice_bound(start_ix, 0, length)
+    let end: int = written_end(end_ix, inclusive, length)
+    if start > end {
+        panic.range_out_of_bounds(start, end, length, container)
+    }
+    return clamp_bound(start, length)
+}
+
+// Where a slice ends (exclusive).
+func slice_end(end_ix: int?, inclusive: bool, length: uint) -> int {
+    return clamp_bound(written_end(end_ix, inclusive, length), length)
+}
+
+func __slice(self: Array['T], start_ix: int?, end_ix: int?,
+             inclusive: bool) -> Slice['T] {
+    let available: uint = __array_length(self)
+    let start: int = slice_start(start_ix, end_ix, inclusive, available,
+                                 "an array")
+    let end: int = slice_end(end_ix, inclusive, available)
+    let count: uint = cast[uint](end - start)
     var copy: Array['T] = new[Array['T]](cast[int] count)
-    containers.array.copy_items(copy, 0, self, cast[uint] start_ix, count)
+    containers.array.copy_items(copy, 0, self, cast[uint] start, count)
     return new[Slice['T]](copy, 0, cast[int] count)
 }
 

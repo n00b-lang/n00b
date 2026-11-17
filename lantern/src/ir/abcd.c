@@ -1662,7 +1662,10 @@ zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
                              type, x.unbounded_min || y.unbounded_max,
                              x.unbounded_max || y.unbounded_min);
     case IR_OP_DIV:
-        if (!pair || x.seen.lo < 0 || y.seen.lo <= 0)
+        // An empty range (lo above hi) says nothing about the divisor, and
+        // dividing by its `hi` could divide by zero.
+        if (!pair || x.seen.lo < 0 || y.seen.lo <= 0
+            || y.seen.hi < y.seen.lo || x.seen.hi < x.seen.lo)
             return unknown_range(type);
         return derived_range((ir_interval_t){x.seen.lo / y.seen.hi,
                                              x.seen.hi / y.seen.lo},
@@ -1894,6 +1897,9 @@ trip_count(ir_abcd_t *a, ir_block_t *header, ir_block_t *latch,
         else if (!rising && (op == IR_OP_GT || op == IR_OP_GE))
             span = start.seen.hi - limit.seen.lo + (op == IR_OP_GE);
         else continue;
+        // The step is one constant, not 0 (checked above), so a falling loop
+        // counts down by its magnitude; the most negative step has none.
+        if (step.lo == ir_int_min) continue;
         ir_int_t stride = rising ? step.lo : -step.lo;
         if (limit.seen.hi == ir_int_max || limit.seen.lo == ir_int_min
             || start.seen.lo == ir_int_min || start.seen.hi == ir_int_max)
