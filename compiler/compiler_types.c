@@ -5554,7 +5554,7 @@ static bool coerces(void *context, th_type *to, th_type *from)
     if (th_is_nil(th_resolve(from))) {
         return n00bb_declared_flagset(index->analysis, to);
     }
-    if (n00bb_reference_views(from, to)) {
+    if (n00bb_reference_views(from, to) || n00bb_value_views(from, to)) {
         return true;
     }
     // A float widens to a wider float; f32 is the only narrower one.
@@ -7700,6 +7700,9 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                     CORE_STRING_STATIC("String_Syntax"));
     ty_declare_impl(solver,
                     th_array(types, th_name(types, CORE_STRING_STATIC("char"))),
+                    CORE_STRING_STATIC("String_Syntax"));
+    ty_declare_impl(solver,
+                    th_array(types, th_name(types, CORE_STRING_STATIC("byte"))),
                     CORE_STRING_STATIC("String_Syntax"));
     ty_declare_default(solver, CORE_STRING_STATIC("String_Syntax"),
                        th_name(types, CORE_STRING_STATIC("string")));

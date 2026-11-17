@@ -1284,6 +1284,10 @@ n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
                ir_span_t span);
 
 ir_value_t *
+n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
+                     core_string_t text, ir_span_t span);
+
+ir_value_t *
 n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,
                        parse_tree_t *node, ir_span_t span);
 

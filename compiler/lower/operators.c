@@ -1525,6 +1525,32 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     return ir_lower_set_node_value(context, visit->node, constant->dest);
 }
 
+// The reference `ref` makes to the place at `storage`; `text` is the
+// operand's source, for the escape check.
+ir_value_t *
+n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
+                     core_string_t text, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_instr_t *open = storage && lower
+        ? ir_lower_emit_instruction(context, IR_OP_DISPATCH, span) : nullptr;
+    ir_value_t *referenced = open && ir_lower_set_temp_dest(context, open,
+            CORE_STRING_STATIC("__n00bb_ref_"),
+            th_var(ir_module_types(context->module)))
+        && ir_instr_operand_name(open, N00BB_REF_METHOD)
+        && ir_instr_operand_fresh(open, storage)
+        // An address a reference type lends may only be passed straight
+        // to a call; rewrite checks how the `ref` is used once the
+        // reference types are known.
+        && ir_annot_set(lower->ir_context, &open->annots,
+               (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
+                            .kind = IR_ANNOT_STR,
+                            .s = ir_strdup(lower->ir_context, text)})
+        ? open->dest : nullptr;
+    if (referenced) n00bb_rewrite_later(context, open);
+    return referenced;
+}
+
 // The function `ref` names, when its operand names one (recorded by name
 // resolution); the operand is returned in `operand_out`.
 static parse_sym_entry_t *
@@ -1635,26 +1661,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             return false;
         }
         ir_value_t *referenced = storage;
-        if (!function_reference) {
-            ir_instr_t *open = ir_lower_emit_instruction(context,
-                IR_OP_DISPATCH, span);
-            referenced = open && ir_lower_set_temp_dest(context, open,
-                    CORE_STRING_STATIC("__n00bb_ref_"),
-                    th_var(ir_module_types(context->module)))
-                && ir_instr_operand_name(open, N00BB_REF_METHOD)
-                && ir_instr_operand_fresh(open, storage)
-                // An address a reference type lends may only be passed
-                // straight to a call; rewrite checks how the `ref` is used
-                // once the reference types are known.
-                && ir_annot_set(lower->ir_context, &open->annots,
-                       (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
-                                    .kind = IR_ANNOT_STR,
-                                    .s = ir_strdup(lower->ir_context,
-                                        source_text_of(lower->unit,
-                                                       operand))})
-                ? open->dest : nullptr;
-            if (referenced) n00bb_rewrite_later(context, open);
-        }
+        if (!function_reference)
+            referenced = n00bb_emit_reference(context, storage,
+                source_text_of(lower->unit, operand), span);
         if (!referenced
             || !ir_lower_set_node_value(context, visit->node, referenced)) {
             n00bb_operator_error(context, IR_DIAG_INTERNAL, span,

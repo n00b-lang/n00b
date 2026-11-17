@@ -491,7 +491,10 @@ n00bb_emit_char_array(ir_lower_context_t *context, const uint8_t *bytes,
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
         ? th_resolve(th_seq_elem(resolved)) : nullptr;
-    bool ok = n00bb_scalar_role_is(element_type, IR_ROLE_CHAR);
+    // An `Array[byte]` holds the literal's UTF-8 bytes; an `Array[char]`
+    // its code points.
+    bool bytewise = n00bb_scalar_role_is(element_type, IR_ROLE_BYTE);
+    bool ok = bytewise || n00bb_scalar_role_is(element_type, IR_ROLE_CHAR);
     if (length > UINT32_MAX) {
         return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
             N00B_TEXT_NOT_SUPPORTED_YET_A_CHARACTER,
@@ -501,8 +504,9 @@ n00bb_emit_char_array(ir_lower_context_t *context, const uint8_t *bytes,
         core_list_new(n00bb_ir_value_ptr_t);
     uint32_t position = 0;
     while (ok && position < length) {
-        int32_t codepoint = unicode_utf8_decode((const char *)bytes,
-            (uint32_t)length, &position);
+        int32_t codepoint = bytewise ? bytes[position++]
+            : unicode_utf8_decode((const char *)bytes, (uint32_t)length,
+                                  &position);
         if (codepoint < 0) {
             ok = false;
             break;
@@ -590,7 +594,8 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
         ? th_resolve(th_seq_elem(resolved)) : nullptr;
-    if (n00bb_scalar_role_is(element_type, IR_ROLE_CHAR)) {
+    if (n00bb_scalar_role_is(element_type, IR_ROLE_CHAR)
+        || n00bb_scalar_role_is(element_type, IR_ROLE_BYTE)) {
         ir_lower_result_t array = n00bb_emit_char_array(context,
             (const uint8_t *)decoded->data, decoded->byte_len, result_type,
             span);

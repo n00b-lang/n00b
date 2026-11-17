@@ -5465,6 +5465,25 @@ n00bb_reference_views(th_type *from, th_type *to)
         && th_same_type(th_ind_referent(from), item->type);
 }
 
+// A `P` passed where a `View[P]` is wanted is viewed in place, as if
+// written `ref p`.
+bool
+n00bb_value_views(th_type *from, th_type *to)
+{
+    from = from ? th_resolve(from) : nullptr;
+    to = to ? th_resolve(to) : nullptr;
+    core_string_t name = {};
+    size_t count = 0;
+    const th_arg *item = to && th_kind_of(to) == TH_NAMED
+        && th_named_info(to, &name, nullptr, &count) && count == 1
+        && core_string_eq(name,
+               CORE_STRING_STATIC("builtin.containers.view.View"))
+        ? th_named_arg(to, 0) : nullptr;
+    return item && item->kind == TH_ARG_TYPE && from
+        && th_kind_of(from) != TH_VAR && th_kind_of(from) != TH_INDIRECTION
+        && th_same_type(from, item->type);
+}
+
 static bool
 named_arguments_want_buffer(th_ctx *types, th_type *expected, th_type *actual)
 {

@@ -42,4 +42,46 @@ func inferred_option_var() -> int {
 }
 require inferred_option() == 2 and inferred_option_var() == 2
 
+# A string literal converts to `Array[byte]`, holding its UTF-8 bytes (#4).
+let greeting: Array[byte] = "hi"
+const hex_digits: Array[byte][16] = "0123456789abcdef"
+func byte_count(x: Array[byte]) -> uint {
+    return len(x)
+}
+func accented() -> uint {
+    let e: Array[byte] = "é!"
+    return len(e)
+}
+require len(greeting) == 2 and greeting[1] == 0x69
+require byte_count("abc") == 3 and hex_digits[15] == 0x66
+require accented() == 3
+
+# A `P` passed where a `View[P]` is wanted is viewed in place, as `ref p`
+# would be (#8): variables, fields and temporaries alike.
+record Style {
+    weight: int
+}
+record Boxed {
+    style: Style
+}
+const plain_style: Style = (weight = 1)
+func style_weight(s: View[Style]) -> int {
+    return s.__value.weight
+}
+func make_style(n: int) -> Style {
+    return (weight = n)
+}
+func viewed_local() -> int {
+    var s: Style = (weight = 1)
+    s.weight = 9
+    return style_weight(s)
+}
+func viewed_field() -> int {
+    let b: Boxed = (style = (weight = 4))
+    return style_weight(b.style)
+}
+require style_weight(plain_style) == 1 and style_weight(ref plain_style) == 1
+require viewed_local() == 9 and viewed_field() == 4
+require style_weight(make_style(7)) == 7
+
 __fd_write(2, "ok")

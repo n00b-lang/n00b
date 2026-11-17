@@ -720,6 +720,7 @@ static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
 bool n00bb_reference_views(th_type *from, th_type *to);
+bool n00bb_value_views(th_type *from, th_type *to);
 bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
                                         th_type *actual);
 parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
