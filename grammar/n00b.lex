@@ -21,7 +21,7 @@
 			"nil"))
 @lex-number(digits("0123456789"),
 	    sep("_"),
-	    point("leading"),
+	    point("leading", "trailing"),
 	    exp("eE"),
 	    sign("-"),
 	    sign_not_after("IDENTIFIER", "INT_LIT", "HEX_LIT", "FLOAT_LIT",
