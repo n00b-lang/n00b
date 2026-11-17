@@ -3387,14 +3387,10 @@ apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return ok;
 }
 
-// A trait the compiler provides without a declaration: `Equal`,
-// `Comparable` and the operator traits.
+// An operator trait, which the compiler provides without a declaration.
 static bool
 builtin_trait_name(core_string_t name)
 {
-    if (core_string_eq(name, CORE_STRING_STATIC("Equal"))
-        || core_string_eq(name, CORE_STRING_STATIC("Comparable")))
-        return true;
     for (size_t i = 0; i < n00bb_binary_operator_count; i++)
         if (core_string_eq(name, n00bb_binary_operators[i].trait)
             || core_string_eq(name, n00bb_binary_operators[i].in_place_trait))

@@ -997,14 +997,16 @@ missing_implementation(const n00bb_trait_binder_t *binder,
                selection->operands[1].name))
         return false;
     if (!report) return true;
+    // Messages name the trait as written, not by its qualified name.
+    core_string_t trait = n00bb_name_leaf(selection->operands[0].name);
     core_buffer_t used = {0};
-    core_buffer_append_string(&used, selection->operands[0].name);
+    core_buffer_append_string(&used, trait);
     core_buffer_putc(&used, '.');
     core_buffer_append_string(&used, selection->operands[1].name);
     locate_selection_failure(specializations, caller, selection, report);
     report->before = n00bb_print_type(types, receiver->type);
     report->after = core_string_dup(core_buffer_string(&used));
-    report->trait = core_string_dup(selection->operands[0].name);
+    report->trait = core_string_dup(trait);
     report->missing_implementation = true;
     core_buffer_release(&used);
     return true;

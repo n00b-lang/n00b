@@ -2,6 +2,7 @@
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "ir/summary.h"
+#include "qualified_names.h"
 
 static bool
 n00bb_builtin_init_function(parse_sym_entry_t *symbol);
@@ -1145,25 +1146,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         symtab, CORE_STRING_STATIC("builtin"));
     parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                              values->root);
-    static const core_string_t comparison_traits[] = {
-        CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("Comparable"),
-    };
-    for (size_t i = 0; i < sizeof(comparison_traits)
-             / sizeof(comparison_traits[0]); i++) {
-        core_string_t name = comparison_traits[i];
-        parse_sym_entry_t *trait = parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), name, PARSE_SYM_TYPEDEF, nullptr);
-        if (!trait || !parse_sym_set_binding(trait,
-                CORE_STRING_STATIC("n00bb.builtin-type"), trait)) return false;
-        trait->type = th_name(types, comparison_traits[i]);
-        trait->adt_kind = CORE_STRING_STATIC("trait");
-        parse_symtab_push_scope(symtab, CORE_STRING_STATIC("builtin"), name);
-        trait->member_scope = parse_symtab_current_scope(symtab,
-            CORE_STRING_STATIC("builtin"));
-        trait->member_scope->scope_tag = CORE_STRING_STATIC("trait");
-        parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
-                                 values->root);
-    }
     parse_sym_entry_t *symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("has_type"),
         PARSE_SYM_FUNCTION, nullptr);
@@ -1562,9 +1544,9 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
         core_string_t method;
         core_string_t result;
     } operators[] = {
-        {CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+        {N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
          CORE_STRING_STATIC("bool")},
-        {CORE_STRING_STATIC("Comparable"), CORE_STRING_STATIC("__cmp"),
+        {N00BB_COMPARABLE_TRAIT, CORE_STRING_STATIC("__cmp"),
          CORE_STRING_STATIC("Comparison")},
     };
     th_type *comparison = th_name(types, CORE_STRING_STATIC("Comparison"));
@@ -1582,29 +1564,13 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
         || !th_env_register_type_shape(environment,
             CORE_STRING_STATIC("Comparison"),
             TH_ENV_TYPE_SHAPE_ENUM, shape)) return false;
+    // The traits themselves are declared in lib/builtin/compare.n; the
+    // built-in scalar types' implementations are registered here.
     for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
-        th_type *receiver = th_var(types);
-        th_type *argument = th_var(types);
         th_type *result = th_name(types, operators[o].result);
-        th_param parameters[] = {
-            {.mode = TH_VIEW, .type = receiver},
-            {.mode = TH_VIEW, .type = argument},
-        };
-        th_type *contract = th_func_with_error(types, result,
-            th_name(types, CORE_STRING_STATIC("nil")), parameters, 2, nullptr, nullptr, 0);
-        th_member method = {
-            .name = operators[o].method,
-            .type = contract,
-        };
-        th_type *methods = method.type
-            ? th_trait(types, operators[o].trait, &method, 1, nullptr, 0)
-            : nullptr;
-        if (!methods || !th_env_register_trait_contracts(environment,
-                operators[o].trait, CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC,
-                methods)) return false;
         size_t ordered_count = sizeof(numeric_types) / sizeof(numeric_types[0]);
         bool equal_trait = core_string_eq(operators[o].trait,
-                                          CORE_STRING_STATIC("Equal"));
+                                          N00BB_EQUAL_TRAIT);
         size_t equality_count = equal_trait
             ? sizeof(equality_types) / sizeof(equality_types[0]) : 0;
         for (size_t n = 0; n < ordered_count + equality_count; n++) {
@@ -1619,8 +1585,9 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
                 th_name(types, CORE_STRING_STATIC("nil")), primitive_params, 2,
                 nullptr, nullptr, 0);
             core_buffer_t qualified = {0};
+            core_string_t label = n00bb_name_leaf(operators[o].trait);
             core_buffer_printf(&qualified, "builtins.%.*s.%.*s.%.*s",
-                (int)operators[o].trait.u8_bytes, operators[o].trait.data,
+                (int)label.u8_bytes, label.data,
                 (int)name.u8_bytes, name.data,
                 (int)operators[o].method.u8_bytes, operators[o].method.data);
             bool registered = signature && qualified.data

@@ -30,6 +30,9 @@
 #define N00BB_RESULT_KEY CORE_STRING_STATIC("n00bb.result")
 #define N00BB_CASE_METHOD CORE_STRING_STATIC("__is")
 #define N00BB_REF_METHOD CORE_STRING_STATIC("__ref")
+// The equality and ordering traits, declared in lib/builtin/compare.n.
+#define N00BB_EQUAL_TRAIT CORE_STRING_STATIC("builtin.compare.Equal")
+#define N00BB_COMPARABLE_TRAIT CORE_STRING_STATIC("builtin.compare.Comparable")
 ir_instr_t *n00bb_declared_result_default(ir_instr_t *write);
 core_diag_location_t n00bb_name_location(core_translation_unit_t *unit,
                                          ir_span_t span, core_string_t name);

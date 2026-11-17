@@ -1,3 +1,4 @@
+import compare
 import hashing
 import containers.hash_index
 import containers.slice
@@ -230,7 +231,7 @@ func snapshot_entries(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
 func compare_key(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
     let key: 'K = left.key
     typecase key {
-        case Comparable {
+        case compare.Comparable {
         return key.__cmp(right.key)
     }
         else {
@@ -244,7 +245,7 @@ func compare_key(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
 func compare_value(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
     let value: 'V = left.value
     typecase value {
-        case Comparable {
+        case compare.Comparable {
         return value.__cmp(right.value)
     }
         else {

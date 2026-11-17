@@ -4366,7 +4366,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 th_env_method_t selected = {0};
                 bool custom_equal = candidate &&
                     th_env_method_resolve(probe, candidate,
-                        CORE_STRING_STATIC("Equal"),
+                        N00BB_EQUAL_TRAIT,
                         CORE_STRING_STATIC("__equal"), &selected)
                         == TH_ENV_METHOD_FOUND;
                 bool custom_hash = hash_available && candidate &&
@@ -4378,7 +4378,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 // `__cmp`, and a hash of the fields would disagree with it.
                 bool custom_cmp = !custom_equal && candidate &&
                     th_env_method_resolve(probe, candidate,
-                        CORE_STRING_STATIC("Comparable"),
+                        N00BB_COMPARABLE_TRAIT,
                         CORE_STRING_STATIC("__cmp"), &selected)
                         == TH_ENV_METHOD_FOUND;
                 custom_equal = custom_equal || custom_cmp;
@@ -4388,7 +4388,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                     && (scalar || object
                         || (record && record_default_fields_support(
                         probe, state->types, receiver,
-                        CORE_STRING_STATIC("Equal"),
+                        N00BB_EQUAL_TRAIT,
                         CORE_STRING_STATIC("__equal"), &visiting)));
                 bool derive_hash = hash_available && !custom_equal
                     && !custom_hash

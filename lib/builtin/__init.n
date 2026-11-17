@@ -7,6 +7,7 @@ import containers.slice
 import containers.view
 import containers.buffer
 import containers.errors
+import compare
 import cursor
 import hashing
 import integer
@@ -217,6 +218,8 @@ package builtin {
     export containers.errors.Container_Err
     export cursor.Cursor
     export cursor.Lease_Cursor
+    export compare.Equal
+    export compare.Comparable
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup

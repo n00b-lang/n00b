@@ -78,7 +78,7 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     if (item) {
         th_env_method_t inner = {0};
         if (th_env_method_resolve(state->types, item,
-                CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
                 &inner) != TH_ENV_METHOD_FOUND
             || (inner.error_type && !th_is_nil(inner.error_type)))
             return false;
@@ -158,7 +158,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
                 &selected) != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))

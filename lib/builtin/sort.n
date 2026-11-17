@@ -1,3 +1,4 @@
+import compare
 import panic
 import string.core
 
