@@ -121,4 +121,20 @@ func atomic_bits() -> u8 {
 }
 require atomic_updates() == 13 and atomic_bits() == 2
 
+# Chained operators in a generic function specialize to primitive
+# operations, `i:N` and `u:N` included (#41).
+func chained(a: 'T, b: 'T) -> 'T {
+    return ((a * b + a - b) / b) % a
+}
+func flipped_sum(a: 'T, b: 'T) -> 'T {
+    return ~(a + b)
+}
+let chain_i: i:10 = 3
+let chain_j: i:10 = 4
+let chain_u: u16 = 5
+let chain_v: u16 = 2
+require chained(chain_i, chain_j) == cast[i:10](2)
+require chained(chain_u, chain_v) == 1
+require flipped_sum(cast[u:10](1), cast[u:10](2)) == cast[u:10](1020)
+
 __fd_write(2, "ok")

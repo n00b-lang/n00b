@@ -1156,16 +1156,22 @@ lower_primitive_trait_call(const n00bb_trait_binder_t *binder,
                 ? ir_value_replacement(&replacements,
                                        ir_operand_value(&call->operands[2]))
                 : nullptr;
+            // A result still typed by the requirement's open signature is
+            // the receiver's type, so an operator applied to it is lowered
+            // in turn (`a + b + a`).
+            th_type *result = th_is_closed(ir_module_types(module),
+                                           call->dest->type)
+                ? call->dest->type : receiver->type;
             ir_value_t *value = flagset
                 ? n00bb_emit_flagset_operator(&context, method,
-                                              call->dest->type, left, right,
+                                              result, left, right,
                                               call->span)
                 : compare
                 ? right ? n00bb_emit_three_way(&context, call->dest->type,
                                                members, left, right,
                                                call->span)
                         : nullptr
-                : n00bb_emit_primitive(&context, method, call->dest->type,
+                : n00bb_emit_primitive(&context, method, result,
                                        left, right, call->span);
             ok = value != nullptr;
             while (ok && scratch->n_instrs)
