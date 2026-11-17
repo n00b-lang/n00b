@@ -21,6 +21,42 @@ record Picked {
     count:  uint
 }
 
+// Walks a set's items in insertion order. `for item in set` yields each
+// item, not the (item, nil) pair its dictionary would.
+record Set_Cursor {
+    lease: containers.lease.Lease[containers.dict.Entry['T, nil]]
+    end:   uint
+    index: uint
+}
+
+func __iterator(self: Set['T]) -> Set_Cursor['T] {
+    return new[Set_Cursor['T]](ref self.entries, self.index.used)
+}
+
+func __init(modify self: Set_Cursor['T],
+            consume lease: containers.lease.Lease[containers.dict.Entry['T, nil]],
+            end: uint) {
+    self.lease = lease
+    self.end = end
+    self.index = 0
+}
+
+func __next(modify self: Set_Cursor['T]) -> 'T? {
+    while self.index < self.end {
+        let entry: containers.dict.Entry['T, nil] = self.lease.__value[self.index]
+        self.index += 1
+        if entry.live {
+            return entry.key
+        }
+    }
+    containers.lease.release(self.lease)
+    return nil
+}
+
+func __cleanup(consume self: Set_Cursor['T]) {
+    containers.lease.release(self.lease)
+}
+
 // Whether entry `at` of a set's storage holds an item.
 inline func holds(view self: Set['T], at: uint) -> bool {
     return !containers.hash_index.is_dead(ref self.index, at)

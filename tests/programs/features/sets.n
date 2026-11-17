@@ -71,4 +71,28 @@ let words: Set[string] = {"a", "b"}
 var more = words | {"c"}
 require more.len() == 3 and more.items().len() == 3
 require more.add("d") and !more.add("a") and more.len() == 4
+
+// Iterating a set yields its items, in insertion order, skipping removed
+// ones; a dictionary still yields its pairs.
+var walked: List[string] = []
+for item in more {
+    walked.append(item)
+}
+require walked.len() == 4 and walked[0] == "a" and walked[3] == "d"
+
+func summed(items: Set[int]) -> int {
+    var sum = 0
+    for n in items {
+        sum += n
+    }
+    return sum
+}
+
+var counted: Set[int] = {1, 2, 3, 4}
+counted -= {2}
+require summed(counted) == 8 and summed(none) == 0
+let pairs: Dict[string, int] = {"x": 1}
+for key, value in pairs {
+    require key == "x" and value == 1
+}
 __fd_write(2, "ok")

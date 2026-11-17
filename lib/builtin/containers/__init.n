@@ -47,6 +47,8 @@ package containers.set {
     export containers.set.set
     export containers.set.add
     export containers.set.items
+    export containers.set.Set_Cursor
+    export containers.set.__iterator
     export containers.set.union
     export containers.set.intersection
     export containers.set.difference
