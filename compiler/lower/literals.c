@@ -491,10 +491,7 @@ n00bb_emit_char_array(ir_lower_context_t *context, const uint8_t *bytes,
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
         ? th_resolve(th_seq_elem(resolved)) : nullptr;
-    // An `Array[byte]` holds the literal's UTF-8 bytes; an `Array[char]`
-    // its code points.
-    bool bytewise = n00bb_scalar_role_is(element_type, IR_ROLE_BYTE);
-    bool ok = bytewise || n00bb_scalar_role_is(element_type, IR_ROLE_CHAR);
+    bool ok = n00bb_scalar_role_is(element_type, IR_ROLE_CHAR);
     if (length > UINT32_MAX) {
         return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
             N00B_TEXT_NOT_SUPPORTED_YET_A_CHARACTER,
@@ -504,9 +501,8 @@ n00bb_emit_char_array(ir_lower_context_t *context, const uint8_t *bytes,
         core_list_new(n00bb_ir_value_ptr_t);
     uint32_t position = 0;
     while (ok && position < length) {
-        int32_t codepoint = bytewise ? bytes[position++]
-            : unicode_utf8_decode((const char *)bytes, (uint32_t)length,
-                                  &position);
+        int32_t codepoint = unicode_utf8_decode((const char *)bytes,
+            (uint32_t)length, &position);
         if (codepoint < 0) {
             ok = false;
             break;
@@ -594,13 +590,33 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
         ? th_resolve(th_seq_elem(resolved)) : nullptr;
-    if (n00bb_scalar_role_is(element_type, IR_ROLE_CHAR)
-        || n00bb_scalar_role_is(element_type, IR_ROLE_BYTE)) {
+    if (n00bb_scalar_role_is(element_type, IR_ROLE_CHAR)) {
         ir_lower_result_t array = n00bb_emit_char_array(context,
             (const uint8_t *)decoded->data, decoded->byte_len, result_type,
             span);
         core_buffer_free(decoded);
         return array;
+    }
+    // An `Array[byte]` copies the literal's UTF-8 bytes out of the string
+    // constant in one block (`__byte_array` in builtin.string.core).
+    if (n00bb_scalar_role_is(element_type, IR_ROLE_BYTE)) {
+        th_type *string = th_name(ir_module_types(context->module),
+                                  CORE_STRING_STATIC("string"));
+        ir_instr_t *text = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+        ok = text && ir_lower_set_temp_dest(context, text,
+                CORE_STRING_STATIC("__n00bb_"), string)
+            && ir_instr_set_const_bytes(text,
+                   (const uint8_t *)decoded->data, decoded->byte_len);
+        core_buffer_free(decoded);
+        ir_value_t *source = ok ? text->dest : nullptr;
+        ir_value_t *bytes = source
+            ? n00bb_dispatch(context, CORE_STRING_STATIC("__byte_array"),
+                             &source, 1, result_type, span)
+            : nullptr;
+        return bytes ? (ir_lower_result_t){IR_LOWER_VALUE, bytes}
+                     : lower_internal(context, span,
+                                      "could not copy a literal's bytes");
     }
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                         span);
