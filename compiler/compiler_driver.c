@@ -38,6 +38,7 @@ double n00bb_profile_seconds(void);
 #include "abi_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
+#include "static_branches.h"
 #include "abi_semantics.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
@@ -4888,8 +4889,17 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
             || (i >= emitted
                 && !ir_summary_known(analysis->summaries, function)))
             continue;
+        // A folded branch can leave the only writes of a value that decides
+        // another branch in blocks no path reaches (a `with` manager's exit
+        // reason, say), so folding goes on once those blocks are gone.
+        for (;;) {
+            size_t scope = ir_analysis_scope_begin();
+            uint32_t folded = ir_abcd_fold(function);
+            ir_analysis_scope_end(scope);
+            if (!folded) break;
+            n00bb_drop_unreachable_blocks(function);
+        }
         size_t scope = ir_analysis_scope_begin();
-        (void)ir_abcd_fold(function);
         (void)ir_abcd_hoist(function);
         ir_analysis_scope_end(scope);
     }

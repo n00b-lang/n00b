@@ -445,22 +445,40 @@ typedef struct {
 
 core_list_decl(n00bb_try_frame_t);
 
-// One manager of a `with` statement. Its `__exit` runs on every way out of
-// the body, given `value` (what its `__enter` returned); while lowering is
-// in the body, the item is the handler a body failure goes to (`failed`,
-// with the failure stored in `error`), and `__exit` may drop it,
-// continuing at `after`.
+// One manager of a `with` statement. Every way out of its body goes through
+// its one `exit` block, having set `reason`: N00BB_WITH_FALLTHROUGH, or
+// N00BB_WITH_FAILURE (with the failure stored in `error`), or, for a
+// `return`, `break` or `continue` leaving through it, the index of the
+// block in `resumes` that goes on from there, plus N00BB_WITH_RESUMES. The
+// exit block runs `__exit` once, given `value` (what `__enter` returned),
+// and continues as `reason` says.
 typedef struct {
     parse_tree_t *node;
     ir_local_t *manager;
     ir_value_t *value;
-    ir_local_t *error;
-    ir_block_t *failed;
-    ir_block_t *after;
+    // What `__exit` is given as `failure`: written on every way out of the
+    // body, so the exit block always has it.
+    th_type *failure_type;
+    ir_local_t *failure;
+    // What a `return` in the body returns, kept across the exit blocks. It
+    // is `nil` from the manager's entry, so every path has written it.
+    th_type *result_type;
+    ir_local_t *result;
+    ir_local_t *reason;
+    ir_block_t *exit;
+    core_list_t(n00bb_ir_block_ptr_t) resumes;
     uint64_t order;
     bool in_body;
+    bool fallthrough;
     bool failure_reachable;
+    bool carries_result;
 } n00bb_with_item_t;
+
+enum {
+    N00BB_WITH_FALLTHROUGH = 0,
+    N00BB_WITH_FAILURE = 1,
+    N00BB_WITH_RESUMES = 2,
+};
 
 core_list_decl(n00bb_with_item_t);
 
@@ -1118,6 +1136,13 @@ n00bb_emit_scoped_success(ir_lower_context_t *context,
 
 bool
 n00bb_emit_with_success(ir_lower_context_t *context, parse_tree_t *exit_node);
+
+bool
+n00bb_emit_with_success_carrying(ir_lower_context_t *context,
+                                 parse_tree_t *exit_node, ir_value_t **value);
+
+void
+n00bb_free_with_frame(n00bb_with_frame_t *frame);
 
 bool
 n00bb_emit_with_failure(ir_lower_context_t *context, parse_tree_t *exit_node);

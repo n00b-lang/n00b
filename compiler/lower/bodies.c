@@ -787,9 +787,8 @@ cleanup:
     core_list_free(lower_data.typecases);
     core_list_free(lower_data.value_blocks);
     core_list_free(lower_data.tries);
-    for (size_t w = 0; w < lower_data.withs.len; w++) {
-        core_list_free(lower_data.withs.data[w].items);
-    }
+    for (size_t w = 0; w < lower_data.withs.len; w++)
+        n00bb_free_with_frame(&lower_data.withs.data[w]);
     core_list_free(lower_data.withs);
     core_list_free(lower_data.default_params);
     for (size_t i = 0; i < lower_data.tuple_parts.len; i++) {

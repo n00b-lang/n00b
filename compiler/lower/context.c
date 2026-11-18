@@ -10,13 +10,16 @@
 // dispatched like any method call, and either may fail. A manager is
 // entered after the managers to its left, and exited before them.
 //
-// While the body is being lowered, each manager is a failure handler, like
-// a `try`: a body failure stores its value in the manager's error local and
-// jumps to the manager's `failed` block, which calls `__exit` with it. When
+// Each manager has one exit block, the only place its `__exit` is called.
+// Every way out of the body (running off its end, a failure, `return`,
+// `break` or `continue`) sets the manager's reason local and jumps there;
+// the exit block calls `__exit` and goes on by the reason. While the body
+// is being lowered, each manager is a failure handler, like a `try`: a body
+// failure is kept in the manager's error local and given to `__exit`. When
 // `__exit` returns `true` the failure is dropped, and the program continues
-// after the manager's exit (`after`); otherwise the failure goes on to the
-// handler outside the manager. A failure of `__enter` or `__exit` itself
-// goes to the handlers outside that manager.
+// after the manager; otherwise the failure goes on to the handler outside
+// it. A failure of `__enter` or `__exit` itself goes to the handlers outside
+// that manager.
 
 static bool
 with_cleanups_before(ir_lower_context_t *context, parse_tree_t *exit_node,
@@ -188,31 +191,85 @@ n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
          : *with_item ? (*with_item)->order : 0;
 }
 
+static ir_local_t *
+with_local(ir_lower_context_t *context, const char *role, th_type *type)
+{
+    char buffer[48];
+    ir_local_t *local = ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_with_%s_%llu",
+                          role, (unsigned long long)context->next_value_id++),
+        type);
+    if (local) local->synthetic = true;
+    return local;
+}
+
+static ir_value_t *
+with_reason_value(ir_lower_context_t *context, uint64_t reason,
+                  ir_span_t span)
+{
+    th_type *uint_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("uint"));
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    return constant && ir_lower_set_temp_dest(context, constant,
+            CORE_STRING_STATIC("__n00bb_with_reason_"), uint_type)
+        && ir_instr_operand_uint(constant, reason)
+        ? constant->dest : nullptr;
+}
+
+// Leaves `item`'s body for its exit block, saying why, with the failure
+// when it is leaving because of one.
+static bool
+with_jump_to_exit(ir_lower_context_t *context, n00bb_with_item_t *item,
+                  uint64_t reason, ir_value_t *error, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!item->exit)
+        item->exit = n00bb_branch_block(context, lower, "with_exit");
+    th_type *option = th_option(ir_module_types(context->module),
+                                item->failure_type);
+    ir_value_t *failure = n00bb_emit_wrapping(context,
+        error ? IR_OP_OPTION_SOME : IR_OP_OPTION_NONE, error, option, span);
+    ir_value_t *value = failure && item->exit
+        ? with_reason_value(context, reason, span) : nullptr;
+    if (!value || !n00bb_emit_local_write(context, item->failure, failure, span)
+        || !n00bb_emit_local_write(context, item->reason, value, span)
+        || !n00bb_emit_jump(context, item->exit, span)) {
+        lower_internal(context, span, "could not leave a `with` block");
+        return false;
+    }
+    context->reachable = false;
+    return true;
+}
+
+// A `return`, `break` or `continue` leaves through `item`'s exit block and
+// goes on from a block of its own, where lowering continues.
+static bool
+with_leave_through(ir_lower_context_t *context, n00bb_with_item_t *item,
+                   ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_block_t *resume = n00bb_branch_block(context, lower, "with_resume");
+    if (!resume
+        || !with_jump_to_exit(context, item,
+               N00BB_WITH_RESUMES + item->resumes.len, nullptr, span))
+        return false;
+    core_list_push(item->resumes, resume);
+    context->block = resume;
+    context->reachable = true;
+    return true;
+}
+
 bool
 n00bb_route_with_failure(ir_lower_context_t *context, n00bb_with_item_t *item,
                          ir_value_t *error, ir_span_t span)
 {
-    n00bb_lower_context_t *lower = context->user;
-    if (!item->failed)
-        item->failed = n00bb_branch_block(context, lower, "with_failed");
-    if (!item->error && item->failed) {
-        char buffer[48];
-        item->error = ir_local_add(context->function,
-            n00bb_format_name(buffer, sizeof(buffer),
-                "__n00bb_with_error_%llu",
-                (unsigned long long)context->next_value_id++),
-            error->type);
-        if (item->error) item->error->synthetic = true;
-    }
-    if (!item->failed || !item->error
-        || !n00bb_emit_local_write(context, item->error, error, span)
-        || !n00bb_emit_jump(context, item->failed, span)) {
+    if (!with_jump_to_exit(context, item, N00BB_WITH_FAILURE, error, span)) {
         lower_internal(context, span,
                        "could not send a failure to its `with` manager");
         return false;
     }
     item->failure_reachable = true;
-    context->reachable = false;
     return true;
 }
 
@@ -256,9 +313,9 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
             continue;
         }
         before = with_item->order;
-        if (!with_exit(context, with_item, exit_node, nullptr, nullptr))
+        if (!with_leave_through(context, with_item,
+                                lower_span_for_tree(context, exit_node)))
             return false;
-        if (!context->reachable) break;
     }
     return true;
 }
@@ -377,21 +434,70 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
     }
 
+    th_ctx *types = ir_module_types(context->module);
+    th_type *failure_type = th_var(types);
+    th_type *result_type = th_var(types);
     n00bb_with_item_t item = {
         .node = visit->node,
         .manager = manager,
         .value = entered,
+        .failure_type = failure_type,
+        .failure = with_local(context, "failure",
+                              th_option(types, failure_type)),
+        .result_type = result_type,
+        .result = with_local(context, "result", th_option(types, result_type)),
+        .reason = with_local(context, "reason",
+            n00bb_ir_builtin_type(context->module,
+                                  CORE_STRING_STATIC("uint"))),
         .order = ++lower->next_control_order,
+        .resumes = core_list_new(n00bb_ir_block_ptr_t),
         .in_body = true,
     };
+    ir_value_t *no_result = item.result
+        ? n00bb_emit_wrapping(context, IR_OP_OPTION_NONE, nullptr,
+                              item.result->type, span) : nullptr;
+    if (!item.failure || !item.reason || !no_result
+        || !n00bb_emit_local_write(context, item.result, no_result, span)) {
+        lower_internal(context, span, "could not enter a `with` manager");
+        return false;
+    }
     core_list_push(frame->items, item);
     return true;
 }
 
-// Leaves the managers innermost first. Each one's `__exit` runs on the
-// path that reached the end of the body, and again in its failure handler;
-// a dropped failure continues where the fallthrough path does, after that
-// manager's exit.
+// Goes on from `item`'s exit block to the block for its reason.
+static bool
+with_dispatch_reason(ir_lower_context_t *context, n00bb_with_item_t *item,
+                     ir_block_t **targets, size_t count, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    size_t last = count;
+    while (last > 0 && !targets[last - 1]) last--;
+    for (size_t reason = 0; reason + 1 < last; reason++) {
+        if (!targets[reason]) continue;
+        ir_value_t *current = n00bb_emit_local_read(context, item->reason,
+                                                    span);
+        ir_value_t *wanted = current
+            ? with_reason_value(context, reason, span) : nullptr;
+        ir_value_t *hit = wanted
+            ? n00bb_emit_binary_ir(context, IR_OP_EQ, bool_type, current,
+                                   wanted, span) : nullptr;
+        ir_block_t *next = n00bb_branch_block(context, lower, "with_reason");
+        if (!hit || !next
+            || !n00bb_emit_branch(context, hit, targets[reason], next, span))
+            return false;
+        context->block = next;
+    }
+    return last && n00bb_emit_jump(context, targets[last - 1], span);
+}
+
+// Leaves the managers innermost first. Every way out of a manager's body
+// sets its reason local and jumps to its one exit block, which calls
+// `__exit` and goes on by the reason: after the manager when the body ran
+// off its end or `__exit` dropped a failure, out to the next handler when
+// it didn't, or back to the `return`, `break` or `continue` that left.
 static bool
 with_leave(ir_lower_context_t *context, n00bb_with_frame_t *frame,
            parse_tree_t *source)
@@ -401,57 +507,129 @@ with_leave(ir_lower_context_t *context, n00bb_with_frame_t *frame,
     for (size_t i = frame->items.len; i > 0; i--) {
         n00bb_with_item_t *item = &frame->items.data[i - 1];
         item->in_body = false;
-        // Made only when a path continues past this manager.
-        item->after = nullptr;
         if (context->reachable) {
-            if (!with_exit(context, item, item->node, nullptr, nullptr))
+            item->fallthrough = true;
+            if (!with_jump_to_exit(context, item, N00BB_WITH_FALLTHROUGH,
+                                   nullptr, span))
                 return false;
-            if (context->reachable) {
-                item->after = n00bb_branch_block(context, lower,
-                                                 "with_after");
-                if (!item->after
-                    || !n00bb_emit_jump(context, item->after, span))
-                    return false;
-            }
         }
-        if (item->failure_reachable) {
-            context->block = item->failed;
+        // With no failure to give it, `__exit` gets its default.
+        if (!item->failure_reachable)
+            (void)th_var_bind(item->failure_type,
+                              th_nil(ir_module_types(context->module)));
+        if (!item->carries_result)
+            (void)th_var_bind(item->result_type,
+                              th_nil(ir_module_types(context->module)));
+        if (!item->exit) {
+            context->reachable = false;
+            continue;
+        }
+        context->block = item->exit;
+        context->reachable = true;
+        ir_value_t *failure = item->failure_reachable
+            ? n00bb_emit_local_read(context, item->failure, span) : nullptr;
+        ir_value_t *swallowed = nullptr;
+        if ((item->failure_reachable && !failure)
+            || !with_exit(context, item, item->node, failure, &swallowed))
+            return false;
+        if (!context->reachable) continue;
+        ir_block_t *after = item->fallthrough || item->failure_reachable
+            ? n00bb_branch_block(context, lower, "with_after") : nullptr;
+        size_t count = N00BB_WITH_RESUMES + item->resumes.len;
+        ir_block_t **targets = core_alloc_array(ir_block_t *, count);
+        targets[N00BB_WITH_FALLTHROUGH] = item->fallthrough ? after : nullptr;
+        ir_block_t *failed = item->failure_reachable
+            ? n00bb_branch_block(context, lower, "with_failed") : nullptr;
+        targets[N00BB_WITH_FAILURE] = failed;
+        for (size_t r = 0; r < item->resumes.len; r++)
+            targets[N00BB_WITH_RESUMES + r] = item->resumes.data[r];
+        bool ok = with_dispatch_reason(context, item, targets, count, span);
+        core_free(targets);
+        if (!ok) {
+            lower_internal(context, span, "could not leave a `with` block");
+            return false;
+        }
+        if (failed) {
+            ir_block_t *rethrow = n00bb_branch_block(context, lower,
+                                                     "with_rethrow");
+            context->block = failed;
             context->reachable = true;
-            ir_value_t *failure = n00bb_emit_local_read(context, item->error,
-                                                        span);
-            ir_value_t *swallowed = nullptr;
-            if (!failure
-                || !with_exit(context, item, item->node, failure,
-                              &swallowed))
+            if (!rethrow
+                || !n00bb_emit_branch(context, swallowed, after, rethrow,
+                                      span))
                 return false;
-            if (context->reachable) {
-                if (!item->after)
-                    item->after = n00bb_branch_block(context, lower,
-                                                     "with_after");
-                ir_block_t *rethrow = n00bb_branch_block(context, lower,
-                                                         "with_rethrow");
-                if (!item->after || !rethrow
-                    || !n00bb_emit_branch(context, swallowed, item->after,
-                                          rethrow, span))
-                    return false;
-                context->block = rethrow;
-                context->reachable = true;
-                ir_value_t *again = n00bb_emit_local_read(context,
-                                                          item->error, span);
-                if (!again
-                    || !with_propagate(context, source, again, span,
-                                       item->order,
-                                       N00B_TEXT_PHRASE_THIS_WITH_BLOCK))
-                    return false;
-            }
+            context->block = rethrow;
+            ir_value_t *held = n00bb_emit_local_read(context, item->failure,
+                                                     span);
+            ir_instr_t *get = held
+                ? ir_lower_emit_instruction(context, IR_OP_OPTION_GET, span)
+                : nullptr;
+            ir_value_t *again = get && ir_lower_set_temp_dest(context, get,
+                    CORE_STRING_STATIC("__n00bb_with_error_"),
+                    item->failure_type)
+                && ir_instr_operand_value(get, held) ? get->dest : nullptr;
+            if (!again
+                || !with_propagate(context, source, again, span, item->order,
+                                   N00B_TEXT_PHRASE_THIS_WITH_BLOCK))
+                return false;
         }
-        if (item->after) {
-            context->block = item->after;
+        if (after) {
+            context->block = after;
             context->reachable = true;
         }
         else context->reachable = false;
     }
     return true;
+}
+
+void
+n00bb_free_with_frame(n00bb_with_frame_t *frame)
+{
+    for (size_t i = 0; i < frame->items.len; i++)
+        core_list_free(frame->items.data[i].resumes);
+    core_list_free(frame->items);
+}
+
+// A `return` or a function's value body gives a value computed in the body
+// of a `with`, but returns it after leaving through the managers' exit
+// blocks, so the value is kept across them in the outermost manager's
+// result.
+bool
+n00bb_emit_with_success_carrying(ir_lower_context_t *context,
+                                 parse_tree_t *exit_node, ir_value_t **value)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_with_item_t *outermost = nullptr;
+    for (size_t i = 0; i < lower->withs.len; i++) {
+        n00bb_with_frame_t *frame = &lower->withs.data[i];
+        for (size_t j = 0; frame->active && j < frame->items.len; j++) {
+            n00bb_with_item_t *item = &frame->items.data[j];
+            if (item->in_body && (!outermost || item->order < outermost->order))
+                outermost = item;
+        }
+    }
+    if (!outermost || !*value)
+        return n00bb_emit_with_success(context, exit_node);
+    ir_span_t span = lower_span_for_tree(context, exit_node);
+    ir_value_t *kept = n00bb_emit_wrapping(context, IR_OP_OPTION_SOME, *value,
+                                           outermost->result->type, span);
+    if (!kept || !n00bb_emit_local_write(context, outermost->result, kept,
+                                         span))
+        return false;
+    outermost->carries_result = true;
+    th_type *result_type = outermost->result_type;
+    ir_local_t *result = outermost->result;
+    // Leaving may move the frames `outermost` points into.
+    if (!n00bb_emit_with_success(context, exit_node)) return false;
+    if (!context->reachable) return true;
+    ir_value_t *held = n00bb_emit_local_read(context, result, span);
+    ir_instr_t *get = held
+        ? ir_lower_emit_instruction(context, IR_OP_OPTION_GET, span)
+        : nullptr;
+    *value = get && ir_lower_set_temp_dest(context, get,
+            CORE_STRING_STATIC("__n00bb_with_result_"), result_type)
+        && ir_instr_operand_value(get, held) ? get->dest : nullptr;
+    return *value != nullptr;
 }
 
 bool
@@ -479,7 +657,7 @@ n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
         return false;
     n00bb_with_frame_t *frame = &lower->withs.data[lower->withs.len - 1];
     bool ok = !frame->active || with_leave(context, frame, visit->node);
-    core_list_free(frame->items);
+    n00bb_free_with_frame(frame);
     lower->withs.len--;
     return ok;
 }

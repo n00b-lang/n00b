@@ -2569,8 +2569,13 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 lower_span_for_tree(context, expression));
             if (!read || !ir_lower_set_node_value(context, expression, read))
                 return false;
+            result = read;
         }
-        return n00bb_emit_with_success(context, visit->node);
+        ir_value_t *carried = result;
+        if (!n00bb_emit_with_success_carrying(context, visit->node, &carried))
+            return false;
+        return carried == result || !context->reachable
+            || ir_lower_set_node_value(context, expression, carried);
     }
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
         if (entering || !context->reachable) return true;
@@ -2631,7 +2636,9 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 "function value body has no value");
             return false;
         }
-        if (!n00bb_emit_with_success(context, visit->node)) return false;
+        if (!n00bb_emit_with_success_carrying(context, visit->node, &value))
+            return false;
+        if (!context->reachable) return true;
         if (!n00bb_emit_success_return(context, value,
                 lower_span_for_tree(context, visit->node))) {
             lower_internal(context,
