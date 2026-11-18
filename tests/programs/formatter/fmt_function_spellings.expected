@@ -1,0 +1,20 @@
+fn a_very_long_function_name_that_should_wrap(first_parameter_with_a_long_name : int,
+                                              second_parameter_with_a_long_name: int) ->
+                                              int {
+    return first_parameter_with_a_long_name
+}
+
+function another_long_function_name(first_parameter_with_a_long_name: int, second: int) ->
+                                    int {
+    return second
+}
+
+private fn private_long_function_name(first_parameter_with_a_long_name: int,
+                                      second                          : int) -> int {
+    return second
+}
+
+int litmod meters_from_a_long_literal(contents: string, site_with_a_long_name: int) ->
+                                      int {
+    return site_with_a_long_name
+}

@@ -4062,9 +4062,28 @@ n00bb_signature_open(const char *text, n00bb_signature_line_t *line)
         at = before;
         break;
     }
-    if (!n00bb_format_word(text + line->start,
-                           line->end - line->start, &at, "func"))
-        return SIZE_MAX;
+    // Every spelling that declares a function: `func`, `fn`, `function`,
+    // and the `<kind> litmod` prelude of a literal modifier.
+    const char *row = text + line->start;
+    size_t length = line->end - line->start;
+    bool function = n00bb_format_word(row, length, &at, "func")
+        || n00bb_format_word(row, length, &at, "fn")
+        || n00bb_format_word(row, length, &at, "function");
+    if (!function) {
+        size_t kind = at;
+        while (kind < length
+               && ((row[kind] >= 'a' && row[kind] <= 'z')
+                   || (row[kind] >= 'A' && row[kind] <= 'Z')
+                   || (row[kind] >= '0' && row[kind] <= '9')
+                   || row[kind] == '_'))
+            kind++;
+        size_t litmod = kind;
+        while (litmod < length && row[litmod] == ' ') litmod++;
+        if (kind == at || litmod == kind
+            || !n00bb_format_word(row, length, &litmod, "litmod"))
+            return SIZE_MAX;
+        at = litmod;
+    }
     for (size_t pos = line->start + at; pos < line->end; pos++)
         if (text[pos] == '(') return pos;
     return SIZE_MAX;

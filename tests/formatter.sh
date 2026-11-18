@@ -103,6 +103,12 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/function_spellings.n" \
+    "$program_dir/fmt_function_spellings.n"
+diff -u "$program_dir/fmt_function_spellings.expected" \
+    "$tmp/function_spellings.n"
+"$compiler" fmt --check "$tmp/function_spellings.n"
+
 "$compiler" fmt --output "$tmp/branches.n" \
     "$program_dir/fmt_branches.n"
 diff -u "$program_dir/fmt_branches.expected" "$tmp/branches.n"
