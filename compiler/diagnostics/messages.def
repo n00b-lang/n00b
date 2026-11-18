@@ -83,6 +83,7 @@ N00B_TEXT(STANDARD_LIBRARY_MODULE_IS_SHADOWED, "standard library module `{0}` is
 N00B_TEXT(SHADOWED_STANDARD_LIBRARY_FILES, "the standard library's `{0}` is `{1}`; the other file is `{2}`")
 N00B_TEXT(LOADED_BY_IMPORTING, "`{0}` is loaded by importing `{1}`")
 N00B_TEXT(IMPORTED_DIRECTLY, "`{0}` is imported here directly")
+N00B_TEXT(LOADED_IMPLICITLY, "`{0}` is loaded implicitly, for every program")
 N00B_TEXT(LOADED_IMPLICITLY_THROUGH, "`{0}` is loaded implicitly, through `{1}`")
 N00B_TEXT(LOADED_FOR_COMMAND_LINE, "`{0}` is named on the command line")
 N00B_TEXT(THE_STANDARD_LIBRARY_CANNOT_BE, "the standard library cannot be shadowed; rename the module or package at `{0}`")

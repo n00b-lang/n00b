@@ -1117,6 +1117,9 @@ report_shadow_cause(core_diagnostics_t *diagnostics,
     if (reach == SHADOW_REACHED_IMPLICITLY && other)
         n00bb_report_note(diagnostics, N00B_TEXT_LOADED_IMPLICITLY_THROUGH,
             N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(loaded)));
+    else if (reach == SHADOW_REACHED_IMPLICITLY)
+        n00bb_report_note(diagnostics, N00B_TEXT_LOADED_IMPLICITLY,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
     else if (reach == SHADOW_REACHED_BY_IMPORT && other)
         n00bb_report_note(diagnostics, N00B_TEXT_LOADED_BY_IMPORTING,
             N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(loaded)));

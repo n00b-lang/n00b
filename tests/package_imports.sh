@@ -217,7 +217,15 @@ grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
     cat "$tmp/shadow.log" >&2
     exit 1
 }
-rm "$shadow/project/builtin/__init.n"
+rm -r "$shadow/project/builtin"
+# The user's own file taking the name of the package loaded implicitly.
+printf "$module" >"$shadow/project/builtin.n"
+shadowed_case 'file named like the implicit package' uses_helper.n \
+    'uses_helper\.n: ' builtin builtin/__init.n project/builtin.n
+expect_note 'file named like the implicit package' \
+    '`builtin` is loaded implicitly, for every program'
+rm "$shadow/project/builtin.n"
+mkdir "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/sort.n"
 shadowed_case 'module of the builtin package' uses_helper.n \
     'uses_helper\.n: ' builtin.sort builtin/sort.n project/builtin/sort.n
