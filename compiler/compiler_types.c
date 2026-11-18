@@ -464,6 +464,38 @@ static bool report_required_trait(th_ctx *types,
     return true;
 }
 
+// A `where` bound on a variable that only a function's body names, broken
+// by the type the body gives it (body_bound_site).
+static bool report_body_bound(th_ctx *types, core_translation_unit_t *unit,
+                              const ty_failure_t *failure)
+{
+    const ir_instr_t *site = failure->why.at;
+    const ir_func_t  *owner = site && site->block ? site->block->owner
+                                                   : nullptr;
+
+    if (failure->kind != TY_FAIL_PREDICATE || !failure->pred.bound
+        || failure->pred.kind != TY_PRED_IMPLEMENTS || !failure->pred.subject
+        || !failure->pred.name.u8_bytes || !owner
+        || n00bb_direct_call_target(site)
+        || site->op == IR_OP_DISPATCH) {
+        return false;
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       subject     = n00bb_print_type(types,
+        th_resolve(failure->pred.subject));
+    core_string_t       trait       = n00bb_name_leaf(failure->pred.name);
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION,
+                 n00bb_span_location(site->span),
+                 N00B_TEXT_REQUIRED_TRAIT_MISSING,
+                 N00BB_ARGS(ARG_TEXT(subject), ARG_TEXT(trait),
+                            ARG_TEXT(function_name(owner))));
+    n00bb_report_help(diagnostics, N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
+                      N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
+
+    return true;
+}
+
 static bool report_varargs_array(th_ctx *types,
                                  core_translation_unit_t *const *units,
                                  size_t count, core_translation_unit_t *unit,
@@ -1082,7 +1114,8 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         report_case_mismatch(types, unit, test);
         return;
     }
-    if (report_unchecked_call(types, units, count, unit, failure)
+    if (report_body_bound(types, unit, failure)
+        || report_unchecked_call(types, units, count, unit, failure)
         || report_fixed_parameter(types, unit, failure)
         || report_condition(types, unit, failure)
         || report_nil(types, unit, failure)
@@ -1778,6 +1811,28 @@ static th_type *function_var(th_ctx *types, ir_func_t *function,
     return found;
 }
 
+// Where a bound on a variable that only the body of `function` names is
+// broken: the first instruction that makes a value of the variable's type.
+// A bound on a variable of the signature is checked at each call instead.
+static const ir_instr_t *body_bound_site(th_ctx *types, ir_func_t *function,
+                                         core_string_t name)
+{
+    if (var_named_in(types, function->type, name)) {
+        return nullptr;
+    }
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        for (uint32_t k = 0; k < function->blocks[b]->n_instrs; k++) {
+            ir_instr_t *in = function->blocks[b]->instrs[k];
+
+            if (in->dest && var_named_in(types, in->dest->type, name)) {
+                return in;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 static th_type *in_function(th_ctx *types, ir_func_t *function, th_type *type)
 {
     th_type **vars  = nullptr;
@@ -1957,7 +2012,11 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                 ty_declare_bound(solver, var,
                                  (ty_pred_t){.kind = TY_PRED_IMPLEMENTS,
                                              .name = bound.iface},
-                                 (ty_why_t){0});
+                                 (ty_why_t){
+                                     .at = body_bound_site(
+                                         types, function,
+                                         th_var_name(bound.subject)),
+                                 });
                 // A bound that names no trait arguments still fixes the
                 // trait's parameters for every call through it.
                 bool given = r + 1 < declared.len

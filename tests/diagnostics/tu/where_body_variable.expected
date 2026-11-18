@@ -1,0 +1,3 @@
+tests/diagnostics/tu/where_body_variable.n:4:9: error N00B-T0021: `string` does not implement `Integer`, which `strings` requires
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_body_variable.n:8:13: warning N00B-S0059: this condition is always true, so the other branch never runs
