@@ -36,15 +36,21 @@ typedef struct {
     n00bb_text_t unnamed;
     bool named;
     bool function_part;
+    // Space-separated keywords that come right before the declared
+    // name. Modifiers such as `open`, `inline` or `struct` lex as
+    // names, so the name is the first one after one of these.
+    const char *keywords;
 } construct_name_t;
 
 #define CONSTRUCT(rule, text) \
-    {rule, N00B_TEXT_IN_##text, N00B_TEXT_IN_##text, false, false}
-#define NAMED_CONSTRUCT(rule, text) \
-    {rule, N00B_TEXT_IN_##text##_NAMED, N00B_TEXT_IN_##text, true, false}
+    {rule, N00B_TEXT_IN_##text, N00B_TEXT_IN_##text, false, false, nullptr}
+#define NAMED_CONSTRUCT(rule, text, keywords) \
+    {rule, N00B_TEXT_IN_##text##_NAMED, N00B_TEXT_IN_##text, true, false, \
+     keywords}
 
 static const construct_name_t constructs[] = {
-    {"formals", N00B_TEXT_IN_FORMALS, N00B_TEXT_IN_FORMALS, false, true},
+    {"formals", N00B_TEXT_IN_FORMALS, N00B_TEXT_IN_FORMALS, false, true,
+     nullptr},
     CONSTRUCT("call-args", CALL_ARGS),
     CONSTRUCT("index-contents", INDEX),
     CONSTRUCT("slice-contents", SLICE),
@@ -73,18 +79,18 @@ static const construct_name_t constructs[] = {
     CONSTRUCT("try-value-expr", TRY_EXPRESSION),
     CONSTRUCT("with-stmt", WITH_STATEMENT),
     CONSTRUCT("with-value-expr", WITH_EXPRESSION),
-    NAMED_CONSTRUCT("variable-decl", VARIABLE),
-    NAMED_CONSTRUCT("func-def", FUNCTION),
-    NAMED_CONSTRUCT("record-decl", RECORD),
-    NAMED_CONSTRUCT("object-decl", OBJECT),
-    NAMED_CONSTRUCT("type-decl", TYPE_DECLARATION),
-    NAMED_CONSTRUCT("variant-decl", VARIANT),
-    NAMED_CONSTRUCT("trait-decl", TRAIT),
-    NAMED_CONSTRUCT("enum-stmt", ENUM),
-    NAMED_CONSTRUCT("flagset-stmt", FLAGSET),
-    NAMED_CONSTRUCT("callback-decl", CALLBACK),
-    NAMED_CONSTRUCT("package-decl", PACKAGE),
-    NAMED_CONSTRUCT("alias-stmt", ALIAS),
+    NAMED_CONSTRUCT("variable-decl", VARIABLE, "var let const"),
+    NAMED_CONSTRUCT("func-def", FUNCTION, "func fn function litmod"),
+    NAMED_CONSTRUCT("record-decl", RECORD, "record struct"),
+    NAMED_CONSTRUCT("object-decl", OBJECT, "object"),
+    NAMED_CONSTRUCT("type-decl", TYPE_DECLARATION, "type"),
+    NAMED_CONSTRUCT("variant-decl", VARIANT, "variant"),
+    NAMED_CONSTRUCT("trait-decl", TRAIT, "trait"),
+    NAMED_CONSTRUCT("enum-stmt", ENUM, "enum"),
+    NAMED_CONSTRUCT("flagset-stmt", FLAGSET, "flagset"),
+    NAMED_CONSTRUCT("callback-decl", CALLBACK, "callback"),
+    NAMED_CONSTRUCT("package-decl", PACKAGE, "package"),
+    NAMED_CONSTRUCT("alias-stmt", ALIAS, "type"),
 };
 
 typedef struct {
@@ -418,9 +424,30 @@ expected_list(const syntax_t *s, parse_pwz_parser_t *parser, int32_t at)
     return result;
 }
 
-static core_string_t
-name_between(const syntax_t *s, int32_t first, int32_t end)
+static bool
+is_construct_keyword(core_string_t text, const char *keywords)
 {
+    for (const char *k = keywords; k && *k;) {
+        const char *stop = k;
+        while (*stop && *stop != ' ') stop++;
+        size_t length = (size_t)(stop - k);
+        if (text.u8_bytes == length && !memcmp(text.data, k, length))
+            return true;
+        k = *stop ? stop + 1 : stop;
+    }
+    return false;
+}
+
+static core_string_t
+name_between(const syntax_t *s, const construct_name_t *construct,
+             int32_t first, int32_t end)
+{
+    for (int32_t i = first; i < end && i < s->count; i++)
+        if (is_construct_keyword(token_source(s, token_at(s, i)),
+                                 construct->keywords)) {
+            first = i + 1;
+            break;
+        }
     for (int32_t i = first; i < end && i < s->count; i++)
         if (tid_at(s, i) == s->identifier)
             return token_source(s, token_at(s, i));
@@ -462,12 +489,13 @@ describe_construct(const syntax_t *s, const parse_pwz_expected_t *entry,
     }
     if (!inner->named) {
         core_string_t name = owner != inner
-            ? name_between(s, owner_start, inner_start) : (core_string_t){0};
+            ? name_between(s, owner, owner_start, inner_start)
+            : (core_string_t){0};
         return n00bb_text(name.u8_bytes ? N00B_TEXT_IN_PART_OF_FUNCTION
                                         : inner->phrase,
             N00BB_ARGS(ARG_PHRASE_ID(inner->phrase), ARG_TEXT(name)));
     }
-    core_string_t name = name_between(s, inner_start, at);
+    core_string_t name = name_between(s, inner, inner_start, at);
     return n00bb_text(name.u8_bytes ? inner->phrase : inner->unnamed,
                       N00BB_ARGS(ARG_TEXT(name)));
 }

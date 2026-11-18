@@ -1,0 +1,6 @@
+tests/diagnostics/front/modifier_declaration_names.n:1:20: error N00B-P0001: expected the end of the statement or a name, found end of line in enum `Fd`
+tests/diagnostics/front/modifier_declaration_names.n:3:14: error N00B-P0001: expected a block, found `+` in object `Shape`
+tests/diagnostics/front/modifier_declaration_names.n:4:14: error N00B-P0001: expected a block, `layout`, `align`, `carries` or `rejects`, found `+` in record `Point`
+tests/diagnostics/front/modifier_declaration_names.n:5:18: error N00B-P0001: expected a parameter, found `+` in function `helper`
+tests/diagnostics/front/modifier_declaration_names.n:6:20: error N00B-P0001: expected `,`, the end of the statement, `:` or `=`, found `+` in the declaration of `counter`
+tests/diagnostics/front/modifier_declaration_names.n:7:19: error N00B-P0001: expected a parameter, found `+` in function `meters`

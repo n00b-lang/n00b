@@ -1,0 +1,7 @@
+open enum Fd: i32 {
+}
+object Shape +
+struct Point +
+inline fn helper +
+thread var counter +
+int litmod meters +
