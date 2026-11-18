@@ -7441,6 +7441,117 @@ static bool outcome_inspection(ir_instr_t *in, uint32_t operand, void *state)
     return !uses->escapes;
 }
 
+// The failure type a direct call's callee settled on.
+static th_type *callee_failure(const ir_instr_t *call)
+{
+    const ir_func_t *callee = n00bb_direct_call_target(call);
+    th_type *signature = callee && callee->type ? th_resolve(callee->type)
+                                                : nullptr;
+    return signature && th_kind_of(signature) == TH_FUNCTION
+            && th_func_error(signature)
+        ? th_resolve(th_func_error(signature))
+        : nullptr;
+}
+
+// A call site's copy of its callee's signature whose failure type nothing
+// bound: a call that can fail is written with `!`, which ties its outcome
+// to the callee's failure, so this one can't fail. A failure type a
+// parameter's type also names stays open.
+static void settle_site_failures(th_ctx *types,
+    const core_list_t(n00bb_ir_func_ptr_t) *functions)
+{
+    th_type *nil = th_name(types, CORE_STRING_STATIC("nil"));
+    for (size_t f = 0; f < functions->len; f++) {
+        ir_func_t *function = functions->data[f];
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                th_type *site = ir_instr_call_signature(block->instrs[i]);
+                site = site ? th_resolve(site) : nullptr;
+                th_type *failure = site && th_kind_of(site) == TH_FUNCTION
+                        && th_func_error(site)
+                    ? th_resolve(th_func_error(site)) : nullptr;
+                if (!failure || th_kind_of(failure) != TH_VAR
+                    || th_var_ref(failure) || th_var_name(failure).u8_bytes)
+                    continue;
+                bool shared = false;
+                for (size_t p = 0; !shared && p < th_func_nparams(site);
+                     p++) {
+                    th_type **open = nullptr;
+                    size_t count = th_free_vars(types,
+                        th_func_param(site, p)->type, &open);
+                    for (size_t v = 0; !shared && v < count; v++)
+                        shared = th_resolve(open[v]) == failure;
+                }
+                if (!shared) th_var_bind(failure, nil);
+            }
+        }
+    }
+}
+
+// Calls lowered without `!` while their callee's failure type was still
+// being inferred: the callee must have turned out not to fail.
+static bool check_pending_failures(
+    th_ctx *types, core_translation_unit_t *const *units, size_t count,
+    const core_list_t(n00bb_ir_func_ptr_t) *functions)
+{
+    bool ok = true;
+    for (size_t f = 0; f < functions->len; f++) {
+        ir_func_t *function = functions->data[f];
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *call = block->instrs[i];
+                if (!ir_annot_get(&call->annots, N00BB_FAILURE_PENDING_KEY))
+                    continue;
+                th_type *failure = callee_failure(call);
+                core_translation_unit_t *unit = unit_of(units, count, call);
+                if (!unit || !failure || th_kind_of(failure) == TH_VAR
+                    || th_is_nil(failure))
+                    continue;
+                const ir_func_t *callee = n00bb_direct_call_target(call);
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                core_string_t name = function_name(callee);
+                n00bb_report(diagnostics, unit,
+                             N00B_DIAG_FAILURE_NOT_PROPAGATED,
+                             n00bb_span_location(call->span),
+                             N00B_TEXT_CAN_FAIL_WITH_SO_THIS,
+                             N00BB_ARGS(ARG_TEXT(name),
+                                        ARG_TEXT(n00bb_print_type(types,
+                                                                  failure))));
+                note_declared(units, count, unit, callee);
+                n00bb_report_help(diagnostics,
+                                  N00B_TEXT_WRITE_TO_PASS_THE_FAILURE,
+                                  N00BB_ARGS(ARG_TEXT(name)));
+                ok = false;
+            }
+        }
+    }
+    return ok;
+}
+
+// A call written with `!` whose callee's inferred failure type turned out
+// to be `nil`: there is nothing for the `!` to pass along.
+static bool report_infallible_bang(core_translation_unit_t *const *units,
+                                   size_t count,
+                                   core_translation_unit_t *unit,
+                                   const ir_instr_t *call)
+{
+    th_type *failure = callee_failure(call);
+    const ir_func_t *callee = n00bb_direct_call_target(call);
+    if (!failure || !th_is_nil(failure) || !callee) return false;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t name = function_name(callee);
+    n00bb_report(diagnostics, unit, N00B_DIAG_PROPAGATE_INFALLIBLE,
+                 n00bb_span_location(call->span),
+                 N00B_TEXT_CANNOT_FAIL_SO_THIS_HAS,
+                 N00BB_ARGS(ARG_TEXT(name)));
+    note_declared(units, count, unit, callee);
+    n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
+    return true;
+}
+
 static bool check_unpropagated_outcomes(
     th_ctx *types, core_translation_unit_t *const *units, size_t count,
     const core_list_t(ty_outcome_call_t) *calls, core_dict_t *tainted)
@@ -7452,6 +7563,10 @@ static bool check_unpropagated_outcomes(
         outcome_uses_t           uses    = {0};
         if (!unit || !call->dest || !call->block || !call->block->owner)
             continue;
+        if (report_infallible_bang(units, count, unit, call)) {
+            ok = false;
+            continue;
+        }
         ir_value_visit_uses(call->block->owner, call->dest,
                             outcome_inspection, &uses);
         if ((uses.inspected && !uses.escapes)
@@ -7803,6 +7918,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
             ir_instr_set_call_signature(in, instance);
         }
     }
+    settle_site_failures(types, &functions);
 
     core_dict_t reported;
     core_dict_t tainted;
@@ -7813,6 +7929,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     ok = check_unpropagated_outcomes(types, units, count,
                                      &coverage.outcome_calls, &tainted)
         && ok;
+    ok = check_pending_failures(types, units, count, &functions) && ok;
     // A call whose argument's method doesn't fit a `where` constraint gets
     // that one error; the mismatches it causes there are not reported.
     core_dict_t bound_sites;

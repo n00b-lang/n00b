@@ -15,6 +15,9 @@
 #define N00BB_DECLARATION_KEY CORE_STRING_STATIC("n00bb.declaration")
 #define N00BB_REFERENCE_ESCAPES_KEY CORE_STRING_STATIC("n00bb.reference-escapes")
 #define N00BB_TRAIT_CAST_KEY CORE_STRING_STATIC("n00bb.trait-cast")
+// A call lowered as infallible while its callee's failure type was still
+// being inferred; typing checks the callee can't fail.
+#define N00BB_FAILURE_PENDING_KEY CORE_STRING_STATIC("n00bb.failure-pending")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")

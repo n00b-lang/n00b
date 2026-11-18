@@ -697,6 +697,22 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                                                  symbol);
                 ir_func_t *target = link_ir_function_for_symbol(analysis,
                                                                 implementation);
+                // An adapter only forwards to its target, so it fails as
+                // the target does, once the target's failure is inferred.
+                th_type *adapter_type = adapter && adapter->type
+                    ? th_resolve(adapter->type) : nullptr;
+                th_type *target_type = target && target->type
+                    ? th_resolve(target->type) : nullptr;
+                th_type *adapter_failure = adapter_type
+                        && th_kind_of(adapter_type) == TH_FUNCTION
+                        && th_func_error(adapter_type)
+                    ? th_resolve(th_func_error(adapter_type)) : nullptr;
+                if (adapter_failure && th_kind_of(adapter_failure) == TH_VAR
+                    && !th_var_ref(adapter_failure) && target_type
+                    && th_kind_of(target_type) == TH_FUNCTION
+                    && th_func_error(target_type))
+                    th_var_bind(adapter_failure,
+                                th_resolve(th_func_error(target_type)));
                 if (target && target->n_blocks
                     && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
                                                    adapter, target, receiver)

@@ -22,6 +22,22 @@ static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
                          th_type *result_type, ir_span_t span);
 
+// Whether `node`, a call, is the operand of a postfix `!`.
+static bool
+unwrapped_by_bang(parse_tree_t *node)
+{
+    parse_tree_t *at = node;
+    parse_tree_t *up = at ? parse_tree_parent(at) : nullptr;
+    while (up && core_tree_num_children(up) == 1) {
+        at = up;
+        up = parse_tree_parent(at);
+    }
+    size_t count = up ? core_tree_num_children(up) : 0;
+    return count == 2 && core_tree_child(up, 0) == at
+        && parse_tree_leaf_is(core_tree_child(up, 1),
+                              CORE_STRING_STATIC("!"));
+}
+
 static ir_value_t *
 n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
                    ir_value_t *storage, th_type *type, ir_span_t span)
@@ -1378,7 +1394,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     th_ctx *types = ir_module_types(context->module);
     th_type *error_type = th_func_error(signature);
-    bool has_error = error_type && !th_is_nil(error_type);
+    // A callee whose failure type is still being inferred is called as
+    // written: with `!` it may fail, without it it may not. Which one holds
+    // is checked once the callee's failure type is known.
+    th_type *open_error = error_type ? th_resolve(error_type) : nullptr;
+    bool pending = open_error && th_kind_of(open_error) == TH_VAR
+        && !th_var_name(open_error).u8_bytes;
+    bool has_error = error_type && !th_is_nil(error_type)
+        && (!pending || unwrapped_by_bang(visit ? visit->node : nullptr));
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
         : signature_return;
@@ -1421,6 +1444,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool emitted = instruction && ir_lower_set_temp_dest(context, instruction,
                                                  CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(instruction, callee_value);
+    n00bb_lower_context_t *call_lower = context->user;
+    if (emitted && pending && !has_error && call_lower)
+        emitted = ir_annot_set(call_lower->ir_context, &instruction->annots,
+            (ir_annot_t){.key = N00BB_FAILURE_PENDING_KEY,
+                         .kind = IR_ANNOT_BOOL, .b = true});
     for (size_t i = 0; emitted && i < values.len; i++) {
         if (values.data[i]) {
             emitted = ir_instr_operand_value(instruction, values.data[i]);
@@ -1988,7 +2016,11 @@ unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
         if (lower->tries.data[i - 1].active && lower->tries.data[i - 1].in_body)
             frame = &lower->tries.data[i - 1];
     bool in_try = frame != nullptr;
-    bool accepts = failure && !th_is_nil(failure)
+    // An inferred failure type can't take `nil`: a failure type of `nil`
+    // means the function can't fail. A generic one may be an option.
+    bool inferred = failure && th_kind_of(failure) == TH_VAR
+        && !th_var_name(failure).u8_bytes;
+    bool accepts = failure && !th_is_nil(failure) && !inferred
         && (th_kind_of(failure) == TH_VAR || th_option_item(failure));
     parse_tree_t *operand = core_tree_num_children(visit->node)
         ? core_tree_child(visit->node, 0) : nullptr;
@@ -2001,7 +2033,7 @@ unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
         frame->nil_span = span;
     }
     if (!in_try && !accepts) {
-        if (failure && !th_is_nil(failure))
+        if (failure && !th_is_nil(failure) && !inferred)
             lower_report(context, N00B_DIAG_PROPAGATE_OPTION_NIL, span,
                 N00B_TEXT_OPTION_BANG_NEEDS_NIL_FAILURE,
                 N00BB_ARGS(ARG_TEXT(text),

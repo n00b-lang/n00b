@@ -189,4 +189,43 @@ let tag_two: By_Tag = (v = 1, tag = 2)
 let tag_three: By_Tag = (v = 5, tag = 1)
 require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
 
+# With no `fail:` clause, a function's failure type is inferred from its
+# body, mutual recursion included (#9).
+func parsed(x: int) -> int {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+func parsed_untyped(x: int) {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+func count_down(n: int) -> int {
+    if n < 0 {
+        fail "below zero"
+    }
+    if n == 0 {
+        return 0
+    }
+    return count_other(n - 2)!
+}
+func count_other(n: int) -> int {
+    return count_down(n)!
+}
+func or_minus_one(x: int) -> int {
+    return try { -> parsed(x)! } fail (e) { -> -1 }
+}
+func untyped_or_minus_one(x: int) -> int {
+    return try { -> parsed_untyped(x)! } fail (e) { -> -1 }
+}
+func counted_or_minus_one(n: int) -> int {
+    return try { -> count_other(n)! } fail (e) { -> -1 }
+}
+require or_minus_one(3) == 3 and or_minus_one(-1) == -1
+require untyped_or_minus_one(3) == 3 and untyped_or_minus_one(-1) == -1
+require counted_or_minus_one(4) == 0 and counted_or_minus_one(3) == -1
+
 __fd_write(2, "ok")

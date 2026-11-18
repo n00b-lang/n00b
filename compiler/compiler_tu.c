@@ -3143,6 +3143,27 @@ owner_typevar(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
     return type;
 }
 
+// Whether a function body may fail: it has a `fail` statement or passes a
+// failure along with `!`. A nested function's body doesn't count.
+static bool
+body_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return false;
+    if (NT_IS(grammar, node, "fail-stmt")) return true;
+    size_t count = core_tree_num_children(node);
+    if (count == 2 && NT_IS(grammar, node, "postfix-expr")
+        && parse_tree_leaf_is(core_tree_child(node, 1),
+                              CORE_STRING_STATIC("!")))
+        return true;
+    for (size_t i = 0; i < count; i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (!core_tree_is_leaf(child) && !NT_IS(grammar, child, "func-def")
+            && body_may_fail(grammar, child))
+            return true;
+    }
+    return false;
+}
+
 void
 record_cached_declared_function_signature(parse_grammar_t *grammar,
                                           core_translation_unit_t *unit,
@@ -3164,8 +3185,12 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     th_type *success = return_node
         ? return_types ? parse_tree_type(return_types) : nullptr
         : th_var(state->types);
+    // With no `fail:` clause, a body that may fail has its failure type
+    // inferred; any other can't fail.
     th_type *failure = error_node
         ? error_type ? parse_tree_type(error_type) : nullptr
+        : body_may_fail(grammar, CHILD_NT(grammar, function, "body"))
+        ? th_var(state->types)
         : th_name(state->types, CORE_STRING_STATIC("nil"));
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
         N00BB_PARAMETER_FACTS_KEY);
@@ -3225,9 +3250,9 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
         && (!parse_sym_set_binding(symbol,
                 CORE_STRING_STATIC("n00bb.declared-function-signature"),
                 unified)
-            || !parse_sym_set_binding(symbol,
+            || (error_node && !parse_sym_set_binding(symbol,
                 CORE_STRING_STATIC("n00bb.declared-function-failure"),
-                failure))) {
+                failure)))) {
         core_list_free(declared);
         n00bb_tu_internal_error(unit, signature, "checking declarations",
             "could not retain the function signature");
@@ -3618,8 +3643,13 @@ record_function_signature(parse_grammar_t *grammar,
     if (declared) {
         th_type *unified = function_with_error_channel(state->types,
                                                        declared, nullptr);
-        th_type *declared_error = declared_failure
-            ? declared_failure : th_name(state->types, CORE_STRING_STATIC("nil"));
+        // An omitted `fail:` leaves the declared signature's failure open,
+        // to be inferred.
+        th_type *declared_kind = th_resolve(declared);
+        th_type *declared_error = declared_failure ? declared_failure
+            : th_kind_of(declared_kind) == TH_FUNCTION
+                && th_func_error(declared_kind)
+            ? th_func_error(declared_kind) : failure;
         if (refine_symbol_type) {
             symbol->type = function_with_error_channel(state->types, unified,
                                                        declared_error);
