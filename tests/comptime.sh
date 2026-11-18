@@ -71,8 +71,9 @@ prunes() {
         failed=1
         return
     fi
-    if [ "$(grep comptime-pruned "$tmp/$name.err")" != \
-        "PROFILE comptime-pruned $pruned" ]; then
+    # $pruned lists every variable expected pruned, in order.
+    want=$(for each in $pruned; do echo "PROFILE comptime-pruned $each"; done)
+    if [ "$(grep comptime-pruned "$tmp/$name.err")" != "$want" ]; then
         echo "$name: expected only $pruned pruned" >&2
         grep comptime-pruned "$tmp/$name.err" >&2
         failed=1
@@ -110,15 +111,16 @@ mutable at runtime" "$programs/record_list.n"
 start)
     prints comptime_main "comptime_main ran" "$programs/comptime_main.n"
     prints start_reads_comptime "ok" "$programs/start_reads_comptime.n"
-    prunes runtime_prune "bumped recomputed
+    prunes runtime_prune "bumped from comptime
 phase recomputed
-items recomputed
-kept" runtime_prune.kept "$programs/runtime_prune.n"
+items from comptime
+kept" "runtime_prune.bumped runtime_prune.items runtime_prune.kept" \
+        "$programs/runtime_prune.n"
     prunes prune_literal "list kept" prune_literal.names \
         "$programs/prune_literal.n" ;;
 entry)
     prints entry_exit "frozen at exit" "$programs/entry_exit.n"
-    prints runtime_branch "runtime" "$programs/runtime_branch.n"
+    prints runtime_branch "comptime" "$programs/runtime_branch.n"
     prints loop_back "loop-back ok" "$programs/loop_back.n" ;;
 failures)
     rejects entry_failure N00B-B0110 "$programs/entry_failure.n"
