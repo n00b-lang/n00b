@@ -568,6 +568,58 @@ func slots_of(s: string) -> string {
     return out
 }
 
+func plain_of(s: string) -> string {
+    var walked: Array[u8] = __text_byte_array(s)
+    return from_raw(ref walked, cast[int] byte_len(s))
+}
+
+func rich_concatenation() {
+    // rich + rich keeps both sides' records, the right side's moved by the
+    // left side's byte length.
+    let both: string = "x [b]bold[/b] [#] y"'r + " z [#:04] w"'r
+    check(is_rich(both) and plain_of(both) == "x bold  y z  w",
+          "rich_concatenation", "1")
+    check(slots_of(both) == "auto@7;auto@12:04", "rich_concatenation", "2")
+    check(repr_of(both) == "r\"x [b]bold[/b] [#] y z [#:04] w\"",
+          "rich_concatenation", "3")
+    // rich + plain and plain + rich.
+    check(repr_of("[b]a[/b]"'r + "c") == "r\"[b]a[/b]c\"",
+          "rich_concatenation", "4")
+    // (A slot where a span ends prints inside it: the records can't say
+    // which side of the close it was written on.)
+    let after_plain: string = "cd" + "[b]a[/b][#n]"'r
+    check(repr_of(after_plain) == "r\"cd[b]a[#n][/b]\"",
+          "rich_concatenation", "5")
+    check(slots_of(after_plain) == "name n@3", "rich_concatenation", "6")
+    // A left span that runs to the end of its string stops where the left
+    // side does.
+    let open_left: string = "[b]open"'r + "tail"
+    check(body_of(open_left).__value.style_info[0].end_ix.get_or_else(0) == 4,
+          "rich_concatenation", "7")
+    // A span ending where the next starts closes first in repr.
+    check(repr_of("[b]open"'r + "[i]x[/i]"'r) == "r\"[b]open[/b][i]x[/i]\"",
+          "rich_concatenation", "13")
+    check(repr_of("[b]a[/b][b]c[/b]"'r) == "r\"[b]a[/b][b]c[/b]\"",
+          "rich_concatenation", "14")
+    // The result is the string the whole literal would have made.
+    check(("[b]a[/b]"'r + "[#]"'r) == "[b]a[/b][#]"'r, "rich_concatenation",
+          "8")
+    // join and repeat keep records too.
+    var parts: List[string] = ["[b]a[/b]"'r, "b", "[#:x]"'r]
+    let joined: string = join(parts, "[#]"'r)
+    check(plain_of(joined) == "ab" and slots_of(joined) == "auto@1;auto@2;auto@2:x",
+          "rich_concatenation", "9")
+    let twice: string = text.repeat("[#]x"'r, 2)
+    check(slots_of(twice) == "auto@0;auto@1", "rich_concatenation", "10")
+    // Each layer of a layered string is kept.
+    var spans: List[text.Style_Span] = [(start = 0, end = 5, tag = "u")]
+    let layered: string = text.rich_string("[b]alpha[/b]"'r, spans) +
+        "[i]z[/i]"'r
+    check(is_rich(body_of(layered).__value.s), "rich_concatenation", "11")
+    check(body_of(body_of(layered).__value.s).__value.style_info.len() == 1,
+          "rich_concatenation", "12")
+}
+
 func substitution_slots() {
     // Auto slots are recorded as auto, not numbered; `format()` numbers
     // them later, in order of appearance in the final string.
@@ -685,6 +737,7 @@ func string_rich_literal_main() {
     local_literals()
     bracket_markup()
     substitution_slots()
+    rich_concatenation()
     dispatch()
 }
 
