@@ -283,6 +283,125 @@ written_place(ir_func_t *function, ir_places_t *places,
     return false;
 }
 
+// The parameters each function writes through while it holds no lock of
+// its own, following its calls: a write it makes under a lock it takes is
+// guarded wherever it is called from.
+typedef struct {
+    ir_summaries_t        *summaries;
+    const ir_race_hooks_t *hooks;
+    core_dict_t            masks;
+    core_dict_t            busy;
+} unheld_writes_t;
+
+#define ALL_PARAMS (~(uint64_t)0)
+
+static uint64_t
+param_bit(uint32_t param)
+{
+    return param < 64 ? (uint64_t)1 << param : ALL_PARAMS;
+}
+
+// The parameters of `function` that `place`, one of its places, is under.
+static uint64_t
+param_of_place(const ir_func_t *function, const ir_place_t *place)
+{
+    ir_splace_t at;
+    return ir_summary_place_of(function, place, &at)
+            && at.kind == IR_SPLACE_PARAM
+        ? param_bit(at.param) : 0;
+}
+
+static uint64_t unheld_writes(unheld_writes_t *u, const ir_func_t *function,
+                              const ir_summary_t *summary);
+
+typedef struct {
+    unheld_writes_t  *u;
+    const ir_func_t  *function;
+    const ir_instr_t *call;
+    ir_places_t      *places;
+    uint64_t          mask;
+} unheld_call_t;
+
+static void
+unheld_callee(void *context, const ir_func_t *target,
+              const ir_summary_t *summary)
+{
+    unheld_call_t *walk = context;
+    uint64_t written = unheld_writes(walk->u, target, summary);
+    uint32_t count = ir_call_argument_count(walk->call);
+    for (uint32_t q = 0; written && q < count; q++) {
+        if (!(written & param_bit(q))) continue;
+        ir_call_arg_t argument = ir_call_argument(walk->call, q);
+        if (argument.role != IR_ARG_VALUE && argument.role != IR_ARG_FRESH
+            && argument.role != IR_ARG_UNMAPPED) continue;
+        const uint32_t *ids   = nullptr;
+        uint32_t        found = 0;
+        if (!ir_places_of(walk->places, argument.value, &ids, &found))
+            continue;
+        for (uint32_t i = 0; i < found; i++)
+            walk->mask |= param_of_place(walk->function,
+                                         ir_place_at(walk->places, ids[i]));
+    }
+}
+
+static uint64_t
+summary_writes(const ir_summary_t *summary)
+{
+    if (!summary) return ALL_PARAMS;
+    uint64_t mask = 0;
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if ((path->flags & IR_SPATH_WRITE) && path->root == IR_SPLACE_PARAM)
+            mask |= param_bit(path->param);
+    }
+    return mask;
+}
+
+static uint64_t
+unheld_writes(unheld_writes_t *u, const ir_func_t *function,
+              const ir_summary_t *summary)
+{
+    // With no body to look into, every write the summary has may be
+    // unguarded.
+    if (!function || !function->n_blocks) return summary_writes(summary);
+    bool known = false;
+    uintptr_t mask = (uintptr_t)core_dict_get(&u->masks, function, &known);
+    if (known) return mask;
+    if (core_dict_contains(&u->busy, function)) return summary_writes(summary);
+    ir_func_t   *body   = (ir_func_t *)function;
+    ir_places_t *places = ir_func_places(body);
+    if (!places) return summary_writes(summary);
+    core_dict_put(&u->busy, function, 1);
+    core_dict_t unheld;
+    core_dict_init(&unheld, nullptr, nullptr);
+    walk_held(body, false, u->hooks, note_unheld, &unheld);
+    for (uint32_t a = 0; a < ir_places_access_count(places); a++) {
+        const ir_access_t *access = ir_places_access_at(places, a);
+        if (access->kind != IR_ACCESS_STORE
+            || !core_dict_contains(&unheld, (void *)access->instr)) continue;
+        const uint32_t *ids = ir_places_access_places(places, access);
+        for (uint32_t p = 0; p < access->count; p++)
+            mask |= param_of_place(function, ir_place_at(places, ids[p]));
+    }
+    unheld_call_t walk = {.u = u, .function = function, .places = places};
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            if ((in->op != IR_OP_CALL && in->op != IR_OP_CALLBACK_INVOKE)
+                || lock_role(u->hooks, in) != IR_LOCK_NONE
+                || !core_dict_contains(&unheld, in)) continue;
+            walk.call = in;
+            if (!ir_summary_call_callees(u->summaries, in, unheld_callee,
+                                         &walk))
+                walk.mask = ALL_PARAMS;
+        }
+    mask |= walk.mask;
+    core_dict_free(&unheld);
+    core_dict_remove(&u->busy, function);
+    core_dict_put(&u->masks, function, (void *)mask);
+    return mask;
+}
+
 typedef struct {
     ir_func_t             *function;
     const ir_instr_t      *call;
@@ -290,6 +409,7 @@ typedef struct {
     const ir_race_entry_t *entry;
     const race_others_t   *others;
     const ir_race_hooks_t *hooks;
+    unheld_writes_t       *unheld;
     bool                   found;
     ir_splace_t            place;
 } call_write_t;
@@ -326,14 +446,13 @@ static void
 callee_writes(void *context, const ir_func_t *target,
               const ir_summary_t *summary)
 {
-    (void)target;
     call_write_t *walk = context;
-    for (uint32_t i = 0; !walk->found && i < ir_summary_path_count(summary);
-         i++) {
-        const ir_spath_t *path = ir_summary_path_at(summary, i);
-        if (!(path->flags & IR_SPATH_WRITE) || path->root != IR_SPLACE_PARAM)
-            continue;
-        ir_call_arg_t argument = ir_call_argument(walk->call, path->param);
+    // Only what the callee writes without a lock of its own can race.
+    uint64_t written = unheld_writes(walk->unheld, target, summary);
+    uint32_t count = ir_call_argument_count(walk->call);
+    for (uint32_t q = 0; !walk->found && written && q < count; q++) {
+        if (!(written & param_bit(q))) continue;
+        ir_call_arg_t argument = ir_call_argument(walk->call, q);
         if (argument.role == IR_ARG_VALUE || argument.role == IR_ARG_FRESH
             || argument.role == IR_ARG_UNMAPPED)
             walk->found = argument_conflicts(walk, argument.value);
@@ -345,7 +464,8 @@ callee_writes(void *context, const ir_func_t *target,
 }
 
 static void
-function_races(ir_summaries_t *summaries, ir_func_t *function, bool at_entry,
+function_races(ir_summaries_t *summaries, unheld_writes_t *unheld_writes,
+               ir_func_t *function, bool at_entry,
                const ir_race_entry_t *entry, const race_others_t *others,
                const ir_race_hooks_t *hooks, ir_race_report_fn report,
                void *context)
@@ -376,6 +496,7 @@ function_races(ir_summaries_t *summaries, ir_func_t *function, bool at_entry,
             call_write_t walk = {
                 .function = function, .call = in, .places = places,
                 .entry = entry, .others = others, .hooks = hooks,
+                .unheld = unheld_writes,
             };
             ir_summary_call_callees(summaries, in, callee_writes, &walk);
             if (walk.found)
@@ -413,8 +534,14 @@ ir_races_find(ir_summaries_t *summaries, ir_func_t *const *main_roots,
         bool *held = solve_locks(reach, entries[e].entry, hooks);
         for (size_t f = 0; f < reach->functions.len; f++) {
             size_t scope = ir_analysis_scope_begin();
-            function_races(summaries, reach->functions.data[f], held[f],
-                           &entries[e], &others, hooks, report, context);
+            unheld_writes_t unheld = {.summaries = summaries, .hooks = hooks};
+            core_dict_init(&unheld.masks, nullptr, nullptr);
+            core_dict_init(&unheld.busy, nullptr, nullptr);
+            function_races(summaries, &unheld, reach->functions.data[f],
+                           held[f], &entries[e], &others, hooks, report,
+                           context);
+            core_dict_free(&unheld.masks);
+            core_dict_free(&unheld.busy);
             ir_analysis_scope_end(scope);
         }
         core_free(held);
