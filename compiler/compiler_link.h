@@ -177,8 +177,9 @@ ir_module_t *library_ir_module(const n00bb_link_analysis_t *analysis,
                                core_string_t name);
 ir_module_t *interface_body_module(const n00bb_link_analysis_t *analysis,
                                    core_string_t name);
+// On failure, `*failed` names the package or export it stopped at.
 bool register_package_interfaces(n00bb_link_analysis_t *analysis,
-    th_env *environment);
+    th_env *environment, core_string_t *failed);
 ir_func_t *link_ir_function_for_symbol(n00bb_link_analysis_t *analysis,
     parse_sym_entry_t *symbol);
 ir_global_t *link_ir_global_for_symbol(n00bb_link_analysis_t *analysis,

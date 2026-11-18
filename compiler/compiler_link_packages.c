@@ -1564,7 +1564,7 @@ register_package_manifest(th_env *environment, core_translation_unit_t *unit,
 
 bool
 register_package_interfaces(n00bb_link_analysis_t *analysis,
-                            th_env *environment)
+                            th_env *environment, core_string_t *failed)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
@@ -1582,9 +1582,11 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                     CORE_STRING_STATIC("n00b.package-interface"), 1,
                     interface_payload.data, interface_payload.byte_len);
             core_buffer_release(&interface_payload);
-            if (!registered) return false;
-            if (!register_package_grants(analysis, environment, package)) return false;
-            if (!register_package_manifest(environment, unit, package)) return false;
+            *failed = package->name;
+            if (!registered
+                || !register_package_grants(analysis, environment, package)
+                || !register_package_manifest(environment, unit, package))
+                return false;
             parse_scope_t *scopes[] = {
                 package->scope,
                 parse_symtab_scope_in_namespace(state->annotations->symtab,
@@ -1596,7 +1598,10 @@ register_package_interfaces(n00bb_link_analysis_t *analysis,
                      binding; binding = binding->next_in_scope)
                     if (binding->kind != PARSE_SYM_MODULE
                         && !register_package_export_declaration(analysis,
-                            environment, unit, package, binding)) return false;
+                            environment, unit, package, binding)) {
+                        *failed = binding->name;
+                        return false;
+                    }
         }
     }
     return true;

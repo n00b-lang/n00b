@@ -4797,6 +4797,26 @@ trait_implementation(void *context, th_ctx *types, th_type *receiver,
     return nullptr;
 }
 
+// Prints each module holding a function to emit, once.
+static void
+dump_final_ir(const n00bb_link_analysis_t *analysis)
+{
+    core_dict_t printed;
+    core_dict_init(&printed, nullptr, nullptr);
+    size_t emitted = analysis->emitted_functions.len;
+    for (size_t i = 0; i < emitted + analysis->cached_functions.len; i++) {
+        ir_func_t *function = i < emitted
+            ? analysis->emitted_functions.data[i]
+            : analysis->cached_functions.data[i - emitted];
+        ir_module_t *module = function ? function->owner : nullptr;
+        if (!module || !core_dict_add(&printed, module, 1)) continue;
+        core_string_t text = ir_module_print(module);
+        if (text.data) fwrite(text.data, 1, text.u8_bytes, stdout);
+        core_free(text.data);
+    }
+    core_dict_free(&printed);
+}
+
 static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
@@ -4851,6 +4871,8 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
     core_dict_free(&visited);
     core_dict_free(&binder_state.found);
     core_list_free(callers);
+    if (ok && n00bb_setting_bool(N00BB_KEY_DEV_DUMP_FINAL_IR))
+        dump_final_ir(analysis);
     return ok;
 }
 

@@ -15,6 +15,9 @@ typedef struct {
     uint32_t *stream_indexes;
     size_t stream_index_count;
     uint32_t initializer_index;
+    // When the rows can't be built: the function they stopped at, and why.
+    core_string_t failed_name;
+    core_string_t failed_reason;
 } n00bb_abi_function_rows_t;
 
 bool n00bb_abi_function_rows_build(
