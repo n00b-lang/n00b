@@ -366,6 +366,34 @@ require several_generic(several_float) == "other"
 require several_union(0) == "several" and several_union(1) == "several"
 require several_union(2) == "float"
 
+# An `Any` holding an option matches a generic option arm, which narrows
+# it to an option.
+func option_arm(b: Any) -> string {
+    typecase b {
+        case Array['T] { return "array" }
+        case List['T]? { return "list option" }
+        case 'T? {
+            if b == nil {
+                return "nil"
+            }
+            return "some"
+        }
+        else { return "other" }
+    }
+}
+let held_option: int? = 4
+let empty_option: string? = nil
+let listed_option: List[int]? = [1]
+let small_option: bool? = true
+let small_nil: u8? = nil
+require option_arm(cast[Any] held_option) == "some"
+require option_arm(cast[Any] small_option) == "some"
+require option_arm(cast[Any] small_nil) == "nil"
+require option_arm(cast[Any] empty_option) == "nil"
+require option_arm(cast[Any] listed_option) == "list option"
+require option_arm(cast[Any] several_array) == "array"
+require option_arm(cast[Any] several_list) == "other"
+
 # A module variable's declaration initializer reruns at run time, so a
 # value comptime writes after it doesn't carry over (#13).
 var comptime_counter: int = 0

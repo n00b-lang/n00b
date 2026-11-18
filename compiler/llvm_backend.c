@@ -6617,6 +6617,59 @@ unbox_value(lower_state_t *state, LLVMValueRef box, th_type *type)
     return LLVMBuildLoad2(state->builder, target, slot, "unboxed");
 }
 
+// Whether `type` is an option whose item is open: its value pairs a box
+// holding the item with a presence tag.
+static bool
+open_option_type(lower_state_t *state, th_type *type)
+{
+    th_type *option = type ? th_builtin_applied(th_resolve(type),
+                                                TH_BUILTIN_OPTION, 1)
+                           : nullptr;
+    return option && !th_is_closed(ir_module_types(state->function->owner),
+                                   option);
+}
+
+// Narrows `box`, which holds a closed option, to the open option `type`:
+// the item is copied into a box of the item's runtime type, beside the
+// option's presence tag.
+static LLVMValueRef
+unbox_open_option(lower_state_t *state, const ir_instr_t *instruction,
+                  LLVMValueRef box, th_type *type)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef box_type = box_llvm_type(context);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
+    LLVMTypeRef target = value_type(state->function->owner, type, context);
+    if (!target || LLVMGetTypeKind(target) != LLVMStructTypeKind
+        || LLVMCountStructElementTypes(target) != 2
+        || LLVMStructGetTypeAtIndex(target, 0) != box_type
+        || LLVMStructGetTypeAtIndex(target, 1) != i8) return nullptr;
+    LLVMValueRef source = entry_alloca(state, box_type);
+    LLVMValueRef item = entry_alloca(state, box_type);
+    if (!source || !item) return nullptr;
+    LLVMBuildStore(state->builder, box, source);
+    LLVMValueRef option_index = LLVMBuildAnd(state->builder,
+        LLVMBuildExtractValue(state->builder, box, 2, "option.type"),
+        LLVMConstInt(LLVMInt32TypeInContext(context), 0x7fffffff, false),
+        "option.index");
+    LLVMValueRef item_index = runtime_type_component(state, option_index, 0);
+    if (!item_index || !prepare_box_slot_in(state,
+            box_in_frame(state, instruction), item_index, item))
+        return nullptr;
+    LLVMTypeRef parameters[] = {pointer, pointer};
+    LLVMValueRef arguments[] = {source, item};
+    LLVMValueRef present = box_runtime_call(state,
+        "sys.internal.box.option_unbox", i8, parameters, arguments, 2);
+    if (!present) return nullptr;
+    LLVMValueRef option = LLVMGetUndef(target);
+    option = LLVMBuildInsertValue(state->builder, option,
+        LLVMBuildLoad2(state->builder, box_type, item, "option.item"), 0,
+        "option.open");
+    return LLVMBuildInsertValue(state->builder, option, present, 1,
+                                "option.open");
+}
+
 static bool
 prepare_box_slot_in(lower_state_t *state, bool in_frame,
                     LLVMValueRef type_index, LLVMValueRef slot)
@@ -10720,7 +10773,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[0].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);
         if (!value) break;
-        if (LLVMTypeOf(value) == box_llvm_type(context))
+        if (LLVMTypeOf(value) == box_llvm_type(context)
+            && open_option_type(state, operands[1].type))
+            result = unbox_open_option(state, instruction, value,
+                                       operands[1].type);
+        else if (LLVMTypeOf(value) == box_llvm_type(context))
             result = unbox_value(state, value, operands[1].type);
         else {
             LLVMTypeRef target = value_type(state->function->owner,

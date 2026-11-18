@@ -50,6 +50,7 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"sys.internal.box.reference_type_of", nullptr, nullptr, 0},
     {"sys.internal.box.array_type_of", nullptr, nullptr, 0},
     {"sys.internal.box.type_component", nullptr, nullptr, 0},
+    {"sys.internal.box.option_unbox", nullptr, nullptr, 0},
     {"sys.internal.box.type_specializes", nullptr, nullptr, 0},
     {"sys.internal.box.named_type", nullptr, nullptr, 0},
     {"sys.internal.gc.box_store.new_reference", nullptr, nullptr, 0},
