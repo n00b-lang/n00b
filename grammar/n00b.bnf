@@ -469,7 +469,7 @@
 <return-type> ::= <return-sigil> <union-tspec>
 
 <return-sigil> ::= %"->"
-                 | %"return" %":"
+<return-sigil> @nospace($1) ::= %"return" %":"
 
 <error-type> @nospace($1) ::= %"fail" %":" <one-tspec>
 

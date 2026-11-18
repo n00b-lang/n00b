@@ -94,6 +94,15 @@ EOF
 diff -u "$tmp/comments.expected" "$tmp/comments.n"
 "$compiler" fmt --check "$tmp/comments.n"
 
+"$compiler" fmt --output "$tmp/return_skin.n" \
+    "$program_dir/fmt_return_skin.n"
+diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
+"$compiler" fmt --check "$tmp/return_skin.n"
+"$compiler" fmt --normalize --output "$tmp/return_skin_normalized.n" \
+    "$program_dir/fmt_return_skin.n"
+diff -u "$program_dir/fmt_return_skin.expected" \
+    "$tmp/return_skin_normalized.n"
+
 "$compiler" fmt --output "$tmp/branches.n" \
     "$program_dir/fmt_branches.n"
 diff -u "$program_dir/fmt_branches.expected" "$tmp/branches.n"

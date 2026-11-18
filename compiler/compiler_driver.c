@@ -3734,8 +3734,12 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             if (printed[gap_start + j] == '/' || printed[gap_start + j] == '#')
                 has_comment = true;
         bool comma = to_len == 1 && printed[to_start] == ',';
+        // `return:` is a result sigil, not a field colon to keep aligned.
+        bool sigil_colon = prior_original
+            && prior_original_end - prior_original_start == 6
+            && !memcmp(source.data + prior_original_start, "return", 6);
         bool aligned_colon = prior_original && to_len == 1
-            && printed[to_start] == ':'
+            && printed[to_start] == ':' && !sigil_colon
             && source_lines == 0 && printed_lines == 0;
         bool channel_break = (to_len == 2
                               && !memcmp(printed + to_start, "->", 2))
@@ -4253,6 +4257,16 @@ n00bb_format_signatures(parse_grammar_t *grammar, core_string_t input)
     return core_buffer_string(&result);
 }
 
+// `return: T` is the keyword spelling of the `-> T` result channel.
+static bool
+n00bb_format_return_channel(const char *text, size_t length)
+{
+    if (length < 7 || memcmp(text, "return", 6)) return false;
+    size_t at = 6;
+    while (at < length && text[at] == ' ') at++;
+    return at < length && text[at] == ':';
+}
+
 static core_string_t
 n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
 {
@@ -4284,8 +4298,10 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
             bool arrow = channel_start + 1 < i
                 && text[channel_start] == '-'
                 && text[channel_start + 1] == '>';
-            bool fail_channel = channel_start + 4 < i
-                && !memcmp(text + channel_start, "fail:", 5);
+            bool fail_channel = (channel_start + 4 < i
+                    && !memcmp(text + channel_start, "fail:", 5))
+                || n00bb_format_return_channel(text + channel_start,
+                                               i - channel_start);
             size_t body_end = i;
             while (body_end > channel_start && text[body_end - 1] == ' ')
                 body_end--;
@@ -4322,7 +4338,9 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
         bool channel = (line_length - indent >= 2
                 && line[indent] == '-' && line[indent + 1] == '>')
             || (line_length - indent >= 5
-                && !memcmp(line + indent, "fail:", 5));
+                && !memcmp(line + indent, "fail:", 5))
+            || n00bb_format_return_channel(line + indent,
+                                           line_length - indent);
         if (channel && line[indent] == '-' && result.byte_len
             && result.data[result.byte_len - 1] == '\n') {
             size_t prior = result.byte_len - 1;
@@ -4347,8 +4365,10 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
                 core_buffer_string(&result), prior_start,
                 result.byte_len - prior_start);
             bool previous_has_channel = prior_len
-                && core_string_find(prior_text,
-                                    CORE_STRING_STATIC("-> ")) >= 0
+                && (core_string_find(prior_text,
+                                     CORE_STRING_STATIC("-> ")) >= 0
+                    || core_string_find(prior_text,
+                                        CORE_STRING_STATIC(") return:")) >= 0)
                 && !memchr(result.data + prior_start, '{', prior_len);
             if (((channel && previous_closes_params)
                  || (opening_brace && (previous_closes_params

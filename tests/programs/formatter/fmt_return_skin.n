@@ -1,0 +1,14 @@
+fn either(a: bool, b: bool) return: bool {
+    return a || b
+}
+
+fn spaced(a: bool) return : bool
+{
+    return a
+}
+
+fn failing(a: bool) return: bool fail: string {
+    return a
+}
+
+require either(true, false) and spaced(true)
