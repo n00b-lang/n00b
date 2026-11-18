@@ -1,5 +1,6 @@
 #include "lower_internal.h"
 #include "comptime.h"
+#include "static_branches.h"
 
 static int
 compare_functions(const void *left, const void *right);
@@ -645,6 +646,13 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
         ir_func_t *initializer = module ? n00bb_cached_body(ir_func_find(
             module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))) : nullptr;
         if (initializer) core_list_push(initializer_functions, initializer);
+    }
+    // Typing knows what each `with` manager's `__exit` returns, so whether
+    // it can drop a failure is settled before the analyses walk the paths.
+    for (size_t i = 0; ok && i < units.len; i++) {
+        ir_module_t *module = unit_module(tu_state(units.data[i]));
+        for (size_t f = 0; module && f < ir_func_count(module); f++)
+            n00bb_fold_exit_verdicts(ir_func_at(module, f));
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,
                                           &runtime_init.entry_functions)

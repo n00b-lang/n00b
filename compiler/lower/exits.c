@@ -1,5 +1,6 @@
 #include "lower_internal.h"
 #include "ir/pass.h"
+#include "static_branches.h"
 
 // Exit scopes: the one exit block of a `with` manager or a loop over a
 // container. See n00bb_exit_scope_t.
@@ -75,6 +76,8 @@ n00bb_exit_scope_jump(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                       uint64_t reason, ir_value_t *error, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
+    // The compiler's own code, which dead-code warnings don't point at.
+    span.implied = true;
     if (!scope->exit)
         scope->exit = n00bb_branch_block(context, lower, "exit");
     th_type *option = th_option(ir_module_types(context->module),
@@ -119,6 +122,7 @@ bool
 n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                        ir_span_t span, bool *reached, ir_value_t **failure)
 {
+    span.implied = true;
     *reached = false;
     *failure = nullptr;
     scope->open = false;
@@ -206,6 +210,9 @@ drop_failure(ir_lower_context_t *context, ir_value_t *verdict,
             CORE_STRING_STATIC("__n00bb_exit_verdict_"), bool_type)
         || !ir_instr_operand_value(test, verdict)
         || !ir_instr_operand_type(test, bool_type)
+        || !ir_annot_set(lower->ir_context, &test->annots,
+            (ir_annot_t){.key = CORE_STRING_STATIC(N00BB_EXIT_VERDICT_KEY),
+                         .kind = IR_ANNOT_BOOL, .b = true})
         || !n00bb_emit_branch(context, test->dest, decide, rethrow, span))
         return false;
     context->block = decide;
@@ -228,6 +235,7 @@ n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
 {
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, source);
+    span.implied = true;
     if (!context->reachable) return true;
     bool continues = scope->fallthrough
         || (scope->failure_reachable && verdict);

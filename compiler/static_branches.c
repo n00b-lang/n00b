@@ -158,6 +158,25 @@ n00bb_instantiated(const ir_func_t *function)
         != 0;
 }
 
+void
+n00bb_fold_exit_verdicts(ir_func_t *function)
+{
+    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+        ir_instr_t *term = ir_block_terminator(function->blocks[b]);
+        ir_instr_t *test = branch_type_test(function->blocks[b]);
+        if (!test || !ir_annot_get(&test->annots,
+                CORE_STRING_STATIC(N00BB_EXIT_VERDICT_KEY)))
+            continue;
+        int decided = n00bb_static_type_test(test);
+        ir_block_t *next = decided >= 0
+            ? ir_succ_at(term, decided ? 0 : 1) : nullptr;
+        if (!next) continue;
+        term->op = IR_OP_JUMP;
+        term->n_operands = 0;
+        (void)ir_instr_operand_block(term, next);
+    }
+}
+
 bool
 n00bb_fold_static_branches(ir_func_t *function, ir_func_t *origin,
                            ir_ctx_t *context)
