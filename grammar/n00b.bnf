@@ -847,15 +847,15 @@
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
 
-<type-constraint> ::= %TYPE_VAR %":" <constraint-list>
+<type-constraint> @nospace($1) ::= %TYPE_VAR %":" <constraint-list>
 
 <constraint-list> ::= <one-constraint> (<plus-op> <one-constraint>)*
 
 <one-constraint> ::= %"!=" <one-tspec>
                    | <trait-name>
-                   | <trait-name> %"[" <tspec-list> %"]"
+<one-constraint> @nospace ::= <trait-name> %"[" <tspec-list> %"]"
 
-<trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+<trait-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <type-decl> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <type-layout-modifier>* <type-body>
