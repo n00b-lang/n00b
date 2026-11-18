@@ -212,9 +212,16 @@ move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local)
     core_buffer_release(&name);
     ir_value_t *held = holder ? ir_local_value(function, holder) : nullptr;
     ir_value_t *target = local->value;
-    if (!held || !target || !function->n_blocks
-        || !fresh_storage(function->blocks[0], 0, function->span, local,
-                          holder, storage_type))
+    ir_value_t *storage = held && target && function->n_blocks
+        ? fresh_storage(function->blocks[0], 0, function->span, local,
+                        holder, storage_type)
+        : nullptr;
+    // The storage stands for the local from here on; the checks that a
+    // local is set before it's read follow it there (ir_unset_locals).
+    if (!storage || !ir_annot_set(ir_module_ctx(function->owner),
+            &storage->def->annots, (ir_annot_t){
+                .key = CORE_STRING_STATIC("ir.placed_local"),
+                .kind = IR_ANNOT_STR, .s = local->name}))
         return false;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];

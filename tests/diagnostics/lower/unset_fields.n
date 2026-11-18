@@ -92,3 +92,14 @@ _ = every_field()
 _ = only_what_was_set()
 _ = filled_by_callee()
 _ = arrays_start_zeroed()
+
+# A local whose reference outlives the call is moved to the heap; it is
+# still checked there.
+var kept: Ref[Pair]? = nil
+func escapes_unset() -> int {
+    var p: Pair
+    p.a = 1
+    kept = ref p
+    return p.b
+}
+_ = escapes_unset()

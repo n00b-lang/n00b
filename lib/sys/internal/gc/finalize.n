@@ -266,6 +266,10 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
         if count > queued {
             count = queued
         }
+        if count == 0 {
+            internal.locks.mutex_unlock(ref heap.__value.fin)
+            break
+        }
         var index: uint = 0
         while index < count {
             let storage: Ref[byte]? = heap.__value.finq
@@ -278,25 +282,20 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
             index += 1
         }
         __atomic_store(ref heap.__value.finq_n, queued - count)
-        if count != 0 {
-            batch.n = count
-            batch.prev = nil
-            let previous: Ref[internal.gc.core.Final_Batch]? = heap.__value.running
-            batch.next = previous
-            if previous != nil {
-                previous.__value.prev = ref batch
-            }
-            heap.__value.running = ref batch
-            heap.__value.running_n += count
-            if finalizer_thread {
-                __atomic_compare_exchange(ref heap.__value.fin_thread, thread_starting,
-                                          thread_running)
-            }
+        batch.n = count
+        batch.prev = nil
+        let running: Ref[internal.gc.core.Final_Batch]? = heap.__value.running
+        batch.next = running
+        if running != nil {
+            running.__value.prev = ref batch
+        }
+        heap.__value.running = ref batch
+        heap.__value.running_n += count
+        if finalizer_thread {
+            __atomic_compare_exchange(ref heap.__value.fin_thread, thread_starting,
+                                      thread_running)
         }
         internal.locks.mutex_unlock(ref heap.__value.fin)
-        if count == 0 {
-            break
-        }
 
         internal.gc.core.signal(ref heap.__value.fin_progress)
         index = 0

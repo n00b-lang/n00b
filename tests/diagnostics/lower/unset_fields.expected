@@ -11,3 +11,5 @@ tests/diagnostics/lower/unset_fields.n:52:12: error N00B-S0004: `p.a` is read on
   tests/diagnostics/lower/unset_fields.n:47:9: note: `p` is declared here
 tests/diagnostics/lower/unset_fields.n:58:12: error N00B-S0004: `s.count` is read on a path where it has no value
   tests/diagnostics/lower/unset_fields.n:56:9: note: `s` is declared here
+tests/diagnostics/lower/unset_fields.n:103:12: error N00B-S0004: `p.b` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:100:9: note: `p` is declared here
