@@ -1,0 +1,15 @@
+enum Color { red, green }
+flagset Perm { read, write }
+
+func pick(c: Color) -> int {
+    switch c {
+        case Color.blue { return 1 }
+        else { return 0 }
+    }
+}
+
+func start() {
+    let shade = Color.gren
+    let mode = Perm.exec
+    require pick(Color.red) == 0 and Perm.read != Perm.write
+}

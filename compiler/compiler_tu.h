@@ -725,9 +725,17 @@ bool reference_is_simple_assignment_target(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node,
                                            parse_sym_entry_t *symbol);
+// `Type.name` where the enum or flagset `Type` declares no `name`.
+typedef struct {
+    parse_sym_entry_t *type;
+    parse_tree_t      *path;
+    core_string_t      name;
+} n00bb_missing_member_t;
+
 bool resolve_local_enum_constant(parse_grammar_t *grammar,
                                  n00bb_tu_state_t *state,
-                                 n00bb_link_use_site_t *site);
+                                 n00bb_link_use_site_t *site,
+                                 n00bb_missing_member_t *missing);
 bool identifier_is_variant_case_expression(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node);

@@ -37,6 +37,13 @@ N00B_DIAG(FIELD_MISSING, "N00B-N0005", ERROR,
     "    }\n"
     "    require p.x == 1\n"
     "Check the spelling against the type's fields.")
+N00B_DIAG(ENUM_MEMBER_MISSING, "N00B-N0027", ERROR,
+    "an enum or flagset member is named that the type does not declare",
+    "`Type.name` names the member `name` of the enum or flagset `Type`,\n"
+    "which must declare it:\n"
+    "    enum Phase { idle, busy }\n"
+    "    let state = Phase.idle\n"
+    "Check the spelling against the members the type declares.")
 N00B_DIAG(FIELD_NOT_VISIBLE, "N00B-N0006", ERROR,
     "a private field or variant arm is used outside its module",
     "A `private` field is visible only inside the module that declares its\n"

@@ -237,8 +237,10 @@ variant_arms_in_source_order(parse_scope_t *scope)
 bool
 resolve_local_enum_constant(parse_grammar_t *grammar,
                             n00bb_tu_state_t *state,
-                            n00bb_link_use_site_t *site)
+                            n00bb_link_use_site_t *site,
+                            n00bb_missing_member_t *missing)
 {
+    if (missing) *missing = (n00bb_missing_member_t){0};
     if (!state || !state->annotations || !site || site->dotted_path
         || !site->node || !site->member_name.data) return false;
     parse_tree_t *receiver = site->node;
@@ -262,6 +264,9 @@ resolve_local_enum_constant(parse_grammar_t *grammar,
                                CORE_STRING_STATIC("flagset")))) return false;
     core_string_t name = first_token_text(core_tree_child(parent, 2));
     parse_sym_entry_t *item = parse_symtab_lookup_in(type->member_scope, name);
+    if (!item && missing)
+        *missing = (n00bb_missing_member_t){
+            .type = type, .path = parent, .name = name};
     if (!item || item->kind != PARSE_SYM_ENUM_CONST || !item->type
         || !parse_tree_set_resolution_symbol(site->node, type)
         || !parse_tree_set_resolution_symbol(parent, item)) return false;

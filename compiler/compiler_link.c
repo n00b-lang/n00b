@@ -284,11 +284,22 @@ bind_field_member_uses(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+static bool enum_like_scope(const parse_scope_t *scope);
+static bool module_member_is_call(parse_grammar_t *grammar,
+                                  parse_tree_t *node);
+static void report_enum_member_missing(core_translation_unit_t *unit,
+                                       parse_tree_t *node,
+                                       core_translation_unit_t *owner,
+                                       parse_sym_entry_t *type,
+                                       parse_scope_t *scope,
+                                       core_string_t name);
+
 bool
 resolve_type_member_references(core_link_unit_t *link,
                                n00bb_link_analysis_t *analysis)
 {
     parse_grammar_t *grammar = analysis->grammar;
+    bool all_resolved = true;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -309,10 +320,19 @@ resolve_type_member_references(core_link_unit_t *link,
             core_translation_unit_t *owner = nullptr;
             parse_scope_t *scope = record_scope_for_type(analysis,
                 receiver->type, &owner);
+            core_string_t name = first_token_text(core_tree_child(node, 2));
             parse_sym_entry_t *member = scope && owner
-                ? parse_symtab_lookup_in(scope,
-                      first_token_text(core_tree_child(node, 2)))
+                ? parse_symtab_lookup_in(scope, name)
                 : nullptr;
+            if (!member && scope && owner
+                && enum_like_scope(scope)
+                && !module_member_is_call(grammar, node)) {
+                report_enum_member_missing(unit, node, owner, receiver,
+                                           scope, name);
+                site->unresolved = true;
+                all_resolved = false;
+                continue;
+            }
             if (!member || member->kind != PARSE_SYM_ENUM_CONST) continue;
             if (site->symbol && site->symbol != member)
                 parse_sym_remove_use(site->symbol, node);
@@ -335,7 +355,7 @@ resolve_type_member_references(core_link_unit_t *link,
                     core_source_file_path(&unit->source))) return false;
         }
     }
-    return true;
+    return all_resolved;
 }
 
 static void
@@ -1974,6 +1994,39 @@ enum_like_scope(const parse_scope_t *scope)
                               CORE_STRING_STATIC("flagset")));
 }
 
+// `Type.name` where `Type` is an enum or flagset that declares no `name`.
+static void
+report_enum_member_missing(core_translation_unit_t *unit, parse_tree_t *node,
+                           core_translation_unit_t *owner,
+                           parse_sym_entry_t *type, parse_scope_t *scope,
+                           core_string_t name)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_MEMBER_MISSING,
+        n00bb_node_span(member_name_node(node)), N00B_TEXT_TYPE_HAS_NO_MEMBER,
+        N00BB_ARGS(ARG_TEXT(scope->scope_tag), ARG_TEXT(type->name),
+                   ARG_TEXT(name)));
+    if (n00bb_suggest_scope_member(diagnostics, unit, owner, scope, name))
+        return;
+    // Scope order differs between parsed modules and cached interfaces,
+    // so list the members by name.
+    core_list_t(core_string_t) members = core_list_new(core_string_t);
+    for (parse_sym_entry_t *member = scope->first_in_scope; member;
+         member = member->next_in_scope) {
+        if (member->kind != PARSE_SYM_ENUM_CONST || member->is_synthetic)
+            continue;
+        size_t at = members.len;
+        while (at && core_string_cmp(members.data[at - 1], member->name) > 0)
+            at--;
+        core_list_insert(members, at, member->name);
+    }
+    if (members.len)
+        n00bb_report_note(diagnostics, N00B_TEXT_TYPE_HAS_MEMBERS,
+            N00BB_ARGS(ARG_NAMES(members.data, members.len),
+                       ARG_TEXT(type->name)));
+    core_list_free(members);
+}
+
 static parse_sym_entry_t *
 visible_enum_type(core_translation_unit_t *consumer,
                   core_translation_unit_t *provider, parse_sym_entry_t *entry)
@@ -2546,9 +2599,20 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (!site->symbol
                     && !resolve_prelude_value(grammar, unit, state, site))
                     return false;
+                n00bb_missing_member_t missing = {0};
                 if (!site->symbol)
-                    resolve_local_enum_constant(grammar, state, site);
-                if (!site->symbol
+                    resolve_local_enum_constant(grammar, state, site,
+                                                &missing);
+                if (!site->symbol && missing.type
+                    && !module_member_is_call(grammar, missing.path)) {
+                    report_enum_member_missing(unit, missing.path,
+                        missing.type->owner_unit ? missing.type->owner_unit
+                                                 : unit,
+                        missing.type, missing.type->member_scope,
+                        missing.name);
+                    site->unresolved = true;
+                }
+                if (!site->symbol && !site->unresolved
                     && !resolve_module_member_name(unit, state, site))
                     return false;
                 if (site->unresolved) {

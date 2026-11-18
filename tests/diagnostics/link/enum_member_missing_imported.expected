@@ -1,0 +1,2 @@
+tests/diagnostics/link/enum_member_missing_imported.n:6:46: error N00B-N0027: enum `Index_Unit` has no member `grapheme`
+  note: `Index_Unit` has members `byte`, `char` and `cluster`
