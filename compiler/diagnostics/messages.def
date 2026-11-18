@@ -270,6 +270,7 @@ N00B_TEXT(CANNOT_CAST_TO_NO_CONVERSION, "cannot cast `{0}` to `{1}`: no conversi
 N00B_TEXT(TRAIT_TYPE_OUTSIDE_FUNCTION, "`{0}` is a trait, which can only stand for a type inside a function")
 N00B_TEXT(NAME_THE_IMPLEMENTING_TYPE, "name the type that implements `{0}` here instead")
 N00B_TEXT(TRAIT_TYPE_UNSETTLED, "nothing in `{1}` settles which type the `{0}` in `{2}` stands for")
+N00B_TEXT(TRAIT_TYPE_UNSETTLED_HERE, "nothing in `{1}` settles which type `{0}` stands for here")
 N00B_TEXT(STORE_OR_NAME_THE_IMPLEMENTING_TYPE, "store a value of the type that implements `{0}`, or name that type instead of `{0}`")
 N00B_TEXT(CANNOT_CAST_TO_NOT_IMPLEMENTED, "cannot cast `{0}` to `{1}`: `{0}` does not implement `{1}`")
 N00B_TEXT(REINTERPRETING_A_REFERENCE_NEEDS_UNSAFE, "reinterpreting a reference needs `unsafe_cast`")

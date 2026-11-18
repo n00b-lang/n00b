@@ -2180,6 +2180,43 @@ enclosing_cast_type(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
+// Whether `node` is a type a `typecase` arm names (`case Shape`).
+static bool
+in_typecase_arm_types(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *up = parse_tree_parent(at);
+        if (up && NT_IS(grammar, at, "type-spec-list")
+            && (NT_IS(grammar, up, "typecase-case-block")
+                || NT_IS(grammar, up, "typecase-value-case-block")))
+            return true;
+        if (NT_IS(grammar, at, "func-def")
+            || NT_IS(grammar, at, "typecase-case-block")
+            || NT_IS(grammar, at, "typecase-value-case-block"))
+            return false;
+    }
+    return false;
+}
+
+// Notes `name` as a variable a `typecase` arm of `owner` introduces.
+static bool
+record_typecase_trait_var(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
+                          core_string_t name)
+{
+    core_list_t(core_string_t) *names = parse_sym_binding(owner,
+        N00BB_TYPECASE_TRAIT_VARS_KEY);
+    if (!names) {
+        names = core_arena_alloc(&state->semantic_values, sizeof(*names));
+        if (!names || !parse_sym_set_binding(owner,
+                N00BB_TYPECASE_TRAIT_VARS_KEY, names)) return false;
+        *names = core_list_new(core_string_t);
+    }
+    for (size_t i = 0; i < names->len; i++)
+        if (core_string_eq(names->data[i], name)) return true;
+    core_list_push(*names, name);
+    return true;
+}
+
 // The trait `spec`, the type of a `cast[...]`, names directly.
 static parse_sym_entry_t *
 first_named_symbol(parse_tree_t *node)
@@ -2253,15 +2290,18 @@ trait_type_reference(parse_grammar_t *grammar,
     core_buffer_t name = {0};
     core_buffer_printf(&name, "%.*s@%u:%u", (int)symbol->name.u8_bytes,
                        symbol->name.data, at.line, at.column);
-    th_type *type = owner_typevar(state, owner,
-        store_semantic_string(state, core_buffer_string(&name)), nullptr);
+    core_string_t stored = store_semantic_string(state,
+                                                 core_buffer_string(&name));
+    th_type *type = owner_typevar(state, owner, stored, nullptr);
     bool recorded = type && qualified.data
         && record_type_bound(state, owner, (th_trait_requirement){
             .subject = type,
             .kind = TH_CON_IMPLEMENTS,
             .iface = store_semantic_string(state,
                                            core_buffer_string(&qualified)),
-        });
+        })
+        && (!in_typecase_arm_types(grammar, reference)
+            || record_typecase_trait_var(state, owner, stored));
     core_buffer_release(&name);
     core_buffer_release(&qualified);
     return recorded ? type : nullptr;

@@ -2,3 +2,5 @@ tests/diagnostics/tu/trait_type_unsettled.n:16:9: error N00B-T0605: nothing in `
   help: store a value of the type that implements `Shape`, or name that type instead of `Shape`
 tests/diagnostics/tu/trait_type_unsettled.n:21:9: error N00B-T0605: nothing in `empty_list` settles which type the `Shape` in `shapes` stands for
   help: store a value of the type that implements `Shape`, or name that type instead of `Shape`
+tests/diagnostics/tu/trait_type_unsettled.n:31:18: error N00B-T0605: nothing in `temporary` settles which type `Shape` stands for here
+  help: store a value of the type that implements `Shape`, or name that type instead of `Shape`

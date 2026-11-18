@@ -5676,9 +5676,10 @@ static bool type_mentions(th_ctx *types, th_type *type, th_type *var)
 }
 
 // A trait used as a type inside a function (`Array[Shape]`) stands for one
-// type that implements it, which the function's body settles. A variable
-// whose type holds one that nothing settled can't be built. (One whose
-// type is just the trait is check_untyped's.)
+// type that implements it, which the function's body settles. A value
+// whose type holds one that nothing settled can't be built. It is reported
+// at the variable holding it, or else at the first value that has it. (A
+// variable whose type is just the trait is check_untyped's.)
 static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
                                    parse_sym_entry_t *symbol,
                                    ir_func_t *function, core_string_t trait,
@@ -5686,32 +5687,75 @@ static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
 {
     ir_local_t *holder = nullptr;
 
-    for (uint32_t l = 0; !holder && l < function->n_locals; l++) {
+    for (uint32_t l = 0; l < function->n_locals; l++) {
         ir_local_t *local = function->locals[l];
         th_type    *type  = local->type ? th_resolve(local->type) : nullptr;
 
-        if (type && th_kind_of(type) != TH_VAR && !local->synthetic
-            && local->source_name.u8_bytes && ir_span_known(local->span)
-            && !local->span.implied && type_mentions(types, type, var)) {
+        if (!type || local->synthetic || !local->source_name.u8_bytes
+            || !ir_span_known(local->span) || local->span.implied) {
+            continue;
+        }
+        if (type == var) {
+            return true;
+        }
+        if (!holder && type_mentions(types, type, var)) {
             holder = local;
         }
     }
-    if (!holder) {
-        return true;
-    }
 
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    core_string_t       name        = n00bb_name_leaf(holder->source_name);
 
     trait = n00bb_name_leaf(trait);
-    n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
-                 n00bb_name_location(unit, holder->span, name),
-                 N00B_TEXT_TRAIT_TYPE_UNSETTLED,
-                 N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name),
-                            ARG_TEXT(name)));
+    if (holder) {
+        core_string_t name = n00bb_name_leaf(holder->source_name);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_name_location(unit, holder->span, name),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name),
+                                ARG_TEXT(name)));
+    }
+    else {
+        const ir_instr_t *at = nullptr;
+
+        for (uint32_t b = 0; !at && b < function->n_blocks; b++) {
+            for (uint32_t i = 0; !at && i < function->blocks[b]->n_instrs;
+                 i++) {
+                const ir_instr_t *in = function->blocks[b]->instrs[i];
+
+                at = in->dest && ir_span_known(in->span) && !in->span.implied
+                        && type_mentions(types, in->dest->type, var)
+                       ? in
+                       : nullptr;
+            }
+        }
+        if (!at) {
+            return true;
+        }
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED_HERE,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name)));
+    }
     n00bb_report_help(diagnostics,
                       N00B_TEXT_STORE_OR_NAME_THE_IMPLEMENTING_TYPE,
                       N00BB_ARGS(ARG_TEXT(trait)));
+
+    return false;
+}
+
+// Whether `name` is a variable one of `symbol`'s `typecase` arms
+// introduces.
+static bool typecase_trait_var(parse_sym_entry_t *symbol, core_string_t name)
+{
+    core_list_t(core_string_t) *names = parse_sym_binding(
+        symbol, N00BB_TYPECASE_TRAIT_VARS_KEY);
+
+    for (size_t i = 0; names && i < names->len; i++) {
+        if (core_string_eq(names->data[i], name)) {
+            return true;
+        }
+    }
 
     return false;
 }
@@ -5755,6 +5799,15 @@ static bool check_unsettled_traits(th_ctx *types,
             core_list_t(th_type_ptr_t) reported =
                 core_list_new(th_type_ptr_t);
 
+            // A `typecase` arm's variable stands for the subject's type at
+            // run time, so it stays open, and so does anything it reached.
+            for (size_t v = 0; function && v < variables->len; v++) {
+                if (variables->data[v].type
+                    && typecase_trait_var(symbol, variables->data[v].name)) {
+                    core_list_push(reported,
+                                   th_resolve(variables->data[v].type));
+                }
+            }
             for (size_t v = 0; function && v < variables->len; v++) {
                 th_type *var = variables->data[v].type
                     ? th_resolve(variables->data[v].type) : nullptr;

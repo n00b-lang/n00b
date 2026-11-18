@@ -12,6 +12,11 @@
 #define N00BB_DECLARED_WHERE_KEY \
     CORE_STRING_STATIC("n00bb.declared-where")
 #define N00BB_TYPE_BOUNDS_KEY CORE_STRING_STATIC("n00bb.type-bounds")
+// The trait-as-type variables a function's `typecase` arms introduce
+// (`case Shape`), by name: each stands for whatever type the subject has
+// at run time, so nothing in the body settles it.
+#define N00BB_TYPECASE_TRAIT_VARS_KEY \
+    CORE_STRING_STATIC("n00bb.typecase-trait-vars")
 
 core_list_decl(th_trait_requirement);
 
