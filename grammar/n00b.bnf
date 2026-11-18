@@ -197,16 +197,16 @@
 <try-body-stmts> ::= <value-stmt>
                     | <body-stmt-list>
                     | <body-stmt-list> <eos>+ <value-stmt>
-<try-error-clause> @scope("try-error") ::=
+<try-error-clause> @scope("try-error") @nospace($1) ::=
        %"fail" <try-handler-params> <body>
-<try-handler-params> ::= %"(" <try-error-binding> %")" | %"(" %")"
+<try-handler-params> @nospace ::= %"(" <try-error-binding> %")" | %"(" %")"
 <try-error-binding> @declares($0, "error") ::= %IDENTIFIER
-<try-error-binding> @declares($0, "error") ::=
+<try-error-binding> @declares($0, "error") @nospace($1) ::=
        %IDENTIFIER %":" <type-spec>
 
 <try-value-expr> @scope("try") @disambig(n00bb_prefer_statement_form, 100) ::=
        %"try" <value-body> <try-value-error-clause>
-<try-value-error-clause> @scope("try-error") ::=
+<try-value-error-clause> @scope("try-error") @nospace($1) ::=
        %"fail" <try-handler-params> <value-body>
 
 # Using the `type` keyword creates a 'brand new' type, meaning that

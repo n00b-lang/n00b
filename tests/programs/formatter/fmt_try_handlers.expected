@@ -1,0 +1,36 @@
+func risky() -> int fail: string {
+    fail "bad"
+}
+
+func a() -> int {
+    try {
+        return risky()!
+    } fail(diags) {
+        return 0
+    }
+}
+
+func b() -> int {
+    try {
+        return risky()!
+    } fail(e: string) {
+        return 1
+    }
+}
+
+func c() -> int {
+    try {
+        return risky()!
+    } fail() {
+        return 2
+    }
+}
+
+func d() -> int {
+    let v = try {
+        -> risky()!
+    } fail(e) {
+        -> 3
+    }
+    return v
+}
