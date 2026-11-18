@@ -1,4 +1,5 @@
 import string.core
+import string.xid
 import containers.list
 import containers.buffer
 import io.format
@@ -1298,30 +1299,52 @@ private func is_digit_byte(b: u8) -> bool {
     return b >= 0x30 and b <= 0x39
 }
 
-// Identifier bytes for tag names. ASCII follows the language's identifier
-// rule exactly (a letter or `_`, then letters, digits, or `_`). The builtin
-// layer cannot reach the Unicode XID tables, so every non-ASCII code point
-// (all of whose UTF-8 bytes are >= 0x80) is accepted as an identifier
-// character.
-private func is_id_start_byte(b: u8) -> bool {
-    return (b >= 0x41 and b <= 0x5a) or (b >= 0x61 and b <= 0x7a) or
-        b == 0x5f or b >= 0x80
-}
-
-private func is_id_continue_byte(b: u8) -> bool {
-    return is_id_start_byte(b) or is_digit_byte(b)
+// The byte length of the identifier character at `at`, or 0 when there is
+// none. Tag and slot names follow n00b's identifier rule exactly:
+// `(_|XID_Start)(_|XID_Continue)*`.
+private func id_char_len(raw: string, at: uint, first: bool) -> uint {
+    let b: u8 = string.core.byte_at(raw, at)
+    if b < 0x80 {
+        let ok: bool = b == 0x5f or (b >= 0x41 and b <= 0x5a) or
+            (b >= 0x61 and b <= 0x7a) or (!first and is_digit_byte(b))
+        if ok {
+            return 1
+        }
+        return 0
+    }
+    let step: string.core.Utf8_Step =
+        string.core.utf8_decode_step(raw, cast[u32] at)
+    if step.adv <= 0 {
+        return 0
+    }
+    let cp: u32 = cast[u32] step.cp
+    var ok: bool = string.xid.is_xid_continue(cp)
+    if first {
+        ok = string.xid.is_xid_start(cp)
+    }
+    if ok {
+        return cast[uint] step.adv
+    }
+    return 0
 }
 
 // Returns the index just past the identifier starting at `at`, or `at`
 // itself when no identifier starts there.
 private func scan_id(raw: string, at: uint) -> uint {
     let n: uint = string.core.byte_len(raw)
-    if at >= n or !is_id_start_byte(string.core.byte_at(raw, at)) {
+    if at >= n {
         return at
     }
-    var j: uint = at + 1
-    while j < n and is_id_continue_byte(string.core.byte_at(raw, j)) {
-        j += 1
+    var j: uint = at + id_char_len(raw, at, true)
+    if j == at {
+        return at
+    }
+    while j < n {
+        let step: uint = id_char_len(raw, j, false)
+        if step == 0 {
+            break
+        }
+        j += step
     }
     return j
 }

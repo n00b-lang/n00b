@@ -198,6 +198,36 @@ def compare_tables(label, ours, theirs, errors):
                           f"vs baseline {describe(their_value)}{detail}")
 
 
+def builtin_xid_array(text, name):
+    match = re.search(rf"const {name}: Array\[\w+\] = \[(.*?)\]", text, re.S)
+    return numbers(match.group(1)) if match else None
+
+
+def check_builtin_xid(root):
+    """lib/builtin/string/xid.n must be what gen_builtin_xid makes from the
+    committed proplist tables, which carry the same UCD data."""
+    sys.path.insert(0, str(root / "tools"))
+    import gen_unicode_tables as gen
+    generated = root / "lib" / "unicode" / "generated"
+    xid = root / "lib" / "builtin" / "string" / "xid.n"
+    if not xid.is_file():
+        return [f"missing {xid}"]
+    s1 = (generated / "proplist_stage1.bin").read_bytes()
+    s2 = (generated / "proplist_stage2.bin").read_bytes()
+    stage1 = struct.unpack(f"<{len(s1) // 2}H", s1)
+    stage2 = struct.unpack(f"<{len(s2) // 8}Q", s2)
+    props = [stage2[stage1[cp >> 8] * gen.BLOCK_SIZE + (cp & 0xff)]
+             for cp in range(gen.MAX_CP)]
+    blocks, words = gen.builtin_xid_tables(props)
+    text = xid.read_text()
+    errors = []
+    if builtin_xid_array(text, "xid_block") != blocks:
+        errors.append(f"{xid}: xid_block does not match proplist")
+    if builtin_xid_array(text, "xid_words") != words:
+        errors.append(f"{xid}: xid_words does not match proplist")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check Unicode tables")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parent.parent),
@@ -211,6 +241,12 @@ def main():
 
     root = Path(args.root).resolve()
     baseline = Path(args.baseline).expanduser()
+
+    xid_errors = check_builtin_xid(root)
+    for line in xid_errors:
+        print(f"FAIL {line}")
+    if xid_errors:
+        return 1
 
     if not baseline.is_dir():
         print(f"SKIP: baseline directory absent: {baseline}")

@@ -655,6 +655,16 @@ func bracket_markup() {
                "on t m u",
                "r\"[b]on[/b] [title]t[/title] [mine]m[/mine] [_x9]u[/_x9]\"")
     check_rich("[warning]w[/warning]"'rich, "w", "r\"[warning]w[/warning]\"")
+    // Names follow the identifier rule `(_|XID_Start)(_|XID_Continue)*`,
+    // non-ASCII included; anything else is literal text.
+    check_rich("[é]x[/é] [日本]y[/日本] [_9]z[/_9] [a1]w[/a1]"'r,
+               "x y z w",
+               "r\"[é]x[/é] [日本]y[/日本] [_9]z[/_9] [a1]w[/a1]\"")
+    check_rich("[—]x[/—] [→]y [9a] [é—] [ö·]"'r,
+               "[—]x[/—] [→]y [9a] [é—] ",
+               "r\"\\[—]x\\[/—] \\[→]y \\[9a] \\[é—] [ö·]\"")
+    check(slots_of("[#é][#日本:x][#→]"'r) == "name é@0;name 日本@0:x",
+          "bracket_markup", "xid")
     // `[/]` ends every open style.
     check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b]c\"")
     check_rich("[/]x"'r, "x", "r\"x\"")
