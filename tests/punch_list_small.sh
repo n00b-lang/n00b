@@ -107,3 +107,19 @@ func g(n: uint) -> uint {
 EOF
 "$compiler" fmt --normalize "$tmp/counter.n"
 grep -q 'var i: *uint ' "$tmp/counter.n"
+
+# Type arguments on an imported type are counted the same whether the
+# module comes from source or from its cached interface: both checks
+# report `Plain[int]`, `Holder[int, int]` and `Level[int]`.
+for pass in fresh cached; do
+    N00B_CACHE="$tmp/arity-cache" N00B_DIAGNOSTICS=terse \
+        N00B_PATH="$src/tests/diagnostics/modules/type_argument_arity_imported" \
+        "$compiler" check "$src/tests/diagnostics/tu/type_argument_arity_imported.n" \
+        >"$tmp/arity.out" 2>"$tmp/arity.err" && {
+        echo "type argument check passed on the $pass pass" >&2
+        exit 1
+    }
+    grep -q '`Plain` takes no type arguments, but 1 is given' "$tmp/arity.err"
+    grep -q '`Holder` takes 1 type argument, but 2 are given' "$tmp/arity.err"
+    grep -q '`Level` takes no type arguments, but 1 is given' "$tmp/arity.err"
+done

@@ -1,0 +1,9 @@
+tests/diagnostics/tu/type_argument_arity_imported.n:5:20: error N00B-T0515: `Plain` takes no type arguments, but 1 is given
+  tests/diagnostics/modules/type_argument_arity_imported/shapes.n:2:8: note: `Plain` is declared here
+  help: remove the type argument
+tests/diagnostics/tu/type_argument_arity_imported.n:6:21: error N00B-T0515: `Holder` takes 1 type argument, but 2 are given
+  tests/diagnostics/modules/type_argument_arity_imported/shapes.n:6:8: note: `Holder` is declared here
+  help: remove the extra type argument
+tests/diagnostics/tu/type_argument_arity_imported.n:8:20: error N00B-T0515: `Level` takes no type arguments, but 1 is given
+  tests/diagnostics/modules/type_argument_arity_imported/shapes.n:10:6: note: `Level` is declared here
+  help: remove the type argument

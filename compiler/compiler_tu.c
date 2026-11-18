@@ -9596,6 +9596,29 @@ named_type_arity(parse_grammar_t *grammar, core_translation_unit_t *unit,
     int builtin_generic = builtin_generic_type_arity(name);
     if (builtin_generic != -1) return builtin_generic < 0 ? -1
                                                           : builtin_generic;
+    // A record, object or variant from a cached module's interface has no
+    // syntax to count, but loading the interface defined its template, so
+    // its generic head is already registered.
+    core_string_t declared_name = {0};
+    if (symbol && symbol->kind == PARSE_SYM_TYPEDEF
+        && (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("enum"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("flagset")))) {
+        *declaration = symbol;
+        return 0;
+    }
+    bool defined_shape = symbol
+        && (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("record"))
+            || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("object"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("variant")));
+    if (defined_shape && symbol->kind == PARSE_SYM_TYPEDEF && symbol->type
+        && th_named_info(th_resolve(symbol->type), &declared_name, nullptr,
+                         nullptr)) {
+        *declaration = symbol;
+        return (ptrdiff_t)th_generic_arity(tu_state(unit)->types,
+                                           declared_name);
+    }
     const th_builtin_type_t *builtin = base
         ? th_builtin_type(tu_state(unit)->types, base) : nullptr;
     return builtin && builtin->arity >= 0 ? builtin->arity : -1;

@@ -1,0 +1,10 @@
+// On the package path, so another module than the test.
+record Plain {
+    x: int
+}
+
+record Holder {
+    v: 'T
+}
+
+enum Level { low, high }
