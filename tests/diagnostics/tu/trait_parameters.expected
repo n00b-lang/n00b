@@ -1,2 +1,4 @@
 tests/diagnostics/tu/trait_parameters.n:11:26: error N00B-T0602: `c.stop` is given `string` here, but another call on `c` already fixed that type as `int`
   help: the type parameters of `Stopper` are fixed once for each bound, so every call on `c` uses the same types; to pass different ones, use a variant type
+tests/diagnostics/tu/trait_parameters.n:16:27: error N00B-T0602: `c.stop` is given `string` here, but another call on `c` already fixed that type as `int`
+  help: the type parameters of `Stopper` are fixed once for each bound, so every call on `c` uses the same types; to pass different ones, use a variant type

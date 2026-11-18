@@ -133,3 +133,75 @@ let base: Base = (v = 4)
 assert summed(base) == 14
 assert base.total(1) == 5
 assert base.total() == 4
+
+# A trait method called as a function, `area(x)`, on a value whose type is
+# bound by the trait goes to the trait's method, as `x.area()` does, not to
+# the functions of that name that take concrete types.
+trait Shape {
+    func area(self: 'T) -> f64
+}
+
+record Square {
+    side: f64
+}
+
+record Circle {
+    r: f64
+}
+
+func area(self: Square) -> f64 {
+    return self.side * self.side
+}
+
+func area(self: Circle) -> f64 {
+    return 3.0 * self.r * self.r
+}
+
+func area_of(x: 'T) -> f64 where 'T: Shape {
+    return area(x)
+}
+
+func area_of_shape(x: Shape) -> f64 {
+    return area(x)
+}
+
+func area_of_any(x: Any) -> f64 {
+    typecase x {
+        case Shape {
+            return area(x)
+        }
+        else {
+            return 0.0
+        }
+    }
+}
+
+let square: Square = (side = 2.0)
+let circle: Circle = (r = 1.0)
+assert area_of(square) == 4.0
+assert area_of(circle) == 3.0
+assert area_of_shape(square) == 4.0
+assert area_of_shape(circle) == 3.0
+assert area_of_any(cast[Any] square) == 4.0
+
+# With one function of that name, a call on the bound variable still goes
+# through the bound, and a call on a concrete value goes to the function.
+trait Sized {
+    func size(self: 'T) -> int
+}
+
+record Pile {
+    n: int
+}
+
+func size(self: Pile) -> int {
+    return self.n
+}
+
+func size_of(x: 'T, pile: Pile) -> int where 'T: Sized {
+    return size(x) + 10 * size(pile)
+}
+
+let pile: Pile = (n = 3)
+let other: Pile = (n = 2)
+assert size_of(pile, other) == 23

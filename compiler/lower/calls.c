@@ -335,6 +335,48 @@ n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return overloaded;
 }
 
+// A call `f(x, ...)` to the one function named `f`, made in a function
+// with a trait bound whose trait declares `f`, when `f`'s first parameter
+// takes a concrete type. It is lowered as an overloaded call with that one
+// candidate, so typing can send it to the trait's method instead, as it
+// does `x.f(...)`, when `x`'s type is the bound variable. Types aren't
+// known yet here, so typing decides.
+static bool
+trait_method_candidate(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *arguments, parse_sym_entry_t *symbol)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *signature = symbol->kind == PARSE_SYM_FUNCTION
+        ? n00bb_symbol_signature(symbol) : nullptr;
+    signature = signature ? th_resolve(signature) : nullptr;
+    while (signature && th_kind_of(signature) == TH_BINDER)
+        signature = th_resolve(th_binder_body(signature));
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || !th_func_nparams(signature)
+        || !th_is_closed(types, th_func_param(signature, 0)->type))
+        return false;
+    core_list_t(n00bb_tree_ptr_t) nodes = core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, arguments, CORE_STRING_STATIC("positional-args")),
+        &nodes);
+    size_t positional = nodes.len;
+    core_list_free(nodes);
+    if (!positional) return false;
+
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    core_list_t(th_trait_requirement) bounds =
+        n00bb_declared_bounds(lower ? lower->function_symbol : nullptr);
+    bool found = false;
+    for (size_t i = 0; analysis && !found && i < bounds.len; i++)
+        found = bounds.data[i].kind == TH_CON_IMPLEMENTS
+            && trait_method_requirement_symbol(grammar, analysis, lower->unit,
+                   bounds.data[i].iface, symbol->name);
+    core_list_free(bounds);
+    return found;
+}
+
 // A method's receiver is written back when the method takes it by
 // reference: rewrite passes the place the receiver was read from, or a
 // temporary when it names none.
@@ -934,6 +976,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *arguments = call_label
             && call_label->kind == PARSE_CF_CALL ? call_label->then_body
             : call_arguments_node(visit->grammar, call_node);
+        return n00bb_lower_overloaded_call(context, visit->grammar, call_node,
+                                           arguments, symbol->name,
+                                           result_type, span, candidates);
+    }
+    parse_tree_t *arguments = symbol ? (call_label
+            && call_label->kind == PARSE_CF_CALL ? call_label->then_body
+            : call_arguments_node(visit->grammar, call_node)) : nullptr;
+    if (symbol && trait_method_candidate(context, visit->grammar, arguments,
+                                         symbol)) {
+        candidates = core_list_new(parse_sym_entry_ptr_t);
+        core_list_push(candidates, symbol);
         return n00bb_lower_overloaded_call(context, visit->grammar, call_node,
                                            arguments, symbol->name,
                                            result_type, span, candidates);

@@ -3241,6 +3241,29 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
     return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
 }
 
+// An overloaded call `f(x, ...)` whose first argument is a type variable
+// bound by a trait that declares `f` goes to that trait's method, as
+// `x.f(...)` does: the functions named `f` that take concrete types can't
+// take the variable.
+static bool trait_bound_call(const n00bb_dispatch_index_t *index,
+                             const ir_instr_t *at, th_type *shape)
+{
+    th_type *receiver = shape && th_kind_of(shape) == TH_FUNCTION
+            && th_func_nparams(shape)
+        ? th_resolve(th_func_param(shape, 0)->type)
+        : nullptr;
+    n00bb_dispatch_target_t target = {0};
+
+    return receiver && th_kind_of(receiver) == TH_VAR && at
+        && at->op == IR_OP_DISPATCH && at->n_operands
+        && at->operands[0].kind == IR_OPD_NAME
+        && n00bb_dispatch_target_for(index, receiver, at->operands[0].name,
+                                     th_func_nparams(shape)
+                                         + th_func_nkw(shape),
+                                     &target)
+        && target.kind == N00BB_TARGET_TRAIT;
+}
+
 static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
                                      th_type *call, th_type **signature)
 {
@@ -3265,7 +3288,7 @@ static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
     if (!site) {
         site = method_site(index, at, shape);
     }
-    if (!site) {
+    if (!site || (!site->chosen && trait_bound_call(index, at, shape))) {
         return TY_OVERLOAD_NONE;
     }
     if (!site->chosen && shape && th_kind_of(shape) == TH_FUNCTION) {
@@ -3959,7 +3982,8 @@ static bool report_overload_site(th_ctx *types,
 {
     n00bb_overload_site_t *site = overload_site(index, at);
 
-    if (!site || site->chosen) {
+    if (!site || site->chosen
+        || trait_bound_call(index, at, dispatch_shape(types, at))) {
         return false;
     }
 
