@@ -585,13 +585,10 @@ static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why)
     if (a == b) {
         return true;
     }
-    if (flexible(s, a)) {
-        return bind(s, a, b, why);
-    }
-    if (flexible(s, b)) {
-        return bind(s, b, a, why);
-    }
 
+    // An outcome that can't fail is its value, before a variable takes it:
+    // a variable bound to the outcome itself would hold the outcome's type
+    // where everything after typing expects the value's.
     bool handled = false;
     bool held    = call_outcome(a) != call_outcome(b)
         && outcome_as_value(s, call_outcome(a) ? a : b,
@@ -599,6 +596,12 @@ static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why)
 
     if (handled) {
         return held;
+    }
+    if (flexible(s, a)) {
+        return bind(s, a, b, why);
+    }
+    if (flexible(s, b)) {
+        return bind(s, b, a, why);
     }
     if (unbound(a) || unbound(b) || !th_same_shape(a, b)) {
         fail(s, TY_FAIL_MISMATCH, why, a, b, nullptr);
@@ -834,6 +837,16 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
                                       .other   = target},
                           why);
     }
+    // An outcome that can't fail flows as its value, before a variable
+    // takes it: a variable bound to the outcome itself would hold the
+    // outcome's type where everything after typing expects the value's.
+    bool handled = false;
+    bool held    = given && !call_outcome(target)
+        && outcome_as_value(s, given, slot, false, why, &handled);
+
+    if (handled) {
+        return held;
+    }
     if (flexible(s, target) && !flexible(s, given)) {
         th_type *slot_root = root_var(s, slot);
 
@@ -865,14 +878,6 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
     }
     if (th_kind_of(given) == TH_RECORD && th_kind_of(target) == TH_RECORD) {
         return flow_record(s, target, given, why);
-    }
-
-    bool handled = false;
-    bool held    = given && !call_outcome(target)
-        && outcome_as_value(s, given, slot, false, why, &handled);
-
-    if (handled) {
-        return held;
     }
 
     th_type *inner = th_option_item(target);

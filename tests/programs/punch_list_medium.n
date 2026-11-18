@@ -458,7 +458,7 @@ func __exit(self: Visits, value: nil, failure: 'E? = nil) {
 }
 
 func visits() {
-    return new[Visits](n = 0)
+    return new[Visits]()
 }
 
 func entered_twice(manager: 'C) where 'C: Context_Manager {
@@ -618,6 +618,12 @@ func with_value() -> int {
     let v = with t = tag_named("v") { -> t.byte_len() * 10 }
     return v
 }
+// A function with a `with` may fail as its managers do; these can't, so a
+// call to it is a plain value, bound and used like any other.
+func with_value_bound() -> int {
+    let v = with_value()
+    return v + 1
+}
 func with_values_in_block() -> string {
     let v = {
         with_log = with_log + "<"
@@ -683,6 +689,7 @@ if !comptime() {
     with_log = ""
     require with_value() == 20
     require with_log == "+v-v"
+    require with_value_bound() == 21
     with_log = ""
     require with_values_in_block() == "a!bb!"
     require with_log == "<+a+bb-bb-a"
