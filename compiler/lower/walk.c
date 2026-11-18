@@ -718,19 +718,10 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
         // has the same name (`string`), the name means the type.
         if (named && named->kind == PARSE_SYM_FUNCTION
             && builtin_type_name(named->name)
-            && !member_receiver(visit->node)) {
-            th_ctx *types = ir_module_types(context->module);
-            ir_instr_t *index = ir_lower_emit_instruction(context,
-                IR_OP_TYPE_INDEX, span);
-            return index && ir_lower_set_temp_dest(context, index,
-                    CORE_STRING_STATIC("__n00bb_type_"),
-                    th_name(types, CORE_STRING_STATIC("typespec")))
-                && ir_instr_operand_type(index, th_name(types,
-                       canonical_builtin_type_name(named->name)))
-                ? (ir_lower_result_t){IR_LOWER_VALUE, index->dest}
-                : lower_internal(context, span,
-                                 "could not emit a type literal");
-        }
+            && !member_receiver(visit->node))
+            return n00bb_emit_type_literal(context,
+                th_name(ir_module_types(context->module),
+                        canonical_builtin_type_name(named->name)), span);
         if (named && named->kind == PARSE_SYM_FUNCTION) {
             lower_report(context, N00B_DIAG_FUNCTION_NAME_AS_VALUE, span,
                          N00B_TEXT_FUNCTION_NAME_AS_VALUE,
@@ -749,18 +740,9 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
         // A type named where a value goes is its `typespec` descriptor.
         n00bb_node_facts_t *facts = visit ? n00bb_node_facts(visit->node)
                                           : nullptr;
-        if (facts && facts->type_literal) {
-            th_type *typespec = th_name(ir_module_types(context->module),
-                                        CORE_STRING_STATIC("typespec"));
-            ir_instr_t *index = ir_lower_emit_instruction(context,
-                IR_OP_TYPE_INDEX, span);
-            return index && ir_lower_set_temp_dest(context, index,
-                    CORE_STRING_STATIC("__n00bb_type_"), typespec)
-                && ir_instr_operand_type(index, facts->type_literal)
-                ? (ir_lower_result_t){IR_LOWER_VALUE, index->dest}
-                : lower_internal(context, span,
-                                 "could not emit a type literal");
-        }
+        if (facts && facts->type_literal)
+            return n00bb_emit_type_literal(context, facts->type_literal,
+                                           span);
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);
         if (!binding && symbol
@@ -1131,6 +1113,9 @@ ir_lower_read_variable(ir_lower_context_t *context, const ir_value_t *value)
         ? value->def : nullptr;
     const ir_value_t *source = read && read->n_operands
         ? ir_operand_value(&read->operands[0]) : nullptr;
+    // A variable narrowed by `has_type` is still that variable.
+    if (read && read->op == IR_OP_TYPE_NARROW && source)
+        return ir_lower_read_variable(context, source);
     if (read && read->op == IR_OP_COPY && read->n_operands == 1) {
         const ir_local_t *local = ir_operand_local(&read->operands[0]);
         if (local) return ir_lower_binding_symbol(context, local, nullptr);
@@ -1228,6 +1213,12 @@ lower_write_binding_value(ir_lower_context_t *context,
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "assignment destination is not writable storage");
     }
+    // A write ends a `has_type` narrowing: the variable reads as its own
+    // type again.
+    if (binding->value && binding->value->def
+        && binding->value->def->op == IR_OP_TYPE_NARROW
+        && (binding->local || binding->address))
+        binding->value = nullptr;
     return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
 }
 

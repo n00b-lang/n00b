@@ -984,27 +984,32 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 N00BB_NO_ARGS);
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
-    // `has_type(value, T)` tests the value's run-time type against a type
-    // written in place.
-    if (symbol && !symbol->decl_node
-        && core_string_eq(symbol->name, CORE_STRING_STATIC("has_type"))
-        && n00bb_builtin_function(symbol)) {
-        parse_tree_t *value_node = n00bb_call_positional_argument(
-            visit->grammar, call_node, 0, 2);
-        parse_tree_t *spec_node = n00bb_call_positional_argument(
-            visit->grammar, call_node, 1, 2);
-        ir_value_t *value = value_node
-            ? ir_lower_node_value(context, value_node) : nullptr;
-        ir_value_t *spec = spec_node
-            ? ir_lower_node_value(context, spec_node) : nullptr;
-        th_type *described = spec && spec->def
-                && spec->def->op == IR_OP_TYPE_INDEX
-                && spec->def->n_operands == 1
-                && spec->def->operands[0].kind == IR_OPD_TYPE
-            ? spec->def->operands[0].type : nullptr;
-        if (!value || !described)
-            return lower_report(context, N00B_DIAG_BUILTIN_ARGUMENTS, span,
-                N00B_TEXT_HAS_TYPE_NEEDS_A_TYPE, N00BB_NO_ARGS);
+    // `has_type(value, T)` with the type written in place is a static type
+    // test; with a `typespec` value it is a call to builtin.abi.has_type,
+    // which checks at run time.
+    parse_sym_entry_t *has_type = symbol ? canonical_symbol(symbol)
+                                         : nullptr;
+    bool has_type_call = has_type && has_type->owner_unit
+        && core_string_eq(has_type->name, CORE_STRING_STATIC("has_type"))
+        && core_string_eq(has_type->owner_unit->module.identifier,
+                          CORE_STRING_STATIC("builtin.abi"));
+    parse_tree_t *value_node = has_type_call
+        ? n00bb_call_positional_argument(visit->grammar, call_node, 0, 2)
+        : nullptr;
+    parse_tree_t *spec_node = has_type_call
+        ? n00bb_call_positional_argument(visit->grammar, call_node, 1, 2)
+        : nullptr;
+    ir_value_t *tested = value_node
+        ? ir_lower_node_value(context, value_node) : nullptr;
+    ir_value_t *spec = spec_node
+        ? ir_lower_node_value(context, spec_node) : nullptr;
+    th_type *described = tested && spec && spec->def
+            && spec->def->op == IR_OP_TYPE_INDEX
+            && spec->def->n_operands == 1
+            && spec->def->operands[0].kind == IR_OPD_TYPE
+        ? spec->def->operands[0].type : nullptr;
+    if (described) {
+        ir_value_t *value = tested;
         th_type *truth = th_name(ir_module_types(context->module),
                                  CORE_STRING_STATIC("bool"));
         ir_instr_t *test = ir_lower_emit_instruction(context,

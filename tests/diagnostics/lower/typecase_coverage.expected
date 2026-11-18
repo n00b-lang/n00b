@@ -2,4 +2,3 @@ tests/diagnostics/lower/typecase_coverage.n:2:5: error N00B-S0102: this `typecas
   help: add an `else` for the types the cases don't name
 tests/diagnostics/lower/typecase_coverage.n:7:5: error N00B-S0102: this `typecase` on `int?` has no `case` for `nil`
   help: add `case nil`, or an `else`
-tests/diagnostics/lower/typecase_coverage.n:12:12: error N00B-T1026: `has_type` needs a value and a type written in place, as in `has_type(x, int)`

@@ -560,6 +560,16 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_type_specializes"),
             th_name(types, CORE_STRING_STATIC("i32")), bytes_args, 2)
+        // The same test on `typespec` descriptors, which are type indexes.
+        && register_native_signature(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_typespec_specializes"),
+            builtin_native_name(
+                CORE_STRING_STATIC("__abi_type_specializes")),
+            th_func_with_error(types,
+                th_name(types, CORE_STRING_STATIC("i32")), nil_type,
+                (th_param[]){{.mode = TH_IN, .type = typespec},
+                             {.mode = TH_IN, .type = typespec}},
+                2, nullptr, nullptr, 0))
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_type_argument_type"), u32, bytes_args,
             1)
@@ -1061,19 +1071,8 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         symtab, CORE_STRING_STATIC("builtin"));
     if (!values || !values->root) return false;
 
-    th_type *value_type = th_var(types);
-    th_type *spec_type = th_name(types, CORE_STRING_STATIC("typespec"));
     th_type *bool_type = th_name(types, CORE_STRING_STATIC("bool"));
     th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
-    th_param parameters[] = {
-        {.mode = TH_IN, .type = value_type},
-        {.mode = TH_IN, .type = spec_type},
-    };
-    th_type *signature = bool_type && nil_type && spec_type
-        ? th_func_with_error(types, bool_type, nil_type, parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *contract = signature
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
     th_type *option_is_nil_item = th_var(types);
     th_type *option_is_nil_type = option_is_nil_item
         ? th_option(types, option_is_nil_item) : nullptr;
@@ -1134,7 +1133,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *init_contract = init_signature
         ? th_env_signature_contract(types, init_signature, nil_type)
         : nullptr;
-    if (!signature || !contract || !option_is_nil_signature
+    if (!option_is_nil_signature
         || !option_get_or_else_signature
         || !option_is_nil_contract
         || !option_get_or_else_contract
@@ -1146,9 +1145,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         symtab, CORE_STRING_STATIC("builtin"));
     parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                              values->root);
-    parse_sym_entry_t *symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("has_type"),
-        PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *option_is_nil_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"),
         CORE_STRING_STATIC("__option_is_nil"), PARSE_SYM_FUNCTION, nullptr);
@@ -1216,7 +1212,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
-    if (!symbol || !option_is_nil_symbol
+    if (!option_is_nil_symbol
         || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
         || !init_symbol || !init_contract
@@ -1225,9 +1221,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
         || !bit_counts_registered || !array_length_registered
         || !array_prefix_registered || !array_clear_registered
         || !borrow_registered) return false;
-    symbol->type = signature;
-    symbol->error_type = nil_type;
-    symbol->callable_contract = contract;
     option_is_nil_symbol->type = option_is_nil_signature;
     option_is_nil_symbol->error_type = nil_type;
     option_is_nil_symbol->callable_contract = option_is_nil_contract;
@@ -1252,7 +1245,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     parse_sym_set_binding(init_symbol, CORE_STRING_STATIC("n00bb.init"),
                           init_symbol);
     return register_builtin_comparison_symbols(symtab, state, types)
-        && symbol->callable_contract
         && option_is_nil_symbol->callable_contract
         && option_get_or_else_symbol->callable_contract
         && array_read_symbol->callable_contract
@@ -1919,8 +1911,7 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
         && symbol->scope->ns
         && core_string_eq(symbol->scope->ns->ns_name,
                           CORE_STRING_STATIC("builtin"))
-        && (core_string_eq(symbol->name, CORE_STRING_STATIC("has_type"))
-            || parse_sym_binding(symbol,
+        && (parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.builtin-operator"))
             || n00bb_builtin_option_function(symbol)
             || n00bb_builtin_array_read_function(symbol)

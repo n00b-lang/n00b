@@ -244,7 +244,9 @@ n00bb_lower_variable_assignment(ir_lower_context_t *context,
         return false;
     check_loop_initialization(context, visit->grammar, visit->node, variable,
                               target);
-    if (!ir_value_has_uses(context->function, read))
+    // A narrowed read is the variable's binding, not a read of its own.
+    if (!ir_value_has_uses(context->function, read)
+        && read->def->op != IR_OP_TYPE_NARROW)
         (void)ir_instr_erase(read->def);
     ir_local_t *local = ir_lower_bound_local(context, variable);
     ir_value_t *binding = ir_lower_bound_value(context, variable);

@@ -1033,8 +1033,11 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
             ? parse_token_value(token) : core_option_none(core_string_t);
         if (!core_option_is_set(value)) return false;
         core_string_t spelling = core_option_get(value);
+        // `typespec` names a type, so where a value goes `typespec[T]` is
+        // the type literal, not an index.
         return core_string_eq(spelling, CORE_STRING_STATIC("null"))
-            || core_string_eq(spelling, CORE_STRING_STATIC("None"));
+            || core_string_eq(spelling, CORE_STRING_STATIC("None"))
+            || core_string_eq(spelling, CORE_STRING_STATIC("typespec"));
     }
     return core_string_eq(predicate,
                CORE_STRING_STATIC("n00bb_prefer_type_application"))

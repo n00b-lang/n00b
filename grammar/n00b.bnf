@@ -693,12 +693,15 @@
             | <new-expr>
             | <callback-expr>
             | <typeof-expr>
+            | <typespec-expr>
             | <effect-query>
             | <tuple-or-paren>
 
 <primary> @varref($0) @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
 <typeof-expr> @nospace ::= %"typeof" %"(" <expression> %")"
+
+<typespec-expr> @nospace ::= %"typespec" %"[" <type-spec> %"]"
 
 <effect-query> @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
 <effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"

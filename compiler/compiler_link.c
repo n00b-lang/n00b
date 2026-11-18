@@ -2367,7 +2367,6 @@ bind_type_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol = lookup_named_type_reference(grammar, state,
         state->annotations->symtab, site->scope, name);
     th_type *described = symbol && symbol->type
-            && !is_trait_type_symbol(grammar, symbol)
         ? symbol->type
         : !symbol && builtin_type_name(name)
         ? th_name(state->types, canonical_builtin_type_name(name))
@@ -3829,7 +3828,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const core_string_t builtin_names[] = {
-        CORE_STRING_STATIC("has_type"),
         CORE_STRING_STATIC("__gc_byte_offset"),
         CORE_STRING_STATIC("__gc_byte_diff"),
         CORE_STRING_STATIC("__count_leading_zeros"),

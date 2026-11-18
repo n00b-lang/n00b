@@ -38,6 +38,7 @@ package builtin {
     export bitptr.Bitptr
     export bitptr.bitptr
     export abi.string_backing_at
+    export abi.has_type
     export string.style.index_extends to text
     export string.style.Text_Case to text
     export string.style.Font_Hint to text

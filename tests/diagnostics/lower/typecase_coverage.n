@@ -8,9 +8,5 @@ func option_without_nil(x: int?) -> int {
         case int { return x }
     }
 }
-func spec_in_variable(x: Any, t: typespec) -> bool {
-    return has_type(x, t)
-}
 let n: int = 1
 require any_without_else(cast[Any] n) == 1 and option_without_nil(1) == 1
-require spec_in_variable(cast[Any] n, int)

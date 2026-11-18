@@ -269,4 +269,49 @@ require plus_one(cast[Any] declared_int) == 4 and plus_one(cast[Any] "a") == 0
 require describe_any(cast[Any] "hi") == "hi!"
 require describe_any(cast[Any] declared_int) == "number"
 
+# `typespec[T]` writes any type as a value; `has_type` also takes a
+# `typespec` held in a variable, a trait included, and checks it at run
+# time; assigning a narrowed variable ends its narrowing.
+let maybe_int: int? = 3
+let some_names: List[string] = ["a"]
+require typeof(maybe_int) == typespec[int?]
+require typeof(some_names) == typespec[List[string]]
+require typespec[int] == int and typespec[int] != typespec[u8]
+func matches(x: Any, t: typespec) -> bool {
+    return has_type(x, t)
+}
+require matches(cast[Any] declared_int, int)
+require !matches(cast[Any] declared_int, string)
+require matches(cast[Any] module_box, Scaled_Box)
+require matches(cast[Any] module_box, Scales)
+require !matches(cast[Any] declared_int, Scales)
+func reassigned(start: Any) -> string {
+    var x: Any = start
+    if has_type(x, int) {
+        x = cast[Any] "changed"
+        if has_type(x, string) {
+            return x
+        }
+        return "stale"
+    }
+    return "not int"
+}
+require reassigned(cast[Any] declared_int) == "changed"
+
+# A declared union return takes any of its members, literals included.
+func int_or_string(flag: bool) -> int | string {
+    if flag {
+        return 3
+    }
+    return "three"
+}
+func union_kind(flag: bool) -> string {
+    let x = int_or_string(flag)
+    typecase x {
+        case int { return "int" }
+        case string { return x }
+    }
+}
+require union_kind(true) == "int" and union_kind(false) == "three"
+
 __fd_write(2, "ok")

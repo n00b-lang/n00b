@@ -34,6 +34,7 @@
 	    int("HEX_LIT"))
 @lex-soft-keywords("i", "u", "bits", "call", "handler", "setup",
                    "layout", "align", "step", "out", "inline", "typeof",
+                   "typespec",
                    "provides", "enter", "exit", "ensure", "as", "thread",
                    "litmod", "modify", "consume", "where",
                    "from", "all", "struct", "object", "view",

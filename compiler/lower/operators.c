@@ -687,6 +687,53 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
+// The `typespec` descriptor of `described`, a type written in place. A
+// trait's descriptor is its own row, not one built from its arguments.
+ir_lower_result_t
+n00bb_emit_type_literal(ir_lower_context_t *context, th_type *described,
+                        ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    bool trait = described
+        && th_kind_of(th_resolve(described)) == TH_TRAIT;
+    ir_instr_t *index = described
+        ? ir_lower_emit_instruction(context, IR_OP_TYPE_INDEX, span)
+        : nullptr;
+    bool ok = index && ir_lower_set_temp_dest(context, index,
+            CORE_STRING_STATIC("__n00bb_type_"),
+            th_name(ir_module_types(context->module),
+                    CORE_STRING_STATIC("typespec")))
+        && ir_instr_operand_type(index, described)
+        && (!trait || (lower && ir_annot_set(lower->ir_context,
+               &index->annots,
+               (ir_annot_t){.key = CORE_STRING_STATIC(
+                                "n00bb.type_index.static"),
+                            .kind = IR_ANNOT_BOOL, .b = true})));
+    return ok ? (ir_lower_result_t){IR_LOWER_VALUE, index->dest}
+              : lower_internal(context, span, "could not emit a type literal");
+}
+
+// `typespec[T]`: the `typespec` descriptor of the type written in it.
+ir_lower_result_t
+n00bb_lower_typespec_literal(ir_lower_context_t *context,
+                             parse_visit_t *visit,
+                             ir_value_t *const *operands,
+                             size_t operand_count, th_type *result_type,
+                             ir_span_t span, void *state)
+{
+    (void)operands;
+    (void)operand_count;
+    (void)result_type;
+    (void)state;
+    parse_tree_t *spec = child_nt(visit->grammar, visit->node,
+                                  CORE_STRING_STATIC("type-spec"));
+    th_type *described = spec ? parse_tree_type(spec) : nullptr;
+    if (!described)
+        return lower_internal(context, span,
+                              "typespec[] names no resolved type");
+    return n00bb_emit_type_literal(context, described, span);
+}
+
 static ir_value_t *
 n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
                              th_type *type, ir_value_t *left,

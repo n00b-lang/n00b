@@ -940,6 +940,17 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
                    th_type *result_type, ir_span_t span, void *state);
 
+ir_lower_result_t
+n00bb_emit_type_literal(ir_lower_context_t *context, th_type *described,
+                        ir_span_t span);
+
+ir_lower_result_t
+n00bb_lower_typespec_literal(ir_lower_context_t *context,
+                             parse_visit_t *visit,
+                             ir_value_t *const *operands,
+                             size_t operand_count, th_type *result_type,
+                             ir_span_t span, void *state);
+
 bool
 foreign_pointer_type(th_type *type);
 
