@@ -3695,6 +3695,102 @@ n00bb_format_line_comment(core_buffer_t *out, const char *gap,
     return end;
 }
 
+enum { N00BB_GAP_COMMENTS = 64 };
+
+typedef struct {
+    size_t count;                              // comments
+    size_t gaps[N00BB_GAP_COMMENTS + 1][2];    // whitespace runs
+    size_t comments[N00BB_GAP_COMMENTS][2];
+} n00bb_gap_layout_t;
+
+// Splits the text between two tokens into whitespace runs and the
+// comments between them. Fails on anything else, or on too many comments.
+static bool
+n00bb_format_gap_layout(const char *gap, size_t length,
+                        n00bb_gap_layout_t *out)
+{
+    out->count = 0;
+    size_t at = 0;
+    for (;;) {
+        size_t start = at;
+        while (at < length && (gap[at] == ' ' || gap[at] == '\t'
+                               || gap[at] == '\n' || gap[at] == '\r'))
+            at++;
+        out->gaps[out->count][0] = start;
+        out->gaps[out->count][1] = at;
+        if (at == length) return true;
+        if (out->count == N00BB_GAP_COMMENTS
+            || !n00bb_format_comment_start(gap + at, length - at))
+            return false;
+        start = at;
+        if (gap[at] == '/' && gap[at + 1] == '*') {
+            at += 2;
+            while (at + 1 < length && !(gap[at] == '*' && gap[at + 1] == '/'))
+                at++;
+            if (at + 1 >= length) return false;
+            at += 2;
+        }
+        else while (at < length && gap[at] != '\n') at++;
+        out->comments[out->count][0] = start;
+        out->comments[out->count][1] = at;
+        out->count++;
+    }
+}
+
+static size_t
+n00bb_format_run_newlines(const char *text, const size_t run[2])
+{
+    return n00bb_format_newline_count(text + run[0], run[1] - run[0]);
+}
+
+// Writes a gap that holds comments: the printer's comments and
+// indentation, with the source's line breaks around each comment, so a
+// blank line stays where it was written and a comment that ends a line
+// keeps its column. Returns false, writing nothing, when the printed gap
+// does not hold the same comments as the source.
+static bool
+n00bb_format_comment_gap(core_buffer_t *out, const char *printed,
+                         size_t printed_length, const char *source,
+                         size_t source_length)
+{
+    n00bb_gap_layout_t shown, written;
+    if (!n00bb_format_gap_layout(printed, printed_length, &shown)
+        || !n00bb_format_gap_layout(source, source_length, &written)
+        || shown.count != written.count || !shown.count)
+        return false;
+    for (size_t i = 0; i < shown.count; i++) {
+        size_t a = shown.comments[i][1] - shown.comments[i][0];
+        size_t b = written.comments[i][1] - written.comments[i][0];
+        if (a != b || memcmp(printed + shown.comments[i][0],
+                             source + written.comments[i][0], a))
+            return false;
+    }
+    for (size_t i = 0; i <= shown.count; i++) {
+        const size_t *run = shown.gaps[i];
+        size_t breaks = n00bb_format_run_newlines(source, written.gaps[i]);
+        size_t printed_breaks = n00bb_format_run_newlines(printed, run);
+        if (!breaks || !printed_breaks) {
+            // On one line: a comment that ends a line keeps the source's
+            // spacing, so it can stay aligned in a column.
+            bool keep = !breaks && !printed_breaks && i == 0
+                && written.gaps[i][1] > written.gaps[i][0];
+            const char *from = keep ? source : printed;
+            const size_t *span = keep ? written.gaps[i] : run;
+            core_buffer_append(out, from + span[0], span[1] - span[0]);
+        }
+        else {
+            for (size_t j = 0; j < breaks; j++) core_buffer_putc(out, '\n');
+            size_t indent = run[1];
+            while (indent > run[0] && printed[indent - 1] == ' ') indent--;
+            core_buffer_append(out, printed + indent, run[1] - indent);
+        }
+        if (i < shown.count)
+            core_buffer_append(out, printed + shown.comments[i][0],
+                shown.comments[i][1] - shown.comments[i][0]);
+    }
+    return true;
+}
+
 static core_string_t
 n00bb_format_restore_breaks(parse_grammar_t *grammar,
                             core_string_t source, core_string_t printed_text)
@@ -3802,7 +3898,14 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 && source.data[prior_original_end - 1] == ')';
             value_sigil = leading && !follows_params;
         }
-        if (value_sigil) {
+        size_t source_gap_start = prior_original ? prior_original_end : 0;
+        if (has_comment && !value_sigil && from_start >= source_gap_start
+            && n00bb_format_comment_gap(&result, printed + gap_start,
+                   gap_len, source.data + source_gap_start,
+                   from_start - source_gap_start)) {
+            /* Comments keep the source's line structure. */
+        }
+        else if (value_sigil) {
             size_t line_start = prior_rendered
                 ? parse_token_start_byte(prior_rendered) : 0;
             while (line_start && printed[line_start - 1] != '\n')

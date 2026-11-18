@@ -1,0 +1,19 @@
+# A header comment, kept apart from the first declaration.
+# It runs for two lines.
+
+import shape
+
+// The section below is introduced by this comment.
+
+func a() -> int {
+    let x: int = 1
+
+    # Stands alone between two statements.
+
+    return x
+}
+
+/* A block comment */
+func b() -> int {
+    return 2
+}
