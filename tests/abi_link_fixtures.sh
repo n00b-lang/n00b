@@ -1,10 +1,20 @@
 #!/bin/sh
 set -eu
 
-compiler=$1
-abi_record_object_test=$2
-abi_link_input_test=$3
-abi_register_object_test=$4
+# Some fixtures run from another directory, so a relative path to a tool
+# is made absolute here. (A bare name is left to be found on PATH.)
+absolute() {
+    case $1 in
+    /*) printf '%s' "$1" ;;
+    */*) printf '%s/%s' "$(pwd)" "$1" ;;
+    *) printf '%s' "$1" ;;
+    esac
+}
+
+compiler=$(absolute "$1")
+abi_record_object_test=$(absolute "$2")
+abi_link_input_test=$(absolute "$3")
+abi_register_object_test=$(absolute "$4")
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 abi_programs="$script_dir/programs/abi"
 records="$script_dir/programs/link_records"
