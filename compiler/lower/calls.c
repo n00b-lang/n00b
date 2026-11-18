@@ -984,6 +984,38 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 N00BB_NO_ARGS);
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
+    // `has_type(value, T)` tests the value's run-time type against a type
+    // written in place.
+    if (symbol && !symbol->decl_node
+        && core_string_eq(symbol->name, CORE_STRING_STATIC("has_type"))
+        && n00bb_builtin_function(symbol)) {
+        parse_tree_t *value_node = n00bb_call_positional_argument(
+            visit->grammar, call_node, 0, 2);
+        parse_tree_t *spec_node = n00bb_call_positional_argument(
+            visit->grammar, call_node, 1, 2);
+        ir_value_t *value = value_node
+            ? ir_lower_node_value(context, value_node) : nullptr;
+        ir_value_t *spec = spec_node
+            ? ir_lower_node_value(context, spec_node) : nullptr;
+        th_type *described = spec && spec->def
+                && spec->def->op == IR_OP_TYPE_INDEX
+                && spec->def->n_operands == 1
+                && spec->def->operands[0].kind == IR_OPD_TYPE
+            ? spec->def->operands[0].type : nullptr;
+        if (!value || !described)
+            return lower_report(context, N00B_DIAG_BUILTIN_ARGUMENTS, span,
+                N00B_TEXT_HAS_TYPE_NEEDS_A_TYPE, N00BB_NO_ARGS);
+        th_type *truth = th_name(ir_module_types(context->module),
+                                 CORE_STRING_STATIC("bool"));
+        ir_instr_t *test = ir_lower_emit_instruction(context,
+            IR_OP_TYPE_TEST, span);
+        return test && ir_lower_set_temp_dest(context, test,
+                CORE_STRING_STATIC("__n00bb_type_test_"), truth)
+            && ir_instr_operand_value(test, value)
+            && ir_instr_operand_type(test, described)
+            ? (ir_lower_result_t){IR_LOWER_VALUE, test->dest}
+            : lower_internal(context, span, "could not emit has_type");
+    }
     bool native_builtin = n00bb_builtin_native_function(symbol);
     bool byte_offset_builtin = n00bb_builtin_byte_offset_function(symbol);
     bool byte_diff_builtin = n00bb_builtin_byte_diff_function(symbol);

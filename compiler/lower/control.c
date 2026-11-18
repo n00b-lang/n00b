@@ -52,6 +52,9 @@ static bool
 n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
                              n00bb_typecase_frame_t *frame);
 static bool
+narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
+                n00bb_branch_arm_t *arm, ir_value_t *condition);
+static bool
 n00bb_lower_typecase_annotation(ir_lower_context_t *context,
                                 parse_visit_t *visit, bool entering);
 
@@ -1467,6 +1470,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 return false;
             context->block = arm->body_block;
             context->reachable = true;
+            if (!frame->short_circuit
+                && !narrow_has_type(context, visit->grammar, arm, condition))
+                return false;
         }
         else if (arm_index < frame->arms.len && frame->jumping) {
             if (jumping_condition(visit->node)) {
@@ -1493,6 +1499,17 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = false;
         }
         else if (arm_index < frame->arms.len) {
+            n00bb_branch_arm_t *left = &frame->arms.data[arm_index];
+            if (left->narrowed) {
+                left->narrowed = false;
+                if (!ir_lower_bindings_restore(context,
+                                               left->binding_checkpoint)) {
+                    lower_internal(context,
+                        lower_span_for_tree(context, frame->node),
+                        "could not restore a variable narrowed by has_type");
+                    return false;
+                }
+            }
             if (frame->expression && context->reachable) {
                 parse_tree_t *expression = frame->short_circuit
                     ? core_tree_child(visit->node,
@@ -1827,6 +1844,129 @@ n00bb_case_test_type(th_ctx *types, parse_sym_entry_t *function,
     return test;
 }
 
+// The item of an option subject when `test` is one of its arms: the item
+// type or `nil`.
+static th_type *
+typecase_option_item(th_ctx *types, ir_value_t *subject, th_type *test)
+{
+    th_type *type = subject && subject->type ? th_resolve(subject->type)
+                                             : nullptr;
+    th_type *item = type && th_is_closed(types, type)
+        ? th_option_item(type) : nullptr;
+    th_type *wanted = test ? th_resolve(test) : nullptr;
+    return item && wanted && (th_is_nil(wanted)
+                              || th_hash(types, wanted)
+                                  == th_hash(types, th_resolve(item)))
+        ? item : nullptr;
+}
+
+// The variable or parameter under `node` whose value is `value`.
+static parse_sym_entry_t *
+tested_variable(ir_lower_context_t *context, parse_tree_t *node,
+                ir_value_t *value)
+{
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    parse_node_resolution_t resolution = parse_tree_resolution(node);
+    parse_sym_entry_t *symbol =
+        resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+            ? resolution.target.symbol : nullptr;
+    if (symbol && (symbol->kind == PARSE_SYM_VARIABLE
+                   || symbol->kind == PARSE_SYM_PARAM)
+        && ir_lower_node_value(context, node) == value)
+        return symbol;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_sym_entry_t *found = tested_variable(context,
+            core_tree_child(node, i), value);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+// In the body of `if has_type(x, T)`, `x` reads as a `T`.
+static bool
+narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
+                n00bb_branch_arm_t *arm, ir_value_t *condition)
+{
+    (void)grammar;
+    ir_instr_t *test = condition ? condition->def : nullptr;
+    if (!test || test->op != IR_OP_TYPE_TEST || test->n_operands != 2
+        || test->operands[0].kind != IR_OPD_VALUE
+        || test->operands[1].kind != IR_OPD_TYPE) return true;
+    ir_value_t *value = test->operands[0].value;
+    th_type *narrowed = test->operands[1].type;
+    parse_sym_entry_t *symbol = tested_variable(context, arm->condition,
+                                                value);
+    if (!symbol) return true;
+    ir_instr_t *narrow = ir_lower_emit_instruction(context,
+        IR_OP_TYPE_NARROW, lower_span_for_tree(context, arm->body));
+    if (!narrow || !ir_lower_set_temp_dest(context, narrow,
+            CORE_STRING_STATIC("__n00bb_narrow_"), narrowed)
+        || !ir_instr_operand_value(narrow, value)
+        || !ir_instr_operand_type(narrow, narrowed)) return false;
+    arm->binding_checkpoint = ir_lower_bindings_checkpoint(context);
+    arm->narrowed = ir_lower_bind_scoped_value(context, symbol, narrow->dest,
+        ir_lower_bound_local(context, symbol));
+    return arm->narrowed;
+}
+
+// Whether a `case` for `test` takes a value of type `member`.
+static bool
+typecase_arm_covers(th_ctx *types, th_type *test, th_type *member)
+{
+    th_type *wanted = test ? th_resolve(test) : nullptr;
+    core_string_t trait = {0};
+    if (!wanted || !member) return false;
+    if (th_hash(types, wanted) == th_hash(types, th_resolve(member)))
+        return true;
+    return th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait)
+        && th_env_implements(types, th_resolve(member), trait);
+}
+
+// Reports a `typecase` with no `else` that doesn't cover every type its
+// subject can hold. A subject whose type is still open is decided when it
+// is specialized.
+static void
+check_typecase_coverage(ir_lower_context_t *context,
+                        n00bb_typecase_frame_t *frame, ir_value_t *subject,
+                        ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *type = subject->type ? th_resolve(subject->type) : nullptr;
+    if (frame->else_body || !type || !th_is_closed(types, type)) return;
+    core_string_t subject_text = lower_type_text(context, type);
+    if (th_builtin_kind_of(type) == TH_BUILTIN_ANY
+        || th_kind_of(type) == TH_TRAIT) {
+        lower_report(context, N00B_DIAG_TYPECASE_NOT_EXHAUSTIVE, span,
+                     N00B_TEXT_TYPECASE_NEEDS_ELSE,
+                     N00BB_ARGS(ARG_TEXT(subject_text)));
+        lower_help(context, N00B_TEXT_ADD_AN_ELSE, N00BB_NO_ARGS);
+        return;
+    }
+    th_type *item = th_option_item(type);
+    th_comb comb;
+    bool is_union = th_sum_comb(type, &comb) && comb == TH_UNION;
+    size_t count = item ? 2 : is_union ? th_sum_len(type) : 1;
+    for (size_t m = 0; m < count; m++) {
+        th_type *member = item ? (m ? th_nil(types) : item)
+            : is_union ? th_sum_arm(type, m) : type;
+        bool covered = false;
+        for (size_t a = 0; !covered && a < frame->arms.len; a++)
+            covered = typecase_arm_covers(types, frame->arms.data[a].test,
+                                          member)
+                || typecase_arm_covers(types, frame->arms.data[a].test,
+                                       type);
+        if (covered) continue;
+        core_string_t member_text = lower_type_text(context, member);
+        lower_report(context, N00B_DIAG_TYPECASE_NOT_EXHAUSTIVE, span,
+                     N00B_TEXT_TYPECASE_MISSES,
+                     N00BB_ARGS(ARG_TEXT(subject_text),
+                                ARG_TEXT(member_text)));
+        lower_help(context, N00B_TEXT_ADD_A_CASE_OR_ELSE,
+                   N00BB_ARGS(ARG_TEXT(member_text)));
+        return;
+    }
+}
+
 static bool
 n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
                              n00bb_typecase_frame_t *frame)
@@ -1838,22 +1978,48 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
     frame->subject_value = subject;
     ir_block_t *test_block = context->block;
     ir_span_t span = lower_span_for_tree(context, frame->node);
+    th_ctx *types = ir_module_types(context->module);
+    check_typecase_coverage(context, frame, subject, span);
     for (size_t i = 0; i < frame->arms.len; i++) {
         n00bb_typecase_arm_t *arm = &frame->arms.data[i];
         ir_block_t *next = i + 1 < frame->arms.len
             ? n00bb_branch_block(context, context->user, "typecase_test")
             : frame->else_body ? frame->else_block : frame->unmatched_block;
-        ir_instr_t *test = ir_instr_add(test_block, IR_OP_TYPE_TEST);
-        ir_instr_t *branch = test
+        if (!next) return false;
+        // An option's arms are its item and `nil`: whether it holds a
+        // value is decided at run time, by a presence test.
+        th_type *item = typecase_option_item(types, subject, arm->test);
+        ir_value_t *condition = nullptr;
+        if (item) {
+            ir_block_t *saved = context->block;
+            context->block = test_block;
+            if (th_is_nil(th_resolve(arm->test))) {
+                ir_instr_t *is_nil = ir_lower_emit_instruction(context,
+                    IR_OP_OPTION_IS_NIL, span);
+                condition = is_nil && ir_lower_set_temp_dest(context, is_nil,
+                        CORE_STRING_STATIC("__n00bb_type_test_"), bool_type)
+                    && ir_instr_operand_value(is_nil, subject)
+                    ? is_nil->dest : nullptr;
+            }
+            else condition = option_present(context, subject, bool_type,
+                                            span);
+            context->block = saved;
+        }
+        else {
+            ir_instr_t *test = ir_instr_add(test_block, IR_OP_TYPE_TEST);
+            if (test && ir_lower_set_temp_dest(context, test,
+                    CORE_STRING_STATIC("__n00bb_type_test_"), bool_type)
+                && ir_instr_operand_value(test, subject)
+                && ir_instr_operand_type(test, arm->test)) {
+                test->span = span;
+                condition = test->dest;
+            }
+        }
+        ir_instr_t *branch = condition
             ? ir_instr_add(test_block, IR_OP_BRANCH) : nullptr;
-        if (!next || !test || !ir_lower_set_temp_dest(context, test,
-            CORE_STRING_STATIC("__n00bb_type_test_"), bool_type)
-            || !ir_instr_operand_value(test, subject)
-            || !ir_instr_operand_type(test, arm->test)
-            || !branch || !ir_instr_operand_value(branch, test->dest)
+        if (!branch || !ir_instr_operand_value(branch, condition)
             || !ir_instr_operand_block(branch, arm->block)
             || !ir_instr_operand_block(branch, next)) return false;
-        test->span = span;
         branch->span = span;
         test_block = next;
     }
@@ -1902,13 +2068,21 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_typecase_arm_t *arm = &frame->arms.data[arm_index];
             context->block = arm->block;
             context->reachable = true;
+            // An option narrows to its item, or to `nil`.
+            th_type *item = typecase_option_item(
+                ir_module_types(context->module), frame->subject_value,
+                arm->test);
+            bool nil_arm = item && th_is_nil(th_resolve(arm->test));
             ir_instr_t *narrow = ir_lower_emit_instruction(context,
-                IR_OP_TYPE_NARROW, lower_span_for_tree(context, visit->node));
+                !item ? IR_OP_TYPE_NARROW
+                      : nil_arm ? IR_OP_NIL : IR_OP_OPTION_GET,
+                lower_span_for_tree(context, visit->node));
             if (!narrow || !ir_lower_set_temp_dest(context, narrow,
                                                     CORE_STRING_STATIC("__n00bb_narrow_"),
                                                     arm->type)
-                || !ir_instr_operand_value(narrow, frame->subject_value)
-                || !ir_instr_operand_type(narrow, arm->type)) {
+                || (!nil_arm
+                    && !ir_instr_operand_value(narrow, frame->subject_value))
+                || (!item && !ir_instr_operand_type(narrow, arm->type))) {
                 lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not narrow the typecase subject");

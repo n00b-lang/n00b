@@ -668,6 +668,22 @@ lower_find_annotation(parse_visit_t *visit, parse_annot_kind_t kind)
 
 
 
+// Whether `node` is the receiver of a member access (`x` in `x.name`).
+static bool
+member_receiver(parse_tree_t *node)
+{
+    parse_tree_t *at = node;
+    parse_tree_t *up = at ? parse_tree_parent(at) : nullptr;
+    while (up && core_tree_num_children(up) == 1) {
+        at = up;
+        up = parse_tree_parent(at);
+    }
+    return up && core_tree_num_children(up) >= 3
+        && core_tree_child(up, 0) == at
+        && parse_tree_leaf_is(core_tree_child(up, 1),
+                              CORE_STRING_STATIC("."));
+}
+
 static ir_lower_result_t
 lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                      parse_visit_t *visit, size_t operand_count,
@@ -698,6 +714,23 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                                                  &folded))
             return n00bb_emit_untyped_const(context, folded, span);
         parse_sym_entry_t *named = symbol ? canonical_symbol(symbol) : nullptr;
+        // A function's name can't be a value without `ref`, so when a type
+        // has the same name (`string`), the name means the type.
+        if (named && named->kind == PARSE_SYM_FUNCTION
+            && builtin_type_name(named->name)
+            && !member_receiver(visit->node)) {
+            th_ctx *types = ir_module_types(context->module);
+            ir_instr_t *index = ir_lower_emit_instruction(context,
+                IR_OP_TYPE_INDEX, span);
+            return index && ir_lower_set_temp_dest(context, index,
+                    CORE_STRING_STATIC("__n00bb_type_"),
+                    th_name(types, CORE_STRING_STATIC("typespec")))
+                && ir_instr_operand_type(index, th_name(types,
+                       canonical_builtin_type_name(named->name)))
+                ? (ir_lower_result_t){IR_LOWER_VALUE, index->dest}
+                : lower_internal(context, span,
+                                 "could not emit a type literal");
+        }
         if (named && named->kind == PARSE_SYM_FUNCTION) {
             lower_report(context, N00B_DIAG_FUNCTION_NAME_AS_VALUE, span,
                          N00B_TEXT_FUNCTION_NAME_AS_VALUE,
@@ -712,6 +745,21 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
             return member ? (ir_lower_result_t){IR_LOWER_VALUE, member}
                 : lower_internal(context, span,
                                  "could not emit an enum or flagset member");
+        }
+        // A type named where a value goes is its `typespec` descriptor.
+        n00bb_node_facts_t *facts = visit ? n00bb_node_facts(visit->node)
+                                          : nullptr;
+        if (facts && facts->type_literal) {
+            th_type *typespec = th_name(ir_module_types(context->module),
+                                        CORE_STRING_STATIC("typespec"));
+            ir_instr_t *index = ir_lower_emit_instruction(context,
+                IR_OP_TYPE_INDEX, span);
+            return index && ir_lower_set_temp_dest(context, index,
+                    CORE_STRING_STATIC("__n00bb_type_"), typespec)
+                && ir_instr_operand_type(index, facts->type_literal)
+                ? (ir_lower_result_t){IR_LOWER_VALUE, index->dest}
+                : lower_internal(context, span,
+                                 "could not emit a type literal");
         }
         ir_lower_symbol_binding_t *binding =
             lower_find_binding(context, symbol);

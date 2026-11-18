@@ -590,6 +590,12 @@ N00B_DIAG(INTEGER_LITERAL_TOO_LARGE, "N00B-S0101", ERROR,
     "2^128 - 1 (340282366920938463463374607431768211455), and `i128` from\n"
     "-2^127 to 2^127 - 1. Use a smaller value, or keep a value this large as\n"
     "a string or in a big-number type.")
+N00B_DIAG(TYPECASE_NOT_EXHAUSTIVE, "N00B-S0102", ERROR,
+    "a `typecase` doesn't cover every type its subject can hold",
+    "A `typecase` with no `else` must have a `case` for every type its\n"
+    "subject can hold: both the item type and `nil` for an option, and\n"
+    "each member of a union. A subject that can hold any type, such as an\n"
+    "`Any`, a trait or a type parameter, needs an `else`.")
 N00B_DIAG(PROPAGATE_OPTION_NIL, "N00B-S0100", ERROR,
     "`!` on an option needs a function that can fail with `nil`",
     "A trailing `!` on an option gives its value when it holds one, and\n"

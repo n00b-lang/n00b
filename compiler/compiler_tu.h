@@ -352,6 +352,9 @@ typedef struct {
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
+    // A type named where a value goes (`let t: typespec = int`): the type
+    // the `typespec` value describes.
+    th_type *type_literal;
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;

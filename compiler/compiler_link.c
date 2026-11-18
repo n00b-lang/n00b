@@ -2354,6 +2354,31 @@ check_import_brings(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+// A bare name with no value of that name, that names a type: it stands for
+// that type's `typespec` descriptor.
+static bool
+bind_type_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                  n00bb_link_use_site_t *site)
+{
+    core_string_t name = site->member_name;
+    n00bb_node_facts_t *facts = n00bb_node_facts(site->node);
+    if (!name.data || !facts || !state->types || !state->annotations
+        || !state->annotations->symtab) return false;
+    parse_sym_entry_t *symbol = lookup_named_type_reference(grammar, state,
+        state->annotations->symtab, site->scope, name);
+    th_type *described = symbol && symbol->type
+            && !is_trait_type_symbol(grammar, symbol)
+        ? symbol->type
+        : !symbol && builtin_type_name(name)
+        ? th_name(state->types, canonical_builtin_type_name(name))
+        : nullptr;
+    if (!described) return false;
+    facts->type_literal = described;
+    parse_tree_set_type(site->node,
+        th_name(state->types, CORE_STRING_STATIC("typespec")));
+    return true;
+}
+
 static void
 report_unresolved_name(core_translation_unit_t *unit,
                        n00bb_link_use_site_t *site, core_string_t name)
@@ -2555,6 +2580,12 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                      && !names_imported_module(grammar, site->node)
                      && report_hidden_import(unit, state, site)) {
                 all_resolved = false;
+            }
+            else if (!site->symbol && !site->dotted_path
+                     && !site->trait_reference && !site->constructor_call
+                     && !is_type_reference_node(grammar, site->node)
+                     && bind_type_literal(grammar, state, site)) {
+                // A type named where a value goes is a `typespec` literal.
             }
             else if (!site->symbol && !site->dotted_path
                      && !names_imported_module(grammar, site->node)

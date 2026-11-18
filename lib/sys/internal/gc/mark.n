@@ -497,8 +497,10 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
     let found: Ref[internal.abi.Type_Record]? = internal.abi.type_at(type_index)
     if found != nil {
         let row: Ref[internal.abi.Type_Record] = found
+        // A traced primitive is a type index (a `typespec`), not a pointer.
         if row.__value.tracing_index == 0 or
-            row.__value.kind == cast[u32](internal.abi.Type_Kind.foreign_type) {
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.foreign_type) or
+            row.__value.kind == cast[u32](internal.abi.Type_Kind.primitive_type) {
             return
         }
         if start_index == 0 {

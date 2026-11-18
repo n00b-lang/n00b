@@ -249,6 +249,9 @@ typedef struct {
     parse_tree_t *body;
     ir_block_t *test_block;
     ir_block_t *body_block;
+    // Set while the body reads a variable narrowed by `has_type`.
+    void *binding_checkpoint;
+    bool narrowed;
 } n00bb_branch_arm_t;
 
 core_list_decl(n00bb_branch_arm_t);
