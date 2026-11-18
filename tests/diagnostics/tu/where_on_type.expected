@@ -1,19 +1,30 @@
-tests/diagnostics/tu/where_on_type.n:3:27: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
-tests/diagnostics/tu/where_on_type.n:6:17: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
-tests/diagnostics/tu/where_on_type.n:9:21: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
-tests/diagnostics/tu/where_on_type.n:12:6: warning N00B-N0019: function `local` is never called
-  help: call it or delete it
-tests/diagnostics/tu/where_on_type.n:13:9: warning N00B-S0006: the value assigned to `x` here is never read
-tests/diagnostics/tu/where_on_type.n:13:15: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
-tests/diagnostics/tu/where_on_type.n:15:7: warning N00B-N0023: type `Sized` is never used
-  help: remove it
-tests/diagnostics/tu/where_on_type.n:18:14: note N00B-S0064: parameter `x` could be `view`: `checked` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:21:6: warning N00B-N0019: function `sized` is never called
-  help: call it or delete it
-tests/diagnostics/tu/where_on_type.n:24:9: error N00B-T0021: `string` does not implement `Integer`, which `checked` requires
-  tests/diagnostics/tu/where_on_type.n:18:6: note: `checked` is declared here
+tests/diagnostics/tu/where_on_type.n:4:21: note N00B-S0064: parameter `b` could be `view`: `middle` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:7:11: note N00B-S0064: parameter `x` could be `view`: `last` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:10:15: note N00B-S0064: parameter `x` could be `view`: `trailing` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:14:11: note N00B-S0064: parameter `x` could be `view`: `both` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:18:14: note N00B-S0064: parameter `x` could be `view`: `in_body` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:19:9: warning N00B-S0006: the value assigned to `y` here is never read
+tests/diagnostics/tu/where_on_type.n:23:9: error N00B-T0021: `string` does not implement `Integer`, which `local` requires
   help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:25:9: error N00B-T0021: `string` does not implement `Integer`, which `middle` requires
+  tests/diagnostics/tu/where_on_type.n:4:6: note: `middle` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:26:9: error N00B-T0021: `string` does not implement `Integer`, which `last` requires
+  tests/diagnostics/tu/where_on_type.n:7:6: note: `last` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:27:9: error N00B-T0021: `string` does not implement `Integer`, which `trailing` requires
+  tests/diagnostics/tu/where_on_type.n:10:6: note: `trailing` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:28:9: error N00B-T0021: `f64` does not implement `Integer`, which `both` requires
+  tests/diagnostics/tu/where_on_type.n:14:6: note: `both` is declared here
+  help: implement `Integer` for `f64`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:29:9: error N00B-T0021: `string` does not implement `Integer`, which `in_body` requires
+  tests/diagnostics/tu/where_on_type.n:18:6: note: `in_body` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:37:16: warning N00B-N0021: field `height` of `Plant` is set but never read
+tests/diagnostics/tu/where_on_type.n:38:6: warning N00B-N0019: function `grow` is never called
+  help: call it or delete it
+tests/diagnostics/tu/where_on_type.n:39:12: note N00B-S0064: parameter `x` could be `view`: `grown` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:41:9: error N00B-T0021: `Plant` does not implement `Grows`, which `grown` requires
+  tests/diagnostics/tu/where_on_type.n:39:6: note: `grown` is declared here
+  help: implement `Grows` for `Plant`, or call a function that does not need it

@@ -1009,12 +1009,17 @@ void signature_typevars_for_symbol(parse_sym_entry_t *symbol,
     core_list_t(n00bb_typevar_binding_t) *out);
 th_type *signature_typevar_for_node(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
+parse_tree_t *typevar_owner_declaration(parse_grammar_t *grammar,
+    parse_tree_t *node);
 bool apply_signature_constraints(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *where, th_ctx *types,
     core_list_t(n00bb_typevar_binding_t) *variables,
     core_list_t(th_trait_requirement) *declared);
 void record_cached_declared_function_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *signature,
+    n00bb_tu_state_t *state);
+void record_function_body_constraints(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *func,
     n00bb_tu_state_t *state);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *method, th_ctx *types,

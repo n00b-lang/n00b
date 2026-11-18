@@ -1,5 +1,6 @@
-// A `where` clause after a type is rejected rather than dropped unchecked;
-// one after a function signature or a trait name is still checked.
+// A `where` clause after a type in a function constrains the function's
+// variable of that name, as one after its signature does: every
+// occurrence of `'T` in one function is the same variable.
 func middle(a: int, b: 'U where 'U: Integer, c: int) -> int {
     return a + c
 }
@@ -9,16 +10,32 @@ func last(x: 'T where 'T: Integer, y: int) -> int {
 func trailing(x: 'T where 'T: Integer,) -> int {
     return 1
 }
+// Clauses on the same variable add up.
+func both(x: 'T where 'T: Integer) -> 'T where 'T: Hash {
+    return x
+}
+// A clause in the body constrains the function's variable too.
+func in_body(x: 'T) -> int {
+    var y: 'T where 'T: Integer = x
+    return 1
+}
 func local() {
     var x: 'T where 'T: Integer = "hi"
 }
-trait Sized where 'T: Equal {
-    func size(self: 'T) -> int
+require middle(1, "x", 3) == 4
+require last("no", 2) == 2
+require trailing("no") == 1
+require both(2.5) == 2.5
+require in_body("no") == 1
+require middle(1, 2, 3) + last(1, 2) + trailing(1) + in_body(3) == 8
+require both(2) == 2
+local()
+// One after a type in a trait's method constrains the trait's variable.
+trait Grows {
+    func grow(self: 'T, by: 'N where 'N: Integer) -> 'T
 }
-func checked(x: 'T) -> 'T where 'T: Integer {
-    return x
-}
-func sized(x: 'T) -> int where 'T: Sized {
-    return x.size()
-}
-require checked("no") == "no"
+record Plant { height: int }
+func grow(self: Plant, by: string) -> Plant { return self }
+func grown(x: 'T) -> int where 'T: Grows { return 1 }
+let plant: Plant = (height = 1)
+require grown(plant) == 1

@@ -364,11 +364,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 N00B_TEXT_TYPE_VARIABLES_ARE_DECLARED_BY,
                 N00BB_NO_ARGS);
     }
-    // The grammar takes a `where` clause after any type, but only one after
-    // a function signature or a trait name is ever checked; elsewhere it
-    // would be dropped unchecked, so it is an error until it is supported.
+    // A `where` clause after a type constrains the variable of its owner,
+    // but only a function's or a trait's are checked; elsewhere it would be
+    // dropped unchecked, so it is an error until it is supported.
+    parse_tree_t *where_owner = step == SEMANTIC_PREPARE_ENTER
+        && NT_IS(grammar, node, "where-clause")
+        ? typevar_owner_declaration(grammar, node) : nullptr;
     if (step == SEMANTIC_PREPARE_ENTER && NT_IS(grammar, node, "where-clause")
-        && NT_IS(grammar, named_ancestor(grammar, node), "type-spec")) {
+        && NT_IS(grammar, named_ancestor(grammar, node), "type-spec")
+        && !NT_IS(grammar, where_owner, "func-def")
+        && !NT_IS(grammar, where_owner, "trait-decl")) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
         if (n00bb_report(diagnostics, unit, N00B_DIAG_WHERE_ON_TYPE,
@@ -658,9 +663,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         core_list_t(th_trait_requirement) declared =
             core_list_new(th_trait_requirement);
         signature_typevars_for_symbol(symbol, &variables);
-        bool valid = apply_signature_constraints(grammar, unit,
-            CHILD_NT(grammar, node, "where-clause"), state->types,
-            &variables, &declared);
+        // The clause after the trait's name and any after a type in one of
+        // its methods: the trait's variables are shared by its methods.
+        bool valid = apply_signature_constraints(grammar, unit, node,
+            state->types, &variables, &declared);
         core_list_free(variables);
         if (valid && symbol) {
             n00bb_declared_trait_requirements_t *facts = core_arena_alloc(
@@ -694,8 +700,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     if (!entering && NT_IS(grammar, node, "callback-decl"))
         finalize_callback_contract(grammar, unit, node, state);
 
-    if (!entering && NT_IS(grammar, node, "func-def"))
+    if (!entering && NT_IS(grammar, node, "func-def")) {
+        record_function_body_constraints(grammar, unit, node, state);
         record_function_signature(grammar, unit, node, state);
+    }
 
     if (!entering) {
         if (!cache_ordered_literal_children(grammar, state, node)) {

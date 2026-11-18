@@ -3119,12 +3119,20 @@ typevar_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
             && alias_declaration_is_transparent(grammar, node));
 }
 
-static parse_sym_entry_t *
-typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
+// The declaration that owns the type variables written at `node`.
+parse_tree_t *
+typevar_owner_declaration(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *owner_node = node;
     while (owner_node && !typevar_owner_node(grammar, owner_node))
         owner_node = parse_tree_parent(owner_node);
+    return owner_node;
+}
+
+static parse_sym_entry_t *
+typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *owner_node = typevar_owner_declaration(grammar, node);
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
 
@@ -3318,6 +3326,10 @@ note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
     }
 }
 
+static bool add_declared_where(n00bb_tu_state_t *state,
+    parse_sym_entry_t *symbol,
+    const core_list_t(th_trait_requirement) *declared);
+
 void
 record_cached_declared_function_signature(parse_grammar_t *grammar,
                                           core_translation_unit_t *unit,
@@ -3368,9 +3380,10 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             .target = members,
         }));
     }
-    valid = valid && apply_signature_constraints(grammar, unit,
-        CHILD_NT(grammar, signature, "where-clause"), state->types,
-        &variables, &declared);
+    // The clause after the signature and any after a parameter's or the
+    // result's type each constrain the function's variable of that name.
+    valid = valid && apply_signature_constraints(grammar, unit, signature,
+        state->types, &variables, &declared);
     th_type *signature_type = valid
         ? th_func_with_error(state->types, success, failure, params.data,
             params.len, has_rest ? &rest : nullptr, nullptr, 0)
@@ -3410,38 +3423,66 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             "could not retain the function signature");
         return;
     }
-    if (declared.len) {
-        if (declared.len > SIZE_MAX / sizeof(th_trait_requirement)) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "too many declared where constraints");
-            return;
-        }
-        n00bb_declared_where_t *facts = core_arena_alloc(
-            &state->semantic_values, sizeof(*facts));
-        th_trait_requirement *items = core_arena_alloc(
-            &state->semantic_values, declared.len * sizeof(*items));
-        if (!facts || !items) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "could not retain declared where constraints");
-            return;
-        }
-        memcpy(items, declared.data, declared.len * sizeof(*items));
-        *facts = (n00bb_declared_where_t){.data = items,
-                                          .len = declared.len};
-        if (!parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY,
-                                   facts)) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "could not bind declared where constraints");
-            return;
-        }
+    if (!add_declared_where(state, symbol, &declared)) {
+        core_list_free(declared);
+        n00bb_tu_internal_error(unit, signature, "checking declarations",
+            "could not retain declared where constraints");
+        return;
     }
     core_list_free(declared);
     if (unified) symbol->type = unified;
     symbol->error_type = failure;
     symbol->callable_contract = unified;
+}
+
+// Adds `declared` to the `where` requirements `symbol` already has.
+static bool
+add_declared_where(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                   const core_list_t(th_trait_requirement) *declared)
+{
+    if (!declared->len) return true;
+    n00bb_declared_where_t *previous = parse_sym_binding(symbol,
+        N00BB_DECLARED_WHERE_KEY);
+    size_t before = previous ? previous->len : 0;
+    if (declared->len > SIZE_MAX / sizeof(th_trait_requirement) - before)
+        return false;
+    n00bb_declared_where_t *facts = core_arena_alloc(
+        &state->semantic_values, sizeof(*facts));
+    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
+        (before + declared->len) * sizeof(*items));
+    if (!facts || !items) return false;
+    if (before) memcpy(items, previous->data, before * sizeof(*items));
+    memcpy(items + before, declared->data, declared->len * sizeof(*items));
+    *facts = (n00bb_declared_where_t){.data = items,
+                                      .len = before + declared->len};
+    return parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY, facts);
+}
+
+// A `where` clause after a type in a function's body constrains the
+// function's variable of that name, as one in its signature does. The
+// body's types are known only once it has been walked.
+void
+record_function_body_constraints(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *func, n00bb_tu_state_t *state)
+{
+    parse_sym_entry_t *symbol = parse_tree_sym(func);
+    parse_tree_t *body = CHILD_NT(grammar, func, "body");
+    if (!symbol || !body || !state || !state->types) return;
+    core_list_t(n00bb_typevar_binding_t) variables =
+        core_list_new(n00bb_typevar_binding_t);
+    core_list_t(th_trait_requirement) declared =
+        core_list_new(th_trait_requirement);
+    signature_typevars_for_symbol(symbol, &variables);
+    bool valid = apply_signature_constraints(grammar, unit, body,
+        state->types, &variables, &declared)
+        && add_declared_where(state, symbol, &declared);
+    core_list_free(variables);
+    core_list_free(declared);
+    if (!valid)
+        n00bb_tu_internal_error_unless_reported(unit, func,
+            "checking declarations",
+            "could not apply the where clauses in the function's body");
 }
 
 static void
@@ -3720,13 +3761,18 @@ apply_signature_where_tree(parse_grammar_t *grammar,
             && apply_signature_constraint_tree(grammar, unit, constraints,
                                                types, variable, declared);
     }
+    // A declaration nested inside owns its own type variables, and so the
+    // clauses written in it.
     for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!apply_signature_where_tree(grammar, unit,
+        if (!typevar_owner_node(grammar, core_tree_child(node, i))
+            && !apply_signature_where_tree(grammar, unit,
                 core_tree_child(node, i), types, variables, declared))
             return false;
     return true;
 }
 
+// Every `where` clause under `where`, outside any nested declaration, as
+// requirements on the variables of the declaration that owns them.
 bool
 apply_signature_constraints(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
