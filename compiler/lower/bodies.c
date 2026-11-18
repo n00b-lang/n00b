@@ -747,7 +747,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     else if (context.reachable) {
-        if (!n00bb_emit_with_success(&context, body))
+        if (!n00bb_emit_scoped_success(&context, body, 0, nullptr))
             goto cleanup;
         ir_span_t implicit_return = ir_module_span(module);
         implicit_return.implied = true;
@@ -774,6 +774,8 @@ cleanup:
     for (size_t i = 0; i < lower_data.branches.len; i++)
         core_list_free(lower_data.branches.data[i].arms);
     core_list_free(lower_data.branches);
+    for (size_t i = 0; i < lower_data.loops.len; i++)
+        n00bb_exit_scope_free(&lower_data.loops.data[i].scope);
     core_list_free(lower_data.loops);
     core_list_free(lower_data.requires);
     for (size_t i = 0; i < lower_data.switches.len; i++) {

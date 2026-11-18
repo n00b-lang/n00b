@@ -524,6 +524,126 @@ func gated_or(open: bool) -> int {
     return 0
 }
 
+// A loop over a container calls `__cleanup` once on every way out.
+record Countdown {
+    from: int
+}
+record Countdown_Cursor {
+    left: int
+}
+func countdown(from: int) -> Countdown { return (from = from) }
+func __iterator(self: Countdown) -> Countdown_Cursor {
+    return (left = self.from)
+}
+func __next(modify self: Countdown_Cursor) -> int? {
+    if self.left == 0 { return nil }
+    self.left = self.left - 1
+    return self.left + 1
+}
+func __cleanup(consume self: Countdown_Cursor) {
+    with_log = with_log + "c"
+}
+func loop_sum() -> int {
+    var total = 0
+    for i in countdown(3) {
+        if i == 2 { continue }
+        total = total + i
+    }
+    return total
+}
+func loop_break() -> int {
+    var last = 0
+    for i in countdown(5) {
+        last = i
+        if i == 3 { break }
+    }
+    return last
+}
+func loop_return() -> int {
+    for i in countdown(5) {
+        if i == 4 { return i * 10 }
+    }
+    return 0
+}
+func loop_fails() -> int fail: string {
+    for i in countdown(3) {
+        if i == 2 { fail "two" }
+    }
+    return 0
+}
+func loop_caught() -> int {
+    try {
+        for i in countdown(3) {
+            if i == 1 { fail "one" }
+        }
+    } fail (e) { return -1 }
+    return 0
+}
+func loop_managed() -> int {
+    for i in countdown(3) {
+        with tag_named("m") {
+            if i == 2 { return i }
+        }
+    }
+    return 0
+}
+func managed_loop() -> int fail: string {
+    with tag_named("o") {
+        for i in countdown(2) {
+            fail "out"
+        }
+    }
+    return 0
+}
+func switch_break(x: int) -> int {
+    var seen = 0
+    switch x {
+        case 1 {
+            with tag_named("s") {
+                seen = 1
+                break
+            }
+        }
+    }
+    return seen
+}
+// A `break` leaves the innermost loop or `switch`, here the loop.
+func loop_in_switch(x: int) -> int {
+    var n = 0
+    switch x {
+        case 1 {
+            for i in countdown(3) {
+                if i == 2 { break }
+                n = n + i
+            }
+            n = n + 100
+        }
+    }
+    return n
+}
+
+if !comptime() {
+    with_log = ""
+    require loop_sum() == 4
+    require loop_break() == 3
+    require loop_return() == 40
+    require (try { -> loop_fails()! } fail (e) { -> -1 }) == -1
+    require loop_caught() == -1
+    require with_log == "ccccc"
+    with_log = ""
+    require loop_managed() == 2
+    require with_log == "+m-m+m-mc"
+    with_log = ""
+    require (try { -> managed_loop()! } fail (e) { -> -1 }) == -1
+    require with_log == "+oc-o"
+    with_log = ""
+    require switch_break(1) == 1
+    require with_log == "+s-s"
+    with_log = ""
+    require loop_in_switch(1) == 103
+    require with_log == "c"
+}
+
 if !comptime() {
     require (try { -> gated_value(true)! } fail (e) { -> -1 }) == 1
     require (try { -> gated_value(false)! } fail (e) { -> -1 }) == -1

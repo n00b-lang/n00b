@@ -23,8 +23,8 @@ n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
                              n00bb_loop_frame_t *frame,
                              parse_tree_t *source)
 {
-    if (!frame || !frame->cleanup_active || !frame->iteration_plan
-        || !frame->iteration_cursor) return true;
+    if (!frame || !frame->iteration_plan || !frame->iteration_cursor)
+        return true;
     ir_span_t span = lower_span_for_tree(context, source);
     th_type *nil_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil"));
     ir_value_t *cursor = n00bb_emit_local_read(context,

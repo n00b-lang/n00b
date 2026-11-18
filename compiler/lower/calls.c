@@ -2069,20 +2069,14 @@ unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
     context->block = nil_block;
     ir_instr_t *nil = ir_lower_emit_instruction(context, IR_OP_NIL, span);
     if (!nil || !ir_lower_set_temp_dest(context, nil,
-            CORE_STRING_STATIC("__n00bb_"), th_nil(types))
-        || !n00bb_emit_with_failure(context, visit->node))
+            CORE_STRING_STATIC("__n00bb_"), th_nil(types)))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not fail with nil");
     int routed = n00bb_route_try_error(context, nil->dest, span);
     if (routed < 0) return false;
-    if (!routed) {
-        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-        if (!fail || !ir_instr_operand_value(fail, nil->dest))
-            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                "could not fail with nil");
-        fail->span = span;
-        context->reachable = false;
-    }
+    if (!routed && !n00bb_emit_function_failure(context, nil->dest, span,
+                                                UINT64_MAX))
+        return false;
 
     context->block = ok_block;
     context->reachable = true;
@@ -2189,9 +2183,9 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     context->block = error_block;
     ir_value_t *error = n00bb_emit_outcome_payload(
         context, outcome, CORE_STRING_STATIC("error"), error_type, span);
-    if (!error || !n00bb_emit_with_failure(context, visit->node))
+    if (!error)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-            "could not unwind active context managers");
+            "could not read the call's failure");
     int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (!routed) {
@@ -2220,14 +2214,9 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                                          N00B_TEXT_PHRASE_THIS_CALL))
                 return false;
         }
-        else {
-            ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-            if (!fail || !ir_instr_operand_value(fail, error))
-                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                    "could not propagate the call error");
-            fail->span = span;
-            context->reachable = false;
-        }
+        else if (!n00bb_emit_function_failure(context, error, span,
+                                              UINT64_MAX))
+            return false;
     }
 
     context->block = ok_block;
