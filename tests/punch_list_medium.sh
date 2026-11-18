@@ -90,3 +90,38 @@ if "$compiler" build --no-syntax-warnings --output "$tmp/unset_state" \
 fi
 grep -q '`local.count` is read on a path where it has no value' \
     "$tmp/compile.err"
+
+# A callback's `call` takes its arguments by the names its role declares,
+# in any order, as well as by position.
+cat >"$tmp/callback_names.n" <<'EOF'
+callback Joiner {
+    call(label: string, count: int) -> string
+    handler(label: string, count: int) -> string
+}
+func join(label: string, count: int) -> string {
+    var out = ""
+    var i = 0
+    while i < count {
+        out = out + label
+        i += 1
+    }
+    return out
+}
+func joined() -> string {
+    let local_joiner = callback[Joiner](ref join)
+    return local_joiner.call(count = 3, label = "ab")
+}
+let joiner = callback[Joiner](ref join)
+require joiner.call(count = 2, label = "x") == "xx"
+require joiner.call("y", 2) == "yy"
+require joined() == "ababab"
+__fd_write(2, "ok")
+EOF
+"$compiler" build --no-syntax-warnings \
+    --output "$tmp/callback_names" "$tmp/callback_names.n" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err" || {
+    cat "$tmp/compile.err" >&2
+    exit 1
+}
+"$tmp/callback_names" >"$tmp/stdout" 2>"$tmp/stderr"
+test "$(cat "$tmp/stderr")" = ok

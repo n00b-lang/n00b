@@ -6009,6 +6009,146 @@ static bool check_field_privacy(th_ctx *types, n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+// The `call` role of a nominal callback type, whose declaration names the
+// parameters; a function reference's type has no names for them.
+static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index,
+                                             th_type *receiver)
+{
+    n00bb_link_analysis_t *analysis = index->analysis;
+
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_callback_contract_t *contract = n00bb_callback_contract_for_type(
+            tu_state(analysis->units.data[u]), receiver);
+
+        if (contract) {
+            return contract->call;
+        }
+    }
+
+    return nullptr;
+}
+
+// `f.call(...)` on a function reference or a callback: the written
+// arguments are planned against the called signature, without the
+// receiver. Named arguments bind by the names the callback's `call` role
+// declares; a function reference's parameters are passed by position.
+// Returns whether it reported a problem.
+static bool callback_call_reports(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ir_instr_t *at,
+                                  const n00bb_written_call_t *call,
+                                  th_type *receiver)
+{
+    n00bb_dispatch_target_t target = {0};
+
+    receiver = receiver ? th_resolve(receiver) : nullptr;
+    if (!receiver
+        || !n00bb_dispatch_target(index, receiver, at->operands[0].name,
+                                  &target)
+        || target.kind != N00BB_TARGET_CALLBACK) {
+        return false;
+    }
+
+    th_type *signature = th_resolve(target.signature);
+
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || !th_func_nparams(signature)) {
+        return false;
+    }
+
+    size_t    count  = th_func_nparams(signature) - 1;
+    th_param *params = core_alloc_array(th_param, count + 1);
+
+    for (size_t i = 0; i < count; i++) {
+        params[i] = *th_func_param(signature, i + 1);
+    }
+
+    size_t      keywords = th_func_nkw(signature);
+    th_kwparam *named    = core_alloc_array(th_kwparam, keywords + 1);
+
+    for (size_t k = 0; k < keywords; k++) {
+        named[k] = *th_func_kw(signature, k);
+    }
+
+    th_type *called = th_func_with_error(types, th_func_ret(signature),
+                                         th_func_error(signature), params,
+                                         count, th_func_rest(signature),
+                                         named, keywords);
+
+    core_free(params);
+    core_free(named);
+
+    parse_grammar_t   *grammar = index->analysis->grammar;
+    parse_sym_entry_t *role    = callback_call_role(index, receiver);
+    n00bb_call_plan_t  plan    = {0};
+    bool               bound   = n00bb_call_plan_init(&plan, grammar, role,
+                                                      called, 0);
+
+    if (bound) {
+        n00bb_call_plan_use(&plan, call);
+        bound = n00bb_call_plan_bind(&plan);
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+
+    if (!bound) {
+        n00bb_call_plan_report(&plan, unit, diagnostics, call->span);
+        if (!role && plan.status == N00BB_CALL_PLAN_UNKNOWN_NAME) {
+            n00bb_report_help(diagnostics,
+                              N00B_TEXT_FUNCTION_REFERENCE_BY_POSITION,
+                              N00BB_NO_ARGS);
+        }
+        n00bb_call_plan_free(&plan);
+        return true;
+    }
+
+    // Typing matched the arguments passed by position; one passed by name
+    // must fit the parameter it names.
+    bool reported = false;
+
+    for (uint32_t o = 1; role && !reported && o < at->n_operands; o++) {
+        const ir_operand_t *operand = &at->operands[o];
+        size_t              p       = 0;
+
+        if (operand->kind != IR_OPD_NAMED_ARG || !operand->named.value
+            || !function_parameter_named(grammar, role, plan.formals,
+                                         operand->named.name, &p)
+            || p >= count) {
+            continue;
+        }
+
+        th_type *formal = th_resolve(th_func_param(called, p)->type);
+        th_type *actual = th_resolve(operand->named.value->type);
+
+        if (th_same_type(actual, formal) || !th_is_closed(types, formal)
+            || !th_is_closed(types, actual)
+            || is_integer_type(actual) == is_integer_type(formal)) {
+            continue;
+        }
+
+        core_string_t subject  = n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
+            N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(operand->named.name),
+                       ARG_TEXT(role->name)));
+        core_string_t argument = quoted_type(types, actual);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
+                     value_source(unit, operand->named.value, at->span).at,
+                     N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
+                     N00BB_ARGS(ARG_TEXT(subject),
+                                ARG_TEXT(n00bb_print_type(types, formal)),
+                                ARG_TEXT(argument)));
+        core_free(argument.data);
+        core_free(subject.data);
+        n00bb_diag_declared_here(diagnostics, role,
+                                 N00B_TEXT_IS_DECLARED_HERE);
+        reported = true;
+    }
+    n00bb_call_plan_free(&plan);
+
+    return reported;
+}
+
 static bool check_dispatch_call(th_ctx *types,
                                 const n00bb_dispatch_index_t *index,
                                 core_translation_unit_t *unit,
@@ -6030,7 +6170,8 @@ static bool check_dispatch_call(th_ctx *types,
     if (!dispatch_callee(index, unit, at, self ? self->type : nullptr,
                          at->operands[0].name, at->n_operands - 1,
                          &target)) {
-        return true;
+        return !callback_call_reports(types, index, unit, at, call,
+                                      self ? self->type : nullptr);
     }
 
     return !dispatch_plan_reports(grammar, unit, call, &target, method_style)

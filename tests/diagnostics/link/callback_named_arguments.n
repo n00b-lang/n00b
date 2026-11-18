@@ -1,0 +1,27 @@
+# A function reference's parameters have no names, so its `call` takes
+# arguments by position only; a callback's `call` takes the names its role
+# declares.
+func scaled(a: int, scale: int = 2) -> int {
+    return a * scale
+}
+func less(a: int, b: int) -> int {
+    return a - b
+}
+let by_name: Ref[(int, scale: int) -> int] = ref scaled
+require by_name.call(3, scale = 4) == 12
+require by_name.call(3) == 6
+func use(r: Ref[(a: int, b: int) -> int]) -> int {
+    return r.call(b = 3, a = 5)
+}
+require use(ref less) == 2
+
+callback Joiner {
+    call(label: string, count: int) -> string
+    handler(label: string, count: int) -> string
+}
+func join(label: string, count: int) -> string {
+    return label
+}
+let joiner = callback[Joiner](ref join)
+require joiner.call(count = 2, lable = "x") == "x"
+require joiner.call(count = "2", label = "x") == "x"

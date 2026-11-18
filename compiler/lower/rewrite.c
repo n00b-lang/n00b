@@ -1922,6 +1922,49 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     return n00bb_rewrite_splice(rewrite, in);
 }
 
+// A callback's arguments passed by name go where the names its `call`
+// role declares put them, as what that parameter takes; the handler is
+// invoked with them all by position. A name the role doesn't declare, and
+// any name given to a function reference (whose parameters have none), is
+// reported by typing (callback_call_reports), so it is left as written.
+static bool
+n00bb_place_callback_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                               th_type *signature, parse_sym_entry_t *role)
+{
+    uint32_t count = in->n_operands;
+    uint32_t positional = 1;
+    while (positional < count
+           && in->operands[positional].kind != IR_OPD_NAMED_ARG)
+        positional++;
+    if (positional == count) return true;
+    parse_grammar_t *grammar =
+        tu_state(rewrite->unit)->link_analysis->grammar;
+    parse_tree_t *formals = role
+        ? callable_formal_parameters(grammar, role) : nullptr;
+    size_t parameters = th_func_nparams(signature);
+    if (!formals || count - 1 != parameters) return true;
+    // Every parameter after the positional ones is named exactly once.
+    ir_value_t **by_parameter = core_alloc_array(ir_value_t *,
+                                                 parameters + 1);
+    bool placed = true;
+    for (uint32_t o = positional; placed && o < count; o++) {
+        size_t p = 0;
+        placed = function_parameter_named(grammar, role, formals,
+                                          in->operands[o].named.name, &p)
+            && p + 1 >= positional && p < parameters && !by_parameter[p];
+        if (placed) by_parameter[p] = in->operands[o].named.value;
+    }
+    in->n_operands = placed ? positional : count;
+    bool ok = true;
+    for (size_t p = positional - 1; placed && ok && p < parameters; p++)
+        ok = ir_instr_operand_value(in, by_parameter[p])
+            && n00bb_rewrite_operand(rewrite, in, (uint32_t)p + 1,
+                                     th_func_param(signature, p)->type);
+    core_free(by_parameter);
+    if (placed && ok) ir_instr_uses_changed(in);
+    return ok;
+}
+
 static bool
 n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                        th_type *receiver_type)
@@ -1947,12 +1990,15 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ? IR_OP_CALL : IR_OP_CALLBACK_INVOKE;
     if (!signature || !ir_instr_set_call_signature(in, signature))
         return false;
-    if (in->op != IR_OP_CALLBACK_INVOKE) return true;
     n00bb_link_analysis_t *analysis = tu_state(rewrite->unit)->link_analysis;
     n00bb_callback_contract_t *contract = nullptr;
     for (size_t u = 0; !contract && u < analysis->units.len; u++)
         contract = n00bb_callback_contract_for_type(
             tu_state(analysis->units.data[u]), receiver_type);
+    if (!n00bb_place_callback_arguments(rewrite, in, signature,
+            contract ? contract->call : nullptr))
+        return false;
+    if (in->op != IR_OP_CALLBACK_INVOKE) return true;
     return !contract || !contract->stateful
         || ir_instr_set_callback_invoke_handler(in,
                n00bb_specialize_callback_role(types, contract, receiver_type,
