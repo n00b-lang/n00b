@@ -13,3 +13,7 @@ func start() {
     let mode = Perm.exec
     require pick(Color.red) == 0 and Perm.read != Perm.write
 }
+
+func near() {
+    let tone = Color.rde
+}

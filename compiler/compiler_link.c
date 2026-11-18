@@ -289,7 +289,6 @@ static bool module_member_is_call(parse_grammar_t *grammar,
                                   parse_tree_t *node);
 static void report_enum_member_missing(core_translation_unit_t *unit,
                                        parse_tree_t *node,
-                                       core_translation_unit_t *owner,
                                        parse_sym_entry_t *type,
                                        parse_scope_t *scope,
                                        core_string_t name);
@@ -326,8 +325,8 @@ resolve_type_member_references(core_link_unit_t *link,
             if (!member && scope && owner
                 && enum_like_scope(scope)
                 && !module_member_is_call(grammar, node)) {
-                report_enum_member_missing(unit, node, owner, receiver,
-                                           scope, name);
+                report_enum_member_missing(unit, node, receiver, scope,
+                                           name);
                 site->unresolved = true;
                 site->blocks_lowering = true;
                 continue;
@@ -1998,7 +1997,6 @@ enum_like_scope(const parse_scope_t *scope)
 // `Type.name` where `Type` is an enum or flagset that declares no `name`.
 static void
 report_enum_member_missing(core_translation_unit_t *unit, parse_tree_t *node,
-                           core_translation_unit_t *owner,
                            parse_sym_entry_t *type, parse_scope_t *scope,
                            core_string_t name)
 {
@@ -2007,10 +2005,8 @@ report_enum_member_missing(core_translation_unit_t *unit, parse_tree_t *node,
         n00bb_node_span(member_name_node(node)), N00B_TEXT_TYPE_HAS_NO_MEMBER,
         N00BB_ARGS(ARG_TEXT(scope->scope_tag), ARG_TEXT(type->name),
                    ARG_TEXT(name)));
-    if (n00bb_suggest_scope_member(diagnostics, unit, owner, scope, name))
-        return;
-    // Scope order differs between parsed modules and cached interfaces,
-    // so list the members by name.
+    // Members are visible wherever their type is. Scope order differs
+    // between parsed modules and cached interfaces, so sort by name.
     core_list_t(core_string_t) members = core_list_new(core_string_t);
     for (parse_sym_entry_t *member = scope->first_in_scope; member;
          member = member->next_in_scope) {
@@ -2020,6 +2016,11 @@ report_enum_member_missing(core_translation_unit_t *unit, parse_tree_t *node,
         while (at && core_string_cmp(members.data[at - 1], member->name) > 0)
             at--;
         core_list_insert(members, at, member->name);
+    }
+    if (n00bb_diag_did_you_mean(diagnostics, name, members.data,
+                                members.len)) {
+        core_list_free(members);
+        return;
     }
     if (members.len)
         n00bb_report_note(diagnostics, N00B_TEXT_TYPE_HAS_MEMBERS,
@@ -2608,8 +2609,6 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (!site->symbol && missing.type
                     && !module_member_is_call(grammar, missing.path)) {
                     report_enum_member_missing(unit, missing.path,
-                        missing.type->owner_unit ? missing.type->owner_unit
-                                                 : unit,
                         missing.type, missing.type->member_scope,
                         missing.name);
                     site->unresolved = true;

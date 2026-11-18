@@ -3,5 +3,5 @@ tests/diagnostics/link/name_errors_all_reported.n:7:23: error N00B-N0027: enum `
 tests/diagnostics/link/name_errors_all_reported.n:8:17: error N00B-N0026: `idle` could be `Handshake.idle` or `Phase.idle`
   help: write the type's name to choose one, such as `Handshake.idle`
 tests/diagnostics/link/name_errors_all_reported.n:9:32: error N00B-N0027: enum `Index_Unit` has no member `bytes`
-  note: `Index_Unit` has members `byte`, `char` and `cluster`
+  help: did you mean `byte`?
 tests/diagnostics/link/name_errors_all_reported.n:10:17: error N00B-N0001: cannot find `countr` in this scope
