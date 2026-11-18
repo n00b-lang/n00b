@@ -193,7 +193,8 @@
 <type-spec-list> ::= <type-spec> (%"," <type-spec>)* %","?
 
 <try-stmt> @scope("try") ::= %"try" <try-body> <try-error-clause>
-<try-body> @scope("block") ::= <block-start> <try-body-stmts>? <block-end>
+<try-body> @scope("block") @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <try-body-stmts>? <block-end>
 <try-body-stmts> ::= <value-stmt>
                     | <body-stmt-list>
                     | <body-stmt-list> <eos>+ <value-stmt>

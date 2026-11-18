@@ -1,0 +1,14 @@
+func risky() -> int fail: string {
+    fail "bad"
+}
+
+func a() -> int {
+    try {
+        let x: int = risky()!
+        let y: int = x + 1
+        return y
+    } fail(e) {
+        let z: int = 0
+        return z
+    }
+}
