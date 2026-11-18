@@ -1,0 +1,17 @@
+# A trait's type parameters (`'E` here) are fixed once for each bound.
+trait Stopper {
+    func stop(self: 'T, failure: 'E?) -> bool
+}
+record Q {
+    n: int
+}
+func stop(self: Q, failure: 'E?) -> bool { return failure != nil }
+
+func both(c: 'C, i: int?, s: string?) -> bool where 'C: Stopper {
+    return c.stop(i) and c.stop(s)
+}
+
+func main() {
+    let q: Q = (n = 1)
+    require both(q, 1, "x")
+}

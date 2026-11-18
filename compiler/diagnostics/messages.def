@@ -339,6 +339,8 @@ N00B_TEXT(NAME_EVERY_ELEMENT, "give each element a name, or `_` for the ones you
 N00B_TEXT(PATTERN_NEEDS_NAME, "`{0}` is unpacked by field name, so this element needs one: `name = ...`")
 N00B_TEXT(IS_WHICH_CANNOT_BE_ITERATED, "`{0}` is `{1}`, which cannot be iterated")
 N00B_TEXT(A_FOR_LOOP_NEEDS_A, "a `for` loop needs a value whose type implements the `Iterable` trait, such as a `List` or a range")
+N00B_TEXT(TRAIT_PARAMETER_FIXED, "`{1}.{0}` is given `{2}` here, but another call on `{1}` already fixed that type as `{3}`")
+N00B_TEXT(TRAIT_PARAMETERS_ARE_PER_BOUND, "the type parameters of `{0}` are fixed once for each bound, so every call on `{1}` uses the same types; to pass different ones, use a variant type")
 N00B_TEXT(IS_WHICH_IS_NOT_A_CONTEXT, "`{0}` is `{1}`, which `with` can't manage: it has no `{2}`")
 N00B_TEXT(A_WITH_NEEDS_A_CONTEXT, "a `with` manager's type implements the `Context_Manager` trait, with `__enter` and `__exit` functions")
 N00B_TEXT(TUPLE_NOT_ITERABLE_HELP, "a tuple's elements can each have their own type, so a `for` loop cannot walk them; put values of one type in a `List` instead")

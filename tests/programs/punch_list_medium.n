@@ -375,6 +375,11 @@ func opened_only(o: 'O) -> int fail: string where 'O: Opener {
     let v = o.opened()!
     return 0
 }
+// A plain value is passed where the trait's parameter is an option.
+func closed_plainly(o: 'O) -> int fail: string where 'O: Opener {
+    let note: int? = 4
+    return o.closed(o.opened()!, note = note)!
+}
 
 if !comptime() {
     let calm: Calm = (n = 2)
@@ -384,6 +389,7 @@ if !comptime() {
     let wild: Jumpy = (n = 9)
     require (try { -> open_and_close(wild)! } fail (e) { -> -1 }) == -1
     require (try { -> opened_only(jumpy)! } fail (e) { -> -1 }) == 0
+    require (try { -> closed_plainly(calm)! } fail (e) { -> -1 }) == 20
 }
 
 # `with` uses a manager's `Context_Manager` methods: `__enter` runs before the

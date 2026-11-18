@@ -139,6 +139,17 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               size_t *index);
 parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
                                          parse_sym_entry_t *symbol);
+// Each of a trait's methods for a bound on `variable`, as a method
+// constraint whose target is the whole method: its receiver is `variable`,
+// and the trait's parameters (the other variables its methods name) are
+// `arguments`, or, with none given, one fresh variable each, shared by all
+// the methods. `*expected` is how many parameters the trait has; false when
+// `arguments` has another count.
+bool n00bb_trait_method_instances(th_ctx *types, parse_sym_entry_t *trait,
+                                  th_type *variable,
+                                  const core_list_t(th_type_ptr_t) *arguments,
+                                  core_list_t(th_trait_requirement) *out,
+                                  size_t *expected);
 typedef enum {
     N00BB_LITERAL_STRING_SHAPE,
     N00BB_LITERAL_SEQUENCE_SHAPE,

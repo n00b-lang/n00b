@@ -98,6 +98,11 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
     core_translation_unit_t *caller, core_string_t qualified_trait,
     core_string_t method_name);
+// The trait `qualified_trait` names, as `caller` sees it.
+parse_sym_entry_t *n00bb_link_trait_symbol(parse_grammar_t *grammar,
+                                           n00bb_link_analysis_t *analysis,
+                                           core_translation_unit_t *caller,
+                                           core_string_t qualified_trait);
 bool n00bb_field_shared_outside(parse_sym_entry_t *field);
 th_type *constructor_signature_instance(th_ctx *types,
     parse_sym_entry_t *symbol);

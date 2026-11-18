@@ -1260,6 +1260,69 @@ struct n00bb_dispatch_index {
     bool                   sizing_pending;
 };
 
+// The trait whose bound a method call at `at` goes through, when its
+// receiver's type is a bound type variable.
+static core_string_t bound_trait_of_call(const n00bb_dispatch_index_t *index,
+                                         const ir_instr_t *at,
+                                         th_type **receiver)
+{
+    const ir_value_t *self = at && at->op == IR_OP_DISPATCH
+            && at->n_operands >= 2
+        ? ir_operand_value(&at->operands[1]) : nullptr;
+    th_type *type = self ? th_resolve(self->type) : nullptr;
+
+    for (size_t i = 0; type && th_kind_of(type) == TH_VAR
+         && i < index->bounds.len; i++) {
+        if (index->bounds.data[i].kind == TH_CON_IMPLEMENTS
+            && th_resolve(index->bounds.data[i].subject) == type) {
+            *receiver = type;
+            return index->bounds.data[i].iface;
+        }
+    }
+
+    return (core_string_t){0};
+}
+
+// A call through a bound that gives a trait parameter another type than an
+// earlier call through it did.
+static bool report_trait_parameter(th_ctx *types,
+                                   const n00bb_dispatch_index_t *index,
+                                   core_translation_unit_t *unit,
+                                   const ty_failure_t *failure)
+{
+    th_type      *receiver = nullptr;
+    core_string_t trait    = bound_trait_of_call(index, failure->why.at,
+                                                 &receiver);
+
+    if (!trait.data || !failure->expected || !failure->actual
+        || failure->why.at->operands[0].kind != IR_OPD_NAME) {
+        return false;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    // The receiver as written: the solver's copy of its type variable has
+    // no name to show.
+    core_string_t       variable    = n00bb_value_text(unit,
+        ir_operand_value(&failure->why.at->operands[1]),
+        failure->why.at->span);
+
+    if (!variable.u8_bytes) {
+        variable = shown(types, receiver);
+    }
+    n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
+                 n00bb_span_location(failure->why.at->span),
+                 N00B_TEXT_TRAIT_PARAMETER_FIXED,
+                 N00BB_ARGS(ARG_TEXT(failure->why.at->operands[0].name),
+                            ARG_TEXT(variable),
+                            ARG_TEXT(shown(types, failure->actual)),
+                            ARG_TEXT(shown(types, failure->expected))));
+    n00bb_report_help(diagnostics, N00B_TEXT_TRAIT_PARAMETERS_ARE_PER_BOUND,
+                      N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(trait)),
+                                 ARG_TEXT(variable)));
+
+    return true;
+}
+
 static parse_sym_entry_t *nominal_symbol(n00bb_link_analysis_t *analysis,
                                          th_type *receiver)
 {
@@ -1666,24 +1729,54 @@ static th_type *in_function(th_ctx *types, ir_func_t *function, th_type *type)
     return mapped;
 }
 
-static th_type *method_shape(th_ctx *types, th_type *receiver, th_type *call)
+// A bound method's call shape with its receiver put back, passed in `mode`.
+static th_type *method_shape(th_ctx *types, th_type *receiver, th_mode mode,
+                             th_type *call)
 {
-    call         = th_resolve(call);
-    size_t    n  = th_func_nparams(call);
-    th_param *ps = core_alloc_array(th_param, n + 1);
+    call             = th_resolve(call);
+    size_t      n    = th_func_nparams(call);
+    size_t      nkw  = th_func_nkw(call);
+    th_param   *ps   = core_alloc_array(th_param, n + 1);
+    th_kwparam *kws  = core_alloc_array(th_kwparam, nkw + 1);
 
-    ps[0] = (th_param){.mode = TH_IN, .type = receiver};
+    ps[0] = (th_param){.mode = mode, .type = receiver};
     for (size_t i = 0; i < n; i++) {
         ps[i + 1] = *th_func_param(call, i);
+    }
+    for (size_t k = 0; k < nkw; k++) {
+        kws[k] = *th_func_kw(call, k);
     }
 
     th_type *shape = th_func_with_error(types, th_func_ret(call),
                                         th_func_error(call), ps, n + 1,
-                                        nullptr, nullptr, 0);
+                                        th_func_rest(call), kws, nkw);
 
     core_free(ps);
+    core_free(kws);
 
     return shape;
+}
+
+// The mode the receiver of trait `trait`'s method `method` is passed in.
+static th_mode bound_receiver_mode(n00bb_link_analysis_t *analysis,
+                                   core_string_t trait, core_string_t method)
+{
+    parse_sym_entry_t *requirement = trait.data && analysis->units.len
+        ? trait_method_requirement_symbol(analysis->grammar, analysis,
+                                          analysis->units.data[0], trait,
+                                          method)
+        : nullptr;
+    th_type *signature = requirement
+        ? th_resolve(n00bb_symbol_signature(requirement)) : nullptr;
+
+    while (signature && th_kind_of(signature) == TH_BINDER) {
+        signature = th_resolve(th_binder_body(signature));
+    }
+
+    return signature && th_kind_of(signature) == TH_FUNCTION
+            && th_func_nparams(signature)
+        ? th_func_param(signature, 0)->mode
+        : TH_IN;
 }
 
 static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
@@ -1702,15 +1795,26 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                 ? link_ir_function_for_symbol(analysis, symbol)
                 : nullptr;
 
+            // A trait's method constraints follow its `implements` one.
+            core_string_t trait = {0};
+
             for (size_t r = 0; function && r < declared.len; r++) {
                 th_trait_requirement bound = declared.data[r];
                 th_type *var = function_var(types, function,
-                                            th_var_name(bound.subject));                if (var && bound.kind == TH_CON_METHOD) {
+                                            th_var_name(bound.subject));
+
+                if (bound.kind == TH_CON_IMPLEMENTS) {
+                    trait = bound.iface;
+                }
+                if (var && bound.kind == TH_CON_METHOD) {
                     ty_declare_bound(solver, var,
                                      (ty_pred_t){.kind  = TY_PRED_DISPATCH,
                                                  .name  = bound.iface,
                                                  .other = method_shape(
                                                      types, var,
+                                                     bound_receiver_mode(
+                                                         analysis, trait,
+                                                         bound.iface),
                                                      in_function(
                                                          types, function,
                                                          bound.target))},
@@ -1731,6 +1835,32 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                                  (ty_pred_t){.kind = TY_PRED_IMPLEMENTS,
                                              .name = bound.iface},
                                  (ty_why_t){0});
+                // A bound that names no trait arguments still fixes the
+                // trait's parameters for every call through it.
+                bool given = r + 1 < declared.len
+                    && declared.data[r + 1].kind == TH_CON_METHOD;
+                parse_sym_entry_t *trait_symbol = given ? nullptr
+                    : n00bb_link_trait_symbol(analysis->grammar, analysis,
+                                              symbol->owner_unit,
+                                              bound.iface);
+                core_list_t(th_trait_requirement) methods =
+                    core_list_new(th_trait_requirement);
+                size_t parameters = 0;
+                // A trait with no parameters has nothing for a bound to fix.
+                if (trait_symbol
+                    && n00bb_trait_method_instances(types, trait_symbol, var,
+                                                    nullptr, &methods,
+                                                    &parameters)
+                    && parameters) {
+                    for (size_t m = 0; m < methods.len; m++) {
+                        ty_declare_bound(solver, var,
+                            (ty_pred_t){.kind  = TY_PRED_DISPATCH,
+                                        .name  = methods.data[m].iface,
+                                        .other = methods.data[m].target},
+                            (ty_why_t){0});
+                    }
+                }
+                core_list_free(methods);
             }
             core_list_free(declared);
         }
@@ -3861,7 +3991,9 @@ static bool report_method_argument(th_ctx *types, parse_grammar_t *grammar,
 
         th_type *actual = th_resolve(value->type);
 
-        if (th_same_type(actual, formal) || th_kind_of(formal) == TH_VAR
+        // A formal with the trait's variables in it (`'E?`) is what typing
+        // made of it for this call, not something to judge here.
+        if (th_same_type(actual, formal) || !th_is_closed(types, formal)
             || is_integer_type(actual) == is_integer_type(formal)) {
             continue;
         }
@@ -7977,10 +8109,37 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     // that one error; the mismatches it causes there are not reported.
     core_dict_t bound_sites;
     core_dict_init(&bound_sites, nullptr, nullptr);
+    // A call through a bound whose types conflict with an earlier call's
+    // gets one error, from its first mismatch.
+    core_dict_t parameter_sites;
+    core_dict_init(&parameter_sites, nullptr, nullptr);
+    // A type that doesn't implement a bound's trait at all is told that,
+    // not how each of the trait's methods misses.
+    core_dict_t implements_sites;
+    core_dict_init(&implements_sites, nullptr, nullptr);
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
         const ty_failure_t *failure = ty_failure_at(solver, i);
-        if (bound_method_failure(failure)) {
+        if (failure->kind == TY_FAIL_PREDICATE && failure->why.at
+            && failure->pred.kind == TY_PRED_IMPLEMENTS) {
+            core_dict_put(&implements_sites, (void *)failure->why.at,
+                          (void *)1);
+        }
+    }
+    for (size_t i = 0; i < ty_failure_count(solver); i++) {
+        const ty_failure_t *failure = ty_failure_at(solver, i);
+        th_type            *receiver = nullptr;
+        if (bound_method_failure(failure)
+            && !core_dict_contains(&implements_sites,
+                                   (void *)failure->why.at)) {
             core_dict_put(&bound_sites, (void *)failure->why.at, (void *)1);
+        }
+        else if (failure->expected && failure->actual
+                 && bound_trait_of_call(typing->dispatch, failure->why.at,
+                                        &receiver).data
+                 && !core_dict_contains(&parameter_sites,
+                                        (void *)failure->why.at)) {
+            core_dict_put(&parameter_sites, (void *)failure->why.at,
+                          (void *)failure);
         }
     }
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
@@ -7990,6 +8149,23 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
 
         if (!bound_method_failure(failure) && failure->why.at
             && core_dict_contains(&bound_sites, (void *)failure->why.at)) {
+            continue;
+        }
+        if (bound_method_failure(failure)
+            && core_dict_contains(&implements_sites,
+                                  (void *)failure->why.at)) {
+            continue;
+        }
+        bool parameter = false;
+        const ty_failure_t *first = failure->why.at
+            ? core_dict_get(&parameter_sites, (void *)failure->why.at,
+                            &parameter)
+            : nullptr;
+        if (parameter) {
+            if (first == failure && unit) {
+                report_trait_parameter(types, typing->dispatch, unit,
+                                       failure);
+            }
             continue;
         }
 
@@ -8032,6 +8208,8 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     core_dict_free(&tainted);
     core_dict_free(&reported);
     core_dict_free(&bound_sites);
+    core_dict_free(&parameter_sites);
+    core_dict_free(&implements_sites);
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
     for (size_t u = 0; u < count; u++) {

@@ -56,6 +56,30 @@ linked_method_declaration(core_link_unit_t *link,
 }
 
 parse_sym_entry_t *
+n00bb_link_trait_symbol(parse_grammar_t *grammar,
+                        n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *caller,
+                        core_string_t qualified_trait)
+{
+    for (size_t i = 0; grammar && analysis && caller
+         && qualified_trait.data && i < analysis->units.len; i++) {
+        core_translation_unit_t *owner = analysis->units.data[i];
+        size_t start = qualified_trait.u8_bytes;
+        while (start && qualified_trait.data[start - 1] != '.') start--;
+        core_string_t trait = core_string_borrow(
+            qualified_trait.data + start, qualified_trait.u8_bytes - start);
+        if (start && !core_string_eq(core_string_borrow(qualified_trait.data,
+                                                        start - 1),
+                                     owner->module.identifier))
+            continue;
+        parse_sym_entry_t *found = unit_trait_symbol(grammar, owner, trait,
+                                                     caller);
+        if (found && found->member_scope) return found;
+    }
+    return nullptr;
+}
+
+parse_sym_entry_t *
 trait_method_requirement_symbol(parse_grammar_t *grammar,
                                 n00bb_link_analysis_t *analysis,
                                 core_translation_unit_t *caller,

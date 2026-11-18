@@ -298,6 +298,12 @@ N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
     "a `for` loop iterates over a value that cannot be iterated",
     "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
     "such as a list or a range.")
+N00B_DIAG(TRAIT_PARAMETER_FIXED, "N00B-T0602", ERROR,
+    "calls through one trait bound give a trait parameter different types",
+    "A trait's type parameters are the type variables its methods name\n"
+    "besides the receiver's. A bound such as `'C: Opener` fixes them once,\n"
+    "so every call through `'C` uses the same types. To pass values of\n"
+    "different types, pass a variant type that holds either.")
 N00B_DIAG(NOT_A_CONTEXT, "N00B-T0601", ERROR,
     "a `with` statement is given a value that is not a context manager",
     "`with` needs a value whose type implements the `Context_Manager`\n"
