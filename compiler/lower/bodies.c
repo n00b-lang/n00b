@@ -788,8 +788,6 @@ cleanup:
     core_list_free(lower_data.value_blocks);
     core_list_free(lower_data.tries);
     for (size_t w = 0; w < lower_data.withs.len; w++) {
-        for (size_t i = 0; i < lower_data.withs.data[w].items.len; i++)
-            core_list_free(lower_data.withs.data[w].items.data[i].captures);
         core_list_free(lower_data.withs.data[w].items);
     }
     core_list_free(lower_data.withs);
@@ -1044,103 +1042,4 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
     context->block = join;
     context->reachable = true;
     return true;
-}
-
-bool
-lower_context_hook(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                   core_translation_unit_t *unit,
-                   parse_sym_entry_t *context_symbol,
-                   parse_tree_t *hook, ir_ctx_t *ir_context,
-                   core_list_t(core_translation_unit_ptr_t) *units)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    core_string_t role = context_hook_binding_role(grammar, hook);
-    core_link_declaration_t *declaration = state
-        ? link_declaration_for_symbol(state->link_analysis, context_symbol)
-        : nullptr;
-    ir_func_t *function = declaration && role.data
-        ? core_link_declaration_binding(declaration, role)
-        : nullptr;
-    parse_tree_t *body = child_nt(grammar, hook, CORE_STRING_STATIC("body"));
-    th_type *type = parse_tree_type(hook);
-    if (!function || !body || !type) return false;
-
-    core_list_t(parse_sym_entry_ptr_t) parameters =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_tree_t *context_params = child_nt(grammar, context_symbol->decl_node,
-                                             CORE_STRING_STATIC("param-decl"));
-    parse_tree_t *hook_params = child_nt(grammar, hook,
-                                          CORE_STRING_STATIC("context-hook-params"));
-    parse_sym_entry_t *rest = nullptr;
-    collect_ir_parameters(grammar, context_params, &parameters, &rest);
-    collect_ir_parameters(grammar, hook_params, &parameters, &rest);
-    parse_sym_entry_t function_symbol = {
-        .name = context_symbol->name,
-        .kind = PARSE_SYM_FUNCTION,
-        .type = type,
-        .decl_node = hook,
-    };
-    bool ok = lower_ir_body(lowerer, grammar, unit,
-        &function_symbol, body, function, &parameters, nullptr, rest,
-        false, ir_context, units, nullptr, nullptr);
-    core_list_free(parameters);
-    return ok;
-}
-
-bool
-lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                      core_translation_unit_t *unit,
-                      parse_sym_entry_t *context_symbol, size_t parameter_index,
-                      ir_ctx_t *ir_context,
-                      core_list_t(core_translation_unit_ptr_t) *units)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    core_link_declaration_t *declaration = state
-        ? link_declaration_for_symbol(state->link_analysis, context_symbol)
-        : nullptr;
-    char role_buffer[64];
-    core_string_t role = {};
-    core_buffer_t name = {0};
-    if (!state || !declaration
-        || !context_default_role(parameter_index, role_buffer,
-                                 sizeof(role_buffer), &role)
-        || !context_default_name(context_symbol, parameter_index, &name)) {
-        core_buffer_release(&name);
-        return false;
-    }
-    ir_func_t *function = core_link_declaration_binding(declaration, role);
-    parse_tree_t *param_decl = child_nt(grammar, context_symbol->decl_node,
-                                         CORE_STRING_STATIC("param-decl"));
-    core_list_t(parse_sym_entry_ptr_t) parameters =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_sym_entry_t *rest = nullptr;
-    collect_ir_parameters(grammar, param_decl, &parameters, &rest);
-    if (rest) core_list_push(parameters, rest);
-    parse_sym_entry_t *target = parameter_index < parameters.len
-        ? parameters.data[parameter_index] : nullptr;
-    parse_tree_t *expression = target
-        ? child_nt(grammar, target->decl_node, CORE_STRING_STATIC("expression")) : nullptr;
-    core_list_t(parse_sym_entry_ptr_t) dependencies =
-        core_list_new(parse_sym_entry_ptr_t);
-    context_default_dependencies(expression, &parameters,
-                                 &dependencies);
-    if (!function || !target || !expression) {
-        core_buffer_release(&name);
-        core_list_free(dependencies);
-        core_list_free(parameters);
-        return false;
-    }
-    parse_sym_entry_t function_symbol = {
-        .name = core_buffer_string(&name),
-        .kind = PARSE_SYM_FUNCTION,
-        .type = function->type,
-        .decl_node = target->decl_node,
-    };
-    bool ok = lower_ir_body(lowerer, grammar, unit, &function_symbol,
-        expression, function, &dependencies, nullptr, nullptr,
-        true, ir_context, units, nullptr, nullptr);
-    core_buffer_release(&name);
-    core_list_free(dependencies);
-    core_list_free(parameters);
-    return ok;
 }

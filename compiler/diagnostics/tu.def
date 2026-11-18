@@ -221,14 +221,6 @@ N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "type, such as a `record`, is copied on assignment, so each copy would\n"
     "be finalized. Declare the type as an `object`, or keep the resource in\n"
     "an `object` field.")
-N00B_DIAG(CONTEXT_FAIL_WITHOUT_TYPE, "N00B-T0555", ERROR,
-    "a context has a `fail` hook but no failure type",
-    "A context's `fail` hook receives the context's failure value, so the\n"
-    "context must declare `fail: T`. Add it, or remove the hook.")
-N00B_DIAG(CONTEXT_HOOK_PARAMETER, "N00B-T0556", ERROR,
-    "a context hook's parameter has a different type than the context gives it",
-    "The `enter` hook's parameter receives the provided value and the `fail`\n"
-    "hook's parameter the failure value; their declared types must match.")
 N00B_DIAG(ARRAY_SIZE_NOT_POSITIVE, "N00B-T0557", ERROR,
     "an array size is zero or negative",
     "Each sized array dimension holds at least one element:\n"
@@ -306,6 +298,13 @@ N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
     "a `for` loop iterates over a value that cannot be iterated",
     "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
     "such as a list or a range.")
+N00B_DIAG(NOT_A_CONTEXT, "N00B-T0601", ERROR,
+    "a `with` statement is given a value that is not a context manager",
+    "`with` needs a value whose type implements the `Context_Manager`\n"
+    "trait: an `__enter` that runs before the block, and an `__exit` that\n"
+    "runs on every way out of it:\n"
+    "    func __enter(self: Lock) -> Guard { ... }\n"
+    "    func __exit(self: Lock, value: Guard, failure: 'E? = nil) -> bool")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"

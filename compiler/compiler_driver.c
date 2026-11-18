@@ -815,10 +815,6 @@ dump_link_unit(core_link_unit_t *link)
         CORE_STRING_STATIC("n00bb.semantic.type"),
         CORE_STRING_STATIC("ir.array-shape"),
         CORE_STRING_STATIC("n00bb.semantic.declaration-facts"),
-        CORE_STRING_STATIC("n00bb.ir.context.enter"),
-        CORE_STRING_STATIC("n00bb.ir.context.exit"),
-        CORE_STRING_STATIC("n00bb.ir.context.fail"),
-        CORE_STRING_STATIC("n00bb.ir.context.ensure"),
     };
     puts("  declarations:");
     for (size_t i = 0; i < core_link_unit_declaration_count(link); i++) {
@@ -936,8 +932,6 @@ dump_link_unit(core_link_unit_t *link)
         core_string_t kind = edge.kind == N00BB_LINK_DEPENDENCY_CALL
             ? S("call") : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
             ? S("trait-dispatch")
-            : edge.kind == N00BB_LINK_DEPENDENCY_CONTEXT_CALL
-            ? S("context-call")
             : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION
             ? S("trait-specialization") : S("other");
 #undef S

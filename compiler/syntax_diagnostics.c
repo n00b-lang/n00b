@@ -81,7 +81,6 @@ static const construct_name_t constructs[] = {
     NAMED_CONSTRUCT("trait-decl", TRAIT),
     NAMED_CONSTRUCT("enum-stmt", ENUM),
     NAMED_CONSTRUCT("flagset-stmt", FLAGSET),
-    NAMED_CONSTRUCT("context-def", CONTEXT),
     NAMED_CONSTRUCT("callback-decl", CALLBACK),
     NAMED_CONSTRUCT("package-decl", PACKAGE),
     NAMED_CONSTRUCT("alias-stmt", ALIAS),
@@ -180,7 +179,7 @@ starts_declaration_line(const syntax_t *s, int32_t index)
 {
     static const char *keywords[] = {
         "func", "record", "object", "type", "enum", "flagset", "trait",
-        "variant", "import", "package", "alias", "context", "callback",
+        "variant", "import", "package", "alias", "callback",
     };
     int32_t before = index ? tid_at(s, index - 1) : s->newline;
     if (before != s->newline && before != s->indent && before != s->dedent)

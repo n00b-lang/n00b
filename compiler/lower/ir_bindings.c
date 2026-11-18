@@ -321,8 +321,7 @@ bind_link_declaration(parse_grammar_t *grammar, core_link_unit_t *link,
     bool module_scope = symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
                           CORE_STRING_STATIC("module"));
-    if (is_named_type_declaration(grammar, symbol)
-        || context_symbol(grammar, symbol)) {
+    if (is_named_type_declaration(grammar, symbol)) {
         th_type *type = link_semantic_type_for_symbol(
             grammar, owner, symbol);
         if (!type) {

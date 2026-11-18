@@ -1,3 +1,0 @@
-import context_effect_dep.impl
-
-package context_effect_dep { export context_effect_dep.impl }

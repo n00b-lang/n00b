@@ -1,0 +1,11 @@
+# Method calls dispatched by their receiver's type: whether one can fail
+# is known only once typing chose the method.
+import dep
+func needless() -> int fail: string {
+    let q = dep.quiet()
+    return q.poke()!
+}
+func unhandled() -> int {
+    let q = dep.quiet()
+    return q.risky()
+}

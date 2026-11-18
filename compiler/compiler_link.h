@@ -40,12 +40,6 @@ bool function_interface_parameter(parse_sym_entry_t *symbol, size_t target,
 size_t function_interface_parameter_count(parse_sym_entry_t *symbol);
 bool function_interface_parameter_named(parse_sym_entry_t *symbol,
                                         core_string_t target, size_t *index);
-bool context_interface_parameter(parse_sym_entry_t *symbol, size_t target,
-                                 core_string_t *name,
-                                 uint8_t *flags, uint8_t *mode);
-size_t context_interface_parameter_count(parse_sym_entry_t *symbol);
-bool context_interface_parameter_named(parse_sym_entry_t *symbol,
-                                       core_string_t target, size_t *index);
 bool n00bb_call_operator_node(parse_grammar_t *grammar, parse_tree_t *node);
 bool n00bb_classify_calls(parse_grammar_t *grammar,
                          core_translation_unit_t *const *units, size_t count);
@@ -262,7 +256,6 @@ enum {
 enum {
     N00BB_LINK_DEPENDENCY_CALL = 1,
     N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH = 2,
-    N00BB_LINK_DEPENDENCY_CONTEXT_CALL = 11,
     N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION = 16,
 };
 

@@ -26,8 +26,7 @@ kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
     }
     if (!owner->adt_kind.u8_bytes) return false;
     core_string_t adt = owner->adt_kind;
-    if (core_string_eq(adt, CORE_STRING_STATIC("record"))
-        || core_string_eq(adt, CORE_STRING_STATIC("context")))
+    if (core_string_eq(adt, CORE_STRING_STATIC("record")))
         *kind = N00B_ABI_TYPE_RECORD;
     else if (core_string_eq(adt, CORE_STRING_STATIC("variant")))
         *kind = N00B_ABI_TYPE_VARIANT;

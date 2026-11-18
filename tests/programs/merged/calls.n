@@ -174,11 +174,17 @@ func __init(modify self: Holder, count: u8) {
     self.n = count
 }
 
-context Label(width: u8, origin: Point) {
-    enter() {
-    }
-    ensure() {
-    }
+record Label {
+    width: u8
+}
+
+func label(width: u8, origin: Point) -> Label {
+    return (width = width + cast[u8] origin.x)
+}
+
+func __enter(self: Label) -> u8 { return self.width }
+func __exit(self: Label, value: u8, failure: 'E? = nil) -> bool {
+    return false
 }
 
 var kw_b: Buffer = buffer_from_string("abc")
@@ -198,7 +204,8 @@ require shifted(kw_p) == 3
 require doubled(kw_p) == 2
 require measured(kw_p) == 200
 require kw_h.n == 200
-with Label(width = 255, origin = (x = 0, y = 0)) {
+with width = label(width = 255, origin = (x = 0, y = 0)) {
+    require width == 255
 }
 
 func unsigned(capacity: uint = 0) -> uint { return capacity }

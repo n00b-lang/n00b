@@ -1,0 +1,4 @@
+tests/diagnostics/modules/dispatch_failures/callers.n:6:12: error N00B-S0026: `poke` can't fail, so there's nothing for this `!` to pass along
+  help: remove the `!`
+tests/diagnostics/modules/dispatch_failures/callers.n:10:12: error N00B-S0025: `risky` can fail with `string`, so this call needs a trailing `!` or a `try`
+  help: write `risky(...)!` to pass the failure to the caller, or handle it with `try`

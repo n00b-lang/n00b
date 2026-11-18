@@ -1048,15 +1048,27 @@ int
 n00bb_route_try_error(ir_lower_context_t *context, ir_value_t *error,
                       ir_span_t span)
 {
+    return n00bb_route_failure_before(context, error, span, UINT64_MAX);
+}
+
+int
+n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
+                           ir_span_t span, uint64_t before_order)
+{
     n00bb_lower_context_t *lower = context->user;
     n00bb_try_frame_t *frame = nullptr;
     for (size_t i = lower->tries.len; i > 0; i--) {
         n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
-        if (candidate->active && candidate->in_body) {
+        if (candidate->active && candidate->in_body
+            && candidate->order < before_order) {
             frame = candidate;
             break;
         }
     }
+    // A `with` manager entered inside the try handles the failure first.
+    n00bb_with_item_t *with = n00bb_with_handler(lower, before_order);
+    if (with && (!frame || with->order > frame->order))
+        return n00bb_route_with_failure(context, with, error, span) ? 1 : -1;
     if (!frame) return 0;
     th_type *failure = error && error->type ? th_resolve(error->type)
                                             : nullptr;
@@ -2591,7 +2603,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                                                            frame->result)
                 && ir_instr_operand_value(store, value)
                 && n00bb_emit_scoped_cleanups(context, visit->node,
-                                              frame->order, nullptr, true,
+                                              frame->order, true,
                                               UINT64_MAX);
             ir_instr_t *jump = stored
                 ? ir_instr_add(context->block, IR_OP_JUMP) : nullptr;

@@ -862,12 +862,6 @@ bool n00bb_builtin_atomic_cas_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_access_function(parse_sym_entry_t *symbol);
 bool n00bb_default_references(parse_tree_t *node,
     parse_sym_entry_t *symbol);
-void context_default_dependencies(parse_tree_t *expr,
-    core_list_t(parse_sym_entry_ptr_t) *parameters,
-    core_list_t(parse_sym_entry_ptr_t) *out);
-th_type *context_default_ir_type(th_ctx *types, th_type *context_type,
-    core_list_t(parse_sym_entry_ptr_t) *dependencies,
-    th_type *result_type);
 bool n00bb_call_is_error_propagated(parse_grammar_t *grammar,
     parse_tree_t *node);
 parse_sym_entry_t *n00bb_try_clause_symbol(parse_grammar_t *grammar,
@@ -875,7 +869,6 @@ parse_sym_entry_t *n00bb_try_clause_symbol(parse_grammar_t *grammar,
 bool bind_array_shape_type_source(parse_grammar_t *grammar,
                                   parse_tree_t *type_reference,
                                   parse_sym_entry_t *symbol);
-bool context_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol);
 bool is_module_global_symbol(parse_grammar_t *grammar,
                              parse_sym_entry_t *symbol);
 bool type_may_contain_reference_alias(th_ctx *types, th_type *type);
@@ -902,10 +895,6 @@ bool node_is_within(parse_tree_t *node, parse_tree_t *ancestor);
 void collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
     core_list_t(parse_sym_entry_ptr_t) *parameters,
     parse_sym_entry_t **rest);
-bool context_hook_name(parse_sym_entry_t *symbol, core_string_t suffix,
-    core_buffer_t *out);
-bool context_default_name(parse_sym_entry_t *symbol, size_t index,
-    core_buffer_t *out);
 bool callback_protocol_name(core_string_t type_name, core_string_t marker,
     core_buffer_t *out);
 n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
@@ -922,7 +911,6 @@ th_type *n00bb_reference_definition(th_ctx *types, th_type *type);
 th_type *n00bb_dereferenced_type(th_ctx *types, th_type *type);
 bool n00bb_object_type(th_ctx *types, th_type *type);
 th_type *n00bb_shape_object(th_ctx *types, th_type *type);
-core_string_t n00bb_context_hook_role(core_string_t name);
 bool alias_declaration_is_transparent(parse_grammar_t *grammar,
                                       parse_tree_t *declaration);
 th_type *declared_type_from_node(parse_grammar_t *grammar,
@@ -933,8 +921,6 @@ bool exported_type_shape(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_sym_entry_t *symbol,
     th_env_type_shape_kind_t *shape_kind, th_type **shape);
 parse_sym_entry_t *enclosing_function_symbol(parse_grammar_t *grammar,
-                                             parse_tree_t *node);
-parse_sym_entry_t *link_effect_owner_symbol(parse_grammar_t *grammar,
                                              parse_tree_t *node);
 bool n00bb_symbol_visible_to(core_translation_unit_t *consumer,
                              core_translation_unit_t *owner,
@@ -1020,12 +1006,6 @@ void link_use_site_bind(n00bb_link_use_site_t *site,
     parse_sym_entry_t *symbol);
 void record_callback_role_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *role,
-    n00bb_tu_state_t *state);
-void record_context_signature(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *context,
-    n00bb_tu_state_t *state);
-void record_context_hook_signature(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *hook,
     n00bb_tu_state_t *state);
 void finalize_callback_contract(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *declaration,

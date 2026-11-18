@@ -873,17 +873,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     if (operand_count || !result_type)
         return lower_internal(context, span, "call has no result type");
-    ir_lower_result_t context_result = {IR_LOWER_FAILED, nullptr};
-    int context_call = n00bb_context_call(context, visit, result_type, span,
-                                          &context_result);
-    if (context_call < 0)
-        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-    if (context_call > 0)
-        return context_result;
-    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call")))
-        return lower_report(context, N00B_DIAG_CONTEXT_OUTSIDE_WITH, span,
-            N00B_TEXT_A_CONTEXT_CAN_BE_CALLED,
-            N00BB_NO_ARGS);
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller_state = lower
         ? tu_state(lower->unit) : nullptr;

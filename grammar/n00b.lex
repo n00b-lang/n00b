@@ -35,7 +35,7 @@
 @lex-soft-keywords("i", "u", "bits", "call", "handler", "setup",
                    "layout", "align", "step", "out", "inline", "typeof",
                    "typespec",
-                   "provides", "enter", "exit", "ensure", "as", "thread",
+                   "as", "thread",
                    "litmod", "modify", "consume", "where",
                    "from", "all", "struct", "object", "view",
                    "fn", "function", "not", "null", "None",

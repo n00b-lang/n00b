@@ -80,22 +80,42 @@ private func write_unlock(buffer: Buffer) {
     __atomic_store(ref buffer.lock, 0)
 }
 
-context Buffer_Read(buffer: Buffer) {
-    enter() {
-        read_lock(buffer)
-    }
-    ensure() {
-        read_unlock(buffer)
-    }
+// `with reading(buffer)` and `with writing(buffer)` hold the buffer's lock
+// for their block.
+private record Buffer_Read {
+    buffer: Buffer
 }
 
-context Buffer_Write(buffer: Buffer) {
-    enter() {
-        write_lock(buffer)
-    }
-    ensure() {
-        write_unlock(buffer)
-    }
+private record Buffer_Write {
+    buffer: Buffer
+}
+
+private func reading(buffer: Buffer) -> Buffer_Read {
+    return (buffer = buffer)
+}
+
+private func writing(buffer: Buffer) -> Buffer_Write {
+    return (buffer = buffer)
+}
+
+private func __enter(self: Buffer_Read) {
+    read_lock(self.buffer)
+}
+
+private func __exit(self: Buffer_Read, value: nil,
+                    failure: 'E? = nil) -> bool {
+    read_unlock(self.buffer)
+    return false
+}
+
+private func __enter(self: Buffer_Write) {
+    write_lock(self.buffer)
+}
+
+private func __exit(self: Buffer_Write, value: nil,
+                    failure: 'E? = nil) -> bool {
+    write_unlock(self.buffer)
+    return false
 }
 
 private func align(n: uint) -> uint {
@@ -245,7 +265,7 @@ private func raw_resize(buffer: Buffer, new_sz: uint) {
 }
 
 func resize(self: Buffer, new_sz: uint) {
-    with Buffer_Write(self) {
+    with writing(self) {
         raw_resize(self, new_sz)
     }
 }
@@ -255,7 +275,7 @@ func append_bytes(self: Buffer, src: Array[u8], len: uint) {
         return
     }
 
-    with Buffer_Write(self) {
+    with writing(self) {
         let old_len: uint = self.byte_len
         let needed: uint = old_len + len
 
@@ -306,13 +326,13 @@ func put_string(self: Buffer, s: string) {
 
 func __add(view self: Buffer, view other: string) -> Buffer {
     let left: Buffer = self
-    with Buffer_Read(left) {
+    with reading(left) {
         let other_len: uint = string.core.byte_len(other)
         let new_len: uint = left.byte_len + other_len
 
         result = new[Buffer](length = cast[int] new_len)
         let out: Buffer = result
-        with Buffer_Write(out) {
+        with writing(out) {
             let target: Ref[Array[u8]] = writable_bytes(out)
             containers.array.copy_items(target.__value, 0,
                                         bytes_of(left).__value, 0,
@@ -353,14 +373,14 @@ private func concat_raw(buffer: Buffer, src: Array[u8],
 }
 
 func __add_assign(self: Buffer, view other: string) {
-    with Buffer_Write(self) {
+    with writing(self) {
         concat_raw(self, string.core.__text_byte_array(other),
                    string.core.byte_len(other), false)
     }
 }
 
 func concat(self: Buffer, src: string, to_front: bool = false) {
-    with Buffer_Write(self) {
+    with writing(self) {
         concat_raw(self, string.core.__text_byte_array(src),
                    string.core.byte_len(src), to_front)
     }
@@ -368,7 +388,7 @@ func concat(self: Buffer, src: string, to_front: bool = false) {
 
 func set_index(self: Buffer, n: int, c: u8) fail: Buffer_Error {
     var ok: bool = false
-    with Buffer_Write(self) {
+    with writing(self) {
         var at: int = n
         if at < 0 {
             at += cast[int] self.byte_len
@@ -443,7 +463,7 @@ func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
         bytes = string.core.__text_byte_array(val)
         add_len = cast[int] string.core.byte_len(val)
     }
-    with Buffer_Write(self) {
+    with writing(self) {
         ok = set_slice_raw(self, start, end, bytes, add_len)
     }
     if !ok {
@@ -475,7 +495,7 @@ func __equal(view self: Buffer, view other: string) -> bool {
 
 func to_string(consume self: Buffer,
                encoding: string.core.Str_Encoding? = nil) -> string {
-    with Buffer_Write(self) {
+    with writing(self) {
         raw_own(self)
         result = string.core.from_raw(bytes_of(self),
                                       cast[int] self.byte_len,
@@ -488,7 +508,7 @@ func to_string(consume self: Buffer,
 }
 
 func free(self: Buffer) {
-    with Buffer_Write(self) {
+    with writing(self) {
         set_bytes(self, [])
         self.byte_len = 0
         self.alloc_len = 0
@@ -499,14 +519,14 @@ func free(self: Buffer) {
 func buffer_slice_begin(self: Buffer) -> string {
     var bytes: Ref[Array[u8]]
     var len:   uint
-    with Buffer_Read(self) {
+    with reading(self) {
         bytes = containers.lease.hold(self.store)
         len = self.byte_len
     }
     let text: string = string.core.from_raw(bytes, cast[int] len,
                                             copy = false)
     if string.core.string_backing_at(text) == 0 {
-        with Buffer_Read(self) {
+        with reading(self) {
             containers.lease.drop(self.store)
         }
     }
@@ -514,7 +534,7 @@ func buffer_slice_begin(self: Buffer) -> string {
 }
 
 func buffer_slice_copy(self: Buffer) -> string {
-    with Buffer_Read(self) {
+    with reading(self) {
         result = string.core.from_raw(bytes_of(self),
                                       cast[int] self.byte_len, copy = true)
     }
@@ -526,7 +546,7 @@ func buffer_slice_end(self: Buffer, text: string) {
     if at == 0 {
         return
     }
-    with Buffer_Read(self) {
+    with reading(self) {
         if data_address(bytes_of(self)) == at {
             containers.lease.drop(self.store)
         }

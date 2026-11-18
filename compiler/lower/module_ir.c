@@ -1,17 +1,6 @@
 #include "lower_internal.h"
 #include "sequence_transfer.h"
 
-static core_string_t
-context_hook_suffix(parse_grammar_t *grammar, parse_tree_t *hook);
-static bool
-context_hook_ir_name(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
-                     parse_tree_t *hook, core_buffer_t *out);
-static bool
-add_context_hook_functions(parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           n00bb_link_analysis_t *analysis,
-                           core_link_unit_t *link,
-                           uint32_t producer_stage);
 static bool
 register_nominal_types(parse_grammar_t *grammar,
                        core_translation_unit_t *unit, ir_module_t *module,
@@ -120,267 +109,6 @@ function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node)
 {
     return node && nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
         ? parse_tree_sym(node) : nullptr;
-}
-
-static core_string_t
-context_hook_suffix(parse_grammar_t *grammar, parse_tree_t *hook)
-{
-    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-enter")))
-        return CORE_STRING_STATIC("enter");
-    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-exit")))
-        return CORE_STRING_STATIC("exit");
-    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-fail")))
-        return CORE_STRING_STATIC("fail");
-    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-ensure")))
-        return CORE_STRING_STATIC("ensure");
-    return (core_string_t){};
-}
-
-core_string_t
-context_hook_binding_role(parse_grammar_t *grammar, parse_tree_t *hook)
-{
-    core_string_t suffix = context_hook_suffix(grammar, hook);
-    if (!suffix.data) return (core_string_t){};
-    if (core_string_eq(suffix, CORE_STRING_STATIC("enter")))
-        return CORE_STRING_STATIC("n00bb.ir.context.enter");
-    if (core_string_eq(suffix, CORE_STRING_STATIC("exit")))
-        return CORE_STRING_STATIC("n00bb.ir.context.exit");
-    if (core_string_eq(suffix, CORE_STRING_STATIC("fail")))
-        return CORE_STRING_STATIC("n00bb.ir.context.fail");
-    if (core_string_eq(suffix, CORE_STRING_STATIC("ensure")))
-        return CORE_STRING_STATIC("n00bb.ir.context.ensure");
-    return (core_string_t){};
-}
-
-static bool
-context_hook_ir_name(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
-                     parse_tree_t *hook, core_buffer_t *out)
-{
-    core_string_t suffix = context_hook_suffix(grammar, hook);
-    return suffix.data && context_hook_name(symbol, suffix, out);
-}
-
-bool
-context_default_role(size_t index, char *buffer, size_t size,
-                     core_string_t *out)
-{
-    if (!buffer || !size || !out) return false;
-    int written = snprintf(buffer, size, "n00bb.ir.context.default.%zu",
-                           index);
-    if (written <= 0 || (size_t)written >= size) return false;
-    *out = core_string_borrow(buffer, (size_t)written);
-    return true;
-}
-
-bool
-context_interface_dependencies(parse_sym_entry_t *symbol, size_t target,
-                                size_t *indices, size_t capacity,
-                                size_t *count)
-{
-    const uint8_t *data = symbol ? symbol->user_data : nullptr;
-    if (count) *count = 0;
-    if (!data || !(data[0] & 0x80u) || (data[0] & 0x70u))
-        return false;
-    uint32_t parameter_count = read_u32_le(data + 1);
-    if (target >= parameter_count) return false;
-    size_t offset = 5;
-    for (size_t i = 0; i < parameter_count; i++) {
-        if (offset > SIZE_MAX - 4) return false;
-        uint16_t name_size = (uint16_t)data[offset]
-            | (uint16_t)data[offset + 1] << 8;
-        uint8_t flags = data[offset + 2];
-        offset += 4;
-        if (!name_size || name_size > SIZE_MAX - offset) return false;
-        offset += name_size;
-        size_t dependency_count = 0;
-        if (flags & 4u) {
-            if (offset > SIZE_MAX - 2) return false;
-            dependency_count = (uint16_t)data[offset]
-                | (uint16_t)data[offset + 1] << 8;
-            offset += 2;
-            if (dependency_count > (SIZE_MAX - offset) / 2) return false;
-            if (i == target && dependency_count > capacity) return false;
-            for (size_t d = 0; d < dependency_count; d++) {
-                size_t dependency = (uint16_t)data[offset]
-                    | (uint16_t)data[offset + 1] << 8;
-                if (i == target && indices) indices[d] = dependency;
-                offset += 2;
-            }
-        }
-        if (i == target) {
-            if (count) *count = dependency_count;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool
-add_context_hook_functions(parse_grammar_t *grammar,
-                           core_translation_unit_t *unit,
-                           n00bb_link_analysis_t *analysis,
-                           core_link_unit_t *link,
-                           uint32_t producer_stage)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || !state->ir_module) return false;
-    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
-        state, CORE_STRING_STATIC(""));
-    bool ok = true;
-    for (size_t s = 0; ok && s < scopes.len; s++) {
-        for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-             ok && symbol; symbol = symbol->next_in_scope) {
-            if (n00bb_injected_member(symbol)) continue;
-            if (!context_symbol(grammar, symbol)) continue;
-            if (state->interface_module) {
-                core_link_declaration_t *context_declaration =
-                    link_declaration_for_symbol(analysis, symbol);
-                static const struct {
-                    core_string_t suffix;
-                    core_string_t role;
-                } interface_hooks[] = {
-                    {CORE_STRING_STATIC("enter"),
-                     CORE_STRING_STATIC("n00bb.ir.context.enter")},
-                    {CORE_STRING_STATIC("exit"),
-                     CORE_STRING_STATIC("n00bb.ir.context.exit")},
-                    {CORE_STRING_STATIC("fail"),
-                     CORE_STRING_STATIC("n00bb.ir.context.fail")},
-                    {CORE_STRING_STATIC("ensure"),
-                     CORE_STRING_STATIC("n00bb.ir.context.ensure")},
-                };
-                for (size_t h = 0; ok && h <
-                     sizeof(interface_hooks) / sizeof(interface_hooks[0]); h++) {
-                    core_buffer_t name = {0};
-                    if (!context_hook_name(symbol, interface_hooks[h].suffix,
-                                           &name)) {
-                        core_buffer_release(&name);
-                        ok = false;
-                        break;
-                    }
-                    parse_sym_entry_t *hook_symbol = parse_symtab_lookup_scoped(
-                        state->annotations->symtab, symbol->scope,
-                        CORE_STRING_STATIC(""), core_buffer_string(&name));
-                    core_buffer_release(&name);
-                    if (!hook_symbol) continue;
-                    core_link_declaration_t *hook_declaration =
-                        link_declaration_for_symbol(analysis, hook_symbol);
-                    ir_func_t *function = hook_declaration
-                        ? core_link_declaration_binding(hook_declaration,
-                            CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
-                    ok = context_declaration && function
-                        && core_link_declaration_set_binding(link,
-                            context_declaration, interface_hooks[h].role,
-                            producer_stage, function);
-                }
-                for (size_t p = 0; ok && p <
-                     context_interface_parameter_count(symbol); p++) {
-                    uint8_t flags = 0;
-                    if (!context_interface_parameter(symbol, p, nullptr,
-                                                     &flags, nullptr)) {
-                        ok = false;
-                        break;
-                    }
-                    if (!(flags & 4u)) continue;
-                    core_buffer_t name = {0};
-                    char role_buffer[64];
-                    core_string_t role = {};
-                    if (!context_default_name(symbol, p, &name)
-                        || !context_default_role(p, role_buffer,
-                                                 sizeof(role_buffer), &role)) {
-                        core_buffer_release(&name);
-                        ok = false;
-                        break;
-                    }
-                    parse_sym_entry_t *helper_symbol =
-                        parse_symtab_lookup_scoped(state->annotations->symtab,
-                            symbol->scope, CORE_STRING_STATIC(""),
-                            core_buffer_string(&name));
-                    core_buffer_release(&name);
-                    core_link_declaration_t *helper_declaration =
-                        link_declaration_for_symbol(analysis, helper_symbol);
-                    ir_func_t *function = helper_declaration
-                        ? core_link_declaration_binding(helper_declaration,
-                            CORE_STRING_STATIC("n00bb.ir.function")) : nullptr;
-                    ok = helper_symbol && context_declaration && function
-                        && core_link_declaration_set_binding(link,
-                            context_declaration, role, producer_stage,
-                            function);
-                }
-                continue;
-            }
-            static const core_string_t hooks[] = {
-                CORE_STRING_STATIC("context-enter"),
-                CORE_STRING_STATIC("context-exit"),
-                CORE_STRING_STATIC("context-fail"),
-                CORE_STRING_STATIC("context-ensure"),
-            };
-            for (size_t i = 0; ok && i < sizeof(hooks) / sizeof(hooks[0]);
-                 i++) {
-                core_string_t hook_role = n00bb_context_hook_role(hooks[i]);
-                parse_tree_t *hook = hook_role.data
-                    ? parse_sym_binding(symbol, hook_role) : nullptr;
-                if (!hook) continue;
-                core_buffer_t name = {0};
-                th_type *type = th_func_collect_rest(state->types,
-                    parse_tree_type(hook));
-                if (type && th_kind_of(type) != TH_FUNCTION) type = nullptr;
-                ir_func_t *function = context_hook_ir_name(
-                        grammar, symbol, hook, &name)
-                    && type && !ir_func_find(state->ir_module,
-                                             core_buffer_string(&name))
-                    ? ir_func_add(state->ir_module, core_buffer_string(&name),
-                                  type, IR_LINK_INTERNAL) : nullptr;
-                core_buffer_release(&name);
-                core_link_declaration_t *declaration =
-                    link_declaration_for_symbol(analysis, symbol);
-                core_string_t role = context_hook_binding_role(grammar, hook);
-                ok = function && declaration && role.data
-                    && core_link_declaration_set_binding(link, declaration,
-                        role, producer_stage, function);
-            }
-            core_list_t(parse_sym_entry_ptr_t) parameters =
-                core_list_new(parse_sym_entry_ptr_t);
-            parse_sym_entry_t *rest = nullptr;
-            collect_ir_parameters(grammar,
-                child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
-                &parameters, &rest);
-            if (rest) core_list_push(parameters, rest);
-            for (size_t i = 0; ok && i < parameters.len; i++) {
-                parse_sym_entry_t *parameter = parameters.data[i];
-                if (!parameter || !parameter->is_optional) continue;
-                parse_tree_t *default_expr = child_nt(grammar,
-                    parameter->decl_node, CORE_STRING_STATIC("expression"));
-                core_list_t(parse_sym_entry_ptr_t) dependencies =
-                    core_list_new(parse_sym_entry_ptr_t);
-                context_default_dependencies(default_expr,
-                    &parameters, &dependencies);
-                th_type *type = context_default_ir_type(state->types,
-                    symbol->type, &dependencies, parameter->type);
-                core_buffer_t name = {0};
-                char role_buffer[64];
-                core_string_t role = {};
-                bool named = context_default_name(symbol, i, &name)
-                    && context_default_role(i, role_buffer,
-                                            sizeof(role_buffer), &role);
-                ir_func_t *function = named && type
-                    && !ir_func_find(state->ir_module,
-                                     core_buffer_string(&name))
-                    ? ir_func_add(state->ir_module, core_buffer_string(&name),
-                                  type, IR_LINK_INTERNAL) : nullptr;
-                core_buffer_release(&name);
-                core_link_declaration_t *declaration =
-                    link_declaration_for_symbol(analysis, symbol);
-                ok = function && declaration
-                    && core_link_declaration_set_binding(link, declaration,
-                        role, producer_stage, function);
-                core_list_free(dependencies);
-            }
-            core_list_free(parameters);
-            (void)rest;
-        }
-    }
-    core_list_free(scopes);
-    return ok;
 }
 
 bool
@@ -985,7 +713,6 @@ register_module_globals(parse_grammar_t *grammar,
              ok && symbol; symbol = symbol->next_in_scope) {
             if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind != PARSE_SYM_VARIABLE
-                || context_symbol(grammar, symbol)
                 || (!symbol_binding_node(symbol)
                     && !source_state->interface_module)
                 || !symbol->type
@@ -1762,8 +1489,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                     ? symbol->user_data
                         ? interface_function_semantic_type(state->types,
                                                            symbol)
-                        : interface_context_hook_symbol(symbol)
-                            || parse_sym_binding(symbol, CORE_STRING_STATIC(
+                        : parse_sym_binding(symbol, CORE_STRING_STATIC(
                                 "n00bb.generated-value-method"))
                             ? symbol->type
                             : nullptr
@@ -1935,11 +1661,6 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             }
         }
     }
-    for (size_t i = 0; i < units->len; i++)
-        if (!add_context_hook_functions(grammar, units->data[i], analysis,
-                                         link, producer_stage))
-            return ir_initialization_error(units->data[i],
-                "could not register context hooks in Lantern IR");
     if (!restore_declarations(analysis))
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
             "could not restore declarations from a linked interface");
@@ -1974,7 +1695,6 @@ validate_module_declarations(parse_grammar_t *grammar,
             parse_tree_t *binding = symbol_binding_node(symbol);
             if (symbol->kind == PARSE_SYM_FUNCTION
                 || symbol->kind == PARSE_SYM_MODULE
-                || context_symbol(grammar, symbol)
                 || (symbol->decl_node
                     && nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("trait-decl")))
                 || (symbol->decl_node
@@ -2180,8 +1900,7 @@ bind_missing_external(ir_lower_context_t *context,
             ? ir_func_address(target_module, target) : nullptr;
         return address && ir_lower_bind_value(context, symbol, address);
     }
-    if (symbol->kind != PARSE_SYM_VARIABLE
-        || context_symbol(lower->grammar, symbol)) return false;
+    if (symbol->kind != PARSE_SYM_VARIABLE) return false;
     core_translation_unit_t *owner = unit_for_symbol(lower->grammar,
                                                     lower->units, symbol);
     n00bb_tu_state_t *owner_state = owner ? tu_state(owner) : nullptr;

@@ -589,8 +589,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         declare_result_variable(state, parent);
     if (entering && (NT_IS(grammar, node, "func-def")
                      || NT_IS(grammar, node, "callback-role")
-                     || NT_IS(grammar, node, "trait-spec")
-                     || NT_IS(grammar, node, "context-def"))) {
+                     || NT_IS(grammar, node, "trait-spec"))) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) {
             n00bb_function_parameter_facts_t *parameter_facts =
@@ -668,8 +667,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
 
     if (!entering && NT_IS(grammar, node, "func-def"))
         record_function_signature(grammar, unit, node, state);
-    if (entering && NT_IS(grammar, node, "context-enter"))
-        record_context_hook_signature(grammar, unit, node, state);
 
     if (!entering) {
         if (!cache_ordered_literal_children(grammar, state, node)) {
@@ -1004,16 +1001,6 @@ semantic_walk_child_complete(parse_visit_t *visit)
         record_cached_declared_function_signature(context->grammar,
             unit, child, tu_state(unit));
     }
-    if (NT_IS(context->grammar, node, "context-def")
-        && NT_IS(context->grammar, child, "context-spec"))
-        record_context_signature(context->grammar, unit, node,
-                                 tu_state(unit));
-    if ((NT_IS(context->grammar, node, "context-exit")
-         || NT_IS(context->grammar, node, "context-fail")
-         || NT_IS(context->grammar, node, "context-ensure"))
-        && NT_IS(context->grammar, child, "context-hook-params"))
-        record_context_hook_signature(context->grammar, unit, node,
-                                      tu_state(unit));
     return semantic_walk_status(walk, visit->node);
 }
 

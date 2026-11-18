@@ -3756,7 +3756,6 @@ block_item(pp_context_t *ctx, parse_tree_t *node)
 {
     return is_name(ctx->grammar, node, "body-stmt")
         || is_name(ctx->grammar, node, "value-stmt")
-        || is_name(ctx->grammar, node, "context-hook")
         || is_name(ctx->grammar, node, "package-item")
         || is_name(ctx->grammar, node, "top-level-stmt")
         || is_name(ctx->grammar, node, "pass-stmt");

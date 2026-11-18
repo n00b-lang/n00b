@@ -1590,11 +1590,8 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         return true;
     }
     uint8_t archived_mode = 0;
-    bool archived = context_symbol(grammar, symbol)
-        ? context_interface_parameter(symbol, index, name, flags,
-                                      &archived_mode)
-        : function_interface_parameter(symbol, index, name,
-                                       flags, &archived_mode);
+    bool archived = function_interface_parameter(symbol, index, name,
+                                                 flags, &archived_mode);
     if (!archived) return false;
     if (formal_out) *formal_out = nullptr;
     if (mode) *mode = (th_mode)archived_mode;
@@ -1656,8 +1653,6 @@ function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     parse_sym_entry_t *formal = formal_symbol_named(grammar, formals, name,
                                                     index);
     if (formal) return true;
-    if (context_symbol(grammar, symbol))
-        return context_interface_parameter_named(symbol, name, index);
     return function_interface_parameter_named(symbol, name, index);
 }
 
@@ -1667,8 +1662,6 @@ callable_formal_parameters(parse_grammar_t *grammar,
 {
     parse_tree_t *declaration = symbol ? symbol->decl_node : nullptr;
     if (!declaration) return nullptr;
-    if (NT_IS(grammar, declaration, "context-def"))
-        return CHILD_NT(grammar, declaration, "param-decl");
     parse_tree_t *signature = CHILD_NT(grammar, declaration,
                                        "func-type-signature");
     if (signature) return CHILD_NT(grammar, signature, "param-decl");
@@ -4044,174 +4037,6 @@ n00bb_hide_reserved_segments(core_string_t printed)
 
 
 void
-record_context_signature(parse_grammar_t *grammar,
-                         core_translation_unit_t *unit,
-                         parse_tree_t *context, n00bb_tu_state_t *state)
-{
-    parse_sym_entry_t *symbol = parse_tree_sym(context);
-    if (!symbol || !state || !state->types) return;
-    parse_tree_t *spec = CHILD_NT(grammar, context, "context-spec");
-    parse_tree_t *context_body = CHILD_NT(grammar, context, "context-body");
-    parse_tree_t *context_hooks = CHILD_NT(grammar, context_body,
-                                            "context-hooks");
-    static const core_string_t hook_names[] = {
-        CORE_STRING_STATIC("context-enter"),
-        CORE_STRING_STATIC("context-exit"),
-        CORE_STRING_STATIC("context-fail"),
-        CORE_STRING_STATIC("context-ensure"),
-    };
-    for (size_t hook_index = 0;; hook_index++) {
-        parse_tree_t *wrapper = parse_tree_get_nth_nt_child(
-            context_hooks, (int32_t)hook_index);
-        if (!wrapper) break;
-        if (!NT_IS(grammar, wrapper, "context-hook")) continue;
-        for (size_t i = 0; i < sizeof(hook_names) / sizeof(hook_names[0]);
-             i++) {
-            parse_tree_t *hook = child_nt(grammar, wrapper, hook_names[i]);
-            core_string_t role = n00bb_context_hook_role(hook_names[i]);
-            if (hook && (!role.data
-                         || !parse_sym_set_binding(symbol, role, hook))) {
-                n00bb_tu_internal_error(unit, hook, "checking declarations",
-                    "could not cache a context hook on its declaration");
-                return;
-            }
-        }
-    }
-    parse_tree_t *provides = CHILD_NT(grammar, spec, "provides-clause");
-    parse_tree_t *error = CHILD_NT(grammar, spec, "error-type");
-    parse_tree_t *fail_hook = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.ir.context.fail"));
-    if (fail_hook && !error) {
-        core_diagnostics_t *diagnostics =
-            core_translation_unit_diagnostics(unit);
-        if (n00bb_report(diagnostics, unit, N00B_DIAG_CONTEXT_FAIL_WITHOUT_TYPE,
-            link_source_location(fail_hook), N00B_TEXT_CONTEXT_HAS_A_FAIL_HOOK,
-            N00BB_ARGS(ARG_TEXT(symbol->name))))
-            n00bb_report_help(diagnostics, N00B_TEXT_ADD_FAIL_T_TO_THE,
-                N00BB_ARGS(ARG_TEXT(symbol->name)));
-        return;
-    }
-
-    core_list_t(th_param) constructor_params = core_list_new(th_param);
-    th_param constructor_rest = {0};
-    bool constructor_has_rest = false;
-    n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
-        symbol, N00BB_PARAMETER_FACTS_KEY);
-    bool params_ok = resolve_function_parameter_facts(grammar, state,
-        parameter_facts, &constructor_params, &constructor_rest,
-        &constructor_has_rest);
-    th_type *provided_type = provides
-        ? parse_tree_type(CHILD_NT(grammar, provides, "type-spec"))
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
-    th_type *failure_type = error
-        ? parse_tree_type(CHILD_NT(grammar, error, "one-tspec"))
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
-    th_type *signature = params_ok && provided_type && failure_type
-        ? th_func_with_error(state->types, provided_type, failure_type,
-            constructor_params.data, constructor_params.len,
-            constructor_has_rest ? &constructor_rest : nullptr, nullptr, 0)
-        : nullptr;
-    if (!signature) {
-        core_list_free(constructor_params);
-        n00bb_tu_internal_error_unless_reported(unit, context,
-            "checking declarations",
-            "could not form the context constructor signature");
-        return;
-    }
-    symbol->type = signature;
-    symbol->error_type = failure_type;
-    core_list_free(constructor_params);
-}
-
-void
-record_context_hook_signature(parse_grammar_t *grammar,
-                               core_translation_unit_t *unit,
-                               parse_tree_t *hook, n00bb_tu_state_t *state)
-{
-    if (!hook || !state || !state->types) return;
-    int hook_index = NT_IS(grammar, hook, "context-enter") ? 0
-        : NT_IS(grammar, hook, "context-exit") ? 1
-        : NT_IS(grammar, hook, "context-fail") ? 2
-        : NT_IS(grammar, hook, "context-ensure") ? 3 : -1;
-    if (hook_index < 0) return;
-    parse_tree_t *context = parse_tree_parent(hook);
-    while (context && !NT_IS(grammar, context, "context-def"))
-        context = parse_tree_parent(context);
-    parse_sym_entry_t *symbol = context
-        ? parse_tree_sym(context) : nullptr;
-    th_type *context_type = symbol && symbol->type
-        ? th_resolve(symbol->type) : nullptr;
-    if (!symbol || !context_type || th_kind_of(context_type) != TH_FUNCTION)
-        return;
-    th_type *provided_type = th_func_ret(context_type);
-    th_type *failure_type = symbol->error_type;
-    n00bb_function_parameter_facts_t *parameter_facts = parse_sym_binding(
-        symbol, N00BB_PARAMETER_FACTS_KEY);
-    core_list_t(th_param) hook_params = core_list_new(th_param);
-    th_param rest = {0};
-    bool has_rest = false;
-    bool valid = resolve_function_parameter_facts(grammar, state,
-        parameter_facts, &hook_params, &rest, &has_rest);
-
-    parse_tree_t *hook_param_list = CHILD_NT(grammar, hook,
-                                              "context-hook-params");
-    parse_tree_t *hook_param = CHILD_NT(grammar, hook_param_list, "pos-param");
-    if (hook_param) {
-        parse_tree_t *hook_type_node = CHILD_NT(grammar, hook_param,
-                                                 "type-spec");
-        th_type *parameter_type = hook_type_node
-            ? parse_tree_type(hook_type_node)
-            : hook_index == 2 ? failure_type : provided_type;
-        if (!parameter_type) valid = false;
-        else {
-            parse_sym_entry_t *parameter_symbol =
-                parse_tree_sym(hook_param);
-            if (parameter_symbol) {
-                th_type *previous = parameter_symbol->type;
-                if (previous && !th_fill(previous,
-                                                    parameter_type)) {
-                    valid = false;
-                    core_string_t wanted = n00bb_print_type(state->types,
-                                                            parameter_type);
-                    core_string_t written = n00bb_print_type(state->types,
-                                                             previous);
-                    n00bb_report(core_translation_unit_diagnostics(unit),
-                        unit, N00B_DIAG_CONTEXT_HOOK_PARAMETER,
-                        link_source_location(hook_param),
-                        hook_index == 2 ? N00B_TEXT_HOOK_PARAMETER_FAILS
-                                        : N00B_TEXT_HOOK_PARAMETER_PROVIDES,
-                        N00BB_ARGS(ARG_TEXT(parameter_symbol->name),
-                                   ARG_TEXT(written), ARG_TEXT(symbol->name),
-                                   ARG_TEXT(wanted)));
-                }
-                else if (parameter_type)
-                    parameter_symbol->type = parameter_type;
-            }
-            parse_tree_set_type(hook_param, parameter_type);
-            core_list_push(hook_params, ((th_param){
-                .mode = TH_IN, .type = parameter_type,
-            }));
-        }
-    }
-    th_type *hook_return = hook_index == 0 ? provided_type
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
-    th_type *hook_failure = hook_index == 3
-        ? th_name(state->types, CORE_STRING_STATIC("nil")) : failure_type;
-    th_type *hook_type = valid && hook_return && hook_failure
-        ? th_func_with_error(state->types, hook_return, hook_failure,
-            hook_params.data, hook_params.len,
-            has_rest ? &rest : nullptr, nullptr, 0) : nullptr;
-    core_list_free(hook_params);
-    if (!hook_type) {
-        n00bb_tu_internal_error_unless_reported(unit, hook,
-            "checking declarations",
-            "could not form the context hook signature");
-        return;
-    }
-    parse_tree_set_type(hook, hook_type);
-}
-
-void
 link_use_site_bind(n00bb_link_use_site_t *site, parse_sym_entry_t *symbol)
 {
     site->symbol = symbol;
@@ -4329,8 +4154,7 @@ bind_declared_parameter(parse_grammar_t *grammar,
     parse_tree_t *callable = parse_tree_parent(node);
     while (callable && !NT_IS(grammar, callable, "func-def")
            && !NT_IS(grammar, callable, "callback-role")
-           && !NT_IS(grammar, callable, "trait-spec")
-           && !NT_IS(grammar, callable, "context-def"))
+           && !NT_IS(grammar, callable, "trait-spec"))
         callable = parse_tree_parent(callable);
     if (!callable) return;
     parse_tree_t *declared_type = CHILD_NT(grammar, node, "type-spec");
@@ -5260,69 +5084,6 @@ n00bb_default_references(parse_tree_t *node, parse_sym_entry_t *symbol)
     return false;
 }
 
-void
-context_default_dependencies(parse_tree_t *expr,
-                             core_list_t(parse_sym_entry_ptr_t) *parameters,
-                             core_list_t(parse_sym_entry_ptr_t) *out)
-{
-    if (!expr) return;
-    core_list_t(parse_sym_entry_ptr_t) ordered =
-        core_list_new(parse_sym_entry_ptr_t);
-    core_list_t(size_t) offsets = core_list_new(size_t);
-    for (size_t i = 0; i < parameters->len; i++) {
-        parse_sym_entry_t *parameter = parameters->data[i];
-        if (!parameter || !n00bb_default_references(expr, parameter))
-            continue;
-        size_t offset = SIZE_MAX;
-        for (size_t u = 0; u < parameter->use_count; u++) {
-            parse_tree_t *use = parameter->use_nodes[u];
-            if (!node_is_within(use, expr)) continue;
-            parse_token_info_t *token = parse_tree_find_first_terminal(use);
-            if (token && parse_token_start_byte(token) < offset)
-                offset = parse_token_start_byte(token);
-        }
-        size_t at = ordered.len;
-        while (at && offsets.data[at - 1] > offset) at--;
-        core_list_insert(ordered, at, parameter);
-        core_list_insert(offsets, at, offset);
-    }
-    for (size_t i = 0; i < ordered.len; i++)
-        core_list_push(*out, ordered.data[i]);
-    core_list_free(ordered);
-    core_list_free(offsets);
-}
-
-th_type *
-context_default_ir_type(th_ctx *types, th_type *context_type,
-                        core_list_t(parse_sym_entry_ptr_t) *dependencies,
-                        th_type *result_type)
-{
-    th_type *signature = context_type ? th_resolve(context_type) : nullptr;
-    if (!types || !signature || th_kind_of(signature) != TH_FUNCTION
-        || !result_type) return nullptr;
-    core_list_t(th_param) parameters = core_list_new(th_param);
-    bool valid = true;
-    for (size_t i = 0; valid && i < dependencies->len; i++) {
-        parse_sym_entry_t *dependency = dependencies->data[i];
-        valid = dependency && dependency->type;
-        if (valid) core_list_push(parameters, ((th_param){
-            .mode = TH_IN,
-            .type = dependency->type,
-        }));
-    }
-    th_type *failure = th_func_error(signature);
-    if (!failure) failure = th_name(types, CORE_STRING_STATIC("nil"));
-    th_type *function_type = valid && failure
-        ? th_func_with_error(types, result_type, failure,
-                             parameters.data, parameters.len, nullptr,
-                             nullptr, 0)
-        : nullptr;
-    core_list_free(parameters);
-    return function_type;
-}
-
-
-
 parse_sym_entry_t *
 n00bb_atomic_load_symbol(parse_grammar_t *grammar,
                          core_translation_unit_t *unit, parse_tree_t *node)
@@ -6168,43 +5929,6 @@ callback_protocol_name(core_string_t type_name, core_string_t marker,
 }
 
 bool
-context_hook_name(parse_sym_entry_t *symbol, core_string_t suffix,
-                  core_buffer_t *out)
-{
-    if (!symbol || !symbol->name.data || !suffix.data || !out)
-        return false;
-    core_buffer_printf(out, "__n00bb_context_%.*s_%.*s",
-        (int)symbol->name.u8_bytes, symbol->name.data,
-        (int)suffix.u8_bytes, suffix.data);
-    return out->data != nullptr;
-}
-
-bool
-context_default_name(parse_sym_entry_t *symbol, size_t index,
-                     core_buffer_t *out)
-{
-    if (!symbol || !symbol->name.data || !out) return false;
-    core_buffer_printf(out, "__n00bb_context_%.*s_default_%zu",
-        (int)symbol->name.u8_bytes, symbol->name.data, index);
-    return out->data != nullptr;
-}
-
-core_string_t
-n00bb_context_hook_role(core_string_t name)
-{
-    if (!name.data) return (core_string_t){};
-    if (core_string_eq(name, CORE_STRING_STATIC("context-enter")))
-        return CORE_STRING_STATIC("n00bb.ir.context.enter");
-    if (core_string_eq(name, CORE_STRING_STATIC("context-exit")))
-        return CORE_STRING_STATIC("n00bb.ir.context.exit");
-    if (core_string_eq(name, CORE_STRING_STATIC("context-fail")))
-        return CORE_STRING_STATIC("n00bb.ir.context.fail");
-    if (core_string_eq(name, CORE_STRING_STATIC("context-ensure")))
-        return CORE_STRING_STATIC("n00bb.ir.context.ensure");
-    return (core_string_t){};
-}
-
-bool
 node_is_within(parse_tree_t *node, parse_tree_t *ancestor)
 {
     for (parse_tree_t *at = node; at;
@@ -6341,12 +6065,6 @@ collect_ir_parameters(parse_grammar_t *grammar, parse_tree_t *node,
     if (NT_IS(grammar, node, "func-type-signature"))
         node = CHILD_NT(grammar, node, "param-decl");
     if (!node) return;
-    if (NT_IS(grammar, node, "context-hook-params")) {
-        parse_tree_t *parameter = CHILD_NT(grammar, node, "pos-param");
-        if (parameter)
-            core_list_push(*parameters, parse_tree_sym(parameter));
-        return;
-    }
     bool trait_parameters = NT_IS(grammar, node, "trait-param-decl");
     if (!trait_parameters && !NT_IS(grammar, node, "param-decl")) return;
     if (trait_parameters) {
@@ -6766,34 +6484,12 @@ enclosing_function_symbol(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
-parse_sym_entry_t *
-link_effect_owner_symbol(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    parse_sym_entry_t *function = enclosing_function_symbol(grammar, node);
-    if (function) return function;
-    for (parse_tree_t *parent = node; parent;
-         parent = parse_tree_parent(parent)) {
-        if (!NT_IS(grammar, parent, "context-def")) continue;
-        parse_sym_entry_t *context = parse_tree_sym(parent);
-        return context_symbol(grammar, context) ? context : nullptr;
-    }
-    return nullptr;
-}
-
-bool
-context_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
-{
-    return symbol && ((symbol->decl_node
-        && NT_IS(grammar, symbol->decl_node, "context-def"))
-        || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("context")));
-}
-
 bool
 is_module_global_symbol(parse_grammar_t *grammar,
                         parse_sym_entry_t *symbol)
 {
+    (void)grammar;
     return symbol && symbol->kind == PARSE_SYM_VARIABLE && symbol->scope
-        && !context_symbol(grammar, symbol)
         && (core_string_eq(symbol->scope->scope_tag,
                            CORE_STRING_STATIC("module"))
             || core_string_eq(symbol->scope->scope_tag,
@@ -6831,9 +6527,7 @@ scope_is_within_function(parse_scope_t *scope)
 {
     for (parse_scope_t *at = scope; at; at = at->parent)
         if (core_string_eq(at->scope_tag,
-                           CORE_STRING_STATIC("function"))
-            || core_string_eq(at->scope_tag,
-                              CORE_STRING_STATIC("context-hook")))
+                           CORE_STRING_STATIC("function")))
             return true;
     return false;
 }
@@ -6851,7 +6545,6 @@ scope_has_lexical_lifetime(parse_scope_t *scope)
 {
     static const core_string_t local_scopes[] = {
         CORE_STRING_STATIC("block"), CORE_STRING_STATIC("comptime"),
-        CORE_STRING_STATIC("context"), CORE_STRING_STATIC("context-hook"),
         CORE_STRING_STATIC("for"), CORE_STRING_STATIC("function"),
         CORE_STRING_STATIC("if"), CORE_STRING_STATIC("switch"),
         CORE_STRING_STATIC("try"), CORE_STRING_STATIC("try-error"),
@@ -6918,8 +6611,6 @@ inferred_binding_scope(parse_scope_t *scope)
 {
     for (parse_scope_t *s = scope; s; s = s->parent) {
         if (core_string_eq(s->scope_tag, CORE_STRING_STATIC("function"))
-            || core_string_eq(s->scope_tag,
-                              CORE_STRING_STATIC("context-hook"))
             || core_string_eq(s->scope_tag, CORE_STRING_STATIC("module")))
             return s;
     }
@@ -8159,8 +7850,7 @@ function_parameter_facts(parse_grammar_t *grammar, parse_tree_t *node)
     parse_tree_t *function = parse_tree_parent(node);
     while (function && !NT_IS(grammar, function, "func-def")
            && !NT_IS(grammar, function, "trait-spec")
-           && !NT_IS(grammar, function, "callback-role")
-           && !NT_IS(grammar, function, "context-def"))
+           && !NT_IS(grammar, function, "callback-role"))
         function = parse_tree_parent(function);
     parse_sym_entry_t *symbol = function
         ? parse_tree_sym(function) : nullptr;
@@ -8179,19 +7869,6 @@ record_function_parameter_fact(parse_grammar_t *grammar,
         function_parameter_facts(grammar, node);
     parse_tree_t *type_node = CHILD_NT(grammar, node, "type-spec");
     if (!facts) return true;
-    parse_tree_t *owner = parse_tree_parent(node);
-    while (owner && !NT_IS(grammar, owner, "func-def")
-           && !NT_IS(grammar, owner, "trait-spec")
-           && !NT_IS(grammar, owner, "callback-role")
-           && !NT_IS(grammar, owner, "context-def"))
-        owner = parse_tree_parent(owner);
-    if (owner && NT_IS(grammar, owner, "context-def")) {
-        parse_tree_t *context_child = node;
-        while (context_child
-               && parse_tree_parent(context_child) != owner)
-            context_child = parse_tree_parent(context_child);
-        if (!NT_IS(grammar, context_child, "param-decl")) return true;
-    }
     if (!core_arena_try_reserve_raw(&state->semantic_values,
             (void **)&facts->params, &facts->param_capacity,
             facts->param_count + 1, sizeof(*facts->params))) return false;
@@ -8368,7 +8045,7 @@ bool
 module_initializer_declaration(parse_grammar_t *grammar, parse_tree_t *node)
 {
     static const core_string_t declarations[] = {
-        CORE_STRING_STATIC("func-def"), CORE_STRING_STATIC("context-def"),
+        CORE_STRING_STATIC("func-def"),
         CORE_STRING_STATIC("enum-stmt"), CORE_STRING_STATIC("import-stmt"),
         CORE_STRING_STATIC("alias-stmt"), CORE_STRING_STATIC("type-decl"),
         CORE_STRING_STATIC("record-decl"), CORE_STRING_STATIC("object-decl"),
@@ -8390,8 +8067,7 @@ is_module_initializer_use(parse_grammar_t *grammar, parse_tree_t *node,
     if (initializer_owner) return true;
     for (parse_tree_t *at = node; at;
          at = parse_tree_parent(at)) {
-        if (NT_IS(grammar, at, "func-def")
-            || NT_IS(grammar, at, "context-def")) return false;
+        if (NT_IS(grammar, at, "func-def")) return false;
         if (!NT_IS(grammar, at, "top-level-stmt")) continue;
         for (size_t i = 0; i < core_tree_num_children(at); i++) {
             parse_tree_t *statement = core_tree_child(at, i);

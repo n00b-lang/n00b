@@ -557,10 +557,12 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
     ir_value_t *outcome = ok ? call->dest : nullptr;
     ir_value_t *value = outcome;
     if (ok && fails) {
-        ir_block_t *ok_block = ir_block_add(context->function,
-            CORE_STRING_STATIC("__n00bb_adapter_ok"));
-        ir_block_t *error_block = ir_block_add(context->function,
-            CORE_STRING_STATIC("__n00bb_adapter_error"));
+        // Each combination of omitted parameters has its own tail, so the
+        // blocks are named apart.
+        ir_block_t *ok_block = n00bb_branch_block(context, context->user,
+                                                  "adapter_ok");
+        ir_block_t *error_block = n00bb_branch_block(context, context->user,
+                                                     "adapter_error");
         ok = ok_block && error_block && n00bb_branch_on_outcome(context,
             outcome, ok_block, error_block, IR_SPAN_UNKNOWN);
         context->block = error_block;
@@ -594,10 +596,10 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
         ->params[adapter->optional[level]];
     ir_instr_t *present = ir_lower_emit_instruction(context,
         IR_OP_PARAM_PRESENT, IR_SPAN_UNKNOWN);
-    ir_block_t *given = ir_block_add(context->function,
-        CORE_STRING_STATIC("__n00bb_adapter_given"));
-    ir_block_t *omitted = ir_block_add(context->function,
-        CORE_STRING_STATIC("__n00bb_adapter_omitted"));
+    ir_block_t *given = n00bb_branch_block(context, context->user,
+                                           "adapter_given");
+    ir_block_t *omitted = n00bb_branch_block(context, context->user,
+                                             "adapter_omitted");
     th_type *bool_type = n00bb_ir_builtin_type(context->module,
                                                CORE_STRING_STATIC("bool"));
     ir_instr_t *branch = present && given && omitted && bool_type

@@ -1,0 +1,3 @@
+import manager_effect_dep.impl
+
+package manager_effect_dep { export manager_effect_dep.impl }

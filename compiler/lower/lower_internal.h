@@ -445,14 +445,21 @@ typedef struct {
 
 core_list_decl(n00bb_try_frame_t);
 
+// One manager of a `with` statement. Its `__exit` runs on every way out of
+// the body, given `value` (what its `__enter` returned); while lowering is
+// in the body, the item is the handler a body failure goes to (`failed`,
+// with the failure stored in `error`), and `__exit` may drop it,
+// continuing at `after`.
 typedef struct {
-    parse_sym_entry_t *context_symbol;
-    core_translation_unit_t *context_unit;
-    parse_tree_t *call_node;
-    core_list_t(n00bb_ir_value_ptr_t) captures;
-    ir_value_t *provided_value;
+    parse_tree_t *node;
+    ir_local_t *manager;
+    ir_value_t *value;
+    ir_local_t *error;
+    ir_block_t *failed;
+    ir_block_t *after;
     uint64_t order;
-    bool active;
+    bool in_body;
+    bool failure_reachable;
 } n00bb_with_item_t;
 
 core_list_decl(n00bb_with_item_t);
@@ -1096,11 +1103,13 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       ir_value_t *const *operands, size_t operand_count,
                       th_type *result_type, ir_span_t span, void *state);
 
+// Runs the cleanups of the loops and `with` managers entered after
+// `stop_order` and before `before_order`, innermost first. On success a
+// manager's `__exit` runs; a failure leaves the managers to their handlers.
 bool
 n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                            parse_tree_t *exit_node, uint64_t stop_order,
-                           n00bb_try_frame_t *handler, bool success,
-                           uint64_t before_order);
+                           bool success, uint64_t before_order);
 
 bool
 n00bb_emit_scoped_success(ir_lower_context_t *context,
@@ -1118,14 +1127,28 @@ n00bb_pack_rest_values(ir_lower_context_t *context, th_type *element,
                        const core_list_t(n00bb_ir_value_ptr_t) *values,
                        ir_span_t span);
 
-int
-n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
-                   th_type *result_type, ir_span_t span,
-                   ir_lower_result_t *result);
-
 bool
 n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state);
+
+bool
+n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
+                         bool entering, void *state);
+
+// The innermost `with` manager entered before `before_order` whose body
+// lowering is still in, or null.
+n00bb_with_item_t *
+n00bb_with_handler(n00bb_lower_context_t *lower, uint64_t before_order);
+
+// Sends `error` to `item`'s handler.
+bool
+n00bb_route_with_failure(ir_lower_context_t *context, n00bb_with_item_t *item,
+                         ir_value_t *error, ir_span_t span);
+
+// As n00bb_route_try_error, for the handlers entered before `before_order`.
+int
+n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
+                           ir_span_t span, uint64_t before_order);
 
 
 bool
@@ -1375,18 +1398,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
 const parse_sym_entry_t *
 function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node);
 
-core_string_t
-context_hook_binding_role(parse_grammar_t *grammar, parse_tree_t *hook);
-
-bool
-context_default_role(size_t index, char *buffer, size_t size,
-                     core_string_t *out);
-
-bool
-context_interface_dependencies(parse_sym_entry_t *symbol, size_t target,
-                                size_t *indices, size_t capacity,
-                                size_t *count);
-
 bool
 n00bb_failure_channel_accepts(ir_lower_context_t *context,
                               th_type *failure);
@@ -1532,20 +1543,6 @@ bool
 n00bb_lower_assert_statement(ir_lower_context_t *context,
                              parse_visit_t *visit, bool entering,
                              void *state);
-
-bool
-lower_context_hook(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                   core_translation_unit_t *unit,
-                   parse_sym_entry_t *context_symbol,
-                   parse_tree_t *hook, ir_ctx_t *ir_context,
-                   core_list_t(core_translation_unit_ptr_t) *units);
-
-bool
-lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                      core_translation_unit_t *unit,
-                      parse_sym_entry_t *context_symbol, size_t parameter_index,
-                      ir_ctx_t *ir_context,
-                      core_list_t(core_translation_unit_ptr_t) *units);
 
 typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) *functions;

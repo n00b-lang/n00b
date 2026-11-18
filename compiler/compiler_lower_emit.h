@@ -18,6 +18,9 @@
 // A call lowered as infallible while its callee's failure type was still
 // being inferred; typing checks the callee can't fail.
 #define N00BB_FAILURE_PENDING_KEY CORE_STRING_STATIC("n00bb.failure-pending")
+// A call the compiler wrote as possibly failing (a `with` hook's), whose
+// outcome reads are settled if its callee turns out not to fail.
+#define N00BB_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.may-fail")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")
@@ -64,6 +67,11 @@ ir_value_t *n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
                                  th_type *result_type, ir_value_t *left,
                                  ir_value_t *right, ir_span_t span);
 bool n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function);
+// A call typed as possibly failing whose callee turns out not to fail (its
+// failure type, `failure`, is nil) returns its value plainly; the reads of
+// its outcome in `function` are settled to that.
+bool n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
+                                     th_type *failure);
 ir_value_t *n00bb_lower_shift_count(ir_lower_context_t *context,
                                     parse_tree_t *node, ir_value_t *value,
                                     th_type *receiver, ir_span_t span);

@@ -1,0 +1,27 @@
+record Inert {
+    n: int
+}
+func inert() -> Inert { return (n = 1) }
+
+record Quiet {
+    n: int
+}
+func quiet() -> Quiet { return (n = 2) }
+func poke(self: Quiet) -> int { return self.n }
+func risky(self: Quiet) -> int fail: string {
+    if self.n > 3 { fail "big" }
+    return self.n
+}
+
+func not_a_manager() {
+    with inert() {
+    }
+}
+
+func needless_bang(q: Quiet) -> int fail: string {
+    return q.poke()!
+}
+
+func unhandled(q: Quiet) -> int {
+    return q.risky()
+}

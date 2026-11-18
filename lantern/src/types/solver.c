@@ -1044,12 +1044,15 @@ static bool flow_call(ty_solver_t *s, th_type *shape, th_type *signature,
     }
 
     th_type *failure = th_func_error(shape);
+    th_type *callee  = th_func_error(signature) ? th_func_error(signature)
+                                                : th_nil(s->types);
 
+    // A callee that cannot fail puts nothing in the call's failure: the
+    // call's failure path is never taken. (A flow of `nil` would make the
+    // call's failure an option.)
     if (failure && !th_is_nil(th_resolve(failure))
-        && !flow(s, failure,
-                 th_func_error(signature) ? th_func_error(signature)
-                                          : th_nil(s->types),
-                 why)) {
+        && !th_is_nil(th_resolve(callee))
+        && !flow(s, failure, callee, why)) {
         return false;
     }
 
@@ -1125,7 +1128,6 @@ static bool dispatch_call(ty_solver_t *s, pending_t *p, th_type *signature)
         ? s->requirements(s->requirements_context, p->why.at, receiver,
                           p->pred.name, p->pred.other, signature, nullptr, 0)
         : 0;
-
     if (!count) {
         return dispatch_as(s, p, renamed(s, signature));
     }

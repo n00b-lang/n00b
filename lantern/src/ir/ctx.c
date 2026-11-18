@@ -669,6 +669,17 @@ bool ir_callable_returns_value(ir_module_t *m, th_type *callable)
     return ret && ir_machine_of(m, ret).class != IR_CLASS_VOID;
 }
 
+bool ir_type_is_call_outcome(th_type *type)
+{
+    core_string_t name = {0};
+    type = type ? th_resolve(type) : nullptr;
+    return type && th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, nullptr, nullptr)
+        && core_string_starts_with(name,
+                                   CORE_STRING_STATIC("__lantern_call_outcome_"))
+        && th_named_nargs(type) == 2;
+}
+
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
 {
     if (!m || !callable) return nullptr;

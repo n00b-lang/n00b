@@ -25,7 +25,6 @@
                    | <switch-stmt>
                    | <try-stmt>
                    | <func-def>
-                   | <context-def>
                    | <with-stmt>
                    | <variable-decl>
                    | <labeled-for>
@@ -231,38 +230,11 @@
 
 <record-keyword> ::= %"record" | %"struct"
 
-<context-def> @scope("context", $2) @declares($2) ::=
-       <member-visibility>? %"context" %IDENTIFIER <param-decl> <context-spec> <context-body>
-
-<context-spec> ::= <provides-clause>? <error-type>?
-<provides-clause> ::= %"provides" %":" <type-spec>
-
-<context-body> ::= <block-start> <context-hooks>? <block-end>
-<context-hooks> ::= <context-hook> (<eos>+ <context-hook>)*
-
-<context-hook> ::= <pass-stmt>
-                 | <context-enter>
-                 | <context-exit>
-                 | <context-fail>
-                 | <context-ensure>
-
-<context-enter> @scope("context-hook") ::= %"enter" %"(" %")" <body>
-<context-exit> @scope("context-hook") ::= %"exit" <context-hook-params> <body>
-<context-fail> @scope("context-hook") ::= %"fail" <context-hook-params> <body>
-<context-ensure> @scope("context-hook") ::= %"ensure" <context-hook-params> <body>
-
-<context-hook-params> ::= %"(" <pos-param>? %")"
-
 <with-stmt> @scope("with") ::= %"with" <context-manager> (%"," <context-manager>)* %","? <body>
-<context-manager> @declares($0) @assigns($0, $4) ::=
-       %IDENTIFIER %":" <type-spec> <assign-op> <context-call>
-<context-manager> @declares($0) @assigns($0, $2) ::=
-       %IDENTIFIER <assign-op> <context-call>
-<context-manager> ::= <context-call>
-<context-call> @call($0, $2) ::=
-       <member-chain> %"(" <call-args> %")"
-<context-call> @call($0) ::=
-       <member-chain> %"(" %")"
+<context-manager> @declares($0) ::=
+       %IDENTIFIER %":" <type-spec> <assign-op> <expression>
+<context-manager> @declares($0) ::= %IDENTIFIER <assign-op> <expression>
+<context-manager> ::= <expression>
 
 <switch-stmt> @scope("switch") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) ::=
        %"switch" <expression> <block-start> <switch-cases> <block-end>

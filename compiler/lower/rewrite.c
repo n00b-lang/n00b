@@ -1190,6 +1190,93 @@ n00bb_rewrite_option_builtin(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ? instruction->dest : nullptr;
 }
 
+static ir_value_t *
+settled_value(ir_instr_t *before, ir_op_t op, th_type *type)
+{
+    ir_instr_t *instruction = ir_instr_generated(before->block, op,
+        before->span, CORE_STRING_STATIC("settle"), before->index);
+    return instruction
+        && ir_instr_set_fresh_dest(instruction, "__n00bb_settled", type)
+        ? instruction->dest : nullptr;
+}
+
+// The outcome always holds `ok`, so its reads become: the tag is `ok`'s,
+// the `ok` payload is the value, and the `error` payload (read only where
+// the tag is not `ok`) is `nil`.
+bool
+n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
+                                th_type *failure)
+{
+    th_ctx *types = ir_module_types(function->owner);
+    if (!call->dest || (failure && !th_is_nil(th_resolve(failure))))
+        return true;
+    // An outcome whose failure settled on `nil` is already its value's type
+    // once types are interned again; its reads are still there.
+    bool shaped = ir_type_is_call_outcome(call->dest->type);
+    if (!shaped && !ir_annot_get(&call->annots, N00BB_MAY_FAIL_KEY))
+        return true;
+    core_list_t(n00bb_ir_instr_ptr_t) uses =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    bool ok = true;
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++)
+        for (uint32_t i = 0; ok && i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            bool reads = false;
+            for (uint32_t o = 0; o < in->n_operands; o++)
+                reads |= ir_operand_value(&in->operands[o]) == call->dest;
+            if (!reads) continue;
+            ok = in->op == IR_OP_VARIANT_TAG
+                || (in->op == IR_OP_VARIANT_PAYLOAD && in->n_operands == 2
+                    && in->operands[1].kind == IR_OPD_NAME);
+            if (ok) core_list_push(uses, in);
+        }
+    // An outcome used some other way keeps its shape.
+    if (!ok || (!shaped && !uses.len)) {
+        core_list_free(uses);
+        return true;
+    }
+    if (shaped)
+        call->dest->type = th_named_arg(th_resolve(call->dest->type),
+                                        0)->type;
+    th_type *site = th_resolve(ir_instr_call_signature(call));
+    if (shaped && site && th_kind_of(site) == TH_FUNCTION) {
+        size_t count = th_func_nparams(site), keywords = th_func_nkw(site);
+        th_param *params = core_alloc_array(th_param, count + 1);
+        th_kwparam *named = core_alloc_array(th_kwparam, keywords + 1);
+        for (size_t p = 0; p < count; p++) params[p] = *th_func_param(site, p);
+        for (size_t k = 0; k < keywords; k++) named[k] = *th_func_kw(site, k);
+        th_type *settled = th_func_with_error(types, th_func_ret(site),
+            th_name(types, CORE_STRING_STATIC("nil")), params, count,
+            th_func_rest(site), named, keywords);
+        core_free(params);
+        core_free(named);
+        ok = settled && ir_instr_set_call_signature(call, settled);
+    }
+    for (size_t u = 0; ok && u < uses.len; u++) {
+        ir_instr_t *in = uses.data[u];
+        ir_value_t *replacement = nullptr;
+        if (in->op == IR_OP_VARIANT_TAG) {
+            replacement = settled_value(in, IR_OP_CONST, in->dest->type);
+            ok = replacement && ir_instr_operand_uint(replacement->def,
+                th_arm_tag(CORE_STRING_STATIC("ok")));
+        }
+        else if (core_string_eq(in->operands[1].name,
+                                CORE_STRING_STATIC("ok")))
+            replacement = call->dest;
+        else {
+            replacement = settled_value(in, IR_OP_NIL,
+                th_name(types, CORE_STRING_STATIC("nil")));
+            ok = replacement != nullptr;
+        }
+        if (!ok || !in->dest) continue;
+        ir_value_replace_uses(function, in->dest, replacement, nullptr,
+                              nullptr);
+        ok = ir_instr_erase(in);
+    }
+    core_list_free(uses);
+    return ok;
+}
+
 bool
 n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
 {
@@ -1456,6 +1543,14 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     // may be typed after this call, so the copy can still hold a variable.
     // The final signature has the answer.
     th_type *settled = ir_instr_call_signature(in);
+    // A call that may fail (a `with` hook's, written as one) reaching a
+    // method that cannot returns its value plainly.
+    th_type *callee_type = th_resolve(function->type);
+    if (th_kind_of(callee_type) == TH_FUNCTION
+        && !n00bb_settle_infallible_outcome(rewrite->context.function, in,
+                                            th_func_error(callee_type)))
+        return false;
+    settled = ir_instr_call_signature(in);
     th_type *body_ret = th_kind_of(th_resolve(function->type)) == TH_FUNCTION
         ? th_resolve(th_func_ret(function->type)) : nullptr;
     // A cached callee was typed by an earlier build: its kept body has it.

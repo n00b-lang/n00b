@@ -1,0 +1,30 @@
+var shared_value: int = 0
+
+func write_shared(next_value: int) {
+    (ref shared_value).__value = next_value
+}
+
+record UpdatingManager {
+    next_value: int
+}
+
+func __enter(self: UpdatingManager) {
+}
+
+func __exit(self: UpdatingManager, value: nil, failure: 'E? = nil) -> bool {
+    write_shared(self.next_value)
+    return false
+}
+
+record FailingUpdatingManager {
+    next_value: int
+}
+
+func __enter(self: FailingUpdatingManager) {
+}
+
+func __exit(self: FailingUpdatingManager, value: nil,
+            failure: 'E? = nil) -> bool fail: int {
+    write_shared(self.next_value)
+    fail 17
+}

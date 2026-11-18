@@ -1,0 +1,18 @@
+tests/diagnostics/lower/with_managers.n:1:8: warning N00B-N0023: type `Inert` is never used
+  help: remove it
+tests/diagnostics/lower/with_managers.n:4:6: warning N00B-N0019: function `inert` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:6:8: warning N00B-N0023: type `Quiet` is never used
+  help: remove it
+tests/diagnostics/lower/with_managers.n:9:6: warning N00B-N0019: function `quiet` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:10:6: warning N00B-N0019: function `poke` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:11:6: warning N00B-N0019: function `risky` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:17:10: error N00B-T0601: `inert()` is `Inert`, which `with` can't manage: it has no `__enter`
+  help: a `with` manager's type implements the `Context_Manager` trait, with `__enter` and `__exit` functions
+tests/diagnostics/lower/with_managers.n:22:12: error N00B-S0026: `poke` can't fail, so there's nothing for this `!` to pass along
+  help: remove the `!`
+tests/diagnostics/lower/with_managers.n:26:12: error N00B-S0025: `risky` can fail with `string`, so this call needs a trailing `!` or a `try`
+  help: write `risky(...)!` to pass the failure to the caller, or handle it with `try`

@@ -2,5 +2,5 @@ import impl
 
 package shared_link_dep {
     export impl.shared_link_value
-    export impl.SharedLinkContext
+    export impl.SharedLinkManager
 }

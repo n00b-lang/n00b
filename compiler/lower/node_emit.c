@@ -155,8 +155,6 @@ n00bb_node_emit(parse_grammar_t *grammar, parse_tree_t *node,
         emit_set(emit, S("array_new"), 0, 0, 0);
     else if (core_string_eq(name, S("callback-expr")))
         emit_set(emit, S("callback_create"), 0, 0, 0);
-    else if (core_string_eq(name, S("context-call")))
-        emit_set(emit, S("call"), 0, 0, 0);
     else if (core_string_eq(name, S("return-stmt")))
         emit_set(emit, S("return"), count > 1 ? 1 : 0, 1, 0);
     else if (core_string_eq(name, S("binop-assign-stmt")))

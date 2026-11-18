@@ -310,8 +310,6 @@ register_callable_parameter_metadata(parse_grammar_t *grammar,
         ? child_nt(grammar, trait_signature, CORE_STRING_STATIC("trait-param-decl"))
         : child_nt(grammar, signature_node ? signature_node : declaration,
                    CORE_STRING_STATIC("param-decl"));
-    if (!param_decl)
-        param_decl = child_nt(grammar, declaration, CORE_STRING_STATIC("context-hook-params"));
     core_list_t(parse_sym_entry_ptr_t) parameters =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest = nullptr;
@@ -441,44 +439,6 @@ register_function_parameter_metadata(parse_grammar_t *grammar,
     return register_callable_parameter_metadata(grammar, environment,
         declaration, function_type, TH_ENV_METADATA_FUNCTION,
         qualified_name, CORE_STRING_STATIC("n00b.function-params"));
-}
-
-static bool
-register_context_callable_parameter_metadata(
-    th_env *environment, core_string_t qualified_name,
-    core_list_t(parse_sym_entry_ptr_t) *parameters,
-    parse_sym_entry_t *rest)
-{
-    size_t count = parameters->len + (rest != nullptr);
-    if (count > UINT32_MAX) return false;
-    core_buffer_t metadata = {0};
-    core_buffer_append(&metadata, "N0FP", 4);
-    core_buffer_putc(&metadata, 1);
-    append_u32_le(&metadata, (uint32_t)count);
-    bool ok = true;
-    for (size_t i = 0; ok && i < count; i++) {
-        parse_sym_entry_t *parameter = i < parameters->len
-            ? parameters->data[i] : rest;
-        size_t name_size = parameter && parameter->name.data
-            ? parameter->name.u8_bytes : 0;
-        uint8_t flags = parameter == rest && rest ? 2u : 0u;
-        th_mode mode = parameter && parameter->has_mode
-            ? parameter->mode : TH_IN;
-        ok = parameter && name_size && name_size <= UINT16_MAX
-            && th_mode_is_in(mode);
-        if (!ok) break;
-        core_buffer_putc(&metadata, (char)(name_size & 0xff));
-        core_buffer_putc(&metadata, (char)(name_size >> 8));
-        core_buffer_putc(&metadata, (char)flags);
-        core_buffer_putc(&metadata, (char)mode);
-        core_buffer_append(&metadata, parameter->name.data, name_size);
-    }
-    if (ok)
-        ok = th_env_register_metadata(environment, TH_ENV_METADATA_FUNCTION,
-            qualified_name, CORE_STRING_STATIC("n00b.function-params"), 1, metadata.data,
-            metadata.byte_len);
-    core_buffer_release(&metadata);
-    return ok;
 }
 
 static bool
@@ -863,189 +823,6 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             // The generated module exports the declarations its members
             // stand for.
             if (n00bb_injected_member(symbol)) continue;
-            if (context_symbol(grammar, symbol) && symbol->type
-                && symbol->decl_node) {
-                core_buffer_t qualified = {0};
-                n00bb_qualify(&qualified, module_text, symbol->name);
-                ok = th_env_register_value(environment, core_buffer_string(&qualified),
-                    symbol->name, module_text, package_text,
-                    symbol_visibility(symbol), symbol->type);
-                uint8_t hook_mask = 0;
-                static const struct {
-                    core_string_t nonterminal;
-                    core_string_t suffix;
-                    uint8_t bit;
-                } context_hooks[] = {
-                    {CORE_STRING_STATIC("context-enter"),
-                     CORE_STRING_STATIC("enter"), 1u << 0},
-                    {CORE_STRING_STATIC("context-exit"),
-                     CORE_STRING_STATIC("exit"), 1u << 1},
-                    {CORE_STRING_STATIC("context-fail"),
-                     CORE_STRING_STATIC("fail"), 1u << 2},
-                    {CORE_STRING_STATIC("context-ensure"),
-                     CORE_STRING_STATIC("ensure"), 1u << 3},
-                };
-                for (size_t h = 0; ok && h <
-                     sizeof(context_hooks) / sizeof(context_hooks[0]); h++) {
-                    core_string_t role = n00bb_context_hook_role(
-                        context_hooks[h].nonterminal);
-                    parse_tree_t *hook = role.data
-                        ? parse_sym_binding(symbol, role) : nullptr;
-                    if (!hook) continue;
-                    th_type *hook_type = parse_tree_type(hook);
-                    th_type *contract = hook_type
-                        ? th_env_signature_contract(state->types, hook_type,
-                            th_func_error(hook_type)
-                                ? th_func_error(hook_type)
-                                : th_name(state->types, CORE_STRING_STATIC("nil"))) : nullptr;
-                    core_buffer_t hook_name = {0}, hook_qualified = {0};
-                    core_buffer_printf(&hook_name,
-                        "__n00bb_context_%.*s_%.*s",
-                        (int)symbol->name.u8_bytes, symbol->name.data,
-                        (int)context_hooks[h].suffix.u8_bytes,
-                        context_hooks[h].suffix.data);
-                    n00bb_qualify(&hook_qualified, module_text,
-                                  core_buffer_string(&hook_name));
-                    ok = contract && th_env_register_function_contract(
-                        environment, core_buffer_string(&hook_qualified),
-                        core_buffer_string(&hook_name),
-                        module_text, package_text, TH_ENV_PRIVATE, contract);
-                    core_list_t(parse_sym_entry_ptr_t) hook_parameters =
-                        core_list_new(parse_sym_entry_ptr_t);
-                    parse_sym_entry_t *hook_rest = nullptr;
-                    collect_ir_parameters(grammar,
-                        child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
-                        &hook_parameters, &hook_rest);
-                    collect_ir_parameters(grammar,
-                        child_nt(grammar, hook, CORE_STRING_STATIC("context-hook-params")),
-                        &hook_parameters, &hook_rest);
-                    if (ok)
-                        ok = register_context_callable_parameter_metadata(
-                            environment, core_buffer_string(&hook_qualified),
-                            &hook_parameters, hook_rest);
-                    core_list_free(hook_parameters);
-                    core_buffer_release(&hook_qualified);
-                    core_buffer_release(&hook_name);
-                    if (ok) hook_mask |= context_hooks[h].bit;
-                }
-                core_buffer_t context_metadata = {0};
-                core_list_t(parse_sym_entry_ptr_t) context_params =
-                    core_list_new(parse_sym_entry_ptr_t);
-                parse_sym_entry_t *context_rest = nullptr;
-                collect_ir_parameters(grammar,
-                    child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
-                    &context_params, &context_rest);
-                if (context_rest)
-                    core_list_push(context_params, context_rest);
-                size_t serialized_param_count = context_params.len;
-                ok = ok && serialized_param_count <= UINT32_MAX
-                    && serialized_param_count <= UINT16_MAX;
-                for (size_t p = 0; ok && p < serialized_param_count; p++) {
-                    parse_sym_entry_t *parameter = context_params.data[p];
-                    if (!parameter || !parameter->is_optional) continue;
-                    parse_tree_t *default_expr = child_nt(grammar,
-                        parameter->decl_node, CORE_STRING_STATIC("expression"));
-                    core_list_t(parse_sym_entry_ptr_t) dependencies =
-                        core_list_new(parse_sym_entry_ptr_t);
-                    context_default_dependencies(default_expr,
-                        &context_params, &dependencies);
-                    th_type *helper_type = context_default_ir_type(
-                        state->types, symbol->type, &dependencies,
-                        parameter->type);
-                    th_type *helper_contract = helper_type
-                        ? th_env_signature_contract(state->types, helper_type,
-                            th_func_error(helper_type)
-                                ? th_func_error(helper_type)
-                                : th_name(state->types, CORE_STRING_STATIC("nil"))) : nullptr;
-                    core_buffer_t helper_name = {0};
-                    core_buffer_t helper_qualified = {0};
-                    bool named = context_default_name(symbol, p,
-                                                      &helper_name);
-                    if (named)
-                        n00bb_qualify(&helper_qualified, module_text,
-                                      core_buffer_string(&helper_name));
-                    ok = named && helper_contract
-                        && th_env_register_function_contract(environment,
-                            core_buffer_string(&helper_qualified),
-                            core_buffer_string(&helper_name), module_text,
-                            package_text, TH_ENV_PRIVATE, helper_contract);
-                    if (ok)
-                        ok = register_context_callable_parameter_metadata(
-                            environment, core_buffer_string(&helper_qualified),
-                            &dependencies, nullptr);
-                    core_buffer_release(&helper_qualified);
-                    core_buffer_release(&helper_name);
-                    core_list_free(dependencies);
-                }
-                if (ok) {
-                    core_buffer_putc(&context_metadata,
-                                     (char)(hook_mask | 0x80u));
-                    append_u32_le(&context_metadata,
-                        (uint32_t)serialized_param_count);
-                    for (size_t p = 0; ok && p < serialized_param_count; p++) {
-                        parse_sym_entry_t *parameter = context_params.data[p];
-                        size_t name_len = parameter && parameter->name.data
-                            ? parameter->name.u8_bytes : 0;
-                        uint8_t flags = parameter && parameter->is_optional
-                            ? 1u : 0u;
-                        if (parameter == context_rest) flags |= 2u;
-                        if (parameter && parameter->is_optional) flags |= 4u;
-                        th_mode mode = parameter && parameter->has_mode
-                            ? parameter->mode : TH_IN;
-                        ok = parameter && name_len > 0
-                            && name_len <= UINT16_MAX;
-                        if (!ok) break;
-                        core_buffer_putc(&context_metadata,
-                            (char)(name_len & 0xff));
-                        core_buffer_putc(&context_metadata,
-                            (char)(name_len >> 8));
-                        core_buffer_putc(&context_metadata, (char)flags);
-                        core_buffer_putc(&context_metadata, (char)mode);
-                        core_buffer_append(&context_metadata,
-                            parameter->name.data, name_len);
-                        if (flags & 4u) {
-                            parse_tree_t *default_expr = child_nt(grammar,
-                                parameter->decl_node, CORE_STRING_STATIC("expression"));
-                            core_list_t(parse_sym_entry_ptr_t) dependencies =
-                                core_list_new(parse_sym_entry_ptr_t);
-                            context_default_dependencies(default_expr,
-                                &context_params, &dependencies);
-                            ok = dependencies.len <= UINT16_MAX;
-                            if (ok) {
-                                core_buffer_putc(&context_metadata,
-                                    (char)(dependencies.len & 0xff));
-                                core_buffer_putc(&context_metadata,
-                                    (char)(dependencies.len >> 8));
-                            }
-                            for (size_t d = 0; ok && d < dependencies.len;
-                                 d++) {
-                                size_t index = 0;
-                                while (index < context_params.len
-                                    && context_params.data[index]
-                                        != dependencies.data[d]) index++;
-                                ok = index < context_params.len
-                                    && index <= UINT16_MAX;
-                                if (ok) {
-                                    core_buffer_putc(&context_metadata,
-                                        (char)(index & 0xff));
-                                    core_buffer_putc(&context_metadata,
-                                        (char)(index >> 8));
-                                }
-                            }
-                            core_list_free(dependencies);
-                        }
-                    }
-                }
-                core_list_free(context_params);
-                if (ok)
-                    ok = th_env_register_metadata(environment,
-                        TH_ENV_METADATA_VALUE, core_buffer_string(&qualified),
-                        CORE_STRING_STATIC("n00b.context"), 1, context_metadata.data,
-                        context_metadata.byte_len);
-                core_buffer_release(&context_metadata);
-                core_buffer_release(&qualified);
-                continue;
-            }
             if (symbol->kind == PARSE_SYM_VARIABLE && symbol->type
                 && symbol_binding_node(symbol)) {
                 core_buffer_t qualified = {0};
@@ -1201,22 +978,6 @@ append_package_export_origin(th_env *environment,
     return ok;
 }
 
-static th_type *
-environment_function_contract(const th_env *environment,
-                              core_string_t qualified_name)
-{
-    for (size_t i = 0; environment
-            && i < th_env_declaration_count(environment); i++) {
-        th_env_declaration_view_t declaration = {0};
-        if (th_env_declaration_at(environment, i, &declaration)
-            && declaration.kind == TH_ENV_DECLARATION_FUNCTION
-            && declaration.qualified_name.data
-            && core_string_eq(declaration.qualified_name, qualified_name))
-            return declaration.contract;
-    }
-    return nullptr;
-}
-
 static bool
 copy_package_export_metadata(const th_env *source, th_env *destination,
                              th_env_metadata_owner_t kind,
@@ -1239,92 +1000,6 @@ copy_package_export_metadata(const th_env *source, th_env *destination,
         ? th_env_function_required(source, source_name) : SIZE_MAX;
     return required == SIZE_MAX
         || th_env_set_function_required(destination, external_name, required);
-}
-
-static bool
-register_package_context_callable(th_env *environment,
-                                  core_translation_unit_t *interface_unit,
-                                  n00bb_package_declaration_t *package,
-                                  core_translation_unit_t *source_unit,
-                                  core_string_t source_name,
-                                  core_string_t external_name)
-{
-    core_buffer_t source_qualified = {0}, external_qualified = {0};
-    n00bb_qualify(&source_qualified, source_unit->module.identifier,
-                  source_name);
-    n00bb_qualify(&external_qualified, package->name, external_name);
-    th_type *contract = environment_function_contract(
-        environment, core_buffer_string(&source_qualified));
-    bool ok = contract && th_env_register_function_contract(environment,
-        core_buffer_string(&external_qualified), external_name, package->name,
-        interface_package_id(interface_unit), TH_ENV_PRIVATE, contract);
-    if (ok)
-        ok = copy_package_export_metadata(environment, environment,
-            TH_ENV_METADATA_FUNCTION, core_buffer_string(&source_qualified),
-            core_buffer_string(&external_qualified), (core_string_t){0});
-    if (ok)
-        ok = append_package_export_origin(environment,
-            TH_ENV_METADATA_FUNCTION, core_buffer_string(&external_qualified), source_unit,
-            core_buffer_string(&source_qualified));
-    core_buffer_release(&external_qualified);
-    core_buffer_release(&source_qualified);
-    return ok;
-}
-
-static bool
-register_package_context_callables(parse_grammar_t *grammar,
-                                   th_env *environment,
-                                   core_translation_unit_t *interface_unit,
-                                   n00bb_package_declaration_t *package,
-                                   parse_sym_entry_t *binding,
-                                   parse_sym_entry_t *source,
-                                   core_translation_unit_t *source_unit)
-{
-    static const struct {
-        core_string_t nonterminal;
-        core_string_t suffix;
-    } hooks[] = {
-        {CORE_STRING_STATIC("context-enter"), CORE_STRING_STATIC("enter")},
-        {CORE_STRING_STATIC("context-exit"), CORE_STRING_STATIC("exit")},
-        {CORE_STRING_STATIC("context-fail"), CORE_STRING_STATIC("fail")},
-        {CORE_STRING_STATIC("context-ensure"), CORE_STRING_STATIC("ensure")},
-    };
-    for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {
-        core_string_t role = n00bb_context_hook_role(hooks[i].nonterminal);
-        if (!role.data || !parse_sym_binding(source, role)) continue;
-        core_buffer_t source_name = {0}, external_name = {0};
-        bool registered = context_hook_name(source, hooks[i].suffix,
-                                            &source_name)
-            && context_hook_name(binding, hooks[i].suffix, &external_name)
-            && register_package_context_callable(environment, interface_unit,
-                package, source_unit, core_buffer_string(&source_name),
-                core_buffer_string(&external_name));
-        core_buffer_release(&source_name);
-        core_buffer_release(&external_name);
-        if (!registered) return false;
-    }
-    core_list_t(parse_sym_entry_ptr_t) parameters =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_sym_entry_t *rest = nullptr;
-    collect_ir_parameters(grammar,
-        child_nt(grammar, source->decl_node, CORE_STRING_STATIC("param-decl")),
-        &parameters, &rest);
-    if (rest) core_list_push(parameters, rest);
-    bool ok = true;
-    for (size_t i = 0; ok && i < parameters.len; i++) {
-        parse_sym_entry_t *parameter = parameters.data[i];
-        if (!parameter || !parameter->is_optional) continue;
-        core_buffer_t source_name = {0}, external_name = {0};
-        ok = context_default_name(source, i, &source_name)
-            && context_default_name(binding, i, &external_name)
-            && register_package_context_callable(environment, interface_unit,
-                package, source_unit, core_buffer_string(&source_name),
-                core_buffer_string(&external_name));
-        core_buffer_release(&source_name);
-        core_buffer_release(&external_name);
-    }
-    core_list_free(parameters);
-    return ok;
 }
 
 static bool
@@ -1439,10 +1114,6 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
         ok = append_package_export_origin(environment, metadata_kind,
             core_buffer_string(&external), source_unit,
             core_buffer_string(&origin));
-    if (ok && context_symbol(analysis->grammar, source))
-        ok = register_package_context_callables(analysis->grammar,
-            environment, interface_unit, package, binding, source,
-            source_unit);
     core_buffer_release(&origin);
     core_buffer_release(&external);
     return ok;

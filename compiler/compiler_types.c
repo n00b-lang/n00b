@@ -289,26 +289,10 @@ unit_of_module(core_translation_unit_t *const *units, size_t count,
 
 static core_string_t function_name(const ir_func_t *function)
 {
-    int64_t       cut    = core_string_find_byte(function->name, '#');
-    core_string_t name   = cut >= 0
-                               ? core_string_slice(function->name, 0,
-                                                   (size_t)cut)
-                               : function->name;
-    core_string_t prefix = CORE_STRING_STATIC("__n00bb_context_");
+    int64_t cut = core_string_find_byte(function->name, '#');
 
-    if (!core_string_starts_with(name, prefix)) {
-        return name;
-    }
-    core_string_t context = core_string_slice(name, prefix.u8_bytes,
-        name.u8_bytes - prefix.u8_bytes);
-
-    for (size_t i = context.u8_bytes; i > 0; i--) {
-        if (context.data[i - 1] == '_') {
-            return core_string_slice(context, 0, i - 1);
-        }
-    }
-
-    return context;
+    return cut >= 0 ? core_string_slice(function->name, 0, (size_t)cut)
+                    : function->name;
 }
 
 static void note_declared(core_translation_unit_t *const *units, size_t count,
@@ -327,34 +311,7 @@ static void note_declared(core_translation_unit_t *const *units, size_t count,
             home = analysis->units.data[u];
     }
     core_string_t            name = function_name(function);
-    parse_scope_t           *scope =
-        home && core_string_starts_with(function->name,
-                    CORE_STRING_STATIC("__n00bb_context_"))
-            ? module_scope(tu_state(home))
-            : nullptr;
-    parse_sym_entry_t       *context =
-        scope ? parse_symtab_lookup_in(scope, name) : nullptr;
 
-    parse_tree_t *named = context ? context->decl_node : nullptr;
-
-    for (size_t i = 0; named && i < core_tree_num_children(named); i++) {
-        parse_tree_t *child = core_tree_child(named, i);
-
-        if (core_tree_is_leaf(child)
-            && core_string_eq(parse_tree_leaf_text(child), name)) {
-            named = child;
-            break;
-        }
-    }
-    core_diag_location_t declared = named ? link_source_location(named)
-                                          : (core_diag_location_t){0};
-
-    if (declared.has_location) {
-        n00bb_report_secondary(core_translation_unit_diagnostics(unit), home,
-                               declared, N00B_TEXT_IS_DECLARED_HERE,
-                               N00BB_ARGS(ARG_TEXT(name)));
-        return;
-    }
     if (!home || !ir_span_known(function->span)) {
         return;
     }
@@ -4017,6 +3974,38 @@ static bool report_iteration(th_ctx *types, core_translation_unit_t *unit,
     return true;
 }
 
+// A `with` manager's hook calls are the compiler's; one with no method to
+// reach means the value is not a manager.
+static bool report_with_manager(th_ctx *types, core_translation_unit_t *unit,
+                                const ir_instr_t *at, core_string_t method,
+                                th_type *receiver)
+{
+    if (!ir_annot_get((ir_annots_t *)&at->annots, N00BB_MAY_FAIL_KEY)
+        || (!core_string_eq(method, CORE_STRING_STATIC("__enter"))
+            && !core_string_eq(method, CORE_STRING_STATIC("__exit")))) {
+        return false;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    source_t            source      = value_source(unit, dispatch_operand(at, 1),
+                                                   at->span);
+    core_string_t       text        = source.text.u8_bytes
+                                        ? source.text
+                                        : CORE_STRING_STATIC("the manager");
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_NOT_A_CONTEXT,
+                 source.text.u8_bytes ? source.at
+                                      : n00bb_span_location(at->span),
+                 N00B_TEXT_IS_WHICH_IS_NOT_A_CONTEXT,
+                 N00BB_ARGS(ARG_TEXT(text),
+                            ARG_TEXT(n00bb_print_type(types, receiver)),
+                            ARG_TEXT(method)));
+    n00bb_report_help(diagnostics, N00B_TEXT_A_WITH_NEEDS_A_CONTEXT,
+                      N00BB_NO_ARGS);
+
+    return true;
+}
+
 static bool report_tuple_index(core_translation_unit_t *unit,
                                const ir_instr_t *at, core_string_t method,
                                th_type *receiver)
@@ -4221,6 +4210,7 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
         return true;
     }
     if (report_iteration(types, unit, at, method, receiver)
+        || report_with_manager(types, unit, at, method, receiver)
         || report_tuple_index(unit, at, method, receiver)
         || report_missing_operator(types, index, unit, at, method, receiver)
         || report_operator(types, index, unit, at, method, receiver,
@@ -7183,7 +7173,9 @@ static bool user_variant(th_type *type)
         type = th_resolve(th_ind_referent(type));
     }
 
-    return type && th_named_info(type, &name, nullptr, nullptr)
+    bool variant = false;
+
+    return type && th_named_info(type, &name, &variant, nullptr) && variant
         && !core_string_starts_with(n00bb_name_leaf(name),
                                     CORE_STRING_STATIC("__"));
 }
@@ -7527,6 +7519,56 @@ static bool check_pending_failures(
                 ok = false;
             }
         }
+    }
+    return ok;
+}
+
+// A method call is dispatched by its receiver's type, so whether it can fail
+// is known only once typing chose the method. One written without `!` (or
+// a `try`) that reaches a method that can fail does not pass the failure on.
+static bool check_unpropagated_dispatches(
+    th_ctx *types, core_translation_unit_t *const *units, size_t count,
+    ty_solver_t *solver)
+{
+    bool ok = true;
+    for (size_t i = 0; i < ty_dispatch_count(solver); i++) {
+        const ir_instr_t *in = ty_dispatch_at(solver, i);
+        th_type *instance = ty_dispatch_instance(solver, in);
+        th_type *signature = instance ? th_resolve(instance) : nullptr;
+        th_type *failure = signature && th_kind_of(signature) == TH_FUNCTION
+                && th_func_error(signature)
+            ? th_resolve(th_func_error(signature)) : nullptr;
+        core_translation_unit_t *unit = unit_of(units, count, in);
+        if (!unit || !in->dest || !failure || th_kind_of(failure) == TH_VAR
+            || !in->n_operands || in->operands[0].kind != IR_OPD_NAME)
+            continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        core_string_t name = in->operands[0].name;
+        bool shaped = ir_type_is_call_outcome(in->dest->type);
+        // A `!` on a method that cannot fail has nothing to pass on. The
+        // compiler's own calls (a `with` hook's) may reach such a method.
+        if (shaped && th_is_nil(failure)
+            && !ir_annot_get((ir_annots_t *)&in->annots,
+                             N00BB_MAY_FAIL_KEY)) {
+            n00bb_report(diagnostics, unit, N00B_DIAG_PROPAGATE_INFALLIBLE,
+                         n00bb_span_location(in->span),
+                         N00B_TEXT_CANNOT_FAIL_SO_THIS_HAS,
+                         N00BB_ARGS(ARG_TEXT(name)));
+            n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_THE,
+                              N00BB_NO_ARGS);
+            ok = false;
+            continue;
+        }
+        if (shaped || th_is_nil(failure)) continue;
+        n00bb_report(diagnostics, unit, N00B_DIAG_FAILURE_NOT_PROPAGATED,
+                     n00bb_span_location(in->span),
+                     N00B_TEXT_CAN_FAIL_WITH_SO_THIS,
+                     N00BB_ARGS(ARG_TEXT(name),
+                                ARG_TEXT(n00bb_print_type(types, failure))));
+        n00bb_report_help(diagnostics, N00B_TEXT_WRITE_TO_PASS_THE_FAILURE,
+                          N00BB_ARGS(ARG_TEXT(name)));
+        ok = false;
     }
     return ok;
 }
@@ -7930,6 +7972,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                                      &coverage.outcome_calls, &tainted)
         && ok;
     ok = check_pending_failures(types, units, count, &functions) && ok;
+    ok = check_unpropagated_dispatches(types, units, count, solver) && ok;
     // A call whose argument's method doesn't fit a `where` constraint gets
     // that one error; the mismatches it causes there are not reported.
     core_dict_t bound_sites;
