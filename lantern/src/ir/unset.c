@@ -301,6 +301,29 @@ call_events(U *u, ir_instr_t *in)
     }
 }
 
+// A retained reference outlives the instruction that takes it: the value
+// that keeps it (a callback's state) reads and writes through it later,
+// out of sight of this function. What it points at must be set in full
+// when it is retained.
+static void
+retain_events(U *u, ir_instr_t *in)
+{
+    ir_value_t *reference = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    const uint32_t *ids = nullptr;
+    uint32_t count = 0;
+    if (!reference || !reference_type(reference->type)
+        || !ir_places_of(u->places, reference, &ids, &count))
+        return;
+    for (uint32_t p = 0; p < count; p++) {
+        uint32_t tracked;
+        node_t  *node;
+        bool     element;
+        if (place_node(u, ids[p], &tracked, &node, &element))
+            event(u, in, EVENT_READ, tracked, node);
+    }
+}
+
 static bool
 fills(ir_op_t op)
 {
@@ -517,6 +540,8 @@ ir_unset_locals(ir_summaries_t *summaries, ir_func_t *f,
             access_events(&u, in);
             if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
                 call_events(&u, in);
+            else if (in->op == IR_OP_RETAIN_REF)
+                retain_events(&u, in);
         }
     }
     u.block_events[f->n_blocks] = u.events.len;

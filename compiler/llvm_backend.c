@@ -8157,35 +8157,6 @@ feasible_edge(lower_state_t *state, ir_block_t *from, ir_block_t *to,
     return false;
 }
 
-static const ir_instr_t *
-local_assignment(ir_func_t *function, const ir_local_t *local)
-{
-    const ir_instr_t *assignment = nullptr;
-    for (uint32_t b = 0; b < function->n_blocks; b++)
-        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-            const ir_instr_t *in = function->blocks[b]->instrs[i];
-            if (in->dest_kind != IR_DEST_LOCAL || in->dest_local != local)
-                continue;
-            if (assignment) return nullptr;
-            assignment = in;
-        }
-    return assignment;
-}
-
-static const ir_instr_t *
-retained_source(ir_func_t *function, const ir_value_t *value)
-{
-    for (uint32_t depth = 0; value && depth < 8; depth++) {
-        const ir_instr_t *source = value->kind == IR_VAL_LOCAL && value->local
-            ? local_assignment(function, value->local) : value->def;
-        if (!source || source->op != IR_OP_COPY || source->n_operands != 1
-            || source->operands[0].kind != IR_OPD_VALUE)
-            return source;
-        value = source->operands[0].value;
-    }
-    return nullptr;
-}
-
 enum { MAX_FAILURE_OPERANDS = 16 };
 
 static const ir_instr_t *
@@ -8809,17 +8780,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
     case IR_OP_RETAIN_REF:
         if (count != 1 || operands[0].kind != IR_OPD_VALUE
             || !operands[0].value || !instruction->dest) break;
-        if (operands[0].value->kind != IR_VAL_FUNC) {
-            th_type *referent = th_ind_referent(operands[0].value->type);
-            if (!referent || th_kind_of(th_resolve(referent)) != TH_FUNCTION) {
-                const ir_instr_t *source = retained_source(state->function,
-                    operands[0].value);
-                if (operands[0].value->kind != IR_VAL_PARAM
-                    && (!source || source->op != IR_OP_ALLOC
-                        || ir_allocation_has_only_local_uses(state->function,
-                                                              source))) break;
-            }
-        }
+        // A retained reference is the address itself. How long the storage
+        // behind it lives was settled before code generation: escape
+        // analysis follows the address through retain.ref and
+        // callback.create, so storage placement has already moved a local
+        // whose retained address outlives the frame to the heap. A global's
+        // address, or a local's that the retaining value never carries out
+        // of the frame, is kept as it is.
         result = lowered_value(state, operands[0].value);
         return result && save_result(state, instruction, result);
     case IR_OP_NOT: {
