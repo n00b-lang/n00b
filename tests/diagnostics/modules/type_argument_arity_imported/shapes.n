@@ -8,3 +8,13 @@ record Holder {
 }
 
 enum Level { low, high }
+
+callback Pick {
+    call (left: 'T, right: 'T) -> 'T
+    handler (left: 'T, right: 'T) -> 'T
+}
+
+callback Count {
+    call (n: int) -> int
+    handler (n: int) -> int
+}

@@ -110,7 +110,8 @@ grep -q 'var i: *uint ' "$tmp/counter.n"
 
 # Type arguments on an imported type are counted the same whether the
 # module comes from source or from its cached interface: both checks
-# report `Plain[int]`, `Holder[int, int]` and `Level[int]`.
+# report `Plain[int]`, `Holder[int, int]`, `Level[int]`, and the callbacks
+# `Pick[int, int]` and `Count[int]`.
 for pass in fresh cached; do
     N00B_CACHE="$tmp/arity-cache" N00B_DIAGNOSTICS=terse \
         N00B_PATH="$src/tests/diagnostics/modules/type_argument_arity_imported" \
@@ -122,4 +123,6 @@ for pass in fresh cached; do
     grep -q '`Plain` takes no type arguments, but 1 is given' "$tmp/arity.err"
     grep -q '`Holder` takes 1 type argument, but 2 are given' "$tmp/arity.err"
     grep -q '`Level` takes no type arguments, but 1 is given' "$tmp/arity.err"
+    grep -q '`Pick` takes 1 type argument, but 2 are given' "$tmp/arity.err"
+    grep -q '`Count` takes no type arguments, but 1 is given' "$tmp/arity.err"
 done

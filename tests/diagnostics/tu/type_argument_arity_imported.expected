@@ -7,3 +7,12 @@ tests/diagnostics/tu/type_argument_arity_imported.n:6:21: error N00B-T0515: `Hol
 tests/diagnostics/tu/type_argument_arity_imported.n:8:20: error N00B-T0515: `Level` takes no type arguments, but 1 is given
   tests/diagnostics/modules/type_argument_arity_imported/shapes.n:10:6: note: `Level` is declared here
   help: remove the type argument
+tests/diagnostics/tu/type_argument_arity_imported.n:9:25: error N00B-T0515: `Pick` takes 1 type argument, but 2 are given
+  tests/diagnostics/modules/type_argument_arity_imported/shapes.n:12:10: note: `Pick` is declared here
+  help: remove the extra type argument
+tests/diagnostics/tu/type_argument_arity_imported.n:12:27: error N00B-T0515: `Count` takes no type arguments, but 1 is given
+  tests/diagnostics/modules/type_argument_arity_imported/shapes.n:17:10: note: `Count` is declared here
+  help: remove the type argument
+tests/diagnostics/tu/type_argument_arity_imported.n:15:6: warning N00B-N0019: function `fine` is never called
+  help: call it or delete it
+tests/diagnostics/tu/type_argument_arity_imported.n:15:11: note N00B-S0064: parameter `f` could be `view`: `fine` never writes anything reachable from it
