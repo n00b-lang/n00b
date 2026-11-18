@@ -25,6 +25,35 @@ build_time_failure() {
     test ! -e "$tmp/$name"
 }
 
+# A literal handler that fails at build time is a source diagnostic at the
+# literal, not a panic of the comptime run. Each further argument is a
+# `file:line:col: modifier: message` failure that must be reported.
+literal_failures() {
+    name=$1
+    shift
+    if "$compiler" build --output "$tmp/$name" "$program_dir/$name.n" \
+        >"$tmp/$name.out" 2>&1; then
+        echo "$name unexpectedly built" >&2
+        exit 1
+    fi
+    expected=0
+    for failure in "$@"; do
+        location=${failure%%: *}
+        rest=${failure#*: }
+        modifier=${rest%%: *}
+        message=${rest#*: }
+        grep -qF "$location: error N00B-B0116: literal modifier \`'$modifier\` failed: $message" \
+            "$tmp/$name.out"
+        expected=$((expected + 1))
+    done
+    test "$(grep -c 'error N00B-B0116' "$tmp/$name.out")" = "$expected"
+    if grep -q '^panic:\|comptime run of' "$tmp/$name.out"; then
+        echo "$name reported a literal failure as a failed comptime run" >&2
+        exit 1
+    fi
+    test ! -e "$tmp/$name"
+}
+
 case $part in
 runtime)
     if "$compiler" build --native --generic --output "$tmp/conflict" \
@@ -66,23 +95,21 @@ build-time)
     "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
-    build_time_failure bitcode_litmod_comptime_fail \
-        'uncaught failure "prelude failed"' \
-        'bitcode_litmod_comptime_fail.n:7:5'
-    grep -q 'the comptime run of `bitcode_litmod_comptime_fail` exited' \
-        "$tmp/bitcode_litmod_comptime_fail.out"
-    build_time_failure bitcode_litmod_fence_nil_fail \
-        'uncaught failure "fence failed"' \
-        'bitcode_litmod_fence_nil_fail.n:6:1'
-    build_time_failure bitcode_litmod_string_fail \
-        'uncaught failure "bad literal"' \
-        'bitcode_litmod_string_fail.n:7:12'
-    build_time_failure bitcode_rich_auto_then_explicit \
-        'uncaught failure "rich string cannot mix automatic and explicit positional substitutions"' \
-        'bitcode_rich_auto_then_explicit.n:2:12'
-    build_time_failure bitcode_rich_explicit_then_auto \
-        'uncaught failure "rich string cannot mix automatic and explicit positional substitutions"' \
-        'bitcode_rich_explicit_then_auto.n:2:12'
+    literal_failures bitcode_litmod_comptime_fail \
+        'bitcode_litmod_comptime_fail.n:7:5: noop: prelude failed'
+    literal_failures bitcode_litmod_fence_nil_fail \
+        'bitcode_litmod_fence_nil_fail.n:6:1: noop: fence failed'
+    literal_failures bitcode_litmod_string_fail \
+        'bitcode_litmod_string_fail.n:7:12: reject: bad literal'
+    mixed='rich string cannot mix automatic and explicit positional substitutions'
+    literal_failures bitcode_rich_auto_then_explicit \
+        "bitcode_rich_auto_then_explicit.n:2:12: r: $mixed"
+    literal_failures bitcode_rich_explicit_then_auto \
+        "bitcode_rich_explicit_then_auto.n:2:12: r: $mixed"
+    literal_failures bitcode_litmod_many_fail \
+        "bitcode_litmod_many_fail.n:5:34: r: $mixed" \
+        'bitcode_litmod_many_fail.n:7:24: reject: bad literal' \
+        "bitcode_litmod_many_fail.n:10:12: r: $mixed"
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'

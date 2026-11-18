@@ -1,0 +1,11 @@
+alias litmod reject = reject_text
+quotes litmod reject_text(raw: string) -> string fail: string {
+    fail "bad literal"
+}
+let auto_then_explicit: string = "[#] and [#1]"'r
+let fine: string = "[b]ok[/b]"'r
+let rejected: string = "anything"'reject
+
+func value() -> string {
+    return "[#0:x] and [#:y]"'r + auto_then_explicit + fine + rejected
+}

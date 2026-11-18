@@ -1065,10 +1065,192 @@ n00bb_lower_literal_site(ir_lower_context_t *context, parse_visit_t *visit,
     return ok ? aggregate->dest : nullptr;
 }
 
+// The comptime runtime's `n00b_comptime_literal_failed(module, site,
+// message)`, which records a literal handler's failure for the compiler to
+// report at the literal, or `n00b_comptime_literals_checked(module)`, which
+// ends the run if any were recorded.
+static ir_func_t *
+literal_failure_native(ir_lower_context_t *context, bool checked)
+{
+    ir_module_t *module = context->module;
+    core_string_t name = checked
+        ? CORE_STRING_STATIC(N00BB_COMPTIME_LITERALS_CHECKED_NATIVE)
+        : CORE_STRING_STATIC(N00BB_COMPTIME_LITERAL_FAILED_NATIVE);
+    ir_func_t *function = ir_func_find(module, name);
+    if (function) return function;
+    n00bb_lower_context_t *lower = context->user;
+    th_type *nil_type = n00bb_ir_builtin_type(module,
+                                              CORE_STRING_STATIC("nil"));
+    th_type *u64 = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("u64"));
+    th_type *text = n00bb_ir_builtin_type(module,
+                                          CORE_STRING_STATIC("string"));
+    th_param params[] = {
+        {.mode = TH_IN, .type = u64}, {.mode = TH_IN, .type = u64},
+        {.mode = TH_IN, .type = text},
+    };
+    th_type *type = nil_type && u64 && text
+        ? th_func_with_error(ir_module_types(module), nil_type, nil_type,
+                             params, checked ? 1 : 3, nullptr, nullptr, 0)
+        : nullptr;
+    function = type ? ir_func_add(module, name, type, IR_LINK_EXTERN)
+                    : nullptr;
+    bool annotated = function && lower && ir_annot_set(lower->ir_context,
+        &function->annots,
+        (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.abi.native"),
+                     .kind = IR_ANNOT_STR, .s = name});
+    return annotated ? function : nullptr;
+}
+
+// The token in `node` that carries its literal modifier.
+static parse_token_info_t *
+modifier_token(parse_tree_t *node)
+{
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node)) {
+        parse_token_info_t *token = parse_node_token(node);
+        return token
+            && core_option_is_set(parse_token_postfix_modifier(token))
+            ? token : nullptr;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_token_info_t *found = modifier_token(core_tree_child(node, i));
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+static ir_instr_t *
+literal_native_call(ir_lower_context_t *context, ir_func_t *native,
+                    ir_value_t *const *arguments, size_t count,
+                    ir_span_t span)
+{
+    th_type *nil_type = n00bb_ir_builtin_type(context->module,
+                                              CORE_STRING_STATIC("nil"));
+    ir_instr_t *call = nil_type
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    bool ok = call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_literal_failed_"), nil_type)
+        && ir_instr_operand_value(call,
+               ir_func_address(context->module, native));
+    for (size_t i = 0; ok && i < count; i++)
+        ok = ir_instr_operand_value(call, arguments[i]);
+    return ok && ir_instr_set_call_signature(call, native->type) ? call
+                                                                 : nullptr;
+}
+
+// Records the failure `error` of the literal at `visit` with the comptime
+// runtime: the module's key, and the byte offsets of the literal's first
+// token and of the token carrying its modifier. With `stop`, the run then
+// ends so the compiler reports the failure.
+static bool
+emit_literal_failure(ir_lower_context_t *context, parse_visit_t *visit,
+                     ir_value_t *error, bool stop, ir_span_t span)
+{
+    ir_module_t *module = context->module;
+    th_type *u64 = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("u64"));
+    parse_token_info_t *first = parse_tree_find_first_terminal(visit->node);
+    parse_token_info_t *modified = modifier_token(visit->node);
+    ir_func_t *record = literal_failure_native(context, false);
+    ir_func_t *checked = stop ? literal_failure_native(context, true)
+                              : nullptr;
+    if (!u64 || !first || !modified || !record || (stop && !checked))
+        return false;
+    ir_instr_t *key = n00bb_emit_uint_constant(context, u64,
+        n00bb_comptime_module_key(ir_module_name(module)), span,
+        CORE_STRING_STATIC("__n00bb_literal_module"));
+    ir_instr_t *at = key ? n00bb_emit_uint_constant(context, u64,
+        (uint64_t)parse_token_start_byte(first)
+            | (uint64_t)parse_token_start_byte(modified) << 32, span,
+        CORE_STRING_STATIC("__n00bb_literal_site")) : nullptr;
+    ir_value_t *arguments[] = {key ? key->dest : nullptr,
+                               at ? at->dest : nullptr, error};
+    return at && literal_native_call(context, record, arguments, 3, span)
+        && (!stop || literal_native_call(context, checked, arguments, 1,
+                                         span));
+}
+
+// A literal handler's failure becomes a diagnostic at the literal rather
+// than a panic of the comptime run. While a module's comptime run evaluates
+// its hoisted literals (`failed` given), the failure is recorded and
+// evaluation goes on to the next literal at `failed`; the run stops once
+// they are all evaluated, so every failure is reported. Elsewhere the
+// failure is recorded and the run stops at once when it happens during a
+// comptime run; at run time it is the uncaught failure it always was.
+// Returns -1 when the call's outcome can't be handled this way (the caller
+// unwraps it as usual), 0 when emitting it failed, and 1 when it was
+// emitted.
+static int
+record_literal_failure(ir_lower_context_t *context, parse_visit_t *visit,
+                       ir_value_t *outcome, ir_block_t *failed,
+                       ir_span_t span, ir_value_t **value)
+{
+    *value = nullptr;
+    ir_module_t *module = context->module;
+    n00bb_lower_context_t *lower = context->user;
+    th_type *definition = outcome
+        ? ir_type_definition(module, outcome->type) : nullptr;
+    bool variant = false;
+    if (!lower || !definition || th_kind_of(definition) != TH_RECORD
+        || !th_named_info(outcome->type, nullptr, &variant, nullptr)
+        || !variant) return -1;
+    th_type *ok_type = th_record_lookup(definition, CORE_STRING_STATIC("ok"));
+    th_type *error_type = th_record_lookup(definition,
+                                           CORE_STRING_STATIC("error"));
+    if (!ok_type || !error_type
+        || th_builtin_kind_of(th_resolve(error_type)) != TH_BUILTIN_STRING
+        || !parse_tree_find_first_terminal(visit->node)
+        || !modifier_token(visit->node)) return -1;
+    uint64_t id = context->next_value_id++;
+    char ok_name[48], error_name[48];
+    ir_block_t *ok_block = ir_block_add(context->function,
+        n00bb_format_name(ok_name, sizeof(ok_name),
+                          "__n00bb_literal_ok_%llu", (unsigned long long)id));
+    ir_block_t *error_block = ir_block_add(context->function,
+        n00bb_format_name(error_name, sizeof(error_name),
+                          "__n00bb_literal_failed_%llu",
+                          (unsigned long long)id));
+    if (!ok_block || !error_block
+        || !n00bb_branch_on_outcome(context, outcome, ok_block, error_block,
+                                    span)) return 0;
+    context->block = error_block;
+    ir_value_t *error = n00bb_emit_outcome_payload(context, outcome,
+        CORE_STRING_STATIC("error"), error_type, span);
+    if (!error) return 0;
+    int routed = 0;
+    if (failed) {
+        if (!emit_literal_failure(context, visit, error, false, span)
+            || !n00bb_emit_jump(context, failed, span)) return 0;
+    }
+    else if ((routed = n00bb_route_try_error(context, error, span)) < 0)
+        return 0;
+    else if (!routed) {
+        // In a comptime run this records the failure and ends the run; in
+        // the program both calls do nothing, and the failure is the
+        // uncaught failure it always was. (Reading `comptime()` here
+        // instead would make every module that reaches the literal need a
+        // comptime run.)
+        if (!emit_literal_failure(context, visit, error, true, span))
+            return 0;
+        ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
+        if (!trap || !ir_instr_operand_value(trap, error)
+            || !n00bb_describe_failure(lower, trap, N00BB_FAILURE_UNCAUGHT,
+                   (core_string_t){0},
+                   n00bb_print_type(ir_module_types(module), error_type)))
+            return 0;
+        trap->span = span;
+    }
+    context->block = ok_block;
+    context->reachable = true;
+    if (ir_machine_of(module, ok_type).class == IR_CLASS_VOID) return 1;
+    *value = n00bb_emit_outcome_payload(context, outcome,
+        CORE_STRING_STATIC("ok"), ok_type, span);
+    return *value != nullptr;
+}
+
 static ir_lower_result_t
 user_literal_call(ir_lower_context_t *context, parse_visit_t *visit,
                   n00bb_litmod_site_t *site, th_type *result_type,
-                  ir_span_t span)
+                  ir_span_t span, ir_block_t *failed)
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
@@ -1228,8 +1410,13 @@ user_literal_call(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_internal(context, span,
                            "could not emit the literal handler call");
     ir_value_t *value = nullptr;
-    if (!n00bb_unwrap_call_outcome(context, visit, call->dest, span,
-                                   &value, true))
+    int recorded = record_literal_failure(context, visit, call->dest, failed,
+                                          span, &value);
+    if (!recorded)
+        return lower_internal(context, span,
+                              "could not record the literal's failure");
+    if (recorded < 0 && !n00bb_unwrap_call_outcome(context, visit, call->dest,
+                                                   span, &value, true))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
     if (ir_machine_of(context->module, th_func_ret(site->signature)).class
             == IR_CLASS_VOID)
@@ -1355,26 +1542,47 @@ n00bb_lower_user_literal(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_hoisted_literal_t *hoisted = state
         ? hoisted_literal(state, visit->node) : nullptr;
     if (hoisted && producing_constants(context)) {
-        ir_lower_result_t produced = user_literal_call(context, visit, site,
-                                                       result_type, span);
-        if (produced.status != IR_LOWER_VALUE || !hoisted->global)
-            return produced;
-        ir_instr_t *store = ir_lower_emit_instruction(context,
-            IR_OP_GLOBAL_STORE, span);
-        if (!store || !ir_instr_operand_value(store,
-                ir_global_address(context->module, hoisted->global))
-            || !ir_instr_operand_value(store, produced.value)
-            || !ir_instr_set_binding_initialization(store, true))
+        // A failing handler is recorded and joins `done` without a value,
+        // so evaluation goes on to the module's next literal (see
+        // record_literal_failure). The literal is a root of the constants
+        // initializer, so nothing uses its value past the store.
+        uint64_t id = context->next_value_id++;
+        char done_name[48];
+        ir_block_t *done = ir_block_add(context->function,
+            n00bb_format_name(done_name, sizeof(done_name),
+                              "__n00bb_literal_done_%llu",
+                              (unsigned long long)id));
+        if (!done)
             return lower_internal(context, span,
-                                  "could not store the literal's comptime value");
-        return produced;
+                                  "could not add the literal's join block");
+        ir_lower_result_t produced = user_literal_call(context, visit, site,
+                                                       result_type, span,
+                                                       done);
+        if (produced.status == IR_LOWER_FAILED) return produced;
+        if (produced.status == IR_LOWER_VALUE && hoisted->global) {
+            ir_instr_t *store = ir_lower_emit_instruction(context,
+                IR_OP_GLOBAL_STORE, span);
+            if (!store || !ir_instr_operand_value(store,
+                    ir_global_address(context->module, hoisted->global))
+                || !ir_instr_operand_value(store, produced.value)
+                || !ir_instr_set_binding_initialization(store, true))
+                return lower_internal(context, span,
+                    "could not store the literal's comptime value");
+        }
+        if (context->reachable && !n00bb_emit_jump(context, done, span))
+            return lower_internal(context, span,
+                                  "could not join the literal's evaluation");
+        context->block = done;
+        context->reachable = true;
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     }
     th_type *type = site && site->signature ? th_func_ret(site->signature)
                                             : nullptr;
     if (!hoisted && state && type && hoistable_literal(context, visit, site))
         hoisted = hoist_literal(context, visit, type);
     if (!hoisted)
-        return user_literal_call(context, visit, site, result_type, span);
+        return user_literal_call(context, visit, site, result_type, span,
+                                 nullptr);
     if (!hoisted->global) return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
     ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY, span);
     if (!copy || !ir_lower_set_temp_dest(context, copy,

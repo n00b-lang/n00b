@@ -29,6 +29,7 @@ N00B_TEXT(COMPTIME_MODULE_EXITED, "`{0}` exits with status {1} during its compti
 N00B_TEXT(COMPTIME_NOT_FREEZABLE, "`{0}` in `{1}` cannot be frozen: it {2}")
 N00B_TEXT(COMPTIME_IMPORT_CHANGE_DROPPED, "the comptime run of `{0}` changes `{1}` in `{2}`; the change is not kept in the program")
 N00B_TEXT(MAKE_THE_CHANGE_IN_COMPTIME_START, "make the change from `comptime_main` in the root module to keep it")
+N00B_TEXT(LITERAL_MODIFIER_FAILED, "literal modifier `'{0}` failed: {1}")
 N00B_TEXT(NO_CLANG_WAS_FOUND_TO, "no clang was found to link the executable with")
 N00B_TEXT(REINSTALL_THE_TOOLCHAIN_OR_REBUILD, "reinstall the toolchain, or rebuild the checkout")
 N00B_TEXT(LIBRARY_NEEDS_OUTPUT_FILE_FOR, "`library` needs `--output <file>` for ABI metadata")

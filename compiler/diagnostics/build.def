@@ -65,6 +65,12 @@ N00B_DIAG(COMPTIME_IMPORT_CHANGE_DROPPED, "N00B-B0114", WARNING,
     "Changes another module's comptime makes to it are seen for the rest of\n"
     "that run but are not kept in the program. Changes made from\n"
     "`comptime_main` in the root module are kept.")
+N00B_DIAG(LITERAL_MODIFIER_FAILED, "N00B-B0116", ERROR,
+    "a literal modifier rejects its literal",
+    "A literal with a modifier, such as `\"[b]hi[/b]\"'r`, is passed to the\n"
+    "modifier's handler when the program is built. The handler failed with\n"
+    "the message shown, so the literal has no value. Every failing literal\n"
+    "in a module is reported, each at its own position.")
 N00B_DIAG(INTERFACE_HAS_NO_CODE, "N00B-B0115", ERROR,
     "a program cannot be built from a library interface",
     "A semantic interface from `n00b library --emit-interface` describes a\n"

@@ -43,6 +43,12 @@ static const n00bb_axiom_t axioms[] = {
            IR_SUMMARY_MAY_BLOCK, 0, 0),
     NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
     NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
+    // Both run only where a literal handler failed, which already traps;
+    // what they write is the comptime run's report, not program output.
+    NATIVE("__comptime_literal_failed", "n00b_comptime_literal_failed",
+           IR_SUMMARY_MAY_TRAP, 0, 0),
+    NATIVE("__comptime_literals_checked", "n00b_comptime_literals_checked",
+           IR_SUMMARY_MAY_TRAP, 0, 0),
     COLLECTION_FREE_NATIVE("__effect_query", "n00bb_effect_query", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__function_has_effect",
                            "n00bb_function_has_effect", 0, 0, 0),
