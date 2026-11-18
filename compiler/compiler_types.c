@@ -1329,6 +1329,55 @@ static bool report_trait_parameter(th_ctx *types,
     return true;
 }
 
+typedef enum {
+    // Every failure at the call is reported.
+    SITE_FREE,
+    // A type doesn't implement a bound's trait: it is told that, not how
+    // each of the trait's methods misses.
+    SITE_IMPLEMENTS,
+    // A method doesn't fit a `where` constraint: that is the error, not the
+    // mismatches it causes there.
+    SITE_BOUND_METHOD,
+    // A call through a bound gives a trait parameter another type than an
+    // earlier call did: one error, from its first mismatch.
+    SITE_TRAIT_PARAMETER,
+} site_rule_t;
+
+// Which failure at the call `at` governs what is said about it, in that
+// order; `*rule` says how.
+static const ty_failure_t *governing_failure(
+    ty_solver_t *solver, const n00bb_dispatch_index_t *index,
+    const ir_instr_t *at, site_rule_t *rule)
+{
+    const ty_failure_t *bound     = nullptr;
+    const ty_failure_t *parameter = nullptr;
+    th_type            *receiver  = nullptr;
+
+    *rule = SITE_FREE;
+    for (size_t i = 0; at && i < ty_failure_count(solver); i++) {
+        const ty_failure_t *failure = ty_failure_at(solver, i);
+
+        if (failure->why.at != at) {
+            continue;
+        }
+        if (failure->kind == TY_FAIL_PREDICATE
+            && failure->pred.kind == TY_PRED_IMPLEMENTS) {
+            *rule = SITE_IMPLEMENTS;
+            return failure;
+        }
+        if (!bound && bound_method_failure(failure)) {
+            bound = failure;
+        }
+        if (!parameter && failure->expected && failure->actual
+            && bound_trait_of_call(index, at, &receiver).data) {
+            parameter = failure;
+        }
+    }
+    *rule = bound ? SITE_BOUND_METHOD
+          : parameter ? SITE_TRAIT_PARAMETER : SITE_FREE;
+    return bound ? bound : parameter;
+}
+
 static parse_sym_entry_t *nominal_symbol(n00bb_link_analysis_t *analysis,
                                          th_type *receiver)
 {
@@ -8039,64 +8088,20 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                                      &coverage.outcome_calls, &tainted)
         && ok;
     ok = check_unpropagated_dispatches(types, units, count, solver) && ok;
-    // A call whose argument's method doesn't fit a `where` constraint gets
-    // that one error; the mismatches it causes there are not reported.
-    core_dict_t bound_sites;
-    core_dict_init(&bound_sites, nullptr, nullptr);
-    // A call through a bound whose types conflict with an earlier call's
-    // gets one error, from its first mismatch.
-    core_dict_t parameter_sites;
-    core_dict_init(&parameter_sites, nullptr, nullptr);
-    // A type that doesn't implement a bound's trait at all is told that,
-    // not how each of the trait's methods misses.
-    core_dict_t implements_sites;
-    core_dict_init(&implements_sites, nullptr, nullptr);
-    for (size_t i = 0; i < ty_failure_count(solver); i++) {
-        const ty_failure_t *failure = ty_failure_at(solver, i);
-        if (failure->kind == TY_FAIL_PREDICATE && failure->why.at
-            && failure->pred.kind == TY_PRED_IMPLEMENTS) {
-            core_dict_put(&implements_sites, (void *)failure->why.at,
-                          (void *)1);
-        }
-    }
-    for (size_t i = 0; i < ty_failure_count(solver); i++) {
-        const ty_failure_t *failure = ty_failure_at(solver, i);
-        th_type            *receiver = nullptr;
-        if (bound_method_failure(failure)
-            && !core_dict_contains(&implements_sites,
-                                   (void *)failure->why.at)) {
-            core_dict_put(&bound_sites, (void *)failure->why.at, (void *)1);
-        }
-        else if (failure->expected && failure->actual
-                 && bound_trait_of_call(typing->dispatch, failure->why.at,
-                                        &receiver).data
-                 && !core_dict_contains(&parameter_sites,
-                                        (void *)failure->why.at)) {
-            core_dict_put(&parameter_sites, (void *)failure->why.at,
-                          (void *)failure);
-        }
-    }
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
         const ty_failure_t      *failure = ty_failure_at(solver, i);
         core_translation_unit_t *unit    = unit_of(units, count,
                                                    failure->why.at);
+        site_rule_t              rule    = SITE_FREE;
+        const ty_failure_t      *governs = governing_failure(solver,
+            typing->dispatch, failure->why.at, &rule);
 
-        if (!bound_method_failure(failure) && failure->why.at
-            && core_dict_contains(&bound_sites, (void *)failure->why.at)) {
+        if ((rule == SITE_IMPLEMENTS && bound_method_failure(failure))
+            || (rule == SITE_BOUND_METHOD && !bound_method_failure(failure))) {
             continue;
         }
-        if (bound_method_failure(failure)
-            && core_dict_contains(&implements_sites,
-                                  (void *)failure->why.at)) {
-            continue;
-        }
-        bool parameter = false;
-        const ty_failure_t *first = failure->why.at
-            ? core_dict_get(&parameter_sites, (void *)failure->why.at,
-                            &parameter)
-            : nullptr;
-        if (parameter) {
-            if (first == failure && unit) {
+        if (rule == SITE_TRAIT_PARAMETER) {
+            if (governs == failure && unit) {
                 report_trait_parameter(types, typing->dispatch, unit,
                                        failure);
             }
@@ -8141,9 +8146,6 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     }
     core_dict_free(&tainted);
     core_dict_free(&reported);
-    core_dict_free(&bound_sites);
-    core_dict_free(&parameter_sites);
-    core_dict_free(&implements_sites);
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
