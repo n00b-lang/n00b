@@ -103,6 +103,11 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/trait_receivers.n" \
+    "$program_dir/fmt_trait_receivers.n"
+diff -u "$program_dir/fmt_trait_receivers.expected" "$tmp/trait_receivers.n"
+"$compiler" fmt --check "$program_dir/fmt_trait_receivers.expected"
+
 "$compiler" fmt --output "$tmp/line_comments.n" \
     "$program_dir/fmt_line_comments.n"
 diff -u "$program_dir/fmt_line_comments.expected" "$tmp/line_comments.n"

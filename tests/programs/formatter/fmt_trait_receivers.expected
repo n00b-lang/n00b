@@ -1,0 +1,11 @@
+trait Fixup {
+    func fixup(modify self: 'T) -> nil fail: string
+}
+
+trait Peek {
+    func peek(view self: 'T) -> int
+}
+
+trait Take {
+    func take(consume self: 'T) -> int
+}

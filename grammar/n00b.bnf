@@ -938,11 +938,11 @@
 <trait-param-decl> @group @nospace($0) @nospace($1) @nospace($2) ::=
     %"(" <trait-obj-tref> %")"
 
-<trait-obj-tref> @declares($1, "param") @direction($1, "in") @pass_by("in") ::= %"in" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "view") @pass_by("view") ::= %"view" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "out") @pass_by("out") ::= %"out" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($2) ::= %"in" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "view") @pass_by("view") @nospace($2) ::= %"view" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "out") @pass_by("out") @nospace($2) ::= %"out" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "modify") @pass_by("inout") @nospace($2) ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "consume") @pass_by("consume") @nospace($2) ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($0, "param") @direction($0, "in") @pass_by("in") @nospace($1) ::= %IDENTIFIER %":" <tspec-tvar>
 
 <callback-decl> @namespace("type") @scope("callback", $2) @type($2) @exposes ::=
