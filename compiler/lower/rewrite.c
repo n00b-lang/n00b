@@ -150,11 +150,26 @@ n00bb_value_origin(const ir_pdg_t *pdg, ir_value_t *value)
     return nullptr;
 }
 
+static th_type *
+n00bb_written_type(const ir_instr_t *in)
+{
+    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local)
+        return in->dest_local->type;
+    return in->dest ? in->dest->type : nullptr;
+}
+
+/* Gives `aggregate`'s result its settled type `target`, along with every
+ * copy that still carries the result's old, provisional type. A copy whose
+ * destination has a type of its own, such as an option local the result is
+ * assigned into, keeps that type: retyping it would make the local lose its
+ * declared type while its other writes (an `option.none`, say) still assume
+ * it. */
 static void
 n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
                      th_type *target)
 {
     th_ctx *types = ir_module_types(rewrite->context.module);
+    th_type *provisional = n00bb_written_type(aggregate);
     core_list_t(n00bb_ir_instr_ptr_t) work = core_list_new(n00bb_ir_instr_ptr_t);
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
@@ -165,6 +180,10 @@ n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
         core_dict_get(&seen, at, &visited);
         if (visited) continue;
         core_dict_put(&seen, at, at);
+        th_type *written = n00bb_written_type(at);
+        if (at != aggregate && at->op == IR_OP_COPY && provisional && written
+            && !th_same_type(written, provisional))
+            continue;
         if (at->dest_kind == IR_DEST_LOCAL && at->dest_local)
             at->dest_local->type = target;
         else if (at->dest && at->op == IR_OP_ADDRESS_OF) {

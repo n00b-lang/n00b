@@ -16,6 +16,16 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
 
+# An option local assigned from a call whose type the rewrite settles keeps
+# its option type (this used to be an internal error in the LLVM backend).
+# It is its own program: the miscompile depended on the module's shape.
+"$compiler" build --output "$tmp/settled" \
+    "$src/tests/programs/option_local_settled_call.n" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err"
+"$tmp/settled" >"$tmp/stdout" 2>"$tmp/stderr"
+test ! -s "$tmp/stdout"
+test "$(cat "$tmp/stderr")" = ok
+
 # Reaching `unreachable()` stops the program with its own message.
 cat >"$tmp/unreachable.n" <<'EOF'
 func f(x: int) -> int {
