@@ -121,5 +121,26 @@ grep -q 'dev-0000000000000000 does not' "$tmp/out" \
 [ -d "$caches/dev" ] && [ -d "$caches/dev-0000000000000000" ] \
     || fail "cache key: cleaning removed another build's cache"
 
+# paths.path layers add up instead of replacing one another: flag entries
+# first, then N00B_PATH, the project file and the user file. Relative entries
+# in a file resolve against that file's directory.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) sep=';' ;;
+    *) sep=':' ;;
+esac
+printf '[paths]\npath = ["user-lib"]\n' >"$user"
+printf '[paths]\npath = ["project-lib"]\n' >"$project"
+isolated N00B_PATH="env-a${sep}env-b" "$compiler" config --path flag-a \
+    --path flag-b >"$tmp/out" 2>&1
+expect_line "path layers accumulate" \
+    "path = [\"flag-a\", \"flag-b\", \"env-a\", \"env-b\", \"$native_tmp/project/project-lib\", \"$native_tmp/home/.config/n00b/user-lib\"] # flag --path, environment N00B_PATH, $native_project:2, $native_user:2"
+isolated N00B_PATH="env-a" "$compiler" config >"$tmp/out" 2>&1
+expect_line "environment keeps file paths" \
+    "path = [\"env-a\", \"$native_tmp/project/project-lib\", \"$native_tmp/home/.config/n00b/user-lib\"] # environment N00B_PATH, $native_project:2, $native_user:2"
+printf '[paths]\npath = []\n' >"$project"
+setting
+expect_line "an empty project list keeps the user paths" \
+    "path = [\"$native_tmp/home/.config/n00b/user-lib\"] # $native_user:2"
+
 [ "$failed" -eq 0 ] && echo "config layering: all checks passed"
 [ "$failed" -eq 0 ]

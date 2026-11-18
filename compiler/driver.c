@@ -136,8 +136,9 @@ path_within(core_string_t path, core_string_t directory)
 
 static void
 add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
-                     core_string_t entry, core_diagnostics_t *diagnostics)
+                     size_t index, core_diagnostics_t *diagnostics)
 {
+    core_string_t entry = n00bb_setting_at(N00BB_KEY_PATHS_PATH, index);
     if (core_os_is_absolute(entry)) {
         add_root(resolver, entry, false);
         return;
@@ -145,8 +146,8 @@ add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
     core_string_t joined = core_os_path_join(cwd, entry);
     core_string_t resolved = core_os_real_path(joined);
     if (resolved.data && !path_within(resolved, cwd)) {
-        core_string_t origin = n00bb_setting_origin(
-            N00BB_KEY_PATHS_PATH);
+        core_string_t origin = n00bb_setting_origin_at(
+            N00BB_KEY_PATHS_PATH, index);
         n00bb_report(diagnostics, nullptr, N00B_DIAG_PATH_ENTRY_OUTSIDE_CWD,
             (core_diag_location_t){}, N00B_TEXT_ENTRY_RESOLVES_TO_OUTSIDE_THE,
             N00BB_ARGS(ARG_TEXT(origin), ARG_TEXT(entry), ARG_TEXT(resolved)));
@@ -169,8 +170,7 @@ add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd,
         if (resolver->roots.data[i].is_default_package)
             base = resolver->roots.data[i].path;
     for (size_t i = 0; i < n00bb_setting_count(key); i++)
-        add_environment_root(resolver, base, n00bb_setting_at(key, i),
-                             diagnostics);
+        add_environment_root(resolver, base, i, diagnostics);
 }
 
 n00bb_resolver_t *

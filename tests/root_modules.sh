@@ -64,3 +64,36 @@ for place in "$root/../../../lib/sys" "$tmp"; do
         exit 1
     fi
 done
+
+# Every paths.path layer contributes roots, highest precedence first: a module
+# only on N00B_PATH is still found when --path is given, and the project and
+# user files add their entries too. When two layers hold the same module, the
+# --path copy wins.
+layers="$tmp/layers"
+mkdir -p "$layers/flag" "$layers/env" "$layers/home/.config/n00b" \
+    "$layers/user" "$layers/project/plib"
+printf 'func pick() -> int { return 1 }\n' >"$layers/flag/both.n"
+printf 'func pick() -> int { return 2 }\n' >"$layers/env/both.n"
+printf 'func e() -> int { return 3 }\n' >"$layers/env/envonly.n"
+printf 'func p() -> int { return 4 }\n' >"$layers/project/plib/projonly.n"
+printf 'func u() -> int { return 5 }\n' >"$layers/user/useronly.n"
+printf '[paths]\npath = ["plib"]\n' >"$layers/project/n00b.cfg"
+printf '[paths]\npath = ["%s"]\n' "$layers/user" \
+    >"$layers/home/.config/n00b/config.cfg"
+cat >"$layers/project/main.n" <<'PROGRAM'
+import both
+import envonly
+import projonly
+import useronly
+require both.pick() == 1
+require envonly.e() + projonly.p() + useronly.u() == 12
+PROGRAM
+cd "$layers/project"
+if ! env -u XDG_CONFIG_HOME HOME="$layers/home" N00B_PATH="$layers/env" \
+        "$compiler" build --path "$layers/flag" --output "$tmp/layers.bin" \
+        main.n >"$tmp/layers.log" 2>&1; then
+    echo 'paths.path layers did not all contribute roots' >&2
+    cat "$tmp/layers.log" >&2
+    exit 1
+fi
+"$tmp/layers.bin"

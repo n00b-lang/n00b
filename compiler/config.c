@@ -35,6 +35,7 @@
 #define ENVIRONMENT_MATCH(variable, word) \
     ENVIRONMENT(variable), .environment_match = CORE_STRING_STATIC(word)
 #define RANGE(low, high) .minimum = (low), .maximum = (high)
+#define ACCUMULATE .accumulate = true
 #define N00BB_SETTING(id, section_name, key, kind, fallback, ...) \
     [N00BB_KEY_##id] = { \
         .section = CORE_STRING_STATIC(section_name), \
@@ -51,10 +52,19 @@ const n00bb_setting_spec_t n00bb_setting_specs[N00BB_KEY_COUNT] = {
 #undef N00BB_SETTING
 
 typedef struct {
+    n00bb_setting_source_t source;
+    core_string_t          origin;
+} item_layer_t;
+
+core_list_decl(item_layer_t);
+
+typedef struct {
     bool                       boolean;
     int64_t                    integer;
     core_string_t              text;
     core_list_t(core_string_t) items;
+    // Parallel to items, for an accumulating list only.
+    core_list_t(item_layer_t)  layers;
 } setting_value_t;
 
 typedef struct {
@@ -87,13 +97,36 @@ release_value(setting_value_t *value)
     for (size_t i = 0; i < value->items.len; i++)
         core_free(value->items.data[i].data);
     core_list_free(value->items);
+    for (size_t i = 0; i < value->layers.len; i++)
+        core_free(value->layers.data[i].origin.data);
+    core_list_free(value->layers);
     *value = (setting_value_t){0};
+}
+
+// A later, higher-precedence layer's entries go in front of those already
+// gathered, and every entry remembers the layer that gave it.
+static void
+accumulate(setting_t *setting, setting_value_t *value,
+           n00bb_setting_source_t source, core_string_t origin)
+{
+    for (size_t i = 0; i < value->items.len; i++)
+        core_list_push(value->layers, ((item_layer_t){
+            .source = source, .origin = core_string_dup(origin)}));
+    setting_value_t *old = &setting->value;
+    for (size_t i = 0; i < old->items.len; i++) {
+        core_list_push(value->items, old->items.data[i]);
+        core_list_push(value->layers, old->layers.data[i]);
+    }
+    old->items.len = 0;
+    old->layers.len = 0;
 }
 
 static void
 assign(setting_t *setting, setting_value_t value,
        n00bb_setting_source_t source, core_string_t origin)
 {
+    if (setting->spec->accumulate)
+        accumulate(setting, &value, source, origin);
     release_value(&setting->value);
     setting->value = value;
     setting->source = source;
@@ -1156,6 +1189,23 @@ n00bb_setting_origin(n00bb_setting_id_t id)
         ? n00bb_text_form(N00B_TEXT_THE_DEFAULT) : setting->origin;
 }
 
+n00bb_setting_source_t
+n00bb_setting_source_at(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    return index < setting->value.layers.len
+        ? setting->value.layers.data[index].source : setting->source;
+}
+
+core_string_t
+n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    return index < setting->value.layers.len
+        ? setting->value.layers.data[index].origin
+        : n00bb_setting_origin(id);
+}
+
 core_string_t
 n00bb_setting_key(n00bb_setting_id_t id)
 {
@@ -1201,8 +1251,39 @@ print_value(core_buffer_t *out, const setting_t *setting)
 }
 
 static void
+print_layer(core_buffer_t *out, n00bb_setting_source_t source,
+            core_string_t origin)
+{
+    switch (source) {
+    case N00BB_SETTING_FROM_ENVIRONMENT:
+        core_buffer_puts(out, "environment ");
+        break;
+    case N00BB_SETTING_FROM_FLAG:
+        core_buffer_puts(out, "flag ");
+        break;
+    default:
+        break;
+    }
+    core_buffer_append_string(out, origin);
+}
+
+static void
 print_source(core_buffer_t *out, const setting_t *setting)
 {
+    const setting_value_t *value = &setting->value;
+    if (setting->spec->accumulate && value->layers.len) {
+        // One entry per contributing layer, highest precedence first.
+        for (size_t i = 0; i < value->layers.len; i++) {
+            const item_layer_t *layer = &value->layers.data[i];
+            if (i && layer->source == value->layers.data[i - 1].source
+                && core_string_eq(layer->origin,
+                                  value->layers.data[i - 1].origin))
+                continue;
+            if (i) core_buffer_puts(out, ", ");
+            print_layer(out, layer->source, layer->origin);
+        }
+        return;
+    }
     switch (setting->source) {
     case N00BB_SETTING_FROM_DEFAULT:
         core_buffer_puts(out, "default");

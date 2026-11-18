@@ -755,10 +755,10 @@ directory_problem(path_state_t state)
 }
 
 static void
-describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
+describe_layer(core_buffer_t *out, n00bb_setting_id_t key,
+               n00bb_setting_source_t source, core_string_t origin)
 {
-    core_string_t origin = n00bb_setting_origin(key);
-    switch (n00bb_setting_source(key)) {
+    switch (source) {
     case N00BB_SETTING_FROM_ENVIRONMENT:
         core_buffer_append_string(out, origin);
         break;
@@ -772,6 +772,13 @@ describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
                            (int)origin.u8_bytes, origin.data);
         break;
     }
+}
+
+static void
+describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
+{
+    describe_layer(out, key, n00bb_setting_source(key),
+                   n00bb_setting_origin(key));
 }
 
 static void
@@ -801,7 +808,8 @@ warn_contract_dirs(core_diagnostics_t *d)
     }
 }
 
-typedef void (*package_path_visit_t)(void *context, core_string_t entry,
+typedef void (*package_path_visit_t)(void *context, size_t index,
+                                     core_string_t entry,
                                      core_string_t resolved);
 
 static void
@@ -813,19 +821,22 @@ each_package_path(package_path_visit_t visit, void *context)
         core_string_t entry = n00bb_setting_at(key, i);
         core_string_t resolved = core_os_is_absolute(entry)
             ? core_string_dup(entry) : core_os_path_join(cwd, entry);
-        visit(context, entry, resolved);
+        visit(context, i, entry, resolved);
         core_free(resolved.data);
     }
     core_free(cwd.data);
 }
 
 static void
-warn_package_path(void *context, core_string_t entry, core_string_t resolved)
+warn_package_path(void *context, size_t index, core_string_t entry,
+                  core_string_t resolved)
 {
     path_state_t state = directory_state(resolved);
     if (state == PATH_IS_DIRECTORY) return;
     core_buffer_t source = {0};
-    describe_setting_source(&source, N00BB_KEY_PATHS_PATH);
+    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
+    describe_layer(&source, key, n00bb_setting_source_at(key, index),
+                   n00bb_setting_origin_at(key, index));
     n00bb_report(context, nullptr, N00B_DIAG_PACKAGE_PATH_MISSING, nowhere,
         N00B_TEXT_ENTRY_SO_IT_IS_SKIPPED,
         N00BB_ARGS(ARG_TEXT(core_buffer_string(&source)), ARG_TEXT(entry),
@@ -1060,9 +1071,11 @@ env_tool(const char *label, const char *path, n00bb_setting_id_t key,
 }
 
 static void
-env_package_path(void *context, core_string_t entry, core_string_t resolved)
+env_package_path(void *context, size_t index, core_string_t entry,
+                 core_string_t resolved)
 {
     (void)context;
+    (void)index;
     path_state_t state = directory_state(resolved);
     const char *problem = state == PATH_IS_MISSING ? "does not exist"
         : state == PATH_IS_NOT_DIRECTORY ? "not a directory" : nullptr;
