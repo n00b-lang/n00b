@@ -10,7 +10,7 @@ callback Event_Call {
 callback State_Call {
     call(value: int) -> int
     handler(modify state: Callback_State, value: int) -> int
-    setup(handler: Ref[(modify state: Callback_State, value: int) -> int],
+    setup(handler: Ref[(modify Callback_State, int) -> int],
           state: Ref[Callback_State]) -> nil
 }
 

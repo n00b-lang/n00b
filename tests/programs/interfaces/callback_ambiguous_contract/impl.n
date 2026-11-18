@@ -5,7 +5,7 @@ record Shared_State {
 callback Shared_Callback {
     call(value: int) -> int
     handler(modify state: Shared_State, value: int) -> int
-    setup(handler: Ref[(modify state: Shared_State, value: int) -> int],
+    setup(handler: Ref[(modify Shared_State, int) -> int],
           state: Ref[Shared_State]) -> nil
 }
 

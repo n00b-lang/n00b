@@ -1786,6 +1786,9 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
             t->fn.kw[i].mode = kw[i].mode;
             t->fn.kw[i].type = kw[i].type;
         }
+        // Keyword parameters are unordered; they are kept in the order the
+        // hash uses, so that equal function types list them alike.
+        qsort(t->fn.kw, nkw, sizeof(th_kwparam), th_cmp_kw);
     }
 
     return t;

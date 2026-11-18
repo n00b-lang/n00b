@@ -820,18 +820,20 @@
                        | <tspec-vargs> (%"," <tspec-kargs>)?
                        | <tspec-kargs>
 
+# A positional parameter's name is not part of a function type, so a
+# positional entry is only a type; an entry written `name: T` is a keyword
+# parameter (<tspec-kargs>).
 <tspec-func-param> ::= <union-tspec> <where-clause>?
-<tspec-func-param> ::=
-       <tspec-param-mode> %IDENTIFIER %":" <union-tspec> <where-clause>?
 <tspec-func-param> ::= <tspec-param-mode> <union-tspec> <where-clause>?
-<tspec-func-param> ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
 <tspec-param-mode> ::= %"in" | %"view" | %"out" | %"modify" | %"consume"
 
 <tspec-field> ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
 <tspec-vargs> ::= %"*" <union-tspec> <where-clause>?
-<tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
+# Writing `**` before the keyword parameters is an alternate spelling; the
+# preferred one leaves it out.
+<tspec-kargs> ::= %"**"? <tspec-field> (%"," <tspec-field>)*
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
 

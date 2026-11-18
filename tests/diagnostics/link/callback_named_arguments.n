@@ -10,7 +10,7 @@ func less(a: int, b: int) -> int {
 let by_name: Ref[(int, scale: int) -> int] = ref scaled
 require by_name.call(3, scale = 4) == 12
 require by_name.call(3) == 6
-func use(r: Ref[(a: int, b: int) -> int]) -> int {
+func use(r: Ref[(int, int) -> int]) -> int {
     return r.call(b = 3, a = 5)
 }
 require use(ref less) == 2

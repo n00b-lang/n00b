@@ -1,6 +1,7 @@
+tests/diagnostics/link/callback_named_arguments.n:10:5: error N00B-T0046: expected `(int, scale: int) -> int fail: nil`, found `(int, int) -> int fail: nil`
 tests/diagnostics/link/callback_named_arguments.n:11:25: error N00B-T0003: this function has no parameter named `scale`
+  note: the parameters are `scale`
   help: the parameters of a function reference have no names; pass the argument by position
-tests/diagnostics/link/callback_named_arguments.n:12:9: error N00B-T0002: this function takes 2 arguments, but this call passes 1
 tests/diagnostics/link/callback_named_arguments.n:14:19: error N00B-T0003: this function has no parameter named `b`
   help: the parameters of a function reference have no names; pass the argument by position
 tests/diagnostics/link/callback_named_arguments.n:26:32: error N00B-T0003: `call` has no parameter named `lable`

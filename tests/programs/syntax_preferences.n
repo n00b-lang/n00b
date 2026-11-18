@@ -3,6 +3,8 @@ struct Value:
 
 type ValueAlias = Value
 
+alias Scaled = Ref[(int, **scale: int) return: int]
+
 fn choose(first: bool, second: bool) return: int?:
     if (not first && second) || first:
         return None

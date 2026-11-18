@@ -49,6 +49,7 @@ typedef enum {
     PP_STYLE_RETURN,
     PP_STYLE_BOOL,
     PP_STYLE_CASE_DEFAULT,
+    PP_STYLE_KEYWORD_TYPE,
     PP_STYLE_SET_COUNT,
 } pp_style_set_t;
 
@@ -87,6 +88,8 @@ static const pp_spelling_info_t pp_spellings[PP_SPELL_COUNT] = {
     [PP_SPELL_PY_TRUE]      = {PP_STYLE_BOOL, S("bool"), S("True"), S("boolean literals"), false},
     [PP_SPELL_CASE_ELSE]    = {PP_STYLE_CASE_DEFAULT, S("case-default"), S("else"), S("default cases"), true},
     [PP_SPELL_CASE_DEFAULT] = {PP_STYLE_CASE_DEFAULT, S("case-default"), S("default"), S("default cases"), false},
+    [PP_SPELL_KEYWORD_TYPE] = {PP_STYLE_KEYWORD_TYPE, S("keyword-type"), S("name:"), S("keyword parameters in function types"), true},
+    [PP_SPELL_STARRED_KEYWORD_TYPE] = {PP_STYLE_KEYWORD_TYPE, S("keyword-type"), S("**name:"), S("keyword parameters in function types"), false},
 };
 #undef S
 
@@ -3462,6 +3465,10 @@ style_spelling(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "case-default-keyword"))
         return core_string_eq(text, CORE_STRING_STATIC("default"))
             ? PP_SPELL_CASE_DEFAULT : PP_SPELL_CASE_ELSE;
+    // A function type's keyword parameters, with or without a leading `**`.
+    if (is_name(ctx->grammar, node, "tspec-kargs"))
+        return core_string_eq(text, CORE_STRING_STATIC("**"))
+            ? PP_SPELL_STARRED_KEYWORD_TYPE : PP_SPELL_KEYWORD_TYPE;
     return PP_SPELL_COUNT;
 }
 

@@ -28,5 +28,8 @@ struct Second:
 alias type FirstAlias = First
 type SecondAlias = Second
 
+alias Scaled = Ref[(int, **scale: int) -> int]
+alias Shifted = Ref[(int, shift: int) -> int]
+
 assert true
 require true

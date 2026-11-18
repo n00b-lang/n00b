@@ -13,16 +13,17 @@ if ! "$compiler" lower "$program" >"$tmp/out" 2>"$tmp/err"; then
 fi
 
 count=$(grep -c 'warning N00B-P0011:' "$tmp/err")
-if [ "$count" -ne 9 ]; then
+if [ "$count" -ne 10 ]; then
     cat "$tmp/err" >&2
-    echo "expected 9 mixed-syntax warnings, got $count" >&2
+    echo "expected 10 mixed-syntax warnings, got $count" >&2
     exit 1
 fi
 
 for concept in \
     'function declarations' 'logical or' 'logical and' \
     'logical negation' 'the nil value' 'else-if clauses' 'blocks' \
-    'record declarations' 'function return types'
+    'record declarations' 'function return types' \
+    'keyword parameters in function types'
 do
     grep -q "inconsistent spelling for $concept" "$tmp/err" || {
         cat "$tmp/err" >&2
@@ -36,9 +37,9 @@ if ! "$compiler" lower "$preferences_program" >"$tmp/out" 2>"$tmp/err"; then
     exit 1
 fi
 count=$(grep -c 'warning N00B-P0012:' "$tmp/err")
-if [ "$count" -ne 9 ]; then
+if [ "$count" -ne 10 ]; then
     cat "$tmp/err" >&2
-    echo "expected 9 preference warnings, got $count" >&2
+    echo "expected 10 preference warnings, got $count" >&2
     exit 1
 fi
 
@@ -51,7 +52,8 @@ set -- \
     --syntax-preference else-if=elseif \
     --syntax-preference 'block=:' \
     --syntax-preference record=struct \
-    --syntax-preference 'return-type=return:'
+    --syntax-preference 'return-type=return:' \
+    --syntax-preference 'keyword-type=**name:'
 if ! "$compiler" "$@" lower "$preferences_program" \
     >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
