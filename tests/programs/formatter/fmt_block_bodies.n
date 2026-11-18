@@ -1,0 +1,14 @@
+trait Store {
+  func fixup(modify self: 'T) -> nil fail: string
+        func take(consume self: 'T, count: int) -> int
+}
+
+callback Scale {
+call (value: int) -> int
+      handler (value: int) -> int
+}
+
+variant Shape {
+      circle: int
+  square: int
+}

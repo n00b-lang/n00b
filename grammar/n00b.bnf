@@ -332,8 +332,9 @@
 <brought-symbol> ::= %IDENTIFIER (%"as" %IDENTIFIER)?
 
 <package-decl> ::= %"package" <dotted-name> <package-body>
-<package-body> ::= <block-start> <package-items>? <block-end>
-<package-items> ::= <package-item> (<eos>+ <package-item>)*
+<package-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <package-items>? <block-end>
+<package-items> @hardline ::= <package-item> (<eos>+ <package-item>)*
 <package-item> ::= <export-stmt> | <when-stmt> | <pass-stmt>
 <export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
 <export-alias> ::= %"as" %IDENTIFIER
@@ -887,14 +888,17 @@
 <variant-decl> @namespace("type") @scope("variant", $2) @type($2) @exposes ::=
        <member-visibility>? %"variant" %IDENTIFIER <variant-body>
 
-<variant-body> ::= <block-start> <variant-decl-spec-list> <block-end>
-<variant-decl-spec-list> ::= (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
+<variant-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <variant-decl-spec-list> <block-end>
+<variant-decl-spec-list> @hardline ::=
+       (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
 <variant-decl-one> @declares($1) @nospace($2) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
 
 <trait-decl> @namespace("type") @scope("trait", $2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
 
-<trait-body> ::= <block-start> <trait-spec-list> <block-end>
-<trait-spec-list> ::= (<trait-spec> (<eos>+ <trait-spec>)*)?
+<trait-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <trait-spec-list> <block-end>
+<trait-spec-list> @hardline ::= (<trait-spec> (<eos>+ <trait-spec>)*)?
 
 <trait-spec> @declares($1, "function") @scope("trait") @nospace($2) ::=
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
@@ -948,8 +952,9 @@
 <callback-decl> @namespace("type") @scope("callback", $2) @type($2) @exposes ::=
        <member-visibility>? %"callback" %IDENTIFIER <callback-body>
 
-<callback-body> ::= <block-start> <callback-role-list> <block-end>
-<callback-role-list> ::= <callback-role> (<eos>+ <callback-role>)*
+<callback-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <callback-role-list> <block-end>
+<callback-role-list> @hardline ::= <callback-role> (<eos>+ <callback-role>)*
 
 <callback-role> @declares($0, "function") @scope("callback-role") ::=
        %"call" <func-type-signature>
