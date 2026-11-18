@@ -332,6 +332,14 @@ N00B_DIAG(WITH_VALUE_DROPS, "N00B-T0604", ERROR,
     "`__exit` returns a `bool` can drop a failure by returning `true`, so\n"
     "it can only be used by a `with` statement. A manager that never drops\n"
     "a failure has an `__exit` that returns nothing.")
+N00B_DIAG(WHERE_ON_TYPE, "N00B-T0606", ERROR,
+    "a `where` clause follows a type instead of a function signature",
+    "Type constraints are checked only when the `where` clause follows a\n"
+    "function's signature, after its result type, or names a trait. A\n"
+    "`where` clause after the type of a parameter, a variable, a field or\n"
+    "an alias is not supported yet. Put the constraint on the enclosing\n"
+    "function instead:\n"
+    "    func pick(x: 'T) -> 'T where 'T: Integer { return x }")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"

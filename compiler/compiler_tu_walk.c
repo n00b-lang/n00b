@@ -310,6 +310,17 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     }
 }
 
+// The nearest ancestor that is a grammar rule, past the unnamed groups the
+// parser makes for `?` and repetition.
+static parse_tree_t *
+named_ancestor(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *up = parse_tree_parent(node);
+    while (up && !parse_tree_nt_name(grammar, up).u8_bytes)
+        up = parse_tree_parent(up);
+    return up;
+}
+
 static void
 semantic_annotation_node(void *context, core_translation_unit_t *unit,
                          parse_tree_t *node, parse_tree_t *parent,
@@ -352,6 +363,19 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             n00bb_report_help(diagnostics,
                 N00B_TEXT_TYPE_VARIABLES_ARE_DECLARED_BY,
                 N00BB_NO_ARGS);
+    }
+    // The grammar takes a `where` clause after any type, but only one after
+    // a function signature or a trait name is ever checked; elsewhere it
+    // would be dropped unchecked, so it is an error until it is supported.
+    if (step == SEMANTIC_PREPARE_ENTER && NT_IS(grammar, node, "where-clause")
+        && NT_IS(grammar, named_ancestor(grammar, node), "type-spec")) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_WHERE_ON_TYPE,
+                link_source_location(node), N00B_TEXT_WHERE_ON_TYPE_UNSUPPORTED,
+                N00BB_NO_ARGS))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_WHERE_ON_FUNCTION_INSTEAD, N00BB_NO_ARGS);
     }
     return;
     }

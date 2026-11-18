@@ -1,0 +1,19 @@
+tests/diagnostics/tu/where_on_type.n:3:27: error N00B-T0606: a `where` clause after a type is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_on_type.n:6:17: error N00B-T0606: a `where` clause after a type is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_on_type.n:9:21: error N00B-T0606: a `where` clause after a type is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_on_type.n:12:6: warning N00B-N0019: function `local` is never called
+  help: call it or delete it
+tests/diagnostics/tu/where_on_type.n:13:9: warning N00B-S0006: the value assigned to `x` here is never read
+tests/diagnostics/tu/where_on_type.n:13:15: error N00B-T0606: a `where` clause after a type is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_on_type.n:15:7: warning N00B-N0023: type `Sized` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type.n:18:14: note N00B-S0064: parameter `x` could be `view`: `checked` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:21:6: warning N00B-N0019: function `sized` is never called
+  help: call it or delete it
+tests/diagnostics/tu/where_on_type.n:24:9: error N00B-T0021: `string` does not implement `Integer`, which `checked` requires
+  tests/diagnostics/tu/where_on_type.n:18:6: note: `checked` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it

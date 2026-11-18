@@ -1,0 +1,5 @@
+// A `where` clause after a field's or an alias's type is rejected.
+record Box {
+    v: 'T where 'T: Integer
+}
+alias Ints = Array['T] where 'T: Integer
