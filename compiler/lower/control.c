@@ -1057,17 +1057,9 @@ n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
 {
     n00bb_lower_context_t *lower = context->user;
     n00bb_try_frame_t *frame = nullptr;
-    for (size_t i = lower->tries.len; i > 0; i--) {
-        n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
-        if (candidate->active && candidate->in_body
-            && candidate->order < before_order) {
-            frame = candidate;
-            break;
-        }
-    }
-    // A `with` manager entered inside the try handles the failure first.
-    n00bb_with_item_t *with = n00bb_with_handler(lower, before_order);
-    if (with && (!frame || with->order > frame->order))
+    n00bb_with_item_t *with = nullptr;
+    (void)n00bb_failure_handler(lower, before_order, &frame, &with);
+    if (with)
         return n00bb_route_with_failure(context, with, error, span) ? 1 : -1;
     if (!frame) return 0;
     th_type *failure = error && error->type ? th_resolve(error->type)

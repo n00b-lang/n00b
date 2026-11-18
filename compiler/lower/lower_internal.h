@@ -1135,10 +1135,14 @@ bool
 n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
                          bool entering, void *state);
 
-// The innermost `with` manager entered before `before_order` whose body
-// lowering is still in, or null.
-n00bb_with_item_t *
-n00bb_with_handler(n00bb_lower_context_t *lower, uint64_t before_order);
+// The handler a failure raised where only the frames entered before
+// `before_order` are open goes to: the innermost `try` whose body lowering
+// is in, or `with` manager. At most one of `*try_frame` and `*with_item` is
+// set; the result is its order, or 0 when the failure leaves the function.
+uint64_t
+n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
+                      n00bb_try_frame_t **try_frame,
+                      n00bb_with_item_t **with_item);
 
 // Sends `error` to `item`'s handler.
 bool

@@ -150,35 +150,42 @@ static bool
 with_cleanups_before(ir_lower_context_t *context, parse_tree_t *exit_node,
                      uint64_t before_order)
 {
-    n00bb_lower_context_t *lower = context->user;
-    uint64_t stop = 0;
-    for (size_t i = lower->tries.len; i > 0; i--) {
-        n00bb_try_frame_t *frame = &lower->tries.data[i - 1];
-        if (frame->active && frame->in_body && frame->order < before_order) {
-            stop = frame->order;
-            break;
-        }
-    }
-    n00bb_with_item_t *with = n00bb_with_handler(lower, before_order);
-    if (with && with->order > stop) stop = with->order;
+    n00bb_try_frame_t *try_frame = nullptr;
+    n00bb_with_item_t *with_item = nullptr;
+    uint64_t stop = n00bb_failure_handler(context->user, before_order,
+                                          &try_frame, &with_item);
     return n00bb_emit_scoped_cleanups(context, exit_node, stop, false,
                                       before_order);
 }
 
-n00bb_with_item_t *
-n00bb_with_handler(n00bb_lower_context_t *lower, uint64_t before_order)
+uint64_t
+n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
+                      n00bb_try_frame_t **try_frame,
+                      n00bb_with_item_t **with_item)
 {
-    n00bb_with_item_t *found = nullptr;
+    *try_frame = nullptr;
+    *with_item = nullptr;
+    for (size_t i = lower->tries.len; i > 0 && !*try_frame; i--) {
+        n00bb_try_frame_t *frame = &lower->tries.data[i - 1];
+        if (frame->active && frame->in_body && frame->order < before_order)
+            *try_frame = frame;
+    }
     for (size_t i = 0; i < lower->withs.len; i++) {
         n00bb_with_frame_t *frame = &lower->withs.data[i];
         for (size_t j = 0; frame->active && j < frame->items.len; j++) {
             n00bb_with_item_t *item = &frame->items.data[j];
             if (item->in_body && item->order < before_order
-                && (!found || item->order > found->order))
-                found = item;
+                && (!*with_item || item->order > (*with_item)->order))
+                *with_item = item;
         }
     }
-    return found;
+    // Only the innermost of the two handles the failure.
+    if (*try_frame && *with_item) {
+        if ((*with_item)->order > (*try_frame)->order) *try_frame = nullptr;
+        else *with_item = nullptr;
+    }
+    return *try_frame ? (*try_frame)->order
+         : *with_item ? (*with_item)->order : 0;
 }
 
 bool
