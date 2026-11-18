@@ -4446,6 +4446,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
 typedef struct {
     core_string_t method;
     core_string_t trait;
+    th_type      *contract;
     size_t        next;
 } trait_method_ref_t;
 core_list_decl(trait_method_ref_t);
@@ -4469,7 +4470,8 @@ trait_method_index_build(const th_env *environment,
             const th_member *method = th_trait_method(trait.contract, m);
             if (method && method->name.data)
                 core_list_push(index->refs, ((trait_method_ref_t){
-                    .method = method->name, .trait = trait.qualified_name}));
+                    .method = method->name, .trait = trait.qualified_name,
+                    .contract = method->type}));
         }
     }
     core_dict_init_string(&index->by_method);
@@ -4488,7 +4490,8 @@ trait_method_index_free(trait_method_index_t *index)
     core_list_free(index->refs);
 }
 
-static bool
+// The trait method `symbol` implements for `receiver`, if any.
+static const trait_method_ref_t *
 implements_trait_method(const trait_method_index_t *index, th_ctx *types,
                         parse_grammar_t *grammar,
                         core_translation_unit_t *unit,
@@ -4498,11 +4501,11 @@ implements_trait_method(const trait_method_index_t *index, th_ctx *types,
     bool present = false;
     uintptr_t first = (uintptr_t)core_dict_get(
         (core_dict_t *)&index->by_method, &root, &present);
-    if (!present) return false;
+    if (!present) return nullptr;
     core_buffer_t qualified = {0};
     bool named = append_environment_symbol_name(grammar, unit, symbol,
                                                 &qualified) && qualified.data;
-    bool found = false;
+    const trait_method_ref_t *found = nullptr;
     for (size_t r = first; named && !found && r;
          r = index->refs.data[r - 1].next) {
         const trait_method_ref_t *ref = &index->refs.data[r - 1];
@@ -4513,19 +4516,24 @@ implements_trait_method(const trait_method_index_t *index, th_ctx *types,
                 == TH_ENV_METHOD_FOUND
             && chosen.qualified_name.data
             && core_string_eq(chosen.qualified_name,
-                              core_buffer_string(&qualified));
+                              core_buffer_string(&qualified))
+            ? ref : nullptr;
     }
     core_buffer_release(&qualified);
     return found;
 }
 
+// An adapter is called as the trait's method is, so it takes the
+// parameters the trait's method names (`arity` of them), not the further
+// optional ones its implementation adds: those it leaves out.
 static th_type *
 dispatch_adapter_signature(th_ctx *types, th_type *signature,
-                           th_type *receiver)
+                           th_type *receiver, size_t arity)
 {
     uint64_t receiver_hash = th_hash(types, receiver);
     th_type *self = th_var(types);
     size_t count = th_func_nparams(signature);
+    if (arity && arity < count) count = arity;
     th_param *parameters = count ? core_alloc_array(th_param, count)
                                  : nullptr;
     bool valid = self && (!count || parameters);
@@ -4593,8 +4601,20 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
             th_type *signature = th_resolve(th_func_collect_rest(state->types,
                 n00bb_symbol_signature(symbol)));
             th_type *receiver = th_resolve(th_func_param(signature, 0)->type);
+            const trait_method_ref_t *implemented = implements_trait_method(
+                &index, state->types, grammar, unit, symbol, receiver);
+            th_type *required = implemented && implemented->contract
+                ? th_resolve(th_func_collect_rest(state->types,
+                                                  implemented->contract))
+                : nullptr;
+            size_t arity = required && th_kind_of(required) == TH_FUNCTION
+                ? th_func_nparams(required) : 0;
+            parse_sym_entry_t *requirement = implemented
+                ? trait_method_requirement_symbol(grammar, analysis, unit,
+                      implemented->trait, implemented->method)
+                : nullptr;
             th_type *adapter_type = dispatch_adapter_signature(state->types,
-                signature, receiver);
+                signature, receiver, arity);
             if (!adapter_type) continue;
             core_buffer_t qualified = {0};
             core_buffer_t name = {0};
@@ -4624,6 +4644,9 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
                     receiver)
                 || !parse_sym_set_binding(adapter,
                     CORE_STRING_STATIC("n00bb.dispatch-adapter"), symbol)
+                || (requirement && !parse_sym_set_binding(adapter,
+                    CORE_STRING_STATIC("n00bb.dispatch-requirement"),
+                    requirement))
                 || !register_link_declaration(link, unit, grammar,
                     &analysis->declarations_by_symbol, adapter)) {
                 core_list_free(targets);

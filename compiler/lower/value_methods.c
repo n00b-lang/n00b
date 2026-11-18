@@ -545,12 +545,18 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
         && ir_instr_operand_value(call,
                ir_func_address(module, adapter->target));
     size_t optional_index = 0;
+    size_t given = th_func_nparams(adapter->signature);
     for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
-        bool optional = ir_func_parameter_is_optional(adapter->target,
-                                                      (uint32_t)i);
-        if (optional && (missing >> optional_index & 1u))
-            ok = ir_instr_operand_missing(call);
-        else ok = ir_instr_operand_value(call, adapter->inputs[i]);
+        bool takes_missing = ir_func_parameter_is_optional(adapter->target,
+                                                           (uint32_t)i);
+        // A parameter the trait's method doesn't name is left out.
+        bool optional = i < given
+            && ir_func_parameter_is_optional(adapter->context->function,
+                                             (uint32_t)i);
+        bool omitted = i >= given
+            || (optional && (missing >> optional_index & 1u));
+        ok = omitted ? takes_missing && ir_instr_operand_missing(call)
+                     : ir_instr_operand_value(call, adapter->inputs[i]);
         optional_index += optional;
     }
     ok = ok && ir_instr_set_call_signature(call, adapter->target->type);
@@ -620,7 +626,8 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
 static bool
 n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
                             ir_ctx_t *ir_context, ir_func_t *adapter,
-                            ir_func_t *target, th_type *receiver)
+                            ir_func_t *target, ir_func_t *required,
+                            th_type *receiver)
 {
     if (!adapter || adapter->n_blocks || !target || !target->type)
         return false;
@@ -653,7 +660,12 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
         ir_value_t *value = ir_param_add(adapter, name, by_reference
             ? th_ind(types, 0, parameter->type) : parameter->type);
         ok = value != nullptr;
-        if (ok && ir_func_parameter_is_optional(target, (uint32_t)i)) {
+        // The adapter is called as the trait's method is: a parameter is
+        // optional in it when the trait's method makes it optional.
+        bool optional = ir_func_parameter_is_optional(required ? required
+                                                               : target,
+                                                      (uint32_t)i);
+        if (ok && optional) {
             ok = state.optional_count < 64
                 && ir_func_set_parameter_optional(adapter, (uint32_t)i,
                                                   true);
@@ -699,6 +711,11 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                                                  symbol);
                 ir_func_t *target = link_ir_function_for_symbol(analysis,
                                                                 implementation);
+                parse_sym_entry_t *requirement = parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.dispatch-requirement"));
+                ir_func_t *required = requirement
+                    ? link_ir_function_for_symbol(analysis, requirement)
+                    : nullptr;
                 // An adapter only forwards to its target, so it fails as
                 // the target does, once the target's failure is inferred.
                 th_type *adapter_type = adapter && adapter->type
@@ -717,7 +734,8 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                 th_resolve(th_func_error(target_type)));
                 if (target && target->n_blocks
                     && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
-                                                   adapter, target, receiver)
+                                                   adapter, target, required,
+                                                   receiver)
                     && ir_annot_set(analysis->ir_context, &adapter->annots,
                         (ir_annot_t){
                             .key = CORE_STRING_STATIC(
