@@ -186,16 +186,51 @@ dispatch_reason(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     return n00bb_emit_jump(context, targets[last - 1], span);
 }
 
+// Goes on to `after` when `verdict`, what the construct's exit code said
+// about a failure, drops it, and continues lowering where it doesn't. Only
+// a `bool` verdict can drop one, by being `true`: an `__exit` that returns
+// nothing never does. Which it is is known once types are, and the test
+// folds away then.
+static bool
+drop_failure(ir_lower_context_t *context, ir_value_t *verdict,
+             ir_block_t *after, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    ir_block_t *decide = n00bb_branch_block(context, lower, "exit_decide");
+    ir_block_t *rethrow = n00bb_branch_block(context, lower, "exit_rethrow");
+    ir_instr_t *test = decide && rethrow
+        ? ir_lower_emit_instruction(context, IR_OP_TYPE_TEST, span) : nullptr;
+    if (!test || !ir_lower_set_temp_dest(context, test,
+            CORE_STRING_STATIC("__n00bb_exit_verdict_"), bool_type)
+        || !ir_instr_operand_value(test, verdict)
+        || !ir_instr_operand_type(test, bool_type)
+        || !n00bb_emit_branch(context, test->dest, decide, rethrow, span))
+        return false;
+    context->block = decide;
+    ir_instr_t *narrow = ir_lower_emit_instruction(context, IR_OP_TYPE_NARROW,
+                                                   span);
+    if (!narrow || !ir_lower_set_temp_dest(context, narrow,
+            CORE_STRING_STATIC("__n00bb_exit_drops_"), bool_type)
+        || !ir_instr_operand_value(narrow, verdict)
+        || !ir_instr_operand_type(narrow, bool_type)
+        || !n00bb_emit_branch(context, narrow->dest, after, rethrow, span))
+        return false;
+    context->block = rethrow;
+    return true;
+}
+
 bool
 n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
-                        ir_block_t *after, ir_value_t *swallowed,
+                        ir_block_t *after, ir_value_t *verdict,
                         parse_tree_t *source, n00bb_text_t phrase)
 {
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, source);
     if (!context->reachable) return true;
     bool continues = scope->fallthrough
-        || (scope->failure_reachable && swallowed);
+        || (scope->failure_reachable && verdict);
     if (!after && continues)
         after = n00bb_branch_block(context, lower, "exit_after");
     ir_block_t *failed = scope->failure_reachable
@@ -215,15 +250,8 @@ n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     if (failed) {
         context->block = failed;
         context->reachable = true;
-        if (swallowed) {
-            ir_block_t *rethrow = n00bb_branch_block(context, lower,
-                                                     "exit_rethrow");
-            if (!rethrow
-                || !n00bb_emit_branch(context, swallowed, after, rethrow,
-                                      span))
-                return false;
-            context->block = rethrow;
-        }
+        if (verdict && !drop_failure(context, verdict, after, span))
+            return false;
         ir_value_t *error = option_item(context, scope->failure,
                                         scope->failure_type, span);
         if (!error

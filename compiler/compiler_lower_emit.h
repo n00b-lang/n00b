@@ -18,6 +18,9 @@
 // A call the compiler wrote as possibly failing (a `with` hook's), whose
 // outcome reads are settled if its callee turns out not to fail.
 #define N00BB_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.call-may-fail")
+// The `__exit` call of a `with` used as a value, whose manager must not be
+// able to drop a failure.
+#define N00BB_WITH_VALUE_EXIT_KEY CORE_STRING_STATIC("n00bb.with-value-exit")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")

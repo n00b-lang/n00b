@@ -1156,13 +1156,13 @@ n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                        ir_span_t span, bool *reached, ir_value_t **failure);
 
 // Goes on from `scope`'s exit block once its exit code has run: to `after`
-// when falling through, or when `swallowed` (if given) holds for a failure;
-// back to the resume blocks; and otherwise on to the failure handlers
-// outside the construct. Lowering continues in `after` if anything reaches
-// it.
+// when falling through, or for a failure that `verdict` (if given: what
+// the exit code returned) drops by being `true`; back to the resume
+// blocks; and otherwise on to the failure handlers outside the construct.
+// Lowering continues in `after` if anything reaches it.
 bool
 n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
-                        ir_block_t *after, ir_value_t *swallowed,
+                        ir_block_t *after, ir_value_t *verdict,
                         parse_tree_t *source, n00bb_text_t phrase);
 
 // Fails the function with `error`, raised where only the frames entered

@@ -1,11 +1,9 @@
 record Gate {
-    open: bool
+    n: int
 }
-func gate() -> Gate { return (open = false) }
-func __enter(self: Gate) {}
-func __exit(self: Gate, value: nil, failure: 'E? = nil) -> bool {
-    return self.open
-}
+func gate() -> Gate { return (n = 0) }
+func __enter(self: Gate) { require self.n == 0 }
+func __exit(self: Gate, value: nil, failure: 'E? = nil) {}
 
 # A `->` ends the body it is in, and gives that body's construct its value.
 # A statement has no value, so nothing takes these.

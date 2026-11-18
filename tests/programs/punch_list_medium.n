@@ -395,9 +395,10 @@ if !comptime() {
 # `with` uses a manager's `Context_Manager` methods: `__enter` runs before the
 # block and what it returns is bound; `__exit` runs on every way out of the
 # block, given that value and, when the block failed, the failure as
-# `failure`; an `__exit` returning `true` drops the failure. Either may
-# fail. Managers are entered left to right and left in reverse. The
-# manager's type need not be known until typing.
+# `failure`. An `__exit` that returns a `bool` drops the failure by returning
+# `true`; one that returns nothing never drops one. Either hook may fail.
+# Managers are entered left to right and left in reverse. The manager's
+# type need not be known until typing.
 var with_log: string = ""
 
 record Tag {
@@ -408,10 +409,19 @@ func __enter(self: Tag) -> string {
     with_log = with_log + "+" + self.name
     return self.name + "!"
 }
-func __exit(self: Tag, value: string, failure: 'E? = nil) -> bool {
+func __exit(self: Tag, value: string, failure: 'E? = nil) {
     require value == self.name + "!"
     with_log = with_log + "-" + self.name
-    return failure != nil and self.name == "eat"
+}
+
+record Eater {
+    name: string
+}
+func eater(name: string) -> Eater { return (name = name) }
+func __enter(self: Eater) { with_log = with_log + "+" + self.name }
+func __exit(self: Eater, value: nil, failure: 'E? = nil) -> bool {
+    with_log = with_log + "-" + self.name
+    return failure != nil
 }
 
 record Gate {
@@ -425,11 +435,9 @@ func __enter(self: Gate) fail: string {
     if not self.open { fail "shut " + self.name }
     with_log = with_log + "+" + self.name
 }
-func __exit(self: Gate, value: nil, failure: 'E? = nil) -> bool
-        fail: string {
+func __exit(self: Gate, value: nil, failure: 'E? = nil) fail: string {
     with_log = with_log + "-" + self.name
     if self.name == "bad" { fail "exit " + self.name }
-    return false
 }
 
 record Held {
@@ -437,18 +445,16 @@ record Held {
 }
 func held(item: 'T) -> Held['T] { return (item = item) }
 func __enter(self: Held['T]) -> 'T { return self.item }
-func __exit(self: Held['T], value: 'T, failure: 'E? = nil) -> bool {
+func __exit(self: Held['T], value: 'T, failure: 'E? = nil) {
     with_log = with_log + "-box"
-    return false
 }
 
 object Visits {
     n: int
 }
 func __enter(self: Visits) { self.n = self.n + 1 }
-func __exit(self: Visits, value: nil, failure: 'E? = nil) -> bool {
+func __exit(self: Visits, value: nil, failure: 'E? = nil) {
     self.n = self.n + 10
-    return false
 }
 
 func visits() {
@@ -482,7 +488,7 @@ func with_failing() -> int fail: string {
     return 0
 }
 func with_swallowed() -> int fail: string {
-    with tag_named("eat") {
+    with eater("eat") {
         fail "boom"
     }
     return 7
@@ -626,10 +632,10 @@ func with_value_looped() -> int {
     }
     return total
 }
-// It has no value to go on with when a failure is dropped, so the failure
-// goes on even though `eat`'s `__exit` drops it.
+// When its body fails it has no value, and the failure goes on, after
+// `__exit` has run.
 func with_value_failing() -> int fail: string {
-    return with tag_named("eat") { -> risky(quiet_four())! }
+    return with tag_named("f") { -> risky(quiet_four())! }
 }
 func quiet_four() -> Quiet_Four { return (n = 4) }
 record Quiet_Four {
@@ -685,7 +691,7 @@ if !comptime() {
     require with_log == "+l-l+l-l+l-lc"
     with_log = ""
     require (try { -> with_value_failing()! } fail (e) { -> -1 }) == -1
-    require with_log == "+eat-eat"
+    require with_log == "+f-f"
 }
 
 if !comptime() {

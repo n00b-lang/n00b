@@ -7637,6 +7637,65 @@ static th_type *callee_failure(const ir_instr_t *call)
         : nullptr;
 }
 
+// A `with` manager's `__exit` returns nothing, or a `bool` saying whether
+// to drop the failure; a `with` used as a value can't have one that drops
+// failures. Which `__exit` a manager has is known once typing chose it.
+static bool check_with_exits(th_ctx *types,
+                             core_translation_unit_t *const *units,
+                             size_t count, ty_solver_t *solver)
+{
+    bool ok = true;
+    for (size_t i = 0; i < ty_dispatch_count(solver); i++) {
+        const ir_instr_t *in = ty_dispatch_at(solver, i);
+        th_type *instance = ty_dispatch_instance(solver, in);
+        th_type *signature = instance ? th_resolve(instance) : nullptr;
+        th_type *result = signature && th_kind_of(signature) == TH_FUNCTION
+            ? th_resolve(th_func_ret(signature)) : nullptr;
+        core_translation_unit_t *unit = unit_of(units, count, in);
+        if (!unit || !result || th_kind_of(result) == TH_VAR
+            || !in->n_operands || in->operands[0].kind != IR_OPD_NAME
+            || !core_string_eq(in->operands[0].name,
+                               CORE_STRING_STATIC("__exit"))
+            || !ir_annot_get((ir_annots_t *)&in->annots, N00BB_MAY_FAIL_KEY))
+            continue;
+        bool drops = th_same_type(result,
+            th_resolve(th_name(types, CORE_STRING_STATIC("bool"))));
+        if (!drops && th_is_nil(result)) continue;
+        bool value_form = ir_annot_get((ir_annots_t *)&in->annots,
+                                       N00BB_WITH_VALUE_EXIT_KEY) != nullptr;
+        if (drops && !value_form) continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        const ir_value_t *receiver = dispatch_operand(in, 1);
+        source_t source = value_source(unit, receiver, in->span);
+        core_string_t manager = receiver
+            ? n00bb_print_type(types, receiver->type)
+            : CORE_STRING_STATIC("the manager");
+        core_diag_location_t at = source.text.u8_bytes
+            ? source.at : n00bb_span_location(in->span);
+        if (drops) {
+            n00bb_report(diagnostics, unit, N00B_DIAG_WITH_VALUE_DROPS, at,
+                         N00B_TEXT_WITH_VALUE_MANAGER_DROPS,
+                         N00BB_ARGS(ARG_TEXT(source.text.u8_bytes
+                                             ? source.text : manager)));
+            n00bb_report_help(diagnostics,
+                              N00B_TEXT_WITH_VALUE_MANAGER_DROPS_HELP,
+                              N00BB_NO_ARGS);
+        }
+        else {
+            n00bb_report(diagnostics, unit, N00B_DIAG_EXIT_RESULT, at,
+                         N00B_TEXT_EXIT_RETURNS_OTHER,
+                         N00BB_ARGS(ARG_TEXT(manager),
+                                    ARG_TEXT(n00bb_print_type(types,
+                                                              result))));
+            n00bb_report_help(diagnostics, N00B_TEXT_EXIT_RETURNS_OTHER_HELP,
+                              N00BB_NO_ARGS);
+        }
+        ok = false;
+    }
+    return ok;
+}
+
 // A method call is dispatched by its receiver's type, so whether it can fail
 // is known only once typing chose the method. One written without `!` (or
 // a `try`) that reaches a method that can fail does not pass the failure on.
@@ -8093,6 +8152,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                                      &coverage.outcome_calls, &tainted)
         && ok;
     ok = check_unpropagated_dispatches(types, units, count, solver) && ok;
+    ok = check_with_exits(types, units, count, solver) && ok;
     for (size_t i = 0; i < ty_failure_count(solver); i++) {
         const ty_failure_t      *failure = ty_failure_at(solver, i);
         core_translation_unit_t *unit    = unit_of(units, count,

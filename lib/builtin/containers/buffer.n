@@ -102,20 +102,16 @@ private func __enter(self: Buffer_Read) {
     read_lock(self.buffer)
 }
 
-private func __exit(self: Buffer_Read, value: nil,
-                    failure: 'E? = nil) -> bool {
+private func __exit(self: Buffer_Read, value: nil, failure: 'E? = nil) {
     read_unlock(self.buffer)
-    return false
 }
 
 private func __enter(self: Buffer_Write) {
     write_lock(self.buffer)
 }
 
-private func __exit(self: Buffer_Write, value: nil,
-                    failure: 'E? = nil) -> bool {
+private func __exit(self: Buffer_Write, value: nil, failure: 'E? = nil) {
     write_unlock(self.buffer)
-    return false
 }
 
 private func align(n: uint) -> uint {

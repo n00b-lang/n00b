@@ -38,11 +38,12 @@ with_failure_argument(ir_lower_context_t *context, ir_value_t *failure,
 // after the manager when there is one and `failure` as the `failure`
 // keyword argument when there is one. The call may fail: a failure goes to
 // the handlers entered before `before_order`. `*value` is what it returns.
+// `value_form` marks the `__exit` of a `with` used as a value.
 static bool
 with_call(ir_lower_context_t *context, ir_local_t *manager,
           core_string_t method, ir_value_t *argument, ir_value_t *failure,
           parse_tree_t *source, uint64_t before_order, n00bb_text_t phrase,
-          ir_value_t **value)
+          bool value_form, ir_value_t **value)
 {
     n00bb_lower_context_t *lower = context->user;
     th_ctx *types = ir_module_types(context->module);
@@ -67,6 +68,9 @@ with_call(ir_lower_context_t *context, ir_local_t *manager,
         && ir_annot_set(lower->ir_context, &call->def->annots,
             (ir_annot_t){.key = N00BB_MAY_FAIL_KEY, .kind = IR_ANNOT_BOOL,
                          .b = true})
+        && (!value_form || ir_annot_set(lower->ir_context, &call->def->annots,
+            (ir_annot_t){.key = N00BB_WITH_VALUE_EXIT_KEY,
+                         .kind = IR_ANNOT_BOOL, .b = true}))
         && (!named || ir_instr_operand_named(call->def,
                           CORE_STRING_STATIC("failure"), named));
     ir_block_t *ok_block = ok ? n00bb_branch_block(context, lower, "with_ok")
@@ -176,8 +180,8 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
 
     ir_value_t *entered = nullptr;
     if (!with_call(context, manager, CORE_STRING_STATIC("__enter"), nullptr,
-                   nullptr, visit->node, UINT64_MAX,
-                   N00B_TEXT_PHRASE_ENTERING_THIS_MANAGER, &entered))
+                   nullptr, expression, UINT64_MAX,
+                   N00B_TEXT_PHRASE_ENTERING_THIS_MANAGER, false, &entered))
         return false;
     if (binding) {
         ir_local_t *local = ir_local_add(context->function,
@@ -193,8 +197,9 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
     }
 
+    // The hooks' calls are the manager expression's, without its name.
     n00bb_with_item_t item = {
-        .node = visit->node,
+        .node = expression,
         .manager = manager,
         .value = entered,
     };
@@ -208,8 +213,8 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
 // Leaves the managers innermost first: each one's exit block calls
 // `__exit`, then goes on by the reason it was reached for. A `with` used
 // as a value keeps its body's value across the exit blocks, and is that
-// value after them. It has no value to go on with when a failure is
-// dropped, so there the failure goes on whatever `__exit` returns.
+// value after them. Its managers can't drop a failure, which would leave
+// it no value: typing reports one whose `__exit` returns a `bool`.
 static bool
 with_leave(ir_lower_context_t *context, parse_grammar_t *grammar,
            n00bb_with_frame_t *frame, parse_tree_t *source)
@@ -238,13 +243,14 @@ with_leave(ir_lower_context_t *context, parse_grammar_t *grammar,
                                     &failure))
             return false;
         if (!reached) continue;
-        ir_value_t *swallowed = nullptr;
+        ir_value_t *verdict = nullptr;
         if (!with_call(context, item->manager, CORE_STRING_STATIC("__exit"),
                        item->value, failure, item->node, item->scope.order,
-                       N00B_TEXT_PHRASE_LEAVING_THIS_MANAGER, &swallowed)
+                       N00B_TEXT_PHRASE_LEAVING_THIS_MANAGER,
+                       frame->expression, &verdict)
             || !n00bb_exit_scope_finish(context, &item->scope, nullptr,
                    item->scope.failure_reachable && !frame->expression
-                       ? swallowed : nullptr,
+                       ? verdict : nullptr,
                    source, N00B_TEXT_PHRASE_THIS_WITH_BLOCK))
             return false;
     }
