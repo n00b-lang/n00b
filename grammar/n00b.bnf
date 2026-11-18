@@ -627,7 +627,7 @@
 <unary-expr> @nospace ::= %"-" <unary-expr>
 <unary-expr> @nospace ::= %"+" <unary-expr>
 <unary-expr> @operator("ref") ::= %"ref" <unary-expr>
-<unary-expr> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
+<unary-expr> @nospace($1) @nospace($2) @nospace($3) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @nospace($1) @nospace($2) @nospace($3) ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> ::= <postfix-expr>
 # A type annotation on any expression: `5: u8`, `items: List[int]`. It

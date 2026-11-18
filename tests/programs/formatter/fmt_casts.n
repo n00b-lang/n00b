@@ -1,0 +1,11 @@
+func f(bits: u32, n: int, m: u128) -> u8 {
+    let a: u8 = cast[u8]bits
+    let b: int = cast[int](n - 1)
+    let c: u64 = unsafe_cast[u64](m >> 64)
+    let d: u64 = unsafe_cast[u64]m
+    let e: Array[u8] = new[Array[u8]](cast[int] n)
+    let g: u8 = cast[u8] '\n'
+    let h: i8 = cast[i8] -1
+    let k: List[int] = cast[List[int]] [1, 2]
+    return a
+}
