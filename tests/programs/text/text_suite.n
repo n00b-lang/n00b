@@ -538,6 +538,9 @@ func local_literals() {
 // one, separated by `;`.
 func slots_of(s: string) -> string {
     var out: string = ""
+    if !is_rich(s) {
+        return out
+    }
     let recs: List[text.Style_Record] = body_of(s).__value.style_info
     for i from 0 until cast[int] recs.len() {
         let r: text.Style_Record = recs[i]
@@ -738,6 +741,7 @@ func string_rich_literal_main() {
     bracket_markup()
     substitution_slots()
     rich_concatenation()
+    slot_slicing()
     dispatch()
 }
 
@@ -1604,6 +1608,41 @@ func byte_slice_of(s: string, start: i64, end: i64) -> string {
         got = ""
     }
     return got
+}
+
+// Slots go to exactly one piece when a string is cut: half-open, like
+// spans, so a slot at the cut belongs to the piece that starts there, and
+// one at the very end stays with the piece that reaches the end.
+func slot_slicing() {
+    let s: string = "ab[#]cd[#n:x]"'r
+    let left: string = byte_slice_of(s, 0, 2)
+    let right: string = byte_slice_of(s, 2, 4)
+    check(slots_of(left) == "", "slot_slicing", "1")
+    check(slots_of(right) == "auto@0;name n@2:x", "slot_slicing", "2")
+    check(slots_of(byte_slice_of(s, 0, 4)) == "auto@2;name n@4:x",
+          "slot_slicing", "3")
+    check(slots_of(byte_slice_of(s, 1, 3)) == "auto@1", "slot_slicing", "4")
+    check(slots_of(byte_slice_of(s, 3, 4)) == "name n@1:x", "slot_slicing",
+          "5")
+    // Every slot lands in exactly one piece of a split.
+    for cut from 0 until 5 {
+        let a: string = slots_of(byte_slice_of(s, 0, cut))
+        let b: string = slots_of(byte_slice_of(s, cut, 4))
+        var n: uint = 0
+        if byte_len(a) != 0 {
+            n += 1
+            if find_bytes(a, ";") != nil {
+                n += 1
+            }
+        }
+        if byte_len(b) != 0 {
+            n += 1
+            if find_bytes(b, ";") != nil {
+                n += 1
+            }
+        }
+        check(n == 2, "slot_slicing", "6")
+    }
 }
 
 func rich_build_checks() {

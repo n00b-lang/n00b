@@ -59,7 +59,11 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
             }
         }
         if is_sub {
-            if rs < since or rs > upto {
+            // Half-open, as spans are cut: a slot at the cut belongs to
+            // the piece that starts there. A slot at the very end of the
+            // string stays with the piece that reaches the end.
+            if rs < since or rs > upto or
+                (rs == upto and upto < cast[u64] byte_len(s)) {
                 continue
             }
             var rec: Style_Record = r
