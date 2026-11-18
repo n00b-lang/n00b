@@ -1,0 +1,5 @@
+# A program whose dependency gets an error only from the analysis of the
+# whole program. A second `check` reports it again, as the first did: the
+# dependency is not stored in the cache with an error against it.
+import dep
+require dep.read_counted() == 0

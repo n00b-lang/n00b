@@ -3396,9 +3396,17 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
     core_buffer_release(&modules_directory);
     core_buffer_release(&shared_directory);
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
+    // A module snapshotted clean can still be reported against afterwards,
+    // by the analysis of the whole program (a read of one of its variables
+    // before anything sets it): a module with errors, or one that imports
+    // one, is not stored, so the next run reports them again, as it does for
+    // a module that failed to check.
+    uint8_t *clean = ok ? core_alloc_array(uint8_t, sccs->len ? sccs->len : 1)
+                        : nullptr;
     for (size_t s = 0; ok && s < sccs->len; s++) {
         cache_scc_t *scc = &sccs->data[s];
-        bool unstored = scc_uses_library(cache, sccs, scc);
+        bool unstored = scc_uses_library(cache, sccs, scc)
+            || !scc_clean(sccs, s, clean);
         for (size_t m = 0; !unstored && m < scc->members.len; m++)
             unstored = name_listed(core_buffer_string(&cache->unstored),
                                    scc->members.data[m]->module.identifier);
@@ -3423,6 +3431,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
             core_buffer_release(&members);
         }
     }
+    core_free(clean);
     for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
         const n00bb_specialization_t *item =
             &analysis->specializations.data[i];

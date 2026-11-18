@@ -1,0 +1,7 @@
+# `counted` has no initializer, and `read_counted` may run before anything
+# sets it: the analysis of the whole program reports that here, in a module
+# that checks clean on its own.
+var counted: int
+func read_counted() -> int {
+    return counted
+}

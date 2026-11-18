@@ -89,6 +89,37 @@ compare_rejected() {
     fi
 }
 
+# A rejected program checked twice with one cache reports the same
+# diagnostics both times; $expected is how many errors.
+compare_repeated() {
+    target=$1
+    path=$2
+    label=$3
+    expected=$4
+    for run in first second; do
+        if N00B_CACHE="$tmp/$label.cache" N00B_PATH="$path" \
+                N00B_DIAGNOSTICS=terse "$compiler" check \
+                --no-syntax-warnings "$target" \
+                >/dev/null 2>"$tmp/$label.$run.err"; then
+            echo "$label: the $run check passed, but should be rejected" >&2
+            exit 1
+        fi
+    done
+    if ! cmp -s "$tmp/$label.first.err" "$tmp/$label.second.err"; then
+        echo "$label: diagnostics differ between cold and cached checks" >&2
+        diff "$tmp/$label.first.err" "$tmp/$label.second.err" >&2 || true
+        exit 1
+    fi
+    errors=$(grep -c ': error' "$tmp/$label.first.err" || true)
+    if [ "$errors" -ne "$expected" ]; then
+        echo "$label: expected $expected errors, got $errors" >&2
+        cat "$tmp/$label.first.err" >&2
+        exit 1
+    fi
+}
+
+compare_repeated "$programs/cache_errors/app.n" "$programs/cache_errors" \
+    cache_errors 2
 compare "$programs/merged/calls.n" "$programs/features/fast_suite.n" calls
 compare "$programs/features/fast_suite.n" "$programs/merged/calls.n" fast
 compare_rejected "$programs/callbacks/state_unset.n" "$tmp/fast.shared" \
