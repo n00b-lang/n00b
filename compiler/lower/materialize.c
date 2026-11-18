@@ -224,6 +224,30 @@ widened_value(ir_lower_context_t *context, ir_value_t *value, th_type *target,
     return ok ? aggregate->dest : nullptr;
 }
 
+// A value with no place of its own is copied into a fresh local, whose
+// address is returned.
+static ir_value_t *
+temporary_place(ir_lower_context_t *context, ir_value_t *value,
+                ir_span_t span)
+{
+    char buffer[48];
+    ir_local_t *local = ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_viewed_%llu",
+                          (unsigned long long)context->next_value_id++),
+        value->type);
+    if (local) local->synthetic = true;
+    ir_instr_t *copy = local
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    ir_instr_t *take = copy && ir_instr_set_dest_local(copy, local)
+            && ir_instr_operand_value(copy, value)
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+        : nullptr;
+    return take && ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_place_"),
+            th_ind(ir_module_types(context->module), 0, local->type))
+        && ir_instr_operand_local(take, local) ? take->dest : nullptr;
+}
+
 static ir_value_t *
 view_of_reference(ir_lower_context_t *context, ir_value_t *reference,
                   th_type *target, ir_span_t span)
@@ -269,6 +293,20 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     }
     if (n00bb_reference_views(value->type, target))
         return view_of_reference(context, value, target, span);
+    if (n00bb_value_views(value->type, target)) {
+        ir_value_t *place = n00bb_place_of(context, value, false, span);
+        if (!place) place = temporary_place(context, value, span);
+        n00bb_lower_context_t *lower = context->user;
+        core_string_t text = node && lower
+            ? source_text_of(lower->unit, node) : (core_string_t){0};
+        // Once types are solved there is no later rewrite of a `ref`
+        // dispatch; the place's address is the reference.
+        ir_value_t *reference = !place ? nullptr
+            : lower && lower->solved ? place
+            : n00bb_emit_reference(context, place, text, span);
+        return reference
+            ? view_of_reference(context, reference, target, span) : nullptr;
+    }
     if (n00bb_string_where_buffer_expected(types, target, value->type)) {
         n00bb_lower_context_t *lower = context->user;
         parse_tree_t *site = node && lower

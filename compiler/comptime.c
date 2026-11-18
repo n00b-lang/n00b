@@ -650,8 +650,26 @@ n00bb_comptime_run(n00bb_link_analysis_t *analysis,
 
 typedef struct {
     core_dict_t counts;
+    // Writes that can run at run time, per global.
+    core_dict_t writes;
+    // Whether the initializer being touched has effects the summaries
+    // can't see; the units whose initializers did.
     bool opaque;
+    core_list_t(core_translation_unit_ptr_t) opaque_units;
 } touches_t;
+
+// Whether initializers that may write `unit`'s globals have unknown
+// effects: its own, or one of a unit that imports it.
+static bool
+unit_opaque(const touches_t *touches, core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < touches->opaque_units.len; i++) {
+        core_translation_unit_t *other = touches->opaque_units.data[i];
+        if (other == unit || n00bb_unit_reaches_import(other, unit))
+            return true;
+    }
+    return false;
+}
 
 static void
 touch(touches_t *touches, const ir_global_t *global, uintptr_t weight)
@@ -664,6 +682,47 @@ touch(touches_t *touches, const ir_global_t *global, uintptr_t weight)
     uintptr_t count = (uintptr_t)core_dict_get(&touches->counts, identity,
                                                nullptr);
     core_dict_put(&touches->counts, identity, count + weight);
+}
+
+static void
+touch_write(touches_t *touches, const ir_global_t *global)
+{
+    if (!global) {
+        touches->opaque = true;
+        return;
+    }
+    ir_global_t *identity = ir_global_identity(global);
+    uintptr_t count = (uintptr_t)core_dict_get(&touches->writes, identity,
+                                               nullptr);
+    core_dict_put(&touches->writes, identity, count + 1);
+}
+
+// The blocks of `function` that can run at run time: a branch on
+// `comptime()` only takes its runtime side.
+static bool *
+runtime_blocks(ir_func_t *function)
+{
+    ir_block_t *entry = ir_block_entry(function);
+    if (!entry) return nullptr;
+    bool *seen = core_alloc_array(bool, function->n_blocks);
+    ir_block_t **stack = core_alloc_array(ir_block_t *, function->n_blocks);
+    size_t depth = 0;
+    stack[depth++] = entry;
+    seen[entry->index] = true;
+    while (depth) {
+        ir_instr_t *term = ir_block_terminator(stack[--depth]);
+        uint32_t taken = term ? ir_phase_successor(term, false) : UINT32_MAX;
+        uint32_t count = term ? ir_succ_count(term) : 0;
+        for (uint32_t s = 0; s < count; s++) {
+            ir_block_t *next = ir_succ_at(term, s);
+            if ((taken != UINT32_MAX && s != taken) || !next
+                || seen[next->index]) continue;
+            seen[next->index] = true;
+            stack[depth++] = next;
+        }
+    }
+    core_free(stack);
+    return seen;
 }
 
 static void
@@ -682,8 +741,11 @@ touch_summary(void *context, const ir_func_t *target,
         const ir_spath_t *path = ir_summary_path_at(summary, i);
         if (path->root == IR_SPLACE_UNKNOWN) touches->opaque = true;
         else if (path->root == IR_SPLACE_GLOBAL
-                 || path->root == IR_SPLACE_THREAD)
+                 || path->root == IR_SPLACE_THREAD) {
             touch(touches, path->global, 2);
+            if (path->flags & IR_SPATH_WRITE)
+                touch_write(touches, path->global);
+        }
     }
 }
 
@@ -706,14 +768,21 @@ static void
 touch_function(ir_summaries_t *summaries, ir_func_t *function,
                touches_t *touches)
 {
+    bool *runtime = function ? runtime_blocks(function) : nullptr;
     for (uint32_t b = 0; function && b < function->n_blocks; b++)
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = function->blocks[b]->instrs[i];
             for (uint32_t k = 0; k < in->n_operands; k++) {
                 const ir_value_t *value =
                     ir_operand_referenced_value(&in->operands[k]);
-                if (value && value->kind == IR_VAL_GLOBAL)
-                    touch(touches, value->global, 1);
+                if (!value || value->kind != IR_VAL_GLOBAL) continue;
+                touch(touches, value->global, 1);
+                // A copy of a global reads it; anything else that names it
+                // may write it.
+                bool read = in->op == IR_OP_COPY
+                    || (in->op == IR_OP_GLOBAL_STORE && k == 1);
+                if (!read && runtime && runtime[b])
+                    touch_write(touches, value->global);
             }
             if (in->op == IR_OP_CALLBACK_INVOKE) touches->opaque = true;
             if (in->op == IR_OP_CALL && !comptime_only_call(in)
@@ -721,6 +790,7 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                                             touches))
                 touches->opaque = true;
         }
+    core_free(runtime);
 }
 
 static bool
@@ -1022,7 +1092,10 @@ prunable_store(purity_t *purity, ir_module_t *module,
         || !identity->has_static_initializer
         || identity->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
-        || (uintptr_t)core_dict_get(&touches->counts, identity, nullptr) != 1
+        // Comptime's value is the starting value unless the runtime
+        // initializer writes the variable again: this store is its only
+        // runtime write. Reads see the comptime value.
+        || (uintptr_t)core_dict_get(&touches->writes, identity, nullptr) != 1
         || !always_runs(function, in->block, true)
         || !always_runs(function, in->block, false)) return false;
     purity->root = in;
@@ -1138,22 +1211,32 @@ void
 n00bb_comptime_prune(n00bb_link_analysis_t *analysis,
                      core_translation_unit_t *const *units, size_t count)
 {
-    touches_t touches = {0};
+    touches_t touches = {
+        .opaque_units = core_list_new(core_translation_unit_ptr_t),
+    };
     core_dict_init(&touches.counts, nullptr, nullptr);
+    core_dict_init(&touches.writes, nullptr, nullptr);
     for (size_t i = 0; i < analysis->initializer_order.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->initializer_order.data[i]);
+        core_translation_unit_t *unit = analysis->initializer_order.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->ir_module || state->interface_module) continue;
+        touches.opaque = false;
         touch_function(analysis->summaries, ir_func_find(state->ir_module,
             CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)), &touches);
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++)
             if (n00bb_const_initializer(ir_func_at(state->ir_module, f)))
                 touch_function(analysis->summaries,
                                ir_func_at(state->ir_module, f), &touches);
+        if (touches.opaque) core_list_push(touches.opaque_units, unit);
     }
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < count; i++) {
+        touches.opaque = unit_opaque(&touches, units[i]);
         prune_module(analysis->summaries, tu_state(units[i])->ir_module,
                      &touches);
+    }
     core_dict_free(&touches.counts);
+    core_dict_free(&touches.writes);
+    core_list_free(touches.opaque_units);
 }
 
 void

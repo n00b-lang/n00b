@@ -126,6 +126,7 @@ struct ty_solver {
 };
 
 static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why);
+static bool member_fits(ty_solver_t *s, th_type *subject, th_type *member);
 static void free_vars(th_type *t, core_list_t(ty_type_ptr_t) *out);
 static bool integral(ty_solver_t *s, th_type *t);
 static th_type *renamed(ty_solver_t *s, th_type *t);
@@ -734,6 +735,29 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
     if (target && given && th_builtin_kind_of(target) == TH_BUILTIN_ANY) {
         convert_at(s, why.at);
         return true;
+    }
+    // A value flowing into a declared union becomes one of its members: the
+    // member it already is, or, for a value still open (a literal), the one
+    // member its requirements allow.
+    th_comb comb;
+    if (target && given && th_kind_of(target) == TH_SUM
+        && th_sum_comb(target, &comb) && comb == TH_UNION) {
+        th_type *member = nullptr;
+        size_t   fits   = 0;
+
+        for (size_t i = 0; i < th_sum_len(target); i++) {
+            th_type *arm = th_resolve(th_sum_arm(target, i));
+
+            if (flexible(s, given) ? member_fits(s, given, arm)
+                                   : th_same_type(arm, given)) {
+                member = arm;
+                fits++;
+            }
+        }
+        if (fits == 1) {
+            convert_at(s, why.at);
+            return flexible(s, given) ? same(s, member, given, why) : true;
+        }
     }
     if (flexible(s, given) && th_option_item(target)) {
         return ty_require(s,

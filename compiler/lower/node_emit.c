@@ -147,6 +147,8 @@ n00bb_node_emit(parse_grammar_t *grammar, parse_tree_t *node,
         emit_set(emit, S("brace_literal"), 0, 0, 0);
     else if (core_string_eq(name, S("typeof-expr")))
         emit_set(emit, S("typeof"), 1, 2, 0);
+    else if (core_string_eq(name, S("typespec-expr")))
+        emit_set(emit, S("typespec_literal"), 0, 0, 0);
     else if (core_string_eq(name, S("effect-query")))
         emit_set(emit, S("effect_query"), 0, 0, 0);
     else if (core_string_eq(name, S("new-expr")))

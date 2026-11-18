@@ -522,6 +522,19 @@ func __string_storage(s: string) -> Array[u8]? {
     return storage.__value
 }
 
+// A string literal used as an `Array[byte]`: a fresh array holding a copy
+// of its UTF-8 bytes.
+func __byte_array(self: string) -> Array[byte] {
+    var held: string = self
+    let len: uint = __string_byte_len(held)
+    var copy: Array[byte] = new[Array[byte]](cast[int] len)
+    if len != 0 {
+        __gc_memcpy(unsafe_cast[Ref[byte]] ref copy[0], __string_data(ref held),
+                    len)
+    }
+    return copy
+}
+
 func __text_byte_array(self: string) -> Array[u8] {
     let base: string = text(self)
     let storage: Array[u8]? = __string_storage(base)

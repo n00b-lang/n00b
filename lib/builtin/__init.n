@@ -7,6 +7,7 @@ import containers.slice
 import containers.view
 import containers.buffer
 import containers.errors
+import compare
 import cursor
 import hashing
 import integer
@@ -37,6 +38,7 @@ package builtin {
     export bitptr.Bitptr
     export bitptr.bitptr
     export abi.string_backing_at
+    export abi.has_type
     export string.style.index_extends to text
     export string.style.Text_Case to text
     export string.style.Font_Hint to text
@@ -217,6 +219,8 @@ package builtin {
     export containers.errors.Container_Err
     export cursor.Cursor
     export cursor.Lease_Cursor
+    export compare.Equal
+    export compare.Comparable
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup

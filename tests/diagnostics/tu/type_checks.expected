@@ -21,7 +21,7 @@ tests/diagnostics/tu/type_checks.n:50:17: error N00B-T0552: the receiver of `__f
   help: write `func __finalize(consume self: Ref[T])`
 tests/diagnostics/tu/type_checks.n:56:1: warning N00B-S0062: this call has no effect and its result is ignored: `f` changes nothing the caller can see and has no other effect
 tests/diagnostics/tu/type_checks.n:57:12: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
-  lib/builtin/containers/dict.n:22:8: note: `Dict` is declared here
+  lib/builtin/containers/dict.n:23:8: note: `Dict` is declared here
   help: add the missing type argument
 tests/diagnostics/tu/type_checks.n:58:8: warning N00B-N0023: type `Box` is never used
   help: remove it
@@ -29,7 +29,7 @@ tests/diagnostics/tu/type_checks.n:61:16: error N00B-T0515: `Box` takes 1 type a
   tests/diagnostics/tu/type_checks.n:58:8: note: `Box` is declared here
   help: remove the extra type argument
 tests/diagnostics/tu/type_checks.n:64:16: error N00B-T0515: `List` takes 1 type argument, but 2 are given
-  lib/builtin/containers/list.n:8:8: note: `List` is declared here
+  lib/builtin/containers/list.n:9:8: note: `List` is declared here
   help: remove the extra type argument
 tests/diagnostics/tu/type_checks.n:66:12: error N00B-T0500: `"bob"` is `string`, but `name` returns `int`
   tests/diagnostics/tu/type_checks.n:65:16: note: the return type of `name` is declared here

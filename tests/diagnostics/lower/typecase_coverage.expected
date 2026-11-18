@@ -1,0 +1,4 @@
+tests/diagnostics/lower/typecase_coverage.n:2:5: error N00B-S0102: this `typecase` on `Any` needs an `else`: its subject can hold any type
+  help: add an `else` for the types the cases don't name
+tests/diagnostics/lower/typecase_coverage.n:7:5: error N00B-S0102: this `typecase` on `int?` has no `case` for `nil`
+  help: add `case nil`, or an `else`

@@ -1,0 +1,339 @@
+# Regression checks for the medium punch-list fixes; run by
+# tests/punch_list_medium.sh, which expects exactly `ok` on stderr.
+
+# Assigning a present value to an option variable proves it present where
+# only such assignments reach (#7).
+func assigned() -> int {
+    var x: int? = nil
+    x = 9
+    return x + 1
+}
+func assigned_on_both_paths(c: bool) -> int {
+    var x: int? = nil
+    if c { x = 1 } else { x = 2 }
+    return x + 1
+}
+func assigned_from_parameter(p: int) -> int {
+    var x: int? = nil
+    x = p
+    return x * 2
+}
+require assigned() == 10
+require assigned_on_both_paths(true) == 2
+require assigned_on_both_paths(false) == 3
+require assigned_from_parameter(4) == 8
+
+# An inferred option is narrowed by a `nil` test like an annotated one (#32).
+func inferred_option() -> int {
+    let d = {"a": 1}
+    let w = d["a"]
+    if w != nil {
+        return w + 1
+    }
+    return 0
+}
+func inferred_option_var() -> int {
+    let d = {"a": 1}
+    var w = d["a"]
+    if w != nil {
+        return cast[int](w) + 1
+    }
+    return 0
+}
+require inferred_option() == 2 and inferred_option_var() == 2
+
+# A string literal converts to `Array[byte]`, holding its UTF-8 bytes (#4).
+let greeting: Array[byte] = "hi"
+const hex_digits: Array[byte][16] = "0123456789abcdef"
+func byte_count(x: Array[byte]) -> uint {
+    return len(x)
+}
+func accented() -> uint {
+    let e: Array[byte] = "é!"
+    return len(e)
+}
+require len(greeting) == 2 and greeting[1] == 0x69
+require byte_count("abc") == 3 and hex_digits[15] == 0x66
+require accented() == 3
+
+# A `P` passed where a `View[P]` is wanted is viewed in place, as `ref p`
+# would be (#8): variables, fields and temporaries alike.
+record Style {
+    weight: int
+}
+record Boxed {
+    style: Style
+}
+const plain_style: Style = (weight = 1)
+func style_weight(s: View[Style]) -> int {
+    return s.__value.weight
+}
+func make_style(n: int) -> Style {
+    return (weight = n)
+}
+func viewed_local() -> int {
+    var s: Style = (weight = 1)
+    s.weight = 9
+    return style_weight(s)
+}
+func viewed_field() -> int {
+    let b: Boxed = (style = (weight = 4))
+    return style_weight(b.style)
+}
+require style_weight(plain_style) == 1 and style_weight(ref plain_style) == 1
+require viewed_local() == 9 and viewed_field() == 4
+require style_weight(make_style(7)) == 7
+
+# A value casts to a trait its type implements (#5); the cast checks the
+# implementation and keeps the value.
+trait Scales {
+    func scale(self: 'S, by: int) -> int
+}
+record Scaled_Box {
+    v: int
+}
+func scale(self: Scaled_Box, by: int) -> int {
+    return self.v * by
+}
+let module_box: Scaled_Box = (v = 3)
+let module_scales = cast[Scales](module_box)
+func cast_in_function() -> int {
+    let b: Scaled_Box = (v = 5)
+    let s = cast[Scales](b)
+    return s.scale(2)
+}
+require module_scales.scale(2) == 6 and cast_in_function() == 10
+
+# `+=`, `-=`, `&=` and `|=` on an atomic are one atomic update (#17).
+var atomic_total: Atomic[int] = 0
+var atomic_flags: Atomic[u8] = 0
+func atomic_updates() -> int {
+    atomic_total += 10
+    atomic_total -= 3
+    var local: Atomic[int] = 5
+    local += 1
+    return __atomic_load(ref atomic_total) + __atomic_load(ref local)
+}
+func atomic_bits() -> u8 {
+    atomic_flags |= 6
+    atomic_flags &= 3
+    return __atomic_load(ref atomic_flags)
+}
+require atomic_updates() == 13 and atomic_bits() == 2
+
+# Chained operators in a generic function specialize to primitive
+# operations, `i:N` and `u:N` included (#41).
+func chained(a: 'T, b: 'T) -> 'T {
+    return ((a * b + a - b) / b) % a
+}
+func flipped_sum(a: 'T, b: 'T) -> 'T {
+    return ~(a + b)
+}
+let chain_i: i:10 = 3
+let chain_j: i:10 = 4
+let chain_u: u16 = 5
+let chain_v: u16 = 2
+require chained(chain_i, chain_j) == cast[i:10](2)
+require chained(chain_u, chain_v) == 1
+require flipped_sum(cast[u:10](1), cast[u:10](2)) == cast[u:10](1020)
+
+# Every trait in `'T: A + B` lends its methods (#26).
+trait Named {
+    func name(self: 'N) -> string
+}
+trait Sized {
+    func size(self: 'S) -> int
+}
+record Labeled {
+    v: int
+}
+func name(self: Labeled) -> string {
+    return "box"
+}
+func size(self: Labeled) -> int {
+    return self.v
+}
+func describe(x: 'T) -> int where 'T: Named + Sized {
+    return cast[int](len(x.name())) + x.size()
+}
+require describe(cast[Labeled]((v = 2))) == 5
+
+# With a `__cmp` and no `__equal`, `==` follows `__cmp`; an `__equal` wins
+# over it (#26).
+record By_Value {
+    v: int
+    tag: int
+}
+func __cmp(view a: By_Value, view b: By_Value) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+record By_Tag {
+    v: int
+    tag: int
+}
+func __cmp(view a: By_Tag, view b: By_Tag) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+func __equal(view a: By_Tag, view b: By_Tag) -> bool {
+    return a.tag == b.tag
+}
+let value_one: By_Value = (v = 1, tag = 1)
+let value_two: By_Value = (v = 1, tag = 2)
+require value_one == value_two and !(value_one != value_two)
+let tag_one: By_Tag = (v = 1, tag = 1)
+let tag_two: By_Tag = (v = 1, tag = 2)
+let tag_three: By_Tag = (v = 5, tag = 1)
+require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
+
+# With no `fail:` clause, a function's failure type is inferred from its
+# body, mutual recursion included (#9).
+func parsed(x: int) -> int {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+func parsed_untyped(x: int) {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+func count_down(n: int) -> int {
+    if n < 0 {
+        fail "below zero"
+    }
+    if n == 0 {
+        return 0
+    }
+    return count_other(n - 2)!
+}
+func count_other(n: int) -> int {
+    return count_down(n)!
+}
+func or_minus_one(x: int) -> int {
+    return try { -> parsed(x)! } fail (e) { -> -1 }
+}
+func untyped_or_minus_one(x: int) -> int {
+    return try { -> parsed_untyped(x)! } fail (e) { -> -1 }
+}
+func counted_or_minus_one(n: int) -> int {
+    return try { -> count_other(n)! } fail (e) { -> -1 }
+}
+require or_minus_one(3) == 3 and or_minus_one(-1) == -1
+require untyped_or_minus_one(3) == 3 and untyped_or_minus_one(-1) == -1
+require counted_or_minus_one(4) == 0 and counted_or_minus_one(3) == -1
+
+# Type testing (#16): `typecase` on an option tests whether it holds a
+# value; a type named where a value goes is its `typespec`; `typeof`
+# results compare, at module level too; `has_type` tests a value's type
+# and narrows it in the `if` it guards.
+func option_kind(x: int?) -> int {
+    typecase x {
+        case nil { return 0 }
+        case int { return x * 2 }
+    }
+}
+record Spot {
+    x: int
+}
+let spec: typespec = int
+let declared_int: int = 3
+let a_spot: Spot = (x = 1)
+require option_kind(2) == 4 and option_kind(nil) == 0
+require typeof(declared_int) == spec and typeof(declared_int) != string
+require typeof(a_spot) == Spot
+func boxed_kind(v: Any) -> typespec {
+    return typeof(v)
+}
+require boxed_kind(cast[Any] "s") == string
+func plus_one(x: Any) -> int {
+    if has_type(x, int) {
+        return x + 1
+    }
+    return 0
+}
+func describe_any(x: Any) -> string {
+    if has_type(x, string) {
+        return x + "!"
+    } elif has_type(x, int) {
+        return "number"
+    }
+    return "other"
+}
+require plus_one(cast[Any] declared_int) == 4 and plus_one(cast[Any] "a") == 0
+require describe_any(cast[Any] "hi") == "hi!"
+require describe_any(cast[Any] declared_int) == "number"
+
+# `typespec[T]` writes any type as a value; `has_type` also takes a
+# `typespec` held in a variable, a trait included, and checks it at run
+# time; assigning a narrowed variable ends its narrowing.
+let maybe_int: int? = 3
+let some_names: List[string] = ["a"]
+require typeof(maybe_int) == typespec[int?]
+require typeof(some_names) == typespec[List[string]]
+require typespec[int] == int and typespec[int] != typespec[u8]
+func matches(x: Any, t: typespec) -> bool {
+    return has_type(x, t)
+}
+require matches(cast[Any] declared_int, int)
+require !matches(cast[Any] declared_int, string)
+require matches(cast[Any] module_box, Scaled_Box)
+require matches(cast[Any] module_box, Scales)
+require !matches(cast[Any] declared_int, Scales)
+func reassigned(start: Any) -> string {
+    var x: Any = start
+    if has_type(x, int) {
+        x = cast[Any] "changed"
+        if has_type(x, string) {
+            return x
+        }
+        return "stale"
+    }
+    return "not int"
+}
+require reassigned(cast[Any] declared_int) == "changed"
+
+# A declared union return takes any of its members, literals included.
+func int_or_string(flag: bool) -> int | string {
+    if flag {
+        return 3
+    }
+    return "three"
+}
+func union_kind(flag: bool) -> string {
+    let x = int_or_string(flag)
+    typecase x {
+        case int { return "int" }
+        case string { return x }
+    }
+}
+require union_kind(true) == "int" and union_kind(false) == "three"
+
+# A module variable comptime sets starts with that value at run time, its
+# declaration's initializer included, unless the runtime initializer
+# writes it again (#13).
+var comptime_counter: int = 0
+if comptime() {
+    comptime_counter = 42
+}
+var runtime_bumped: int = 0
+runtime_bumped += 1
+var rewritten_at_runtime: int = 0
+if comptime() {
+    rewritten_at_runtime = 5
+}
+rewritten_at_runtime += 1
+func comptime_values() -> int {
+    let tens: int = runtime_bumped * 10 + rewritten_at_runtime
+    return comptime_counter * 100 + tens
+}
+if !comptime() {
+    require comptime_values() == 4200 + 10 + 1
+}
+
+__fd_write(2, "ok")

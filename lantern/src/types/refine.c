@@ -283,7 +283,8 @@ static bool present_store(const ir_instr_t *in, const void *location)
 
     return type
         && (global_of(address) ? global_of(address) : address) == location
-        && ((value->def && value->def->op == IR_OP_OPTION_SOME)
+        && ((value->def && (value->def->op == IR_OP_OPTION_SOME
+                            || value->def->op == IR_OP_CONST))
             || (th_kind_of(type) != TH_VAR && !th_option_item(type)
                 && !th_is_nil(type)));
 }
@@ -422,6 +423,57 @@ static bool refined(refine_t *r, ir_instr_t *read)
     }
 
     return false;
+}
+
+// A write to a local through its destination that gives it a present value.
+static bool present_local_write(const ir_instr_t *in, const void *location)
+{
+    if (in->dest_kind != IR_DEST_LOCAL || (const void *)in->dest_local
+                                              != location) {
+        return false;
+    }
+    if (in->op == IR_OP_CONST || in->op == IR_OP_OPTION_SOME) {
+        return true;
+    }
+
+    ir_value_t *value = in->op == IR_OP_COPY && in->n_operands == 1
+                          ? ir_operand_value(&in->operands[0])
+                          : nullptr;
+    th_type    *type  = value && value->type ? th_resolve(value->type)
+                                             : nullptr;
+
+    return value
+        && ((value->def && (value->def->op == IR_OP_CONST
+                            || value->def->op == IR_OP_OPTION_SOME))
+            || (type && th_kind_of(type) != TH_VAR && !th_option_item(type)
+                && !th_is_nil(type)));
+}
+
+// Assigning a present value proves the variable is present where only such
+// assignments reach it: the read of an option slot is unwrapped there.
+static bool assigned_present(refine_t *r, ir_instr_t *read)
+{
+    const void *location = read->op == IR_OP_EXTRACT ? nullptr
+                                                     : location_of(read);
+    th_type    *type     = read->dest && read->dest->type
+                               ? th_resolve(read->dest->type)
+                               : nullptr;
+
+    if (!location || global_of(ir_operand_value(&read->operands[0]))
+        || !type || !th_option_item(type)) {
+        return false;
+    }
+
+    core_list_t(ty_instr_ptr_t) defs = core_list_new(ty_instr_ptr_t);
+    bool present = reaching(r->g, read, &defs);
+
+    for (size_t i = 0; present && i < defs.len; i++) {
+        present = present_store(defs.data[i], location)
+               || present_local_write(defs.data[i], location);
+    }
+    core_list_free(defs);
+
+    return present;
 }
 
 // The address `in` uses as a place: a field's base, or the address of the
@@ -952,19 +1004,23 @@ size_t ty_refine_options(ir_func_t *f, const ir_pdg_t *g,
     for (uint32_t b = 0; r.tests.len && b < f->n_blocks; b++) {
         plan_places(&r, f->blocks[b]);
     }
-    for (uint32_t b = 0; r.tests.len && b < f->n_blocks; b++) {
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
         for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
             ir_instr_t *in = f->blocks[b]->instrs[k];
             bool        read = in->dest_kind == IR_DEST_VALUE && in->dest
                             && is_read(in);
 
             if (read && shared_read(in)) {
-                plan_shared_read(&r, in);
+                if (r.tests.len) {
+                    plan_shared_read(&r, in);
+                }
             }
-            else if (read && refined(&r, in)) {
+            else if (read
+                     && ((r.tests.len && refined(&r, in))
+                         || assigned_present(&r, in))) {
                 plan_read(&r, in, 0);
             }
-            else {
+            else if (r.tests.len) {
                 plan_uses(&r, in);
             }
         }

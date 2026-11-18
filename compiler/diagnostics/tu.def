@@ -207,6 +207,12 @@ N00B_DIAG(FINALIZE_CANNOT_FAIL, "N00B-T0553", ERROR,
 N00B_DIAG(FINALIZE_RETURNS_VALUE, "N00B-T0554", ERROR,
     "`__finalize` returns a value",
     "A finalizer returns nothing.")
+N00B_DIAG(TRAIT_TYPE_OUTSIDE_FUNCTION, "N00B-T0600", ERROR,
+    "a trait is used as a type outside a function",
+    "A trait used as a type stands for whichever implementing type a\n"
+    "function is given, so it needs a function to belong to. Outside one,\n"
+    "name the implementing type, or `cast[Trait](value)` to check that a\n"
+    "value implements the trait.")
 N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "`__finalize` is defined for a type that is not an `object`",
     "Only an `object` can have a finalizer. An object is a handle to its\n"

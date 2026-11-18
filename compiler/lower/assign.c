@@ -244,7 +244,9 @@ n00bb_lower_variable_assignment(ir_lower_context_t *context,
         return false;
     check_loop_initialization(context, visit->grammar, visit->node, variable,
                               target);
-    if (!ir_value_has_uses(context->function, read))
+    // A narrowed read is the variable's binding, not a read of its own.
+    if (!ir_value_has_uses(context->function, read)
+        && read->def->op != IR_OP_TYPE_NARROW)
         (void)ir_instr_erase(read->def);
     ir_local_t *local = ir_lower_bound_local(context, variable);
     ir_value_t *binding = ir_lower_bound_value(context, variable);
@@ -441,6 +443,57 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 
+// `x op= v` on an atomic `x`: `+=`, `-=`, `&=` and `|=` are one atomic
+// read-modify-write. `+=` and `-=` still check for overflow, by redoing
+// the operation on the value the update replaced. Other operators have no
+// atomic form.
+static ir_lower_result_t
+lower_atomic_update(ir_lower_context_t *context,
+                    const n00bb_binary_operator_t *operator,
+                    ir_value_t *place, th_type *element,
+                    ir_value_t *const *operands, ir_span_t span)
+{
+    core_string_t kind = operator->op == IR_OP_ADD ? CORE_STRING_STATIC("add")
+        : operator->op == IR_OP_SUB ? CORE_STRING_STATIC("sub")
+        : operator->op == IR_OP_AND ? CORE_STRING_STATIC("and")
+        : operator->op == IR_OP_OR ? CORE_STRING_STATIC("or")
+        : (core_string_t){0};
+    if (!kind.data) {
+        lower_report(context, N00B_DIAG_ATOMIC_PART_UPDATE, span,
+                     N00B_TEXT_NO_ATOMIC_FORM,
+                     N00BB_ARGS(ARG_TEXT(operator->assign_spelling)));
+        lower_help(context, N00B_TEXT_UPDATE_ATOMIC_WITH_COMPARE_EXCHANGE,
+                   N00BB_NO_ARGS);
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    }
+    ir_value_t *value = n00bb_materialize(context, nullptr, operands[1],
+                                          element, span);
+    ir_instr_t *rmw = value
+        ? ir_lower_emit_instruction(context, IR_OP_ATOMIC_RMW, span)
+        : nullptr;
+    bool ok = rmw && ir_lower_set_temp_dest(context, rmw,
+            CORE_STRING_STATIC("__n00bb_atomic_"), element)
+        && ir_instr_operand_value(rmw, place)
+        && ir_instr_operand_name(rmw, kind)
+        && ir_instr_operand_value(rmw, value);
+    if (!ok)
+        return lower_internal(context, span,
+                              "could not emit an atomic update");
+    if (operator->op == IR_OP_ADD || operator->op == IR_OP_SUB) {
+        ir_value_t *checked[2] = {rmw->dest, value};
+        ir_lower_result_t result = n00bb_lower_operator_method(context,
+            operator->method, checked, 2, element, span);
+        if (result.status != IR_LOWER_VALUE) return result;
+    }
+    // The target's read only fed the update the read-modify-write replaced;
+    // an atomic load is never dropped as dead, so remove it here.
+    ir_instr_t *read = operands[0]->def;
+    if (read && read->op == IR_OP_LOAD && !ir_instr_erase(read))
+        return lower_internal(context, span,
+                              "could not drop an atomic target's read");
+    return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+}
+
 ir_lower_result_t
 n00bb_lower_compound_assignment(ir_lower_context_t *context,
                                 parse_visit_t *visit,
@@ -475,6 +528,21 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
             N00B_TEXT_NOT_SUPPORTED_YET_THIS_COMPOUND,
             N00BB_NO_ARGS);
+
+    // An atomic target, read by a load through its address, is updated in
+    // one atomic step.
+    ir_instr_t *target_read = operands[0]->def;
+    ir_value_t *atomic_place = target_read && target_read->op == IR_OP_LOAD
+        && target_read->n_operands == 1
+        ? ir_operand_value(&target_read->operands[0]) : nullptr;
+    th_type *atomic_held = atomic_place && atomic_place->type
+        && th_kind_of(th_resolve(atomic_place->type)) == TH_INDIRECTION
+        ? th_ind_referent(th_resolve(atomic_place->type)) : nullptr;
+    th_type *atomic_element = atomic_held
+        ? n00bb_atomic_element_type(atomic_held) : nullptr;
+    if (atomic_element)
+        return lower_atomic_update(context, operator, atomic_place,
+                                   atomic_element, operands, span);
 
     ir_lower_result_t result = n00bb_lower_operator_method(context,
         operator->method, operands, operand_count, target_type, span);

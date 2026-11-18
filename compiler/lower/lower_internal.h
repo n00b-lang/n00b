@@ -249,6 +249,9 @@ typedef struct {
     parse_tree_t *body;
     ir_block_t *test_block;
     ir_block_t *body_block;
+    // Set while the body reads a variable narrowed by `has_type`.
+    void *binding_checkpoint;
+    bool narrowed;
 } n00bb_branch_arm_t;
 
 core_list_decl(n00bb_branch_arm_t);
@@ -937,6 +940,17 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
                    ir_value_t *const *operands, size_t operand_count,
                    th_type *result_type, ir_span_t span, void *state);
 
+ir_lower_result_t
+n00bb_emit_type_literal(ir_lower_context_t *context, th_type *described,
+                        ir_span_t span);
+
+ir_lower_result_t
+n00bb_lower_typespec_literal(ir_lower_context_t *context,
+                             parse_visit_t *visit,
+                             ir_value_t *const *operands,
+                             size_t operand_count, th_type *result_type,
+                             ir_span_t span, void *state);
+
 bool
 foreign_pointer_type(th_type *type);
 
@@ -1282,6 +1296,10 @@ n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
 ir_value_t *
 n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
                ir_span_t span);
+
+ir_value_t *
+n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
+                     core_string_t text, ir_span_t span);
 
 ir_value_t *
 n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,

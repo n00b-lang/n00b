@@ -1,0 +1,6 @@
+tests/diagnostics/lower/inferred_failure.n:11:12: error N00B-S0025: `parse` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/inferred_failure.n:1:6: note: `parse` is declared here
+  help: write `parse(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/inferred_failure.n:14:12: error N00B-S0026: `pure` can't fail, so there's nothing for this `!` to pass along
+  tests/diagnostics/lower/inferred_failure.n:7:6: note: `pure` is declared here
+  help: remove the `!`

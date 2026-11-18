@@ -1,0 +1,2 @@
+tests/diagnostics/lower/atomic_compound.n:3:5: error N00B-S0038: `*=` has no atomic form, so it cannot update an atomic value
+  help: `+=`, `-=`, `&=` and `|=` update atomically; for anything else, retry `__atomic_compare_exchange` until it succeeds

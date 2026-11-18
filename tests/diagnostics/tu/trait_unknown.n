@@ -1,0 +1,4 @@
+func unknown(x: 'T) -> 'T where 'T: Nonexistent {
+    return x
+}
+require unknown(3) == 3

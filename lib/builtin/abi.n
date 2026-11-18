@@ -415,3 +415,14 @@ func __box_component(box: Ref[Box_Record], ordinal: u32) -> u32 {
     require index >= 0
     return cast[u32] index
 }
+
+// Whether `value` satisfies the type or trait `spec` describes, checked
+// against its run-time type. A type written in place, as in
+// `has_type(x, int)`, is tested statically where it can be.
+func has_type(value: 'T, spec: typespec) -> bool {
+    let actual: typespec = typeof(value)
+    if actual == spec {
+        return true
+    }
+    return __abi_typespec_specializes(actual, spec) > 0
+}

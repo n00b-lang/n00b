@@ -1,0 +1,12 @@
+trait Scales {
+    func scale(self: 'S, by: int) -> int
+}
+record Plain {
+    v: int
+}
+func scaled(p: Plain) -> int {
+    let s = cast[Scales](p)
+    return p.v
+}
+var all: List[Scales] = []
+let checked = scaled((v = 3))

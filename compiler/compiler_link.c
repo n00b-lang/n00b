@@ -2354,6 +2354,30 @@ check_import_brings(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+// A bare name with no value of that name, that names a type: it stands for
+// that type's `typespec` descriptor.
+static bool
+bind_type_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                  n00bb_link_use_site_t *site)
+{
+    core_string_t name = site->member_name;
+    n00bb_node_facts_t *facts = n00bb_node_facts(site->node);
+    if (!name.data || !facts || !state->types || !state->annotations
+        || !state->annotations->symtab) return false;
+    parse_sym_entry_t *symbol = lookup_named_type_reference(grammar, state,
+        state->annotations->symtab, site->scope, name);
+    th_type *described = symbol && symbol->type
+        ? symbol->type
+        : !symbol && builtin_type_name(name)
+        ? th_name(state->types, canonical_builtin_type_name(name))
+        : nullptr;
+    if (!described) return false;
+    facts->type_literal = described;
+    parse_tree_set_type(site->node,
+        th_name(state->types, CORE_STRING_STATIC("typespec")));
+    return true;
+}
+
 static void
 report_unresolved_name(core_translation_unit_t *unit,
                        n00bb_link_use_site_t *site, core_string_t name)
@@ -2555,6 +2579,12 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                      && !names_imported_module(grammar, site->node)
                      && report_hidden_import(unit, state, site)) {
                 all_resolved = false;
+            }
+            else if (!site->symbol && !site->dotted_path
+                     && !site->trait_reference && !site->constructor_call
+                     && !is_type_reference_node(grammar, site->node)
+                     && bind_type_literal(grammar, state, site)) {
+                // A type named where a value goes is a `typespec` literal.
             }
             else if (!site->symbol && !site->dotted_path
                      && !names_imported_module(grammar, site->node)
@@ -3798,7 +3828,6 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const core_string_t builtin_names[] = {
-        CORE_STRING_STATIC("has_type"),
         CORE_STRING_STATIC("__gc_byte_offset"),
         CORE_STRING_STATIC("__gc_byte_diff"),
         CORE_STRING_STATIC("__count_leading_zeros"),
@@ -4366,7 +4395,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 th_env_method_t selected = {0};
                 bool custom_equal = candidate &&
                     th_env_method_resolve(probe, candidate,
-                        CORE_STRING_STATIC("Equal"),
+                        N00BB_EQUAL_TRAIT,
                         CORE_STRING_STATIC("__equal"), &selected)
                         == TH_ENV_METHOD_FOUND;
                 bool custom_hash = hash_available && candidate &&
@@ -4374,13 +4403,21 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &selected)
                         == TH_ENV_METHOD_FOUND;
+                // With a `__cmp` and no `__equal`, equality comes from
+                // `__cmp`, and a hash of the fields would disagree with it.
+                bool custom_cmp = !custom_equal && candidate &&
+                    th_env_method_resolve(probe, candidate,
+                        N00BB_COMPARABLE_TRAIT,
+                        CORE_STRING_STATIC("__cmp"), &selected)
+                        == TH_ENV_METHOD_FOUND;
+                custom_equal = custom_equal || custom_cmp;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal
                     && (scalar || object
                         || (record && record_default_fields_support(
                         probe, state->types, receiver,
-                        CORE_STRING_STATIC("Equal"),
+                        N00BB_EQUAL_TRAIT,
                         CORE_STRING_STATIC("__equal"), &visiting)));
                 bool derive_hash = hash_available && !custom_equal
                     && !custom_hash

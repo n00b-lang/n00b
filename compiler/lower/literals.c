@@ -597,6 +597,27 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         core_buffer_free(decoded);
         return array;
     }
+    // An `Array[byte]` copies the literal's UTF-8 bytes out of the string
+    // constant in one block (`__byte_array` in builtin.string.core).
+    if (n00bb_scalar_role_is(element_type, IR_ROLE_BYTE)) {
+        th_type *string = th_name(ir_module_types(context->module),
+                                  CORE_STRING_STATIC("string"));
+        ir_instr_t *text = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+        ok = text && ir_lower_set_temp_dest(context, text,
+                CORE_STRING_STATIC("__n00bb_"), string)
+            && ir_instr_set_const_bytes(text,
+                   (const uint8_t *)decoded->data, decoded->byte_len);
+        core_buffer_free(decoded);
+        ir_value_t *source = ok ? text->dest : nullptr;
+        ir_value_t *bytes = source
+            ? n00bb_dispatch(context, CORE_STRING_STATIC("__byte_array"),
+                             &source, 1, result_type, span)
+            : nullptr;
+        return bytes ? (ir_lower_result_t){IR_LOWER_VALUE, bytes}
+                     : lower_internal(context, span,
+                                      "could not copy a literal's bytes");
+    }
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                         span);
     ok = instruction && ir_lower_set_temp_dest(context, instruction,

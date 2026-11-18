@@ -78,7 +78,7 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     if (item) {
         th_env_method_t inner = {0};
         if (th_env_method_resolve(state->types, item,
-                CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
                 &inner) != TH_ENV_METHOD_FOUND
             || (inner.error_type && !th_is_nil(inner.error_type)))
             return false;
@@ -158,7 +158,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
         if (!field || th_env_method_resolve(state->types, field->type,
-                CORE_STRING_STATIC("Equal"), CORE_STRING_STATIC("__equal"),
+                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
                 &selected) != TH_ENV_METHOD_FOUND
             || (selected.error_type
                 && !th_is_nil(selected.error_type)))
@@ -697,6 +697,22 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                                                  symbol);
                 ir_func_t *target = link_ir_function_for_symbol(analysis,
                                                                 implementation);
+                // An adapter only forwards to its target, so it fails as
+                // the target does, once the target's failure is inferred.
+                th_type *adapter_type = adapter && adapter->type
+                    ? th_resolve(adapter->type) : nullptr;
+                th_type *target_type = target && target->type
+                    ? th_resolve(target->type) : nullptr;
+                th_type *adapter_failure = adapter_type
+                        && th_kind_of(adapter_type) == TH_FUNCTION
+                        && th_func_error(adapter_type)
+                    ? th_resolve(th_func_error(adapter_type)) : nullptr;
+                if (adapter_failure && th_kind_of(adapter_failure) == TH_VAR
+                    && !th_var_ref(adapter_failure) && target_type
+                    && th_kind_of(target_type) == TH_FUNCTION
+                    && th_func_error(target_type))
+                    th_var_bind(adapter_failure,
+                                th_resolve(th_func_error(target_type)));
                 if (target && target->n_blocks
                     && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
                                                    adapter, target, receiver)

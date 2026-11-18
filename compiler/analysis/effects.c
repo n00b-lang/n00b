@@ -1522,8 +1522,14 @@ witness_text(const ir_switness_t *witness, core_buffer_t *out)
         core_buffer_puts(out, "a checked callback");
         return;
     }
+    // `Trait.method`, naming the trait as written rather than qualified.
+    core_string_t text = bound->s;
+    size_t dots = 0, start = 0;
+    for (size_t i = text.u8_bytes; i > 0 && !start; i--)
+        if (text.data[i - 1] == '.' && ++dots == 2) start = i;
     core_buffer_puts(out, "a call to `");
-    core_buffer_append_string(out, bound->s);
+    core_buffer_append_string(out, core_string_borrow(text.data + start,
+                                                      text.u8_bytes - start));
     core_buffer_putc(out, '`');
 }
 

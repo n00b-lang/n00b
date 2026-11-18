@@ -1662,9 +1662,9 @@ push_operator_bound(n00bb_link_analysis_t *analysis, core_string_t trait,
 static void
 collect_operator_bounds(n00bb_link_analysis_t *analysis)
 {
-    push_operator_bound(analysis, CORE_STRING_STATIC("Comparable"),
+    push_operator_bound(analysis, N00BB_COMPARABLE_TRAIT,
                         CORE_STRING_STATIC("__cmp"));
-    push_operator_bound(analysis, CORE_STRING_STATIC("Equal"),
+    push_operator_bound(analysis, N00BB_EQUAL_TRAIT,
                         CORE_STRING_STATIC("__equal"));
     push_operator_bound(analysis, CORE_STRING_STATIC("Negate"),
                         CORE_STRING_STATIC("__negate"));

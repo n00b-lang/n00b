@@ -1,0 +1,12 @@
+func any_without_else(x: Any) -> int {
+    typecase x {
+        case int { return 1 }
+    }
+}
+func option_without_nil(x: int?) -> int {
+    typecase x {
+        case int { return x }
+    }
+}
+let n: int = 1
+require any_without_else(cast[Any] n) == 1 and option_without_nil(1) == 1

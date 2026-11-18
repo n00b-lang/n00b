@@ -604,9 +604,12 @@ static th_type *result_of(gen_t *g, ir_instr_t *in, bool *handled)
         }
         return nullptr;
     case IR_OP_OPTION_GET:
+        // The operand is an option of the result: equate rather than flow,
+        // since a flow would accept a plain value as the operand and type
+        // the result as the whole option.
         if (in->dest) {
-            ty_unify(g->s, th_option(g->types, in->dest->type),
-                     operand_type(in, 0), why_of(in, 11));
+            ty_equate(g->s, th_option(g->types, in->dest->type),
+                      operand_type(in, 0), why_of(in, 11));
         }
         return nullptr;
     case IR_OP_OPTION_SOME:
@@ -697,6 +700,37 @@ static void constrain_function(gen_t *g, ir_func_t *f)
     }
 }
 
+// Once a function's inference finishes, a failure type nothing bound means
+// the function can't fail: it is `nil`, so callers' copies of it are too.
+// One that a parameter's type also names (failing as a callback it is
+// given fails) stays open, to be generalized.
+static void settle_failure(ty_solver_t *s, ir_func_t *f)
+{
+    th_ctx  *types     = ty_solver_types(s);
+    th_type *signature = f && f->type ? th_resolve(f->type) : nullptr;
+    th_type *failure   = signature && th_kind_of(signature) == TH_FUNCTION
+                             && th_func_error(signature)
+                           ? th_resolve(th_func_error(signature))
+                           : nullptr;
+
+    if (!failure || th_kind_of(failure) != TH_VAR || th_var_ref(failure)
+        || th_var_name(failure).u8_bytes) {
+        return;
+    }
+    for (size_t p = 0; p < th_func_nparams(signature); p++) {
+        th_type **open  = nullptr;
+        size_t    count = th_free_vars(types, th_func_param(signature, p)->type,
+                                       &open);
+
+        for (size_t v = 0; v < count; v++) {
+            if (th_resolve(open[v]) == failure) {
+                return;
+            }
+        }
+    }
+    th_var_bind(failure, th_name(types, CORE_STRING_STATIC("nil")));
+}
+
 bool ty_constrain_group(ty_solver_t *s, const ir_group_pdg_t *g,
                         ty_coverage_t *coverage)
 {
@@ -715,6 +749,9 @@ bool ty_constrain_group(ty_solver_t *s, const ir_group_pdg_t *g,
             constrain_function(&gen, ir_group_pdg_component_at(g, c, i));
         }
         ty_solve(s);
+        for (uint32_t i = 0; i < ir_group_pdg_component_size(g, c); i++) {
+            settle_failure(s, ir_group_pdg_component_at(g, c, i));
+        }
         for (uint32_t i = 0; i < ir_group_pdg_component_size(g, c); i++) {
             ir_func_t *f = ir_group_pdg_component_at(g, c, i);
 

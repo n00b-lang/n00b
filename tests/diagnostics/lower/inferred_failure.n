@@ -1,0 +1,16 @@
+func parse(x: int) -> int {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+func pure(x: int) -> int {
+    return x
+}
+func plain(x: int) -> int {
+    return parse(x)
+}
+func banged(x: int) -> int {
+    return pure(x)!
+}
+require plain(1) == 1 and banged(1) == 1

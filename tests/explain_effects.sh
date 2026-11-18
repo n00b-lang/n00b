@@ -31,4 +31,12 @@ if ! "$compiler" "$@" --effects-of "$names" --effects-explain "$program" \
     cat "$tmp/errors" >&2
     exit 1
 fi
-diff -u "$expected" "$tmp/actual" >&2
+# Source positions are not what these expectations check: an edit that
+# moves code, in the library above all, doesn't change its effects.
+positions() {
+    sed -E -e 's/\([0-9]+:[0-9]+\)/(_:_)/g' \
+        -e 's/([A-Za-z_][A-Za-z0-9_.]*):[0-9]+:[0-9]+/\1:_:_/g' "$1"
+}
+positions "$expected" >"$tmp/want"
+positions "$tmp/actual" >"$tmp/have"
+diff -u "$tmp/want" "$tmp/have" >&2

@@ -1254,6 +1254,37 @@ n00bb_rewrite_function_address(n00bb_rewrite_t *rewrite,
                      : nullptr;
 }
 
+// A string literal typed `Array[byte]`: the string constant, copied in one
+// block by builtin.string.core.__byte_array.
+static bool
+n00bb_rewrite_byte_literal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                           const uint8_t *bytes, size_t length)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    th_type *string = th_name(ir_module_types(context->module),
+                              CORE_STRING_STATIC("string"));
+    n00bb_dispatch_target_t target = {0};
+    ir_func_t *function = nullptr;
+    ir_value_t *callee = string
+            && n00bb_dispatch_target(rewrite->dispatch, string,
+                                     CORE_STRING_STATIC("__byte_array"),
+                                     &target)
+            && target.function
+        ? n00bb_rewrite_function_address(rewrite, target.function, &function)
+        : nullptr;
+    ir_instr_t *text = callee
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, in->span) : nullptr;
+    ir_instr_t *call = text && ir_lower_set_temp_dest(context, text,
+            CORE_STRING_STATIC("__n00bb_"), string)
+        && ir_instr_set_const_bytes(text, bytes, length)
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, in->span) : nullptr;
+    return call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_"), in->dest->type)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, text->dest)
+        && n00bb_rewrite_replace(rewrite, in, call->dest);
+}
+
 static bool
 n00bb_rewrite_pack_operands(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                             uint32_t fixed, th_type *collected)
@@ -2614,6 +2645,10 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     const uint8_t *bytes = in->op == IR_OP_CONST && in->dest
         && th_kind_of(th_resolve(in->dest->type)) == TH_SEQUENCE
         ? ir_instr_const_bytes(in, &length) : nullptr;
+    th_type *literal_element = bytes
+        ? th_resolve(th_seq_elem(th_resolve(in->dest->type))) : nullptr;
+    if (bytes && n00bb_scalar_role_is(literal_element, IR_ROLE_BYTE))
+        return n00bb_rewrite_byte_literal(rewrite, in, bytes, length);
     if (bytes) {
         ir_lower_result_t array = n00bb_emit_char_array(&rewrite->context,
             bytes, length, in->dest->type, in->span);
@@ -2671,6 +2706,26 @@ n00bb_rewrite_instruction(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (open_cast && in->dest && operand)
         return n00bb_rewrite_replace(rewrite, in,
             n00bb_rewrite_cast(rewrite, in, open_cast));
+    ir_annot_t *trait_cast = in->op == IR_OP_COPY
+        ? ir_annot_get(&in->annots, N00BB_TRAIT_CAST_KEY) : nullptr;
+    if (trait_cast && operand) {
+        if (th_env_implements(types, th_resolve(operand->type), trait_cast->s))
+            return true;
+        core_string_t from = n00bb_print_type(types, operand->type);
+        core_string_t trait = trait_cast->s;
+        for (size_t i = trait.u8_bytes; i > 0; i--)
+            if (trait.data[i - 1] == '.') {
+                trait = core_string_borrow(trait.data + i,
+                                           trait.u8_bytes - i);
+                break;
+            }
+        n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
+            rewrite->unit, N00B_DIAG_CAST_NOT_DEFINED,
+            n00bb_span_location(in->span),
+            N00B_TEXT_CANNOT_CAST_TO_NOT_IMPLEMENTED,
+            N00BB_ARGS(ARG_TEXT(from), ARG_TEXT(trait)));
+        return false;
+    }
     if (in->op == IR_OP_CALLBACK_CREATE)
         return n00bb_rewrite_callback_setup(rewrite, in);
     bool arm_store = false;

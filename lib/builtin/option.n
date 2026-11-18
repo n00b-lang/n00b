@@ -1,3 +1,5 @@
+import compare
+
 func __equal(view self: 'T?, view other: 'T?) -> bool where 'T : Equal {
     if self == nil {
         return other == nil

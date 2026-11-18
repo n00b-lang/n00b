@@ -30,6 +30,9 @@
 #define N00BB_RESULT_KEY CORE_STRING_STATIC("n00bb.result")
 #define N00BB_CASE_METHOD CORE_STRING_STATIC("__is")
 #define N00BB_REF_METHOD CORE_STRING_STATIC("__ref")
+// The equality and ordering traits, declared in lib/builtin/compare.n.
+#define N00BB_EQUAL_TRAIT CORE_STRING_STATIC("builtin.compare.Equal")
+#define N00BB_COMPARABLE_TRAIT CORE_STRING_STATIC("builtin.compare.Comparable")
 ir_instr_t *n00bb_declared_result_default(ir_instr_t *write);
 core_diag_location_t n00bb_name_location(core_translation_unit_t *unit,
                                          ir_span_t span, core_string_t name);
@@ -245,6 +248,11 @@ th_type *trait_type_reference(parse_grammar_t *grammar,
                               core_translation_unit_t *declaration_unit,
                               parse_sym_entry_t *symbol,
                               parse_tree_t *reference);
+parse_sym_entry_t *n00bb_cast_trait(parse_grammar_t *grammar,
+                                    parse_tree_t *spec);
+void n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
+                                parse_sym_entry_t *symbol,
+                                core_buffer_t *out);
 void resolve_local_type_reference(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit,
                                   parse_tree_t *node, parse_tree_t *parent);
@@ -344,6 +352,9 @@ typedef struct {
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
+    // A type named where a value goes (`let t: typespec = int`): the type
+    // the `typespec` value describes.
+    th_type *type_literal;
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;
@@ -720,6 +731,7 @@ static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
 bool n00bb_reference_views(th_type *from, th_type *to);
+bool n00bb_value_views(th_type *from, th_type *to);
 bool n00bb_string_where_buffer_expected(th_ctx *types, th_type *expected,
                                         th_type *actual);
 parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
