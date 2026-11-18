@@ -28,6 +28,17 @@ test_source_type(th_ctx *types, ir_value_t *value)
     return value ? value->type : nullptr;
 }
 
+// Whether a value of the closed type `type` is a box whose runtime type
+// varies (an `Any`, a trait, a union): narrowing one to an open pattern
+// reads that type, so the narrowing is no copy of its source.
+static bool
+boxed_source(th_type *type)
+{
+    th_type *resolved = th_resolve(type);
+    return th_kind_of(resolved) == TH_SUM || th_kind_of(resolved) == TH_TRAIT
+        || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY;
+}
+
 // Whether `pattern` takes the concrete type `resolved`, or -1 when that is
 // not known until run time. A union pattern (a `case` naming several types)
 // takes it when any of its members does.
@@ -240,6 +251,7 @@ n00bb_fold_static_branches(ir_func_t *function, ir_func_t *origin,
                                        narrow->operands[0].value)
                 : nullptr;
             if (!source || !th_is_closed(types, source->type)
+                || boxed_source(source->type)
                 || th_is_closed(types, narrow->dest->type)) continue;
             core_dict_put(&replacements, narrow->dest, source);
             replaced = true;

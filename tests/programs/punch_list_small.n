@@ -211,4 +211,43 @@ require half < 3 and 2.0 == int_two
 require cast[float](-3) == -3.0
 require cast[f32](cast[u8](200)) == cast[f32](200.0)
 require cast[float](cast[i128](9007199254740993)) == 9007199254740992.0
+
+# An element read from a `typecase` arm's `Array['T]` over `Any` has the
+# arm's type `'T`, whose runtime type is the one the boxed subject holds.
+# Each arm's `'T` is its own, and a generic function's own variables stay
+# apart from them.
+func element_kind(x: 'T) -> string {
+    typecase x {
+        case int { return "int" }
+        case string { return "string" }
+        else { return "other" }
+    }
+}
+func first_element_kind(b: Any) -> string {
+    typecase b {
+        case Dict['K, 'T] { return "dict" }
+        case List['T] {
+            let item = b[0]
+            return element_kind(item)
+        }
+        case Array['T] {
+            let item = b[0]
+            return element_kind(item) + "!"
+        }
+        else { return "none" }
+    }
+}
+func element_and_own(z: 'U, b: Any) -> string {
+    typecase b {
+        case Array['T] { return element_kind(b[0]) + element_kind(z) }
+        else { return "none" }
+    }
+}
+let element_ints: Array[int] = [1, 2]
+let element_words: List[string] = ["w"]
+let element_own: int = 3
+require first_element_kind(cast[Any] element_ints) == "int!"
+require first_element_kind(cast[Any] element_words) == "string"
+require element_and_own(element_own, cast[Any] element_ints) == "intint"
+require element_and_own("s", cast[Any] element_ints) == "intstring"
 __fd_write(2, "ok")

@@ -5560,6 +5560,29 @@ static bool report_untyped(core_translation_unit_t *unit, core_string_t name,
     return false;
 }
 
+// Whether `variable` is one a `typecase` arm in `function` narrows to: a
+// local of that type has a type, the arm's.
+static bool narrowed_variable(th_ctx *types, ir_func_t *function,
+                              th_type *variable)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+
+            if (in->op == IR_OP_TYPE_NARROW && in->n_operands == 2
+                && in->operands[1].kind == IR_OPD_TYPE
+                && in->operands[1].type
+                && th_occurs(types, variable, in->operands[1].type)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
                           size_t count)
 {
@@ -5599,6 +5622,7 @@ static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
                                                 : nullptr;
 
                 if (type && th_kind_of(type) == TH_VAR && !th_var_ref(type)
+                    && !narrowed_variable(types, function, type)
                     && !local->synthetic && local->source_name.u8_bytes
                     && ir_span_known(local->span) && !local->span.implied) {
                     ok = report_untyped(units[u], local->source_name,

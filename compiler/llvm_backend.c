@@ -6015,6 +6015,39 @@ variable_from_pattern(lower_state_t *state, th_type *pattern,
     return nullptr;
 }
 
+// The runtime type a `typecase` arm's type variable stands for: the arm
+// narrowed a boxed subject to a pattern naming it, so it is read from the
+// type the box holds. An arm's variables are its own, so one narrowing
+// names each.
+static LLVMValueRef
+variable_from_narrowing(lower_state_t *state, th_type *variable)
+{
+    LLVMTypeRef box = box_llvm_type(LLVMGetModuleContext(state->module));
+    const ir_func_t *function = state->function;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        const ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            const ir_instr_t *in = block->instrs[i];
+            if (in->op != IR_OP_TYPE_NARROW || in->n_operands != 2
+                || in->operands[0].kind != IR_OPD_VALUE
+                || in->operands[1].kind != IR_OPD_TYPE
+                || !type_contains_variable(in->operands[1].type, variable))
+                continue;
+            LLVMValueRef source = in->operands[0].value
+                ? lowered_value(state, in->operands[0].value) : nullptr;
+            if (!source || LLVMTypeOf(source) != box) continue;
+            LLVMValueRef field = LLVMBuildExtractValue(state->builder,
+                source, 2, "narrowed.field");
+            LLVMValueRef actual = LLVMBuildAnd(state->builder, field,
+                LLVMConstInt(LLVMTypeOf(field), UINT32_C(0x7fffffff), false),
+                "narrowed.type");
+            return variable_from_pattern(state, in->operands[1].type,
+                                         variable, actual);
+        }
+    }
+    return nullptr;
+}
+
 static LLVMValueRef
 variable_from_inputs(lower_state_t *state, th_type *variable)
 {
@@ -6047,6 +6080,8 @@ variable_from_inputs(lower_state_t *state, th_type *variable)
             "generic.input.type");
         return variable_from_pattern(state, pattern, variable, actual);
     }
+    LLVMValueRef narrowed = variable_from_narrowing(state, variable);
+    if (narrowed) return narrowed;
     th_type *success = th_func_ret(state->function->type);
     if (!state->result_box || !success
         || !type_contains_variable(success, variable)) return nullptr;
