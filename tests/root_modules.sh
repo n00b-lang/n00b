@@ -3,7 +3,7 @@ set -eu
 
 compiler=$1
 root=$2
-tmp=$(mktemp -d)
+tmp=$(cd "$(mktemp -d)" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 mkdir "$tmp/elsewhere"
@@ -97,3 +97,52 @@ if ! env -u XDG_CONFIG_HOME HOME="$layers/home" N00B_PATH="$layers/env" \
     exit 1
 fi
 "$tmp/layers.bin"
+
+# Each root is labelled by the layer it came from, in resolver notes and in
+# `n00b env`, and a directory named twice is searched and listed once.
+printf 'import nowhere\n' >"$layers/project/missing.n"
+labels() {
+    env -u XDG_CONFIG_HOME HOME="$layers/home" \
+        N00B_PATH="$layers/env:$layers/env:$layers/flag:." "$compiler" \
+        "$@" --path "$layers/flag" --path "$layers/flag"
+}
+if labels check missing.n >"$tmp/labels.log" 2>&1; then
+    echo 'a missing module was found' >&2
+    exit 1
+fi
+expect_once() {
+    count=$(grep -cxF -- "$2" "$1" || true)
+    [ "$count" -eq 1 ] || {
+        echo "expected the line '$2' once, saw it $count times" >&2
+        cat "$1" >&2
+        exit 1
+    }
+}
+expect_once "$tmp/labels.log" '  note: searched the toolchain library'
+expect_once "$tmp/labels.log" '  note: searched the current directory'
+expect_once "$tmp/labels.log" \
+    "  note: searched \`--path\` entry \`$layers/flag\`"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`N00B_PATH\` entry \`$layers/env\`"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`paths.path\` entry \`plib\` from $layers/project/n00b.cfg:2"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`paths.path\` entry \`$layers/user\` from $layers/home/.config/n00b/config.cfg:2"
+[ "$(grep -c 'note: searched' "$tmp/labels.log")" -eq 6 ] || {
+    echo 'duplicate roots were searched more than once' >&2
+    cat "$tmp/labels.log" >&2
+    exit 1
+}
+labels env >"$tmp/env.log" 2>&1 || true
+sed -n '/^package roots$/,/^$/p' "$tmp/env.log" >"$tmp/roots.log"
+expect_once "$tmp/roots.log" "  --path     $layers/flag"
+expect_once "$tmp/roots.log" "  N00B_PATH  $layers/env"
+expect_once "$tmp/roots.log" \
+    "  project    $layers/project/plib  (from $layers/project/n00b.cfg:2)"
+expect_once "$tmp/roots.log" \
+    "  user       $layers/user  (from $layers/home/.config/n00b/config.cfg:2)"
+[ "$(grep -c '^  ' "$tmp/roots.log")" -eq 6 ] || {
+    echo 'n00b env listed a root more than once' >&2
+    cat "$tmp/roots.log" >&2
+    exit 1
+}

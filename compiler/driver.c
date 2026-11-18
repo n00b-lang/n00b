@@ -30,9 +30,18 @@
 #include "lib/snapshot_inventory.h"
 #include "th/typehash.h"
 
+typedef enum {
+    ROOT_STDLIB,
+    ROOT_DEFAULT,
+    ROOT_PATH_ENTRY,
+} root_kind_t;
+
 typedef struct {
     core_string_t path;
     bool is_default_package;
+    root_kind_t kind;
+    // For a paths.path root: which entry of the setting it came from.
+    size_t entry;
 } n00bb_root_t;
 core_list_decl(n00bb_root_t);
 
@@ -111,15 +120,25 @@ accept_source_path(void *context, core_string_t relative)
         || core_string_ends_with(relative, CORE_STRING_STATIC(".n00b"));
 }
 
+// A directory named twice (an entry repeated, or naming the stdlib or the
+// current directory) is searched once, as the first, highest-precedence root.
 static void
-add_root(n00bb_resolver_t *resolver, core_string_t path,
-         bool is_default_package)
+add_root(n00bb_resolver_t *resolver, core_string_t path, root_kind_t kind,
+         size_t entry)
 {
     if (!path.data || !path.u8_bytes) return;
     core_string_t canonical = core_os_real_path(path);
+    if (!canonical.data) canonical = core_string_dup(path);
+    for (size_t i = 0; i < resolver->roots.len; i++)
+        if (core_string_eq(resolver->roots.data[i].path, canonical)) {
+            core_free(canonical.data);
+            return;
+        }
     n00bb_root_t root = {
-        .path = canonical.data ? canonical : core_string_dup(path),
-        .is_default_package = is_default_package,
+        .path = canonical,
+        .is_default_package = kind == ROOT_DEFAULT,
+        .kind = kind,
+        .entry = entry,
     };
     core_list_push(resolver->roots, root);
 }
@@ -140,7 +159,7 @@ add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
 {
     core_string_t entry = n00bb_setting_at(N00BB_KEY_PATHS_PATH, index);
     if (core_os_is_absolute(entry)) {
-        add_root(resolver, entry, false);
+        add_root(resolver, entry, ROOT_PATH_ENTRY, index);
         return;
     }
     core_string_t joined = core_os_path_join(cwd, entry);
@@ -155,7 +174,7 @@ add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
             N00B_TEXT_RELATIVE_ENTRIES_MUST_STAY_INSIDE,
             N00BB_ARGS(ARG_TEXT(entry)));
     }
-    else add_root(resolver, joined, false);
+    else add_root(resolver, joined, ROOT_PATH_ENTRY, index);
     core_free(resolved.data);
     core_free(joined.data);
 }
@@ -165,12 +184,8 @@ add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd,
                       core_diagnostics_t *diagnostics)
 {
     n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
-    core_string_t base = cwd;
-    for (size_t i = 0; i < resolver->roots.len; i++)
-        if (resolver->roots.data[i].is_default_package)
-            base = resolver->roots.data[i].path;
     for (size_t i = 0; i < n00bb_setting_count(key); i++)
-        add_environment_root(resolver, base, i, diagnostics);
+        add_environment_root(resolver, cwd, i, diagnostics);
 }
 
 n00bb_resolver_t *
@@ -186,14 +201,14 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     pthread_mutex_init(&resolver->generated_lock, nullptr);
     resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
     pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
-    add_root(resolver, n00bb_toolchain()->stdlib, false);
+    add_root(resolver, n00bb_toolchain()->stdlib, ROOT_STDLIB, 0);
     core_string_t real_cwd = core_os_real_path(cwd);
+    core_string_t here = real_cwd.data ? real_cwd : cwd;
     if (!resolver->roots.len
-        || !path_within(real_cwd.data ? real_cwd : cwd,
-                        resolver->roots.data[0].path))
-        add_root(resolver, cwd, true);
+        || !path_within(here, resolver->roots.data[0].path))
+        add_root(resolver, cwd, ROOT_DEFAULT, 0);
+    add_environment_roots(resolver, here, diagnostics);
     core_free(real_cwd.data);
-    add_environment_roots(resolver, cwd, diagnostics);
     core_snapshot_root_t *roots = core_alloc_array(core_snapshot_root_t,
                                                    resolver->roots.len);
     for (size_t i = 0; i < resolver->roots.len; i++)
@@ -1223,19 +1238,42 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, core_string_t operand,
     return core_module_resolve(&resolver_view, module_out, source_out);
 }
 
+// Roots are canonical paths, so they are shown relative to the canonical
+// current directory.
 static core_string_t
-root_display(const n00bb_root_t *root, size_t index, core_string_t cwd)
+canonical_cwd(void)
 {
-    if (index == 0)
+    core_string_t cwd = core_os_current_directory();
+    core_string_t real = cwd.data ? core_os_real_path(cwd)
+                                  : (core_string_t){0};
+    if (!real.data) return cwd;
+    core_free(cwd.data);
+    return real;
+}
+
+static core_string_t
+root_display(const n00bb_root_t *root, core_string_t cwd)
+{
+    if (root->kind == ROOT_STDLIB)
         return n00bb_text(N00B_TEXT_ROOT_TOOLCHAIN, N00BB_NO_ARGS);
-    if (root->is_default_package)
+    if (root->kind == ROOT_DEFAULT)
         return n00bb_text(N00B_TEXT_ROOT_CURRENT_DIRECTORY, N00BB_NO_ARGS);
     core_string_t shown = root->path;
     if (cwd.data && path_within(root->path, cwd)
         && root->path.u8_bytes > cwd.u8_bytes + 1)
         shown = core_string_slice(root->path, cwd.u8_bytes + 1,
                                   root->path.u8_bytes - cwd.u8_bytes - 1);
-    return n00bb_text(N00B_TEXT_ROOT_PATH_ENTRY, N00BB_ARGS(ARG_TEXT(shown)));
+    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
+    core_string_t origin = n00bb_setting_origin_at(key, root->entry);
+    switch (n00bb_setting_source_at(key, root->entry)) {
+    case N00BB_SETTING_FROM_FLAG:
+    case N00BB_SETTING_FROM_ENVIRONMENT:
+        return n00bb_text(N00B_TEXT_ROOT_PATH_ENTRY,
+                          N00BB_ARGS(ARG_TEXT(shown), ARG_TEXT(origin)));
+    default:
+        return n00bb_text(N00B_TEXT_ROOT_CONFIG_ENTRY,
+                          N00BB_ARGS(ARG_TEXT(shown), ARG_TEXT(origin)));
+    }
 }
 
 void
@@ -1243,9 +1281,9 @@ n00bb_resolver_note_roots(n00bb_resolver_t *resolver,
                           core_diagnostics_t *diagnostics)
 {
     if (!resolver || !diagnostics) return;
-    core_string_t cwd = core_os_current_directory();
+    core_string_t cwd = canonical_cwd();
     for (size_t i = 0; i < resolver->roots.len; i++) {
-        core_string_t root = root_display(&resolver->roots.data[i], i, cwd);
+        core_string_t root = root_display(&resolver->roots.data[i], cwd);
         n00bb_report_note(diagnostics, N00B_TEXT_SEARCHED_ROOT,
                           N00BB_ARGS(ARG_TEXT(root)));
         core_free(root.data);
@@ -1264,9 +1302,9 @@ n00bb_resolver_note_search(n00bb_resolver_t *resolver, core_string_t operand,
     core_string_t relative = {0};
     if (n00bb_operand_module_spec(operand, &module))
         relative = module_relative_path(&module);
-    core_string_t cwd = core_os_current_directory();
+    core_string_t cwd = canonical_cwd();
     for (size_t i = 0; relative.data && i < resolver->roots.len; i++) {
-        core_string_t root = root_display(&resolver->roots.data[i], i, cwd);
+        core_string_t root = root_display(&resolver->roots.data[i], cwd);
         n00bb_report_note(diagnostics, N00B_TEXT_LOOKED_FOR_MODULE,
                           N00BB_ARGS(ARG_TEXT(relative), ARG_TEXT(root)));
         core_free(root.data);

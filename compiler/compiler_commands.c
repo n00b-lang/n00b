@@ -1070,12 +1070,33 @@ env_tool(const char *label, const char *path, n00bb_setting_id_t key,
     core_free(value.data);
 }
 
+// The canonical form of each root listed so far, so that a directory named
+// twice is listed once, where it is first searched.
+static bool
+env_root_seen(core_list_t(core_string_t) *seen, core_string_t path)
+{
+    core_string_t canonical = core_os_real_path(path);
+    if (!canonical.data) canonical = core_string_dup(path);
+    for (size_t i = 0; i < seen->len; i++)
+        if (core_string_eq(seen->data[i], canonical)) {
+            core_free(canonical.data);
+            return true;
+        }
+    core_list_push(*seen, canonical);
+    return false;
+}
+
 static void
 env_package_path(void *context, size_t index, core_string_t entry,
                  core_string_t resolved)
 {
-    (void)context;
-    (void)index;
+    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
+    n00bb_setting_source_t source = n00bb_setting_source_at(key, index);
+    core_string_t origin = n00bb_setting_origin_at(key, index);
+    const char *label = source == N00BB_SETTING_FROM_FLAG ? "--path"
+        : source == N00BB_SETTING_FROM_ENVIRONMENT ? "N00B_PATH"
+        : source == N00BB_SETTING_FROM_PROJECT_FILE ? "project"
+        : "user";
     path_state_t state = directory_state(resolved);
     const char *problem = state == PATH_IS_MISSING ? "does not exist"
         : state == PATH_IS_NOT_DIRECTORY ? "not a directory" : nullptr;
@@ -1094,20 +1115,47 @@ env_package_path(void *context, size_t index, core_string_t entry,
         core_free(canonical.data);
         core_free(cwd.data);
     }
-    env_line("N00B_PATH", entry, problem);
+    // The resolver skips an entry that leaves the current directory, so only
+    // the entries it keeps count toward de-duplication.
+    bool rejected = problem && state == PATH_IS_DIRECTORY;
+    if (!rejected && env_root_seen(context, resolved)) return;
+    core_buffer_t shown = {0};
+    core_buffer_append_string(&shown, entry);
+    if (source == N00BB_SETTING_FROM_PROJECT_FILE
+        || source == N00BB_SETTING_FROM_USER_FILE)
+        core_buffer_printf(&shown, "  (from %.*s)", (int)origin.u8_bytes,
+                           origin.data);
+    env_line(label, core_buffer_string(&shown), problem);
+    core_buffer_release(&shown);
 }
 
 static void
 env_package_roots(void)
 {
     const n00bb_toolchain_t *toolchain = n00bb_toolchain();
+    core_list_t(core_string_t) seen = core_list_new(core_string_t);
     printf("\npackage roots\n");
     printf("  %-10s %.*s\n", "stdlib", (int)toolchain->stdlib.u8_bytes,
            toolchain->stdlib.data);
+    (void)env_root_seen(&seen, toolchain->stdlib);
+    // As in the resolver: the current directory is no package root of its
+    // own when it lies inside the stdlib.
     core_string_t cwd = core_os_current_directory();
-    printf("  %-10s %.*s\n", "default", (int)cwd.u8_bytes, cwd.data);
+    core_string_t real_cwd = core_os_real_path(cwd);
+    core_string_t here = real_cwd.data ? real_cwd : cwd;
+    core_string_t stdlib = seen.data[0];
+    bool inside = core_string_starts_with(here, stdlib)
+        && (here.u8_bytes == stdlib.u8_bytes
+            || core_os_is_separator(here.data[stdlib.u8_bytes]));
+    if (!inside) {
+        printf("  %-10s %.*s\n", "default", (int)cwd.u8_bytes, cwd.data);
+        (void)env_root_seen(&seen, cwd);
+    }
+    core_free(real_cwd.data);
     core_free(cwd.data);
-    each_package_path(env_package_path, nullptr);
+    each_package_path(env_package_path, &seen);
+    for (size_t i = 0; i < seen.len; i++) core_free(seen.data[i].data);
+    core_list_free(seen);
 }
 
 static void
