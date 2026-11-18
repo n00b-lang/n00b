@@ -989,7 +989,18 @@ semantic_walk_before_exit(parse_visit_t *visit)
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_PREPARE_EXIT, visit,
                              &frame->annotation_cache);
-    return semantic_walk_status(walk, visit->node);
+    parse_visit_outcome_t outcome = semantic_walk_status(walk, visit->node);
+    // Pruning here skips the node's exit annotations, among them the one
+    // that closes a scope the node opened on entry. Close it, or every
+    // later declaration in the unit lands in the failed node's scope (a
+    // global after a function whose signature has an error would clash
+    // with its parameters).
+    parse_scope_t *scope = parse_tree_scope(visit->node);
+    n00bb_tu_state_t *state = tu_state(walk->unit);
+    if (outcome == PARSE_VISIT_PRUNE && scope && scope->node == visit->node
+        && state && state->annotations)
+        parse_symtab_pop_scope_all(state->annotations->symtab);
+    return outcome;
 }
 
 static parse_visit_outcome_t
