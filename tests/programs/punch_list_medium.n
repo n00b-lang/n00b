@@ -394,6 +394,38 @@ require option_arm(cast[Any] listed_option) == "list option"
 require option_arm(cast[Any] several_array) == "array"
 require option_arm(cast[Any] several_list) == "other"
 
+# A module-scope `typecase` narrows a module variable in its arms, as one
+# in a function does; an assignment in an arm writes the variable itself.
+var module_held: Any = cast[Any] "hi"
+var module_seen: string = ""
+typecase module_held {
+    case int { module_seen = "int" }
+    case string { module_seen = module_held + "!" }
+    else { module_seen = "other" }
+}
+require module_seen == "hi!"
+module_held = cast[Any] declared_int
+typecase module_held {
+    case int {
+        require module_held * 2 == 6
+        module_held = cast[Any] "back"
+    }
+    else { require false }
+}
+func read_module_held() -> Any {
+    return module_held
+}
+typecase module_held {
+    case string {
+        let again = read_module_held()
+        typecase again {
+            case string { require again == module_held }
+            else { require false }
+        }
+    }
+    else { require false }
+}
+
 # A module variable's declaration initializer reruns at run time, so a
 # value comptime writes after it doesn't carry over (#13).
 var comptime_counter: int = 0

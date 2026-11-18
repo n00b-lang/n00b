@@ -3916,6 +3916,20 @@ register_link_use_sites(core_link_unit_t *link,
     return true;
 }
 
+// Whether `use` reads `declaration` through a `typecase` arm's narrowed view
+// of it. The use links to the declaration (which a module variable is), but
+// it keeps naming the view, so it reads as the arm's type.
+static bool
+narrows_declaration(parse_tree_t *use, parse_sym_entry_t *declaration)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(use);
+    parse_sym_entry_t *view = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    return view && view != declaration
+        && parse_sym_binding(view, CORE_STRING_STATIC("n00bb.typecase-subject"))
+        && canonical_symbol(view) == declaration;
+}
+
 bool
 bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
 {
@@ -3931,7 +3945,9 @@ bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
         n00bb_link_payload_t *payload = target
             ? core_link_declaration_payload(target) : nullptr;
         if (!use_site || !payload || !payload->symbol
-            || !parse_tree_set_resolution_symbol(use_site, payload->symbol)
+            || (!narrows_declaration(use_site, payload->symbol)
+                && !parse_tree_set_resolution_symbol(use_site,
+                                                     payload->symbol))
             || !bind_array_shape_type_source(grammar, use_site,
                                              payload->symbol)) {
             core_translation_unit_t *unit =
