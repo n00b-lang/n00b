@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# The checks below grep for diagnostic codes, so force them on regardless of
+# the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
+
 compiler=$1
 program_dir=$2
 part=$3
