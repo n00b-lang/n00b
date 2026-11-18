@@ -52,6 +52,9 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
             case argname {
                 is_sub = true
             }
+            case auto {
+                is_sub = true
+            }
             case none {
             }
         }

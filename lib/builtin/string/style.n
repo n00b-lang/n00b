@@ -9,6 +9,7 @@ const index_extends: u32 = 0xffffffff
 private const sub_arm_none: u64 = 0
 private const sub_arm_position: u64 = 1
 private const sub_arm_argname: u64 = 2
+private const sub_arm_auto: u64 = 3
 
 enum Text_Case {
     none = 0, upper, lower, title, caps
@@ -39,10 +40,15 @@ record Text_Style {
     font_size:        i16?
 }
 
+// What a substitution slot names: an explicit position (`[#N]`), a keyword
+// argument (`[#name]`), or the next argument in order (`[#]`), which
+// `format()` numbers by order of appearance in the final string. `none`
+// marks a record that is a style span, not a slot.
 variant Sub_Spec {
     argname:  string
     position: u64
     none:     nil
+    auto:     nil
 }
 
 record Style_Record {
@@ -95,6 +101,9 @@ private func sub_arm(sub: Sub_Spec) -> u64 {
         }
         case none {
             return sub_arm_none
+        }
+        case auto {
+            return sub_arm_auto
         }
     }
     return sub_arm_none
@@ -202,6 +211,9 @@ private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
             }
         }
         case none {
+            return 0
+        }
+        case auto {
             return 0
         }
     }
@@ -461,6 +473,9 @@ private func hash_sub_spec(sub: Sub_Spec) -> u128 {
         case none {
             return acc
         }
+        case auto {
+            return acc
+        }
     }
 }
 
@@ -600,6 +615,8 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
                                          fd)!
         }
         case none {
+        }
+        case auto {
         }
     }
     if r.format_spec != nil {
@@ -1099,12 +1116,6 @@ private record Pending_Style {
     start_byte: u32
 }
 
-private record Slot_Numbering {
-    next_auto:    u64
-    saw_auto:     bool
-    saw_explicit: bool
-}
-
 private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
                      name: string = "", prop: Text_Style = empty_style,
                      sub_index: u64? = nil, format_spec: string? = nil)
@@ -1244,7 +1255,7 @@ private func scan_spec(raw: string, modify k: uint) -> string? fail: string {
 // where each `#` form may carry `:spec`, which runs to the first unescaped
 // `]` and has its escapes decoded.
 private func scan_tag(modify segments: List[Markup_Segment],
-                      modify numbering: Slot_Numbering, raw: string,
+                      raw: string,
                       at: uint, text_at: u32) -> uint fail: string {
     let n: uint = string.core.byte_len(raw)
     let j: uint = at + 1
@@ -1307,21 +1318,14 @@ private func scan_tag(modify segments: List[Markup_Segment],
     let raw_tag: string = string.core.byte_slice(raw, cast[int] j,
                                                  cast[int] k)
     if name_end == name_at {
-        if numbering.saw_explicit {
-            fail "rich string cannot mix automatic and explicit positional substitutions"
-        }
-        numbering.saw_auto = true
+        // An auto slot is not numbered here: `format()` numbers auto slots
+        // in order of appearance in the final string, so numbering keeps
+        // working after concatenation. It may sit alongside explicit ones.
         segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
-                                sub_index = numbering.next_auto,
                                 format_spec = format_spec))
-        numbering.next_auto += 1
         return k + 1
     }
     if explicit {
-        if numbering.saw_auto {
-            fail "rich string cannot mix automatic and explicit positional substitutions"
-        }
-        numbering.saw_explicit = true
         var ix: u64 = 0
         var d: uint = name_at
         while d < name_end {
@@ -1349,8 +1353,6 @@ private func parse_rich_markup(raw: string,
                                modify segments: List[Markup_Segment])
     -> string fail: string {
     var text: containers.buffer.Buffer = new[containers.buffer.Buffer](length = 0)
-    var numbering: Slot_Numbering = (next_auto = 0, saw_auto = false,
-                                     saw_explicit = false)
     let n: uint = string.core.byte_len(raw)
     var i: uint = 0
     while i < n {
@@ -1360,7 +1362,7 @@ private func parse_rich_markup(raw: string,
             continue
         }
         if c == 0x5b {
-            let end: uint = scan_tag(segments, numbering, raw, i,
+            let end: uint = scan_tag(segments, raw, i,
                 cast[u32] string.core.byte_len(text))!
             if end != 0 {
                 i = end
@@ -1450,6 +1452,9 @@ private func build_style_records(segments: List[Markup_Segment])
                 var substitution: Sub_Spec = (argname = seg.name)
                 if seg.sub_index != nil {
                     substitution = (position = seg.sub_index)
+                }
+                elif string.core.byte_len(seg.name) == 0 {
+                    substitution = (auto = nil)
                 }
                 let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
                                           style_tag = nil,

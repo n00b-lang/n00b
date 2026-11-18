@@ -530,7 +530,68 @@ func local_literals() {
                "a rich literal well past the inline capacity",
                "r\"[u]a rich literal well past the inline capacity[/u]\"")
     check_rich("x [#] y [#:04d] [#a_rather_long_argument_name]"'r, "x  y  ",
-               "r\"x [#0] y [#1:04d] [#a_rather_long_argument_name]\"")
+               "r\"x [#] y [#:04d] [#a_rather_long_argument_name]\"")
+}
+
+// The substitution slots of a rich string's outer layer, in record order:
+// `auto`, `pos N` or `name X`, then `@offset` and `:spec` when there is
+// one, separated by `;`.
+func slots_of(s: string) -> string {
+    var out: string = ""
+    let recs: List[text.Style_Record] = body_of(s).__value.style_info
+    for i from 0 until cast[int] recs.len() {
+        let r: text.Style_Record = recs[i]
+        let sub = r.substitution
+        var kind: string = ""
+        switch sub {
+            case auto {
+                kind = "auto"
+            }
+            case position {
+                kind = "pos " + decimal(sub.position)
+            }
+            case argname {
+                kind = "name " + sub.argname
+            }
+            case none {
+                continue
+            }
+        }
+        if byte_len(out) != 0 {
+            out = out + ";"
+        }
+        out = out + kind + "@" + decimal(cast[u64] r.start_ix.get_or_else(0))
+        if r.format_spec != nil {
+            out = out + ":" + r.format_spec
+        }
+    }
+    return out
+}
+
+func substitution_slots() {
+    // Auto slots are recorded as auto, not numbered; `format()` numbers
+    // them later, in order of appearance in the final string.
+    let autos: string = "a[#]b[#:>4]c"'r
+    check(slots_of(autos) == "auto@1;auto@2:>4", "substitution_slots", "1")
+    // Auto, explicit and named slots mix freely, each keeping its kind,
+    // offset, spec, and source order.
+    let mixed: string = "[#] and [#1]"'r
+    check(slots_of(mixed) == "auto@0;pos 1@5", "substitution_slots", "2")
+    check(repr_of(mixed) == "r\"[#] and [#1]\"", "substitution_slots", "3")
+    let other_way: string = "[#0:x] and [#:y]"'r
+    check(slots_of(other_way) == "pos 0@0:x;auto@5:y", "substitution_slots",
+          "4")
+    let all_kinds: string = "x[#2:04d]y[#]z[#who:^8]w[#]"'r
+    check(slots_of(all_kinds) == "pos 2@1:04d;auto@2;name who@3:^8;auto@4",
+          "substitution_slots", "5")
+    check(repr_of(all_kinds) == "r\"x[#2:04d]y[#]z[#who:^8]w[#]\"",
+          "substitution_slots", "6")
+    // Equality and hashing see the slot kind.
+    check("[#]"'r != "[#0]"'r, "substitution_slots", "7")
+    check("[#]"'r == "[#]"'r, "substitution_slots", "8")
+    check(("[#]"'r).hash() != ("[#0]"'r).hash(), "substitution_slots", "9")
+    check(("[#:x]"'r).hash() == ("[#:x]"'r).hash(), "substitution_slots",
+          "10")
 }
 
 func bracket_markup() {
@@ -543,10 +604,10 @@ func bracket_markup() {
     check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b]c\"")
     check_rich("[/]x"'r, "x", "r\"x\"")
     // Substitutions: auto, explicit, and named, each with and without a spec.
-    check_rich("a[#]b[#:>4]c"'r, "abc", "r\"a[#0]b[#1:>4]c\"")
+    check_rich("a[#]b[#:>4]c"'r, "abc", "r\"a[#]b[#:>4]c\"")
     check_rich("[#0][#1:x][#12]"'r, "", "r\"[#0][#1:x][#12]\"")
     check_rich("[#who] [#who:^8] [#]"'r, "  ",
-               "r\"[#who] [#who:^8] [#0]\"")
+               "r\"[#who] [#who:^8] [#]\"")
     // A spec runs to the first unescaped `]`; `\]` and `\[` are literal.
     check_rich("[#0:a\]b\[c]"'r, "", "r\"[#0:a\\]b[c]\"")
     check_rich("[#n:{x\]}] tail"'r, " tail", "r\"[#n:{x\\]}] tail\"")
@@ -623,6 +684,7 @@ func string_rich_literal_main() {
     check_rich(fancy, "Hello world", "r\"[b]Hello[/b] [i]world[/i]\"")
     local_literals()
     bracket_markup()
+    substitution_slots()
     dispatch()
 }
 
@@ -2313,7 +2375,7 @@ func rich_repr_probe_main() {
     check(repr_of(rich) == "r\"[b]example [#arg:>10][/b] \"", "rich_repr_probe", "5")
 
     let indexed: string = "[i][#]-[#][/i]"'r
-    check(repr_of(indexed) == "r\"[i][#0]-[#1][/i]\"", "rich_repr_probe", "6")
+    check(repr_of(indexed) == "r\"[i][#]-[#][/i]\"", "rich_repr_probe", "6")
 
     let nested: string = "[b]a[i]b[/i]c[/b]"'r
     check(repr_of(nested) == "r\"[b]a[i]b[/i]c[/b]\"", "rich_repr_probe", "10")

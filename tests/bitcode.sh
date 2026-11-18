@@ -101,15 +101,11 @@ build-time)
         'bitcode_litmod_fence_nil_fail.n:6:1: noop: fence failed'
     literal_failures bitcode_litmod_string_fail \
         'bitcode_litmod_string_fail.n:7:12: reject: bad literal'
-    mixed='rich string cannot mix automatic and explicit positional substitutions'
-    literal_failures bitcode_rich_auto_then_explicit \
-        "bitcode_rich_auto_then_explicit.n:2:12: r: $mixed"
-    literal_failures bitcode_rich_explicit_then_auto \
-        "bitcode_rich_explicit_then_auto.n:2:12: r: $mixed"
+    too_large='rich string substitution index is too large'
     literal_failures bitcode_litmod_many_fail \
-        "bitcode_litmod_many_fail.n:5:34: r: $mixed" \
+        "bitcode_litmod_many_fail.n:5:25: r: $too_large" \
         'bitcode_litmod_many_fail.n:7:24: reject: bad literal' \
-        "bitcode_litmod_many_fail.n:10:12: r: $mixed"
+        "bitcode_litmod_many_fail.n:10:12: r: $too_large"
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'

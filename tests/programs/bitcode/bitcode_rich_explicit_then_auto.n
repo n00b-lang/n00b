@@ -1,3 +1,0 @@
-func value() -> string {
-    return "[#0:x] then [#:y]"'r
-}
