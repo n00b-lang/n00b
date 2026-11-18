@@ -58,3 +58,9 @@ func arguments() {
     let point = new[Point](3)
     let shape = new[Shape](4)
 }
+
+# Named arguments are turned away too, not dropped.
+func named_arguments() {
+    let point = new[Point](x = 3)
+    let inner = new[Inner](v = 1)
+}

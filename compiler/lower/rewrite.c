@@ -2386,6 +2386,24 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (found && (target.kind == N00BB_TARGET_METHOD
                   || target.kind == N00BB_TARGET_FUNCTION))
         return n00bb_rewrite_method_call(rewrite, in, &target);
+    if (target.kind == N00BB_TARGET_ZEROED && in->n_operands > 2) {
+        // Typing turns away positional arguments to `new` on a type with no
+        // `__init`; named ones reach here, and would be dropped.
+        core_string_t type = n00bb_print_type(
+            ir_module_types(rewrite->context.module),
+            th_ind_referent(ir_operand_value(&in->operands[1])->type));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(rewrite->unit);
+        if (n00bb_report(diagnostics, rewrite->unit,
+                         N00B_DIAG_NEW_WITHOUT_INIT_ARGUMENTS,
+                         n00bb_span_location(in->span),
+                         N00B_TEXT_NEW_WITHOUT_INIT_TAKES_NO,
+                         N00BB_ARGS(ARG_TEXT(type))))
+            n00bb_report_help(diagnostics, N00B_TEXT_CREATE_IT_WITH_NEW_THEN,
+                              N00BB_ARGS(ARG_TEXT(type)));
+        in->n_operands = 2;
+        ir_instr_uses_changed(in);
+    }
     if (target.kind == N00BB_TARGET_ZEROED) {
         // Zeroed storage needs no call, but an object still needs the record
         // its handle refers to.
