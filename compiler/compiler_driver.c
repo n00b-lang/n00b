@@ -1107,9 +1107,14 @@ report_shadow_cause(core_diagnostics_t *diagnostics,
                     const n00bb_stdlib_shadow_t *cause, core_string_t loaded,
                     shadow_reach_t reach)
 {
-    n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
-        N00B_TEXT_STANDARD_LIBRARY_MODULE_IS_SHADOWED,
-        N00BB_ARGS(ARG_TEXT(cause->name)));
+    if (cause->warning)
+        n00bb_report(diagnostics, unit, N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB,
+            at, N00B_TEXT_NAME_LOADS_THE_STANDARD_LIBRARY,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
+            N00B_TEXT_STANDARD_LIBRARY_MODULE_IS_SHADOWED,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
     n00bb_report_note(diagnostics, N00B_TEXT_SHADOWED_STANDARD_LIBRARY_FILES,
         N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(cause->stdlib),
                    ARG_TEXT(cause->shadow)));
@@ -1129,7 +1134,9 @@ report_shadow_cause(core_diagnostics_t *diagnostics,
     else if (reach == SHADOW_REACHED_FROM_COMMAND_LINE)
         n00bb_report_note(diagnostics, N00B_TEXT_LOADED_FOR_COMMAND_LINE,
             N00BB_ARGS(ARG_TEXT(loaded.data ? loaded : cause->name)));
-    n00bb_report_help(diagnostics, N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
+    n00bb_report_help(diagnostics, cause->warning
+            ? N00B_TEXT_RENAME_TO_IMPORT_IT
+            : N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
         N00BB_ARGS(ARG_TEXT(cause->shadow)));
 }
 
@@ -1164,7 +1171,7 @@ stdlib_file_shadowed(n00bb_resolver_t *resolver,
         // library, that led here (see pass_stdlib_shadow).
         state->stdlib_shadow = n00bb_resolver_record_shadow(resolver,
             unit->module.identifier, shadow,
-            core_source_file_path(&unit->source));
+            core_source_file_path(&unit->source), false);
         state->import_failure_reported = true;
     }
     else report_shadow(core_translation_unit_diagnostics(unit), unit,
@@ -1992,7 +1999,8 @@ report_stdlib_shadow(import_driver_t *driver,
     // clash travels up to the first importer outside it. Either way it is
     // reported once, however many imports find it.
     pass_stdlib_shadow(driver, importer, statement,
-        n00bb_resolver_record_shadow(driver->resolver, name, shadow, stdlib),
+        n00bb_resolver_record_shadow(driver->resolver, name, shadow, stdlib,
+                                     false),
         name);
     mark_import_failure_reported(importer);
 }
@@ -2041,7 +2049,8 @@ static bool
 reject_stdlib_shadow(import_driver_t *driver,
                      core_translation_unit_t *importer,
                      parse_tree_t *statement, core_string_t name,
-                     core_translation_unit_t *direct, bool *library_name)
+                     core_translation_unit_t *direct, bool direct_named,
+                     bool *library_name)
 {
     *library_name = false;
     if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct)) return false;
@@ -2049,6 +2058,17 @@ reject_stdlib_shadow(import_driver_t *driver,
     if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
     *library_name = true;
     if (n00bb_default_package(direct)) {
+        // Not a clash, but the user's module is passed over: warn, at a
+        // place chosen with the clashes (report_shadow_sites), when a user
+        // module imports the name, explicitly or implicitly. A file named
+        // on the command line is the program itself, built as asked.
+        if (!direct_named
+            && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer)) {
+            pass_stdlib_shadow(driver, importer, statement,
+                n00bb_resolver_record_shadow(driver->resolver, name,
+                    core_source_file_path(&direct->source), stdlib, true),
+                name);
+        }
         core_free(stdlib.data);
         return false;
     }
@@ -2309,9 +2329,17 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
     bool library_name = false;
+    bool direct_named = false;
+    if (direct) {
+        pthread_mutex_lock(driver->requests_lock);
+        locate_request_t *request = request_for_job(driver->requests,
+                                                    locate_job);
+        direct_named = request && request->root_input;
+        pthread_mutex_unlock(driver->requests_lock);
+    }
     if (direct && reject_stdlib_shadow(driver, importer, statement,
                                        module->identifier, direct,
-                                       &library_name))
+                                       direct_named, &library_name))
         return false;
     if (!direct || library_name
         || (statement && !n00bb_same_package(importer, direct))) {
@@ -3520,7 +3548,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     for (size_t i = 0; !success && !core_diagnostics_failed(diags)
          && i < n00bb_resolver_shadow_count(resolver); i++) {
         n00bb_stdlib_shadow_t *shadow = n00bb_resolver_shadow_at(resolver, i);
-        if (n00bb_resolver_claim_shadow(resolver, shadow))
+        if (!shadow->warning && n00bb_resolver_claim_shadow(resolver, shadow))
             report_shadow_cause(diags, nullptr, (core_diag_location_t){},
                 shadow, (core_string_t){0}, SHADOW_REACHED_SOMEHOW);
     }

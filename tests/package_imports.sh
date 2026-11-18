@@ -140,27 +140,40 @@ expect_note() {
         exit 1
     }
 }
+# A top-level module of the current directory is in the default package,
+# which holds no system package, so one named like a library package is no
+# clash: the program builds against the library, and warning N00B-M0026,
+# once, at the user's side, names both files.
+passed_over_case() {
+    label=$1 program=$2 site=$3 name=$4 library=$5 other=$6 modes=${7:-on}
+    for cache in $modes; do
+        if [ "$cache" = on ]; then
+            set -- env -u N00B_NO_PACKAGE_CACHE
+        else
+            set -- env N00B_NO_PACKAGE_CACHE=1
+        fi
+        (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
+            "$compiler" check "$program") >"$tmp/shadow.log" 2>&1 \
+            && grep -Eq "^${site}warning N00B-M0026: \`$name\` loads the standard library's module, not the top-level module of the same name in the current directory\$" \
+                "$tmp/shadow.log" \
+            && grep -Fxq "  note: the standard library's \`$name\` is \`$stdlib_lib/$library\`; the other file is \`$shadow/$other\`" \
+                "$tmp/shadow.log" \
+            && [ "$(grep -c 'N00B-M0026' "$tmp/shadow.log")" -eq 1 ] \
+            && ! grep -q 'N00B-M0025' "$tmp/shadow.log" || {
+            echo "$label (cache $cache): not built against the library with one warning" >&2
+            cat "$tmp/shadow.log" >&2
+            exit 1
+        }
+    done
+}
 module='func one() -> int { return 1 }\n'
-# Clashes are between packages, and no system package is in the default
-# package: a top-level unicode.n in the current directory is the
-# default-package module `unicode`, no clash, and `import unicode` still
-# means the library's package.
 printf "$module" >"$shadow/project/unicode.n"
 printf "import unicode\nrequire unicode.general_category('A') == unicode.Gc.lu\n" \
     >"$shadow/project/uses_library_unicode.n"
-for cache in on off; do
-    if [ "$cache" = on ]; then
-        set -- env -u N00B_NO_PACKAGE_CACHE
-    else
-        set -- env N00B_NO_PACKAGE_CACHE=1
-    fi
-    (cd "$shadow/project" && "$@" "$compiler" check uses_library_unicode.n) \
-        >"$tmp/shadow.log" 2>&1 && ! grep -q 'N00B-M0025' "$tmp/shadow.log" || {
-        echo "default-package unicode.n (cache $cache): the library's unicode was not used" >&2
-        cat "$tmp/shadow.log" >&2
-        exit 1
-    }
-done
+passed_over_case 'default-package unicode.n' uses_library_unicode.n \
+    'uses_library_unicode\.n:1:8: ' unicode unicode/__init.n \
+    project/unicode.n 'on off'
+expect_note 'default-package unicode.n' '`unicode` is imported here directly'
 rm "$shadow/project/unicode.n"
 # `builtin` reaches unicode as well, but the error goes to the user's own
 # import of it, whichever gets there first.
@@ -233,20 +246,21 @@ grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
 }
 rm -r "$shadow/project/builtin"
 # A file on the package path taking the name of the package loaded
-# implicitly. (The same file in the current directory is a default-package
-# module, and the implicit import still loads the library's `builtin`.)
+# implicitly is a clash; the same file in the current directory is a
+# default-package module, passed over with a warning, and the implicit
+# import still loads the library's `builtin`.
 printf "$module" >"$shadow/path/builtin.n"
 shadowed_case 'file named like the implicit package' uses_helper.n \
     'uses_helper\.n: ' builtin builtin/__init.n path/builtin.n
 expect_note 'file named like the implicit package' \
     '`builtin` is loaded implicitly, for every program'
 mv "$shadow/path/builtin.n" "$shadow/project/builtin.n"
-(cd "$shadow/project" && "$compiler" check uses_helper.n) \
-    >"$tmp/shadow.log" 2>&1 || {
-    echo 'a default-package builtin.n replaced or clashed with the library' >&2
-    cat "$tmp/shadow.log" >&2
-    exit 1
-}
+# (Both modules load `builtin` implicitly; the first by path, helper.n,
+# gets the warning.)
+passed_over_case 'default-package builtin.n' uses_helper.n \
+    'helper\.n: ' builtin builtin/__init.n project/builtin.n
+expect_note 'default-package builtin.n' \
+    '`builtin` is loaded implicitly, for every program'
 rm "$shadow/project/builtin.n"
 mkdir "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/sort.n"
@@ -282,12 +296,13 @@ shadowed_case 'module operand' unicode '' unicode unicode/__init.n \
     path/unicode.n 'on off'
 rm "$shadow/path/unicode.n"
 # A file operand, like a top-level module of the current directory, is in
-# the default package, so `unicode.n` is no clash, and builds.
+# the default package, so `unicode.n` is no clash: it builds, with no
+# warning or error.
 printf "$module" >"$shadow/project/unicode.n"
 (cd "$shadow/project" && N00B_PATH="$shadow/path" "$compiler" build \
     --output "$tmp/unicode_file" unicode.n) >"$tmp/shadow.log" 2>&1 \
-    && "$tmp/unicode_file" || {
-    echo 'a file operand named like a library package did not build' >&2
+    && "$tmp/unicode_file" && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
+    echo 'a file operand named like a library package did not build cleanly' >&2
     cat "$tmp/shadow.log" >&2
     exit 1
 }

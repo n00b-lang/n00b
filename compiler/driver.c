@@ -303,7 +303,8 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
 
 n00bb_stdlib_shadow_t *
 n00bb_resolver_record_shadow(n00bb_resolver_t *resolver, core_string_t name,
-                             core_string_t shadow, core_string_t stdlib)
+                             core_string_t shadow, core_string_t stdlib,
+                             bool warning)
 {
     if (!resolver) return nullptr;
     // One record per clash, however many importers find it.
@@ -320,6 +321,7 @@ n00bb_resolver_record_shadow(n00bb_resolver_t *resolver, core_string_t name,
     record->name = core_string_dup(name);
     record->shadow = core_string_dup(shadow);
     record->stdlib = core_string_dup(stdlib);
+    record->warning = warning;
     core_list_push(resolver->shadows, record);
     pthread_mutex_unlock(&resolver->shadows_lock);
     return record;

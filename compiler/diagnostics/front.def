@@ -389,9 +389,17 @@ N00B_DIAG(EXPORT_OUTSIDE_PACKAGE, "N00B-M0024", ERROR,
 N00B_DIAG(MODULE_SHADOWS_STDLIB, "N00B-M0025", ERROR,
     "a module or package has the same name as one in the standard library",
     "Standard library modules and packages always come from the toolchain\n"
-    "library. A file or package in the current directory or on the package\n"
-    "path with the same name would be hidden by it, or hide it, so the name\n"
-    "is an error. Rename the module or package.")
+    "library. A module or package of another package, on the package path\n"
+    "or in a directory under the current one, with the same name would be\n"
+    "hidden by it, or hide it, so the name is an error. Rename the module or\n"
+    "package. (A top-level module of the current directory is in the\n"
+    "default package and only draws warning N00B-M0026.)")
+N00B_DIAG(DEFAULT_MODULE_NAMES_STDLIB, "N00B-M0026", WARNING,
+    "a top-level module of the current directory has a standard library name",
+    "A top-level module of the current directory is in the default package,\n"
+    "so it does not clash with a standard library package of the same name,\n"
+    "but importing that name always loads the standard library, never the\n"
+    "local module. Rename the local module to import it.")
 N00B_DIAG(INPUT_NOT_FOUND, "N00B-B0001", ERROR,
     "a module or file named on the command line cannot be found",
     "Pass a path to a `.n` file or the name of a module on the search path.\n"

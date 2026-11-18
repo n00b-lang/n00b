@@ -103,12 +103,17 @@ typedef struct n00bb_stdlib_shadow_t {
     core_string_t shadow;
     core_string_t stdlib;
     bool          reported;
+    // Not a clash: `shadow` is a top-level module of the current directory
+    // (the default package), which the library's name wins over, with a
+    // warning rather than an error.
+    bool          warning;
 } n00bb_stdlib_shadow_t;
 
-// Records a clash; the resolver owns the record for its lifetime.
+// Records a clash (or, with `warning`, a passed-over default-package
+// module); the resolver owns the record for its lifetime.
 n00bb_stdlib_shadow_t *n00bb_resolver_record_shadow(
     n00bb_resolver_t *resolver, core_string_t name, core_string_t shadow,
-    core_string_t stdlib);
+    core_string_t stdlib, bool warning);
 // True for the one caller that gets to report the clash.
 bool n00bb_resolver_claim_shadow(n00bb_resolver_t *resolver,
                                  n00bb_stdlib_shadow_t *shadow);
