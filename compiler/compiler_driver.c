@@ -38,6 +38,7 @@ double n00bb_profile_seconds(void);
 #include "abi_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
+#include "static_branches.h"
 #include "abi_semantics.h"
 #include "abi_record_layout.h"
 #include "record_layout_request.h"
@@ -815,10 +816,6 @@ dump_link_unit(core_link_unit_t *link)
         CORE_STRING_STATIC("n00bb.semantic.type"),
         CORE_STRING_STATIC("ir.array-shape"),
         CORE_STRING_STATIC("n00bb.semantic.declaration-facts"),
-        CORE_STRING_STATIC("n00bb.ir.context.enter"),
-        CORE_STRING_STATIC("n00bb.ir.context.exit"),
-        CORE_STRING_STATIC("n00bb.ir.context.fail"),
-        CORE_STRING_STATIC("n00bb.ir.context.ensure"),
     };
     puts("  declarations:");
     for (size_t i = 0; i < core_link_unit_declaration_count(link); i++) {
@@ -936,8 +933,6 @@ dump_link_unit(core_link_unit_t *link)
         core_string_t kind = edge.kind == N00BB_LINK_DEPENDENCY_CALL
             ? S("call") : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
             ? S("trait-dispatch")
-            : edge.kind == N00BB_LINK_DEPENDENCY_CONTEXT_CALL
-            ? S("context-call")
             : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION
             ? S("trait-specialization") : S("other");
 #undef S
@@ -1044,7 +1039,9 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
         || core_string_eq(predicate,
                CORE_STRING_STATIC("n00bb_prefer_dict_entries"))
         || core_string_eq(predicate,
-               CORE_STRING_STATIC("n00bb_type_annotation_colon"));
+               CORE_STRING_STATIC("n00bb_type_annotation_colon"))
+        || core_string_eq(predicate,
+               CORE_STRING_STATIC("n00bb_prefer_statement_form"));
 }
 
 static bool
@@ -4803,6 +4800,26 @@ trait_implementation(void *context, th_ctx *types, th_type *receiver,
     return nullptr;
 }
 
+// Prints each module holding a function to emit, once.
+static void
+dump_final_ir(const n00bb_link_analysis_t *analysis)
+{
+    core_dict_t printed;
+    core_dict_init(&printed, nullptr, nullptr);
+    size_t emitted = analysis->emitted_functions.len;
+    for (size_t i = 0; i < emitted + analysis->cached_functions.len; i++) {
+        ir_func_t *function = i < emitted
+            ? analysis->emitted_functions.data[i]
+            : analysis->cached_functions.data[i - emitted];
+        ir_module_t *module = function ? function->owner : nullptr;
+        if (!module || !core_dict_add(&printed, module, 1)) continue;
+        core_string_t text = ir_module_print(module);
+        if (text.data) fwrite(text.data, 1, text.u8_bytes, stdout);
+        core_free(text.data);
+    }
+    core_dict_free(&printed);
+}
+
 static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
@@ -4857,6 +4874,8 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
     core_dict_free(&visited);
     core_dict_free(&binder_state.found);
     core_list_free(callers);
+    if (ok && n00bb_setting_bool(N00BB_KEY_DEV_DUMP_FINAL_IR))
+        dump_final_ir(analysis);
     return ok;
 }
 
@@ -4872,8 +4891,17 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
             || (i >= emitted
                 && !ir_summary_known(analysis->summaries, function)))
             continue;
+        // A folded branch can leave the only writes of a value that decides
+        // another branch in blocks no path reaches (a `with` manager's exit
+        // reason, say), so folding goes on once those blocks are gone.
+        for (;;) {
+            size_t scope = ir_analysis_scope_begin();
+            uint32_t folded = ir_abcd_fold(function);
+            ir_analysis_scope_end(scope);
+            if (!folded) break;
+            n00bb_drop_unreachable_blocks(function);
+        }
         size_t scope = ir_analysis_scope_begin();
-        (void)ir_abcd_fold(function);
         (void)ir_abcd_hoist(function);
         ir_analysis_scope_end(scope);
     }

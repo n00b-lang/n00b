@@ -247,15 +247,24 @@ n00bb_abi_function_rows_build(
         uint64_t source_signature_hash = symbol->type
             ? th_hash(ir_module_types(module), th_func_collect_rest(
                 ir_module_types(module), symbol->type)) : 0;
-        if (!function || function->owner != module
-            || !ir_signature_hash
-            || ir_signature_hash != source_signature_hash
-            || !n00bb_abi_type_index_find(index, symbol->type, &type_index)
-            || type_index >= types->count
-            || types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION
-            || !n00bb_abi_decl_find_scope(declarations, symbol->scope,
-                                           &scope_index)
-            || rows.len >= UINT32_MAX) {
+        const char *problem = !function ? "it has no IR function"
+            : function->owner != module
+                ? "its IR function is in another module"
+            : !ir_signature_hash || ir_signature_hash != source_signature_hash
+                ? "its IR signature differs from its declared one"
+            : !n00bb_abi_type_index_find(index, symbol->type, &type_index)
+                    || type_index >= types->count
+                ? "its type has no ABI type row"
+            : types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION
+                ? "its type row is not a function's"
+            : !n00bb_abi_decl_find_scope(declarations, symbol->scope,
+                                          &scope_index)
+                ? "its scope has no ABI row"
+            : rows.len >= UINT32_MAX ? "there are too many functions"
+            : nullptr;
+        if (problem) {
+            out->failed_name = symbol->name;
+            out->failed_reason = core_string_borrow(problem, strlen(problem));
             valid = false;
             break;
         }

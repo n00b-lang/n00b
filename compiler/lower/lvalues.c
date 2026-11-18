@@ -7,8 +7,7 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state)
 {
     (void)state;
-    if (!entering || !visit->annot || !visit->node
-        || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call"))) return true;
+    if (!entering || !visit->annot || !visit->node) return true;
     parse_node_facts_t *facts = parse_tree_call_facts(visit->node);
     parse_sym_entry_t *symbol = facts && facts->call_function
         ? canonical_symbol(facts->call_function) : nullptr;

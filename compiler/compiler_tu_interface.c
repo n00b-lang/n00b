@@ -15,16 +15,6 @@ static bool restore_function_semantics_data(parse_sym_entry_t *symbol,
                                             const uint8_t *data,
                                             size_t size);
 
-bool
-interface_context_hook_symbol(parse_sym_entry_t *symbol)
-{
-    static const char prefix[] = "__n00bb_context_";
-    return symbol && symbol->name.data
-        && symbol->name.u8_bytes >= sizeof(prefix) - 1
-        && !memcmp(symbol->name.data, prefix, sizeof(prefix) - 1);
-}
-
-
 static core_string_t
 n00bb_visibility_from_code(uint32_t visibility)
 {
@@ -1147,61 +1137,6 @@ restore_interface_value_semantics(n00bb_interface_context_t *loader,
     return true;
 }
 
-static bool
-restore_interface_context_semantics(n00bb_interface_context_t *loader,
-                                    parse_sym_entry_t *symbol,
-                                    core_string_t qualified_name)
-{
-    size_t size = 0;
-    const uint8_t *data = interface_owned_metadata(loader,
-        TH_ENV_METADATA_VALUE, qualified_name,
-        CORE_STRING_STATIC("n00b.context"), 1, &size);
-    if (!data || size < 5 || (data[0] & 0x70u)) return false;
-    bool extended = (data[0] & 0x80u) != 0;
-    uint32_t parameter_count = read_u32_le(data + 1);
-    if (parameter_count > (size - 5) / 5) return false;
-    size_t offset = 5;
-    for (uint32_t i = 0; i < parameter_count; i++) {
-        if (size - offset < 4) return false;
-        uint16_t name_size = (uint16_t)data[offset]
-            | (uint16_t)data[offset + 1] << 8;
-        uint8_t flags = data[offset + 2];
-        uint8_t mode = data[offset + 3];
-        offset += 4;
-        if (!name_size || (flags & ~(extended ? 7u : 3u))
-            || ((flags & 4u) && (!(flags & 1u) || !extended))
-            || !th_mode_is_valid((th_mode)mode)
-            || name_size > size - offset) return false;
-        offset += name_size;
-        if (extended && (flags & 4u)) {
-            if (size - offset < 2) return false;
-            uint16_t dependency_count = (uint16_t)data[offset]
-                | (uint16_t)data[offset + 1] << 8;
-            offset += 2;
-            if (dependency_count > (size - offset) / 2) return false;
-            bool seen[UINT16_MAX + 1] = {0};
-            for (uint16_t d = 0; d < dependency_count; d++) {
-                uint16_t dependency = (uint16_t)data[offset]
-                    | (uint16_t)data[offset + 1] << 8;
-                offset += 2;
-                if (dependency >= parameter_count || seen[dependency])
-                    return false;
-                seen[dependency] = true;
-            }
-        }
-    }
-    if (offset != size) return false;
-    symbol->adt_kind = CORE_STRING_STATIC("context");
-    symbol->user_data = (void *)data;
-    th_type *signature = th_resolve(symbol->type);
-    size_t expected = signature && th_kind_of(signature) == TH_FUNCTION
-        ? th_func_nparams(signature) + (th_func_rest(signature) != nullptr)
-        : 0;
-    if (!signature || th_kind_of(signature) != TH_FUNCTION
-        || expected != parameter_count) return false;
-    return true;
-}
-
 core_string_t
 interface_package_for_module(const n00bb_interface_context_t *context,
                             core_string_t module)
@@ -2028,14 +1963,7 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                 symbol->type = signature;
                 symbol->error_type = th_func_error(signature);
                 symbol->callable_contract = signature;
-                bool has_function_metadata = interface_owned_metadata(
-                    loader, TH_ENV_METADATA_FUNCTION,
-                    declaration.qualified_name,
-                    CORE_STRING_STATIC("n00b.function-params"), 1,
-                    nullptr) != nullptr;
-                if ((has_function_metadata
-                        || !interface_context_hook_symbol(symbol))
-                    && !restore_interface_function_semantics(loader, symbol,
+                if (!restore_interface_function_semantics(loader, symbol,
                         declaration.qualified_name)) {
                     if (failure) *failure = CORE_STRING_STATIC(
                         "interface function has invalid or missing parameter metadata");
@@ -2065,18 +1993,10 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
             }
             else if (is_value) {
                 symbol->type = declaration.value_type;
-                size_t context_metadata_size = 0;
-                bool is_context = interface_owned_metadata(loader,
-                    TH_ENV_METADATA_VALUE, declaration.qualified_name,
-                    CORE_STRING_STATIC("n00b.context"), 1,
-                    &context_metadata_size) != nullptr;
-                bool restored = is_context
-                    ? restore_interface_context_semantics(loader, symbol,
-                        declaration.qualified_name)
-                    : restore_interface_value_semantics(loader, unit, symbol,
-                        declaration.qualified_name)
-                        && restore_interface_array_shape(loader, state,
-                            symbol, declaration.qualified_name);
+                bool restored = restore_interface_value_semantics(loader,
+                        unit, symbol, declaration.qualified_name)
+                    && restore_interface_array_shape(loader, state,
+                        symbol, declaration.qualified_name);
                 if (!restored) {
                     if (failure) *failure =
                         interface_metadata_failure(state,

@@ -8,6 +8,7 @@ import containers.view
 import containers.buffer
 import containers.errors
 import compare
+import context
 import cursor
 import hashing
 import integer
@@ -221,6 +222,7 @@ package builtin {
     export cursor.Lease_Cursor
     export compare.Equal
     export compare.Comparable
+    export context.Context_Manager
     export hashing.Hash
     export integer.Integer
     export ffi.Fixup

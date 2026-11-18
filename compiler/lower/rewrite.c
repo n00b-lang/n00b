@@ -1190,6 +1190,93 @@ n00bb_rewrite_option_builtin(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ? instruction->dest : nullptr;
 }
 
+static ir_value_t *
+settled_value(ir_instr_t *before, ir_op_t op, th_type *type)
+{
+    ir_instr_t *instruction = ir_instr_generated(before->block, op,
+        before->span, CORE_STRING_STATIC("settle"), before->index);
+    return instruction
+        && ir_instr_set_fresh_dest(instruction, "__n00bb_settled", type)
+        ? instruction->dest : nullptr;
+}
+
+// The outcome always holds `ok`, so its reads become: the tag is `ok`'s,
+// the `ok` payload is the value, and the `error` payload (read only where
+// the tag is not `ok`) is `nil`.
+bool
+n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
+                                th_type *failure)
+{
+    th_ctx *types = ir_module_types(function->owner);
+    if (!call->dest || (failure && !th_is_nil(th_resolve(failure))))
+        return true;
+    // An outcome whose failure settled on `nil` is already its value's type
+    // once types are interned again; its reads are still there.
+    bool shaped = ir_type_is_call_outcome(call->dest->type);
+    if (!shaped && !ir_annot_get(&call->annots, N00BB_MAY_FAIL_KEY))
+        return true;
+    core_list_t(n00bb_ir_instr_ptr_t) uses =
+        core_list_new(n00bb_ir_instr_ptr_t);
+    bool ok = true;
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++)
+        for (uint32_t i = 0; ok && i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = function->blocks[b]->instrs[i];
+            bool reads = false;
+            for (uint32_t o = 0; o < in->n_operands; o++)
+                reads |= ir_operand_value(&in->operands[o]) == call->dest;
+            if (!reads) continue;
+            ok = in->op == IR_OP_VARIANT_TAG
+                || (in->op == IR_OP_VARIANT_PAYLOAD && in->n_operands == 2
+                    && in->operands[1].kind == IR_OPD_NAME);
+            if (ok) core_list_push(uses, in);
+        }
+    // An outcome used some other way keeps its shape.
+    if (!ok || (!shaped && !uses.len)) {
+        core_list_free(uses);
+        return true;
+    }
+    if (shaped)
+        call->dest->type = th_named_arg(th_resolve(call->dest->type),
+                                        0)->type;
+    th_type *site = th_resolve(ir_instr_call_signature(call));
+    if (shaped && site && th_kind_of(site) == TH_FUNCTION) {
+        size_t count = th_func_nparams(site), keywords = th_func_nkw(site);
+        th_param *params = core_alloc_array(th_param, count + 1);
+        th_kwparam *named = core_alloc_array(th_kwparam, keywords + 1);
+        for (size_t p = 0; p < count; p++) params[p] = *th_func_param(site, p);
+        for (size_t k = 0; k < keywords; k++) named[k] = *th_func_kw(site, k);
+        th_type *settled = th_func_with_error(types, th_func_ret(site),
+            th_name(types, CORE_STRING_STATIC("nil")), params, count,
+            th_func_rest(site), named, keywords);
+        core_free(params);
+        core_free(named);
+        ok = settled && ir_instr_set_call_signature(call, settled);
+    }
+    for (size_t u = 0; ok && u < uses.len; u++) {
+        ir_instr_t *in = uses.data[u];
+        ir_value_t *replacement = nullptr;
+        if (in->op == IR_OP_VARIANT_TAG) {
+            replacement = settled_value(in, IR_OP_CONST, in->dest->type);
+            ok = replacement && ir_instr_operand_uint(replacement->def,
+                th_arm_tag(CORE_STRING_STATIC("ok")));
+        }
+        else if (core_string_eq(in->operands[1].name,
+                                CORE_STRING_STATIC("ok")))
+            replacement = call->dest;
+        else {
+            replacement = settled_value(in, IR_OP_NIL,
+                th_name(types, CORE_STRING_STATIC("nil")));
+            ok = replacement != nullptr;
+        }
+        if (!ok || !in->dest) continue;
+        ir_value_replace_uses(function, in->dest, replacement, nullptr,
+                              nullptr);
+        ok = ir_instr_erase(in);
+    }
+    core_list_free(uses);
+    return ok;
+}
+
 bool
 n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
 {
@@ -1233,6 +1320,76 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
     core_free(named);
     core_free(used);
     return ok;
+}
+
+// A plain value given for an option parameter is made that option, as a
+// direct call's arguments are where they're typed. (A call typed against a
+// trait's or a generic's signature reaches its target as given.)
+static bool
+option_arguments_to(ir_instr_t *call, ir_func_t *target)
+{
+    th_ctx *types = ir_module_types(target->owner);
+    size_t count = th_func_nparams(target->type);
+    if (call->n_operands != count + 1) return true;
+    uint32_t position = 0;
+    for (uint32_t o = 1; o < call->n_operands; o++) {
+        ir_operand_t *operand = &call->operands[o];
+        uint32_t index = UINT32_MAX;
+        ir_value_t *parameter = ir_call_param(target, operand, &position,
+                                              &index);
+        for (uint32_t p = 0; parameter && index == UINT32_MAX
+             && p < target->n_params; p++)
+            if (target->params[p] == parameter) index = p;
+        const th_param *formal = index < count
+            ? th_func_param(target->type, index) : nullptr;
+        ir_value_t *argument = operand->kind == IR_OPD_VALUE
+            || operand->kind == IR_OPD_NAMED_ARG
+            ? ir_operand_value(operand) : nullptr;
+        th_type *given = argument ? th_resolve(argument->type) : nullptr;
+        if (!formal || !given || th_mode_by_reference(formal->mode)
+            || !th_option_item(th_resolve(formal->type))
+            || th_option_item(given) || th_is_nil(given)
+            || th_kind_of(given) == TH_VAR)
+            continue;
+        ir_value_t *some = settled_value(call, IR_OP_OPTION_SOME,
+                                         th_option(types, given));
+        if (!some || !ir_instr_operand_value(some->def, argument))
+            return false;
+        if (operand->kind == IR_OPD_NAMED_ARG) operand->named.value = some;
+        else operand->value = some;
+        ir_instr_use_added(call, o);
+    }
+    return true;
+}
+
+bool
+n00bb_bind_call_target(ir_func_t *caller, ir_instr_t *call,
+                       ir_func_t *target, bool typed_against_target)
+{
+    th_type *signature = th_resolve(target->type);
+    return n00bb_place_named_arguments(call, target)
+        && (typed_against_target || option_arguments_to(call, target))
+        && n00bb_settle_infallible_outcome(caller, call,
+               th_kind_of(signature) == TH_FUNCTION
+                   ? th_func_error(signature) : nullptr);
+}
+
+void
+n00bb_bind_caller_variables(th_ctx *types, th_type *site, th_type *bound)
+{
+    site = site ? th_resolve(site) : nullptr;
+    bound = bound ? th_resolve(bound) : nullptr;
+    if (!site || !bound || th_kind_of(site) != TH_FUNCTION
+        || th_kind_of(bound) != TH_FUNCTION || th_is_closed(types, site)
+        || !th_is_closed(types, bound))
+        return;
+    // Part by part: the failures may differ (a target that can't fail).
+    (void)th_match(th_func_ret(site), th_func_ret(bound));
+    size_t count = th_func_nparams(site) < th_func_nparams(bound)
+        ? th_func_nparams(site) : th_func_nparams(bound);
+    for (size_t i = 0; i < count; i++)
+        (void)th_match(th_func_param(site, i)->type,
+                       th_func_param(bound, i)->type);
 }
 
 static ir_value_t *
@@ -1444,8 +1601,8 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     th_ctx *types = ir_module_types(rewrite->context.module);
     th_type *current = ir_instr_call_signature(in);
     bool closed = th_is_closed(types, function->type);
-    if (closed && current && !th_is_closed(types, current))
-        (void)th_match(current, function->type);
+    if (closed && current)
+        n00bb_bind_caller_variables(types, current, function->type);
     if (closed ? current && !th_is_closed(types, current)
                    && !ir_instr_set_call_signature(in, function->type)
                : !current && !ir_instr_set_call_signature(in,
@@ -1455,6 +1612,9 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     // A callee with no written return type learns it from its body, which
     // may be typed after this call, so the copy can still hold a variable.
     // The final signature has the answer.
+    if (!n00bb_bind_call_target(rewrite->context.function, in, function,
+                                true))
+        return false;
     th_type *settled = ir_instr_call_signature(in);
     th_type *body_ret = th_kind_of(th_resolve(function->type)) == TH_FUNCTION
         ? th_resolve(th_func_ret(function->type)) : nullptr;
@@ -1478,7 +1638,6 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         else if (th_matches(in->dest->type, th_func_ret(settled)))
             (void)th_match(in->dest->type, th_func_ret(settled));
     }
-    if (!n00bb_place_named_arguments(in, function)) return false;
     for (uint32_t p = in->n_operands - 1; th_kind_of(signature) == TH_FUNCTION
          && p < th_func_nparams(signature); p++) {
         th_mode mode = th_func_param(signature, p)->mode;
@@ -2227,6 +2386,24 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (found && (target.kind == N00BB_TARGET_METHOD
                   || target.kind == N00BB_TARGET_FUNCTION))
         return n00bb_rewrite_method_call(rewrite, in, &target);
+    if (target.kind == N00BB_TARGET_ZEROED && in->n_operands > 2) {
+        // Typing turns away positional arguments to `new` on a type with no
+        // `__init`; named ones reach here, and would be dropped.
+        core_string_t type = n00bb_print_type(
+            ir_module_types(rewrite->context.module),
+            th_ind_referent(ir_operand_value(&in->operands[1])->type));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(rewrite->unit);
+        if (n00bb_report(diagnostics, rewrite->unit,
+                         N00B_DIAG_NEW_WITHOUT_INIT_ARGUMENTS,
+                         n00bb_span_location(in->span),
+                         N00B_TEXT_NEW_WITHOUT_INIT_TAKES_NO,
+                         N00BB_ARGS(ARG_TEXT(type))))
+            n00bb_report_help(diagnostics, N00B_TEXT_CREATE_IT_WITH_NEW_THEN,
+                              N00BB_ARGS(ARG_TEXT(type)));
+        in->n_operands = 2;
+        ir_instr_uses_changed(in);
+    }
     if (target.kind == N00BB_TARGET_ZEROED) {
         // Zeroed storage needs no call, but an object still needs the record
         // its handle refers to.

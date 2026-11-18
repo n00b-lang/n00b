@@ -22,21 +22,6 @@ static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
                          th_type *result_type, ir_span_t span);
 
-// Whether `node`, a call, is the operand of a postfix `!`.
-static bool
-unwrapped_by_bang(parse_tree_t *node)
-{
-    parse_tree_t *at = node;
-    parse_tree_t *up = at ? parse_tree_parent(at) : nullptr;
-    while (up && core_tree_num_children(up) == 1) {
-        at = up;
-        up = parse_tree_parent(at);
-    }
-    size_t count = up ? core_tree_num_children(up) : 0;
-    return count == 2 && core_tree_child(up, 0) == at
-        && parse_tree_leaf_is(core_tree_child(up, 1),
-                              CORE_STRING_STATIC("!"));
-}
 
 static ir_value_t *
 n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
@@ -873,17 +858,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     if (operand_count || !result_type)
         return lower_internal(context, span, "call has no result type");
-    ir_lower_result_t context_result = {IR_LOWER_FAILED, nullptr};
-    int context_call = n00bb_context_call(context, visit, result_type, span,
-                                          &context_result);
-    if (context_call < 0)
-        return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-    if (context_call > 0)
-        return context_result;
-    if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call")))
-        return lower_report(context, N00B_DIAG_CONTEXT_OUTSIDE_WITH, span,
-            N00B_TEXT_A_CONTEXT_CAN_BE_CALLED,
-            N00BB_NO_ARGS);
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller_state = lower
         ? tu_state(lower->unit) : nullptr;
@@ -1431,14 +1405,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     th_ctx *types = ir_module_types(context->module);
     th_type *error_type = th_func_error(signature);
-    // A callee whose failure type is still being inferred is called as
-    // written: with `!` it may fail, without it it may not. Which one holds
-    // is checked once the callee's failure type is known.
-    th_type *open_error = error_type ? th_resolve(error_type) : nullptr;
-    bool pending = open_error && th_kind_of(open_error) == TH_VAR
-        && !th_var_name(open_error).u8_bytes;
-    bool has_error = error_type && !th_is_nil(error_type)
-        && (!pending || unwrapped_by_bang(visit ? visit->node : nullptr));
+    // Whether the callee may fail is known before typing: a failure type
+    // still open is one being inferred from a body that may fail.
+    bool has_error = error_type && !th_is_nil(error_type);
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
         : signature_return;
@@ -1481,11 +1450,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool emitted = instruction && ir_lower_set_temp_dest(context, instruction,
                                                  CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(instruction, callee_value);
-    n00bb_lower_context_t *call_lower = context->user;
-    if (emitted && pending && !has_error && call_lower)
-        emitted = ir_annot_set(call_lower->ir_context, &instruction->annots,
-            (ir_annot_t){.key = N00BB_FAILURE_PENDING_KEY,
-                         .kind = IR_ANNOT_BOOL, .b = true});
     for (size_t i = 0; emitted && i < values.len; i++) {
         if (values.data[i]) {
             emitted = ir_instr_operand_value(instruction, values.data[i]);
@@ -2105,20 +2069,14 @@ unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
     context->block = nil_block;
     ir_instr_t *nil = ir_lower_emit_instruction(context, IR_OP_NIL, span);
     if (!nil || !ir_lower_set_temp_dest(context, nil,
-            CORE_STRING_STATIC("__n00bb_"), th_nil(types))
-        || !n00bb_emit_with_failure(context, visit->node))
+            CORE_STRING_STATIC("__n00bb_"), th_nil(types)))
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not fail with nil");
     int routed = n00bb_route_try_error(context, nil->dest, span);
     if (routed < 0) return false;
-    if (!routed) {
-        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-        if (!fail || !ir_instr_operand_value(fail, nil->dest))
-            return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                "could not fail with nil");
-        fail->span = span;
-        context->reachable = false;
-    }
+    if (!routed && !n00bb_emit_function_failure(context, nil->dest, span,
+                                                UINT64_MAX))
+        return false;
 
     context->block = ok_block;
     context->reachable = true;
@@ -2225,9 +2183,9 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     context->block = error_block;
     ir_value_t *error = n00bb_emit_outcome_payload(
         context, outcome, CORE_STRING_STATIC("error"), error_type, span);
-    if (!error || !n00bb_emit_with_failure(context, visit->node))
+    if (!error)
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-            "could not unwind active context managers");
+            "could not read the call's failure");
     int routed = n00bb_route_try_error(context, error, span);
     if (routed < 0) return false;
     if (!routed) {
@@ -2256,14 +2214,9 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                                          N00B_TEXT_PHRASE_THIS_CALL))
                 return false;
         }
-        else {
-            ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-            if (!fail || !ir_instr_operand_value(fail, error))
-                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                    "could not propagate the call error");
-            fail->span = span;
-            context->reachable = false;
-        }
+        else if (!n00bb_emit_function_failure(context, error, span,
+                                              UINT64_MAX))
+            return false;
     }
 
     context->block = ok_block;

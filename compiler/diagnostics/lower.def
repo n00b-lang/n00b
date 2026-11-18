@@ -107,6 +107,14 @@ N00B_DIAG(PROPAGATE_INFALLIBLE, "N00B-S0026", ERROR,
     "`!` is used on something that cannot fail",
     "A trailing `!` passes a failure to the caller, but this call has no\n"
     "failure to pass. Remove the `!`.")
+N00B_DIAG(VALUE_NOT_TAKEN, "N00B-S0103", ERROR,
+    "a `->` ends the body of a statement, which has no value",
+    "`->` gives the value of the block it ends. A statement such as an\n"
+    "`if`, `switch`, `typecase`, `try` or `with` has no value, so a `->` at\n"
+    "the end of one of its bodies has nowhere to go. To use the value, use\n"
+    "the construct as a value:\n"
+    "    let x = with m { -> f(m) }\n"
+    "Loops have no value, so a `->` can't end a loop's body.")
 N00B_DIAG(IF_VALUE_WITHOUT_ELSE, "N00B-S0023", ERROR,
     "an `if` used as a value has no `else`",
     "When an `if` produces a value, every path must produce one, so it\n"
@@ -152,10 +160,6 @@ N00B_DIAG(DEFAULT_ORDER, "N00B-S0036", ERROR,
     "those and any keyword parameter declared before it, but not one\n"
     "declared after it:\n"
     "    func box(width: int, height: int = width, depth: int = height)")
-N00B_DIAG(CONTEXT_OUTSIDE_WITH, "N00B-S0037", ERROR,
-    "a context is called outside a `with` statement",
-    "A context declaration is entered with `with`, which runs its hooks.\n"
-    "Call it as part of a `with` statement.")
 N00B_DIAG(ATOMIC_PART_UPDATE, "N00B-S0038", ERROR,
     "an atomic value is updated one field at a time",
     "An atomic value changes as a whole. Build the new value and assign the\n"
@@ -165,10 +169,6 @@ N00B_DIAG(NOT_SUPPORTED_YET, "N00B-S0039", ERROR,
     "The language allows this construct, but this compiler cannot build it\n"
     "yet. The message names the construct; write the code another way for\n"
     "now.")
-N00B_DIAG(CONTEXT_HOOK_CANNOT_FAIL, "N00B-S0040", ERROR,
-    "a context hook that cannot report failures declares a failure type",
-    "This hook runs where a failure cannot be passed on. Handle the failure\n"
-    "inside the hook.")
 N00B_DIAG(ZERO_RANGE_STEP, "N00B-S0042", ERROR,
     "a range loop steps by zero",
     "A `for` range with `step 0` never reaches its end. Give a step that\n"
@@ -492,10 +492,6 @@ N00B_DIAG(CONSTANT_OUT_OF_RANGE, "N00B-T1049", ERROR,
 N00B_DIAG(BUILTIN_ARGUMENTS, "N00B-T1026", ERROR,
     "a builtin function is given arguments it does not take",
     "The message says what the builtin takes.")
-N00B_DIAG(CONTEXT_PARAMETER_MODE, "N00B-T1028", ERROR,
-    "a context parameter is not an `in` parameter",
-    "Context parameters are read when the context is entered, so they must\n"
-    "be `in` parameters.")
 N00B_DIAG(VALUE_NEEDS_REFERENCE, "N00B-T1030", ERROR,
     "`__value` is used on something that is not a reference",
     "`__value` reads or writes through a `Ref` or `Foreign` value.")

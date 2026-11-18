@@ -195,6 +195,40 @@ typedef ir_block_t *n00bb_ir_block_ptr_t;
 
 core_list_decl(n00bb_ir_block_ptr_t);
 
+// A construct with code to run on every way out of it: a `with` manager
+// (`__exit`) or a loop over a container (`__cleanup`). While lowering is
+// inside it, every way out sets `reason` and `failure` and jumps to its one
+// `exit` block, which runs that code once and goes on by `reason`:
+// N00BB_EXIT_FALLTHROUGH, past the construct; N00BB_EXIT_FAILURE, on to the
+// next failure handler (`failure` holds the failure, and is `nil` for every
+// other reason); or, for a `return`, `break` or `continue` leaving through
+// it, N00BB_EXIT_RESUMES plus the index of the block in `resumes` that goes
+// on from there. A failure handler is the innermost of these and the `try`s
+// whose bodies lowering is in.
+typedef struct {
+    ir_block_t *exit;
+    ir_local_t *reason;
+    th_type *failure_type;
+    ir_local_t *failure;
+    core_list_t(n00bb_ir_block_ptr_t) resumes;
+    // Against the other control frames' orders: a smaller order encloses.
+    uint64_t order;
+    // Lowering is inside the construct, so ways out go through `exit`.
+    bool open;
+    // A `with` manager handles the failures it is given; a loop passes
+    // them on, so a failure goes through a loop only on its way to a
+    // handler outside it.
+    bool handles;
+    bool fallthrough;
+    bool failure_reachable;
+} n00bb_exit_scope_t;
+
+// A failure's reason is above all the others, so when no failure can reach
+// an exit block, the range of its reason shows the failure test is false.
+#define N00BB_EXIT_FALLTHROUGH UINT64_C(0)
+#define N00BB_EXIT_RESUMES UINT64_C(1)
+#define N00BB_EXIT_FAILURE UINT64_C(0xffffffff)
+
 typedef struct {
     parse_tree_t *node;
     size_t parameter_index;
@@ -304,7 +338,8 @@ typedef struct {
     // The bindings when the loop began: a variable bound since then is
     // declared inside the loop.
     void *entry_bindings;
-    bool cleanup_active;
+    // A loop over a container calls `__cleanup` on every way out of it.
+    n00bb_exit_scope_t scope;
     bool binding_scope_active;
     bool range_inclusive;
     bool is_range;
@@ -445,14 +480,13 @@ typedef struct {
 
 core_list_decl(n00bb_try_frame_t);
 
+// One manager of a `with` statement. Its exit block runs `__exit`, given
+// `value` (what `__enter` returned) and the failure, if any.
 typedef struct {
-    parse_sym_entry_t *context_symbol;
-    core_translation_unit_t *context_unit;
-    parse_tree_t *call_node;
-    core_list_t(n00bb_ir_value_ptr_t) captures;
-    ir_value_t *provided_value;
-    uint64_t order;
-    bool active;
+    parse_tree_t *node;
+    ir_local_t *manager;
+    ir_value_t *value;
+    n00bb_exit_scope_t scope;
 } n00bb_with_item_t;
 
 core_list_decl(n00bb_with_item_t);
@@ -462,6 +496,8 @@ typedef struct {
     parse_tree_t *body;
     core_list_t(n00bb_with_item_t) items;
     bool active;
+    // A `with` used as a value: its body's `->` gives the value.
+    bool expression;
 } n00bb_with_frame_t;
 
 core_list_decl(n00bb_with_frame_t);
@@ -1096,36 +1132,106 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       ir_value_t *const *operands, size_t operand_count,
                       th_type *result_type, ir_span_t span, void *state);
 
+// Starts `scope` for the construct entered with `order`.
 bool
-n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
-                           parse_tree_t *exit_node, uint64_t stop_order,
-                           n00bb_try_frame_t *handler, bool success,
-                           uint64_t before_order);
+n00bb_exit_scope_open(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
+                      uint64_t order, bool handles, ir_span_t span);
 
+void
+n00bb_exit_scope_free(n00bb_exit_scope_t *scope);
+
+// Leaves `scope` for its exit block for `reason`, with `error` when the
+// reason is a failure.
+bool
+n00bb_exit_scope_jump(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
+                      uint64_t reason, ir_value_t *error, ir_span_t span);
+
+// Closes `scope` once lowering has left the construct, first leaving it by
+// falling through when that is reachable. When anything reaches the exit
+// block, lowering continues there with `*reached` set, for the construct's
+// own exit code; `*failure` is then the failure, or nullptr when no failure
+// reaches the block.
+bool
+n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
+                       ir_span_t span, bool *reached, ir_value_t **failure);
+
+// Goes on from `scope`'s exit block once its exit code has run: to `after`
+// when falling through, or for a failure that `verdict` (if given: what
+// the exit code returned) drops by being `true`; back to the resume
+// blocks; and otherwise on to the failure handlers outside the construct.
+// Lowering continues in `after` if anything reaches it.
+bool
+n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
+                        ir_block_t *after, ir_value_t *verdict,
+                        parse_tree_t *source, n00bb_text_t phrase);
+
+// Fails the function with `error`, raised where only the frames entered
+// before `before_order` are open, leaving through the loops still open.
+bool
+n00bb_emit_function_failure(ir_lower_context_t *context, ir_value_t *error,
+                            ir_span_t span, uint64_t before_order);
+
+// Sends `error`, raised where only the frames entered before `before_order`
+// are open, to its handler, or out of the function.
+bool
+n00bb_propagate_failure(ir_lower_context_t *context, parse_tree_t *source,
+                        ir_value_t *error, ir_span_t span,
+                        uint64_t before_order, n00bb_text_t phrase);
+
+// Leaves through the exit blocks of the constructs entered after
+// `stop_order`, innermost first, for a `return`, `break`, `continue` or a
+// block's value. `*value`, when there is one, is carried across them, and
+// is what was carried after.
 bool
 n00bb_emit_scoped_success(ir_lower_context_t *context,
-                          parse_tree_t *exit_node,
-                          n00bb_loop_frame_t *stop_before);
+                          parse_tree_t *exit_node, uint64_t stop_order,
+                          ir_value_t **value);
 
-bool
-n00bb_emit_with_success(ir_lower_context_t *context, parse_tree_t *exit_node);
+// Keeps `value` across exit blocks that other paths also reach: in an
+// option that is `nil` from the function's entry, so every path has
+// written it. n00bb_kept_value reads it back as `type`.
+ir_local_t *
+n00bb_keep_across_exits(ir_lower_context_t *context, ir_value_t *value,
+                        ir_span_t span);
 
-bool
-n00bb_emit_with_failure(ir_lower_context_t *context, parse_tree_t *exit_node);
+ir_value_t *
+n00bb_kept_value(ir_lower_context_t *context, ir_local_t *kept,
+                 th_type *type, ir_span_t span);
+
+void
+n00bb_free_with_frame(n00bb_with_frame_t *frame);
 
 ir_value_t *
 n00bb_pack_rest_values(ir_lower_context_t *context, th_type *element,
                        const core_list_t(n00bb_ir_value_ptr_t) *values,
                        ir_span_t span);
 
-int
-n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
-                   th_type *result_type, ir_span_t span,
-                   ir_lower_result_t *result);
-
 bool
 n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
                        bool entering, void *state);
+
+bool
+n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
+                         bool entering, void *state);
+
+// The innermost exit scope open between `stop_order` and `before_order`.
+n00bb_exit_scope_t *
+n00bb_innermost_exit_scope(n00bb_lower_context_t *lower, uint64_t stop_order,
+                           uint64_t before_order);
+
+// The handler a failure raised where only the frames entered before
+// `before_order` are open goes to: the innermost `try` whose body lowering
+// is in, or open exit scope. At most one of `*try_frame` and `*scope` is
+// set.
+void
+n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
+                      n00bb_try_frame_t **try_frame,
+                      n00bb_exit_scope_t **scope);
+
+// As n00bb_route_try_error, for the handlers entered before `before_order`.
+int
+n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
+                           ir_span_t span, uint64_t before_order);
 
 
 bool
@@ -1375,18 +1481,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
 const parse_sym_entry_t *
 function_symbol_at(parse_grammar_t *grammar, parse_tree_t *node);
 
-core_string_t
-context_hook_binding_role(parse_grammar_t *grammar, parse_tree_t *hook);
-
-bool
-context_default_role(size_t index, char *buffer, size_t size,
-                     core_string_t *out);
-
-bool
-context_interface_dependencies(parse_sym_entry_t *symbol, size_t target,
-                                size_t *indices, size_t capacity,
-                                size_t *count);
-
 bool
 n00bb_failure_channel_accepts(ir_lower_context_t *context,
                               th_type *failure);
@@ -1532,20 +1626,6 @@ bool
 n00bb_lower_assert_statement(ir_lower_context_t *context,
                              parse_visit_t *visit, bool entering,
                              void *state);
-
-bool
-lower_context_hook(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                   core_translation_unit_t *unit,
-                   parse_sym_entry_t *context_symbol,
-                   parse_tree_t *hook, ir_ctx_t *ir_context,
-                   core_list_t(core_translation_unit_ptr_t) *units);
-
-bool
-lower_context_default(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
-                      core_translation_unit_t *unit,
-                      parse_sym_entry_t *context_symbol, size_t parameter_index,
-                      ir_ctx_t *ir_context,
-                      core_list_t(core_translation_unit_ptr_t) *units);
 
 typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) *functions;

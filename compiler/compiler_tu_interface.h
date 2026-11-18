@@ -33,4 +33,3 @@ bool restore_semantic_unit(void *context, core_translation_unit_t *unit);
 bool finish_semantic_unit(void *context, core_translation_unit_t *unit);
 ir_shape_t *function_parameter_shape(parse_sym_entry_t *symbol,
                                      size_t index);
-bool interface_context_hook_symbol(parse_sym_entry_t *symbol);

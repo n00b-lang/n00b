@@ -1918,10 +1918,6 @@ func generic_trait_calls_check() {
     require item == nil
 }
 
-context Quiet(label: string) {
-    pass
-}
-
 func idle():
     pass
 

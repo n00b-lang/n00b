@@ -2309,6 +2309,13 @@ n00bb_abi_emit_unit(
                 core_buffer_append_string(&message, type_rows.failed_reason);
             }
         }
+        if (core_string_eq(failed_stage, CORE_STRING_STATIC("function rows"))
+            && function_rows.failed_name.data) {
+            core_buffer_puts(&message, " for `");
+            core_buffer_append_string(&message, function_rows.failed_name);
+            core_buffer_puts(&message, "`: ");
+            core_buffer_append_string(&message, function_rows.failed_reason);
+        }
         if (core_string_eq(failed_stage, CORE_STRING_STATIC("type layouts"))
             && failed_layout_type != UINT32_MAX) {
             th_type *failed_type = n00bb_abi_type_index_at(type_index,

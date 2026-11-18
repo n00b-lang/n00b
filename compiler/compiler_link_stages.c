@@ -4,13 +4,15 @@
 #include "diagnostics.h"
 
 static th_env *
-build_interface_environment(n00bb_link_analysis_t *analysis)
+build_interface_environment(n00bb_link_analysis_t *analysis,
+                            core_string_t *failed)
 {
     if (!analysis || !analysis->export_environment) return nullptr;
     const th_env *inputs[] = {analysis->export_environment};
     th_env *environment = n00bb_compose_environments(inputs, 1, nullptr,
         analysis->units.len ? analysis->units.data[0] : nullptr);
-    if (environment && register_package_interfaces(analysis, environment))
+    if (environment
+        && register_package_interfaces(analysis, environment, failed))
         return environment;
     th_env_free(environment);
     return nullptr;
@@ -215,11 +217,22 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
     }
-    analysis->interface_environment = build_interface_environment(analysis);
+    core_string_t failed_export = {0};
+    analysis->interface_environment = build_interface_environment(analysis,
+                                                                  &failed_export);
     if (!analysis->interface_environment) {
+        core_buffer_t what = {0};
+        core_buffer_puts(&what,
+                         "could not record what the program's packages export");
+        if (failed_export.data) {
+            core_buffer_puts(&what, " (at `");
+            core_buffer_append_string(&what, failed_export);
+            core_buffer_puts(&what, "`)");
+        }
+        core_buffer_putc(&what, '\0');
         report_stage_failure(units->data, units->len, units->data[0],
-            "collecting package exports",
-            "could not record what the program's packages export");
+            "collecting package exports", core_buffer_string(&what).data);
+        core_buffer_release(&what);
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }

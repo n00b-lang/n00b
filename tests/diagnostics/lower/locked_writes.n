@@ -1,0 +1,63 @@
+import sys.locks
+import sys.threads
+
+# Writes a thread makes under a lock are not races, however the lock is
+# taken: directly, through functions that take and let go of it, through a
+# `with` manager, or inside a function given the shared value.
+var guard: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
+                              nesting = 0, collector = false)
+var direct_total: int = 0
+var wrapped_total: int = 0
+var managed_total: int = 0
+var unguarded_total: int = 0
+
+func take() { sys.locks.mutex_lock(ref guard) }
+func give() { sys.locks.mutex_unlock(ref guard) }
+
+record Locked {
+    mutex: Ref[sys.locks.Mutex]
+}
+func locked(view mutex: Ref[sys.locks.Mutex]) -> Locked {
+    return (mutex = mutex)
+}
+func __enter(self: Locked) { sys.locks.mutex_lock(self.mutex) }
+func __exit(self: Locked, value: nil, failure: 'E? = nil) {
+    sys.locks.mutex_unlock(self.mutex)
+}
+
+object Account {
+    lock:    sys.locks.Mutex
+    balance: int
+}
+func __init(self: Account, balance: int) {
+    sys.locks.mutex_init(ref self.lock)
+    self.balance = balance
+}
+func deposit(account: Account, amount: int) {
+    with locked(ref account.lock) {
+        account.balance = account.balance + amount
+    }
+}
+let savings = new[Account](0)
+
+func worker() {
+    sys.locks.mutex_lock(ref guard)
+    direct_total += 1
+    sys.locks.mutex_unlock(ref guard)
+    take()
+    wrapped_total += 1
+    give()
+    with locked(ref guard) {
+        managed_total += 1
+    }
+    deposit(savings, 1)
+    # Still a race: nothing guards it.
+    unguarded_total += 1
+}
+
+func main() {
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref worker))
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref worker))
+}

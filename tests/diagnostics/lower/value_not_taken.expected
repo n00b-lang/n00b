@@ -1,0 +1,12 @@
+tests/diagnostics/lower/value_not_taken.n:4:6: warning N00B-N0019: function `gate` is never called
+  help: call it or delete it
+tests/diagnostics/lower/value_not_taken.n:11:14: error N00B-S0103: `->` ends a body of a `with` statement, which isn't used as a value
+  help: to use the value, use the `with` as one, as in `let x = with ...` or `-> with ...`; otherwise remove the `->`
+tests/diagnostics/lower/value_not_taken.n:15:12: error N00B-S0103: `->` ends a body of an `if` statement, which isn't used as a value
+  help: to use the value, use the `if` as one, as in `let x = if ...` or `-> if ...`; otherwise remove the `->`
+tests/diagnostics/lower/value_not_taken.n:20:18: error N00B-S0103: `->` ends a body of a `switch` statement, which isn't used as a value
+  help: to use the value, use the `switch` as one, as in `let x = switch ...` or `-> switch ...`; otherwise remove the `->`
+tests/diagnostics/lower/value_not_taken.n:25:23: error N00B-S0103: `->` ends the body of a `for` loop, which never has a value
+  help: remove the `->`
+tests/diagnostics/lower/value_not_taken.n:29:6: warning N00B-N0019: function `as_values` is never called
+  help: call it or delete it

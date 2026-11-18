@@ -32,8 +32,9 @@ check_constant_condition(core_translation_unit_t *unit, ir_abcd_t *ranges,
 static bool
 check_operand_domain(core_translation_unit_t *unit, ir_func_t *function,
                      ir_abcd_t *ranges, const ir_site_t *site);
+typedef struct lock_roles_t lock_roles_t;
 static ir_lock_role_t
-lock_role(const ir_instr_t *in);
+lock_role(lock_roles_t *roles, const ir_instr_t *in);
 static const ir_value_t *
 copied_source(const ir_value_t *value);
 static uint64_t
@@ -680,16 +681,103 @@ diagnose_ranges(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+// What each function does to a lock, worked out once: its role plus 3,
+// and 1 while it is being worked out.
+struct lock_roles_t {
+    core_dict_t roles;
+};
+
 static ir_lock_role_t
-lock_role(const ir_instr_t *in)
+function_lock_role(lock_roles_t *roles, ir_func_t *function);
+
+// The lock states a path can be in: bit 0 when no lock is held, bit 1
+// when one is.
+enum { LOCK_FREE = 1, LOCK_HELD = 2 };
+
+// The states `function` can return in, starting from `entry`; 0 when it
+// never returns.
+static uint8_t
+lock_states_at_return(lock_roles_t *roles, ir_func_t *function, uint8_t entry)
 {
-    const n00bb_axiom_t *axiom = n00bb_axiom_of_function(
-        n00bb_direct_call_target(in));
-    uint8_t roles = axiom ? axiom->roles : 0;
-    if (roles & N00BB_AXIOM_LOCK_ACQUIRE) return IR_LOCK_ACQUIRE;
-    if (roles & N00BB_AXIOM_LOCK_RELEASE) return IR_LOCK_RELEASE;
-    if (roles & N00BB_AXIOM_LOCK_SYNC) return IR_LOCK_SYNC;
-    return IR_LOCK_NONE;
+    uint8_t *in = core_alloc_array(uint8_t, function->n_blocks + 1);
+    in[ir_block_entry(function)->index] = entry;
+    uint8_t returned = 0;
+    for (bool changed = true; changed;) {
+        changed = false;
+        returned = 0;
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            uint8_t state = in[b];
+            for (uint32_t i = 0; state && i < block->n_instrs; i++) {
+                ir_lock_role_t role = lock_role(roles, block->instrs[i]);
+                if (role == IR_LOCK_ACQUIRE) state = LOCK_HELD;
+                else if (role == IR_LOCK_RELEASE) state = LOCK_FREE;
+            }
+            ir_instr_t *last = ir_block_terminator(block);
+            if (last && last->op == IR_OP_RETURN) returned |= state;
+            for (uint32_t s = 0; state && last && s < ir_succ_count(last);
+                 s++) {
+                ir_block_t *next = ir_succ_at(last, s);
+                if (!next || (in[next->index] | state) == in[next->index])
+                    continue;
+                in[next->index] |= state;
+                changed = true;
+            }
+        }
+    }
+    core_free(in);
+    return returned;
+}
+
+// Whether any call in `function` has `role`.
+static bool
+calls_with_role(lock_roles_t *roles, ir_func_t *function, ir_lock_role_t role)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++)
+            if (lock_role(roles, function->blocks[b]->instrs[i]) == role)
+                return true;
+    return false;
+}
+
+// A function that only takes a lock, and returns holding it on every path,
+// takes it, as a context manager's `__enter` does; one that only lets a
+// lock go, and returns without it on every path, lets it go. Anything
+// else, such as taking and letting go around its own work, is neither.
+static ir_lock_role_t
+function_lock_role(lock_roles_t *roles, ir_func_t *function)
+{
+    if (!roles || !function || !function->n_blocks) return IR_LOCK_NONE;
+    bool found = false;
+    uintptr_t known = (uintptr_t)core_dict_get(&roles->roles, function,
+                                               &found);
+    if (found) return known >= 2 ? (ir_lock_role_t)((int)known - 3)
+                                 : IR_LOCK_NONE;
+    core_dict_put(&roles->roles, function, (void *)(uintptr_t)1);
+    ir_lock_role_t role = IR_LOCK_NONE;
+    bool takes = calls_with_role(roles, function, IR_LOCK_ACQUIRE);
+    bool lets_go = calls_with_role(roles, function, IR_LOCK_RELEASE);
+    if (takes && !lets_go
+        && lock_states_at_return(roles, function, LOCK_FREE) == LOCK_HELD)
+        role = IR_LOCK_ACQUIRE;
+    else if (lets_go && !takes
+             && lock_states_at_return(roles, function, LOCK_HELD)
+                    == LOCK_FREE)
+        role = IR_LOCK_RELEASE;
+    core_dict_put(&roles->roles, function, (void *)(uintptr_t)(role + 3));
+    return role;
+}
+
+static ir_lock_role_t
+lock_role(lock_roles_t *roles, const ir_instr_t *in)
+{
+    ir_func_t *target = n00bb_direct_call_target(in);
+    const n00bb_axiom_t *axiom = n00bb_axiom_of_function(target);
+    uint8_t axioms = axiom ? axiom->roles : 0;
+    if (axioms & N00BB_AXIOM_LOCK_ACQUIRE) return IR_LOCK_ACQUIRE;
+    if (axioms & N00BB_AXIOM_LOCK_RELEASE) return IR_LOCK_RELEASE;
+    if (axioms & N00BB_AXIOM_LOCK_SYNC) return IR_LOCK_SYNC;
+    return function_lock_role(roles, target);
 }
 
 static const ir_value_t *
@@ -897,8 +985,7 @@ atomic_access(const ir_instr_t *in)
 static ir_lock_role_t
 race_lock_role(void *context, const ir_instr_t *in)
 {
-    (void)context;
-    return lock_role(in);
+    return lock_role(context, in);
 }
 
 static ir_func_t *
@@ -1077,7 +1164,10 @@ warn_shared_global_races(n00bb_link_analysis_t *analysis,
             core_list_push(main_entries, main_roots.data[f]);
     core_dict_free(&threaded);
     core_list_free(main_roots);
+    lock_roles_t roles;
+    core_dict_init(&roles.roles, nullptr, nullptr);
     ir_race_hooks_t hooks = {
+        .context = &roles,
         .atomic = race_atomic, .lock_role = race_lock_role,
         .direct_target = race_direct_target,
     };
@@ -1085,6 +1175,7 @@ warn_shared_global_races(n00bb_link_analysis_t *analysis,
         ir_races_find(analysis->summaries, main_entries.data,
                       main_entries.len, race_entries.data, race_entries.len,
                       &hooks, report_race, analysis);
+    core_dict_free(&roles.roles);
     for (size_t s = 0; s < starts.list.len; s++)
         core_list_free(starts.list.data[s].arguments);
     core_list_free(starts.list);

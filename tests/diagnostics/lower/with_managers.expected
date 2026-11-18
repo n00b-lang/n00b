@@ -1,0 +1,45 @@
+tests/diagnostics/lower/with_managers.n:1:8: warning N00B-N0023: type `Inert` is never used
+  help: remove it
+tests/diagnostics/lower/with_managers.n:4:6: warning N00B-N0019: function `inert` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:6:8: warning N00B-N0023: type `Quiet` is never used
+  help: remove it
+tests/diagnostics/lower/with_managers.n:9:6: warning N00B-N0019: function `quiet` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:10:6: warning N00B-N0019: function `poke` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:11:6: warning N00B-N0019: function `risky` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:17:10: error N00B-T0601: `inert()` is `Inert`, which `with` can't manage: it has no `__enter`
+  help: a `with` manager's type implements the `Context_Manager` trait, with `__enter` and `__exit` functions
+tests/diagnostics/lower/with_managers.n:22:12: error N00B-S0026: `poke` can't fail, so there's nothing for this `!` to pass along
+  help: remove the `!`
+tests/diagnostics/lower/with_managers.n:26:12: error N00B-S0025: `risky` can fail with `string`, so this call needs a trailing `!` or a `try`
+  help: write `risky(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/with_managers.n:32:6: warning N00B-N0019: function `sealed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:42:6: warning N00B-N0019: function `still` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:47:6: warning N00B-N0019: function `calm` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:49:5: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/with_managers.n:52:12: error N00B-S0026: `calm` can't fail, so there's nothing for this `!` to pass along
+  tests/diagnostics/lower/with_managers.n:47:6: note: `calm` is declared here
+  help: remove the `!`
+tests/diagnostics/lower/with_managers.n:55:6: warning N00B-N0019: function `opened` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:57:5: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/with_managers.n:60:12: error N00B-S0025: `opened` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/with_managers.n:55:6: note: `opened` is declared here
+  help: write `opened(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/with_managers.n:66:5: warning N00B-N0021: field `n` of `Dropper` is set but never read
+tests/diagnostics/lower/with_managers.n:68:6: warning N00B-N0019: function `dropper` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:73:6: warning N00B-N0019: function `dropped_statement` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:77:21: error N00B-T0604: `dropper()` can drop a failure (its `__exit` returns `bool`), but this `with` is used as a value, which a dropped failure would leave without one
+  help: use a `with` statement here, or have this manager's `__exit` return nothing if it never drops a failure
+tests/diagnostics/lower/with_managers.n:84:6: warning N00B-N0019: function `counter` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:90:10: error N00B-T0603: `__exit` for `Counter` returns `int`; it returns nothing, or a `bool` saying whether to drop the failure
+  help: return nothing if it never drops a failure

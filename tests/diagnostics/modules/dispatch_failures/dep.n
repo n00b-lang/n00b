@@ -1,0 +1,9 @@
+record Q {
+    n: int
+}
+func quiet() -> Q { return (n = 2) }
+func poke(self: Q) -> int { return self.n }
+func risky(self: Q) -> int fail: string {
+    if self.n > 3 { fail "big" }
+    return self.n
+}

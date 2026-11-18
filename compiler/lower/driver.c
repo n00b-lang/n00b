@@ -1,5 +1,6 @@
 #include "lower_internal.h"
 #include "comptime.h"
+#include "static_branches.h"
 
 static int
 compare_functions(const void *left, const void *right);
@@ -382,6 +383,9 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
+    ok = ok && ir_lowerer_register_nt_visit(lowerer,
+        CORE_STRING_STATIC("context-manager"), n00bb_lower_with_manager,
+        nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,
                                          n00bb_lower_operator_annotation,
                                          nullptr);
@@ -422,49 +426,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ok = bodies_ok;
     if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-functions %.3f\n",
-            n00bb_profile_seconds() - profile_start);
-    for (size_t i = 0; ok && i < units.len; i++) {
-        core_translation_unit_t *unit = units.data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
-        for (size_t s = 0; ok && s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 ok && symbol; symbol = symbol->next_in_scope) {
-                if (n00bb_injected_member(symbol)) continue;
-                if (!context_symbol(grammar, symbol)) continue;
-                static const core_string_t hooks[] = {
-                    CORE_STRING_STATIC("context-enter"),
-                    CORE_STRING_STATIC("context-exit"),
-                    CORE_STRING_STATIC("context-fail"),
-                    CORE_STRING_STATIC("context-ensure"),
-                };
-                for (size_t h = 0; ok
-                    && h < sizeof(hooks) / sizeof(hooks[0]); h++) {
-                    core_string_t role = n00bb_context_hook_role(hooks[h]);
-                    parse_tree_t *hook = symbol->decl_node && role.data
-                        ? parse_sym_binding(symbol, role) : nullptr;
-                    if (hook)
-                        ok = lower_context_hook(lowerer, grammar, unit,
-                            symbol, hook, ir_context, &units);
-                }
-                core_list_t(parse_sym_entry_ptr_t) parameters =
-                    core_list_new(parse_sym_entry_ptr_t);
-                parse_sym_entry_t *rest = nullptr;
-                collect_ir_parameters(grammar,
-                    child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("param-decl")),
-                    &parameters, &rest);
-                for (size_t p = 0; ok && p < parameters.len; p++)
-                    if (parameters.data[p]->is_optional)
-                        ok = lower_context_default(lowerer, grammar, unit,
-                            symbol, p, ir_context, &units);
-                core_list_free(parameters);
-                (void)rest;
-            }
-        }
-        core_list_free(scopes);
-    }
-    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
-        fprintf(stderr, "PROFILE lower-contexts %.3f\n",
             n00bb_profile_seconds() - profile_start);
     core_list_t(core_translation_unit_ptr_t) init_order =
         core_list_new(core_translation_unit_ptr_t);
@@ -685,6 +646,13 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
         ir_func_t *initializer = module ? n00bb_cached_body(ir_func_find(
             module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))) : nullptr;
         if (initializer) core_list_push(initializer_functions, initializer);
+    }
+    // Typing knows what each `with` manager's `__exit` returns, so whether
+    // it can drop a failure is settled before the analyses walk the paths.
+    for (size_t i = 0; ok && i < units.len; i++) {
+        ir_module_t *module = unit_module(tu_state(units.data[i]));
+        for (size_t f = 0; module && f < ir_func_count(module); f++)
+            n00bb_fold_exit_verdicts(ir_func_at(module, f));
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,
                                           &runtime_init.entry_functions)

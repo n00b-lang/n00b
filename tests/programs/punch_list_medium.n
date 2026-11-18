@@ -336,4 +336,402 @@ if !comptime() {
     require comptime_values() == 4200 + 10 + 1
 }
 
+# A trait method declared `fail: 'F` may be implemented by a method that
+# can fail and by one that cannot; a generic caller works with either.
+# Keyword parameters, generic ones included, pass through a trait call,
+# given or omitted. A result typed by the trait (`'V`) takes the bound
+# method's type.
+trait Opener {
+    func opened(self: 'T) -> 'V fail: 'F
+    func closed(self: 'T, value: 'V, note: 'E? = nil) -> int fail: 'G
+}
+record Calm {
+    n: int
+}
+func opened(self: Calm) -> int { return self.n }
+func closed(self: Calm, value: int, note: 'E? = nil) -> int {
+    if note == nil { return value }
+    return value * 10
+}
+record Jumpy {
+    n: int
+}
+func opened(self: Jumpy) -> int fail: string {
+    if self.n > 5 { fail "jumpy" }
+    return self.n
+}
+func closed(self: Jumpy, value: int, note: 'E? = nil) -> int
+        fail: string {
+    if value > 4 { fail "late" }
+    if note == nil { return value }
+    return value * 100
+}
+func open_and_close(o: 'O) -> int fail: string where 'O: Opener {
+    let v = o.opened()!
+    let note: string? = "x"
+    return o.closed(v)! + o.closed(v, note = note)!
+}
+func opened_only(o: 'O) -> int fail: string where 'O: Opener {
+    let v = o.opened()!
+    return 0
+}
+// A plain value is passed where the trait's parameter is an option.
+func closed_plainly(o: 'O) -> int fail: string where 'O: Opener {
+    let note: int? = 4
+    return o.closed(o.opened()!, note = note)!
+}
+
+if !comptime() {
+    let calm: Calm = (n = 2)
+    let jumpy: Jumpy = (n = 3)
+    require (try { -> open_and_close(calm)! } fail (e) { -> -1 }) == 22
+    require (try { -> open_and_close(jumpy)! } fail (e) { -> -1 }) == 303
+    let wild: Jumpy = (n = 9)
+    require (try { -> open_and_close(wild)! } fail (e) { -> -1 }) == -1
+    require (try { -> opened_only(jumpy)! } fail (e) { -> -1 }) == 0
+    require (try { -> closed_plainly(calm)! } fail (e) { -> -1 }) == 20
+}
+
+# `with` uses a manager's `Context_Manager` methods: `__enter` runs before the
+# block and what it returns is bound; `__exit` runs on every way out of the
+# block, given that value and, when the block failed, the failure as
+# `failure`. An `__exit` that returns a `bool` drops the failure by returning
+# `true`; one that returns nothing never drops one. Either hook may fail.
+# Managers are entered left to right and left in reverse. The manager's
+# type need not be known until typing.
+var with_log: string = ""
+
+record Tag {
+    name: string
+}
+func tag_named(name: string) -> Tag { return (name = name) }
+func __enter(self: Tag) -> string {
+    with_log = with_log + "+" + self.name
+    return self.name + "!"
+}
+func __exit(self: Tag, value: string, failure: 'E? = nil) {
+    require value == self.name + "!"
+    with_log = with_log + "-" + self.name
+}
+
+record Eater {
+    name: string
+}
+func eater(name: string) -> Eater { return (name = name) }
+func __enter(self: Eater) { with_log = with_log + "+" + self.name }
+func __exit(self: Eater, value: nil, failure: 'E? = nil) -> bool {
+    with_log = with_log + "-" + self.name
+    return failure != nil
+}
+
+record Gate {
+    name: string
+    open: bool
+}
+func gate(name: string, open: bool) -> Gate {
+    return (name = name, open = open)
+}
+func __enter(self: Gate) fail: string {
+    if not self.open { fail "shut " + self.name }
+    with_log = with_log + "+" + self.name
+}
+func __exit(self: Gate, value: nil, failure: 'E? = nil) fail: string {
+    with_log = with_log + "-" + self.name
+    if self.name == "bad" { fail "exit " + self.name }
+}
+
+record Held {
+    item: 'T
+}
+func held(item: 'T) -> Held['T] { return (item = item) }
+func __enter(self: Held['T]) -> 'T { return self.item }
+func __exit(self: Held['T], value: 'T, failure: 'E? = nil) {
+    with_log = with_log + "-box"
+}
+
+object Visits {
+    n: int
+}
+func __enter(self: Visits) { self.n = self.n + 1 }
+func __exit(self: Visits, value: nil, failure: 'E? = nil) {
+    self.n = self.n + 10
+}
+
+func visits() {
+    return new[Visits]()
+}
+
+func entered_twice(manager: 'C) where 'C: Context_Manager {
+    with manager {
+        with manager {
+            with_log = with_log + "[]"
+        }
+    }
+}
+
+func with_bound() -> string {
+    with t = tag_named("a"), tag_named("b") {
+        with_log = with_log + "[" + t + "]"
+    }
+    return with_log
+}
+func with_return(x: int) -> int {
+    with tag_named("r") {
+        if x > 0 { return 1 }
+    }
+    return 0
+}
+func with_failing() -> int fail: string {
+    with tag_named("f") {
+        fail "boom"
+    }
+    return 0
+}
+func with_swallowed() -> int fail: string {
+    with eater("eat") {
+        fail "boom"
+    }
+    return 7
+}
+func with_enter_fails() -> int fail: string {
+    with gate("a", true), gate("b", false) {
+        with_log = with_log + "body"
+    }
+    return 0
+}
+func with_exit_fails() -> int fail: string {
+    with gate("a", true), gate("bad", true) {
+        with_log = with_log + "body"
+    }
+    return 0
+}
+func with_loop() -> int {
+    var total = 0
+    for i in [1, 2, 3] {
+        with item = held(i) {
+            if item == 2 { continue }
+            total = total + item
+        }
+    }
+    return total
+}
+// A `with` outside a `try` may fail, like a `!`: with no `fail:`, the
+// function fails as its managers do. (`with_bound`, whose managers can't
+// fail, is called plainly.)
+func gated_value(open: bool) -> int {
+    with gate("g", open) { return 1 }
+    return 0
+}
+// Inside a `try`, the managers' failures are the `try`'s to handle.
+func gated_or(open: bool) -> int {
+    try {
+        with gate("t", open) { return 1 }
+    } fail (e) { return -1 }
+    return 0
+}
+
+// A loop over a container calls `__cleanup` once on every way out.
+record Countdown {
+    from: int
+}
+record Countdown_Cursor {
+    left: int
+}
+func countdown(from: int) -> Countdown { return (from = from) }
+func __iterator(self: Countdown) -> Countdown_Cursor {
+    return (left = self.from)
+}
+func __next(modify self: Countdown_Cursor) -> int? {
+    if self.left == 0 { return nil }
+    self.left = self.left - 1
+    return self.left + 1
+}
+func __cleanup(consume self: Countdown_Cursor) {
+    with_log = with_log + "c"
+}
+func loop_sum() -> int {
+    var total = 0
+    for i in countdown(3) {
+        if i == 2 { continue }
+        total = total + i
+    }
+    return total
+}
+func loop_break() -> int {
+    var last = 0
+    for i in countdown(5) {
+        last = i
+        if i == 3 { break }
+    }
+    return last
+}
+func loop_return() -> int {
+    for i in countdown(5) {
+        if i == 4 { return i * 10 }
+    }
+    return 0
+}
+func loop_fails() -> int fail: string {
+    for i in countdown(3) {
+        if i == 2 { fail "two" }
+    }
+    return 0
+}
+func loop_caught() -> int {
+    try {
+        for i in countdown(3) {
+            if i == 1 { fail "one" }
+        }
+    } fail (e) { return -1 }
+    return 0
+}
+func loop_managed() -> int {
+    for i in countdown(3) {
+        with tag_named("m") {
+            if i == 2 { return i }
+        }
+    }
+    return 0
+}
+func managed_loop() -> int fail: string {
+    with tag_named("o") {
+        for i in countdown(2) {
+            fail "out"
+        }
+    }
+    return 0
+}
+func switch_break(x: int) -> int {
+    var seen = 0
+    switch x {
+        case 1 {
+            with tag_named("s") {
+                seen = 1
+                break
+            }
+        }
+    }
+    return seen
+}
+// A `with` used as a value is its body's value, once `__exit` has run.
+func with_value() -> int {
+    let v = with t = tag_named("v") { -> t.byte_len() * 10 }
+    return v
+}
+// A function with a `with` may fail as its managers do; these can't, so a
+// call to it is a plain value, bound and used like any other.
+func with_value_bound() -> int {
+    let v = with_value()
+    return v + 1
+}
+func with_values_in_block() -> string {
+    let v = {
+        with_log = with_log + "<"
+        -> with a = tag_named("a"), b = tag_named("bb") { -> a + b }
+    }
+    return v
+}
+func with_value_looped() -> int {
+    var total = 0
+    for i in countdown(3) {
+        total = total + with tag_named("l") { -> i }
+    }
+    return total
+}
+// When its body fails it has no value, and the failure goes on, after
+// `__exit` has run.
+func with_value_failing() -> int fail: string {
+    return with tag_named("f") { -> risky(quiet_four())! }
+}
+func quiet_four() -> Quiet_Four { return (n = 4) }
+record Quiet_Four {
+    n: int
+}
+func risky(self: Quiet_Four) -> int fail: string {
+    if self.n > 3 { fail "four" }
+    return self.n
+}
+// A `break` leaves the innermost loop or `switch`, here the loop.
+func loop_in_switch(x: int) -> int {
+    var n = 0
+    switch x {
+        case 1 {
+            for i in countdown(3) {
+                if i == 2 { break }
+                n = n + i
+            }
+            n = n + 100
+        }
+    }
+    return n
+}
+
+if !comptime() {
+    with_log = ""
+    require loop_sum() == 4
+    require loop_break() == 3
+    require loop_return() == 40
+    require (try { -> loop_fails()! } fail (e) { -> -1 }) == -1
+    require loop_caught() == -1
+    require with_log == "ccccc"
+    with_log = ""
+    require loop_managed() == 2
+    require with_log == "+m-m+m-mc"
+    with_log = ""
+    require (try { -> managed_loop()! } fail (e) { -> -1 }) == -1
+    require with_log == "+oc-o"
+    with_log = ""
+    require switch_break(1) == 1
+    require with_log == "+s-s"
+    with_log = ""
+    require loop_in_switch(1) == 103
+    require with_log == "c"
+    with_log = ""
+    require with_value() == 20
+    require with_log == "+v-v"
+    require with_value_bound() == 21
+    with_log = ""
+    require with_values_in_block() == "a!bb!"
+    require with_log == "<+a+bb-bb-a"
+    with_log = ""
+    require with_value_looped() == 6
+    require with_log == "+l-l+l-l+l-lc"
+    with_log = ""
+    require (try { -> with_value_failing()! } fail (e) { -> -1 }) == -1
+    require with_log == "+f-f"
+}
+
+if !comptime() {
+    require (try { -> gated_value(true)! } fail (e) { -> -1 }) == 1
+    require (try { -> gated_value(false)! } fail (e) { -> -1 }) == -1
+    require gated_or(true) == 1
+    require gated_or(false) == -1
+    with_log = ""
+    require with_bound() == "+a+b[a!]-b-a"
+    with_log = ""
+    require with_return(1) == 1
+    require with_log == "+r-r"
+    with_log = ""
+    require (try { -> with_failing()! } fail (e) { -> -1 }) == -1
+    require with_log == "+f-f"
+    with_log = ""
+    require (try { -> with_swallowed()! } fail (e) { -> 0 }) == 7
+    require with_log == "+eat-eat"
+    with_log = ""
+    require (try { -> with_enter_fails()! } fail (e) { -> -1 }) == -1
+    require with_log == "+a-a"
+    with_log = ""
+    require (try { -> with_exit_fails()! } fail (e) { -> -2 }) == -2
+    require with_log == "+a+badbody-bad-a"
+    with_log = ""
+    require with_loop() == 4
+    require with_log == "-box-box-box"
+    let counted = visits()
+    with counted { require counted.n == 1 }
+    require counted.n == 11
+    with_log = ""
+    entered_twice(tag_named("g"))
+    require with_log == "+g+g[]-g-g"
+}
+
 __fd_write(2, "ok")

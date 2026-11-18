@@ -1,0 +1,2 @@
+tests/diagnostics/lower/locked_writes.n:55:5: warning N00B-S0060: global `unguarded_total` is written by thread entry `worker` without atomics or a lock, and is also accessed by another thread running the same entry
+  help: make `unguarded_total` atomic, or guard every access with a lock

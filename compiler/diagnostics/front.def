@@ -60,8 +60,8 @@ N00B_DIAG(SYNTAX_UNEXPECTED_INDENT, "N00B-P0008", ERROR,
     "Indent the line like the statement before it, or start a block.")
 N00B_DIAG(SYNTAX_MISPLACED_PASS, "N00B-P0009", ERROR,
     "`pass` appears somewhere other than an empty body",
-    "`pass` stands for an empty body of a block, case branch, context,\n"
-    "package or union. It cannot appear next to other statements or inside\n"
+    "`pass` stands for an empty body of a block, case branch, package or\n"
+    "union. It cannot appear next to other statements or inside\n"
     "an expression.")
 N00B_DIAG(SYNTAX_COMPTIME_BLOCK, "N00B-P0010", ERROR,
     "`comptime` is used as a block keyword",

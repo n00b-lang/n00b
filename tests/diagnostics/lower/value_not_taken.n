@@ -1,0 +1,32 @@
+record Gate {
+    n: int
+}
+func gate() -> Gate { return (n = 0) }
+func __enter(self: Gate) { require self.n == 0 }
+func __exit(self: Gate, value: nil, failure: 'E? = nil) {}
+
+# A `->` ends the body it is in, and gives that body's construct its value.
+# A statement has no value, so nothing takes these.
+func in_with(g: Gate) -> int {
+    with g { -> 1 }
+    return 0
+}
+func in_if(c: bool) -> int {
+    if c { -> 1 } else { -> 2 }
+    return 0
+}
+func in_switch(x: int) -> int {
+    switch x {
+        case 1 { -> 10 }
+    }
+    return 0
+}
+func in_loop() -> int {
+    for i in [1, 2] { -> i }
+    return 0
+}
+# Used as values, they are fine.
+func as_values(c: bool) -> int {
+    let a = with gate() { -> 1 }
+    return if c { -> a } else { -> 2 }
+}

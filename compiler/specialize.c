@@ -885,9 +885,18 @@ bind_trait_method(const n00bb_trait_binder_t *binder, ir_func_t *caller,
             if (call->op != IR_OP_CALL || !call->n_operands
                 || ir_operand_value(&call->operands[0]) != selection->dest)
                 continue;
+            th_type *site = ir_instr_call_signature(call);
             if ((closed && !ir_instr_set_call_signature(call, target->type))
-                || !n00bb_place_named_arguments(call, target))
+                || !n00bb_bind_call_target(caller, call, target, false))
                 return false;
+            // A method with type variables of its own (not the receiver's)
+            // takes them from the arguments.
+            if (!closed && !concrete_call_signature(call, target, types, true))
+                return false;
+            // The caller's variables a trait's signature left open (its
+            // copy's own) take the bound method's types.
+            n00bb_bind_caller_variables(types, site,
+                                        ir_instr_call_signature(call));
             th_type *signature = closed ? nullptr
                 : ir_instr_call_signature(call);
             core_list_t(type_binding_t) bindings = {0};

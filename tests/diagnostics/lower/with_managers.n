@@ -1,0 +1,91 @@
+record Inert {
+    n: int
+}
+func inert() -> Inert { return (n = 1) }
+
+record Quiet {
+    n: int
+}
+func quiet() -> Quiet { return (n = 2) }
+func poke(self: Quiet) -> int { return self.n }
+func risky(self: Quiet) -> int fail: string {
+    if self.n > 3 { fail "big" }
+    return self.n
+}
+
+func not_a_manager() {
+    with inert() {
+    }
+}
+
+func needless_bang(q: Quiet) -> int fail: string {
+    return q.poke()!
+}
+
+func unhandled(q: Quiet) -> int {
+    return q.risky()
+}
+
+record Sealed {
+    n: int
+}
+func sealed() -> Sealed { return (n = 4) }
+func __enter(self: Sealed) -> int fail: string {
+    if self.n > 3 { fail "sealed" }
+    return self.n
+}
+func __exit(self: Sealed, value: int, failure: 'E? = nil) {}
+
+record Still {
+    n: int
+}
+func still() -> Still { return (n = 5) }
+func __enter(self: Still) -> int { return self.n }
+func __exit(self: Still, value: int, failure: 'E? = nil) {}
+
+# A `with` may fail as its managers do; this one's can't.
+func calm() -> int {
+    with v = still() { return v }
+    return 0
+}
+func calm_banged() -> int fail: string {
+    return calm()!
+}
+# This one's can, so its callers pass the failure on.
+func opened() -> int {
+    with v = sealed() { return v }
+    return 0
+}
+func opened_plainly() -> int {
+    return opened()
+}
+
+# An `__exit` returning a `bool` can drop a failure: fine for a `with`
+# statement, but a `with` used as a value would be left with no value.
+record Dropper {
+    n: int
+}
+func dropper() -> Dropper { return (n = 6) }
+func __enter(self: Dropper) {}
+func __exit(self: Dropper, value: nil, failure: 'E? = nil) -> bool {
+    return failure != nil
+}
+func dropped_statement() {
+    with dropper() {}
+}
+func dropped_value() -> int {
+    return with d = dropper() { -> 1 }
+}
+
+# `__exit` returns nothing or a `bool`.
+record Counter {
+    n: int
+}
+func counter() -> Counter { return (n = 7) }
+func __enter(self: Counter) {}
+func __exit(self: Counter, value: nil, failure: 'E? = nil) -> int {
+    return self.n
+}
+func counted() {
+    with counter() {}
+}

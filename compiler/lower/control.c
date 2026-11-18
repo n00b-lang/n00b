@@ -911,7 +911,10 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         return false;
     }
     frame->iteration_cursor = cursor_local;
-    frame->cleanup_active = true;
+    // From here every way out of the loop calls `__cleanup`.
+    if (!n00bb_exit_scope_open(context, &frame->scope, frame->order, false,
+                               span))
+        return false;
     ir_instr_t *enter = ir_instr_add(context->block, IR_OP_JUMP);
     if (!enter || !ir_instr_operand_block(enter, frame->header)) {
         lower_internal(context, span,
@@ -933,8 +936,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
             option_type, frame->node)
         : nullptr;
     th_type *bool_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool"));
-    ir_block_t *cleanup = n00bb_branch_block(context, lower,
-                                              "for_cleanup");
+    ir_block_t *cleanup = n00bb_branch_block(context, lower, "for_done");
     ir_instr_t *test = option && bool_type && cleanup
         ? ir_lower_emit_instruction(context, IR_OP_OPTION_IS_NIL, span)
         : nullptr;
@@ -956,15 +958,9 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
 
     context->block = cleanup;
     context->reachable = true;
-    if (!n00bb_emit_iteration_cleanup(context, frame, frame->node))
+    if (!n00bb_exit_scope_jump(context, &frame->scope,
+                               N00BB_EXIT_FALLTHROUGH, nullptr, span))
         return false;
-    ir_instr_t *done = ir_instr_add(context->block, IR_OP_JUMP);
-    if (!done || !ir_instr_operand_block(done, frame->exit)) {
-        lower_internal(context, span,
-                    "could not leave an exhausted iteration");
-        return false;
-    }
-    done->span = span;
 
     context->block = frame->body_block;
     context->reachable = true;
@@ -1048,22 +1044,34 @@ int
 n00bb_route_try_error(ir_lower_context_t *context, ir_value_t *error,
                       ir_span_t span)
 {
+    return n00bb_route_failure_before(context, error, span, UINT64_MAX);
+}
+
+int
+n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
+                           ir_span_t span, uint64_t before_order)
+{
     n00bb_lower_context_t *lower = context->user;
     n00bb_try_frame_t *frame = nullptr;
-    for (size_t i = lower->tries.len; i > 0; i--) {
-        n00bb_try_frame_t *candidate = &lower->tries.data[i - 1];
-        if (candidate->active && candidate->in_body) {
-            frame = candidate;
-            break;
-        }
-    }
-    if (!frame) return 0;
-    th_type *failure = error && error->type ? th_resolve(error->type)
-                                            : nullptr;
+    n00bb_exit_scope_t *first = nullptr, *scope = nullptr;
+    n00bb_failure_handler(lower, before_order, &frame, &first);
+    // A loop passes a failure on: it goes into the loop only when a
+    // handler outside the loop takes it.
+    scope = first;
+    while (scope && !scope->handles)
+        n00bb_failure_handler(lower, scope->order, &frame, &scope);
+    if (!frame && !scope) return 0;
+    // The `try` notes the first failure it gets that `nil` doesn't fit,
+    // here where its type is still the raised one.
+    th_type *failure = frame && error && error->type
+        ? th_resolve(error->type) : nullptr;
     if (failure && !frame->other_failure && !th_is_nil(failure)
         && !th_option_item(failure)
         && th_kind_of(failure) != TH_VAR)
         frame->other_failure = failure;
+    if (first)
+        return n00bb_exit_scope_jump(context, first, N00BB_EXIT_FAILURE,
+                                     error, span) ? 1 : -1;
     if (frame->error_symbol
         && !n00bb_store_try_error(context, lower, frame, error, span))
         return -1;
@@ -1684,6 +1692,21 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 return false;
             }
             frame->binding_scope_active = false;
+            if (frame->scope.open) {
+                ir_span_t span = lower_span_for_tree(context, frame->node);
+                bool reached = false;
+                ir_value_t *failure = nullptr;
+                // The back edge has already left: nothing falls through.
+                context->reachable = false;
+                if (!n00bb_exit_scope_close(context, &frame->scope, span,
+                                            &reached, &failure)
+                    || (reached && (!n00bb_emit_iteration_cleanup(context,
+                                        frame, frame->node)
+                        || !n00bb_exit_scope_finish(context, &frame->scope,
+                               frame->exit, nullptr, frame->node,
+                               N00B_TEXT_PHRASE_THIS_CALL))))
+                    return false;
+            }
             context->block = frame->exit;
             context->reachable = true;
         }
@@ -2270,6 +2293,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         n00bb_loop_frame_t frame =
             lower->loops.data[--lower->loops.len];
         core_list_free(frame.iteration_bindings);
+        n00bb_exit_scope_free(&frame.scope);
         if (frame.active) {
             context->block = frame.exit;
             context->reachable = true;
@@ -2530,6 +2554,65 @@ n00bb_expression_owns_body(n00bb_lower_context_t *lower,
                         CORE_STRING_STATIC("value-body")) == body)
             return true;
     }
+    for (size_t i = 0; i < lower->withs.len; i++) {
+        n00bb_with_frame_t *frame = &lower->withs.data[i];
+        if (frame->active && frame->expression && frame->body == body)
+            return true;
+    }
+    return false;
+}
+
+// The statements whose bodies a `->` can end, by mistake: what to call
+// each, and the keyword of its value form if it has one.
+static const struct {
+    const char *rule;
+    n00bb_text_t phrase;
+    const char *keyword;
+} value_less_statements[] = {
+    {"if-stmt", N00B_TEXT_IN_IF_STATEMENT, "if"},
+    {"switch-stmt", N00B_TEXT_IN_SWITCH_STATEMENT, "switch"},
+    {"typecase-stmt", N00B_TEXT_IN_TYPECASE_STATEMENT, "typecase"},
+    {"try-stmt", N00B_TEXT_IN_TRY_STATEMENT, "try"},
+    {"with-stmt", N00B_TEXT_IN_WITH_STATEMENT, "with"},
+    {"for-stmt", N00B_TEXT_IN_FOR_LOOP, nullptr},
+    {"while-stmt", N00B_TEXT_IN_WHILE_LOOP, nullptr},
+    {"when-stmt", N00B_TEXT_IN_WHEN_STATEMENT, nullptr},
+};
+
+// `->` at `node` ends `owner`, a body of a statement, which has no value.
+static bool
+report_value_not_taken(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *node, parse_tree_t *owner)
+{
+    size_t count = sizeof(value_less_statements)
+                 / sizeof(value_less_statements[0]);
+    size_t found = count;
+    for (parse_tree_t *at = owner ? parse_tree_parent(owner) : nullptr;
+         at && found == count; at = parse_tree_parent(at))
+        for (size_t i = 0; i < count && found == count; i++)
+            if (nt_is(grammar, at, core_string_borrow(
+                    value_less_statements[i].rule,
+                    strlen(value_less_statements[i].rule))))
+                found = i;
+    ir_span_t span = lower_span_for_tree(context, node);
+    if (found == count) {
+        lower_internal(context, span,
+                       "a `->` ends a body that nothing takes a value from");
+        return false;
+    }
+    n00bb_text_t phrase = value_less_statements[found].phrase;
+    const char *keyword = value_less_statements[found].keyword;
+    lower_report(context, N00B_DIAG_VALUE_NOT_TAKEN, span,
+                 keyword ? N00B_TEXT_VALUE_NOT_TAKEN
+                         : N00B_TEXT_VALUE_NOT_TAKEN_NO_VALUE,
+                 N00BB_ARGS(ARG_PHRASE_ID(phrase)));
+    if (keyword)
+        lower_help(context, N00B_TEXT_VALUE_NOT_TAKEN_USE_IT,
+                   N00BB_ARGS(ARG_TEXT(core_string_borrow(keyword,
+                                                          strlen(keyword)))));
+    else
+        lower_help(context, N00B_TEXT_VALUE_NOT_TAKEN_REMOVE,
+                   N00BB_NO_ARGS);
     return false;
 }
 
@@ -2565,8 +2648,13 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 lower_span_for_tree(context, expression));
             if (!read || !ir_lower_set_node_value(context, expression, read))
                 return false;
+            result = read;
         }
-        return n00bb_emit_with_success(context, visit->node);
+        ir_value_t *carried = result;
+        if (!n00bb_emit_scoped_success(context, visit->node, 0, &carried))
+            return false;
+        return carried == result || !context->reachable
+            || ir_lower_set_node_value(context, expression, carried);
     }
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
         if (entering || !context->reachable) return true;
@@ -2584,15 +2672,15 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression)
                 : nullptr;
-            ir_instr_t *store = value
+            // The value is stored once the constructs it leaves are left.
+            bool left = value && n00bb_emit_scoped_success(context,
+                visit->node, frame->order, &value);
+            ir_instr_t *store = left
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
             bool stored = store && ir_instr_set_dest_local(store,
                                                            frame->result)
-                && ir_instr_operand_value(store, value)
-                && n00bb_emit_scoped_cleanups(context, visit->node,
-                                              frame->order, nullptr, true,
-                                              UINT64_MAX);
+                && ir_instr_operand_value(store, value);
             ir_instr_t *jump = stored
                 ? ir_instr_add(context->block, IR_OP_JUMP) : nullptr;
             if (!jump || !ir_instr_operand_block(jump, frame->continuation)) {
@@ -2610,13 +2698,9 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         // A value body's value is taken by the expression that owns it.
         if (owner && n00bb_expression_owns_body(lower, visit->grammar, owner))
             return true;
-        if (!owner || owner != lower->function_body) {
-            lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
-                lower_span_for_tree(context, visit->node),
-                N00B_TEXT_NOT_SUPPORTED_YET_A_VALUE,
-                N00BB_NO_ARGS);
-            return false;
-        }
+        if (!owner || owner != lower->function_body)
+            return report_value_not_taken(context, visit->grammar,
+                                          visit->node, owner);
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                             CORE_STRING_STATIC("expression"));
         ir_value_t *value = expression
@@ -2627,7 +2711,9 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                 "function value body has no value");
             return false;
         }
-        if (!n00bb_emit_with_success(context, visit->node)) return false;
+        if (!n00bb_emit_scoped_success(context, visit->node, 0, &value))
+            return false;
+        if (!context->reachable) return true;
         if (!n00bb_emit_success_return(context, value,
                 lower_span_for_tree(context, visit->node))) {
             lower_internal(context,
@@ -2650,8 +2736,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                            "fail statement has no failure value");
             return false;
         }
-        if (!n00bb_emit_with_failure(context, visit->node))
-            return false;
         int routed = n00bb_route_try_error(context, value, span);
         if (routed) return routed > 0;
         th_type *failure_type = lower->function_symbol
@@ -2671,20 +2755,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                     N00BB_ARGS(ARG_TEXT(function->name)));
             return false;
         }
-        if (!value) {
-            lower_internal(context, span, "could not lower the failure value");
-            return false;
-        }
-        ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
-        if (!fail || !ir_instr_operand_value(fail, value)) {
-            lower_internal(context,
-                span,
-                "could not emit function failure exit");
-            return false;
-        }
-        fail->span = span;
-        context->reachable = false;
-        return true;
+        return n00bb_emit_function_failure(context, value, span, UINT64_MAX);
     }
     if (!entering) return true;
     if (core_string_eq(name, CORE_STRING_STATIC("return-stmt"))) return true;
@@ -2719,8 +2790,8 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t i = lower->switches.len; i > 0; i--) {
             n00bb_switch_frame_t *candidate = &lower->switches.data[i - 1];
             if (candidate->active && (!target_name.data || core_string_eq(
-                    candidate->label, target_name)) && (!switch_target
-                || candidate->order > best_order)) {
+                    candidate->label, target_name))
+                && candidate->order > best_order) {
                 switch_target = candidate;
                 typecase_target = nullptr;
                 target = nullptr;
@@ -2756,12 +2827,16 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     ir_block_t *destination = typecase_target ? typecase_target->join
         : switch_target ? switch_target->join
         : is_break ? target->exit : target->continue_block;
-    if (target) {
-        if (!n00bb_emit_scoped_success(context, visit->node, target)
-            || (is_break && !n00bb_emit_iteration_cleanup(
-                    context, target, visit->node)))
-            return false;
-    }
+    uint64_t target_order = typecase_target ? typecase_target->order
+        : switch_target ? switch_target->order : target->order;
+    if (!n00bb_emit_scoped_success(context, visit->node, target_order,
+                                   nullptr))
+        return false;
+    // A `break` leaves its loop as running out does.
+    if (target && is_break && target->scope.open)
+        return n00bb_exit_scope_jump(context, &target->scope,
+            N00BB_EXIT_FALLTHROUGH, nullptr,
+            lower_span_for_tree(context, visit->node));
     ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
     if (!jump || !ir_instr_operand_block(jump, destination)) {
         lower_internal(context,

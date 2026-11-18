@@ -1,0 +1,17 @@
+record ArchiveManager {
+    id: int
+}
+
+func archive_manager(id: int, derived: int = id + 1) -> ArchiveManager {
+    return (id = derived)
+}
+
+func __enter(self: ArchiveManager) -> int {
+    return self.id
+}
+
+func __exit(self: ArchiveManager, value: int, failure: 'E? = nil) -> bool
+        fail: int {
+    if value < 0 { fail value }
+    return failure != nil
+}

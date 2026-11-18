@@ -221,14 +221,6 @@ N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "type, such as a `record`, is copied on assignment, so each copy would\n"
     "be finalized. Declare the type as an `object`, or keep the resource in\n"
     "an `object` field.")
-N00B_DIAG(CONTEXT_FAIL_WITHOUT_TYPE, "N00B-T0555", ERROR,
-    "a context has a `fail` hook but no failure type",
-    "A context's `fail` hook receives the context's failure value, so the\n"
-    "context must declare `fail: T`. Add it, or remove the hook.")
-N00B_DIAG(CONTEXT_HOOK_PARAMETER, "N00B-T0556", ERROR,
-    "a context hook's parameter has a different type than the context gives it",
-    "The `enter` hook's parameter receives the provided value and the `fail`\n"
-    "hook's parameter the failure value; their declared types must match.")
 N00B_DIAG(ARRAY_SIZE_NOT_POSITIVE, "N00B-T0557", ERROR,
     "an array size is zero or negative",
     "Each sized array dimension holds at least one element:\n"
@@ -306,6 +298,32 @@ N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
     "a `for` loop iterates over a value that cannot be iterated",
     "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
     "such as a list or a range.")
+N00B_DIAG(TRAIT_PARAMETER_FIXED, "N00B-T0602", ERROR,
+    "calls through one trait bound give a trait parameter different types",
+    "A trait's type parameters are the type variables its methods name\n"
+    "besides the receiver's. A bound such as `'C: Opener` fixes them once,\n"
+    "so every call through `'C` uses the same types. To pass values of\n"
+    "different types, pass a variant type that holds either.")
+N00B_DIAG(NOT_A_CONTEXT, "N00B-T0601", ERROR,
+    "a `with` statement is given a value that is not a context manager",
+    "`with` needs a value whose type implements the `Context_Manager`\n"
+    "trait: an `__enter` that runs before the block, and an `__exit` that\n"
+    "runs on every way out of it:\n"
+    "    func __enter(self: Lock) -> Guard { ... }\n"
+    "    func __exit(self: Lock, value: Guard, failure: 'E? = nil) { ... }")
+N00B_DIAG(EXIT_RESULT, "N00B-T0603", ERROR,
+    "a context manager's `__exit` returns something other than a `bool`",
+    "An `__exit` returns nothing, or a `bool` saying whether to drop the\n"
+    "failure it was given: `true` drops it, and the program continues after\n"
+    "the `with`. An `__exit` that never drops a failure returns nothing:\n"
+    "    func __exit(self: Lock, value: Guard, failure: 'E? = nil) { ... }")
+N00B_DIAG(WITH_VALUE_DROPS, "N00B-T0604", ERROR,
+    "a `with` used as a value has a manager that can drop a failure",
+    "A `with` used as a value is the value its body gives. When the body\n"
+    "fails there is no value, so the failure has to go on. A manager whose\n"
+    "`__exit` returns a `bool` can drop a failure by returning `true`, so\n"
+    "it can only be used by a `with` statement. A manager that never drops\n"
+    "a failure has an `__exit` that returns nothing.")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"

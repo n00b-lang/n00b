@@ -3,28 +3,28 @@ func twice(n: int) -> int {
 }
 
 require twice("four") == 8
-context Label(s: string) {
-    enter() {
-    }
-    ensure() {
-    }
+record Label { s: string }
+func label(s: string) -> Label {
+    return (s = s)
 }
+func __enter(self: Label) { }
+func __exit(self: Label, value: nil, failure: 'E? = nil) -> bool { return false }
 
 func f(x: int) -> int {
     return x
 }
 
 var b: Buffer = buffer_from_string("abc")
-with Label("a", "b") {
+with label("a", "b") {
 }
-with Label() {
+with label() {
 }
-with Label(s = b) {
+with label(s = b) {
     b += "x"
 }
-with Label(s = 1) {
+with label(s = 1) {
 }
-with Label(b) {
+with label(b) {
     b += "x"
 }
 require f(x = "str") == 1

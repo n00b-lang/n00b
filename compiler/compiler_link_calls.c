@@ -68,32 +68,23 @@ publish_link_call_dependencies(core_link_unit_t *link,
             parse_sym_entry_t *callee = bound_function_symbol(label->cond);
             if (trait_dispatch && n00bb_builtin_option_function(callee))
                 continue;
-            parse_sym_entry_t *context = attached_symbol(
-                analysis->grammar, unit, label->cond);
-            bool context_call = !callee
-                && context_symbol(analysis->grammar, context);
-            if (context_call) callee = context;
             core_link_declaration_t *target = callee
                 ? link_declaration_for_symbol(analysis, callee) : nullptr;
             bool external = target
                 && core_link_declaration_is_external_requirement(target);
-            parse_sym_entry_t *caller = link_effect_owner_symbol(
+            parse_sym_entry_t *caller = enclosing_function_symbol(
                 analysis->grammar, label->self);
             core_link_declaration_t *source = caller
                 ? link_declaration_for_symbol(analysis, caller) : nullptr;
             bool valid_caller = !caller
-                || caller->kind == PARSE_SYM_FUNCTION
-                || context_symbol(analysis->grammar, caller);
+                || caller->kind == PARSE_SYM_FUNCTION;
             bool resolved = target && callee
-                && (context_call
-                    ? context_symbol(analysis->grammar, callee)
-                    : callee->kind == PARSE_SYM_FUNCTION)
+                && callee->kind == PARSE_SYM_FUNCTION
                 && valid_caller && (!caller || source);
             if (caller && !source)
                 source = nullptr;
             if (!core_link_unit_add_dependency(link,
-                    context_call ? N00BB_LINK_DEPENDENCY_CONTEXT_CALL
-                    : trait_dispatch
+                    trait_dispatch
                         ? N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH
                         : N00BB_LINK_DEPENDENCY_CALL,
                     producer_stage,

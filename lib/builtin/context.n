@@ -1,0 +1,14 @@
+# The trait `with` runs. `with name = manager { ... }` calls the manager's
+# `__enter` before the block, binding what it returns to `name`, and its
+# `__exit` on every way out of the block, passing it what `__enter`
+# returned and, when the block failed, the failure as `failure`. Either
+# hook may fail; one that can't simply declares no `fail:`.
+#
+# An `__exit` that returns nothing never drops a failure. One that returns
+# a `bool` drops a failure by returning `true`; a `with` used as a value
+# can't use such a manager, since a dropped failure leaves it no value.
+
+trait Context_Manager {
+    func __enter(self: 'T) -> 'V fail: 'F
+    func __exit(self: 'T, value: 'V, failure: 'E? = nil) -> 'D fail: 'G
+}
