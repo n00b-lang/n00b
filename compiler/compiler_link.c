@@ -299,7 +299,6 @@ resolve_type_member_references(core_link_unit_t *link,
                                n00bb_link_analysis_t *analysis)
 {
     parse_grammar_t *grammar = analysis->grammar;
-    bool all_resolved = true;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -330,7 +329,7 @@ resolve_type_member_references(core_link_unit_t *link,
                 report_enum_member_missing(unit, node, owner, receiver,
                                            scope, name);
                 site->unresolved = true;
-                all_resolved = false;
+                site->blocks_lowering = true;
                 continue;
             }
             if (!member || member->kind != PARSE_SYM_ENUM_CONST) continue;
@@ -355,7 +354,7 @@ resolve_type_member_references(core_link_unit_t *link,
                     core_source_file_path(&unit->source))) return false;
         }
     }
-    return all_resolved;
+    return true;
 }
 
 static void
@@ -2512,6 +2511,7 @@ resolve_module_member_name(core_translation_unit_t *unit,
     else if (found.len > 1) {
         report_ambiguous_member(unit, site->node, name, &found);
         site->unresolved = true;
+        site->blocks_lowering = true;
     }
     core_list_free(found);
     return ok;
@@ -2613,14 +2613,14 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                         missing.type, missing.type->member_scope,
                         missing.name);
                     site->unresolved = true;
+                    site->blocks_lowering = true;
                 }
                 if (!site->symbol && !site->unresolved
                     && !resolve_module_member_name(unit, state, site))
                     return false;
-                if (site->unresolved) {
-                    all_resolved = false;
-                    continue;
-                }
+                // The error is reported; keep resolving so every name
+                // error is, and stop before lowering instead.
+                if (site->unresolved) continue;
             }
             if (site->symbol && site->symbol->kind == PARSE_SYM_MODULE
                 && !site->dotted_path

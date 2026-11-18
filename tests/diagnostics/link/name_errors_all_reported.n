@@ -1,0 +1,11 @@
+import text
+
+enum Phase { idle, busy }
+enum Handshake { idle, waiting }
+
+func start() {
+    let shade = Phase.paused
+    let state = idle
+    let unit = text.Index_Unit.bytes
+    let total = countr + 1
+}
