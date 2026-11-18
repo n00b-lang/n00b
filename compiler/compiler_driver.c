@@ -191,6 +191,18 @@ typedef struct {
     bool parse;
 } locate_worker_context_t;
 
+// A place outside the library where a shadowed library module was reached:
+// an import (`at` set) or an implicit import, which named `loaded`.
+typedef struct {
+    n00bb_stdlib_shadow_t   *cause;
+    core_translation_unit_t *unit;
+    core_diag_location_t     at;
+    core_string_t            loaded;
+    bool                     implicit;
+} shadow_site_t;
+
+core_list_decl(shadow_site_t);
+
 typedef struct {
     core_work_queue_t *queue;
     n00bb_resolver_t *resolver;
@@ -202,6 +214,13 @@ typedef struct {
     n00bb_preprocessor_t *preprocessor;
     th_ctx *types;
     const n00bb_module_generators_t *generators;
+    // Gathered while loading, which runs in no fixed order, and reported
+    // once loading is over (report_shadow_sites), so the place chosen does
+    // not depend on which import got there first.
+    core_list_t(shadow_site_t) shadow_sites;
+    // Every import statement outside the library (`cause` unset).
+    core_list_t(shadow_site_t) import_sites;
+    pthread_mutex_t shadow_sites_lock;
 } import_driver_t;
 
 typedef core_module_spec_t n00bb_module_candidate_t;
@@ -1101,6 +1120,9 @@ report_shadow_cause(core_diagnostics_t *diagnostics,
     else if (reach == SHADOW_REACHED_BY_IMPORT && other)
         n00bb_report_note(diagnostics, N00B_TEXT_LOADED_BY_IMPORTING,
             N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(loaded)));
+    else if (reach == SHADOW_REACHED_BY_IMPORT)
+        n00bb_report_note(diagnostics, N00B_TEXT_IMPORTED_DIRECTLY,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
     else if (reach == SHADOW_REACHED_FROM_COMMAND_LINE)
         n00bb_report_note(diagnostics, N00B_TEXT_LOADED_FOR_COMMAND_LINE,
             N00BB_ARGS(ARG_TEXT(loaded.data ? loaded : cause->name)));
@@ -1426,6 +1448,46 @@ import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
     return true;
 }
 
+// Every import outside the library, whether or not loading gets as far as
+// it, for placing a shadowing error (report_shadow_sites).
+static void
+note_import_site(import_driver_t *driver, core_translation_unit_t *importer,
+                 parse_tree_t *statement, core_string_t identifier)
+{
+    if (n00bb_resolver_unit_in_stdlib(driver->resolver, importer)) return;
+    pthread_mutex_lock(&driver->shadow_sites_lock);
+    core_list_push(driver->import_sites, ((shadow_site_t){
+        .unit = importer,
+        .at = import_location(statement),
+        .loaded = core_string_dup(identifier),
+    }));
+    pthread_mutex_unlock(&driver->shadow_sites_lock);
+}
+
+// The imports of a module whose implicit import failed, which stops its
+// preprocessing before its own imports are prepared.
+static void
+note_unprepared_imports(import_driver_t *driver, parse_grammar_t *grammar,
+                        core_translation_unit_t *importer, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("module-source"))) {
+        parse_tree_t *member = parse_tree_find_flat_child_by_nt_name(
+            grammar, node, CORE_STRING_STATIC("member-chain"));
+        core_buffer_t *name = core_buffer_empty();
+        bool has_name = false;
+        append_import_names(grammar, member, name, &has_name);
+        if (has_name)
+            note_import_site(driver, importer, node,
+                core_string_borrow(name->data, name->byte_len));
+        core_buffer_free(name);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        note_unprepared_imports(driver, grammar, importer,
+                                core_tree_child(node, i));
+}
+
 static bool
 prepare_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
                core_translation_unit_t *importer)
@@ -1443,6 +1505,7 @@ prepare_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
         core_module_spec_release(&module);
         return false;
     }
+    note_import_site(driver, importer, statement, module.identifier);
     core_work_job_t *job = nullptr;
     bool scheduled = add_locate_request_for_module(driver->queue,
         driver->requests, driver->requests_lock, &module, operand, false,
@@ -1517,10 +1580,15 @@ pass_stdlib_shadow(import_driver_t *driver, core_translation_unit_t *importer,
         if (state && !state->stdlib_shadow) state->stdlib_shadow = cause;
         return;
     }
-    if (!n00bb_resolver_claim_shadow(driver->resolver, cause)) return;
-    report_shadow_cause(core_translation_unit_diagnostics(importer), importer,
-        import_location(statement), cause, loaded,
-        statement ? SHADOW_REACHED_BY_IMPORT : SHADOW_REACHED_IMPLICITLY);
+    pthread_mutex_lock(&driver->shadow_sites_lock);
+    core_list_push(driver->shadow_sites, ((shadow_site_t){
+        .cause = cause,
+        .unit = importer,
+        .at = import_location(statement),
+        .loaded = core_string_dup(loaded),
+        .implicit = statement == nullptr,
+    }));
+    pthread_mutex_unlock(&driver->shadow_sites_lock);
 }
 
 // `importer` fails because `failed` did; a shadowed library module behind
@@ -2936,7 +3004,88 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
     if (name.u8_bytes >= sizeof("builtin.") - 1
         && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
         return true;
-    return load_runtime_module(opaque, grammar, importer, module_name);
+    if (load_runtime_module(opaque, grammar, importer, module_name))
+        return true;
+    n00bb_lex_result_t *lex = importer_state ? importer_state->lex : nullptr;
+    if (lex && lex->parser)
+        note_unprepared_imports(opaque, grammar, importer,
+                                parse_pwz_get_tree(lex->parser));
+    return false;
+}
+
+// True when one name is the other or a package holding it.
+static bool
+names_related(core_string_t a, core_string_t b)
+{
+    if (core_string_eq(a, b)) return true;
+    core_string_t shorter = a.u8_bytes < b.u8_bytes ? a : b;
+    core_string_t longer = a.u8_bytes < b.u8_bytes ? b : a;
+    return core_string_starts_with(longer, shorter)
+        && longer.data[shorter.u8_bytes] == '.';
+}
+
+static int
+compare_positions(core_translation_unit_t *a, core_diag_location_t at,
+                  core_translation_unit_t *b, core_diag_location_t bt)
+{
+    int paths = core_string_cmp(core_source_file_path(&a->source),
+                                core_source_file_path(&b->source));
+    if (paths) return paths;
+    if (at.line != bt.line) return at.line < bt.line ? -1 : 1;
+    if (at.column != bt.column) return at.column < bt.column ? -1 : 1;
+    return 0;
+}
+
+// Reports each shadowed library module once, at a place chosen by a fixed
+// rule rather than by which import reached it first: the first import in
+// source order, in the first module by path, that names the module or a
+// package holding it (or held by it); failing that, the first explicit
+// import that reached it; failing that, the first implicit one.
+static void
+report_shadow_sites(import_driver_t *driver)
+{
+    n00bb_resolver_t *resolver = driver->resolver;
+    for (size_t r = 0; r < n00bb_resolver_shadow_count(resolver); r++) {
+        n00bb_stdlib_shadow_t *cause = n00bb_resolver_shadow_at(resolver, r);
+        bool reached = false;
+        for (size_t s = 0; !reached && s < driver->shadow_sites.len; s++)
+            reached = driver->shadow_sites.data[s].cause == cause;
+        if (!reached) continue;
+        // Imports are recorded as they are seen, so whether or not loading
+        // got as far as each, and in no fixed order; the earliest wins.
+        shadow_site_t *named = nullptr;
+        for (size_t s = 0; s < driver->import_sites.len; s++) {
+            shadow_site_t *site = &driver->import_sites.data[s];
+            if (names_related(site->loaded, cause->name)
+                && (!named || compare_positions(site->unit, site->at,
+                                                named->unit, named->at) < 0))
+                named = site;
+        }
+        core_translation_unit_t *unit = named ? named->unit : nullptr;
+        core_diag_location_t at = named ? named->at : (core_diag_location_t){0};
+        core_string_t loaded = named ? named->loaded : (core_string_t){0};
+        shadow_site_t *best = nullptr;
+        for (size_t s = 0; !unit && s < driver->shadow_sites.len; s++) {
+            shadow_site_t *site = &driver->shadow_sites.data[s];
+            if (site->cause != cause) continue;
+            if (!best || (best->implicit && !site->implicit)
+                || (best->implicit == site->implicit
+                    && compare_positions(site->unit, site->at, best->unit,
+                                         best->at) < 0))
+                best = site;
+        }
+        if (n00bb_resolver_claim_shadow(resolver, cause)) {
+            if (unit)
+                report_shadow_cause(core_translation_unit_diagnostics(unit),
+                    unit, at, cause, loaded, SHADOW_REACHED_BY_IMPORT);
+            else
+                report_shadow_cause(
+                    core_translation_unit_diagnostics(best->unit), best->unit,
+                    best->at, cause, best->loaded,
+                    best->implicit ? SHADOW_REACHED_IMPLICITLY
+                                   : SHADOW_REACHED_BY_IMPORT);
+        }
+    }
 }
 
 typedef struct {
@@ -3115,7 +3264,10 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         .worker_count = worker_count,
         .grammar = grammar,
         .types = types,
+        .shadow_sites = core_list_new(shadow_site_t),
+        .import_sites = core_list_new(shadow_site_t),
     };
+    pthread_mutex_init(&import_driver.shadow_sites_lock, nullptr);
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
     active_options.load_import = load_import;
     active_options.load_implicit_import = load_implicit_builtin;
@@ -3320,6 +3472,16 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     core_free(worker_threads);
     pthread_mutex_destroy(&requests_lock);
     n00bb_interface_metadata_index_free(&loader.interfaces);
+
+    // Loading is over; place each shadowed library module's error.
+    report_shadow_sites(&import_driver);
+    for (size_t i = 0; i < import_driver.shadow_sites.len; i++)
+        core_free(import_driver.shadow_sites.data[i].loaded.data);
+    core_list_free(import_driver.shadow_sites);
+    for (size_t i = 0; i < import_driver.import_sites.len; i++)
+        core_free(import_driver.import_sites.data[i].loaded.data);
+    core_list_free(import_driver.import_sites);
+    pthread_mutex_destroy(&import_driver.shadow_sites_lock);
 
     for (size_t i = 0; i < requests->ordered.len; i++) {
         core_translation_unit_t *unit = core_work_job_result(

@@ -132,22 +132,34 @@ shadowed_case() {
         }
     done
 }
+# The last shadowed_case run must also say how the module was reached.
+expect_note() {
+    grep -Fxq "  note: $2" "$tmp/shadow.log" || {
+        echo "$1: no note '$2'" >&2
+        cat "$tmp/shadow.log" >&2
+        exit 1
+    }
+}
 module='func one() -> int { return 1 }\n'
+# `builtin` reaches unicode as well, but the error goes to the user's own
+# import of it, whichever gets there first.
 printf "$module" >"$shadow/project/unicode.n"
-# (`builtin` also reaches unicode, so the report may come from the implicit
-# import, at the top of the module.)
 shadowed_case 'file in the current directory' uses_unicode.n \
-    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n project/unicode.n \
+    'uses_unicode\.n:1:8: ' unicode unicode/__init.n project/unicode.n \
     'on off'
+expect_note 'file in the current directory' \
+    '`unicode` is imported here directly'
 rm "$shadow/project/unicode.n"
 printf "$module" >"$shadow/path/unicode.n"
 shadowed_case 'file on N00B_PATH' uses_unicode.n \
-    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n path/unicode.n
+    'uses_unicode\.n:1:8: ' unicode unicode/__init.n path/unicode.n
+expect_note 'file on N00B_PATH' '`unicode` is imported here directly'
 rm "$shadow/path/unicode.n"
 mkdir "$shadow/project/sys"
 printf "$module" >"$shadow/project/sys/env.n"
-shadowed_case 'nested file' uses_env.n 'uses_env\.n(:1:8)?: ' sys.env \
+shadowed_case 'nested file' uses_env.n 'uses_env\.n:1:8: ' sys.env \
     sys/env/__init.n project/sys/env.n
+expect_note 'nested file' '`sys.env` is imported here directly'
 rm -r "$shadow/project/sys"
 # (langtools is not loaded by `builtin`, so the user's import is the only way
 # these are reached.)
@@ -167,8 +179,9 @@ rm -r "$shadow/project/langtools"
 mkdir "$shadow/path/mine"
 printf 'package unicode {\n}\n' >"$shadow/path/mine/__init.n"
 shadowed_case 'manifest elsewhere' uses_unicode.n \
-    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n path/mine/__init.n \
+    'uses_unicode\.n:1:8: ' unicode unicode/__init.n path/mine/__init.n \
     'on off'
+expect_note 'manifest elsewhere' '`unicode` is imported here directly'
 rm -r "$shadow/path/mine"
 mkdir -p "$shadow/project/langtools/internal"
 printf "$module" >"$shadow/project/langtools/internal/diag.n"
@@ -181,6 +194,14 @@ grep -Fxq '  note: `langtools.internal.diag` is loaded by importing `langtools`'
     cat "$tmp/shadow.log" >&2
     exit 1
 }
+# With several imports of it, the first module by path gets the error.
+printf 'import b_langtools_user\nimport langtools\n' \
+    >"$shadow/project/z_langtools_root.n"
+printf 'require 1 == 1\nimport langtools\n' \
+    >"$shadow/project/b_langtools_user.n"
+shadowed_case 'several importers' z_langtools_root.n \
+    'b_langtools_user\.n:2:8: ' langtools.internal.diag \
+    langtools/internal/diag.n project/langtools/internal/diag.n
 rm -r "$shadow/project/langtools"
 
 # Library modules reached with no import of them in the program are checked
@@ -188,7 +209,7 @@ rm -r "$shadow/project/langtools"
 # `sys.gc`, found only as the parent of the package imported.
 mkdir -p "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/__init.n"
-shadowed_case 'implicit builtin manifest' uses_helper.n '(uses_)?helper\.n: ' \
+shadowed_case 'implicit builtin manifest' uses_helper.n 'uses_helper\.n: ' \
     builtin.__init builtin/__init.n project/builtin/__init.n
 grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
     "$tmp/shadow.log" || {
@@ -199,15 +220,19 @@ grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
 rm "$shadow/project/builtin/__init.n"
 printf "$module" >"$shadow/project/builtin/sort.n"
 shadowed_case 'module of the builtin package' uses_helper.n \
-    '(uses_)?helper\.n: ' builtin.sort builtin/sort.n project/builtin/sort.n
+    'uses_helper\.n: ' builtin.sort builtin/sort.n project/builtin/sort.n
+expect_note 'module of the builtin package' \
+    '`builtin.sort` is loaded implicitly, through `builtin`'
 rm -r "$shadow/project/builtin"
 mkdir "$shadow/project/sys"
 printf "$module" >"$shadow/project/sys/gc.n"
 printf 'import sys.gc.alloc\n' >"$shadow/project/uses_gc.n"
-# Whichever reaches `sys.gc` first, the implicit `builtin` or the import,
-# reports it in uses_gc.n.
+# The implicit `builtin` reaches `sys.gc` too, but the user's import of a
+# package inside it is where the error goes.
 shadowed_case 'parent of an imported package' uses_gc.n \
-    'uses_gc\.n(:1:8)?: ' sys.gc sys/gc/__init.n project/sys/gc.n
+    'uses_gc\.n:1:8: ' sys.gc sys/gc/__init.n project/sys/gc.n 'on off'
+expect_note 'parent of an imported package' \
+    '`sys.gc` is loaded by importing `sys.gc.alloc`'
 rm -r "$shadow/project/sys"
 
 # A namesake nobody imports is no error, and other modules still resolve.
