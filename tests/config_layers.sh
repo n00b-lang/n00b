@@ -107,5 +107,19 @@ expect_line "redefinition" \
     "$native_project:3:1: error N00B-C0101: \`jobs\` is already defined"
 expect_line "redefinition" "  $native_project:2:1: note: first defined here"
 
+# A dev build keeps its caches under its own build identity, so a rebuilt
+# compiler never reads another build's entries: cleaning removes only this
+# build's directory, leaving another build's and the shared `dev` one.
+caches="$tmp/caches"
+mkdir -p "$caches/dev" "$caches/dev-0000000000000000"
+isolated N00B_CACHE="$(native "$caches")" "$compiler" cache clean \
+    >"$tmp/out" 2>&1
+expect_match "cache key" \
+    "^Nothing to clean: .*caches[/\\\\]dev-[0-9a-f]{16} does not exist\\.$"
+grep -q 'dev-0000000000000000 does not' "$tmp/out" \
+    && fail "cache key: the build used another build's cache directory"
+[ -d "$caches/dev" ] && [ -d "$caches/dev-0000000000000000" ] \
+    || fail "cache key: cleaning removed another build's cache"
+
 [ "$failed" -eq 0 ] && echo "config layering: all checks passed"
 [ "$failed" -eq 0 ]

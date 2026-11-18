@@ -100,6 +100,14 @@ dev_layout(void)
             CORE_STRING_STATIC(N00BB_WRIT_CONTRACT_DIR)),
     };
     core_buffer_release(&id);
+    // Every dev build shares a version, so its caches are kept apart by
+    // the build's identity (a hash of what it links): a rebuilt compiler
+    // never reads entries another build wrote.
+    core_buffer_t key = {0};
+    core_buffer_printf(&key, "dev-%016llx",
+                       (unsigned long long)n00bb_compiler_identity);
+    n00bb_cache_set_key(core_string_dup(core_buffer_string(&key)));
+    core_buffer_release(&key);
 }
 
 static core_string_t
