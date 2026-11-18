@@ -1,0 +1,3 @@
+tests/diagnostics/tu/type_argument_arity_order.n:4:20: error N00B-T0515: `Later` takes 1 type argument, but 2 are given
+  tests/diagnostics/tu/type_argument_arity_order.n:5:8: note: `Later` is declared here
+  help: remove the extra type argument

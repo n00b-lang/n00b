@@ -3104,19 +3104,26 @@ source_typevar_name(parse_tree_t *leaf)
     return core_string_borrow(spelling.data + 1, spelling.u8_bytes - 1);
 }
 
+// Whether a declaration owns the type variables written inside it. An
+// alias's type variables are its parameters: `alias Set = Dict['T, nil]`
+// is used as `Set[int]`.
+static bool
+typevar_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return NT_IS(grammar, node, "func-def")
+        || NT_IS(grammar, node, "trait-decl")
+        || NT_IS(grammar, node, "callback-decl")
+        || field_record_declaration(grammar, node)
+        || NT_IS(grammar, node, "variant-decl")
+        || (NT_IS(grammar, node, "alias-stmt")
+            && alias_declaration_is_transparent(grammar, node));
+}
+
 static parse_sym_entry_t *
 typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *owner_node = node;
-    // An alias's type variables are its parameters: `alias Set = Dict['T,
-    // nil]` is used as `Set[int]`.
-    while (owner_node && !NT_IS(grammar, owner_node, "func-def")
-           && !NT_IS(grammar, owner_node, "trait-decl")
-           && !NT_IS(grammar, owner_node, "callback-decl")
-           && !field_record_declaration(grammar, owner_node)
-           && !NT_IS(grammar, owner_node, "variant-decl")
-           && !(NT_IS(grammar, owner_node, "alias-stmt")
-                && alias_declaration_is_transparent(grammar, owner_node)))
+    while (owner_node && !typevar_owner_node(grammar, owner_node))
         owner_node = parse_tree_parent(owner_node);
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
@@ -3126,6 +3133,41 @@ static parse_tree_t *typecase_pattern_arm(parse_grammar_t *grammar,
 static bool declared_typevar(parse_sym_entry_t *owner, core_string_t name);
 static th_type *arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm,
                             core_string_t name, parse_tree_t *node);
+
+static void
+collect_owned_typevars(parse_grammar_t *grammar, parse_tree_t *node,
+                       core_list_t(core_string_t) *names)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (NT_IS(grammar, node, "tspec-tvar")) {
+        core_string_t name = core_tree_num_children(node) == 1
+            ? source_typevar_name(core_tree_child(node, 0))
+            : (core_string_t){0};
+        for (size_t i = 0; name.data && i < names->len; i++)
+            if (core_string_eq(names->data[i], name)) return;
+        if (name.data) core_list_push(*names, name);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (!typevar_owner_node(grammar, child))
+            collect_owned_typevars(grammar, child, names);
+    }
+}
+
+// How many type parameters a declaration has: the distinct type variables
+// it owns, read from source so the answer does not depend on whether the
+// declaration has been processed yet.
+static size_t
+declaration_type_parameter_count(parse_grammar_t *grammar,
+                                 parse_tree_t *declaration)
+{
+    core_list_t(core_string_t) names = core_list_new(core_string_t);
+    collect_owned_typevars(grammar, declaration, &names);
+    size_t count = names.len;
+    core_list_free(names);
+    return count;
+}
 
 th_type *
 signature_typevar_for_node(parse_grammar_t *grammar,
@@ -9531,39 +9573,32 @@ generic_alias_application(parse_grammar_t *grammar,
     return expanded;
 }
 
-static bool
-subtree_has_type_variable(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    if (!node || core_tree_is_leaf(node)) return false;
-    if (NT_IS(grammar, node, "tspec-tvar")) return true;
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (subtree_has_type_variable(grammar, core_tree_child(node, i)))
-            return true;
-    return false;
-}
-
-// Whether the type a name refers to certainly takes no type arguments: a
-// declaration that never names a type variable, or a builtin without
-// parameters. Declarations are read from source because their generic
-// heads may not be registered yet when another module applies them.
-// `declaration` receives the source declaration, when there is one.
-static bool
-type_takes_no_arguments(parse_grammar_t *grammar,
-                        core_translation_unit_t *unit,
-                        parse_tree_t *type_node, th_type *base,
-                        parse_sym_entry_t **declaration)
+// How many type arguments the type a name refers to takes, or -1 when that
+// is not fixed (a variadic builtin, a trait) or not known. A declared type
+// is counted from its source declaration, which `declaration` receives,
+// so the count does not depend on the order declarations are processed
+// in; a builtin has its arity from the builtin tables.
+static ptrdiff_t
+named_type_arity(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                 parse_tree_t *type_node, th_type *base, core_string_t name,
+                 parse_sym_entry_t **declaration)
 {
     parse_node_resolution_t resolution = parse_tree_resolution(type_node);
     parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : parse_tree_sym(type_node);
     symbol = symbol ? canonical_symbol(symbol) : nullptr;
     if (symbol && symbol->decl_node) {
+        if (NT_IS(grammar, symbol->decl_node, "trait-decl")) return -1;
         *declaration = symbol;
-        return !subtree_has_type_variable(grammar, symbol->decl_node);
+        return (ptrdiff_t)declaration_type_parameter_count(grammar,
+                                                           symbol->decl_node);
     }
+    int builtin_generic = builtin_generic_type_arity(name);
+    if (builtin_generic != -1) return builtin_generic < 0 ? -1
+                                                          : builtin_generic;
     const th_builtin_type_t *builtin = base
         ? th_builtin_type(tu_state(unit)->types, base) : nullptr;
-    return builtin && builtin->arity == 0;
+    return builtin && builtin->arity >= 0 ? builtin->arity : -1;
 }
 
 static th_type *
@@ -9673,21 +9708,23 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
         core_list_free(arguments);
         return th_poison(state->types);
     }
-    if (!declared_arity && !is_variant)
-        declared_arity = th_generic_arity(state->types, name);
-    // A type that is neither declared with type parameters nor a builtin
-    // generic takes none; arguments given to it are an error, not dropped.
-    parse_sym_entry_t *plain = nullptr;
-    bool generic = declared_arity || is_variant
-        || builtin_generic_type_arity(name) != -1
-        || !type_takes_no_arguments(grammar, unit, type_node, base, &plain);
-    if (valid && (generic ? declared_arity && declared_arity != arguments.len
-                          : arguments.len != 0)) {
-        parse_sym_entry_t *declaration = generic
-            ? type_symbol_in_loaded_imports(unit, state->types, base, nullptr)
-            : plain;
-        report_generic_arity(unit, application, base, declared_arity,
-                             arguments.len, declaration);
+    // The arity comes from the declaration when there is one, so a type
+    // applied before its declaration is processed is checked the same way;
+    // a type that takes none rejects arguments rather than dropping them.
+    parse_sym_entry_t *declaration = nullptr;
+    ptrdiff_t expected = named_type_arity(grammar, unit, type_node, base,
+                                          name, &declaration);
+    if (expected < 0) {
+        if (!declared_arity && !is_variant)
+            declared_arity = th_generic_arity(state->types, name);
+        expected = declared_arity ? (ptrdiff_t)declared_arity : -1;
+        declaration = type_symbol_in_loaded_imports(unit, state->types, base,
+                                                    nullptr);
+    }
+    if (valid && expected >= 0 && (size_t)expected != arguments.len) {
+        report_generic_arity(unit, application,
+            declaration ? th_name(state->types, declaration->name) : base,
+            (size_t)expected, arguments.len, declaration);
         core_list_free(arguments);
         return th_poison(state->types);
     }
