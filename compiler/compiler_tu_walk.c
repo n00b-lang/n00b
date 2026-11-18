@@ -588,6 +588,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         && NT_IS(grammar, parent, "func-def"))
         declare_result_variable(state, parent);
     if (entering && (NT_IS(grammar, node, "fail-stmt")
+                     || NT_IS(grammar, node, "with-stmt")
                      || NT_IS(grammar, node, "postfix-expr")))
         note_function_may_fail(grammar, node);
     if (entering && (NT_IS(grammar, node, "func-def")

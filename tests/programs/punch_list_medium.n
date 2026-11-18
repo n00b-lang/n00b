@@ -509,8 +509,27 @@ func with_loop() -> int {
     }
     return total
 }
+// A `with` outside a `try` may fail, like a `!`: with no `fail:`, the
+// function fails as its managers do. (`with_bound`, whose managers can't
+// fail, is called plainly.)
+func gated_value(open: bool) -> int {
+    with gate("g", open) { return 1 }
+    return 0
+}
+// Inside a `try`, the managers' failures are the `try`'s to handle.
+func gated_or(open: bool) -> int {
+    try {
+        with gate("t", open) { return 1 }
+    } fail (e) { return -1 }
+    return 0
+}
 
 if !comptime() {
+    require (try { -> gated_value(true)! } fail (e) { -> -1 }) == 1
+    require (try { -> gated_value(false)! } fail (e) { -> -1 }) == -1
+    require gated_or(true) == 1
+    require gated_or(false) == -1
+    with_log = ""
     require with_bound() == "+a+b[a!]-b-a"
     with_log = ""
     require with_return(1) == 1

@@ -28,6 +28,10 @@ typedef enum : uint8_t {
     TY_PRED_REFERENT,
     TY_PRED_ONE_OF,
     TY_PRED_CONDITION,
+    // A call's outcome (`result`) used where its value is expected (`other`),
+    // waiting on its failure type (`subject`): a call whose callee turns out
+    // not to fail is its value.
+    TY_PRED_OUTCOME_VALUE,
 } ty_pred_kind_t;
 
 typedef struct {

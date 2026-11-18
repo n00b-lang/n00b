@@ -3139,7 +3139,9 @@ owner_typevar(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
 void
 note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
 {
+    // A `with`'s hooks are calls that may fail.
     bool raises = NT_IS(grammar, node, "fail-stmt")
+        || NT_IS(grammar, node, "with-stmt")
         || (core_tree_num_children(node) == 2
             && NT_IS(grammar, node, "postfix-expr")
             && parse_tree_leaf_is(core_tree_child(node, 1),
@@ -3720,8 +3722,8 @@ record_function_signature(parse_grammar_t *grammar,
         else symbol->error_type = failure;
     }
 
-    // With no `fail:` clause, a body with no `fail` and no `!` outside a
-    // `try` (note_function_may_fail) cannot fail.
+    // With no `fail:` clause, a body with no `fail`, `!` or `with` outside
+    // a `try` (note_function_may_fail) cannot fail.
     th_type *open = symbol->error_type ? th_resolve(symbol->error_type)
                                        : nullptr;
     if (!declared_failure && open && th_kind_of(open) == TH_VAR

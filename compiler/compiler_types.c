@@ -4915,6 +4915,11 @@ static bool report_body_failure(th_ctx *types, core_translation_unit_t *unit,
                                           : nullptr;
 
     if (raised && raised->def && raised->def->op == IR_OP_VARIANT_PAYLOAD) {
+        // A call that can't fail passes nothing along: its `!` is the error
+        // (report_infallible_bang).
+        if (th_is_nil(th_resolve(failure->actual))) {
+            return true;
+        }
         core_string_t actual = n00bb_print_type(types, failure->actual);
 
         if (core_string_eq(function->name,

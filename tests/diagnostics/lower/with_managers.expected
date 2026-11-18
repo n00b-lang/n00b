@@ -16,3 +16,19 @@ tests/diagnostics/lower/with_managers.n:22:12: error N00B-S0026: `poke` can't fa
   help: remove the `!`
 tests/diagnostics/lower/with_managers.n:26:12: error N00B-S0025: `risky` can fail with `string`, so this call needs a trailing `!` or a `try`
   help: write `risky(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/with_managers.n:32:6: warning N00B-N0019: function `sealed` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:44:6: warning N00B-N0019: function `still` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:51:6: warning N00B-N0019: function `calm` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:53:5: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/with_managers.n:56:12: error N00B-S0026: `calm` can't fail, so there's nothing for this `!` to pass along
+  tests/diagnostics/lower/with_managers.n:51:6: note: `calm` is declared here
+  help: remove the `!`
+tests/diagnostics/lower/with_managers.n:59:6: warning N00B-N0019: function `opened` is never called
+  help: call it or delete it
+tests/diagnostics/lower/with_managers.n:61:5: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/with_managers.n:64:12: error N00B-S0025: `opened` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/with_managers.n:59:6: note: `opened` is declared here
+  help: write `opened(...)!` to pass the failure to the caller, or handle it with `try`

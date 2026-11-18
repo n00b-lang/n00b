@@ -126,9 +126,11 @@ static th_type *call_outcome(gen_t *g, ir_instr_t *call, th_type *type)
     }
     ty_unify(g->s, th_named_arg(dest, 0)->type, th_func_ret(type),
              why_of(call, 28));
+    // The outcome fails as its callee does, exactly: a `nil` flowed into
+    // an open failure would make it an option instead.
     if (th_func_error(type)) {
-        ty_unify(g->s, th_named_arg(dest, 1)->type, th_func_error(type),
-                 why_of(call, 28));
+        ty_equate(g->s, th_named_arg(dest, 1)->type, th_func_error(type),
+                  why_of(call, 28));
     }
 
     return nullptr;
@@ -704,7 +706,7 @@ static void constrain_function(gen_t *g, ir_func_t *f)
 // the function can't fail: it is `nil`, so callers' copies of it are too.
 // One that a parameter's type also names (failing as a callback it is
 // given fails) stays open, to be generalized.
-static void settle_failure(ty_solver_t *s, ir_func_t *f)
+static bool settle_failure(ty_solver_t *s, ir_func_t *f)
 {
     th_ctx  *types     = ty_solver_types(s);
     th_type *signature = f && f->type ? th_resolve(f->type) : nullptr;
@@ -715,7 +717,7 @@ static void settle_failure(ty_solver_t *s, ir_func_t *f)
 
     if (!failure || th_kind_of(failure) != TH_VAR || th_var_ref(failure)
         || th_var_name(failure).u8_bytes) {
-        return;
+        return false;
     }
     for (size_t p = 0; p < th_func_nparams(signature); p++) {
         th_type **open  = nullptr;
@@ -724,11 +726,12 @@ static void settle_failure(ty_solver_t *s, ir_func_t *f)
 
         for (size_t v = 0; v < count; v++) {
             if (th_resolve(open[v]) == failure) {
-                return;
+                return false;
             }
         }
     }
     th_var_bind(failure, th_name(types, CORE_STRING_STATIC("nil")));
+    return true;
 }
 
 bool ty_constrain_group(ty_solver_t *s, const ir_group_pdg_t *g,
@@ -749,8 +752,14 @@ bool ty_constrain_group(ty_solver_t *s, const ir_group_pdg_t *g,
             constrain_function(&gen, ir_group_pdg_component_at(g, c, i));
         }
         ty_solve(s);
+        bool settled = false;
         for (uint32_t i = 0; i < ir_group_pdg_component_size(g, c); i++) {
-            settle_failure(s, ir_group_pdg_component_at(g, c, i));
+            settled |= settle_failure(s, ir_group_pdg_component_at(g, c, i));
+        }
+        // A call in the component that waited on one of those failures
+        // (TY_PRED_OUTCOME_VALUE) can now finish.
+        if (settled) {
+            ty_solve(s);
         }
         for (uint32_t i = 0; i < ir_group_pdg_component_size(g, c); i++) {
             ir_func_t *f = ir_group_pdg_component_at(g, c, i);

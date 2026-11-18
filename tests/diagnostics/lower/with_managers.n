@@ -25,3 +25,41 @@ func needless_bang(q: Quiet) -> int fail: string {
 func unhandled(q: Quiet) -> int {
     return q.risky()
 }
+
+record Sealed {
+    n: int
+}
+func sealed() -> Sealed { return (n = 4) }
+func __enter(self: Sealed) -> int fail: string {
+    if self.n > 3 { fail "sealed" }
+    return self.n
+}
+func __exit(self: Sealed, value: int, failure: 'E? = nil) -> bool {
+    return false
+}
+
+record Still {
+    n: int
+}
+func still() -> Still { return (n = 5) }
+func __enter(self: Still) -> int { return self.n }
+func __exit(self: Still, value: int, failure: 'E? = nil) -> bool {
+    return false
+}
+
+# A `with` may fail as its managers do; this one's can't.
+func calm() -> int {
+    with v = still() { return v }
+    return 0
+}
+func calm_banged() -> int fail: string {
+    return calm()!
+}
+# This one's can, so its callers pass the failure on.
+func opened() -> int {
+    with v = sealed() { return v }
+    return 0
+}
+func opened_plainly() -> int {
+    return opened()
+}

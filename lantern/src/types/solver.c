@@ -131,6 +131,11 @@ static void free_vars(th_type *t, core_list_t(ty_type_ptr_t) *out);
 static bool integral(ty_solver_t *s, th_type *t);
 static th_type *renamed(ty_solver_t *s, th_type *t);
 static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why);
+static bool call_outcome(th_type *type);
+static th_type *call_outcome_failure(th_type *type);
+static bool outcome_as_value(ty_solver_t *s, th_type *outcome,
+                             th_type *value, bool equal, ty_why_t why,
+                             bool *handled);
 static void recheck(ty_solver_t *s, th_type *var);
 static void recheck_because(ty_solver_t *s, th_type *var, ty_why_t why);
 
@@ -586,6 +591,15 @@ static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why)
     if (flexible(s, b)) {
         return bind(s, b, a, why);
     }
+
+    bool handled = false;
+    bool held    = call_outcome(a) != call_outcome(b)
+        && outcome_as_value(s, call_outcome(a) ? a : b,
+                            call_outcome(a) ? b : a, true, why, &handled);
+
+    if (handled) {
+        return held;
+    }
     if (unbound(a) || unbound(b) || !th_same_shape(a, b)) {
         fail(s, TY_FAIL_MISMATCH, why, a, b, nullptr);
         return false;
@@ -709,6 +723,59 @@ static bool flow_record(ty_solver_t *s, th_type *target, th_type *given,
     return true;
 }
 
+// Whether `type` is a call's outcome (ir_call_outcome_type): a variant of
+// its success and its failure.
+static bool call_outcome(th_type *type)
+{
+    core_string_t name = {0};
+
+    type = type ? th_resolve(type) : nullptr;
+    return type && th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, nullptr, nullptr)
+        && core_string_starts_with(name,
+                                   CORE_STRING_STATIC("__lantern_call_outcome_"))
+        && th_named_nargs(type) == 2;
+}
+
+// The failure type of a call's outcome, or null for any other type.
+static th_type *call_outcome_failure(th_type *type)
+{
+    return call_outcome(type) ? th_resolve(th_named_arg(th_resolve(type),
+                                                        1)->type)
+                              : nullptr;
+}
+
+// A call shaped as possibly failing (its callee's body may fail) whose
+// callee turns out not to fail is its value: `outcome` meets `value` as its
+// success does, flowing into it or `equal` to it. While the failure is
+// open, the meeting waits for it. `*handled` is false when the failure is
+// known and isn't `nil`: the outcome is then no value.
+static bool outcome_as_value(ty_solver_t *s, th_type *outcome,
+                             th_type *value, bool equal, ty_why_t why,
+                             bool *handled)
+{
+    th_type *failure = call_outcome_failure(outcome);
+
+    *handled = failure && (th_is_nil(failure) || unbound(failure));
+    if (!*handled) {
+        return false;
+    }
+    if (th_is_nil(failure)) {
+        th_type *success = th_named_arg(th_resolve(outcome), 0)->type;
+
+        return equal ? same(s, value, success, why)
+                     : flow(s, value, success, why);
+    }
+    return ty_require(s,
+                      (ty_pred_t){.kind       = TY_PRED_OUTCOME_VALUE,
+                                  .name       = CORE_STRING_STATIC("outcome"),
+                                  .subject    = failure,
+                                  .other      = value,
+                                  .result     = outcome,
+                                  .positional = equal},
+                      why);
+}
+
 static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
 {
     th_type *target = th_resolve(slot);
@@ -798,6 +865,14 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
     }
     if (th_kind_of(given) == TH_RECORD && th_kind_of(target) == TH_RECORD) {
         return flow_record(s, target, given, why);
+    }
+
+    bool handled = false;
+    bool held    = given && !call_outcome(target)
+        && outcome_as_value(s, given, slot, false, why, &handled);
+
+    if (handled) {
+        return held;
     }
 
     th_type *inner = th_option_item(target);
@@ -1215,6 +1290,17 @@ th_type *ty_dispatch_instance(ty_solver_t *s, const ir_instr_t *at)
 static verdict_t judge(ty_solver_t *s, pending_t *p)
 {
     th_type *subject = th_resolve(p->pred.subject);
+    // A call's outcome is asked about as its value once its callee turns
+    // out not to fail (outcome_as_value), and waits until that's known.
+    th_type *failure = p->pred.kind != TY_PRED_OUTCOME_VALUE
+        ? call_outcome_failure(subject) : nullptr;
+
+    if (failure && unbound(failure)) {
+        return OPEN;
+    }
+    if (failure && th_is_nil(failure)) {
+        subject = th_resolve(th_named_arg(subject, 0)->type);
+    }
 
     if (p->pred.kind == TY_PRED_DISPATCH && !p->pred.bound && s->overloads
         && p->why.at) {
@@ -1401,6 +1487,24 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
 
         return same(s, p->pred.result, item ? item : held, p->why) ? HOLDS
                                                                    : FAILS;
+    }
+    case TY_PRED_OUTCOME_VALUE: {
+        // The failure is known: `nil` makes the outcome its value; any other
+        // leaves the outcome where a value was expected, a mismatch.
+        th_type *met = th_is_nil(subject)
+            ? th_named_arg(th_resolve(p->pred.result), 0)->type
+            : p->pred.result;
+
+        // The mismatch is the error (a call that can fail used without
+        // `!`); the predicate itself is settled.
+        if (!th_is_nil(subject)) {
+            fail(s, TY_FAIL_MISMATCH, p->why, p->pred.other, met, nullptr);
+            return HOLDS;
+        }
+        return (p->pred.positional ? same(s, p->pred.other, met, p->why)
+                                   : flow(s, p->pred.other, met, p->why))
+                 ? HOLDS
+                 : FAILS;
     }
     case TY_PRED_FIELD: {
         th_type *field = p->pred.positional
