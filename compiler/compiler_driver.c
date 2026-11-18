@@ -1070,6 +1070,39 @@ make_interface_module_source(locate_worker_context_t *context,
     return true;
 }
 
+// The standard library cannot be shadowed: a module path it provides, as a
+// module file or a declared package, must come from nowhere else.
+static void
+report_shadow(core_diagnostics_t *diagnostics, core_translation_unit_t *unit,
+              core_diag_location_t at, core_string_t name,
+              core_string_t shadow, core_string_t stdlib)
+{
+    n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
+        N00B_TEXT_SHADOWS_THE_STANDARD_LIBRARY,
+        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(shadow), ARG_TEXT(stdlib)));
+    n00bb_report_help(diagnostics, N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
+        N00BB_ARGS(ARG_TEXT(shadow)));
+}
+
+// A library module file fails to load while another root holds a file with
+// its module path, however it was reached: by an import, as a package's
+// manifest, as a runtime module, or named on the command line.
+static bool
+stdlib_file_shadowed(n00bb_resolver_t *resolver,
+                     core_translation_unit_t *unit)
+{
+    core_string_t shadow = {0};
+    if (!n00bb_resolver_unit_in_stdlib(resolver, unit)
+        || !n00bb_resolver_shadowing_source(resolver,
+               unit->module.identifier, &shadow))
+        return false;
+    report_shadow(core_translation_unit_diagnostics(unit), unit,
+                  (core_diag_location_t){}, unit->module.identifier, shadow,
+                  core_source_file_path(&unit->source));
+    core_free(shadow.data);
+    return true;
+}
+
 static bool
 process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
 {
@@ -1213,6 +1246,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
         }
     }
     (void)root_input;
+    if (ok && stdlib_file_shadowed(context->resolver, unit)) ok = false;
     if (!core_work_complete_tu(context->queue, job, unit, ok)) return false;
     return core_work_job_state(context->queue, job) == CORE_WORK_SUCCEEDED;
 }
@@ -1795,19 +1829,13 @@ accept_package_exports(import_driver_t *driver,
     return subpackages != 0;
 }
 
-// The standard library cannot be shadowed: a module path it provides, as a
-// module file or a declared package, must come from nowhere else.
 static void
 report_stdlib_shadow(core_translation_unit_t *importer,
                      parse_tree_t *statement, core_string_t name,
                      core_string_t shadow, core_string_t stdlib)
 {
-    import_report(importer, statement, N00B_DIAG_MODULE_SHADOWS_STDLIB,
-        N00B_TEXT_SHADOWS_THE_STANDARD_LIBRARY,
-        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(shadow), ARG_TEXT(stdlib)));
-    n00bb_report_help(core_translation_unit_diagnostics(importer),
-        N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
-        N00BB_ARGS(ARG_TEXT(shadow)));
+    report_shadow(core_translation_unit_diagnostics(importer), importer,
+                  import_location(statement), name, shadow, stdlib);
     mark_import_failure_reported(importer);
 }
 
@@ -1843,35 +1871,16 @@ stdlib_package_manifest(import_driver_t *driver, core_string_t name,
     return found;
 }
 
-// A standard library module file must be the only file for its module path.
-static bool
-reject_shadowed_stdlib_file(import_driver_t *driver,
-                            core_translation_unit_t *importer,
-                            parse_tree_t *statement, core_string_t name,
-                            core_translation_unit_t *stdlib_unit)
-{
-    core_string_t shadow = {0};
-    if (!n00bb_resolver_unit_in_stdlib(driver->resolver, stdlib_unit)
-        || !n00bb_resolver_shadowing_source(driver->resolver,
-               stdlib_unit->module.identifier, &shadow))
-        return false;
-    report_stdlib_shadow(importer, statement, name, shadow,
-                         core_source_file_path(&stdlib_unit->source));
-    core_free(shadow.data);
-    return true;
-}
-
-// `direct` is the module file found for `name`. A library file must have no
-// namesake elsewhere, and a file elsewhere must not name a library package.
+// `direct` is the module file found for `name`. A file outside the library
+// must not take the name of a library package. (A library file with a
+// namesake elsewhere already failed when it was located.)
 static bool
 reject_stdlib_shadow(import_driver_t *driver,
                      core_translation_unit_t *importer,
                      parse_tree_t *statement, core_string_t name,
                      core_translation_unit_t *direct)
 {
-    if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct))
-        return reject_shadowed_stdlib_file(driver, importer, statement, name,
-                                           direct);
+    if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct)) return false;
     core_string_t stdlib = {0};
     if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
     report_stdlib_shadow(importer, statement, name,
@@ -1896,11 +1905,16 @@ parent_manifest_declared(import_driver_t *driver,
     if (dot < 0) return true;
     core_string_t parent = core_string_borrow(name.data, (size_t)dot);
     core_module_spec_t spec = {0};
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(importer);
+    size_t before = core_diagnostics_count(diagnostics);
     bool declared = core_module_spec_init(&spec, parent)
         && discover_package_import(driver, importer, statement, &spec,
                                    false) != nullptr;
     core_module_spec_release(&spec);
     if (declared) return true;
+    // Looking for the parent already reported why it is unusable.
+    if (core_diagnostics_count(diagnostics) != before) return false;
     import_report(importer, statement,
         N00B_DIAG_PACKAGE_PARENT_MANIFEST_MISSING,
         N00B_TEXT_PACKAGE_IS_DECLARED_BUT_NO,
@@ -1933,7 +1947,15 @@ discover_package_import(import_driver_t *driver,
         if (!job) continue;
         n00bb_tu_state_t *state = tu_state(unit);
         if (!unit || !tree) {
-            if (manifest_mentions(unit, logical->identifier))
+            // A library manifest that failed because it is shadowed may be
+            // a cached interface, with no text to search.
+            core_string_t shadow = {0};
+            bool shadowed = unit
+                && n00bb_resolver_unit_in_stdlib(driver->resolver, unit)
+                && n00bb_resolver_shadowing_source(driver->resolver,
+                       unit->module.identifier, &shadow);
+            core_free(shadow.data);
+            if (shadowed || manifest_mentions(unit, logical->identifier))
                 claim_manifest_failure(driver, job, unit, importer);
             continue;
         }
@@ -1991,8 +2013,15 @@ discover_package_import(import_driver_t *driver,
         selected_job = job;
         claim_manifest(driver, job);
     }
-    if (selected && reject_shadowed_stdlib_file(driver, importer, statement,
-                        logical->identifier, selected)) {
+    core_string_t shadow = {0};
+    if (selected && n00bb_resolver_unit_in_stdlib(driver->resolver, selected)
+        && n00bb_resolver_shadowing_source(driver->resolver,
+               logical->identifier, &shadow)) {
+        // A library package, reached by an import or as the parent of one,
+        // and a module file elsewhere with the package's name.
+        report_stdlib_shadow(importer, statement, logical->identifier,
+            shadow, core_source_file_path(&selected->source));
+        core_free(shadow.data);
         selected_job = nullptr;
         selected = nullptr;
     }

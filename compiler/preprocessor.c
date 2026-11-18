@@ -3956,7 +3956,11 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
          && i < sizeof(implicit_imports) / sizeof(implicit_imports[0]); i++) {
         if (ctx->options->load_implicit_import(ctx->options->import_context,
                 ctx->grammar, unit, implicit_imports[i])) continue;
-        if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+        bool reported = core_diagnostics_failed(
+                core_translation_unit_diagnostics(unit))
+            || (ctx->options->import_failure_reported
+                && ctx->options->import_failure_reported(unit));
+        if (!reported)
             pp_internal(ctx, tree, "could not load the implicit `builtin` import");
         ctx->failed = true;
         break;

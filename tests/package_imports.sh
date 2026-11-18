@@ -136,7 +136,7 @@ shadow_case 'nested file' uses_env.n sys.env sys/env/__init.n \
 rm -r "$shadow/project/sys"
 mkdir "$shadow/project/unicode"
 printf 'package unicode {\n}\n' >"$shadow/project/unicode/__init.n"
-shadow_case 'manifest at the library path' uses_unicode.n unicode \
+shadow_case 'manifest at the library path' uses_unicode.n unicode.__init \
     unicode/__init.n project/unicode/__init.n
 rm -r "$shadow/project/unicode"
 mkdir "$shadow/path/mine"
@@ -149,6 +149,25 @@ printf "$module" >"$shadow/project/unicode/internal/types.n"
 shadow_case 'library source module' uses_unicode.n unicode.internal.types \
     unicode/internal/types.n project/unicode/internal/types.n
 rm -r "$shadow/project/unicode"
+
+# Library modules reached with no import of them in the program are checked
+# too: the implicit `builtin` manifest, a module that manifest imports, and
+# `sys.gc`, found only as the parent of the package imported.
+mkdir -p "$shadow/project/builtin"
+printf "$module" >"$shadow/project/builtin/__init.n"
+shadow_case 'implicit builtin manifest' uses_helper.n builtin.__init \
+    builtin/__init.n project/builtin/__init.n
+rm "$shadow/project/builtin/__init.n"
+printf "$module" >"$shadow/project/builtin/sort.n"
+shadow_case 'module of the builtin package' uses_helper.n builtin.sort \
+    builtin/sort.n project/builtin/sort.n
+rm -r "$shadow/project/builtin"
+mkdir "$shadow/project/sys"
+printf "$module" >"$shadow/project/sys/gc.n"
+printf 'import sys.gc.alloc\n' >"$shadow/project/uses_gc.n"
+shadow_case 'parent of an imported package' uses_gc.n sys.gc \
+    sys/gc/__init.n project/sys/gc.n
+rm -r "$shadow/project/sys"
 
 # A namesake nobody imports is no error, and other modules still resolve.
 printf "$module" >"$shadow/project/text.n"
