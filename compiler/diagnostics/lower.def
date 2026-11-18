@@ -107,6 +107,14 @@ N00B_DIAG(PROPAGATE_INFALLIBLE, "N00B-S0026", ERROR,
     "`!` is used on something that cannot fail",
     "A trailing `!` passes a failure to the caller, but this call has no\n"
     "failure to pass. Remove the `!`.")
+N00B_DIAG(VALUE_NOT_TAKEN, "N00B-S0103", ERROR,
+    "a `->` ends the body of a statement, which has no value",
+    "`->` gives the value of the block it ends. A statement such as an\n"
+    "`if`, `switch`, `typecase`, `try` or `with` has no value, so a `->` at\n"
+    "the end of one of its bodies has nowhere to go. To use the value, use\n"
+    "the construct as a value:\n"
+    "    let x = with m { -> f(m) }\n"
+    "Loops have no value, so a `->` can't end a loop's body.")
 N00B_DIAG(IF_VALUE_WITHOUT_ELSE, "N00B-S0023", ERROR,
     "an `if` used as a value has no `else`",
     "When an `if` produces a value, every path must produce one, so it\n"

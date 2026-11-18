@@ -3142,6 +3142,7 @@ note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
     // A `with`'s hooks are calls that may fail.
     bool raises = NT_IS(grammar, node, "fail-stmt")
         || NT_IS(grammar, node, "with-stmt")
+        || NT_IS(grammar, node, "with-value-expr")
         || (core_tree_num_children(node) == 2
             && NT_IS(grammar, node, "postfix-expr")
             && parse_tree_leaf_is(core_tree_child(node, 1),

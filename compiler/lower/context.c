@@ -206,12 +206,30 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 // Leaves the managers innermost first: each one's exit block calls
-// `__exit`, then goes on by the reason it was reached for.
+// `__exit`, then goes on by the reason it was reached for. A `with` used
+// as a value keeps its body's value across the exit blocks, and is that
+// value after them. It has no value to go on with when a failure is
+// dropped, so there the failure goes on whatever `__exit` returns.
 static bool
-with_leave(ir_lower_context_t *context, n00bb_with_frame_t *frame,
-           parse_tree_t *source)
+with_leave(ir_lower_context_t *context, parse_grammar_t *grammar,
+           n00bb_with_frame_t *frame, parse_tree_t *source)
 {
     ir_span_t span = lower_span_for_tree(context, source);
+    ir_local_t *kept = nullptr;
+    th_type *kept_type = nullptr;
+    if (frame->expression && context->reachable) {
+        parse_tree_t *expression = value_body_expression(grammar,
+                                                         frame->body);
+        ir_value_t *value = expression
+            ? ir_lower_node_value(context, expression) : nullptr;
+        if (!value) {
+            lower_internal(context, span, "a `with` value has no value");
+            return false;
+        }
+        kept_type = value->type;
+        kept = n00bb_keep_across_exits(context, value, span);
+        if (!kept) return false;
+    }
     for (size_t i = frame->items.len; i > 0; i--) {
         n00bb_with_item_t *item = &frame->items.data[i - 1];
         bool reached = false;
@@ -225,11 +243,15 @@ with_leave(ir_lower_context_t *context, n00bb_with_frame_t *frame,
                        item->value, failure, item->node, item->scope.order,
                        N00B_TEXT_PHRASE_LEAVING_THIS_MANAGER, &swallowed)
             || !n00bb_exit_scope_finish(context, &item->scope, nullptr,
-                   item->scope.failure_reachable ? swallowed : nullptr,
+                   item->scope.failure_reachable && !frame->expression
+                       ? swallowed : nullptr,
                    source, N00B_TEXT_PHRASE_THIS_WITH_BLOCK))
             return false;
     }
-    return true;
+    if (!frame->expression || !context->reachable) return true;
+    ir_value_t *value = kept
+        ? n00bb_kept_value(context, kept, kept_type, span) : nullptr;
+    return value && ir_lower_set_node_value(context, frame->node, value);
 }
 
 void
@@ -246,16 +268,20 @@ n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
 {
     (void)state;
     n00bb_lower_context_t *lower = context->user;
-    if (!lower || !nt_is(visit->grammar, visit->node,
-                         CORE_STRING_STATIC("with-stmt")))
+    bool expression = nt_is(visit->grammar, visit->node,
+                            CORE_STRING_STATIC("with-value-expr"));
+    if (!lower || (!expression && !nt_is(visit->grammar, visit->node,
+                                         CORE_STRING_STATIC("with-stmt"))))
         return true;
     if (entering) {
         n00bb_with_frame_t frame = {
             .node = visit->node,
-            .body = child_nt(visit->grammar, visit->node,
-                             CORE_STRING_STATIC("body")),
+            .body = child_nt(visit->grammar, visit->node, expression
+                ? CORE_STRING_STATIC("value-body")
+                : CORE_STRING_STATIC("body")),
             .items = core_list_new(n00bb_with_item_t),
             .active = context->reachable,
+            .expression = expression,
         };
         core_list_push(lower->withs, frame);
         return true;
@@ -264,7 +290,8 @@ n00bb_lower_with_scope(ir_lower_context_t *context, parse_visit_t *visit,
         || lower->withs.data[lower->withs.len - 1].node != visit->node)
         return false;
     n00bb_with_frame_t *frame = &lower->withs.data[lower->withs.len - 1];
-    bool ok = !frame->active || with_leave(context, frame, visit->node);
+    bool ok = !frame->active
+        || with_leave(context, visit->grammar, frame, visit->node);
     n00bb_free_with_frame(frame);
     lower->withs.len--;
     return ok;

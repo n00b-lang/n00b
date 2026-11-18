@@ -72,6 +72,7 @@ static const construct_name_t constructs[] = {
     CONSTRUCT("try-stmt", TRY_STATEMENT),
     CONSTRUCT("try-value-expr", TRY_EXPRESSION),
     CONSTRUCT("with-stmt", WITH_STATEMENT),
+    CONSTRUCT("with-value-expr", WITH_EXPRESSION),
     NAMED_CONSTRUCT("variable-decl", VARIABLE),
     NAMED_CONSTRUCT("func-def", FUNCTION),
     NAMED_CONSTRUCT("record-decl", RECORD),

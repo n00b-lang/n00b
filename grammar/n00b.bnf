@@ -100,7 +100,10 @@
 <elif-keyword> ::= %"elif" | %"elseif" | %"else" %"if"
 <else-clause> ::= %"else" <body>
 
-<if-value-expr> @scope("if") @branch($1, $2, $3) ::=
+# A construct with a value form is that form only where its statement form
+# can't be: as a statement, `if c { -> a } else { -> b }` is an `if`
+# statement, whose bodies' `->`s nothing takes.
+<if-value-expr> @scope("if") @branch($1, $2, $3) @disambig(n00bb_prefer_statement_form, 100) ::=
        %"if" <expression> <value-body> <value-elif-chain>
 
 <value-body> @scope("block") @hardline($1) @indent($1) @hardline($2) ::=
@@ -169,7 +172,7 @@
 
 <typecase-case-block> ::= <type-spec-list> <body>
 
-<typecase-value-expr> @scope("typecase") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) ::=
+<typecase-value-expr> @scope("typecase") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) @disambig(n00bb_prefer_statement_form, 100) ::=
        %"typecase" <expression> <block-start> <typecase-value-cases> <block-end>
 
 <typecase-value-cases> ::= <typecase-value-branch-list>
@@ -201,7 +204,7 @@
 <try-error-binding> @declares($0, "error") ::=
        %IDENTIFIER %":" <type-spec>
 
-<try-value-expr> @scope("try") ::=
+<try-value-expr> @scope("try") @disambig(n00bb_prefer_statement_form, 100) ::=
        %"try" <value-body> <try-value-error-clause>
 <try-value-error-clause> @scope("try-error") ::=
        %"fail" <try-handler-params> <value-body>
@@ -231,6 +234,8 @@
 <record-keyword> ::= %"record" | %"struct"
 
 <with-stmt> @scope("with") ::= %"with" <context-manager> (%"," <context-manager>)* %","? <body>
+<with-value-expr> @scope("with") @disambig(n00bb_prefer_statement_form, 100) ::=
+       %"with" <context-manager> (%"," <context-manager>)* %","? <value-body>
 <context-manager> @declares($0) ::=
        %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <context-manager> @declares($0) ::= %IDENTIFIER <assign-op> <expression>
@@ -280,7 +285,7 @@
 # `default` is a syntax skin for a switch or typecase `else`.
 <case-default-keyword> ::= %"else" | %"default"
 
-<switch-value-expr> @scope("switch") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) ::=
+<switch-value-expr> @scope("switch") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) @disambig(n00bb_prefer_statement_form, 100) ::=
        %"switch" <expression> <block-start> <switch-value-cases> <block-end>
 
 <switch-value-cases> @hardline($1) ::=
@@ -662,6 +667,7 @@
             | <switch-value-expr>
             | <typecase-value-expr>
             | <try-value-expr>
+            | <with-value-expr>
             | <new-expr>
             | <callback-expr>
             | <typeof-expr>

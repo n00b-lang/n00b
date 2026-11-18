@@ -336,6 +336,31 @@ carrier(ir_lower_context_t *context, th_type *option, ir_span_t span)
     return local;
 }
 
+ir_local_t *
+n00bb_keep_across_exits(ir_lower_context_t *context, ir_value_t *value,
+                        ir_span_t span)
+{
+    th_type *option = th_option(ir_module_types(context->module),
+                                value->type);
+    ir_local_t *kept = carrier(context, option, span);
+    ir_value_t *some = kept ? n00bb_emit_wrapping(context, IR_OP_OPTION_SOME,
+                                                  value, option, span)
+                            : nullptr;
+    if (some && n00bb_emit_local_write(context, kept, some, span))
+        return kept;
+    lower_internal(context, span, "could not keep a value");
+    return nullptr;
+}
+
+ir_value_t *
+n00bb_kept_value(ir_lower_context_t *context, ir_local_t *kept,
+                 th_type *type, ir_span_t span)
+{
+    ir_value_t *value = option_item(context, kept, type, span);
+    if (!value) lower_internal(context, span, "could not read a kept value");
+    return value;
+}
+
 bool
 n00bb_emit_scoped_success(ir_lower_context_t *context,
                           parse_tree_t *exit_node, uint64_t stop_order,
@@ -346,30 +371,15 @@ n00bb_emit_scoped_success(ir_lower_context_t *context,
     n00bb_exit_scope_t *scope = n00bb_innermost_exit_scope(lower, stop_order,
                                                            UINT64_MAX);
     if (!scope) return true;
-    ir_local_t *kept = nullptr;
     th_type *kept_type = value && *value ? (*value)->type : nullptr;
-    if (kept_type) {
-        th_type *option = th_option(ir_module_types(context->module),
-                                    kept_type);
-        kept = carrier(context, option, span);
-        ir_value_t *some = kept ? n00bb_emit_wrapping(context,
-            IR_OP_OPTION_SOME, *value, option, span) : nullptr;
-        if (!some || !n00bb_emit_local_write(context, kept, some, span)) {
-            lower_internal(context, span, "could not keep a value");
-            return false;
-        }
-    }
+    ir_local_t *kept = kept_type
+        ? n00bb_keep_across_exits(context, *value, span) : nullptr;
+    if (kept_type && !kept) return false;
     while (scope) {
         uint64_t before = scope->order;
         if (!leave_through(context, scope, span)) return false;
         scope = n00bb_innermost_exit_scope(lower, stop_order, before);
     }
-    if (kept) {
-        *value = option_item(context, kept, kept_type, span);
-        if (!*value) {
-            lower_internal(context, span, "could not read a kept value");
-            return false;
-        }
-    }
-    return true;
+    if (kept) *value = n00bb_kept_value(context, kept, kept_type, span);
+    return !kept || *value;
 }

@@ -496,6 +496,8 @@ typedef struct {
     parse_tree_t *body;
     core_list_t(n00bb_with_item_t) items;
     bool active;
+    // A `with` used as a value: its body's `->` gives the value.
+    bool expression;
 } n00bb_with_frame_t;
 
 core_list_decl(n00bb_with_frame_t);
@@ -1184,6 +1186,17 @@ bool
 n00bb_emit_scoped_success(ir_lower_context_t *context,
                           parse_tree_t *exit_node, uint64_t stop_order,
                           ir_value_t **value);
+
+// Keeps `value` across exit blocks that other paths also reach: in an
+// option that is `nil` from the function's entry, so every path has
+// written it. n00bb_kept_value reads it back as `type`.
+ir_local_t *
+n00bb_keep_across_exits(ir_lower_context_t *context, ir_value_t *value,
+                        ir_span_t span);
+
+ir_value_t *
+n00bb_kept_value(ir_lower_context_t *context, ir_local_t *kept,
+                 th_type *type, ir_span_t span);
 
 void
 n00bb_free_with_frame(n00bb_with_frame_t *frame);
