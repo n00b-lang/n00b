@@ -103,6 +103,10 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/value_sigils.n" \
+    "$program_dir/fmt_value_sigils.n"
+diff -u "$program_dir/fmt_value_sigils.expected" "$tmp/value_sigils.n"
+
 "$compiler" fmt --output "$tmp/try_bodies.n" "$program_dir/fmt_try_bodies.n"
 diff -u "$program_dir/fmt_try_bodies.expected" "$tmp/try_bodies.n"
 "$compiler" fmt --check "$program_dir/fmt_try_bodies.expected"

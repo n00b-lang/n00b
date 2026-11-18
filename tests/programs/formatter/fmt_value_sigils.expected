@@ -1,0 +1,31 @@
+callback Scale {
+    call (value: int) -> int
+    handler (value: int) -> int
+}
+
+func risky(x: int) -> int fail: string {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+
+func after_call() -> int {
+    let v = try {
+        risky(1)!
+        -> 3
+    } fail(e) {
+        -> 2
+    }
+    return v
+}
+
+func after_binding() -> int {
+    let v = try {
+        let a: int = risky(1)!
+        -> a
+    } fail(e) {
+        -> 2
+    }
+    return v
+}

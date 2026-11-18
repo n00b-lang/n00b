@@ -3775,9 +3775,16 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 ? parse_token_start_byte(prior_rendered) : 0;
             while (line_start && printed[line_start - 1] != '\n')
                 line_start--;
-            size_t spaces = 4;
-            while (line_start + spaces - 4 < printed_len
-                   && printed[line_start + spaces - 4] == ' ')
+            // Inside the block when `->` follows its `{`; level with the
+            // statement before it otherwise.
+            bool opens_block = prior_rendered
+                && parse_token_end_byte(prior_rendered)
+                    == parse_token_start_byte(prior_rendered) + 1
+                && printed[parse_token_start_byte(prior_rendered)] == '{';
+            size_t spaces = opens_block ? 4 : 0;
+            while (line_start + spaces - (opens_block ? 4 : 0) < printed_len
+                   && printed[line_start + spaces - (opens_block ? 4 : 0)]
+                       == ' ')
                 spaces++;
             core_buffer_putc(&result, '\n');
             for (size_t j = 0; j < spaces; j++)
@@ -4063,12 +4070,23 @@ n00bb_signature_open(const char *text, n00bb_signature_line_t *line)
         break;
     }
     // Every spelling that declares a function: `func`, `fn`, `function`,
-    // and the `<kind> litmod` prelude of a literal modifier.
+    // the `<kind> litmod` prelude of a literal modifier, and the `call`,
+    // `handler` and `setup` roles of a callback, whose `(` may follow
+    // with no space.
     const char *row = text + line->start;
     size_t length = line->end - line->start;
     bool function = n00bb_format_word(row, length, &at, "func")
         || n00bb_format_word(row, length, &at, "fn")
         || n00bb_format_word(row, length, &at, "function");
+    static const char *const roles[] = {"call", "handler", "setup"};
+    for (size_t r = 0; !function && r < sizeof(roles) / sizeof(roles[0]);
+         r++) {
+        size_t word = strlen(roles[r]), after = at + word;
+        if (after > length || memcmp(row + at, roles[r], word)) continue;
+        while (after < length && row[after] == ' ') after++;
+        if (after < length && row[after] == '(')
+            return line->start + after;
+    }
     if (!function) {
         size_t kind = at;
         while (kind < length
@@ -4296,8 +4314,17 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
     core_buffer_t result = {0};
     size_t length = input.u8_bytes, start = 0, paren_column = 0;
     size_t signature_close = SIZE_MAX;
+    size_t previous_start = SIZE_MAX, previous_end = SIZE_MAX;
     for (size_t i = 0; i <= length; i++) {
         if (i != length && text[i] != '\n') continue;
+        // A result channel continues the signature whose `)` ended the
+        // line before. Anywhere else, `->` gives a block its value.
+        bool after_signature = signature_close != SIZE_MAX
+            && previous_start != SIZE_MAX
+            && signature_close >= previous_start
+            && signature_close < previous_end;
+        previous_start = start;
+        previous_end = i;
         const char *line = text + start;
         size_t line_length = i - start, indent = 0;
         while (indent < line_length && line[indent] == ' ') indent++;
@@ -4354,12 +4381,13 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
                 continue;
             }
         }
-        bool channel = (line_length - indent >= 2
-                && line[indent] == '-' && line[indent + 1] == '>')
-            || (line_length - indent >= 5
-                && !memcmp(line + indent, "fail:", 5))
-            || n00bb_format_return_channel(line + indent,
-                                           line_length - indent);
+        bool channel = after_signature
+            && ((line_length - indent >= 2
+                 && line[indent] == '-' && line[indent + 1] == '>')
+                || (line_length - indent >= 5
+                    && !memcmp(line + indent, "fail:", 5))
+                || n00bb_format_return_channel(line + indent,
+                                               line_length - indent));
         if (channel && line[indent] == '-' && result.byte_len
             && result.data[result.byte_len - 1] == '\n') {
             size_t prior = result.byte_len - 1;
