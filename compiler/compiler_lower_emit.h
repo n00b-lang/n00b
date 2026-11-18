@@ -69,6 +69,17 @@ bool n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function);
 // its outcome in `function` are settled to that.
 bool n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
                                      th_type *failure);
+// Binds `call`, in `caller`, to `target` once typing or specialization
+// chose it: named arguments go to their parameters, an outcome is settled
+// when the target can't fail, and, unless its arguments were already typed
+// against the target (not a trait's or a generic's signature), a plain
+// value given for an option parameter becomes that option.
+bool n00bb_bind_call_target(ir_func_t *caller, ir_instr_t *call,
+                            ir_func_t *target, bool typed_against_target);
+// The caller's own variables in a call's signature `site` take the types
+// the target's signature `bound` has in their place.
+void n00bb_bind_caller_variables(th_ctx *types, th_type *site,
+                                 th_type *bound);
 ir_value_t *n00bb_lower_shift_count(ir_lower_context_t *context,
                                     parse_tree_t *node, ir_value_t *value,
                                     th_type *receiver, ir_span_t span);

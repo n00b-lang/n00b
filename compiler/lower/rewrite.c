@@ -1322,6 +1322,76 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
     return ok;
 }
 
+// A plain value given for an option parameter is made that option, as a
+// direct call's arguments are where they're typed. (A call typed against a
+// trait's or a generic's signature reaches its target as given.)
+static bool
+option_arguments_to(ir_instr_t *call, ir_func_t *target)
+{
+    th_ctx *types = ir_module_types(target->owner);
+    size_t count = th_func_nparams(target->type);
+    if (call->n_operands != count + 1) return true;
+    uint32_t position = 0;
+    for (uint32_t o = 1; o < call->n_operands; o++) {
+        ir_operand_t *operand = &call->operands[o];
+        uint32_t index = UINT32_MAX;
+        ir_value_t *parameter = ir_call_param(target, operand, &position,
+                                              &index);
+        for (uint32_t p = 0; parameter && index == UINT32_MAX
+             && p < target->n_params; p++)
+            if (target->params[p] == parameter) index = p;
+        const th_param *formal = index < count
+            ? th_func_param(target->type, index) : nullptr;
+        ir_value_t *argument = operand->kind == IR_OPD_VALUE
+            || operand->kind == IR_OPD_NAMED_ARG
+            ? ir_operand_value(operand) : nullptr;
+        th_type *given = argument ? th_resolve(argument->type) : nullptr;
+        if (!formal || !given || th_mode_by_reference(formal->mode)
+            || !th_option_item(th_resolve(formal->type))
+            || th_option_item(given) || th_is_nil(given)
+            || th_kind_of(given) == TH_VAR)
+            continue;
+        ir_value_t *some = settled_value(call, IR_OP_OPTION_SOME,
+                                         th_option(types, given));
+        if (!some || !ir_instr_operand_value(some->def, argument))
+            return false;
+        if (operand->kind == IR_OPD_NAMED_ARG) operand->named.value = some;
+        else operand->value = some;
+        ir_instr_use_added(call, o);
+    }
+    return true;
+}
+
+bool
+n00bb_bind_call_target(ir_func_t *caller, ir_instr_t *call,
+                       ir_func_t *target, bool typed_against_target)
+{
+    th_type *signature = th_resolve(target->type);
+    return n00bb_place_named_arguments(call, target)
+        && (typed_against_target || option_arguments_to(call, target))
+        && n00bb_settle_infallible_outcome(caller, call,
+               th_kind_of(signature) == TH_FUNCTION
+                   ? th_func_error(signature) : nullptr);
+}
+
+void
+n00bb_bind_caller_variables(th_ctx *types, th_type *site, th_type *bound)
+{
+    site = site ? th_resolve(site) : nullptr;
+    bound = bound ? th_resolve(bound) : nullptr;
+    if (!site || !bound || th_kind_of(site) != TH_FUNCTION
+        || th_kind_of(bound) != TH_FUNCTION || th_is_closed(types, site)
+        || !th_is_closed(types, bound))
+        return;
+    // Part by part: the failures may differ (a target that can't fail).
+    (void)th_match(th_func_ret(site), th_func_ret(bound));
+    size_t count = th_func_nparams(site) < th_func_nparams(bound)
+        ? th_func_nparams(site) : th_func_nparams(bound);
+    for (size_t i = 0; i < count; i++)
+        (void)th_match(th_func_param(site, i)->type,
+                       th_func_param(bound, i)->type);
+}
+
 static ir_value_t *
 n00bb_rewrite_function_address(n00bb_rewrite_t *rewrite,
                                parse_sym_entry_t *symbol,
@@ -1531,8 +1601,8 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     th_ctx *types = ir_module_types(rewrite->context.module);
     th_type *current = ir_instr_call_signature(in);
     bool closed = th_is_closed(types, function->type);
-    if (closed && current && !th_is_closed(types, current))
-        (void)th_match(current, function->type);
+    if (closed && current)
+        n00bb_bind_caller_variables(types, current, function->type);
     if (closed ? current && !th_is_closed(types, current)
                    && !ir_instr_set_call_signature(in, function->type)
                : !current && !ir_instr_set_call_signature(in,
@@ -1542,15 +1612,10 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     // A callee with no written return type learns it from its body, which
     // may be typed after this call, so the copy can still hold a variable.
     // The final signature has the answer.
-    th_type *settled = ir_instr_call_signature(in);
-    // A call that may fail (a `with` hook's, written as one) reaching a
-    // method that cannot returns its value plainly.
-    th_type *callee_type = th_resolve(function->type);
-    if (th_kind_of(callee_type) == TH_FUNCTION
-        && !n00bb_settle_infallible_outcome(rewrite->context.function, in,
-                                            th_func_error(callee_type)))
+    if (!n00bb_bind_call_target(rewrite->context.function, in, function,
+                                true))
         return false;
-    settled = ir_instr_call_signature(in);
+    th_type *settled = ir_instr_call_signature(in);
     th_type *body_ret = th_kind_of(th_resolve(function->type)) == TH_FUNCTION
         ? th_resolve(th_func_ret(function->type)) : nullptr;
     // A cached callee was typed by an earlier build: its kept body has it.
@@ -1573,7 +1638,6 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         else if (th_matches(in->dest->type, th_func_ret(settled)))
             (void)th_match(in->dest->type, th_func_ret(settled));
     }
-    if (!n00bb_place_named_arguments(in, function)) return false;
     for (uint32_t p = in->n_operands - 1; th_kind_of(signature) == TH_FUNCTION
          && p < th_func_nparams(signature); p++) {
         th_mode mode = th_func_param(signature, p)->mode;

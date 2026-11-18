@@ -850,76 +850,6 @@ record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
     return valid;
 }
 
-// A trait call's result and arguments may be typed by variables local to
-// the caller, as a trait's method only says what its implementations'
-// types are related to. Once the call is bound to one implementation those
-// are known: they are bound in the caller (a specialized copy, whose
-// variables are its own).
-static void
-bind_caller_variables(th_ctx *types, th_type *site, th_type *bound)
-{
-    site = site ? th_resolve(site) : nullptr;
-    bound = bound ? th_resolve(bound) : nullptr;
-    if (!site || !bound || th_kind_of(site) != TH_FUNCTION
-        || th_kind_of(bound) != TH_FUNCTION || th_is_closed(types, site)
-        || !th_is_closed(types, bound))
-        return;
-    core_list_t(type_binding_t) bindings = {0};
-    (void)match_type(types, th_func_ret(site), th_func_ret(bound), &bindings);
-    size_t count = th_func_nparams(site) < th_func_nparams(bound)
-        ? th_func_nparams(site) : th_func_nparams(bound);
-    for (size_t i = 0; i < count; i++)
-        (void)match_type(types, th_func_param(site, i)->type,
-                         th_func_param(bound, i)->type, &bindings);
-    for (size_t i = 0; i < bindings.len; i++) {
-        // The matched variable is one of the caller's own.
-        th_type *variable = th_resolve(
-            (th_type *)bindings.data[i].variable);
-        if (variable && th_kind_of(variable) == TH_VAR)
-            th_var_bind(variable, bindings.data[i].actual);
-    }
-    core_list_free(bindings);
-}
-
-// A trait call is typed against the trait's signature, so a plain value
-// given for one of the method's option parameters reaches the bound method
-// as it is; it is made the option here, as it would have been in a direct
-// call.
-static bool
-option_arguments_to(ir_instr_t *call, ir_func_t *target, th_ctx *types)
-{
-    size_t count = th_func_nparams(target->type);
-    if (call->n_operands != count + 1) return true;
-    uint32_t position = 0;
-    for (uint32_t o = 1; o < call->n_operands; o++) {
-        ir_operand_t *operand = &call->operands[o];
-        uint32_t index = UINT32_MAX;
-        ir_value_t *parameter = ir_call_param(target, operand, &position,
-                                              &index);
-        for (uint32_t p = 0; parameter && index == UINT32_MAX
-             && p < target->n_params; p++)
-            if (target->params[p] == parameter) index = p;
-        const th_param *formal = index < count
-            ? th_func_param(target->type, index) : nullptr;
-        ir_value_t *argument = operand->kind == IR_OPD_VALUE
-            || operand->kind == IR_OPD_NAMED_ARG
-            ? ir_operand_value(operand) : nullptr;
-        th_type *given = argument ? th_resolve(argument->type) : nullptr;
-        if (!formal || !given || th_mode_by_reference(formal->mode)
-            || !th_option_item(th_resolve(formal->type))
-            || th_option_item(given) || th_is_nil(given))
-            continue;
-        ir_value_t *some = inserted_value(call, IR_OP_OPTION_SOME,
-                                          th_option(types, given));
-        if (!some || !ir_instr_operand_value(some->def, argument))
-            return false;
-        if (operand->kind == IR_OPD_NAMED_ARG) operand->named.value = some;
-        else operand->value = some;
-        ir_instr_use_added(call, o);
-    }
-    return true;
-}
-
 static bool
 bind_trait_method(const n00bb_trait_binder_t *binder, ir_func_t *caller,
                   ir_instr_t *selection)
@@ -957,16 +887,16 @@ bind_trait_method(const n00bb_trait_binder_t *binder, ir_func_t *caller,
                 continue;
             th_type *site = ir_instr_call_signature(call);
             if ((closed && !ir_instr_set_call_signature(call, target->type))
-                || !n00bb_place_named_arguments(call, target)
-                || !n00bb_settle_infallible_outcome(caller, call,
-                       th_func_error(th_resolve(target->type))))
+                || !n00bb_bind_call_target(caller, call, target, false))
                 return false;
             // A method with type variables of its own (not the receiver's)
             // takes them from the arguments.
-            if (!closed && (!option_arguments_to(call, target, types)
-                    || !concrete_call_signature(call, target, types, true)))
+            if (!closed && !concrete_call_signature(call, target, types, true))
                 return false;
-            bind_caller_variables(types, site, ir_instr_call_signature(call));
+            // The caller's variables a trait's signature left open (its
+            // copy's own) take the bound method's types.
+            n00bb_bind_caller_variables(types, site,
+                                        ir_instr_call_signature(call));
             th_type *signature = closed ? nullptr
                 : ir_instr_call_signature(call);
             core_list_t(type_binding_t) bindings = {0};
