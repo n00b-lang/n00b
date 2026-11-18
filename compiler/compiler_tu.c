@@ -3081,6 +3081,12 @@ typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
 
+static parse_tree_t *typecase_pattern_arm(parse_grammar_t *grammar,
+                                          parse_tree_t *node);
+static bool declared_typevar(parse_sym_entry_t *owner, core_string_t name);
+static th_type *arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm,
+                            core_string_t name, parse_tree_t *node);
+
 th_type *
 signature_typevar_for_node(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -3093,7 +3099,70 @@ signature_typevar_for_node(parse_grammar_t *grammar,
     core_string_t name = source_typevar_name(core_tree_child(node, 0));
     if (!name.data) return nullptr;
     parse_sym_entry_t *owner = typevar_owner(grammar, node);
+    parse_tree_t *arm = typecase_pattern_arm(grammar, node);
+    if (arm && !declared_typevar(owner, name))
+        return arm_typevar(state, arm, name, node);
     return owner ? owner_typevar(state, owner, name, node) : nullptr;
+}
+
+// The `typecase` arm whose pattern list holds `node`, if any.
+static parse_tree_t *
+typecase_pattern_arm(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *parent = parse_tree_parent(at);
+        if (NT_IS(grammar, at, "type-spec-list") && parent
+            && (NT_IS(grammar, parent, "typecase-case-block")
+                || NT_IS(grammar, parent, "typecase-value-case-block")))
+            return parent;
+        if (NT_IS(grammar, at, "body") || NT_IS(grammar, at, "value-body")
+            || NT_IS(grammar, at, "func-def")) return nullptr;
+    }
+    return nullptr;
+}
+
+// Whether `owner` already names the type variable `name` (in its signature,
+// or elsewhere in its body): a `typecase` pattern naming it means that one.
+static bool
+declared_typevar(parse_sym_entry_t *owner, core_string_t name)
+{
+    n00bb_signature_typevars_t *variables = owner
+        ? parse_sym_binding(owner, N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
+    for (size_t i = 0; variables && i < variables->len; i++)
+        if (core_string_eq(variables->data[i].name, name)) return true;
+    return false;
+}
+
+// A type variable a `typecase` arm's pattern introduces. It belongs to that
+// arm alone: another arm naming the same variable gets its own, and the
+// enclosing function's signature never gains it.
+static th_type *
+arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm, core_string_t name,
+            parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, arm);
+    if (!facts) return nullptr;
+    n00bb_signature_typevars_t *variables = facts->arm_typevars;
+    if (!variables) {
+        variables = core_arena_alloc(&state->semantic_values,
+                                     sizeof(*variables));
+        if (!variables) return nullptr;
+        memset(variables, 0, sizeof(*variables));
+        facts->arm_typevars = variables;
+    }
+    for (size_t i = 0; i < variables->len; i++) {
+        if (!core_string_eq(variables->data[i].name, name)) continue;
+        parse_tree_set_type(node, variables->data[i].type);
+        return variables->data[i].type;
+    }
+    th_type *type = var_named_text(state->types, name);
+    if (!type || !core_arena_try_reserve_raw(&state->semantic_values,
+            (void **)&variables->data, &variables->cap,
+            variables->len + 1, sizeof(*variables->data))) return nullptr;
+    variables->data[variables->len++] = (n00bb_typevar_binding_t){name, type};
+    core_dict_put(&state->arm_typevars, type, (void *)1);
+    parse_tree_set_type(node, type);
+    return type;
 }
 
 static th_type *
@@ -7154,6 +7223,7 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
+    core_dict_free(&state->arm_typevars);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_foreach(&state->dispatch_calls, item)
@@ -7187,6 +7257,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
+    core_dict_init(&state->arm_typevars, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->mark_annotations = core_list_new(n00bb_mark_annotation_t);

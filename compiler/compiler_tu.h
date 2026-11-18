@@ -360,6 +360,9 @@ typedef struct n00bb_iteration_plan_t n00bb_iteration_plan_t;
 typedef struct n00bb_litmod_site_t n00bb_litmod_site_t;
 typedef struct {
     n00bb_typecase_arm_types_t *typecase_arm_types;
+    // The type variables a `typecase` arm's patterns introduce: each stands
+    // for one unknown type inside that arm only.
+    n00bb_signature_typevars_t *arm_typevars;
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
@@ -595,6 +598,9 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
     core_dict_t shared_state_types;
+    // The type variables `typecase` arm patterns introduce (see
+    // n00bb_node_facts_t.arm_typevars), which inference holds rigid.
+    core_dict_t arm_typevars;
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     n00bb_link_analysis_t *link_analysis;

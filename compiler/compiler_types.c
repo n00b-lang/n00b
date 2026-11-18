@@ -1834,6 +1834,56 @@ static th_mode bound_receiver_mode(n00bb_link_analysis_t *analysis,
         : TH_IN;
 }
 
+// Holds rigid the variables in `pattern` that a `typecase` arm introduced.
+// (A trait arm's narrowing names a variable too, but that one is the
+// subject's own type, which inference still relates to the rest.)
+static void declare_arm_variables_rigid(ty_solver_t *solver, th_ctx *types,
+                                        core_translation_unit_t *const *units,
+                                        size_t count, th_type *pattern)
+{
+    th_type **open     = nullptr;
+    size_t    variables = th_free_vars(types, pattern, &open);
+
+    for (size_t v = 0; v < variables; v++) {
+        for (size_t u = 0; u < count; u++) {
+            if (core_dict_contains(&tu_state(units[u])->arm_typevars,
+                                   open[v])) {
+                ty_declare_rigid(solver, open[v]);
+                break;
+            }
+        }
+    }
+}
+
+// A type variable a `typecase` arm names (`case 'T?`, `case Array['T]`)
+// stands for one fixed, unknown type inside the arm: inference may not
+// bind it, as it may not bind a function's own type parameters.
+static void declare_narrowed_rigid(ty_solver_t *solver, th_ctx *types,
+                                   core_translation_unit_t *const *units,
+                                   size_t count,
+                                   core_list_t(n00bb_ir_func_ptr_t) *functions)
+{
+    for (size_t f = 0; f < functions->len; f++) {
+        ir_func_t *function = functions->data[f];
+
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+
+                if ((in->op == IR_OP_TYPE_NARROW || in->op == IR_OP_TYPE_TEST)
+                    && in->n_operands == 2
+                    && in->operands[1].kind == IR_OPD_TYPE
+                    && in->operands[1].type) {
+                    declare_arm_variables_rigid(solver, types, units, count,
+                                                in->operands[1].type);
+                }
+            }
+        }
+    }
+}
+
 static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
 {
     n00bb_link_analysis_t *analysis = index->analysis;
@@ -8104,6 +8154,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     // Until literals are sized, an operator meeting an unbound operand
     // waits (integer_promotion). Constraining already judges some calls.
     typing->dispatch->sizing_pending = true;
+    declare_narrowed_rigid(solver, types, units, count, &functions);
     ty_constrain_group(solver, group, &coverage);
     ty_solve(solver);
     bool bitwise_negative = false;

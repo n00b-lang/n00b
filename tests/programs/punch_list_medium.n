@@ -394,6 +394,36 @@ require option_arm(cast[Any] listed_option) == "list option"
 require option_arm(cast[Any] several_array) == "array"
 require option_arm(cast[Any] several_list) == "other"
 
+# The arm's `'T` is one fixed type inside the arm: inference does not bind
+# it to a call's type parameter, so the narrowed option, once a `nil` test
+# makes it its item, is made an option again to pass where `'T?` is wanted.
+func holds_value(x: 'T?) -> bool {
+    return x != nil
+}
+func option_passed(b: Any) -> string {
+    typecase b {
+        case 'T? {
+            if b == nil {
+                return "nil"
+            }
+            if !holds_value(b) {
+                return "lost"
+            }
+            return "some"
+        }
+        else { return "other" }
+    }
+}
+let passed_bool: bool? = true
+let passed_byte: u8? = 0
+let passed_float: float? = 0.5
+require option_passed(cast[Any] passed_bool) == "some"
+require option_passed(cast[Any] passed_byte) == "some"
+require option_passed(cast[Any] passed_float) == "some"
+require option_passed(cast[Any] held_option) == "some"
+require option_passed(cast[Any] listed_option) == "some"
+require option_passed(cast[Any] small_nil) == "nil"
+
 # A module-scope `typecase` narrows a module variable in its arms, as one
 # in a function does; an assignment in an arm writes the variable itself.
 var module_held: Any = cast[Any] "hi"
