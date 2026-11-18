@@ -188,10 +188,21 @@ add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd,
         add_environment_root(resolver, cwd, i, diagnostics);
 }
 
+core_string_t
+n00bb_canonical_cwd(void)
+{
+    core_string_t cwd = core_os_current_directory();
+    core_string_t real = cwd.data ? core_os_real_path(cwd)
+                                  : (core_string_t){0};
+    if (!real.data) return cwd;
+    core_free(cwd.data);
+    return real;
+}
+
 n00bb_resolver_t *
 n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
 {
-    core_string_t cwd = core_os_current_directory();
+    core_string_t cwd = n00bb_canonical_cwd();
     if (!cwd.data) return nullptr;
     n00bb_resolver_t *resolver = core_alloc(n00bb_resolver_t);
     resolver->roots = core_list_new(n00bb_root_t);
@@ -202,13 +213,10 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
     pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
     add_root(resolver, n00bb_toolchain()->stdlib, ROOT_STDLIB, 0);
-    core_string_t real_cwd = core_os_real_path(cwd);
-    core_string_t here = real_cwd.data ? real_cwd : cwd;
     if (!resolver->roots.len
-        || !path_within(here, resolver->roots.data[0].path))
+        || !path_within(cwd, resolver->roots.data[0].path))
         add_root(resolver, cwd, ROOT_DEFAULT, 0);
-    add_environment_roots(resolver, here, diagnostics);
-    core_free(real_cwd.data);
+    add_environment_roots(resolver, cwd, diagnostics);
     core_snapshot_root_t *roots = core_alloc_array(core_snapshot_root_t,
                                                    resolver->roots.len);
     for (size_t i = 0; i < resolver->roots.len; i++)
@@ -1321,12 +1329,7 @@ n00bb_locate_operand(n00bb_resolver_t *resolver, core_string_t operand,
 static core_string_t
 canonical_cwd(void)
 {
-    core_string_t cwd = core_os_current_directory();
-    core_string_t real = cwd.data ? core_os_real_path(cwd)
-                                  : (core_string_t){0};
-    if (!real.data) return cwd;
-    core_free(cwd.data);
-    return real;
+    return n00bb_canonical_cwd();
 }
 
 static core_string_t

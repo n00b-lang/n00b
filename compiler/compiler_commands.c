@@ -816,7 +816,8 @@ static void
 each_package_path(package_path_visit_t visit, void *context)
 {
     n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
-    core_string_t cwd = core_os_current_directory();
+    // The resolver joins relative entries to the canonical directory.
+    core_string_t cwd = n00bb_canonical_cwd();
     for (size_t i = 0; i < n00bb_setting_count(key); i++) {
         core_string_t entry = n00bb_setting_at(key, i);
         core_string_t resolved = core_os_is_absolute(entry)
@@ -1101,17 +1102,15 @@ env_package_path(void *context, size_t index, core_string_t entry,
     const char *problem = state == PATH_IS_MISSING ? "does not exist"
         : state == PATH_IS_NOT_DIRECTORY ? "not a directory" : nullptr;
     if (!problem && !core_os_is_absolute(entry)) {
-        core_string_t cwd = core_os_current_directory();
+        core_string_t cwd = n00bb_canonical_cwd();
         core_string_t canonical = core_os_real_path(resolved);
-        core_string_t real_cwd = core_os_real_path(cwd);
-        bool inside = canonical.data && real_cwd.data
-            && core_string_starts_with(canonical, real_cwd)
-            && (canonical.u8_bytes == real_cwd.u8_bytes
-                || core_os_is_separator(canonical.data[real_cwd.u8_bytes]));
+        bool inside = canonical.data && cwd.data
+            && core_string_starts_with(canonical, cwd)
+            && (canonical.u8_bytes == cwd.u8_bytes
+                || core_os_is_separator(canonical.data[cwd.u8_bytes]));
         if (!inside)
             problem = "a relative entry must stay inside the current "
                       "directory";
-        core_free(real_cwd.data);
         core_free(canonical.data);
         core_free(cwd.data);
     }
@@ -1140,18 +1139,15 @@ env_package_roots(void)
     (void)env_root_seen(&seen, toolchain->stdlib);
     // As in the resolver: the current directory is no package root of its
     // own when it lies inside the stdlib.
-    core_string_t cwd = core_os_current_directory();
-    core_string_t real_cwd = core_os_real_path(cwd);
-    core_string_t here = real_cwd.data ? real_cwd : cwd;
+    core_string_t cwd = n00bb_canonical_cwd();
     core_string_t stdlib = seen.data[0];
-    bool inside = core_string_starts_with(here, stdlib)
-        && (here.u8_bytes == stdlib.u8_bytes
-            || core_os_is_separator(here.data[stdlib.u8_bytes]));
+    bool inside = core_string_starts_with(cwd, stdlib)
+        && (cwd.u8_bytes == stdlib.u8_bytes
+            || core_os_is_separator(cwd.data[stdlib.u8_bytes]));
     if (!inside) {
         printf("  %-10s %.*s\n", "default", (int)cwd.u8_bytes, cwd.data);
         (void)env_root_seen(&seen, cwd);
     }
-    core_free(real_cwd.data);
     core_free(cwd.data);
     each_package_path(env_package_path, &seen);
     for (size_t i = 0; i < seen.len; i++) core_free(seen.data[i].data);

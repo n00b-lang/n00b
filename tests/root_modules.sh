@@ -146,3 +146,20 @@ expect_once "$tmp/roots.log" \
     cat "$tmp/roots.log" >&2
     exit 1
 }
+
+# Relative entries resolve against the canonical current directory, the same
+# one the resolver uses, even when it is reached through a symbolic link.
+mkdir -p "$layers/project/sub"
+ln -s "$layers/project" "$tmp/linked"
+(cd "$tmp/linked" && env -u XDG_CONFIG_HOME HOME="$layers/home" \
+    "$compiler" env --path sub --path "$layers/project/sub") \
+    >"$tmp/linked.log" 2>&1 || true
+sed -n '/^package roots$/,/^$/p' "$tmp/linked.log" >"$tmp/roots.log"
+expect_once "$tmp/roots.log" "  default    $layers/project"
+expect_once "$tmp/roots.log" "  --path     sub"
+if grep -q 'problem' "$tmp/roots.log" \
+        || [ "$(grep -c '^  --path' "$tmp/roots.log")" -ne 1 ]; then
+    echo 'a relative entry from a linked directory was mishandled' >&2
+    cat "$tmp/roots.log" >&2
+    exit 1
+fi
