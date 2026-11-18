@@ -498,10 +498,18 @@ condition_fact(ir_abcd_t *ranges, const ir_value_t *value,
         && depth < 8) {
         const ir_value_t *left = ir_operand_value(&test->operands[0]);
         const ir_value_t *right = ir_operand_value(&test->operands[1]);
-        comparison_fact_t inner_left = condition_fact(ranges, left, at,
-                                                      depth + 1);
-        comparison_fact_t inner_right = condition_fact(ranges, right, at,
-                                                       depth + 1);
+        // Truth values only decide `==` / `!=` when both sides are
+        // booleans; `1 == 2` compares two truthy integers that differ.
+        ir_module_t *module = test->block->owner->owner;
+        bool booleans = left && right
+            && ir_machine_of(module, left->type).class == IR_CLASS_BOOL
+            && ir_machine_of(module, right->type).class == IR_CLASS_BOOL;
+        comparison_fact_t inner_left = booleans
+            ? condition_fact(ranges, left, at, depth + 1)
+            : COMPARISON_UNKNOWN;
+        comparison_fact_t inner_right = booleans
+            ? condition_fact(ranges, right, at, depth + 1)
+            : COMPARISON_UNKNOWN;
         if (inner_left != COMPARISON_UNKNOWN
             && inner_right != COMPARISON_UNKNOWN
             && (test->op == IR_OP_EQ || test->op == IR_OP_NE))
@@ -526,6 +534,21 @@ condition_fact(ir_abcd_t *ranges, const ir_value_t *value,
     return found.seen.lo ? COMPARISON_TRUE : COMPARISON_FALSE;
 }
 
+// `require` and `assert` lower to a branch whose false edge reaches a
+// block ending in a trap tagged with the statement's failure kind.
+static int64_t
+branch_failure_kind(const ir_instr_t *branch)
+{
+    const ir_block_t *failure = branch->operands[2].kind == IR_OPD_BLOCK
+        ? branch->operands[2].block : nullptr;
+    ir_instr_t *last = failure && failure->n_instrs
+        ? failure->instrs[failure->n_instrs - 1] : nullptr;
+    if (!last || last->op != IR_OP_TRAP) return -1;
+    ir_annot_t *kind = ir_annot_get(&last->annots,
+        CORE_STRING_STATIC(N00BB_FAILURE_KIND_ANNOTATION));
+    return kind && kind->kind == IR_ANNOT_INT ? (int64_t)kind->i.mag : -1;
+}
+
 static void
 check_constant_condition(core_translation_unit_t *unit, ir_abcd_t *ranges,
                          ir_instr_t *branch)
@@ -538,9 +561,21 @@ check_constant_condition(core_translation_unit_t *unit, ir_abcd_t *ranges,
         || !comparison_op(test->op)) return;
     comparison_fact_t fact = condition_fact(ranges, condition, branch, 0);
     if (fact == COMPARISON_UNKNOWN) return;
-    report_at(unit, N00B_DIAG_CONSTANT_CONDITION, test,
-              fact == COMPARISON_TRUE ? N00B_TEXT_CONDITION_ALWAYS_TRUE
-                                      : N00B_TEXT_CONDITION_ALWAYS_FALSE,
+    n00bb_text_t message = fact == COMPARISON_TRUE
+        ? N00B_TEXT_CONDITION_ALWAYS_TRUE : N00B_TEXT_CONDITION_ALWAYS_FALSE;
+    if (fact == COMPARISON_FALSE) {
+        switch (branch_failure_kind(branch)) {
+        case N00BB_FAILURE_REQUIRE:
+            message = N00B_TEXT_REQUIREMENT_ALWAYS_FAILS;
+            break;
+        case N00BB_FAILURE_ASSERT:
+            message = N00B_TEXT_ASSERTION_ALWAYS_FAILS;
+            break;
+        default:
+            break;
+        }
+    }
+    report_at(unit, N00B_DIAG_CONSTANT_CONDITION, test, message,
               N00BB_NO_ARGS);
 }
 

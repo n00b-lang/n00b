@@ -1194,6 +1194,8 @@ N00B_TEXT(CODE_NEVER_RUNS_NO_PATH, "this code can never run: no path reaches it"
 N00B_TEXT(CODE_NEVER_RUNS_NO_INSTANCE, "this code can never run: no type this function is used with reaches it")
 N00B_TEXT(CONDITION_ALWAYS_TRUE, "this condition is always true, so the other branch never runs")
 N00B_TEXT(CONDITION_ALWAYS_FALSE, "this condition is always false, so the other branch never runs")
+N00B_TEXT(REQUIREMENT_ALWAYS_FAILS, "this requirement is always false, so it always fails")
+N00B_TEXT(ASSERTION_ALWAYS_FAILS, "this assertion is always false, so it always fails")
 N00B_TEXT(CONSTANT_DOES_NOT_FIT, "integer constant {0} does not fit in `{1}`")
 N00B_TEXT(BITWISE_VALUE_CAN_BE_NEGATIVE, "this value can be {0}, but bitwise operators work only on unsigned integers")
 N00B_TEXT(BITWISE_SIGNED_OPERAND, "`{0}` is `{1}`, but bitwise operators work only on unsigned integers")
