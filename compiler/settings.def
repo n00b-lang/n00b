@@ -35,7 +35,6 @@ N00BB_SETTING(DEV_ERRORS_ONLY, "dev", "errors_only", BOOL, "false")
 N00BB_SETTING(DIAGNOSTICS_COLOR, "diagnostics", "color", CHOICE, "auto",
     ENVIRONMENT_MATCH("NO_COLOR", "never"),
     .choices = CORE_STRING_STATIC("auto always never"))
-N00BB_SETTING(FMT_ASCII_TAGS, "fmt", "ascii_tags", BOOL, "false")
 N00BB_SETTING(TOOLCHAIN_KEEP, "toolchain", "keep", INT, "1",
     RANGE(0, INT64_MAX))
 N00BB_SETTING(DEV_PROFILE_COMPILE, "dev", "profile_compile", BOOL, "false",

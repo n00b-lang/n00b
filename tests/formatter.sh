@@ -122,19 +122,17 @@ grep -q 'let signed_value: *int' "$tmp/normalized.n"
 ! grep -Eq '(^|[^[:alnum:]_])(u64|i64)($|[^[:alnum:]_])' \
     "$tmp/normalized.n"
 
+# Rich-string markup is plain `[...]` text to the formatter: it passes
+# through byte for byte, escapes included.
 cat >"$tmp/rich.n" <<'EOF2'
-let a = "[:b:]bold[:/b:] «i»it«/i» \[:x:] [:odd»:]"'r
-let b = "[:plain:]"
+let a = "[b]bold[/b] [i]it[/] \[x] [#0:a\]b] [1, 2]"'r
+let b = "[#name:>4] \[\] [bold"'rich
+let c = "[plain] \[ \]"
 EOF2
-"$compiler" fmt --output "$tmp/rich_guillemets.n" "$tmp/rich.n"
-cat >"$tmp/rich_guillemets.expected" <<'EOF2'
-let a = "«b»bold«/b» «i»it«/i» \[:x:] [:odd»:]"'r
-let b = "[:plain:]"
-EOF2
-diff -u "$tmp/rich_guillemets.expected" "$tmp/rich_guillemets.n"
-"$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n" "$tmp/rich.n"
-cat >"$tmp/rich_ascii.expected" <<'EOF2'
-let a = "[:b:]bold[:/b:] [:i:]it[:/i:] \[:x:] [:odd»:]"'r
-let b = "[:plain:]"
-EOF2
-diff -u "$tmp/rich_ascii.expected" "$tmp/rich_ascii.n"
+"$compiler" fmt --output "$tmp/rich_formatted.n" "$tmp/rich.n"
+diff -u "$tmp/rich.n" "$tmp/rich_formatted.n"
+if "$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n" "$tmp/rich.n" \
+    >/dev/null 2>&1; then
+    echo 'fmt unexpectedly accepted the removed --ascii-tags flag' >&2
+    exit 1
+fi

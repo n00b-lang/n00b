@@ -216,9 +216,6 @@ static const parse_cmdr_flag_t FMT_FLAGS[] = {
          "normalize source using inferred type information"),
     FLAG("--keep-layout", NO_ALIAS, BOOL, false,
          "with --normalize, rewrite only what normalization changes"),
-    KEYED_FLAG("--ascii-tags", NO_ALIAS, BOOL, false,
-               "write rich-string tags as [: :] instead of « »",
-               SETS(FMT_ASCII_TAGS, true)),
     END_FLAGS,
 };
 
