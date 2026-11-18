@@ -1,0 +1,13 @@
+record E {
+    code: i64        # the code
+    text: string?    # the text
+    fn:   string     # the function
+}
+
+func f() -> int {
+    let a: int = 1    # one
+
+    let b: int = 2 /* two */
+    # standalone
+    return a + b      // done
+}

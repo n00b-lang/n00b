@@ -3663,6 +3663,38 @@ n00bb_format_newline_count(const char *text, size_t length)
     return count;
 }
 
+static bool
+n00bb_format_comment_start(const char *text, size_t length)
+{
+    return length && (text[0] == '#'
+        || (length > 1 && text[0] == '/'
+            && (text[1] == '/' || text[1] == '*')));
+}
+
+// When a printed gap opens with a comment that ends the previous line,
+// writes that comment (indented as in the source, which may align it in
+// a column) and returns how much of the gap it used. Otherwise writes
+// nothing and returns 0.
+static size_t
+n00bb_format_line_comment(core_buffer_t *out, const char *gap,
+                          size_t length, const char *source,
+                          size_t source_length)
+{
+    size_t at = 0;
+    while (at < length && gap[at] == ' ') at++;
+    if (!at || !n00bb_format_comment_start(gap + at, length - at)) return 0;
+    size_t end = at;
+    while (end < length && gap[end] != '\n') end++;
+    size_t spaces = 0;
+    while (spaces < source_length && source[spaces] == ' ') spaces++;
+    bool aligned = spaces > at && spaces < source_length
+        && source[spaces] == gap[at];
+    for (size_t i = 0; i < (aligned ? spaces : at); i++)
+        core_buffer_putc(out, ' ');
+    core_buffer_append(out, gap + at, end - at);
+    return end;
+}
+
 static core_string_t
 n00bb_format_restore_breaks(parse_grammar_t *grammar,
                             core_string_t source, core_string_t printed_text)
@@ -3810,9 +3842,14 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             core_buffer_append(&result, printed + gap_start, gap_len);
         else if (prior_original && source_lines > printed_lines
                  && has_comment) {
+            size_t head = n00bb_format_line_comment(&result,
+                printed + gap_start, gap_len,
+                source.data + prior_original_end,
+                from_start - prior_original_end);
             for (size_t j = printed_lines; j < source_lines; j++)
                 core_buffer_putc(&result, '\n');
-            core_buffer_append(&result, printed + gap_start, gap_len);
+            core_buffer_append(&result, printed + gap_start + head,
+                               gap_len - head);
         }
         else if (prior_original && source_lines > printed_lines
                  && !has_comment) {
@@ -3835,6 +3872,14 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             }
             for (size_t j = 0; j < spaces; j++)
                 core_buffer_putc(&result, ' ');
+        }
+        else if (has_comment && prior_original) {
+            size_t head = n00bb_format_line_comment(&result,
+                printed + gap_start, gap_len,
+                source.data + prior_original_end,
+                from_start - prior_original_end);
+            core_buffer_append(&result, printed + gap_start + head,
+                               gap_len - head);
         }
         else core_buffer_append(&result, printed + gap_start, gap_len);
         core_buffer_append(&result, printed + to_start, to_len);
@@ -4465,6 +4510,37 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
     return core_buffer_string(&result);
 }
 
+// A comment that ends a line is scanned as leading trivia of the NEWLINE
+// that follows it. The printer breaks the line before every statement
+// terminator, which would carry the comment onto the next line, so it is
+// handed to the token it follows.
+static void
+n00bb_format_attach_line_comments(parse_grammar_t *grammar,
+                                  parse_token_stream_t *tokens)
+{
+    int64_t newline = parse_terminal_id(grammar,
+                                        CORE_STRING_STATIC("NEWLINE"));
+    int32_t count = tokens ? scan_stream_token_count(tokens) : 0;
+    for (int32_t i = 1; i < count; i++) {
+        parse_token_info_t *token = scan_stream_get(tokens, i);
+        parse_token_info_t *prior = scan_stream_get(tokens, i - 1);
+        if (!token || !prior || parse_token_tid(token) != newline
+            || parse_token_tid(prior) == newline) continue;
+        parse_trivia_t *moved = parse_token_leading_trivia(token);
+        bool comment = false;
+        for (parse_trivia_t *at = moved; at; at = at->next)
+            comment = comment || at->kind == PARSE_TRIVIA_COMMENT;
+        if (!comment) continue;
+        parse_trivia_t *trailing = parse_token_trailing_trivia(prior);
+        if (!trailing) parse_token_set_trailing_trivia(prior, moved);
+        else {
+            while (trailing->next) trailing = trailing->next;
+            trailing->next = moved;
+        }
+        parse_token_set_leading_trivia(token, nullptr);
+    }
+}
+
 static parse_pwz_parser_t *
 n00bb_format_parse(parse_grammar_t *grammar, core_string_t text,
                    parse_token_stream_t **tokens_out)
@@ -4805,6 +4881,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         else {
             if (normalized_parser)
                 tree = parse_pwz_get_tree(normalized_parser);
+            n00bb_format_attach_line_comments(grammar, normalized_parser
+                ? normalized_tokens : state->lex->tokens);
             parse_print_opts_t options = {
                 .source = print_source,
                 .width = 88,
