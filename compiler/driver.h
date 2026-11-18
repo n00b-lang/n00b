@@ -15,6 +15,8 @@ bool n00bb_resolver_prepare_packages(n00bb_resolver_t *resolver);
 core_module_resolver_t n00bb_resolver_interface(n00bb_resolver_t *resolver);
 bool n00bb_operand_module_spec(core_string_t operand,
                                core_module_spec_t *out);
+// True when a command-line operand names a file rather than a module.
+bool n00bb_operand_is_file(core_string_t operand);
 bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t identifier,
                                   core_string_t text,

@@ -623,6 +623,12 @@ is_file_operand(core_string_t operand)
 }
 
 bool
+n00bb_operand_is_file(core_string_t operand)
+{
+    return operand.data && is_file_operand(operand);
+}
+
+bool
 n00bb_operand_module_spec(core_string_t operand, core_module_spec_t *out)
 {
     if (!operand.data || !operand.u8_bytes || !out) return false;

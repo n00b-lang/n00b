@@ -3037,6 +3037,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     n00bb_preprocessor_t *preprocessor =
         n00bb_preprocessor_new(&active_options);
     import_driver.preprocessor = preprocessor;
+    bool shadowed_root = false;
     for (size_t request_ix = 0; request_ix < root_request_count; request_ix++) {
         locate_request_t *request = &requests->ordered.data[request_ix];
         core_work_job_t *job = request->job;
@@ -3058,6 +3059,23 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 ? request->resolve_status : CORE_MODULE_RESOLVE_ERROR;
             report_unreadable_input(diags, resolver, operand,
                                     status == CORE_MODULE_NOT_FOUND);
+            continue;
+        }
+        // A module named on the command line follows the import rule: a file
+        // outside the library may not take a library package's name. (A
+        // library file with a namesake failed as it was located.)
+        core_string_t library = {0};
+        if (job_ok && request->root_input
+            && !n00bb_operand_is_file(request->operand)
+            && !n00bb_resolver_unit_in_stdlib(resolver, unit)
+            && stdlib_package_manifest(&import_driver,
+                   unit->module.identifier, &library)) {
+            report_shadow(diags, nullptr, (core_diag_location_t){},
+                unit->module.identifier,
+                core_source_file_path(&unit->source), library);
+            core_free(library.data);
+            shadowed_root = true;
+            success = false;
             continue;
         }
         n00bb_tu_state_t *state = tu_state(unit);
@@ -3088,7 +3106,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         profile_tick = now;
     }
 
-    if (preprocess && parse) {
+    if (preprocess && parse && !shadowed_root) {
         bool runtime_support_loaded = false;
         for (size_t i = 0; i < root_request_count; i++) {
             if (!requests->ordered.data[i].root_input) continue;

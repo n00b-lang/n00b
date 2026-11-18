@@ -177,3 +177,21 @@ printf "$module" >"$shadow/project/text.n"
     cat "$tmp/shadow.log" >&2
     exit 1
 }
+
+# A module named on the command line follows the same rule; a file path
+# names exactly that file and is left alone.
+rm "$shadow/project/text.n"
+printf "$module" >"$shadow/project/unicode.n"
+shadow_case 'module operand' unicode unicode unicode/__init.n \
+    project/unicode.n 'on off'
+mkdir -p "$shadow/path/sys"
+printf "$module" >"$shadow/path/sys/env.n"
+shadow_case 'module operand on N00B_PATH' sys.env sys.env \
+    sys/env/__init.n path/sys/env.n
+rm -r "$shadow/path/sys"
+(cd "$shadow/project" && "$compiler" check uses_helper unicode.n) \
+    >"$tmp/shadow.log" 2>&1 || {
+    echo 'an ordinary module operand or a file operand failed' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
