@@ -1315,13 +1315,31 @@ static bool report_trait_parameter(th_ctx *types,
     if (!variable.u8_bytes) {
         variable = shown(types, receiver);
     }
-    n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
-                 n00bb_span_location(failure->why.at->span),
-                 N00B_TEXT_TRAIT_PARAMETER_FIXED,
-                 N00BB_ARGS(ARG_TEXT(failure->why.at->operands[0].name),
-                            ARG_TEXT(variable),
-                            ARG_TEXT(shown(types, failure->actual)),
-                            ARG_TEXT(shown(types, failure->expected))));
+
+    // The call as written: `c.stop`, or the whole of `stop(c, s)`.
+    bool          method_style = ir_annot_get(
+        (ir_annots_t *)&failure->why.at->annots,
+        N00BB_DISPATCH_IMPLICIT_SELF_KEY) != nullptr;
+    core_string_t call         = method_style
+        ? (core_string_t){0} : span_text(unit, failure->why.at->span);
+
+    if (call.u8_bytes) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
+                     n00bb_span_location(failure->why.at->span),
+                     N00B_TEXT_TRAIT_PARAMETER_FIXED_CALL,
+                     N00BB_ARGS(ARG_TEXT(call), ARG_TEXT(variable),
+                                ARG_TEXT(shown(types, failure->actual)),
+                                ARG_TEXT(shown(types, failure->expected))));
+    }
+    else {
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
+                     n00bb_span_location(failure->why.at->span),
+                     N00B_TEXT_TRAIT_PARAMETER_FIXED,
+                     N00BB_ARGS(ARG_TEXT(failure->why.at->operands[0].name),
+                                ARG_TEXT(variable),
+                                ARG_TEXT(shown(types, failure->actual)),
+                                ARG_TEXT(shown(types, failure->expected))));
+    }
     n00bb_report_help(diagnostics, N00B_TEXT_TRAIT_PARAMETERS_ARE_PER_BOUND,
                       N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(trait)),
                                  ARG_TEXT(variable)));
