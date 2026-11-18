@@ -1420,8 +1420,10 @@ resolve_module_member_site(parse_grammar_t *grammar,
     size_t failures = core_diagnostics_failures(diagnostics);
     bool resolved = resolve_member_site(grammar, unit, node);
     if (!resolved && site
-        && core_diagnostics_failures(diagnostics) > failures)
+        && core_diagnostics_failures(diagnostics) > failures) {
         site->unresolved = true;
+        site->blocks_lowering = !is_type_reference_node(grammar, node);
+    }
     return resolved;
 }
 

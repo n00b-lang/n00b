@@ -508,6 +508,9 @@ typedef struct {
     bool variant_case_candidate;
     bool constructor_call;
     bool unresolved;
+    // The unresolved reference is a value that code generation cannot
+    // stand in for, so the program stops before lowering.
+    bool blocks_lowering;
     bool init_call;
     bool callback_call;
     bool callback_setup;

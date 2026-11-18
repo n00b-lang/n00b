@@ -18,6 +18,18 @@ build_interface_environment(n00bb_link_analysis_t *analysis,
     return nullptr;
 }
 
+// A use site blocks lowering only after its error was reported.
+static bool
+names_unresolved(const core_list_t(core_translation_unit_ptr_t) *units)
+{
+    for (size_t i = 0; i < units->len; i++) {
+        n00bb_tu_state_t *state = tu_state(units->data[i]);
+        for (size_t s = 0; state && s < state->link_use_sites.len; s++)
+            if (state->link_use_sites.data[s].blocks_lowering) return true;
+    }
+    return false;
+}
+
 static void
 report_stage_failure(core_translation_unit_t *const *units, size_t count,
                      core_translation_unit_t *unit, const char *stage,
@@ -259,6 +271,10 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
                                void *opaque)
 {
     n00bb_link_analysis_t *analysis = opaque;
+    // Those names were reported; code generation would only trip over the
+    // references that name nothing.
+    if (analysis && names_unresolved(&analysis->units))
+        return CORE_LINK_STAGE_RESULT_FAILED;
     if (!analysis || !select_storage_classes(&analysis->units))
         return stage_failed(analysis, "selecting storage classes",
                             "could not select the storage classes of the "
