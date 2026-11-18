@@ -337,7 +337,7 @@
 <export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
 <export-alias> ::= %"as" %IDENTIFIER
 <export-grantee> ::= %"to" <dotted-name>
-<dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
+<dotted-name> @nospace ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <binding-pattern> <assign-op> <expression>

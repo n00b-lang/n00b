@@ -103,6 +103,11 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/package_exports.n" \
+    "$program_dir/fmt_package_exports.n"
+diff -u "$program_dir/fmt_package_exports.expected" "$tmp/package_exports.n"
+"$compiler" fmt --check "$program_dir/fmt_package_exports.expected"
+
 "$compiler" fmt --output "$tmp/try_handlers.n" \
     "$program_dir/fmt_try_handlers.n"
 diff -u "$program_dir/fmt_try_handlers.expected" "$tmp/try_handlers.n"
