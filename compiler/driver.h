@@ -93,6 +93,26 @@ bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
 // whether a unit came from the toolchain library, the module file a root
 // other than the library holds for `identifier` (`path` is owned by the
 // caller), and the library's manifests that may declare `declared_name`.
+// A standard library module that failed because a file elsewhere has its
+// module path. The failure travels up the chain of importers to the first
+// module outside the library, where it is reported once, at the import.
+typedef struct n00bb_stdlib_shadow_t {
+    core_string_t name;
+    core_string_t shadow;
+    core_string_t stdlib;
+    bool          reported;
+} n00bb_stdlib_shadow_t;
+
+// Records a clash; the resolver owns the record for its lifetime.
+n00bb_stdlib_shadow_t *n00bb_resolver_record_shadow(
+    n00bb_resolver_t *resolver, core_string_t name, core_string_t shadow,
+    core_string_t stdlib);
+// True for the one caller that gets to report the clash.
+bool n00bb_resolver_claim_shadow(n00bb_resolver_t *resolver,
+                                 n00bb_stdlib_shadow_t *shadow);
+size_t n00bb_resolver_shadow_count(n00bb_resolver_t *resolver);
+n00bb_stdlib_shadow_t *n00bb_resolver_shadow_at(n00bb_resolver_t *resolver,
+                                                size_t index);
 bool n00bb_resolver_unit_in_stdlib(const n00bb_resolver_t *resolver,
                                    const core_translation_unit_t *unit);
 bool n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,

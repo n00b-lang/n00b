@@ -1070,18 +1070,55 @@ make_interface_module_source(locate_worker_context_t *context,
     return true;
 }
 
+typedef enum {
+    SHADOW_REACHED_BY_IMPORT,
+    SHADOW_REACHED_IMPLICITLY,
+    SHADOW_REACHED_FROM_COMMAND_LINE,
+    SHADOW_REACHED_SOMEHOW,
+} shadow_reach_t;
+
 // The standard library cannot be shadowed: a module path it provides, as a
-// module file or a declared package, must come from nowhere else.
+// module file or a declared package, must come from nowhere else. This
+// reports a clash where the user can act on it: `at` is the import (or
+// nothing, for an implicit import or a command-line module), and `loaded`
+// the module that import named.
+static void
+report_shadow_cause(core_diagnostics_t *diagnostics,
+                    core_translation_unit_t *unit, core_diag_location_t at,
+                    const n00bb_stdlib_shadow_t *cause, core_string_t loaded,
+                    shadow_reach_t reach)
+{
+    n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
+        N00B_TEXT_STANDARD_LIBRARY_MODULE_IS_SHADOWED,
+        N00BB_ARGS(ARG_TEXT(cause->name)));
+    n00bb_report_note(diagnostics, N00B_TEXT_SHADOWED_STANDARD_LIBRARY_FILES,
+        N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(cause->stdlib),
+                   ARG_TEXT(cause->shadow)));
+    bool other = loaded.data && !core_string_eq(loaded, cause->name);
+    if (reach == SHADOW_REACHED_IMPLICITLY && other)
+        n00bb_report_note(diagnostics, N00B_TEXT_LOADED_IMPLICITLY_THROUGH,
+            N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(loaded)));
+    else if (reach == SHADOW_REACHED_BY_IMPORT && other)
+        n00bb_report_note(diagnostics, N00B_TEXT_LOADED_BY_IMPORTING,
+            N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(loaded)));
+    else if (reach == SHADOW_REACHED_FROM_COMMAND_LINE)
+        n00bb_report_note(diagnostics, N00B_TEXT_LOADED_FOR_COMMAND_LINE,
+            N00BB_ARGS(ARG_TEXT(loaded.data ? loaded : cause->name)));
+    n00bb_report_help(diagnostics, N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
+        N00BB_ARGS(ARG_TEXT(cause->shadow)));
+}
+
+// A clash found right at an import or a command-line module.
 static void
 report_shadow(core_diagnostics_t *diagnostics, core_translation_unit_t *unit,
               core_diag_location_t at, core_string_t name,
               core_string_t shadow, core_string_t stdlib)
 {
-    n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
-        N00B_TEXT_SHADOWS_THE_STANDARD_LIBRARY,
-        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(shadow), ARG_TEXT(stdlib)));
-    n00bb_report_help(diagnostics, N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
-        N00BB_ARGS(ARG_TEXT(shadow)));
+    n00bb_stdlib_shadow_t cause = {
+        .name = name, .shadow = shadow, .stdlib = stdlib,
+    };
+    report_shadow_cause(diagnostics, unit, at, &cause, (core_string_t){0},
+        unit ? SHADOW_REACHED_BY_IMPORT : SHADOW_REACHED_FROM_COMMAND_LINE);
 }
 
 // A library module file fails to load while another root holds a file with
@@ -1096,9 +1133,18 @@ stdlib_file_shadowed(n00bb_resolver_t *resolver,
         || !n00bb_resolver_shadowing_source(resolver,
                unit->module.identifier, &shadow))
         return false;
-    report_shadow(core_translation_unit_diagnostics(unit), unit,
-                  (core_diag_location_t){}, unit->module.identifier, shadow,
-                  core_source_file_path(&unit->source));
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (state) {
+        // Reported where it is actionable: at the import, outside the
+        // library, that led here (see pass_stdlib_shadow).
+        state->stdlib_shadow = n00bb_resolver_record_shadow(resolver,
+            unit->module.identifier, shadow,
+            core_source_file_path(&unit->source));
+        state->import_failure_reported = true;
+    }
+    else report_shadow(core_translation_unit_diagnostics(unit), unit,
+                       (core_diag_location_t){}, unit->module.identifier,
+                       shadow, core_source_file_path(&unit->source));
     core_free(shadow.data);
     return true;
 }
@@ -1457,14 +1503,50 @@ claim_manifest(import_driver_t *driver, core_work_job_t *job)
     pthread_mutex_unlock(driver->requests_lock);
 }
 
+// A shadowed library module fails quietly, and so does each library module
+// importing it; the first importer outside the library reports it, at its
+// import of `loaded` (or with a note, for an implicit import).
+static void
+pass_stdlib_shadow(import_driver_t *driver, core_translation_unit_t *importer,
+                   parse_tree_t *statement, n00bb_stdlib_shadow_t *cause,
+                   core_string_t loaded)
+{
+    if (!cause || !importer) return;
+    n00bb_tu_state_t *state = tu_state(importer);
+    if (n00bb_resolver_unit_in_stdlib(driver->resolver, importer)) {
+        if (state && !state->stdlib_shadow) state->stdlib_shadow = cause;
+        return;
+    }
+    if (!n00bb_resolver_claim_shadow(driver->resolver, cause)) return;
+    report_shadow_cause(core_translation_unit_diagnostics(importer), importer,
+        import_location(statement), cause, loaded,
+        statement ? SHADOW_REACHED_BY_IMPORT : SHADOW_REACHED_IMPLICITLY);
+}
+
+// `importer` fails because `failed` did; a shadowed library module behind
+// that failure is carried along or reported.
+static void
+inherit_import_failure(import_driver_t *driver,
+                       core_translation_unit_t *importer,
+                       parse_tree_t *statement,
+                       core_translation_unit_t *failed, core_string_t loaded)
+{
+    n00bb_tu_state_t *state = failed ? tu_state(failed) : nullptr;
+    if (state)
+        pass_stdlib_shadow(driver, importer, statement, state->stdlib_shadow,
+                           loaded);
+    mark_import_failure_reported(importer);
+}
+
 static void
 claim_manifest_failure(import_driver_t *driver, core_work_job_t *job,
                        core_translation_unit_t *manifest,
-                       core_translation_unit_t *importer)
+                       core_translation_unit_t *importer,
+                       parse_tree_t *statement, core_string_t loaded)
 {
     if (!failure_already_reported(manifest)) return;
     claim_manifest(driver, job);
-    mark_import_failure_reported(importer);
+    inherit_import_failure(driver, importer, statement, manifest, loaded);
 }
 
 static bool
@@ -1830,12 +1912,17 @@ accept_package_exports(import_driver_t *driver,
 }
 
 static void
-report_stdlib_shadow(core_translation_unit_t *importer,
+report_stdlib_shadow(import_driver_t *driver,
+                     core_translation_unit_t *importer,
                      parse_tree_t *statement, core_string_t name,
                      core_string_t shadow, core_string_t stdlib)
 {
-    report_shadow(core_translation_unit_diagnostics(importer), importer,
-                  import_location(statement), name, shadow, stdlib);
+    // Inside the library the import is no place the user can fix; the
+    // clash travels up to the first importer outside it. Either way it is
+    // reported once, however many imports find it.
+    pass_stdlib_shadow(driver, importer, statement,
+        n00bb_resolver_record_shadow(driver->resolver, name, shadow, stdlib),
+        name);
     mark_import_failure_reported(importer);
 }
 
@@ -1883,7 +1970,7 @@ reject_stdlib_shadow(import_driver_t *driver,
     if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct)) return false;
     core_string_t stdlib = {0};
     if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
-    report_stdlib_shadow(importer, statement, name,
+    report_stdlib_shadow(driver, importer, statement, name,
                          core_source_file_path(&direct->source), stdlib);
     core_free(stdlib.data);
     return true;
@@ -1908,13 +1995,18 @@ parent_manifest_declared(import_driver_t *driver,
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(importer);
     size_t before = core_diagnostics_count(diagnostics);
+    n00bb_tu_state_t *state = tu_state(importer);
+    bool shadowed_before = state && state->stdlib_shadow;
     bool declared = core_module_spec_init(&spec, parent)
         && discover_package_import(driver, importer, statement, &spec,
                                    false) != nullptr;
     core_module_spec_release(&spec);
     if (declared) return true;
-    // Looking for the parent already reported why it is unusable.
-    if (core_diagnostics_count(diagnostics) != before) return false;
+    // Looking for the parent already reported why it is unusable, here or
+    // (for a shadowed library module) further up the chain of importers.
+    if (core_diagnostics_count(diagnostics) != before
+        || (state && state->stdlib_shadow && !shadowed_before))
+        return false;
     import_report(importer, statement,
         N00B_DIAG_PACKAGE_PARENT_MANIFEST_MISSING,
         N00B_TEXT_PACKAGE_IS_DECLARED_BUT_NO,
@@ -1947,16 +2039,16 @@ discover_package_import(import_driver_t *driver,
         if (!job) continue;
         n00bb_tu_state_t *state = tu_state(unit);
         if (!unit || !tree) {
-            // A library manifest that failed because it is shadowed may be
-            // a cached interface, with no text to search.
-            core_string_t shadow = {0};
-            bool shadowed = unit
-                && n00bb_resolver_unit_in_stdlib(driver->resolver, unit)
-                && n00bb_resolver_shadowing_source(driver->resolver,
-                       unit->module.identifier, &shadow);
-            core_free(shadow.data);
-            if (shadowed || manifest_mentions(unit, logical->identifier))
-                claim_manifest_failure(driver, job, unit, importer);
+            // A failed manifest (a shadowed library one, say) is this
+            // import's failure only if it may declare the package; a cached
+            // interface has no text to search, but knows its packages.
+            bool relevant = state && state->interface_module
+                ? interface_may_declare_package(&driver->loader->interfaces,
+                      unit->module.identifier, logical->identifier)
+                : manifest_mentions(unit, logical->identifier);
+            if (relevant)
+                claim_manifest_failure(driver, job, unit, importer,
+                                       statement, logical->identifier);
             continue;
         }
         if (state->interface_module
@@ -1968,7 +2060,8 @@ discover_package_import(import_driver_t *driver,
         bool in_progress = false;
         if (!ensure_preprocessed_import(driver, driver->grammar,
                                         job, unit, tree, &in_progress)) {
-            claim_manifest_failure(driver, job, unit, importer);
+            claim_manifest_failure(driver, job, unit, importer, statement,
+                                   logical->identifier);
             continue;
         }
         if (!in_progress
@@ -1983,8 +2076,8 @@ discover_package_import(import_driver_t *driver,
                                                                : unit;
             core_translation_unit_t *other = selected_stdlib ? unit
                                                              : selected;
-            report_stdlib_shadow(importer, statement, logical->identifier,
-                core_source_file_path(&other->source),
+            report_stdlib_shadow(driver, importer, statement,
+                logical->identifier, core_source_file_path(&other->source),
                 core_source_file_path(&library->source));
             selected_job = nullptr;
             selected = nullptr;
@@ -2019,8 +2112,9 @@ discover_package_import(import_driver_t *driver,
                logical->identifier, &shadow)) {
         // A library package, reached by an import or as the parent of one,
         // and a module file elsewhere with the package's name.
-        report_stdlib_shadow(importer, statement, logical->identifier,
-            shadow, core_source_file_path(&selected->source));
+        report_stdlib_shadow(driver, importer, statement,
+            logical->identifier, shadow,
+            core_source_file_path(&selected->source));
         core_free(shadow.data);
         selected_job = nullptr;
         selected = nullptr;
@@ -2144,7 +2238,8 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     n00bb_tu_state_t *importer_state = tu_state(importer);
     if (!locate_job && ((resolved && failure_already_reported(attempted))
             || (importer_state && importer_state->import_failure_reported))) {
-        mark_import_failure_reported(importer);
+        inherit_import_failure(driver, importer, statement,
+            resolved ? attempted : nullptr, module->identifier);
         return false;
     }
     if (!locate_job) {
@@ -2196,7 +2291,8 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     if (!ensure_preprocessed_import(driver, grammar, locate_job,
                                     imported, tree, &in_progress)) {
         if (failure_already_reported(imported))
-            mark_import_failure_reported(importer);
+            inherit_import_failure(driver, importer, statement, imported,
+                                   module->identifier);
         else import_internal(importer, statement,
                              "an imported module failed without a diagnostic");
         return false;
@@ -3064,6 +3160,14 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         // A module named on the command line follows the import rule: a file
         // outside the library may not take a library package's name. (A
         // library file with a namesake failed as it was located.)
+        n00bb_tu_state_t *root_state = tu_state(unit);
+        if (!job_ok && request->root_input && root_state
+            && root_state->stdlib_shadow
+            && n00bb_resolver_claim_shadow(resolver,
+                   root_state->stdlib_shadow))
+            report_shadow_cause(diags, nullptr, (core_diag_location_t){},
+                root_state->stdlib_shadow, request->operand,
+                SHADOW_REACHED_FROM_COMMAND_LINE);
         core_string_t library = {0};
         if (job_ok && request->root_input
             && !n00bb_operand_is_file(request->operand)
@@ -3230,6 +3334,15 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         }
         if (unit && !requests->ordered.data[i].manifest_probe)
             merge_unit_diagnostics(diags, warnings, unit, local);
+    }
+    // A shadowed library module whose failure reached no importer outside
+    // the library is still an error, reported without an import to point at.
+    for (size_t i = 0; !success && !core_diagnostics_failed(diags)
+         && i < n00bb_resolver_shadow_count(resolver); i++) {
+        n00bb_stdlib_shadow_t *shadow = n00bb_resolver_shadow_at(resolver, i);
+        if (n00bb_resolver_claim_shadow(resolver, shadow))
+            report_shadow_cause(diags, nullptr, (core_diag_location_t){},
+                shadow, (core_string_t){0}, SHADOW_REACHED_SOMEHOW);
     }
     for (size_t i = 0; !success && !core_diagnostics_failed(diags)
          && !core_diagnostics_failed(requests->diagnostics)

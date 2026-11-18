@@ -87,6 +87,9 @@ typedef struct {
 } n00bb_generated_module_t;
 core_list_decl(n00bb_generated_module_t);
 
+typedef n00bb_stdlib_shadow_t *n00bb_stdlib_shadow_ptr_t;
+core_list_decl(n00bb_stdlib_shadow_ptr_t);
+
 struct n00bb_resolver_t {
     core_list_t(n00bb_root_t) roots;
     core_snapshot_inventory_t *inventory;
@@ -98,6 +101,8 @@ struct n00bb_resolver_t {
     pthread_mutex_t generated_lock;
     core_list_t(n00bb_manifest_fact_t) manifest_facts;
     pthread_mutex_t manifest_facts_lock;
+    core_list_t(n00bb_stdlib_shadow_ptr_t) shadows;
+    pthread_mutex_t shadows_lock;
 };
 
 static const core_string_t source_extensions[] = {
@@ -212,6 +217,8 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     pthread_mutex_init(&resolver->generated_lock, nullptr);
     resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
     pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
+    resolver->shadows = core_list_new(n00bb_stdlib_shadow_ptr_t);
+    pthread_mutex_init(&resolver->shadows_lock, nullptr);
     add_root(resolver, n00bb_toolchain()->stdlib, ROOT_STDLIB, 0);
     if (!resolver->roots.len
         || !path_within(cwd, resolver->roots.data[0].path))
@@ -282,7 +289,73 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
         core_free(resolver->manifest_facts.data[i].package_id.data);
     core_list_free(resolver->manifest_facts);
     pthread_mutex_destroy(&resolver->manifest_facts_lock);
+    for (size_t i = 0; i < resolver->shadows.len; i++) {
+        n00bb_stdlib_shadow_t *shadow = resolver->shadows.data[i];
+        core_free(shadow->name.data);
+        core_free(shadow->shadow.data);
+        core_free(shadow->stdlib.data);
+        core_free(shadow);
+    }
+    core_list_free(resolver->shadows);
+    pthread_mutex_destroy(&resolver->shadows_lock);
     core_free(resolver);
+}
+
+n00bb_stdlib_shadow_t *
+n00bb_resolver_record_shadow(n00bb_resolver_t *resolver, core_string_t name,
+                             core_string_t shadow, core_string_t stdlib)
+{
+    if (!resolver) return nullptr;
+    // One record per clash, however many importers find it.
+    pthread_mutex_lock(&resolver->shadows_lock);
+    for (size_t i = 0; i < resolver->shadows.len; i++) {
+        n00bb_stdlib_shadow_t *known = resolver->shadows.data[i];
+        if (core_string_eq(known->name, name)
+            && core_string_eq(known->shadow, shadow)) {
+            pthread_mutex_unlock(&resolver->shadows_lock);
+            return known;
+        }
+    }
+    n00bb_stdlib_shadow_t *record = core_alloc(n00bb_stdlib_shadow_t);
+    record->name = core_string_dup(name);
+    record->shadow = core_string_dup(shadow);
+    record->stdlib = core_string_dup(stdlib);
+    core_list_push(resolver->shadows, record);
+    pthread_mutex_unlock(&resolver->shadows_lock);
+    return record;
+}
+
+bool
+n00bb_resolver_claim_shadow(n00bb_resolver_t *resolver,
+                            n00bb_stdlib_shadow_t *shadow)
+{
+    if (!resolver || !shadow) return false;
+    pthread_mutex_lock(&resolver->shadows_lock);
+    bool first = !shadow->reported;
+    shadow->reported = true;
+    pthread_mutex_unlock(&resolver->shadows_lock);
+    return first;
+}
+
+size_t
+n00bb_resolver_shadow_count(n00bb_resolver_t *resolver)
+{
+    if (!resolver) return 0;
+    pthread_mutex_lock(&resolver->shadows_lock);
+    size_t count = resolver->shadows.len;
+    pthread_mutex_unlock(&resolver->shadows_lock);
+    return count;
+}
+
+n00bb_stdlib_shadow_t *
+n00bb_resolver_shadow_at(n00bb_resolver_t *resolver, size_t index)
+{
+    if (!resolver) return nullptr;
+    pthread_mutex_lock(&resolver->shadows_lock);
+    n00bb_stdlib_shadow_t *shadow = index < resolver->shadows.len
+        ? resolver->shadows.data[index] : nullptr;
+    pthread_mutex_unlock(&resolver->shadows_lock);
+    return shadow;
 }
 
 bool

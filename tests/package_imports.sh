@@ -100,8 +100,14 @@ printf 'import sys.env\n' >"$shadow/project/uses_env.n"
 printf 'import helper\nrequire helper.one() == 1\n' \
     >"$shadow/project/uses_helper.n"
 printf 'func one() -> int { return 1 }\n' >"$shadow/project/helper.n"
-shadow_case() {
-    label=$1 program=$2 name=$3 library=$4 other=$5 modes=${6:-on}
+# The clash is reported once, at the user's side: at the import that finds
+# it, or, when library modules reach it, at the user's import that started
+# the chain. SITE is what precedes `error` on the line
+# (the import's position, the module of an implicit import, or nothing for a
+# module named on the command line), as an extended regular expression. A
+# note names both files.
+shadowed_case() {
+    label=$1 program=$2 site=$3 name=$4 library=$5 other=$6 modes=${7:-on}
     for cache in $modes; do
         if [ "$cache" = on ]; then
             set -- env -u N00B_NO_PACKAGE_CACHE
@@ -114,9 +120,13 @@ shadow_case() {
             echo "$label (cache $cache): shadowing the standard library checked" >&2
             exit 1
         fi
-        grep -Fq "N00B-M0025: \`$name\` is in the standard library, at \`$stdlib_lib/$library\`, and also at \`$shadow/$other\`" \
-            "$tmp/shadow.log" || {
-            echo "$label (cache $cache): no shadowing error" >&2
+        grep -Eq "^${site}error N00B-M0025: standard library module \`$name\` is shadowed by another file with the same module path\$" \
+            "$tmp/shadow.log" \
+            && grep -Fxq "  note: the standard library's \`$name\` is \`$stdlib_lib/$library\`; the other file is \`$shadow/$other\`" \
+                "$tmp/shadow.log" \
+            && [ "$(grep -c 'N00B-M0025' "$tmp/shadow.log")" -eq 1 ] \
+            && ! grep -q "^$stdlib_lib" "$tmp/shadow.log" || {
+            echo "$label (cache $cache): not reported once, at the user's import" >&2
             cat "$tmp/shadow.log" >&2
             exit 1
         }
@@ -124,51 +134,80 @@ shadow_case() {
 }
 module='func one() -> int { return 1 }\n'
 printf "$module" >"$shadow/project/unicode.n"
-shadow_case 'file in the current directory' uses_unicode.n unicode \
-    unicode/__init.n project/unicode.n 'on off'
+# (`builtin` also reaches unicode, so the report may come from the implicit
+# import, at the top of the module.)
+shadowed_case 'file in the current directory' uses_unicode.n \
+    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n project/unicode.n \
+    'on off'
 rm "$shadow/project/unicode.n"
 printf "$module" >"$shadow/path/unicode.n"
-shadow_case 'file on N00B_PATH' uses_unicode.n unicode \
-    unicode/__init.n path/unicode.n
+shadowed_case 'file on N00B_PATH' uses_unicode.n \
+    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n path/unicode.n
 rm "$shadow/path/unicode.n"
 mkdir "$shadow/project/sys"
 printf "$module" >"$shadow/project/sys/env.n"
-shadow_case 'nested file' uses_env.n sys.env sys/env/__init.n \
-    project/sys/env.n
+shadowed_case 'nested file' uses_env.n 'uses_env\.n(:1:8)?: ' sys.env \
+    sys/env/__init.n project/sys/env.n
 rm -r "$shadow/project/sys"
-mkdir "$shadow/project/unicode"
-printf 'package unicode {\n}\n' >"$shadow/project/unicode/__init.n"
-shadow_case 'manifest at the library path' uses_unicode.n unicode.__init \
-    unicode/__init.n project/unicode/__init.n
-rm -r "$shadow/project/unicode"
+# (langtools is not loaded by `builtin`, so the user's import is the only way
+# these are reached.)
+printf 'import langtools\n' >"$shadow/project/uses_langtools.n"
+mkdir "$shadow/project/langtools"
+printf 'package langtools {\n}\n' >"$shadow/project/langtools/__init.n"
+shadowed_case 'manifest at the library path' uses_langtools.n \
+    'uses_langtools\.n:1:8: ' langtools.__init langtools/__init.n \
+    project/langtools/__init.n
+grep -Fxq '  note: `langtools.__init` is loaded by importing `langtools`' \
+    "$tmp/shadow.log" || {
+    echo 'manifest at the library path: no note on how it was reached' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
+rm -r "$shadow/project/langtools"
 mkdir "$shadow/path/mine"
 printf 'package unicode {\n}\n' >"$shadow/path/mine/__init.n"
-shadow_case 'manifest elsewhere' uses_unicode.n unicode \
-    unicode/__init.n path/mine/__init.n 'on off'
+shadowed_case 'manifest elsewhere' uses_unicode.n \
+    'uses_unicode\.n(:1:8)?: ' unicode unicode/__init.n path/mine/__init.n \
+    'on off'
 rm -r "$shadow/path/mine"
-mkdir -p "$shadow/project/unicode/internal"
-printf "$module" >"$shadow/project/unicode/internal/types.n"
-shadow_case 'library source module' uses_unicode.n unicode.internal.types \
-    unicode/internal/types.n project/unicode/internal/types.n
-rm -r "$shadow/project/unicode"
+mkdir -p "$shadow/project/langtools/internal"
+printf "$module" >"$shadow/project/langtools/internal/diag.n"
+shadowed_case 'library source module' uses_langtools.n \
+    'uses_langtools\.n:1:8: ' langtools.internal.diag \
+    langtools/internal/diag.n project/langtools/internal/diag.n 'on off'
+grep -Fxq '  note: `langtools.internal.diag` is loaded by importing `langtools`' \
+    "$tmp/shadow.log" || {
+    echo 'library source module: no note on how it was reached' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
+rm -r "$shadow/project/langtools"
 
 # Library modules reached with no import of them in the program are checked
 # too: the implicit `builtin` manifest, a module that manifest imports, and
 # `sys.gc`, found only as the parent of the package imported.
 mkdir -p "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/__init.n"
-shadow_case 'implicit builtin manifest' uses_helper.n builtin.__init \
-    builtin/__init.n project/builtin/__init.n
+shadowed_case 'implicit builtin manifest' uses_helper.n '(uses_)?helper\.n: ' \
+    builtin.__init builtin/__init.n project/builtin/__init.n
+grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
+    "$tmp/shadow.log" || {
+    echo 'implicit builtin manifest: no note on how it was reached' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
 rm "$shadow/project/builtin/__init.n"
 printf "$module" >"$shadow/project/builtin/sort.n"
-shadow_case 'module of the builtin package' uses_helper.n builtin.sort \
-    builtin/sort.n project/builtin/sort.n
+shadowed_case 'module of the builtin package' uses_helper.n \
+    '(uses_)?helper\.n: ' builtin.sort builtin/sort.n project/builtin/sort.n
 rm -r "$shadow/project/builtin"
 mkdir "$shadow/project/sys"
 printf "$module" >"$shadow/project/sys/gc.n"
 printf 'import sys.gc.alloc\n' >"$shadow/project/uses_gc.n"
-shadow_case 'parent of an imported package' uses_gc.n sys.gc \
-    sys/gc/__init.n project/sys/gc.n
+# Whichever reaches `sys.gc` first, the implicit `builtin` or the import,
+# reports it in uses_gc.n.
+shadowed_case 'parent of an imported package' uses_gc.n \
+    'uses_gc\.n(:1:8)?: ' sys.gc sys/gc/__init.n project/sys/gc.n
 rm -r "$shadow/project/sys"
 
 # A namesake nobody imports is no error, and other modules still resolve.
@@ -184,13 +223,25 @@ printf "$module" >"$shadow/project/text.n"
 # names exactly that file and is left alone.
 rm "$shadow/project/text.n"
 printf "$module" >"$shadow/project/unicode.n"
-shadow_case 'module operand' unicode unicode unicode/__init.n \
+shadowed_case 'module operand' unicode '' unicode unicode/__init.n \
     project/unicode.n 'on off'
 mkdir -p "$shadow/path/sys"
 printf "$module" >"$shadow/path/sys/env.n"
-shadow_case 'module operand on N00B_PATH' sys.env sys.env \
+shadowed_case 'module operand on N00B_PATH' sys.env '' sys.env \
     sys/env/__init.n path/sys/env.n
 rm -r "$shadow/path/sys"
+mkdir -p "$shadow/project/unicode/internal"
+printf "$module" >"$shadow/project/unicode/internal/types.n"
+shadowed_case 'library module operand' unicode.internal.types '' \
+    unicode.internal.types unicode/internal/types.n \
+    project/unicode/internal/types.n
+grep -Fxq '  note: `unicode.internal.types` is named on the command line' \
+    "$tmp/shadow.log" || {
+    echo 'library module operand: no note on how it was reached' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
+rm -r "$shadow/project/unicode"
 (cd "$shadow/project" && "$compiler" check uses_helper unicode.n) \
     >"$tmp/shadow.log" 2>&1 || {
     echo 'an ordinary module operand or a file operand failed' >&2
