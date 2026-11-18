@@ -1,0 +1,4 @@
+tests/diagnostics/tu/field_without_type.n:3:5: error N00B-T0607: field `y` of `Point` has no type
+  help: give it a type, as in `y: int`
+tests/diagnostics/tu/field_without_type.n:8:9: error N00B-T0607: field `sides` of `Shape` has no type
+  help: give it a type, as in `sides: int`

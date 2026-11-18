@@ -1228,6 +1228,20 @@ n00bb_field_declaration_types(parse_grammar_t *grammar,
     bool valid = true;
     for (size_t i = 0; i < fields.len; i++) {
         parse_sym_entry_t *field = fields.data[i];
+        // The grammar accepts a bare field name so the error can name it.
+        if (field->decl_node && !field->type
+            && !CHILD_NT(grammar, field->decl_node, "type-spec")) {
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            n00bb_report(diagnostics, unit, N00B_DIAG_FIELD_UNTYPED,
+                link_source_location(field->decl_node),
+                N00B_TEXT_FIELD_UNTYPED,
+                N00BB_ARGS(ARG_TEXT(field->name), ARG_TEXT(scope->name)));
+            n00bb_report_help(diagnostics, N00B_TEXT_FIELD_UNTYPED_HELP,
+                N00BB_ARGS(ARG_TEXT(field->name)));
+            valid = false;
+            continue;
+        }
         th_type *field_type = declared_type_from_node(grammar, unit,
                                                        field->decl_node);
         if (!field_type) { valid = false; break; }

@@ -303,6 +303,13 @@ N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
     "from what is later assigned to it. When nothing settles it, give it a\n"
     "type:\n"
     "    var count: int")
+N00B_DIAG(FIELD_UNTYPED, "N00B-T0607", ERROR,
+    "a record or object field is declared without a type",
+    "Every field of a record or object names its type after a colon:\n"
+    "    record Point {\n"
+    "        x: int\n"
+    "        y: int\n"
+    "    }")
 N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
     "the names in a pattern do not match the shape of the value",
     "Pattern names bind the positions of tuple items in order, or the fields\n"
