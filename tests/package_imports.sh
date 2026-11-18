@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 program_dir=$2
@@ -107,7 +109,7 @@ shadow_case() {
             set -- env N00B_NO_PACKAGE_CACHE=1
         fi
         if (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
-                N00B_DIAGNOSTIC_CODES=1 "$compiler" check "$program") \
+                "$compiler" check "$program") \
                 >"$tmp/shadow.log" 2>&1; then
             echo "$label (cache $cache): shadowing the standard library checked" >&2
             exit 1

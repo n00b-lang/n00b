@@ -1,5 +1,7 @@
 #!/bin/sh
 set -u
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 tmp=$(cd "$(mktemp -d)" && pwd -P)

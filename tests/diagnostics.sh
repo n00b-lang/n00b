@@ -1,5 +1,8 @@
 #!/bin/sh
 set -u
+# The goldens carry diagnostic codes, whatever the caller's environment (the
+# layout cases below turn them off for themselves).
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 src=$2
