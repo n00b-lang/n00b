@@ -889,7 +889,7 @@
 
 <variant-body> ::= <block-start> <variant-decl-spec-list> <block-end>
 <variant-decl-spec-list> ::= (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
-<variant-decl-one> @declares($1) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
+<variant-decl-one> @declares($1) @nospace($2) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
 
 <trait-decl> @namespace("type") @scope("trait", $2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
 

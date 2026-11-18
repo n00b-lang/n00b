@@ -3982,7 +3982,9 @@ n00bb_format_align(core_string_t input)
                 || n00bb_format_word(line->start, line->length, &at,
                                      "struct")
                 || n00bb_format_word(line->start, line->length, &at,
-                                     "object"))
+                                     "object")
+                || n00bb_format_word(line->start, line->length, &at,
+                                     "variant"))
                 for (size_t j = at; j < line->length; j++)
                     if (line->start[j] == '{') in_record = true;
         }

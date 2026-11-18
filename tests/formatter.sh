@@ -103,6 +103,10 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/variants.n" "$program_dir/fmt_variants.n"
+diff -u "$program_dir/fmt_variants.expected" "$tmp/variants.n"
+"$compiler" fmt --check "$program_dir/fmt_variants.expected"
+
 "$compiler" fmt --output "$tmp/default_params.n" \
     "$program_dir/fmt_default_params.n"
 diff -u "$program_dir/fmt_default_params.expected" "$tmp/default_params.n"

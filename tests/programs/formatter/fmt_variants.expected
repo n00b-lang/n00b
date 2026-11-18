@@ -1,0 +1,9 @@
+record Alt {
+    weight: int
+}
+
+variant Atom {
+    rule:    uint
+    literal: uint
+    group:   List[Alt]
+}
