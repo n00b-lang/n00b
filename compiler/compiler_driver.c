@@ -5512,7 +5512,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_ffi_set_target(ffi, ffi_target.triple);
     n00bb_setting_id_t contract_dirs_key = N00BB_KEY_PATHS_CONTRACT_DIRS;
     for (size_t i = 0; i < n00bb_setting_count(contract_dirs_key); i++)
-        n00bb_ffi_add_contract_dir(ffi,
+        if (n00bb_setting_path_is_first(contract_dirs_key, i))
+            n00bb_ffi_add_contract_dir(ffi,
                                    n00bb_setting_at(contract_dirs_key, i));
     const n00bb_module_generator_t generator_items[] = {
         {CORE_STRING_STATIC("ffi"), n00bb_ffi_generate, ffi, n00bb_ffi_inputs},

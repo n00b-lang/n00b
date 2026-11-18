@@ -1206,6 +1206,29 @@ n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index)
         : n00bb_setting_origin(id);
 }
 
+static core_string_t
+canonical_entry(core_string_t entry)
+{
+    core_string_t canonical = core_os_real_path(entry);
+    return canonical.data ? canonical : core_string_dup(entry);
+}
+
+bool
+n00bb_setting_path_is_first(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    if (index >= setting->value.items.len) return false;
+    core_string_t wanted = canonical_entry(setting->value.items.data[index]);
+    bool first = true;
+    for (size_t i = 0; first && i < index; i++) {
+        core_string_t earlier = canonical_entry(setting->value.items.data[i]);
+        first = !core_string_eq(earlier, wanted);
+        core_free(earlier.data);
+    }
+    core_free(wanted.data);
+    return first;
+}
+
 core_string_t
 n00bb_setting_key(n00bb_setting_id_t id)
 {

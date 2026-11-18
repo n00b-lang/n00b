@@ -70,4 +70,8 @@ core_string_t n00bb_setting_origin(n00bb_setting_id_t id);
 n00bb_setting_source_t n00bb_setting_source_at(n00bb_setting_id_t id,
                                                size_t index);
 core_string_t n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index);
+// False when entry `index` of a path list names the same directory as an
+// earlier entry, comparing canonical paths; the first occurrence, from the
+// highest-precedence layer, is the one to use.
+bool n00bb_setting_path_is_first(n00bb_setting_id_t id, size_t index);
 core_string_t n00bb_setting_key(n00bb_setting_id_t id);

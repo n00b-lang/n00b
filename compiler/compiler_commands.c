@@ -785,19 +785,23 @@ static void
 warn_contract_dirs(core_diagnostics_t *d)
 {
     n00bb_setting_id_t key = N00BB_KEY_PATHS_CONTRACT_DIRS;
-    bool from_flag = n00bb_setting_source(key) == N00BB_SETTING_FROM_FLAG;
+    // Layers accumulate, so each entry names the layer it came from, and a
+    // directory named twice is reported once.
     for (size_t i = 0; i < n00bb_setting_count(key); i++) {
+        if (!n00bb_setting_path_is_first(key, i)) continue;
         core_string_t value = n00bb_setting_at(key, i);
         path_state_t state = directory_state(value);
         if (state == PATH_IS_DIRECTORY) continue;
-        if (from_flag)
+        n00bb_setting_source_t layer = n00bb_setting_source_at(key, i);
+        if (layer == N00BB_SETTING_FROM_FLAG)
             n00bb_report(d, nullptr, N00B_DIAG_CONTRACT_DIR_MISSING, nowhere,
                 N00B_TEXT_CONTRACT_DIR_SO_IT_IS,
                 N00BB_ARGS(ARG_TEXT(value),
                            ARG_PHRASE_ID(directory_problem(state))));
         else {
             core_buffer_t source = {0};
-            describe_setting_source(&source, key);
+            describe_layer(&source, key, layer,
+                           n00bb_setting_origin_at(key, i));
             n00bb_report(d, nullptr, N00B_DIAG_CONTRACT_DIR_MISSING, nowhere,
                 N00B_TEXT_CONTRACT_DIRECTORY_FROM_SO_IT,
                 N00BB_ARGS(ARG_TEXT(value),

@@ -144,5 +144,26 @@ setting
 expect_line "an empty project list keeps the user paths" \
     "path = [\"$native_tmp/home/.config/n00b/user-lib\"] # $native_user:2"
 
+# paths.contract_dirs accumulates the same way. A missing directory is
+# reported once, from the highest-precedence layer naming it, and each
+# report names its own layer.
+printf '[paths]\ncontract_dirs = ["user-contracts"]\n' >"$user"
+printf '[paths]\ncontract_dirs = ["shared", "shared"]\n' >"$project"
+n00b config --contract-dir flag-contracts \
+    --contract-dir "$tmp/project/shared" >"$tmp/out" 2>&1
+expect_line "contract dirs accumulate" \
+    "contract_dirs = [\"flag-contracts\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/home/.config/n00b/user-contracts\"] # flag --contract-dir, $native_project:2, $native_user:2"
+printf 'fn main() {\n}\n' >"$tmp/project/src/main.n"
+n00b check --contract-dir flag-contracts --contract-dir "$tmp/project/shared" \
+    main.n >"$tmp/out" 2>&1
+expect_line "contract dir from a flag" \
+    "warning N00B-C0034: \`--contract-dir flag-contracts\` does not exist, so it is skipped"
+expect_line "contract dir named by a flag and the project file" \
+    "warning N00B-C0034: \`--contract-dir $native_tmp/project/shared\` does not exist, so it is skipped"
+expect_line "contract dir from the user file" \
+    "warning N00B-C0034: contract directory \`$native_tmp/home/.config/n00b/user-contracts\` from \`paths.contract_dirs\` ($native_user:2) does not exist, so it is skipped"
+[ "$(grep -c 'N00B-C0034' "$tmp/out")" -eq 3 ] \
+    || fail "contract dirs: a directory named twice was reported twice"
+
 [ "$failed" -eq 0 ] && echo "config layering: all checks passed"
 [ "$failed" -eq 0 ]
