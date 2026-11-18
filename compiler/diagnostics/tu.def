@@ -304,6 +304,12 @@ N00B_DIAG(TRAIT_PARAMETER_FIXED, "N00B-T0602", ERROR,
     "besides the receiver's. A bound such as `'C: Opener` fixes them once,\n"
     "so every call through `'C` uses the same types. To pass values of\n"
     "different types, pass a variant type that holds either.")
+N00B_DIAG(TRAIT_TYPE_UNSETTLED, "N00B-T0605", ERROR,
+    "nothing settles which type a trait used as a type stands for",
+    "Inside a function, a trait used as a type stands for one type that\n"
+    "implements it, settled by the values the function stores there. When\n"
+    "none is stored, name the implementing type instead:\n"
+    "    var shapes: Array[Square] = new[Array[Square]](2)")
 N00B_DIAG(NOT_A_CONTEXT, "N00B-T0601", ERROR,
     "a `with` statement is given a value that is not a context manager",
     "`with` needs a value whose type implements the `Context_Manager`\n"

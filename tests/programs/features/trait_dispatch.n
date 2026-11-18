@@ -205,3 +205,14 @@ func size_of(x: 'T, pile: Pile) -> int where 'T: Sized {
 let pile: Pile = (n = 3)
 let other: Pile = (n = 2)
 assert size_of(pile, other) == 23
+
+# Inside a function, a trait used as an element type is settled by what is
+# stored in the container.
+func stored_area(square: Square) -> f64 {
+    var shapes: Array[Shape] = new[Array[Shape]](2)
+    shapes[0] = square
+    shapes[1] = square
+    return shapes[0].area() + area(shapes[1])
+}
+
+assert stored_area(square) == 8.0

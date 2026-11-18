@@ -5661,6 +5661,140 @@ static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
     return ok;
 }
 
+static bool type_mentions(th_ctx *types, th_type *type, th_type *var)
+{
+    th_type **vars  = nullptr;
+    size_t    count = type ? th_free_vars(types, type, &vars) : 0;
+
+    for (size_t v = 0; v < count; v++) {
+        if (th_resolve(vars[v]) == var) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// A trait used as a type inside a function (`Array[Shape]`) stands for one
+// type that implements it, which the function's body settles. A variable
+// whose type holds one that nothing settled can't be built. (One whose
+// type is just the trait is check_untyped's.)
+static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
+                                   parse_sym_entry_t *symbol,
+                                   ir_func_t *function, core_string_t trait,
+                                   th_type *var)
+{
+    ir_local_t *holder = nullptr;
+
+    for (uint32_t l = 0; !holder && l < function->n_locals; l++) {
+        ir_local_t *local = function->locals[l];
+        th_type    *type  = local->type ? th_resolve(local->type) : nullptr;
+
+        if (type && th_kind_of(type) != TH_VAR && !local->synthetic
+            && local->source_name.u8_bytes && ir_span_known(local->span)
+            && !local->span.implied && type_mentions(types, type, var)) {
+            holder = local;
+        }
+    }
+    if (!holder) {
+        return true;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       name        = n00bb_name_leaf(holder->source_name);
+
+    trait = n00bb_name_leaf(trait);
+    n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                 n00bb_name_location(unit, holder->span, name),
+                 N00B_TEXT_TRAIT_TYPE_UNSETTLED,
+                 N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name),
+                            ARG_TEXT(name)));
+    n00bb_report_help(diagnostics,
+                      N00B_TEXT_STORE_OR_NAME_THE_IMPLEMENTING_TYPE,
+                      N00BB_ARGS(ARG_TEXT(trait)));
+
+    return false;
+}
+
+static bool check_unsettled_traits(th_ctx *types,
+                                   const n00bb_dispatch_index_t *index,
+                                   core_translation_unit_t *const *units,
+                                   size_t count)
+{
+    bool  ok      = true;
+    // A unit with errors already may have left types open on their account.
+    bool *checked = core_alloc_array(bool, count ? count : 1);
+
+    for (size_t u = 0; u < count; u++) {
+        checked[u] = !tu_state(units[u])->interface_module
+                  && !core_diagnostics_failed(
+                         core_translation_unit_diagnostics(units[u]));
+    }
+    for (size_t l = 0; l < index->lists.len; l++) {
+        function_list_t *list = index->lists.data[l];
+
+        for (size_t i = 0; i < list->len; i++) {
+            parse_sym_entry_t          *symbol    = list->data[i];
+            n00bb_signature_typevars_t *variables = parse_sym_binding(
+                symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
+            core_translation_unit_t    *unit      = nullptr;
+
+            for (size_t u = 0; !unit && u < count; u++) {
+                unit = units[u] == symbol->owner_unit && checked[u]
+                         ? units[u]
+                         : nullptr;
+            }
+            if (!variables || !variables->len || !unit) {
+                continue;
+            }
+
+            ir_func_t *function = link_ir_function_for_symbol(
+                index->analysis, symbol);
+            core_list_t(th_trait_requirement) bounds =
+                n00bb_declared_bounds(symbol);
+            core_list_t(th_type_ptr_t) reported =
+                core_list_new(th_type_ptr_t);
+
+            for (size_t v = 0; function && v < variables->len; v++) {
+                th_type *var = variables->data[v].type
+                    ? th_resolve(variables->data[v].type) : nullptr;
+                bool     seen = false;
+
+                // Only a trait used as a type names its variable after
+                // where it is used.
+                if (!var || th_kind_of(var) != TH_VAR
+                    || core_string_find_byte(variables->data[v].name, '@') < 0
+                    || type_mentions(types, function->type, var)) {
+                    continue;
+                }
+                for (size_t r = 0; !seen && r < reported.len; r++) {
+                    seen = reported.data[r] == var;
+                }
+                for (size_t b = 0; !seen && b < bounds.len; b++) {
+                    th_type *subject = bounds.data[b].subject;
+
+                    if (bounds.data[b].kind == TH_CON_IMPLEMENTS && subject
+                        && th_kind_of(subject) == TH_VAR
+                        && core_string_eq(th_var_name(subject),
+                                          variables->data[v].name)) {
+                        ok = report_unsettled_trait(types, unit, symbol,
+                                                    function,
+                                                    bounds.data[b].iface, var)
+                          && ok;
+                        core_list_push(reported, var);
+                        seen = true;
+                    }
+                }
+            }
+            core_list_free(reported);
+            core_list_free(bounds);
+        }
+    }
+    core_free(checked);
+
+    return ok;
+}
+
 static bool check_field_privacy(th_ctx *types, n00bb_link_analysis_t *analysis,
                                 core_translation_unit_t *const *units,
                                 size_t count)
@@ -8312,6 +8446,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     core_dict_free(&reported);
     ok = check_empty_lists(types, units, count, &functions) && ok;
     ok = check_untyped(types, units, count) && ok;
+    ok = check_unsettled_traits(types, typing->dispatch, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
             n00bb_written_call_free(item->value);
