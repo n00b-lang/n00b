@@ -28,6 +28,31 @@ test_source_type(th_ctx *types, ir_value_t *value)
     return value ? value->type : nullptr;
 }
 
+// Whether `pattern` takes the concrete type `resolved`, or -1 when that is
+// not known until run time. A union pattern (a `case` naming several types)
+// takes it when any of its members does.
+static int
+static_pattern_accepts(th_ctx *types, th_type *resolved, th_type *pattern)
+{
+    th_type *wanted = th_resolve(pattern);
+    th_comb comb;
+    if (th_sum_comb(wanted, &comb) && comb == TH_UNION) {
+        int result = 0;
+        for (size_t i = 0; result < 1 && i < th_sum_len(wanted); i++) {
+            int member = static_pattern_accepts(types, resolved,
+                                                th_sum_arm(wanted, i));
+            result = member > 0 ? 1 : member < 0 ? -1 : result;
+        }
+        return result;
+    }
+    core_string_t trait = {0};
+    if (th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait))
+        return th_env_implements(types, resolved, trait);
+    if (!th_is_closed(types, pattern))
+        return th_env_type_pattern_accepts(types, pattern, resolved);
+    return th_hash(types, resolved) == th_hash(types, wanted);
+}
+
 int
 n00bb_static_type_test(const ir_instr_t *test)
 {
@@ -42,13 +67,7 @@ n00bb_static_type_test(const ir_instr_t *test)
     if (!resolved || !pattern || !th_is_closed(types, resolved)
         || th_kind_of(resolved) == TH_SUM || th_kind_of(resolved) == TH_TRAIT
         || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY) return -1;
-    core_string_t trait = {0};
-    if (th_kind_of(th_resolve(pattern)) == TH_TRAIT
-        && th_trait_name(th_resolve(pattern), &trait))
-        return th_env_implements(types, resolved, trait);
-    if (!th_is_closed(types, pattern))
-        return th_env_type_pattern_accepts(types, pattern, resolved);
-    return th_hash(types, resolved) == th_hash(types, th_resolve(pattern));
+    return static_pattern_accepts(types, resolved, pattern);
 }
 
 static bool *

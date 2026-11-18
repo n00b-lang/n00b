@@ -7938,6 +7938,36 @@ type_test_source_type(lower_state_t *state, ir_value_t *value)
     return value ? value->type : nullptr;
 }
 
+// Whether `pattern` takes the closed type `source`, or -1 when unknown. A
+// union pattern (a `case` naming several types) takes it when any of its
+// members does.
+static int
+static_pattern_result(lower_state_t *state, th_type *source,
+                      th_type *pattern)
+{
+    th_ctx *types = ir_module_types(state->function->owner);
+    th_type *wanted = th_resolve(pattern);
+    th_comb comb;
+    if (th_sum_comb(wanted, &comb) && comb == TH_UNION) {
+        int result = 0;
+        for (size_t i = 0; result < 1 && i < th_sum_len(wanted); i++) {
+            int member = static_pattern_result(state, source,
+                                               th_sum_arm(wanted, i));
+            result = member > 0 ? 1 : member < 0 ? -1 : result;
+        }
+        return result;
+    }
+    core_string_t trait = {0};
+    if (th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait))
+        return th_env_implements(types, source, trait);
+    if (!th_is_closed(types, pattern))
+        return th_env_type_pattern_accepts(types, pattern, source);
+    uint32_t source_index = 0, pattern_index = 0;
+    if (!runtime_type_index(state, source, &source_index)
+        || !runtime_type_index(state, pattern, &pattern_index)) return -1;
+    return source_index == pattern_index;
+}
+
 static int
 static_type_test_result(lower_state_t *state, const ir_instr_t *test)
 {
@@ -7954,16 +7984,7 @@ static_type_test_result(lower_state_t *state, const ir_instr_t *test)
     if (!source || !pattern || !th_is_closed(types, source)
         || value_type(state->function->owner, source, context)
             == box_llvm_type(context)) return -1;
-    core_string_t trait = {0};
-    if (th_kind_of(th_resolve(pattern)) == TH_TRAIT
-        && th_trait_name(th_resolve(pattern), &trait))
-        return th_env_implements(types, source, trait);
-    if (!th_is_closed(types, pattern))
-        return th_env_type_pattern_accepts(types, pattern, source);
-    uint32_t source_index = 0, pattern_index = 0;
-    if (!runtime_type_index(state, source, &source_index)
-        || !runtime_type_index(state, pattern, &pattern_index)) return -1;
-    return source_index == pattern_index;
+    return static_pattern_result(state, source, pattern);
 }
 
 static int

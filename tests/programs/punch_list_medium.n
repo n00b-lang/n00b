@@ -314,6 +314,58 @@ func union_kind(flag: bool) -> string {
 }
 require union_kind(true) == "int" and union_kind(false) == "three"
 
+# A `case` naming several types matches a value of any of them, whether
+# the subject is `Any`, a generic, or a union, and whether the named types
+# are closed or generic.
+func several_any(b: Any) -> string {
+    typecase b {
+        case string, int { return "several" }
+        case float { return "float" }
+        else { return "other" }
+    }
+}
+func several_sequences(b: Any) -> int {
+    return typecase b {
+        case bool { -> 1 }
+        case Array['T], List['T] { -> 2 }
+        else { -> 0 }
+    }
+}
+func several_generic(x: 'T) -> string {
+    typecase x {
+        case int, string { return "several" }
+        else { return "other" }
+    }
+}
+func three_way(n: int) -> int | string | float {
+    if n == 0 { return 1 }
+    if n == 1 { return "s" }
+    return 1.5
+}
+func several_union(n: int) -> string {
+    let x = three_way(n)
+    typecase x {
+        case int, string { return "several" }
+        case float { return "float" }
+    }
+}
+let several_float: float = 1.5
+let several_array: Array[int] = [1, 2]
+let several_list: List[int] = [1, 2]
+require several_any(cast[Any] declared_int) == "several"
+require several_any(cast[Any] "s") == "several"
+require several_any(cast[Any] several_float) == "float"
+require several_any(cast[Any] true) == "other"
+require several_sequences(cast[Any] several_array) == 2
+require several_sequences(cast[Any] several_list) == 2
+require several_sequences(cast[Any] true) == 1
+require several_sequences(cast[Any] declared_int) == 0
+require several_generic(declared_int) == "several"
+require several_generic("s") == "several"
+require several_generic(several_float) == "other"
+require several_union(0) == "several" and several_union(1) == "several"
+require several_union(2) == "float"
+
 # A module variable's declaration initializer reruns at run time, so a
 # value comptime writes after it doesn't carry over (#13).
 var comptime_counter: int = 0
