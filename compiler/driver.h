@@ -83,6 +83,19 @@ bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
                                      core_string_t name,
                                      core_string_t *module_path,
                                      core_string_t *directory_path);
+// The standard library cannot be shadowed. These find the pieces of a clash:
+// whether a unit came from the toolchain library, the module file a root
+// other than the library holds for `identifier` (`path` is owned by the
+// caller), and the library's manifests that may declare `declared_name`.
+bool n00bb_resolver_unit_in_stdlib(const n00bb_resolver_t *resolver,
+                                   const core_translation_unit_t *unit);
+bool n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,
+                                     core_string_t identifier,
+                                     core_string_t *path);
+bool n00bb_resolver_stdlib_manifests(n00bb_resolver_t *resolver,
+                                     core_string_t declared_name,
+                                     core_module_discovery_emit_fn emit,
+                                     void *emit_context);
 void n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
                                          core_string_t source_path,
                                          const void *names, size_t size);

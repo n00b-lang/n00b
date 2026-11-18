@@ -85,3 +85,76 @@ for consumer in nested_loop_consumer nested_round_consumer looped_consumer; do
         exit 1
     }
 done
+
+# The standard library cannot be shadowed. A module file or a package in the
+# current directory or on the package path that has the module path of a
+# standard library module or package is an error naming both, whichever root
+# it is in and whether it is a file or a manifest.
+shadow=$(cd "$tmp" && pwd -P)/shadow
+stdlib_lib=$(cd "$program_dir/../../../lib" && pwd -P)
+mkdir -p "$shadow/project" "$shadow/path"
+printf 'import unicode\n' >"$shadow/project/uses_unicode.n"
+printf 'import sys.env\n' >"$shadow/project/uses_env.n"
+printf 'import helper\nrequire helper.one() == 1\n' \
+    >"$shadow/project/uses_helper.n"
+printf 'func one() -> int { return 1 }\n' >"$shadow/project/helper.n"
+shadow_case() {
+    label=$1 program=$2 name=$3 library=$4 other=$5 modes=${6:-on}
+    for cache in $modes; do
+        if [ "$cache" = on ]; then
+            set -- env -u N00B_NO_PACKAGE_CACHE
+        else
+            set -- env N00B_NO_PACKAGE_CACHE=1
+        fi
+        if (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
+                N00B_DIAGNOSTIC_CODES=1 "$compiler" check "$program") \
+                >"$tmp/shadow.log" 2>&1; then
+            echo "$label (cache $cache): shadowing the standard library checked" >&2
+            exit 1
+        fi
+        grep -Fq "N00B-M0025: \`$name\` is in the standard library, at \`$stdlib_lib/$library\`, and also at \`$shadow/$other\`" \
+            "$tmp/shadow.log" || {
+            echo "$label (cache $cache): no shadowing error" >&2
+            cat "$tmp/shadow.log" >&2
+            exit 1
+        }
+    done
+}
+module='func one() -> int { return 1 }\n'
+printf "$module" >"$shadow/project/unicode.n"
+shadow_case 'file in the current directory' uses_unicode.n unicode \
+    unicode/__init.n project/unicode.n 'on off'
+rm "$shadow/project/unicode.n"
+printf "$module" >"$shadow/path/unicode.n"
+shadow_case 'file on N00B_PATH' uses_unicode.n unicode \
+    unicode/__init.n path/unicode.n
+rm "$shadow/path/unicode.n"
+mkdir "$shadow/project/sys"
+printf "$module" >"$shadow/project/sys/env.n"
+shadow_case 'nested file' uses_env.n sys.env sys/env/__init.n \
+    project/sys/env.n
+rm -r "$shadow/project/sys"
+mkdir "$shadow/project/unicode"
+printf 'package unicode {\n}\n' >"$shadow/project/unicode/__init.n"
+shadow_case 'manifest at the library path' uses_unicode.n unicode \
+    unicode/__init.n project/unicode/__init.n
+rm -r "$shadow/project/unicode"
+mkdir "$shadow/path/mine"
+printf 'package unicode {\n}\n' >"$shadow/path/mine/__init.n"
+shadow_case 'manifest elsewhere' uses_unicode.n unicode \
+    unicode/__init.n path/mine/__init.n 'on off'
+rm -r "$shadow/path/mine"
+mkdir -p "$shadow/project/unicode/internal"
+printf "$module" >"$shadow/project/unicode/internal/types.n"
+shadow_case 'library source module' uses_unicode.n unicode.internal.types \
+    unicode/internal/types.n project/unicode/internal/types.n
+rm -r "$shadow/project/unicode"
+
+# A namesake nobody imports is no error, and other modules still resolve.
+printf "$module" >"$shadow/project/text.n"
+(cd "$shadow/project" && N00B_PATH="$shadow/path" "$compiler" check \
+    uses_helper.n) >"$tmp/shadow.log" 2>&1 || {
+    echo 'an unimported standard library namesake failed the check' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}

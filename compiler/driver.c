@@ -1065,7 +1065,7 @@ candidate_in_package(const n00bb_resolver_t *resolver,
 
 static core_module_resolve_status_t
 walk_manifests(n00bb_resolver_t *resolver, core_string_t declared_name,
-               core_string_t package_id,
+               core_string_t package_id, bool stdlib_only,
                core_module_discovery_emit_fn emit, void *emit_context)
 {
     if (!resolver->manifests_indexed
@@ -1074,6 +1074,9 @@ walk_manifests(n00bb_resolver_t *resolver, core_string_t declared_name,
     bool found = false;
     for (size_t i = 0; i < resolver->manifests.len; i++) {
         n00bb_manifest_candidate_t *candidate = &resolver->manifests.data[i];
+        if (stdlib_only && resolver->roots.data[candidate->root_index].kind
+                               != ROOT_STDLIB)
+            continue;
         if (package_id.data
             && !candidate_in_package(resolver, candidate, package_id))
             continue;
@@ -1103,7 +1106,7 @@ discover_files(void *context, const core_module_spec_t *module,
     n00bb_resolver_t *resolver = context;
     if (!resolver || !module || !emit) return CORE_MODULE_RESOLVE_ERROR;
     return walk_manifests(resolver, module->identifier, (core_string_t){0},
-                          emit, emit_context);
+                          false, emit, emit_context);
 }
 
 bool
@@ -1113,8 +1116,77 @@ n00bb_resolver_package_manifests(n00bb_resolver_t *resolver,
                                  void *emit_context)
 {
     return resolver && emit && package_id.data
-        && walk_manifests(resolver, (core_string_t){0}, package_id, emit,
-                          emit_context) != CORE_MODULE_RESOLVE_ERROR;
+        && walk_manifests(resolver, (core_string_t){0}, package_id, false,
+                          emit, emit_context) != CORE_MODULE_RESOLVE_ERROR;
+}
+
+bool
+n00bb_resolver_stdlib_manifests(n00bb_resolver_t *resolver,
+                                core_string_t declared_name,
+                                core_module_discovery_emit_fn emit,
+                                void *emit_context)
+{
+    return resolver && emit && declared_name.data
+        && walk_manifests(resolver, declared_name, (core_string_t){0}, true,
+                          emit, emit_context) != CORE_MODULE_RESOLVE_ERROR;
+}
+
+bool
+n00bb_resolver_unit_in_stdlib(const n00bb_resolver_t *resolver,
+                              const core_translation_unit_t *unit)
+{
+    size_t index = unit_root_index(resolver, unit);
+    return index != SIZE_MAX && resolver->roots.data[index].kind == ROOT_STDLIB;
+}
+
+static bool
+root_source(n00bb_resolver_t *resolver, size_t index, core_string_t relative,
+            core_string_t *path)
+{
+    for (size_t e = 0; e < sizeof(source_extensions)
+                            / sizeof(source_extensions[0]); e++) {
+        core_buffer_t file = {0};
+        core_buffer_append_string(&file, relative);
+        core_buffer_append_string(&file, source_extensions[e]);
+        core_string_t found = {0};
+        if (resolver->manifests_indexed) {
+            const core_source_snapshot_t *snapshot =
+                core_snapshot_inventory_find(resolver->inventory, index,
+                                             core_buffer_string(&file));
+            if (snapshot)
+                found = core_string_dup(core_source_snapshot_path(snapshot));
+        }
+        else {
+            core_string_t candidate = core_os_path_join(
+                resolver->roots.data[index].path, core_buffer_string(&file));
+            if (core_os_is_regular_file(candidate)) found = candidate;
+            else core_free(candidate.data);
+        }
+        core_buffer_release(&file);
+        if (found.data) {
+            *path = found;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,
+                                core_string_t identifier, core_string_t *path)
+{
+    if (!resolver || !path) return false;
+    core_module_spec_t module = {0};
+    if (!core_module_spec_init(&module, identifier)) return false;
+    core_string_t relative = module_relative_path(&module);
+    core_module_spec_release(&module);
+    bool found = false;
+    for (size_t i = 0; relative.data && !found && i < resolver->roots.len;
+         i++)
+        found = resolver->roots.data[i].kind != ROOT_STDLIB
+            && root_source(resolver, i, relative, path);
+    core_free(relative.data);
+    return found;
 }
 
 

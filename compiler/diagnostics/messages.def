@@ -79,6 +79,8 @@ N00B_TEXT(PACKAGE_IS_DECLARED_BUT_NO, "package `{0}` is declared, but no manifes
 N00B_TEXT(PACKAGE_IS_DECLARED_BY_MORE, "package `{0}` is declared by more than one manifest")
 N00B_TEXT(DECLARED_IN, "declared in `{0}`")
 N00B_TEXT(DECLARED_AGAIN_IN, "declared again in `{0}`")
+N00B_TEXT(SHADOWS_THE_STANDARD_LIBRARY, "`{0}` is in the standard library, at `{2}`, and also at `{1}`")
+N00B_TEXT(THE_STANDARD_LIBRARY_CANNOT_BE, "the standard library cannot be shadowed; rename the module or package at `{0}`")
 N00B_TEXT(IS_AMBIGUOUS_AND_THE_DIRECTORY, "`{0}` is ambiguous: `{1}` and the directory `{2}` both claim it")
 N00B_TEXT(RENAME_THE_MODULE_OR_THE, "rename the module or the directory")
 N00B_TEXT(MODULE_WAS_FOUND_BUT_COULD, "module `{0}` was found but could not be read")

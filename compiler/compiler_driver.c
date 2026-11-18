@@ -1795,6 +1795,91 @@ accept_package_exports(import_driver_t *driver,
     return subpackages != 0;
 }
 
+// The standard library cannot be shadowed: a module path it provides, as a
+// module file or a declared package, must come from nowhere else.
+static void
+report_stdlib_shadow(core_translation_unit_t *importer,
+                     parse_tree_t *statement, core_string_t name,
+                     core_string_t shadow, core_string_t stdlib)
+{
+    import_report(importer, statement, N00B_DIAG_MODULE_SHADOWS_STDLIB,
+        N00B_TEXT_SHADOWS_THE_STANDARD_LIBRARY,
+        N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(shadow), ARG_TEXT(stdlib)));
+    n00bb_report_help(core_translation_unit_diagnostics(importer),
+        N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
+        N00BB_ARGS(ARG_TEXT(shadow)));
+    mark_import_failure_reported(importer);
+}
+
+// The standard library manifest that declares package `name`, if any.
+static bool
+stdlib_package_manifest(import_driver_t *driver, core_string_t name,
+                        core_string_t *path)
+{
+    n00bb_discovery_candidates_t candidates = {
+        .modules = core_list_new(n00bb_module_candidate_t),
+    };
+    bool found = false;
+    bool listed = n00bb_resolver_stdlib_manifests(driver->resolver, name,
+        collect_discovery_candidate, &candidates);
+    for (size_t i = 0; listed && !found && i < candidates.modules.len; i++) {
+        core_work_job_t *job = nullptr;
+        parse_tree_t *tree = nullptr;
+        core_translation_unit_t *unit = locate_manifest_candidate(driver,
+            &candidates.modules.data[i], &job, &tree, nullptr);
+        if (!job || !unit || !tree
+            || !n00bb_resolver_unit_in_stdlib(driver->resolver, unit))
+            continue;
+        found = tu_state(unit)->interface_module
+            ? interface_may_declare_package(&driver->loader->interfaces,
+                  unit->module.identifier, name)
+            : package_tree_may_declare(driver->grammar, tree, name);
+        if (found)
+            *path = core_string_dup(core_source_file_path(&unit->source));
+    }
+    for (size_t i = 0; i < candidates.modules.len; i++)
+        core_module_spec_release(&candidates.modules.data[i]);
+    core_list_free(candidates.modules);
+    return found;
+}
+
+// A standard library module file must be the only file for its module path.
+static bool
+reject_shadowed_stdlib_file(import_driver_t *driver,
+                            core_translation_unit_t *importer,
+                            parse_tree_t *statement, core_string_t name,
+                            core_translation_unit_t *stdlib_unit)
+{
+    core_string_t shadow = {0};
+    if (!n00bb_resolver_unit_in_stdlib(driver->resolver, stdlib_unit)
+        || !n00bb_resolver_shadowing_source(driver->resolver,
+               stdlib_unit->module.identifier, &shadow))
+        return false;
+    report_stdlib_shadow(importer, statement, name, shadow,
+                         core_source_file_path(&stdlib_unit->source));
+    core_free(shadow.data);
+    return true;
+}
+
+// `direct` is the module file found for `name`. A library file must have no
+// namesake elsewhere, and a file elsewhere must not name a library package.
+static bool
+reject_stdlib_shadow(import_driver_t *driver,
+                     core_translation_unit_t *importer,
+                     parse_tree_t *statement, core_string_t name,
+                     core_translation_unit_t *direct)
+{
+    if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct))
+        return reject_shadowed_stdlib_file(driver, importer, statement, name,
+                                           direct);
+    core_string_t stdlib = {0};
+    if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
+    report_stdlib_shadow(importer, statement, name,
+                         core_source_file_path(&direct->source), stdlib);
+    core_free(stdlib.data);
+    return true;
+}
+
 static core_work_job_t *
 discover_package_import(import_driver_t *driver,
                         core_translation_unit_t *importer,
@@ -1867,6 +1952,23 @@ discover_package_import(import_driver_t *driver,
         if (!in_progress
             && !find_package_declaration(unit, logical->identifier))
             continue;
+        bool selected_stdlib = selected
+            && n00bb_resolver_unit_in_stdlib(driver->resolver, selected);
+        if (selected && selected != unit
+            && selected_stdlib
+                != n00bb_resolver_unit_in_stdlib(driver->resolver, unit)) {
+            core_translation_unit_t *library = selected_stdlib ? selected
+                                                               : unit;
+            core_translation_unit_t *other = selected_stdlib ? unit
+                                                             : selected;
+            report_stdlib_shadow(importer, statement, logical->identifier,
+                core_source_file_path(&other->source),
+                core_source_file_path(&library->source));
+            selected_job = nullptr;
+            selected = nullptr;
+            status = CORE_MODULE_RESOLVE_ERROR;
+            break;
+        }
         if (selected && selected != unit) {
             import_report(importer, statement,
                 N00B_DIAG_PACKAGE_MULTIPLE_MANIFESTS,
@@ -1888,6 +1990,11 @@ discover_package_import(import_driver_t *driver,
         selected = unit;
         selected_job = job;
         claim_manifest(driver, job);
+    }
+    if (selected && reject_shadowed_stdlib_file(driver, importer, statement,
+                        logical->identifier, selected)) {
+        selected_job = nullptr;
+        selected = nullptr;
     }
     if (selected && (!parent_manifest_declared(driver, importer, statement,
                                                logical->identifier)
@@ -1996,6 +2103,9 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                                                               locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
+    if (direct && reject_stdlib_shadow(driver, importer, statement,
+                                       module->identifier, direct))
+        return false;
     if (!direct || (statement && !n00bb_same_package(importer, direct))) {
         core_work_job_t *package_job = discover_package_import(
             driver, importer, statement, module, true);
