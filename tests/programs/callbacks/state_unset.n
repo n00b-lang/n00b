@@ -1,0 +1,21 @@
+# A module variable with no initializer, retained as a callback's state
+# before anything sets it: the initializer reads it there. That is the
+# one diagnostic, whatever the compiler cache holds; code the program
+# reaches but can't see (the collector, library entry points) is not
+# blamed for reading it.
+record Tally { count: int }
+callback Counter {
+    call(value: int) -> int
+    handler(modify state: Tally, value: int) -> int
+    setup(handler: Ref[(modify state: Tally, value: int) -> int],
+          state: Ref[Tally]) -> nil
+}
+func add(modify state: Tally, value: int) -> int {
+    state.count += value
+    return state.count
+}
+func setup(handler: Ref[(modify state: Tally, value: int) -> int],
+           state: Ref[Tally]) -> nil {}
+var tally: Tally
+let counting = callback[Counter](ref add, ref tally)
+require counting.call(2) == 2

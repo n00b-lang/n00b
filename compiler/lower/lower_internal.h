@@ -1886,7 +1886,8 @@ group_facts(n00bb_link_analysis_t *analysis, const ir_func_t *function,
 
 ir_instr_t *
 first_uninitialized_read(n00bb_link_analysis_t *analysis, ir_func_t *function,
-                         const ir_splace_t *place, uint8_t entry_state);
+                         const ir_splace_t *place, uint8_t entry_state,
+                         bool named_only);
 
 bool
 initializer_units_share_cycle(core_link_unit_t *link,

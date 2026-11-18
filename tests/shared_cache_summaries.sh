@@ -59,5 +59,37 @@ compare() {
     fi
 }
 
+# A program the check rejects reports the same diagnostics from a cold
+# cache as from $shared, which other programs filled; $expected is how
+# many errors.
+compare_rejected() {
+    target=$1
+    shared=$2
+    label=$3
+    expected=$4
+    if N00B_CACHE="$tmp/$label.cold" N00B_DIAGNOSTICS=terse "$compiler" \
+            check --no-syntax-warnings "$target" \
+            >/dev/null 2>"$tmp/$label.cold.err"; then
+        echo "$label: check passed, but should be rejected" >&2
+        exit 1
+    fi
+    N00B_CACHE="$shared" N00B_DIAGNOSTICS=terse "$compiler" \
+        check --no-syntax-warnings "$target" >/dev/null \
+        2>"$tmp/$label.warm.err" || true
+    if ! cmp -s "$tmp/$label.cold.err" "$tmp/$label.warm.err"; then
+        echo "$label: diagnostics differ between cold and shared-cache runs" >&2
+        diff "$tmp/$label.cold.err" "$tmp/$label.warm.err" >&2 || true
+        exit 1
+    fi
+    errors=$(grep -c ': error' "$tmp/$label.cold.err" || true)
+    if [ "$errors" -ne "$expected" ]; then
+        echo "$label: expected $expected errors, got $errors" >&2
+        cat "$tmp/$label.cold.err" >&2
+        exit 1
+    fi
+}
+
 compare "$programs/merged/calls.n" "$programs/features/fast_suite.n" calls
 compare "$programs/features/fast_suite.n" "$programs/merged/calls.n" fast
+compare_rejected "$programs/callbacks/state_unset.n" "$tmp/fast.shared" \
+    state_unset 1

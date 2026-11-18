@@ -712,6 +712,16 @@ ir_summary_facts_call_reads_entry(ir_summary_facts_t *facts,
                               &site)
         && ir_summary_place_unseen(facts->summaries, place))
         return true;
+    return ir_summary_facts_call_reads_entry_named(facts, call, place);
+}
+
+bool
+ir_summary_facts_call_reads_entry_named(ir_summary_facts_t *facts,
+                                        const ir_instr_t *call,
+                                        const ir_splace_t *place)
+{
+    core_datalog_symbol_t site;
+    if (!site_of(facts, call, &site)) return true;
     core_dict_t *index = nullptr;
     const void  *key   = place_key(facts, place, &index);
     bool         found = false;

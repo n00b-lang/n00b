@@ -2189,8 +2189,12 @@ validate_thread_function_reads(
                 for (size_t f = 0; runtime_succeeds
                      && f < runtime->entry_functions.len; f++) {
                     ir_func_t *function = runtime->entry_functions.data[f];
+                    // Only reads the entry names: one through code the
+                    // analysis can't see is not evidence it reads this
+                    // variable, and would be reported wherever such code is
+                    // reached, library code included.
                     ir_instr_t *read = first_uninitialized_read(
-                        analysis, function, &place, entry_state);
+                        analysis, function, &place, entry_state, true);
                     core_translation_unit_t *unit = read
                         ? unit_for_ir_module(analysis, function->owner)
                         : nullptr;
