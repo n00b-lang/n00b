@@ -331,6 +331,8 @@ N00B_TEXT(DECLARE_WITH_VAR_TO_ALLOW, "declare `{0}` with `var` to allow changes"
 N00B_TEXT(ITS_FIELD, "its field `{0}`")
 N00B_TEXT(VARIABLE_UNTYPED, "cannot infer the type of `{0}`: it has no type or initial value, and nothing assigned to it settles one")
 N00B_TEXT(VARIABLE_UNTYPED_HELP, "give it a type, as in `{1} {0}: int`")
+N00B_TEXT(VARIABLE_TRAIT_UNSETTLED, "`{0}` is declared as the trait `{1}`, but nothing assigned to it settles which type that implements `{1}` it holds")
+N00B_TEXT(ASSIGN_OR_NAME_THE_IMPLEMENTING_TYPE, "assign `{0}` a value, or declare it with the type that implements `{1}`")
 N00B_PLURAL(PATTERN_ARITY, "this pattern has {0} element, but `{1}` has {2}", "this pattern has {0} elements, but `{1}` has {2}")
 N00B_TEXT(LOOP_BINDS_OUTER_LET, "`{0}` is declared outside this loop and cannot be assigned, but the loop would bind it on every iteration")
 N00B_TEXT(USE_A_NEW_NAME_OR_VAR, "use a new name for the loop variable, or declare `{0}` with `var` so the loop assigns it")

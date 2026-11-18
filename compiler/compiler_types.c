@@ -5607,19 +5607,18 @@ static bool narrowed_variable(th_ctx *types, ir_func_t *function,
     return false;
 }
 
+// `checked` says which units to look at: those with no errors before these
+// checks, which may have left types open on their account. A variable in
+// `reported` was reported already, as declared with a trait.
 static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
-                          size_t count)
+                          size_t count, const bool *checked,
+                          const core_dict_t *reported)
 {
     bool ok = true;
 
     for (size_t u = 0; u < count; u++) {
         n00bb_tu_state_t *state  = tu_state(units[u]);
-        ir_module_t      *module = state->interface_module
-                                       || core_diagnostics_failed(
-                                           core_translation_unit_diagnostics(
-                                               units[u]))
-                                     ? nullptr
-                                     : state->ir_module;
+        ir_module_t      *module = checked[u] ? state->ir_module : nullptr;
 
         for (size_t g = 0; module && g < ir_global_count(module); g++) {
             ir_global_t *global = ir_global_at(module, g);
@@ -5648,7 +5647,8 @@ static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
                 if (type && th_kind_of(type) == TH_VAR && !th_var_ref(type)
                     && !narrowed_variable(types, function, type)
                     && !local->synthetic && local->source_name.u8_bytes
-                    && ir_span_known(local->span) && !local->span.implied) {
+                    && ir_span_known(local->span) && !local->span.implied
+                    && !core_dict_contains((core_dict_t *)reported, local)) {
                     ok = report_untyped(units[u], local->source_name,
                                         local->mutability == IR_MUT_MUTABLE,
                                         local->span)
@@ -5678,14 +5678,16 @@ static bool type_mentions(th_ctx *types, th_type *type, th_type *var)
 // A trait used as a type inside a function (`Array[Shape]`) stands for one
 // type that implements it, which the function's body settles. A value
 // whose type holds one that nothing settled can't be built. It is reported
-// at the variable holding it, or else at the first value that has it. (A
-// variable whose type is just the trait is check_untyped's.)
+// at the variable holding it, or else at the first value that has it. A
+// variable declared with just the trait (`var s: Shape`) is T0586, as any
+// variable nothing settles the type of; it goes in `declared`.
 static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
                                    parse_sym_entry_t *symbol,
                                    ir_func_t *function, core_string_t trait,
-                                   th_type *var)
+                                   th_type *var, core_dict_t *declared)
 {
     ir_local_t *holder = nullptr;
+    ir_local_t *bare   = nullptr;
 
     for (uint32_t l = 0; l < function->n_locals; l++) {
         ir_local_t *local = function->locals[l];
@@ -5695,10 +5697,10 @@ static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
             || !ir_span_known(local->span) || local->span.implied) {
             continue;
         }
-        if (type == var) {
-            return true;
+        if (type == var && !bare) {
+            bare = local;
         }
-        if (!holder && type_mentions(types, type, var)) {
+        if (!holder && type != var && type_mentions(types, type, var)) {
             holder = local;
         }
     }
@@ -5706,6 +5708,19 @@ static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
 
     trait = n00bb_name_leaf(trait);
+    if (bare) {
+        core_string_t name = n00bb_name_leaf(bare->source_name);
+
+        core_dict_put(declared, bare, (void *)1);
+        n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
+                     n00bb_name_location(unit, bare->span, name),
+                     N00B_TEXT_VARIABLE_TRAIT_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        n00bb_report_help(diagnostics,
+                          N00B_TEXT_ASSIGN_OR_NAME_THE_IMPLEMENTING_TYPE,
+                          N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        return false;
+    }
     if (holder) {
         core_string_t name = n00bb_name_leaf(holder->source_name);
 
@@ -5763,17 +5778,11 @@ static bool typecase_trait_var(parse_sym_entry_t *symbol, core_string_t name)
 static bool check_unsettled_traits(th_ctx *types,
                                    const n00bb_dispatch_index_t *index,
                                    core_translation_unit_t *const *units,
-                                   size_t count)
+                                   size_t count, const bool *checked,
+                                   core_dict_t *declared)
 {
-    bool  ok      = true;
-    // A unit with errors already may have left types open on their account.
-    bool *checked = core_alloc_array(bool, count ? count : 1);
+    bool ok = true;
 
-    for (size_t u = 0; u < count; u++) {
-        checked[u] = !tu_state(units[u])->interface_module
-                  && !core_diagnostics_failed(
-                         core_translation_unit_diagnostics(units[u]));
-    }
     for (size_t l = 0; l < index->lists.len; l++) {
         function_list_t *list = index->lists.data[l];
 
@@ -5832,7 +5841,8 @@ static bool check_unsettled_traits(th_ctx *types,
                                           variables->data[v].name)) {
                         ok = report_unsettled_trait(types, unit, symbol,
                                                     function,
-                                                    bounds.data[b].iface, var)
+                                                    bounds.data[b].iface, var,
+                                                    declared)
                           && ok;
                         core_list_push(reported, var);
                         seen = true;
@@ -5843,7 +5853,6 @@ static bool check_unsettled_traits(th_ctx *types,
             core_list_free(bounds);
         }
     }
-    core_free(checked);
 
     return ok;
 }
@@ -8498,8 +8507,22 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     core_dict_free(&tainted);
     core_dict_free(&reported);
     ok = check_empty_lists(types, units, count, &functions) && ok;
-    ok = check_untyped(types, units, count) && ok;
-    ok = check_unsettled_traits(types, typing->dispatch, units, count) && ok;
+    // A unit with errors already may have left types open on their account.
+    bool       *checked = core_alloc_array(bool, count ? count : 1);
+    core_dict_t declared;
+
+    core_dict_init(&declared, nullptr, nullptr);
+    for (size_t u = 0; u < count; u++) {
+        checked[u] = !tu_state(units[u])->interface_module
+                  && !core_diagnostics_failed(
+                         core_translation_unit_diagnostics(units[u]));
+    }
+    ok = check_unsettled_traits(types, typing->dispatch, units, count,
+                                checked, &declared)
+      && ok;
+    ok = check_untyped(types, units, count, checked, &declared) && ok;
+    core_dict_free(&declared);
+    core_free(checked);
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
             n00bb_written_call_free(item->value);
