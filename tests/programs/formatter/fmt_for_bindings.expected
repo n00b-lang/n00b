@@ -1,0 +1,13 @@
+func total(items: List[int], n: uint) -> int {
+    var sum: int = 0
+    for i: uint from 0 until n {
+        sum += 1
+    }
+    for item: int in items {
+        sum += item
+    }
+    for item in items {
+        sum += item
+    }
+    return sum
+}

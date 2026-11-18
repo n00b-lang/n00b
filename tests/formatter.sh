@@ -103,6 +103,11 @@ diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
 diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
+"$compiler" fmt --output "$tmp/for_bindings.n" \
+    "$program_dir/fmt_for_bindings.n"
+diff -u "$program_dir/fmt_for_bindings.expected" "$tmp/for_bindings.n"
+"$compiler" fmt --check "$program_dir/fmt_for_bindings.expected"
+
 "$compiler" fmt --output "$tmp/package_exports.n" \
     "$program_dir/fmt_package_exports.n"
 diff -u "$program_dir/fmt_package_exports.expected" "$tmp/package_exports.n"
