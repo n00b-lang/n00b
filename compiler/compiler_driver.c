@@ -2032,15 +2032,26 @@ stdlib_package_manifest(import_driver_t *driver, core_string_t name,
 // `direct` is the module file found for `name`. A file outside the library
 // must not take the name of a library package. (A library file with a
 // namesake elsewhere already failed when it was located.)
+//
+// Clashes are between packages: no system package is in the default
+// package, so a default-package module named like a library package is a
+// different module, never a clash. `library_name` is set when the library
+// declares `name`, which then names the library's package, not `direct`.
 static bool
 reject_stdlib_shadow(import_driver_t *driver,
                      core_translation_unit_t *importer,
                      parse_tree_t *statement, core_string_t name,
-                     core_translation_unit_t *direct)
+                     core_translation_unit_t *direct, bool *library_name)
 {
+    *library_name = false;
     if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct)) return false;
     core_string_t stdlib = {0};
     if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
+    *library_name = true;
+    if (n00bb_default_package(direct)) {
+        core_free(stdlib.data);
+        return false;
+    }
     report_stdlib_shadow(driver, importer, statement, name,
                          core_source_file_path(&direct->source), stdlib);
     core_free(stdlib.data);
@@ -2297,14 +2308,17 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                                                               locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
+    bool library_name = false;
     if (direct && reject_stdlib_shadow(driver, importer, statement,
-                                       module->identifier, direct))
+                                       module->identifier, direct,
+                                       &library_name))
         return false;
-    if (!direct || (statement && !n00bb_same_package(importer, direct))) {
+    if (!direct || library_name
+        || (statement && !n00bb_same_package(importer, direct))) {
         core_work_job_t *package_job = discover_package_import(
             driver, importer, statement, module, true);
         if (package_job) locate_job = package_job;
-        else if (!located) locate_job = nullptr;
+        else if (!located || library_name) locate_job = nullptr;
     }
     n00bb_tu_state_t *importer_state = tu_state(importer);
     if (!locate_job && ((resolved && failure_already_reported(attempted))
@@ -3312,8 +3326,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                                     status == CORE_MODULE_NOT_FOUND);
             continue;
         }
-        // A module named on the command line follows the import rule: a file
-        // outside the library may not take a library package's name. (A
+        // A module or file named on the command line follows the import
+        // rule: a module of a package outside the library may not take a
+        // library package's name; a default-package module is no clash. (A
         // library file with a namesake failed as it was located.)
         n00bb_tu_state_t *root_state = tu_state(unit);
         if (!job_ok && request->root_input && root_state
@@ -3325,7 +3340,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 SHADOW_REACHED_FROM_COMMAND_LINE);
         core_string_t library = {0};
         if (job_ok && request->root_input
-            && !n00bb_operand_is_file(request->operand)
+            && !n00bb_default_package(unit)
             && !n00bb_resolver_unit_in_stdlib(resolver, unit)
             && stdlib_package_manifest(&import_driver,
                    unit->module.identifier, &library)) {

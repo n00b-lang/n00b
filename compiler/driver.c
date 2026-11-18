@@ -704,12 +704,6 @@ is_file_operand(core_string_t operand)
 }
 
 bool
-n00bb_operand_is_file(core_string_t operand)
-{
-    return operand.data && is_file_operand(operand);
-}
-
-bool
 n00bb_operand_module_spec(core_string_t operand, core_module_spec_t *out)
 {
     if (!operand.data || !operand.u8_bytes || !out) return false;
@@ -914,6 +908,14 @@ n00bb_source_file_is_interface(const core_source_file_t *source)
     const n00bb_source_origin_t *origin = source
         ? core_source_file_user_data(source) : nullptr;
     return origin && origin->interface_module;
+}
+
+bool
+n00bb_default_package(const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    return origin && origin->is_default_package;
 }
 
 core_string_t
@@ -1267,10 +1269,14 @@ n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,
     if (!core_module_spec_init(&module, identifier)) return false;
     core_string_t relative = module_relative_path(&module);
     core_module_spec_release(&module);
+    // A top-level file of the current directory is a default-package module,
+    // a different module from any library one of the same name.
+    bool top_level = core_string_find_byte(identifier, '.') < 0;
     bool found = false;
     for (size_t i = 0; relative.data && !found && i < resolver->roots.len;
          i++)
         found = resolver->roots.data[i].kind != ROOT_STDLIB
+            && !(top_level && resolver->roots.data[i].kind == ROOT_DEFAULT)
             && root_source(resolver, i, relative, path);
     core_free(relative.data);
     return found;

@@ -141,15 +141,29 @@ expect_note() {
     }
 }
 module='func one() -> int { return 1 }\n'
+# Clashes are between packages, and no system package is in the default
+# package: a top-level unicode.n in the current directory is the
+# default-package module `unicode`, no clash, and `import unicode` still
+# means the library's package.
+printf "$module" >"$shadow/project/unicode.n"
+printf "import unicode\nrequire unicode.general_category('A') == unicode.Gc.lu\n" \
+    >"$shadow/project/uses_library_unicode.n"
+for cache in on off; do
+    if [ "$cache" = on ]; then
+        set -- env -u N00B_NO_PACKAGE_CACHE
+    else
+        set -- env N00B_NO_PACKAGE_CACHE=1
+    fi
+    (cd "$shadow/project" && "$@" "$compiler" check uses_library_unicode.n) \
+        >"$tmp/shadow.log" 2>&1 && ! grep -q 'N00B-M0025' "$tmp/shadow.log" || {
+        echo "default-package unicode.n (cache $cache): the library's unicode was not used" >&2
+        cat "$tmp/shadow.log" >&2
+        exit 1
+    }
+done
+rm "$shadow/project/unicode.n"
 # `builtin` reaches unicode as well, but the error goes to the user's own
 # import of it, whichever gets there first.
-printf "$module" >"$shadow/project/unicode.n"
-shadowed_case 'file in the current directory' uses_unicode.n \
-    'uses_unicode\.n:1:8: ' unicode unicode/__init.n project/unicode.n \
-    'on off'
-expect_note 'file in the current directory' \
-    '`unicode` is imported here directly'
-rm "$shadow/project/unicode.n"
 printf "$module" >"$shadow/path/unicode.n"
 shadowed_case 'file on N00B_PATH' uses_unicode.n \
     'uses_unicode\.n:1:8: ' unicode unicode/__init.n path/unicode.n
@@ -218,12 +232,21 @@ grep -Fxq '  note: `builtin.__init` is loaded implicitly, through `builtin`' \
     exit 1
 }
 rm -r "$shadow/project/builtin"
-# The user's own file taking the name of the package loaded implicitly.
-printf "$module" >"$shadow/project/builtin.n"
+# A file on the package path taking the name of the package loaded
+# implicitly. (The same file in the current directory is a default-package
+# module, and the implicit import still loads the library's `builtin`.)
+printf "$module" >"$shadow/path/builtin.n"
 shadowed_case 'file named like the implicit package' uses_helper.n \
-    'uses_helper\.n: ' builtin builtin/__init.n project/builtin.n
+    'uses_helper\.n: ' builtin builtin/__init.n path/builtin.n
 expect_note 'file named like the implicit package' \
     '`builtin` is loaded implicitly, for every program'
+mv "$shadow/path/builtin.n" "$shadow/project/builtin.n"
+(cd "$shadow/project" && "$compiler" check uses_helper.n) \
+    >"$tmp/shadow.log" 2>&1 || {
+    echo 'a default-package builtin.n replaced or clashed with the library' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
 rm "$shadow/project/builtin.n"
 mkdir "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/sort.n"
@@ -252,12 +275,22 @@ printf "$module" >"$shadow/project/text.n"
     exit 1
 }
 
-# A module named on the command line follows the same rule; a file path
-# names exactly that file and is left alone.
+# A module or file named on the command line follows the same rule.
 rm "$shadow/project/text.n"
-printf "$module" >"$shadow/project/unicode.n"
+printf "$module" >"$shadow/path/unicode.n"
 shadowed_case 'module operand' unicode '' unicode unicode/__init.n \
-    project/unicode.n 'on off'
+    path/unicode.n 'on off'
+rm "$shadow/path/unicode.n"
+# A file operand, like a top-level module of the current directory, is in
+# the default package, so `unicode.n` is no clash, and builds.
+printf "$module" >"$shadow/project/unicode.n"
+(cd "$shadow/project" && N00B_PATH="$shadow/path" "$compiler" build \
+    --output "$tmp/unicode_file" unicode.n) >"$tmp/shadow.log" 2>&1 \
+    && "$tmp/unicode_file" || {
+    echo 'a file operand named like a library package did not build' >&2
+    cat "$tmp/shadow.log" >&2
+    exit 1
+}
 mkdir -p "$shadow/path/sys"
 printf "$module" >"$shadow/path/sys/env.n"
 shadowed_case 'module operand on N00B_PATH' sys.env '' sys.env \
