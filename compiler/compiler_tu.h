@@ -984,6 +984,11 @@ parse_sym_entry_t *formal_rest_symbol(parse_grammar_t *grammar,
 void record_function_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *func,
     n00bb_tu_state_t *state);
+// Set on a function whose body may fail: it has a `fail` statement or a
+// postfix `!` outside a `try` body.
+#define N00BB_FUNCTION_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.may-fail")
+// Notes, while walking a function's body, that `node` may make it fail.
+void note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node);
 bool collect_array_dimension_nodes(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_tree_t *node,
     core_list_t(n00bb_tree_ptr_t) *dimensions);

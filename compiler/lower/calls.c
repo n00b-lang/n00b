@@ -22,21 +22,6 @@ static ir_lower_result_t
 n00bb_lower_dispatch_new(ir_lower_context_t *context, parse_visit_t *visit,
                          th_type *result_type, ir_span_t span);
 
-// Whether `node`, a call, is the operand of a postfix `!`.
-static bool
-unwrapped_by_bang(parse_tree_t *node)
-{
-    parse_tree_t *at = node;
-    parse_tree_t *up = at ? parse_tree_parent(at) : nullptr;
-    while (up && core_tree_num_children(up) == 1) {
-        at = up;
-        up = parse_tree_parent(at);
-    }
-    size_t count = up ? core_tree_num_children(up) : 0;
-    return count == 2 && core_tree_child(up, 0) == at
-        && parse_tree_leaf_is(core_tree_child(up, 1),
-                              CORE_STRING_STATIC("!"));
-}
 
 static ir_value_t *
 n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
@@ -1420,14 +1405,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     th_ctx *types = ir_module_types(context->module);
     th_type *error_type = th_func_error(signature);
-    // A callee whose failure type is still being inferred is called as
-    // written: with `!` it may fail, without it it may not. Which one holds
-    // is checked once the callee's failure type is known.
-    th_type *open_error = error_type ? th_resolve(error_type) : nullptr;
-    bool pending = open_error && th_kind_of(open_error) == TH_VAR
-        && !th_var_name(open_error).u8_bytes;
-    bool has_error = error_type && !th_is_nil(error_type)
-        && (!pending || unwrapped_by_bang(visit ? visit->node : nullptr));
+    // Whether the callee may fail is known before typing: a failure type
+    // still open is one being inferred from a body that may fail.
+    bool has_error = error_type && !th_is_nil(error_type);
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
         : signature_return;
@@ -1470,11 +1450,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool emitted = instruction && ir_lower_set_temp_dest(context, instruction,
                                                  CORE_STRING_STATIC("__n00bb_"), call_result_type)
             && ir_instr_operand_value(instruction, callee_value);
-    n00bb_lower_context_t *call_lower = context->user;
-    if (emitted && pending && !has_error && call_lower)
-        emitted = ir_annot_set(call_lower->ir_context, &instruction->annots,
-            (ir_annot_t){.key = N00BB_FAILURE_PENDING_KEY,
-                         .kind = IR_ANNOT_BOOL, .b = true});
     for (size_t i = 0; emitted && i < values.len; i++) {
         if (values.data[i]) {
             emitted = ir_instr_operand_value(instruction, values.data[i]);

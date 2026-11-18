@@ -3136,25 +3136,32 @@ owner_typevar(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
     return type;
 }
 
-// Whether a function body may fail: it has a `fail` statement or passes a
-// failure along with `!`. A nested function's body doesn't count.
-static bool
-body_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
+void
+note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!node || core_tree_is_leaf(node)) return false;
-    if (NT_IS(grammar, node, "fail-stmt")) return true;
-    size_t count = core_tree_num_children(node);
-    if (count == 2 && NT_IS(grammar, node, "postfix-expr")
-        && parse_tree_leaf_is(core_tree_child(node, 1),
-                              CORE_STRING_STATIC("!")))
-        return true;
-    for (size_t i = 0; i < count; i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (!core_tree_is_leaf(child) && !NT_IS(grammar, child, "func-def")
-            && body_may_fail(grammar, child))
-            return true;
+    bool raises = NT_IS(grammar, node, "fail-stmt")
+        || (core_tree_num_children(node) == 2
+            && NT_IS(grammar, node, "postfix-expr")
+            && parse_tree_leaf_is(core_tree_child(node, 1),
+                                  CORE_STRING_STATIC("!")));
+    for (parse_tree_t *at = raises ? parse_tree_parent(node) : nullptr; at;
+         at = parse_tree_parent(at)) {
+        // A `try`'s body sends its failures to the `try`'s handler.
+        parse_tree_t *parent = parse_tree_parent(at);
+        if (NT_IS(grammar, at, "try-body")
+            || (NT_IS(grammar, at, "value-body") && parent
+                && NT_IS(grammar, parent, "try-value-expr")
+                && core_tree_child(parent, 1) == at))
+            return;
+        if (NT_IS(grammar, at, "func-def")) {
+            parse_sym_entry_t *function = parse_tree_sym(at);
+            if (function)
+                (void)parse_sym_set_binding(function,
+                                            N00BB_FUNCTION_MAY_FAIL_KEY,
+                                            (void *)1);
+            return;
+        }
     }
-    return false;
 }
 
 void
@@ -3178,13 +3185,11 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     th_type *success = return_node
         ? return_types ? parse_tree_type(return_types) : nullptr
         : th_var(state->types);
-    // With no `fail:` clause, a body that may fail has its failure type
-    // inferred; any other can't fail.
+    // With no `fail:` clause, the failure type is inferred, or is `nil` if
+    // the body turns out not to fail (record_function_signature).
     th_type *failure = error_node
         ? error_type ? parse_tree_type(error_type) : nullptr
-        : body_may_fail(grammar, CHILD_NT(grammar, function, "body"))
-        ? th_var(state->types)
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
+        : th_var(state->types);
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
         N00BB_PARAMETER_FACTS_KEY);
     core_list_t(th_param) params = core_list_new(th_param);
@@ -3714,6 +3719,14 @@ record_function_signature(parse_grammar_t *grammar,
         }
         else symbol->error_type = failure;
     }
+
+    // With no `fail:` clause, a body with no `fail` and no `!` outside a
+    // `try` (note_function_may_fail) cannot fail.
+    th_type *open = symbol->error_type ? th_resolve(symbol->error_type)
+                                       : nullptr;
+    if (!declared_failure && open && th_kind_of(open) == TH_VAR
+        && !parse_sym_binding(symbol, N00BB_FUNCTION_MAY_FAIL_KEY))
+        th_var_bind(open, th_name(state->types, CORE_STRING_STATIC("nil")));
 
     core_list_free(params);
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
