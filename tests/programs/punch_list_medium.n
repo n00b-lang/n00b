@@ -314,4 +314,26 @@ func union_kind(flag: bool) -> string {
 }
 require union_kind(true) == "int" and union_kind(false) == "three"
 
+# A module variable comptime sets starts with that value at run time, its
+# declaration's initializer included, unless the runtime initializer
+# writes it again (#13).
+var comptime_counter: int = 0
+if comptime() {
+    comptime_counter = 42
+}
+var runtime_bumped: int = 0
+runtime_bumped += 1
+var rewritten_at_runtime: int = 0
+if comptime() {
+    rewritten_at_runtime = 5
+}
+rewritten_at_runtime += 1
+func comptime_values() -> int {
+    let tens: int = runtime_bumped * 10 + rewritten_at_runtime
+    return comptime_counter * 100 + tens
+}
+if !comptime() {
+    require comptime_values() == 4200 + 10 + 1
+}
+
 __fd_write(2, "ok")
