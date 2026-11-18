@@ -8339,14 +8339,22 @@ report_generic_arity(core_translation_unit_t *unit, parse_tree_t *at,
     name = short_type_name(name, nullptr);
     core_string_t given = n00bb_text(N00B_TEXT_TYPE_ARGUMENTS_GIVEN,
                                      N00BB_ARGS(ARG_NUMBER(provided)));
-    bool reported = n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
-        link_source_location(at), N00B_TEXT_TAKES_TYPE_ARGUMENTS,
-        N00BB_ARGS(ARG_NUMBER(expected), ARG_TEXT(name), ARG_TEXT(given)));
+    bool reported = expected
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
+              link_source_location(at), N00B_TEXT_TAKES_TYPE_ARGUMENTS,
+              N00BB_ARGS(ARG_NUMBER(expected), ARG_TEXT(name),
+                         ARG_TEXT(given)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
+              link_source_location(at), N00B_TEXT_TAKES_NO_TYPE_ARGUMENTS,
+              N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(given)));
     core_free(given.data);
     if (!reported) return;
     n00bb_diag_declared_here(diagnostics, declaration,
         N00B_TEXT_IS_DECLARED_HERE);
-    if (provided > expected)
+    if (!expected)
+        n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_TYPE_ARGUMENTS,
+                          N00BB_ARGS(ARG_NUMBER(provided)));
+    else if (provided > expected)
         n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_EXTRA_TYPE_ARGUMENTS,
                           N00BB_ARGS(ARG_NUMBER(provided - expected)));
     else
@@ -9523,6 +9531,41 @@ generic_alias_application(parse_grammar_t *grammar,
     return expanded;
 }
 
+static bool
+subtree_has_type_variable(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return false;
+    if (NT_IS(grammar, node, "tspec-tvar")) return true;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (subtree_has_type_variable(grammar, core_tree_child(node, i)))
+            return true;
+    return false;
+}
+
+// Whether the type a name refers to certainly takes no type arguments: a
+// declaration that never names a type variable, or a builtin without
+// parameters. Declarations are read from source because their generic
+// heads may not be registered yet when another module applies them.
+// `declaration` receives the source declaration, when there is one.
+static bool
+type_takes_no_arguments(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        parse_tree_t *type_node, th_type *base,
+                        parse_sym_entry_t **declaration)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : parse_tree_sym(type_node);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    if (symbol && symbol->decl_node) {
+        *declaration = symbol;
+        return !subtree_has_type_variable(grammar, symbol->decl_node);
+    }
+    const th_builtin_type_t *builtin = base
+        ? th_builtin_type(tu_state(unit)->types, base) : nullptr;
+    return builtin && builtin->arity == 0;
+}
+
 static th_type *
 compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *node)
@@ -9632,9 +9675,17 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     if (!declared_arity && !is_variant)
         declared_arity = th_generic_arity(state->types, name);
-    if (valid && declared_arity && declared_arity != arguments.len) {
-        parse_sym_entry_t *declaration = type_symbol_in_loaded_imports(unit,
-            state->types, base, nullptr);
+    // A type that is neither declared with type parameters nor a builtin
+    // generic takes none; arguments given to it are an error, not dropped.
+    parse_sym_entry_t *plain = nullptr;
+    bool generic = declared_arity || is_variant
+        || builtin_generic_type_arity(name) != -1
+        || !type_takes_no_arguments(grammar, unit, type_node, base, &plain);
+    if (valid && (generic ? declared_arity && declared_arity != arguments.len
+                          : arguments.len != 0)) {
+        parse_sym_entry_t *declaration = generic
+            ? type_symbol_in_loaded_imports(unit, state->types, base, nullptr)
+            : plain;
         report_generic_arity(unit, application, base, declared_arity,
                              arguments.len, declaration);
         core_list_free(arguments);

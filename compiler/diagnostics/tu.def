@@ -135,10 +135,12 @@ N00B_DIAG(LOOP_ASSIGNED_TYPE, "N00B-N0521", ERROR,
     "loop assigns that variable, which already has its type. Remove the\n"
     "type, or use a new name.")
 N00B_DIAG(GENERIC_ARITY, "N00B-T0515", ERROR,
-    "a generic type is given the wrong number of type arguments",
+    "a type is given the wrong number of type arguments",
     "A generic type takes exactly the type arguments its declaration lists:\n"
     "    var items: List[int] = []\n"
-    "    var table: Dict[string, int] = {:}")
+    "    var table: Dict[string, int] = {:}\n"
+    "A type that is not generic, such as `int`, `string`, `Any`, or a\n"
+    "record without type parameters, takes no type arguments.")
 N00B_DIAG(OPTION_USED_AS_VALUE, "N00B-T0516", ERROR,
     "an option that may be nil is used where its value is needed",
     "A value of type `T?` may be nil, so operators cannot use it directly.\n"
