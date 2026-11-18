@@ -1206,11 +1206,35 @@ n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index)
         : n00bb_setting_origin(id);
 }
 
+// The canonical form of a path entry. A missing directory has no real path,
+// so its parent is resolved instead (relative entries against the current
+// directory), letting `x` and `/here/x` match even when `x` does not exist.
 static core_string_t
 canonical_entry(core_string_t entry)
 {
     core_string_t canonical = core_os_real_path(entry);
-    return canonical.data ? canonical : core_string_dup(entry);
+    if (canonical.data) return canonical;
+    core_string_t absolute = {0};
+    if (core_os_is_absolute(entry)) absolute = core_string_dup(entry);
+    else {
+        core_string_t cwd = core_os_current_directory();
+        absolute = core_os_path_join(cwd, entry);
+        core_free(cwd.data);
+    }
+    core_string_t parent = core_os_path_parent(absolute);
+    core_string_t real_parent = core_os_real_path(parent);
+    core_string_t result = absolute;
+    if (real_parent.data && parent.u8_bytes < absolute.u8_bytes) {
+        size_t start = parent.u8_bytes;
+        while (start < absolute.u8_bytes
+               && core_os_is_separator(absolute.data[start])) start++;
+        result = core_os_path_join(real_parent, core_string_slice(absolute,
+            start, absolute.u8_bytes - start));
+        core_free(absolute.data);
+    }
+    core_free(real_parent.data);
+    core_free(parent.data);
+    return result;
 }
 
 bool

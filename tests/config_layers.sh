@@ -165,5 +165,15 @@ expect_line "contract dir from the user file" \
 [ "$(grep -c 'N00B-C0034' "$tmp/out")" -eq 3 ] \
     || fail "contract dirs: a directory named twice was reported twice"
 
+# A missing paths.path entry named by several layers is warned about once,
+# naming the highest-precedence layer.
+printf '[paths]\npath = ["%s"]\n' "$tmp/project/src/missing-lib" >"$project"
+isolated N00B_PATH="missing-lib${sep}missing-lib" "$compiler" check \
+    --path missing-lib main.n >"$tmp/out" 2>&1
+expect_line "missing path entry" \
+    "warning N00B-C0033: \`--path\` entry \`missing-lib\` does not exist, so it is skipped"
+[ "$(grep -c 'N00B-C0033' "$tmp/out")" -eq 1 ] \
+    || fail "paths.path: a missing entry named twice was reported twice"
+
 [ "$failed" -eq 0 ] && echo "config layering: all checks passed"
 [ "$failed" -eq 0 ]

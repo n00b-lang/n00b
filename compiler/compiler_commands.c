@@ -836,10 +836,13 @@ static void
 warn_package_path(void *context, size_t index, core_string_t entry,
                   core_string_t resolved)
 {
+    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
+    // An entry repeated across layers is one root, so one warning, naming
+    // the first, highest-precedence layer.
+    if (!n00bb_setting_path_is_first(key, index)) return;
     path_state_t state = directory_state(resolved);
     if (state == PATH_IS_DIRECTORY) return;
     core_buffer_t source = {0};
-    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
     describe_layer(&source, key, n00bb_setting_source_at(key, index),
                    n00bb_setting_origin_at(key, index));
     n00bb_report(context, nullptr, N00B_DIAG_PACKAGE_PATH_MISSING, nowhere,
