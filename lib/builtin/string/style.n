@@ -563,12 +563,12 @@ func string_hash(s: string) -> u128 {
 private func format_style_tag(fd: int, tag: string, closing: bool)
     -> uint fail: int {
     var out: uint = 0
-    out += io.format.format_string(fd, "«")!
+    out += io.format.format_byte(fd, 0x5b)!
     if closing {
         out += io.format.format_byte(fd, 0x2f)!
     }
     out += io.format.format_string(fd, tag)!
-    out += io.format.format_string(fd, "»")!
+    out += io.format.format_byte(fd, 0x5d)!
     return out
 }
 
@@ -584,7 +584,7 @@ private func closes_here(r: Style_Record, pos: u64) -> bool {
 
 private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     var out: uint = 0
-    out += io.format.format_string(fd, "«#")!
+    out += io.format.format_string(fd, "[#")!
     let sub: Sub_Spec = r.substitution
     switch sub {
         case argname {
@@ -604,9 +604,18 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     }
     if r.format_spec != nil {
         out += io.format.format_byte(fd, 0x3a)!
-        out += io.format.format_string(fd, r.format_spec)!
+        let spec: string = r.format_spec
+        var k: uint = 0
+        while k < string.core.byte_len(spec) {
+            let c: u8 = string.core.byte_at(spec, k)
+            if c == 0x5d {
+                out += io.format.format_byte(fd, 0x5c)!
+            }
+            out += io.format.format_byte(fd, c)!
+            k += 1
+        }
     }
-    out += io.format.format_string(fd, "»")!
+    out += io.format.format_byte(fd, 0x5d)!
     return out
 }
 
@@ -747,11 +756,8 @@ private func repr_rich_string(s: string, fd: int) -> uint fail: int {
             continue
         }
         let c: u8 = string.core.byte_at(base, i)
-        if i + 1 < n and c == 0xc2 {
-            let next: u8 = string.core.byte_at(base, i + 1)
-            if next == 0xab or next == 0xbb {
-                out += io.format.format_byte(fd, 0x5c)!
-            }
+        if c == 0x5b {
+            out += io.format.format_byte(fd, 0x5c)!
         }
         out += io.format.format_byte(fd, c)!
         i += 1
@@ -1071,8 +1077,8 @@ func intrinsic_tag_style(tag: string) -> Text_Style {
 }
 
 private enum Markup_Kind {
-    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, role_on,
-    role_off, reset, subst
+    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, reset,
+    subst
 }
 
 private record Markup_Segment {
@@ -1108,114 +1114,36 @@ private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
             format_spec = format_spec)
 }
 
-private func classify_tag(modify segments: List[Markup_Segment],
-                          modify numbering: Slot_Numbering, tag: string,
-                          at: u32) fail: string {
-    let len: uint = string.core.byte_len(tag)
-    if len == 0 {
-        return
-    }
-    let first: u8 = string.core.byte_at(tag, 0)
-    if len == 1 and first == 0x2f {
-        segments.append(segment(Markup_Kind.reset, at, tag))
-        return
-    }
-    if first == 0x23 {
-        var spec_len: uint = len - 1
-        var format_spec: string? = nil
-        var k: uint = 1
-        while k < len {
-            if string.core.byte_at(tag, k) == 0x3a {
-                format_spec = string.core.byte_slice(tag, cast[int](k) + 1,
-                                                     cast[int] len)
-                spec_len = k - 1
-                break
-            }
-            k += 1
-        }
-        if spec_len == 0 {
-            if numbering.saw_explicit {
-                fail "rich string cannot mix automatic and explicit positional substitutions"
-            }
-            numbering.saw_auto = true
-            segments.append(segment(Markup_Kind.subst, at, tag,
-                                    sub_index = numbering.next_auto,
-                                    format_spec = format_spec))
-            numbering.next_auto += 1
-            return
-        }
-        var all_digits: bool = true
-        var d: uint = 1
-        while d <= spec_len {
-            let c: u8 = string.core.byte_at(tag, d)
-            if c < 0x30 or c > 0x39 {
-                all_digits = false
-                break
-            }
-            d += 1
-        }
-        if all_digits {
-            if numbering.saw_auto {
-                fail "rich string cannot mix automatic and explicit positional substitutions"
-            }
-            numbering.saw_explicit = true
-            var ix: u64 = 0
-            d = 1
-            while d <= spec_len {
-                ix = ix * 10 + cast[u64] (string.core.byte_at(tag, d) - 0x30)
-                if ix > 0xffffffff {
-                    fail "rich string substitution index is too large"
-                }
-                d += 1
-            }
-            segments.append(segment(Markup_Kind.subst, at, tag,
-                                    sub_index = ix,
-                                    format_spec = format_spec))
-            return
-        }
-        segments.append(segment(Markup_Kind.subst, at, tag,
-            name = string.core.byte_slice(tag, 1, cast[int](spec_len) + 1),
-            format_spec = format_spec))
-        return
-    }
-    let is_close: bool = first == 0x2f
-    var name: string = tag
-    if is_close {
-        name = string.core.byte_slice(tag, 1, cast[int] len)
-    }
-    if string.core.byte_len(name) == 0 {
-        return
-    }
-    if string.core.byte_at(name, 0) == 0x40 {
-        var kind: Markup_Kind = Markup_Kind.role_on
-        if is_close {
-            kind = Markup_Kind.role_off
-        }
-        segments.append(segment(kind, at, tag, name = name))
-        return
+// Adds an on (`[name]`) or off (`[/name]`) segment for a style tag whose
+// name has already been checked to be an identifier.
+private func add_style_tag(modify segments: List[Markup_Segment],
+                           name: string, closing: bool, at: u32) {
+    var raw_tag: string = name
+    if closing {
+        raw_tag = "/" + name
     }
     let prop: Text_Style = intrinsic_tag_style(name)
     if prop.text_case != Text_Case.none {
         var kind: Markup_Kind = Markup_Kind.case_on
-        if is_close {
+        if closing {
             kind = Markup_Kind.case_off
         }
-        segments.append(segment(kind, at, tag, prop = prop))
+        segments.append(segment(kind, at, raw_tag, prop = prop))
         return
     }
     if !is_empty(prop) {
         var kind: Markup_Kind = Markup_Kind.prop_on
-        if is_close {
+        if closing {
             kind = Markup_Kind.prop_off
         }
-        segments.append(segment(kind, at, tag, prop = prop))
+        segments.append(segment(kind, at, raw_tag, prop = prop))
         return
     }
     var kind: Markup_Kind = Markup_Kind.style_on
-    if is_close {
+    if closing {
         kind = Markup_Kind.style_off
     }
-    segments.append(segment(kind, at, tag, name = name))
+    segments.append(segment(kind, at, raw_tag, name = name))
 }
 
 private func escape_length(raw: string, at: uint) -> uint {
@@ -1245,6 +1173,178 @@ private func escape_length(raw: string, at: uint) -> uint {
     return len
 }
 
+// Decodes the escape sequence at `at` into `out`, returning its raw length.
+// `\[` and `\]` decode to the bracket itself, like every other escape.
+private func put_escape(out: containers.buffer.Buffer, raw: string, at: uint)
+    -> uint fail: string {
+    let len: uint = escape_length(raw, at)
+    containers.buffer.put_string(out, string.core.decode_escapes(
+        string.core.byte_slice(raw, cast[int] at, cast[int] (at + len)))!)
+    return len
+}
+
+private func is_digit_byte(b: u8) -> bool {
+    return b >= 0x30 and b <= 0x39
+}
+
+// Identifier bytes for tag names. ASCII follows the language's identifier
+// rule exactly (a letter or `_`, then letters, digits, or `_`). The builtin
+// layer cannot reach the Unicode XID tables, so every non-ASCII code point
+// (all of whose UTF-8 bytes are >= 0x80) is accepted as an identifier
+// character.
+private func is_id_start_byte(b: u8) -> bool {
+    return (b >= 0x41 and b <= 0x5a) or (b >= 0x61 and b <= 0x7a) or
+        b == 0x5f or b >= 0x80
+}
+
+private func is_id_continue_byte(b: u8) -> bool {
+    return is_id_start_byte(b) or is_digit_byte(b)
+}
+
+// Returns the index just past the identifier starting at `at`, or `at`
+// itself when no identifier starts there.
+private func scan_id(raw: string, at: uint) -> uint {
+    let n: uint = string.core.byte_len(raw)
+    if at >= n or !is_id_start_byte(string.core.byte_at(raw, at)) {
+        return at
+    }
+    var j: uint = at + 1
+    while j < n and is_id_continue_byte(string.core.byte_at(raw, j)) {
+        j += 1
+    }
+    return j
+}
+
+// Reads a substitution's format spec starting at `k` (just past its `:`),
+// decoding escapes, up to the first unescaped `]`. On success `k` is left on
+// that `]`; nil means the spec is unterminated.
+private func scan_spec(raw: string, modify k: uint) -> string? fail: string {
+    let n: uint = string.core.byte_len(raw)
+    var spec: containers.buffer.Buffer = new[containers.buffer.Buffer](length = 0)
+    while k < n {
+        let c: u8 = string.core.byte_at(raw, k)
+        if c == 0x5d {
+            return containers.buffer.to_string(spec)
+        }
+        if c == 0x5c {
+            k += put_escape(spec, raw, k)!
+            continue
+        }
+        containers.buffer.put_u8(spec, c)
+        k += 1
+    }
+    return nil
+}
+
+// Tries to read a markup tag at the `[` at index `at`. On success the tag's
+// segment is appended and the index just past its closing `]` is returned;
+// when the text is not a tag, nothing is appended and 0 is returned, so the
+// `[` is literal text. The tag forms are:
+//   [ID]  [/ID]  [/]  [#]  [#N]  [#ID]
+// where each `#` form may carry `:spec`, which runs to the first unescaped
+// `]` and has its escapes decoded.
+private func scan_tag(modify segments: List[Markup_Segment],
+                      modify numbering: Slot_Numbering, raw: string,
+                      at: uint, text_at: u32) -> uint fail: string {
+    let n: uint = string.core.byte_len(raw)
+    let j: uint = at + 1
+    if j >= n {
+        return 0
+    }
+    let first: u8 = string.core.byte_at(raw, j)
+    if first == 0x2f {
+        if j + 1 < n and string.core.byte_at(raw, j + 1) == 0x5d {
+            segments.append(segment(Markup_Kind.reset, text_at, "/"))
+            return j + 2
+        }
+        let e: uint = scan_id(raw, j + 1)
+        if e == j + 1 or e >= n or string.core.byte_at(raw, e) != 0x5d {
+            return 0
+        }
+        add_style_tag(segments,
+            string.core.byte_slice(raw, cast[int](j) + 1, cast[int] e),
+            true, text_at)
+        return e + 1
+    }
+    if first != 0x23 {
+        let e: uint = scan_id(raw, j)
+        if e == j or e >= n or string.core.byte_at(raw, e) != 0x5d {
+            return 0
+        }
+        add_style_tag(segments,
+            string.core.byte_slice(raw, cast[int] j, cast[int] e), false,
+            text_at)
+        return e + 1
+    }
+    let name_at: uint = j + 1
+    var k: uint = name_at
+    var explicit: bool = false
+    if k < n and is_digit_byte(string.core.byte_at(raw, k)) {
+        explicit = true
+        while k < n and is_digit_byte(string.core.byte_at(raw, k)) {
+            k += 1
+        }
+    }
+    else {
+        k = scan_id(raw, k)
+    }
+    let name_end: uint = k
+    if k >= n {
+        return 0
+    }
+    var format_spec: string? = nil
+    let after: u8 = string.core.byte_at(raw, k)
+    if after == 0x3a {
+        k += 1
+        format_spec = scan_spec(raw, k)!
+        if format_spec == nil {
+            return 0
+        }
+    }
+    elif after != 0x5d {
+        return 0
+    }
+    let raw_tag: string = string.core.byte_slice(raw, cast[int] j,
+                                                 cast[int] k)
+    if name_end == name_at {
+        if numbering.saw_explicit {
+            fail "rich string cannot mix automatic and explicit positional substitutions"
+        }
+        numbering.saw_auto = true
+        segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+                                sub_index = numbering.next_auto,
+                                format_spec = format_spec))
+        numbering.next_auto += 1
+        return k + 1
+    }
+    if explicit {
+        if numbering.saw_auto {
+            fail "rich string cannot mix automatic and explicit positional substitutions"
+        }
+        numbering.saw_explicit = true
+        var ix: u64 = 0
+        var d: uint = name_at
+        while d < name_end {
+            ix = ix * 10 + cast[u64] (string.core.byte_at(raw, d) - 0x30)
+            if ix > 0xffffffff {
+                fail "rich string substitution index is too large"
+            }
+            d += 1
+        }
+        segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+                                sub_index = ix, format_spec = format_spec))
+        return k + 1
+    }
+    segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+        name = string.core.byte_slice(raw, cast[int] name_at,
+                                      cast[int] name_end),
+        format_spec = format_spec))
+    return k + 1
+}
+
+// Splits a rich literal's raw (still escaped) body into its text and markup
+// segments. A `[` that does not begin a well-formed tag is literal text, and
+// `\[` / `\]` always produce literal brackets.
 private func parse_rich_markup(raw: string,
                                modify segments: List[Markup_Segment])
     -> string fail: string {
@@ -1256,61 +1356,16 @@ private func parse_rich_markup(raw: string,
     while i < n {
         let c: u8 = string.core.byte_at(raw, i)
         if c == 0x5c {
-            if i + 2 < n and string.core.byte_at(raw, i + 1) == 0xc2 {
-                let after: u8 = string.core.byte_at(raw, i + 2)
-                if after == 0xab or after == 0xbb {
-                    containers.buffer.put_u8(text, 0xc2)
-                    containers.buffer.put_u8(text, after)
-                    i += 3
-                    continue
-                }
-            }
-            if i + 1 < n and string.core.byte_at(raw, i + 1) == 0x5b {
-                containers.buffer.put_u8(text, 0x5b)
-                i += 2
+            i += put_escape(text, raw, i)!
+            continue
+        }
+        if c == 0x5b {
+            let end: uint = scan_tag(segments, numbering, raw, i,
+                cast[u32] string.core.byte_len(text))!
+            if end != 0 {
+                i = end
                 continue
             }
-            let len: uint = escape_length(raw, i)
-            containers.buffer.put_string(text, string.core.decode_escapes(
-                string.core.byte_slice(raw, cast[int] i,
-                                       cast[int] (i + len)))!)
-            i += len
-            continue
-        }
-        if c == 0xc2 and i + 1 < n and string.core.byte_at(raw, i + 1) == 0xab {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0xc2 and
-                                  string.core.byte_at(raw, j + 1) == 0xbb) {
-                j += 1
-            }
-            if j + 1 < n {
-                classify_tag(segments, numbering,
-                    string.core.byte_slice(raw, cast[int] (i + 2),
-                                           cast[int] j),
-                    cast[u32] string.core.byte_len(text))!
-                i = j + 2
-            }
-            else {
-                containers.buffer.put_u8(text, 0xc2)
-                containers.buffer.put_u8(text, 0xab)
-                i += 2
-            }
-            continue
-        }
-        if c == 0x5b and i + 1 < n and string.core.byte_at(raw, i + 1) == 0x3a {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0x3a and
-                                  string.core.byte_at(raw, j + 1) == 0x5d) {
-                j += 1
-            }
-            if j + 1 >= n {
-                fail "rich string contains an unclosed ASCII tag"
-            }
-            classify_tag(segments, numbering,
-                string.core.byte_slice(raw, cast[int] (i + 2), cast[int] j),
-                cast[u32] string.core.byte_len(text))!
-            i = j + 2
-            continue
         }
         containers.buffer.put_u8(text, c)
         i += 1
@@ -1350,10 +1405,6 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
             return open.kind == Markup_Kind.style_on and
                 cmp_text(open.name, close.name) == 0
         }
-        case Markup_Kind.role_off {
-            return open.kind == Markup_Kind.role_on and
-                cmp_text(open.name, close.name) == 0
-        }
         else {
             return false
         }
@@ -1369,14 +1420,14 @@ private func build_style_records(segments: List[Markup_Segment])
         let seg: Markup_Segment = segments[s]
         s += 1
         switch seg.kind {
-            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on, Markup_Kind.role_on {
+            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on {
                 let opened: Pending_Style = (kind = seg.kind, name = seg.name,
                                              prop = seg.prop,
                                              raw_tag = seg.raw_tag,
                                              start_byte = seg.at)
                 pending.append(opened)
             }
-            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off, Markup_Kind.role_off {
+            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off {
                 var j: int = cast[int](pending.len()) - 1
                 while j >= 0 {
                     if closes_pending(pending[j], seg) {

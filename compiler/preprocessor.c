@@ -270,15 +270,8 @@ decode_quoted_literal(core_string_t raw, char quote, core_buffer_t *buffer)
         case '"': core_buffer_putc(buffer, '"'); break;
         case '\'': core_buffer_putc(buffer, '\''); break;
         // The lexer's `escape_literal` set: the escaped character itself.
-        // `«` (C2 AB) and `»` (C2 BB) are two bytes in UTF-8.
         case '[': core_buffer_putc(buffer, '['); break;
-        case 0xc2:
-            if (i + 2 >= raw.u8_bytes) goto invalid;
-            if ((unsigned char)raw.data[i + 1] != 0xab
-                && (unsigned char)raw.data[i + 1] != 0xbb) goto invalid;
-            core_buffer_append(buffer, raw.data + i, 2);
-            i++;
-            break;
+        case ']': core_buffer_putc(buffer, ']'); break;
         case 'x':
         case 'u':
         case 'U': {

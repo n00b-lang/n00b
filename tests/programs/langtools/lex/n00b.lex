@@ -6,7 +6,7 @@ comments {
     region:   "#[" "#]", ends-with "#"
 }
 
-escapes n00b: \a \b \f \n \r \t \v \0 \\ \" \' \« \» \[ \xHH \uHHHH \UHHHHHHHH
+escapes n00b: \a \b \f \n \r \t \v \0 \\ \" \' \[ \] \xHH \uHHHH \UHHHHHHHH
 
 STRING_LIT {
     like:     STRING

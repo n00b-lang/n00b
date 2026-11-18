@@ -73,6 +73,12 @@ build-time)
     build_time_failure bitcode_litmod_string_fail \
         'uncaught failure "bad literal"' \
         'bitcode_litmod_string_fail.n:7:12'
+    build_time_failure bitcode_rich_auto_then_explicit \
+        'uncaught failure "rich string cannot mix automatic and explicit positional substitutions"' \
+        'bitcode_rich_auto_then_explicit.n:2:12'
+    build_time_failure bitcode_rich_explicit_then_auto \
+        'uncaught failure "rich string cannot mix automatic and explicit positional substitutions"' \
+        'bitcode_rich_explicit_then_auto.n:2:12'
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'

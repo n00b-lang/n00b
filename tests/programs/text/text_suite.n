@@ -512,7 +512,7 @@ func raw_offset_probe_main() {
     require byte_len(from_raw(ref offset_pool, 0, at = 64)) == 0
 }
 
-let fancy: string = "«b»Hello«/b» «i»world«/i»"'r
+let fancy: string = "[b]Hello[/b] [i]world[/i]"'r
 
 func check_rich(s: string, plain: string, markup: string) {
     require tag(s) == 3
@@ -525,18 +525,58 @@ func check_rich(s: string, plain: string, markup: string) {
 }
 
 func local_literals() {
-    check_rich("«b»Hi«/b»"'r, "Hi", "r\"«b»Hi«/b»\"")
-    check_rich("«u»a rich literal well past the inline capacity«/u»"'r,
+    check_rich("[b]Hi[/b]"'r, "Hi", "r\"[b]Hi[/b]\"")
+    check_rich("[u]a rich literal well past the inline capacity[/u]"'r,
                "a rich literal well past the inline capacity",
-               "r\"«u»a rich literal well past the inline capacity«/u»\"")
-    check_rich("x «#» y «#:04d» «#a_rather_long_argument_name»"'r, "x  y  ",
-               "r\"x «#0» y «#1:04d» «#a_rather_long_argument_name»\"")
+               "r\"[u]a rich literal well past the inline capacity[/u]\"")
+    check_rich("x [#] y [#:04d] [#a_rather_long_argument_name]"'r, "x  y  ",
+               "r\"x [#0] y [#1:04d] [#a_rather_long_argument_name]\"")
+}
+
+func bracket_markup() {
+    // Style on / off for intrinsic, case, and user-named styles.
+    check_rich("[b]on[/b] [title]t[/title] [mine]m[/mine] [_x9]u[/_x9]"'r,
+               "on t m u",
+               "r\"[b]on[/b] [title]t[/title] [mine]m[/mine] [_x9]u[/_x9]\"")
+    check_rich("[warning]w[/warning]"'rich, "w", "r\"[warning]w[/warning]\"")
+    // `[/]` ends every open style.
+    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b]c\"")
+    check_rich("[/]x"'r, "x", "r\"x\"")
+    // Substitutions: auto, explicit, and named, each with and without a spec.
+    check_rich("a[#]b[#:>4]c"'r, "abc", "r\"a[#0]b[#1:>4]c\"")
+    check_rich("[#0][#1:x][#12]"'r, "", "r\"[#0][#1:x][#12]\"")
+    check_rich("[#who] [#who:^8] [#]"'r, "  ",
+               "r\"[#who] [#who:^8] [#0]\"")
+    // A spec runs to the first unescaped `]`; `\]` and `\[` are literal.
+    check_rich("[#0:a\]b\[c]"'r, "", "r\"[#0:a\\]b[c]\"")
+    check_rich("[#n:{x\]}] tail"'r, " tail", "r\"[#n:{x\\]}] tail\"")
+    // Anything else starting with `[` is literal text, never an error.
+    check_rich("[1, 2] [] a[i + 1] [ bold] [10] [@x] [foo, bar]"'r,
+               "[1, 2] [] a[i + 1] [ bold] [10] [@x] [foo, bar]",
+               "r\"\\[1, 2] \\[] a\\[i + 1] \\[ bold] \\[10] \\[@x] \\[foo, bar]\"")
+    check_rich("unclosed [bold"'r, "unclosed [bold",
+               "r\"unclosed \\[bold\"")
+    check_rich("[bold"'r, "[bold", "r\"\\[bold\"")
+    check_rich("[b ] [/ b] [/b c] [#1a] [# x] [#x y]"'r,
+               "[b ] [/ b] [/b c] [#1a] [# x] [#x y]",
+               "r\"\\[b ] \\[/ b] \\[/b c] \\[#1a] \\[# x] \\[#x y]\"")
+    check_rich("[#:abc"'r, "[#:abc", "r\"\\[#:abc\"")
+    check_rich("[#name"'r, "[#name", "r\"\\[#name\"")
+    check_rich("[#0:a\]"'r, "[#0:a]", "r\"\\[#0:a]\"")
+    check_rich("["'r, "[", "r\"\\[\"")
+    // Escapes: `\[` and `\]` are always literal brackets.
+    check_rich("\[bold] \[\] [\] \]"'r, "[bold] [] [] ]",
+               "r\"\\[bold] \\[] \\[] ]\"")
+    check_rich("\[b]x[b]y\[/b]"'r, "[b]xy[/b]", "r\"\\[b]x[b]y\\[/b]\"")
+    check_rich("tab\tA\x42"'r, "tab\tAB", "r\"tab\tAB\"")
+    // A literal `[` right before a real tag still leaves the tag intact.
+    check_rich("[[b]x[/b]]"'r, "[x]", "r\"\\[[b]x[/b]]\"")
 }
 
 func dispatch() {
-    let bold: string = "«b»Hi«/b»"'r
-    let same: string = "«b»Hi«/b»"'r
-    let italic: string = "«i»Hi«/i»"'r
+    let bold: string = "[b]Hi[/b]"'r
+    let same: string = "[b]Hi[/b]"'r
+    let italic: string = "[i]Hi[/i]"'r
     require bold == same
     require bold != italic
     require bold != "Hi"
@@ -580,8 +620,9 @@ let text_offset: u64? = rich_body_text_offset()
 func string_rich_literal_main() {
     require text_offset != nil
     require text_offset == 0
-    check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
+    check_rich(fancy, "Hello world", "r\"[b]Hello[/b] [i]world[/i]\"")
     local_literals()
+    bracket_markup()
     dispatch()
 }
 
@@ -1458,14 +1499,14 @@ func rich_build_checks() {
     check(byte_len(built) == 4 and byte_at(built, 0) == cast[u8] 't', "rich_build_probe", "2")
     check(record_count(built) == 1, "rich_build_probe", "3")
 
-    let literal: string = "«b»text«/b»"'r
+    let literal: string = "[b]text[/b]"'r
     check(built == literal, "rich_build_probe", "4")
     check(built.hash() == literal.hash(), "rich_build_probe", "5")
 
     var ext: List[text.Style_Span] = new[List[text.Style_Span]]()
     push_span(ext, 0, text.index_extends, "b")
     let open_ended: string = text.rich_string("text", ext)
-    let unclosed: string = "«b»text"'r
+    let unclosed: string = "[b]text"'r
     check(open_ended == unclosed, "rich_build_probe", "6")
     check(built != open_ended, "rich_build_probe", "7")
 
@@ -1480,7 +1521,7 @@ func rich_build_checks() {
         check(second.style_tag != nil, "rich_build_probe", "10")
     }
 
-    let nested: string = "«b»alpha «i»beta«/i»«/b»"'r
+    let nested: string = "[b]alpha [i]beta[/i][/b]"'r
     let tail: string = byte_slice_of(nested, 6, 10)
     check(text.eq(tail, "beta"), "rich_build_probe", "11")
     check(record_count(tail) == 2, "rich_build_probe", "12")
@@ -1497,7 +1538,7 @@ func rich_build_checks() {
     let head: string = byte_slice_of(nested, 0, 5)
     check(record_count(head) == 1, "rich_build_probe", "14")
 
-    let carry: string = byte_slice_of("«b»head tail"'r, 5, 9)
+    let carry: string = byte_slice_of("[b]head tail"'r, 5, 9)
     check(record_count(carry) == 1, "rich_build_probe", "15")
     if record_count(carry) == 1 {
         let er: text.Style_Record = body_of(carry).__value.style_info[0]
@@ -1581,11 +1622,11 @@ func cascade_checks() {
     check(runs.len() == 1 and runs[0].start == 0 and runs[0].end == 5 and
           text.is_empty(runs[0].style), "cascade_probe", "1")
 
-    runs = run_list("«b»hi«/b»"'r)
+    runs = run_list("[b]hi[/b]"'r)
     check(runs.len() == 1 and runs[0].end == 2 and yes(runs[0].style.bold),
           "cascade_probe", "2")
 
-    runs = run_list("«b»a«i»b«/i»c«/b»"'r)
+    runs = run_list("[b]a[i]b[/i]c[/b]"'r)
     check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "3")
     if runs.len() == 3 {
         check(yes(runs[0].style.bold) and !yes(runs[0].style.italic) and
@@ -1593,7 +1634,7 @@ func cascade_checks() {
               yes(runs[2].style.bold) and !yes(runs[2].style.italic), "cascade_probe", "4")
     }
 
-    runs = run_list("«u»a«b»b«/u»c«/b»"'r)
+    runs = run_list("[u]a[b]b[/u]c[/b]"'r)
     check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "5")
     if runs.len() == 3 {
         check(yes(runs[0].style.underline) and !yes(runs[0].style.bold) and
@@ -1602,7 +1643,7 @@ func cascade_checks() {
               "cascade_probe", "6")
     }
 
-    runs = run_list("«b»text"'r)
+    runs = run_list("[b]text"'r)
     check(runs.len() == 1 and runs[0].end == 4 and yes(runs[0].style.bold),
           "cascade_probe", "7")
 
@@ -1619,14 +1660,14 @@ func cascade_checks() {
     check(runs.len() == 1 and yes(runs[0].style.italic), "cascade_probe", "9")
     check(runs.len() == 1 and !yes(runs[0].style.bold), "cascade_probe", "10")
 
-    let slotted: string = "«b»«#0»«/b»x"'r
+    let slotted: string = "[b][#0][/b]x"'r
     check(byte_len(slotted) == 1, "cascade_probe", "11")
     check(!yes(text.cascade_style_index(slotted, 0, inclusive = false).bold),
           "cascade_probe", "12")
     check(yes(text.cascade_style_index(slotted, 0, inclusive = true).bold),
           "cascade_probe", "13")
-    check(yes(text.cascade_style_index("«b»hi«/b»"'r, 0).bold) and
-          !yes(text.cascade_style_index("«b»hi«/b»"'r, 2).bold), "cascade_probe", "14")
+    check(yes(text.cascade_style_index("[b]hi[/b]"'r, 0).bold) and
+          !yes(text.cascade_style_index("[b]hi[/b]"'r, 2).bold), "cascade_probe", "14")
 
     let deep: text.Text_Style = text.cascade_style_index(nested_spans(), 0)
     check(yes(deep.bold) and yes(deep.italic), "cascade_probe", "900")
@@ -2175,10 +2216,10 @@ let plain_s: string = rich_over(ref plain_body)
 let based_s: string = rich_over(ref based_body)
 let opaque_s: string = rich_over(ref opaque_body)
 
-var bold_outer_body: text.Rich_Body = (s = "«b»hello"'r,
+var bold_outer_body: text.Rich_Body = (s = "[b]hello"'r,
                                        style_info = no_records(),
                                        base_style = nil, opaque = false)
-var italic_outer_body: text.Rich_Body = (s = "«i»hello"'r,
+var italic_outer_body: text.Rich_Body = (s = "[i]hello"'r,
                                          style_info = no_records(),
                                          base_style = nil, opaque = false)
 
@@ -2228,8 +2269,8 @@ func collect() {
 }
 
 func rich_literal_probe_main() {
-    let closed: string = "«b»text«/b»"'r
-    let unclosed: string = "«b»text"'r
+    let closed: string = "[b]text[/b]"'r
+    let unclosed: string = "[b]text"'r
     check(is_rich(closed) and is_rich(unclosed), "rich_literal_probe", "1")
     check(byte_len(closed) == 4 and byte_len(unclosed) == 4, "rich_literal_probe", "2")
 
@@ -2268,29 +2309,29 @@ func rich_repr_probe_main() {
     let slice: string = byte_slice(lng, 3, 8)
     check(repr_of(slice) == "defgh", "rich_repr_probe", "4")
 
-    let rich: string = "«b»example «#arg:>10»«/b» "'r
-    check(repr_of(rich) == "r\"«b»example «#arg:>10»«/b» \"", "rich_repr_probe", "5")
+    let rich: string = "[b]example [#arg:>10][/b] "'r
+    check(repr_of(rich) == "r\"[b]example [#arg:>10][/b] \"", "rich_repr_probe", "5")
 
-    let indexed: string = "«i»«#»-«#»«/i»"'r
-    check(repr_of(indexed) == "r\"«i»«#0»-«#1»«/i»\"", "rich_repr_probe", "6")
+    let indexed: string = "[i][#]-[#][/i]"'r
+    check(repr_of(indexed) == "r\"[i][#0]-[#1][/i]\"", "rich_repr_probe", "6")
 
-    let nested: string = "«b»a«i»b«/i»c«/b»"'r
-    check(repr_of(nested) == "r\"«b»a«i»b«/i»c«/b»\"", "rich_repr_probe", "10")
+    let nested: string = "[b]a[i]b[/i]c[/b]"'r
+    check(repr_of(nested) == "r\"[b]a[i]b[/i]c[/b]\"", "rich_repr_probe", "10")
 
-    let crossing: string = "«u»a«b»b«/u»c«/b»"'r
-    check(repr_of(crossing) == "r\"«u»a«b»b«/u»c«/b»\"", "rich_repr_probe", "11")
+    let crossing: string = "[u]a[b]b[/u]c[/b]"'r
+    check(repr_of(crossing) == "r\"[u]a[b]b[/u]c[/b]\"", "rich_repr_probe", "11")
 
-    let open_ended: string = "«b»tail"'r
-    check(repr_of(open_ended) == "r\"«b»tail\"", "rich_repr_probe", "12")
+    let open_ended: string = "[b]tail"'r
+    check(repr_of(open_ended) == "r\"[b]tail\"", "rich_repr_probe", "12")
 
-    let slotted: string = "x«#0»y«#name:>4»"'r
-    check(repr_of(slotted) == "r\"x«#0»y«#name:>4»\"", "rich_repr_probe", "13")
+    let slotted: string = "x[#0]y[#name:>4]"'r
+    check(repr_of(slotted) == "r\"x[#0]y[#name:>4]\"", "rich_repr_probe", "13")
 
     var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
     let under: text.Style_Span = (start = 0, end = 5, tag = "u")
     spans.append(under)
-    let layered: string = text.rich_string("«b»alpha«/b»"'r, spans)
-    check(repr_of(layered) == "r\"«u»«b»alpha«/b»«/u»\"", "rich_repr_probe", "14")
+    let layered: string = text.rich_string("[b]alpha[/b]"'r, spans)
+    check(repr_of(layered) == "r\"[u][b]alpha[/b][/u]\"", "rich_repr_probe", "14")
 }
 
 func cell_is(t: text.Table, row: uint, col: uint, want: string) -> bool {

@@ -833,7 +833,7 @@ private func simple_escape(b: u8) -> u8? {
         case 0x74 { return 0x09 }
         case 0x76 { return 0x0b }
         case 0x30 { return 0x00 }
-        case 0x5c, 0x22, 0x27 { return b }
+        case 0x5c, 0x22, 0x27, 0x5b, 0x5d { return b }
         else { return nil }
     }
 }

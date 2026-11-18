@@ -70,7 +70,8 @@ func same_name(a: Name, b: Name) -> bool {
 require arithmetic_when
 require known_arch
 require bare_define
-require "\« \» \[" == "« » ["
+require "\[ \] \[\]" == "[ ] []"
+require byte_len("\[\]") == 2
 require counted(3) == 4
 require counted(nil) == -1
 require inside_try(nil) == 7
