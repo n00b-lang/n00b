@@ -413,27 +413,27 @@
 
 <default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
                 %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
+<default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") @nospace($1) ::=
                 %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
                 %"in" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($2) ::=
                 %"in" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") ::=
                 %"view" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") ::=
+<default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") @nospace($2) ::=
                 %"view" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
                 %"consume" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
+<default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") @nospace($2) ::=
                 %"consume" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
                 %"modify" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
+<default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") @nospace($2) ::=
                 %"modify" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
                 %"out" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
+<default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") @nospace($2) ::=
                 %"out" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 
 <vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
