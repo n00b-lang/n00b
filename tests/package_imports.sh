@@ -456,3 +456,34 @@ for build in first cached; do
         exit 1
     }
 done
+
+# Whether a package holds a single subpackage (M0010) depends on its other
+# manifests, which an importing module's cache entry does not cover: once a
+# sibling subpackage appears, a warm check drops the warning as a cold one
+# does, and gets it back when the sibling goes.
+lone_case="$tmp/lone_case"
+mkdir -p "$lone_case"
+cp -R "$program_dir/lone" "$lone_case/"
+printf 'import lone.only\nfunc f() -> int { return lone.only.f() }\n' \
+    >"$lone_case/helper.n"
+printf 'import helper\nrequire helper.f() == 1\n' >"$lone_case/main.n"
+lone_count() {
+    (cd "$1" && "$compiler" check main.n 2>&1) | grep -c 'N00B-M0010' || true
+}
+lone_expect() {
+    count=$(lone_count "$lone_case")
+    rm -rf "$tmp/lone_cold"
+    cp -R "$lone_case" "$tmp/lone_cold"
+    cold=$(lone_count "$tmp/lone_cold")
+    if [ "$count" != "$2" ] || [ "$cold" != "$2" ]; then
+        echo "single subpackage warning, $1: warm $count, cold $cold, expected $2" >&2
+        exit 1
+    fi
+}
+lone_expect "one subpackage" 1
+lone_expect "one subpackage, warm" 1
+mkdir "$lone_case/lone/other"
+printf 'package lone.other {\n}\n' >"$lone_case/lone/other/manifest.n"
+lone_expect "a sibling added" 0
+rm -r "$lone_case/lone/other"
+lone_expect "the sibling removed" 1

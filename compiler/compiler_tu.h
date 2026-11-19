@@ -690,6 +690,9 @@ typedef struct {
     bool inference_finalized;
     core_buffer_t declaration_sites;
     core_buffer_t unused_facts;
+    // What its warnings depend on beyond its cache key, as the records
+    // n00bb_cache_warning_inputs describes.
+    core_buffer_t warning_inputs;
     bool interface_module;
     bool import_failure_reported;
     // Set when this module failed, directly or through its imports, because

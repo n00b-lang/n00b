@@ -1114,9 +1114,14 @@ static void
 report_race(void *context, const ir_race_t *race)
 {
     n00bb_link_analysis_t *analysis = context;
-    core_translation_unit_t *unit = unit_for_ir_module(analysis,
-        race->site->block->owner->owner);
-    if (!unit || tu_state(unit)->interface_module) return;
+    // A race depends on the whole program's threads, which no module's
+    // cache key covers, so it is never kept with a module: a race in a
+    // module from the cache is reported here too, from its cached body.
+    ir_module_t *owner = race->site->block->owner->owner;
+    core_translation_unit_t *unit = unit_for_ir_module(analysis, owner);
+    if (!unit && owner)
+        unit = n00bb_unit_named(analysis, ir_module_name(owner));
+    if (!unit) return;
     core_string_t global = n00bb_name_leaf(race->place.global->name);
     report_at(unit, N00B_DIAG_DATA_RACE, race->site,
               race->self ? N00B_TEXT_RACE_SAME_ENTRY : N00B_TEXT_RACE,

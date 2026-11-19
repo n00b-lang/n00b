@@ -91,3 +91,30 @@ grep -q 'error N00B-P0033: `--syntax-preference function=bogus`' "$tmp/err" || {
     echo "missing invalid syntax preference diagnostic" >&2
     exit 1
 }
+
+# Syntax warnings follow the settings of the compile that reports them,
+# whatever the settings when an imported module was cached: a warm check
+# reports what a cold one with the same settings does.
+mkdir "$tmp/warm" "$tmp/cold"
+cp "$preferences_program" "$tmp/warm/helper.n"
+printf 'import helper\n' >"$tmp/warm/main.n"
+syntax_check() {
+    dir=$1
+    shift
+    (cd "$tmp/$dir" && N00B_DIAGNOSTICS=terse "$compiler" check "$@" main.n) \
+        2>&1 | grep 'N00B-P00' || true
+}
+for settings in "" --no-syntax-warnings "--syntax-preference function=fn" ""; do
+    rm -rf "$tmp/cold"
+    mkdir "$tmp/cold"
+    cp "$tmp/warm/helper.n" "$tmp/warm/main.n" "$tmp/cold/"
+    # shellcheck disable=SC2086
+    syntax_check warm $settings >"$tmp/warm.out"
+    # shellcheck disable=SC2086
+    syntax_check cold $settings >"$tmp/cold.out"
+    cmp -s "$tmp/warm.out" "$tmp/cold.out" || {
+        echo "syntax warnings ($settings) differ between a warm and a cold check" >&2
+        diff -u "$tmp/cold.out" "$tmp/warm.out" >&2
+        exit 1
+    }
+done

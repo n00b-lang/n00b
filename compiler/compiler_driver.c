@@ -225,6 +225,9 @@ typedef struct {
     // load its implicit import again, but from source it would have, and
     // been a place to report what that import finds.
     core_list_t(shadow_site_t) cached_implicit_sites;
+    // The modules from the cache, whose kept warnings' inputs are checked
+    // once loading is over.
+    core_list_t(core_translation_unit_ptr_t) cached_units;
     pthread_mutex_t shadow_sites_lock;
 } import_driver_t;
 
@@ -2100,6 +2103,102 @@ direct_subpackage_count(const core_buffer_t *names, core_string_t parent)
 static bool collect_package_declarations(import_driver_t *driver,
     core_string_t package_id, core_buffer_t *names, bool first_only);
 
+// How many direct subpackages package `name` has, 2 standing for more than
+// one, among the packages its package declares.
+static size_t
+package_subpackages(import_driver_t *driver, core_string_t package_id,
+                    core_string_t name)
+{
+    core_buffer_t names = {0};
+    size_t subpackages = collect_package_declarations(driver, package_id,
+                                                      &names, false)
+        ? direct_subpackage_count(&names, name) : 2;
+    core_buffer_release(&names);
+    return subpackages;
+}
+
+static void
+put_input_text(core_buffer_t *out, core_string_t text)
+{
+    uint8_t length[4];
+    for (int i = 0; i < 4; i++)
+        length[i] = (uint8_t)(text.u8_bytes >> (8 * i));
+    core_buffer_append(out, (const char *)length, 4);
+    if (text.u8_bytes) core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static void
+record_subpackages_input(core_buffer_t *inputs, core_string_t package_id,
+                         core_string_t name, size_t subpackages)
+{
+    core_buffer_putc(inputs, N00BB_WARNING_INPUT_SUBPACKAGES);
+    put_input_text(inputs, package_id);
+    put_input_text(inputs, name);
+    core_buffer_putc(inputs, (char)(subpackages > 2 ? 2 : subpackages));
+}
+
+static bool
+read_input_text(const uint8_t *data, size_t size, size_t *at,
+                core_string_t *text)
+{
+    if (size - *at < 4) return false;
+    uint32_t length = read_u32_le(data + *at);
+    *at += 4;
+    if (length > size - *at) return false;
+    *text = core_string_borrow((const char *)data + *at, length);
+    *at += length;
+    return true;
+}
+
+// Whether what a cached module's kept warnings depend on beyond its key
+// still holds (see n00bb_cache_warning_inputs).
+static bool
+cached_warning_inputs_hold(import_driver_t *driver,
+                           core_translation_unit_t *unit)
+{
+    const uint8_t *data = nullptr;
+    size_t size = 0;
+    if (!n00bb_cache_warning_inputs(driver->loader->cache,
+                                    unit->module.identifier, &data, &size))
+        return true;
+    size_t at = 0;
+    while (at < size) {
+        uint8_t kind = data[at++];
+        if (kind == N00BB_WARNING_INPUT_SYNTAX) {
+            if (size - at < 8) return false;
+            uint64_t settings = 0;
+            for (int i = 0; i < 8; i++)
+                settings |= (uint64_t)data[at + (size_t)i] << (8 * i);
+            at += 8;
+            if (settings != n00bb_syntax_warning_settings()) return false;
+        }
+        else if (kind == N00BB_WARNING_INPUT_SUBPACKAGES) {
+            core_string_t package_id = {0}, name = {0};
+            if (!read_input_text(data, size, &at, &package_id)
+                || !read_input_text(data, size, &at, &name) || at >= size)
+                return false;
+            size_t subpackages = data[at++];
+            size_t now = package_subpackages(driver, package_id, name);
+            if ((now > 2 ? 2 : now) != subpackages) return false;
+        }
+        else return false;
+    }
+    return true;
+}
+
+// Each module from the cache whose kept warnings depend on something that
+// has changed is compiled again (the compile restarts excluding it).
+static void
+check_cached_warning_inputs(import_driver_t *driver)
+{
+    for (size_t i = 0; i < driver->cached_units.len; i++) {
+        core_translation_unit_t *unit = driver->cached_units.data[i];
+        if (!cached_warning_inputs_hold(driver, unit))
+            n00bb_cache_mark_stale((n00bb_cache_t *)driver->loader->cache,
+                                   unit->module.identifier);
+    }
+}
+
 static bool
 accept_package_exports(import_driver_t *driver,
                        core_translation_unit_t *importer,
@@ -2108,11 +2207,12 @@ accept_package_exports(import_driver_t *driver,
     n00bb_package_declaration_t *package = find_package_declaration(manifest,
                                                                     name);
     if (!package || package->exports.len) return true;
-    core_buffer_t names = {0};
-    size_t subpackages = collect_package_declarations(driver,
-            n00bb_package_id(manifest), &names, false)
-        ? direct_subpackage_count(&names, name) : 2;
-    core_buffer_release(&names);
+    size_t subpackages = package_subpackages(driver,
+                                             n00bb_package_id(manifest), name);
+    n00bb_tu_state_t *importer_state = tu_state(importer);
+    if (importer_state && !importer_state->interface_module)
+        record_subpackages_input(&importer_state->warning_inputs,
+            n00bb_package_id(manifest), name, subpackages);
     if (subpackages > 1
         || (subpackages && n00bb_system_unit(manifest)))
         return true;
@@ -2945,6 +3045,11 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
     }
     n00bb_cache_declaration_sites(driver->loader->cache, module,
                                   &tu_state(unit)->declaration_sites);
+    // Checked once loading is over (check_cached_warning_inputs), when the
+    // package manifests it may count are all loaded.
+    pthread_mutex_lock(&driver->shadow_sites_lock);
+    core_list_push(driver->cached_units, unit);
+    pthread_mutex_unlock(&driver->shadow_sites_lock);
     n00bb_cache_unused_facts(driver->loader->cache, module,
                              &tu_state(unit)->unused_facts);
     core_string_t module_name = module;
@@ -3483,6 +3588,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         .shadow_sites = core_list_new(shadow_site_t),
         .import_sites = core_list_new(shadow_site_t),
         .cached_implicit_sites = core_list_new(shadow_site_t),
+        .cached_units = core_list_new(core_translation_unit_ptr_t),
     };
     pthread_mutex_init(&import_driver.shadow_sites_lock, nullptr);
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
@@ -3637,6 +3743,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             else if (core_work_job_state(queue, preprocess_job)
                      == CORE_WORK_FAILED) success = false;
         }
+        check_cached_warning_inputs(&import_driver);
         n00bb_preprocessor_free(preprocessor);
         preprocessor = nullptr;
         if (profile_compile) {
@@ -3702,6 +3809,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     for (size_t i = 0; i < import_driver.cached_implicit_sites.len; i++)
         core_free(import_driver.cached_implicit_sites.data[i].loaded.data);
     core_list_free(import_driver.cached_implicit_sites);
+    core_list_free(import_driver.cached_units);
     pthread_mutex_destroy(&import_driver.shadow_sites_lock);
 
     for (size_t i = 0; i < requests->ordered.len; i++) {
@@ -6408,7 +6516,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             restart_with_strict_cache(argv, argv0);
         }
     }
-    if (cache && located) {
+    // A cached module found stale while loading is compiled again, whether
+    // or not loading succeeded: its kept warnings would be wrong either way.
+    if (cache) {
         core_buffer_t stale = {0};
         n00bb_cache_stale_modules(cache, &stale);
         if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);

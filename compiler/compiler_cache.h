@@ -33,6 +33,27 @@ typedef struct n00bb_cache_t n00bb_cache_t;
 typedef bool (*n00bb_cache_locate_fn)(void *context, core_string_t module,
                                       core_string_t *path);
 
+// A module's kept warnings can depend on more than its key covers: the
+// syntax warning settings, and how many subpackages a package it imports
+// has. What they were when the warnings were kept is stored with them as
+// records, each a byte saying which:
+// - N00BB_WARNING_INPUT_SYNTAX, then n00bb_syntax_warning_settings() as a
+//   little-endian u64;
+// - N00BB_WARNING_INPUT_SUBPACKAGES, then the package's id and name, each
+//   a little-endian u32 length and its bytes, then the number of its
+//   direct subpackages, 2 standing for more than one.
+// A compile that reuses the module checks them, and has it compiled again
+// (n00bb_cache_mark_stale) when one no longer holds.
+enum {
+    N00BB_WARNING_INPUT_SYNTAX = 1,
+    N00BB_WARNING_INPUT_SUBPACKAGES = 2,
+};
+bool n00bb_cache_warning_inputs(const n00bb_cache_t *cache,
+                                core_string_t module, const uint8_t **data,
+                                size_t *length);
+void n00bb_cache_mark_stale(n00bb_cache_t *cache, core_string_t module);
+uint64_t n00bb_syntax_warning_settings(void);
+
 void n00bb_symbol_use_key(core_buffer_t *out,
                           const core_translation_unit_t *unit,
                           const parse_scope_t *scope,

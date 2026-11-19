@@ -1886,6 +1886,47 @@ n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
 }
 
 bool
+n00bb_cache_warning_inputs(const n00bb_cache_t *cache, core_string_t module,
+                           const uint8_t **data, size_t *length)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = loaded_member(cache, module, &entry);
+    const cache_section_t *section = member
+        ? phase_section(entry, CORE_STRING_STATIC("warning-inputs"),
+                        member->name)
+        : nullptr;
+    if (!section) return false;
+    *data = section->data;
+    *length = section->length;
+    return true;
+}
+
+void
+n00bb_cache_mark_stale(n00bb_cache_t *cache, core_string_t module)
+{
+    const cache_entry_t *found = nullptr;
+    if (!cache || !loaded_member(cache, module, &found) || !found) return;
+    for (size_t e = 0; e < cache->entries.len; e++)
+        if (&cache->entries.data[e] == found)
+            cache->entries.data[e].stale = true;
+}
+
+uint64_t
+n00bb_syntax_warning_settings(void)
+{
+    core_buffer_t text = {0};
+    core_buffer_puts(&text, "n00b.syntax-warnings.v1");
+    put_u32(&text, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    put_u32(&text, (uint32_t)n00bb_setting_count(preferences));
+    for (size_t i = 0; i < n00bb_setting_count(preferences); i++)
+        put_text(&text, n00bb_setting_at(preferences, i));
+    uint64_t hash = buffer_hash(&text);
+    core_buffer_release(&text);
+    return hash;
+}
+
+bool
 n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
                              core_string_t kind, const uint8_t **data,
                              size_t *length)
@@ -2696,6 +2737,28 @@ warning_group_order(const void *left_raw, const void *right_raw)
     return order;
 }
 
+// A warning that depends on more than its module's key covers is not kept
+// with the module: each compile reports it afresh, cached modules
+// included.
+// - A library module passed over or shadowed (M0026, M0025): the files on
+//   the search roots (report_shadow_sites).
+// - A data race (S0060): the program's threads (report_race reports it in
+//   cached modules too).
+// Warnings kept that depend on other things beyond the key are checked
+// when the module is reused instead (n00bb_cache_warning_inputs).
+static bool
+reported_afresh(core_string_t code)
+{
+    static const n00bb_diag_t afresh[] = {
+        N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB,
+        N00B_DIAG_MODULE_SHADOWS_STDLIB,
+        N00B_DIAG_DATA_RACE,
+    };
+    for (size_t i = 0; i < sizeof(afresh) / sizeof(afresh[0]); i++)
+        if (core_string_eq(code, n00bb_diag_code(afresh[i]))) return true;
+    return false;
+}
+
 static void
 put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 {
@@ -2711,16 +2774,10 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
-        // A warning that a library module is passed over depends on files
-        // outside the module, which its key does not cover: each compile
-        // reports it afresh (report_shadow_sites), so it is not kept.
         attached = note ? attached
             : core_diag_is_advisory(item->severity)
                 && !n00bb_diag_reports_unused(item->code)
-                && !core_string_eq(item->code, n00bb_diag_code(
-                       N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB))
-                && !core_string_eq(item->code, n00bb_diag_code(
-                       N00B_DIAG_MODULE_SHADOWS_STDLIB));
+                && !reported_afresh(item->code);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){
@@ -2908,17 +2965,35 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             else sections_remove(&sections, core_buffer_string(&name));
         }
         core_buffer_t warnings = {0};
+        core_buffer_t inputs = {0};
         core_translation_unit_t *root = analysis->units.len
             ? analysis->units.data[0] : nullptr;
         if (root && n00bb_resolver_same_root(analysis->resolver, root,
-                                             scc->members.data[m]))
+                                             scc->members.data[m])) {
             put_warnings(&warnings, scc->members.data[m]);
+            // What the kept warnings depend on beyond the key, checked when
+            // the module is reused (n00bb_cache_warning_inputs).
+            core_buffer_putc(&inputs, N00BB_WARNING_INPUT_SYNTAX);
+            put_u64(&inputs, n00bb_syntax_warning_settings());
+            const core_buffer_t *recorded =
+                &tu_state(scc->members.data[m])->warning_inputs;
+            if (recorded->byte_len)
+                core_buffer_append(&inputs, recorded->data,
+                                   recorded->byte_len);
+        }
         else put_u32(&warnings, 0);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 warnings.data ? (const uint8_t *)warnings.data
                                               : (const uint8_t *)"",
                                 warnings.byte_len);
+        module_section_name(&name, CORE_STRING_STATIC("warning-inputs"),
+                            module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                inputs.data ? (const uint8_t *)inputs.data
+                                            : (const uint8_t *)"",
+                                inputs.byte_len);
+        core_buffer_release(&inputs);
         core_buffer_release(&warnings);
         const core_buffer_t *unused =
             &tu_state(scc->members.data[m])->unused_facts;

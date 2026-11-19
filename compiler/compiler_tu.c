@@ -7956,6 +7956,7 @@ free_tu_state(void *data)
     free_type_symbol_index(state);
     core_buffer_release(&state->declaration_sites);
     core_buffer_release(&state->unused_facts);
+    core_buffer_release(&state->warning_inputs);
     core_arena_free(&state->semantic_values);
     parse_annot_result_free(state->annotations);
     if (state->lex) {
