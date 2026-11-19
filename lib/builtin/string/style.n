@@ -52,12 +52,27 @@ variant Sub_Spec {
     auto:     nil
 }
 
+// One markup event list entry. A style span has `style_tag` and both
+// offsets (`end_ix == index_extends` when it was never closed: it flows
+// right onto whatever is concatenated after it). A substitution slot has
+// a `substitution` other than `none` and no `end_ix`. A reset (`[/]`) has
+// `style_tag == "/"` and no `end_ix`.
+//
+// Several zero-width events can share an offset: a span closing, a slot,
+// a reset, a span opening. `start_order` (for a span, its open) and
+// `end_order` (its close) give each event's place among all the events at
+// its offset, numbered from 0, so `[b]a[/b][#]` (close, then slot) and
+// `[b]a[#][/b]` (slot, then close) stay different. The list is kept
+// canonical by settle_records: orders are dense per offset, and records
+// are sorted by where their first event falls.
 record Style_Record {
     start_ix:     u32?
     end_ix:       u32?
     style_tag:    string?
     format_spec:  string?
     substitution: Sub_Spec
+    start_order:  u32
+    end_order:    u32
 }
 
 record Rich_Body layout(ordered) {
@@ -237,6 +252,14 @@ private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
     if result != 0 {
         return result
     }
+    result = cmp_words(cast[u64] left.start_order, cast[u64] right.start_order)
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(cast[u64] left.end_order, cast[u64] right.end_order)
+    if result != 0 {
+        return result
+    }
     return cmp_sub_spec(left.substitution, right.substitution)
 }
 
@@ -412,6 +435,149 @@ private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
     return -1
 }
 
+// A style span: a tag and both ends (an end of `index_extends` when it
+// flows right).
+func record_is_span(r: Style_Record) -> bool {
+    return r.start_ix != nil and r.end_ix != nil and r.style_tag != nil
+}
+
+func record_is_reset(r: Style_Record) -> bool {
+    return r.end_ix == nil and r.style_tag != nil and
+        string.core.byte_len(r.style_tag) == 1 and
+        string.core.byte_at(r.style_tag, 0) == 0x2f
+}
+
+func record_is_slot(r: Style_Record) -> bool {
+    return sub_arm(r.substitution) != sub_arm_none
+}
+
+// One zero-width markup event: a record's start (a span's open, a slot, a
+// reset) or a span's close.
+private record Markup_Event {
+    offset:  u32
+    order:   u32
+    rec:     int
+    closing: bool
+}
+
+private func event_before(a: Markup_Event, b: Markup_Event) -> bool {
+    if a.offset != b.offset {
+        return a.offset < b.offset
+    }
+    if a.order != b.order {
+        return a.order < b.order
+    }
+    if a.rec != b.rec {
+        return a.rec < b.rec
+    }
+    return !a.closing and b.closing
+}
+
+private func record_events(records: List[Style_Record]) -> List[Markup_Event] {
+    var events: List[Markup_Event] = new[List[Markup_Event]]()
+    var i: int = 0
+    while i < cast[int] records.len() {
+        let r: Style_Record = records[i]
+        if r.start_ix != nil {
+            let open: Markup_Event = (offset = r.start_ix, order = r.start_order,
+                                      rec = i, closing = false)
+            events.append(open)
+            let end: u32 = r.end_ix.get_or_else(index_extends)
+            if record_is_span(r) and end != index_extends {
+                let close: Markup_Event = (offset = end,
+                                           order = r.end_order, rec = i,
+                                           closing = true)
+                events.append(close)
+            }
+        }
+        i += 1
+    }
+    var k: int = 1
+    while k < cast[int] events.len() {
+        let key: Markup_Event = events[k]
+        var j: int = k - 1
+        while j >= 0 and event_before(key, events[j]) {
+            events[j + 1] = events[j]
+            j -= 1
+        }
+        events[j + 1] = key
+        k += 1
+    }
+    return events
+}
+
+private func record_before(a: Style_Record, b: Style_Record) -> bool {
+    if (a.start_ix == nil) != (b.start_ix == nil) {
+        return a.start_ix == nil
+    }
+    if a.start_ix == nil or b.start_ix == nil {
+        return false
+    }
+    let sa: u32 = a.start_ix
+    let sb: u32 = b.start_ix
+    if sa != sb {
+        return sa < sb
+    }
+    return a.start_order < b.start_order
+}
+
+// Puts a markup record list in canonical form: the events at each offset
+// keep their relative order but are numbered 0, 1, 2, ..., and the records
+// are sorted by offset and order of their first event. Equal markup then
+// has equal records, whatever built it.
+func settle_records(records: List[Style_Record]) -> List[Style_Record] {
+    var out: List[Style_Record] = new[List[Style_Record]]()
+    var i: int = 0
+    while i < cast[int] records.len() {
+        var r: Style_Record = records[i]
+        if record_is_span(r) and
+            r.end_ix.get_or_else(0) == index_extends {
+            r.end_order = 0
+        }
+        out.append(r)
+        i += 1
+    }
+    let events: List[Markup_Event] = record_events(out)
+    var at: u32 = 0
+    var next: u32 = 0
+    var e: int = 0
+    while e < cast[int] events.len() {
+        let ev: Markup_Event = events[e]
+        if e == 0 or ev.offset != at {
+            at = ev.offset
+            next = 0
+        }
+        var r: Style_Record = out[ev.rec]
+        if ev.closing {
+            r.end_order = next
+        }
+        else {
+            r.start_order = next
+        }
+        out[ev.rec] = r
+        next += 1
+        e += 1
+    }
+    var k: int = 1
+    while k < cast[int] out.len() {
+        let key: Style_Record = out[k]
+        var j: int = k - 1
+        while j >= 0 and record_before(key, out[j]) {
+            out[j + 1] = out[j]
+            j -= 1
+        }
+        out[j + 1] = key
+        k += 1
+    }
+    return out
+}
+
+// Orders used while joining two record lists, before settle_records
+// renumbers them: the left side's orders are dense from 0, so anything
+// from the right side at the join offset is placed after them all.
+private const right_first_order: u32 = 0x40000000
+private const left_last_order: u32 = 0x3fffffff
+
 private func shifted(at: u32?, by: u64) -> u32? {
     if at == nil {
         return nil
@@ -451,6 +617,7 @@ func concat_rich(left: string, right: string) -> string {
             var rec: Style_Record = lb.__value.style_info[i]
             if rec.end_ix != nil and rec.end_ix == index_extends {
                 rec.end_ix = cast[u32] left_len
+                rec.end_order = left_last_order
             }
             body.style_info.append(rec)
             i += 1
@@ -463,6 +630,14 @@ func concat_rich(left: string, right: string) -> string {
         var i: int = 0
         while i < cast[int] rb.__value.style_info.len() {
             var rec: Style_Record = rb.__value.style_info[i]
+            // The right side's events at its start come after the left
+            // side's events at its end, which share that offset.
+            if rec.start_ix != nil and rec.start_ix == 0 {
+                rec.start_order += right_first_order
+            }
+            if rec.end_ix != nil and rec.end_ix == 0 {
+                rec.end_order += right_first_order
+            }
             rec.start_ix = shifted(rec.start_ix, left_len)
             rec.end_ix = shifted(rec.end_ix, left_len)
             body.style_info.append(rec)
@@ -476,6 +651,7 @@ func concat_rich(left: string, right: string) -> string {
             body.base_style = lb.__value.base_style
         }
     }
+    body.style_info = settle_records(body.style_info)
     body.s = concat_rich(inner_left, inner_right)
     return string.core.__string_make_rich(ref body)
 }
@@ -622,6 +798,9 @@ private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
         acc = hash_chain(acc, hash_opt_string(r.style_tag))
         acc = hash_chain(acc, hash_opt_string(r.format_spec))
         acc = hash_chain(acc, hash_sub_spec(r.substitution))
+        let orders: u64 = (cast[u64](r.start_order) << 32) |
+            cast[u64](r.end_order)
+        acc = hash_chain(acc, orders.hash())
         i += 1
     }
     acc = hash_chain(acc, hash_opt_style(body.__value.base_style))
@@ -654,19 +833,6 @@ private func format_style_tag(fd: int, tag: string, closing: bool)
     out += io.format.format_string(fd, tag)!
     out += io.format.format_byte(fd, 0x5d)!
     return out
-}
-
-private func opens_here(r: Style_Record, pos: u64) -> bool {
-    return r.start_ix != nil and cast[u64](r.start_ix) == pos and
-        r.style_tag != nil
-}
-
-// A span closing at `pos`: with `empty`, only one that also starts there,
-// otherwise only one that started before it.
-private func closes_here(r: Style_Record, pos: u64, empty: bool) -> bool {
-    return r.end_ix != nil and cast[u64](r.end_ix) == pos and
-        r.start_ix != nil and r.style_tag != nil and
-        (cast[u64](r.start_ix) == pos) == empty
 }
 
 private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
@@ -708,167 +874,110 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     return out
 }
 
-private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
-    -> uint fail: int {
-    let nrec: int = cast[int] body.__value.style_info.len()
-    var out: uint = 0
-    let i: u64 = pos
-    var open_first: bool = true
-    var open_mark: u64 = 0
-    while true {
-        var found: bool = false
-        var best: u64 = 0
-        var j: int = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !opens_here(r, i) or r.end_ix == nil {
-                continue
-            }
-            let e: u64 = cast[u64] r.end_ix
-            if !open_first and e >= open_mark {
-                continue
-            }
-            if !found or e > best {
-                best = e
-                found = true
-            }
-        }
-        if !found {
-            break
-        }
-        j = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !opens_here(r, i) or r.end_ix == nil or
-                cast[u64](r.end_ix) != best {
-                continue
-            }
-            out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
-        }
-        open_mark = best
-        open_first = false
+// The layers of a rich string, outermost first.
+private func rich_layers(s: string) -> List[string] {
+    var layers: List[string] = new[List[string]]()
+    var cur: string = s
+    while is_rich(cur) {
+        layers.append(cur)
+        cur = rich_body(cur).__value.s
     }
-    var k: int = 0
-    while k < nrec {
-        let r: Style_Record = body.__value.style_info[k]
+    return layers
+}
+
+// Whether the close event at `at` is one of a run of closes that a reset
+// right after it ends anyway; repr then shows just the `[/]`.
+private func closes_into_reset(body: Ref[Rich_Body],
+                               events: List[Markup_Event], at: int) -> bool {
+    let offset: u32 = events[at].offset
+    var k: int = at
+    while k < cast[int](events.len()) and events[k].offset == offset {
+        let ev: Markup_Event = events[k]
+        if !ev.closing {
+            return record_is_reset(body.__value.style_info[ev.rec])
+        }
         k += 1
-        if r.start_ix != nil and cast[u64](r.start_ix) == i and
-            sub_arm(r.substitution) != sub_arm_none {
-            out += format_substitution(fd, r)!
-        }
     }
-    return out
+    return false
 }
 
-private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64,
-                          empty: bool) -> uint fail: int {
-    let nrec: int = cast[int] body.__value.style_info.len()
-    var out: uint = 0
-    let i: u64 = pos
-    var close_first: bool = true
-    var close_mark: u64 = 0
-    while true {
-        var found: bool = false
-        var best: u64 = 0
-        var j: int = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !closes_here(r, i, empty) {
-                continue
-            }
-            let s: u64 = cast[u64] r.start_ix.get_or_else(0)
-            if !close_first and s >= close_mark {
-                continue
-            }
-            if !found or s > best {
-                best = s
-                found = true
-            }
+private func print_event(fd: int, body: Ref[Rich_Body],
+                         events: List[Markup_Event], at: int)
+    -> uint fail: int {
+    let ev: Markup_Event = events[at]
+    let r: Style_Record = body.__value.style_info[ev.rec]
+    if ev.closing {
+        if closes_into_reset(body, events, at) {
+            return 0
         }
-        if !found {
-            break
-        }
-        j = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if closes_here(r, i, empty) and
-                cast[u64](r.start_ix.get_or_else(0)) == best {
-                out += format_style_tag(fd, r.style_tag.get_or_else(""),
-                                        true)!
-            }
-        }
-        close_mark = best
-        close_first = false
+        return format_style_tag(fd, r.style_tag.get_or_else(""), true)!
     }
-    return out
+    if record_is_reset(r) {
+        return io.format.format_string(fd, "[/]")!
+    }
+    if record_is_slot(r) {
+        return format_substitution(fd, r)!
+    }
+    return format_style_tag(fd, r.style_tag.get_or_else(""), false)!
 }
 
-private func opens_outward_in(fd: int, cur: string, pos: u64)
+// Prints every layer's markup events at offset `pos`, each layer's in its
+// own order. Across layers, the closes that come first in a layer print
+// inner layer first, then the rest of each layer's events print outer
+// layer first, so an outer span wraps an inner one that starts or ends with
+// it.
+private func print_events_at(fd: int, layers: List[string],
+                             events: List[List[Markup_Event]],
+                             modify cursors: Array[int], pos: u64)
     -> uint fail: int {
     var out: uint = 0
-    if !is_rich(cur) {
-        return out
+    let count: int = cast[int] layers.len()
+    var k: int = count - 1
+    while k >= 0 {
+        let body: Ref[Rich_Body] = rich_body(layers[k])
+        let evs: List[Markup_Event] = events[k]
+        while cursors[k] < cast[int](evs.len()) and
+            cast[u64](evs[cursors[k]].offset) == pos and
+            evs[cursors[k]].closing {
+            out += print_event(fd, body, evs, cursors[k])!
+            cursors[k] += 1
+        }
+        k -= 1
     }
-    let body: Ref[Rich_Body] = rich_body(cur)
-    out += level_opens(fd, body, pos)!
-    out += opens_outward_in(fd, body.__value.s, pos)!
-    return out
-}
-
-private func closes_inward_out(fd: int, cur: string, pos: u64, empty: bool)
-    -> uint fail: int {
-    var out: uint = 0
-    if !is_rich(cur) {
-        return out
-    }
-    let body: Ref[Rich_Body] = rich_body(cur)
-    out += closes_inward_out(fd, body.__value.s, pos, empty)!
-    out += level_closes(fd, body, pos, empty)!
-    return out
-}
-
-private func slot_here(cur: string, pos: u64) -> bool {
-    if !is_rich(cur) {
-        return false
-    }
-    let body: Ref[Rich_Body] = rich_body(cur)
-    var k: int = 0
-    while k < cast[int] body.__value.style_info.len() {
-        let r: Style_Record = body.__value.style_info[k]
+    k = 0
+    while k < count {
+        let body: Ref[Rich_Body] = rich_body(layers[k])
+        let evs: List[Markup_Event] = events[k]
+        while cursors[k] < cast[int](evs.len()) and
+            cast[u64](evs[cursors[k]].offset) == pos {
+            out += print_event(fd, body, evs, cursors[k])!
+            cursors[k] += 1
+        }
         k += 1
-        if r.start_ix != nil and cast[u64](r.start_ix) == pos and
-            sub_arm(r.substitution) != sub_arm_none {
-            return true
-        }
     }
-    return slot_here(body.__value.s, pos)
+    return out
 }
 
+// Prints the markup events exactly as recorded, so `[b]a[/b][#]` and
+// `[b]a[#][/b]` stay apart. A span that flows right (never closed) shows
+// no close.
 private func repr_rich_string(s: string, fd: int) -> uint fail: int {
     let base: string = string.core.text(s)
     let n: u64 = cast[u64] string.core.byte_len(base)
+    let layers: List[string] = rich_layers(s)
+    var events: List[List[Markup_Event]] = new[List[List[Markup_Event]]]()
+    var cursors: Array[int] = new[Array[int]](cast[int] layers.len())
+    var k: int = 0
+    while k < cast[int] layers.len() {
+        events.append(record_events(rich_body(layers[k]).__value.style_info))
+        cursors[k] = 0
+        k += 1
+    }
     var out: uint = 0
     out += io.format.format_string(fd, "r\"")!
     var i: u64 = 0
     while i <= n {
-        // Spans that end here close before those that start here open, and
-        // an empty span opens and closes here. A slot here sits inside both
-        // the spans that end and the spans that start here (the records
-        // can't say which side it was written on), so then everything
-        // opens, the slot prints, and then spans close.
-        if slot_here(s, i) {
-            out += opens_outward_in(fd, s, i)!
-            out += closes_inward_out(fd, s, i, false)!
-        }
-        else {
-            out += closes_inward_out(fd, s, i, false)!
-            out += opens_outward_in(fd, s, i)!
-        }
-        out += closes_inward_out(fd, s, i, true)!
+        out += print_events_at(fd, layers, events, cursors, i)!
         if i >= n {
             i += 1
             continue
@@ -1210,11 +1319,28 @@ private record Markup_Segment {
 }
 
 private record Pending_Style {
-    kind:       Markup_Kind
-    name:       string
-    prop:       Text_Style
-    raw_tag:    string
-    start_byte: u32
+    kind:        Markup_Kind
+    name:        string
+    prop:        Text_Style
+    raw_tag:     string
+    start_byte:  u32
+    start_order: u32
+}
+
+// Numbers the markup events at each offset in source order.
+private record Event_Clock {
+    at:   u32
+    next: u32
+}
+
+private func tick(modify clock: Event_Clock, at: u32) -> u32 {
+    if at != clock.at {
+        clock.at = at
+        clock.next = 0
+    }
+    let order: u32 = clock.next
+    clock.next += 1
+    return order
 }
 
 private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
@@ -1498,10 +1624,12 @@ private func parse_rich_markup(raw: string,
     return containers.buffer.to_string(text)
 }
 
-private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {
+private func span_record(pending: Pending_Style, end: u32?, end_order: u32)
+    -> Style_Record {
     return (start_ix = pending.start_byte, end_ix = end,
             style_tag = pending.raw_tag, format_spec = nil,
-            substitution = (none = nil))
+            substitution = (none = nil), start_order = pending.start_order,
+            end_order = end_order)
 }
 
 private func without(pending: List[Pending_Style], index: int)
@@ -1540,6 +1668,7 @@ private func build_style_records(segments: List[Markup_Segment])
     -> List[Style_Record] {
     var records: List[Style_Record] = new[List[Style_Record]]()
     var pending: List[Pending_Style] = new[List[Pending_Style]]()
+    var clock: Event_Clock = (at = 0, next = 0)
     var s: int = 0
     while s < cast[int] segments.len() {
         let seg: Markup_Segment = segments[s]
@@ -1549,14 +1678,16 @@ private func build_style_records(segments: List[Markup_Segment])
                 let opened: Pending_Style = (kind = seg.kind, name = seg.name,
                                              prop = seg.prop,
                                              raw_tag = seg.raw_tag,
-                                             start_byte = seg.at)
+                                             start_byte = seg.at,
+                                             start_order = tick(clock, seg.at))
                 pending.append(opened)
             }
             case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off {
                 var j: int = cast[int](pending.len()) - 1
                 while j >= 0 {
                     if closes_pending(pending[j], seg) {
-                        records.append(span_record(pending[j], seg.at))
+                        records.append(span_record(pending[j], seg.at,
+                                                   tick(clock, seg.at)))
                         pending = without(pending, j)
                         break
                     }
@@ -1564,12 +1695,24 @@ private func build_style_records(segments: List[Markup_Segment])
                 }
             }
             case Markup_Kind.reset {
-                var j: int = 0
-                while j < cast[int] pending.len() {
-                    records.append(span_record(pending[j], seg.at))
-                    j += 1
+                // The reset closes this literal's open spans (innermost
+                // first) and is itself recorded, even at offset 0: on
+                // concatenation it also ends spans flowing in from the
+                // left.
+                var j: int = cast[int](pending.len()) - 1
+                while j >= 0 {
+                    records.append(span_record(pending[j], seg.at,
+                                               tick(clock, seg.at)))
+                    j -= 1
                 }
                 containers.list.clear(pending)
+                let reset: Style_Record = (start_ix = seg.at, end_ix = nil,
+                                           style_tag = "/",
+                                           format_spec = nil,
+                                           substitution = (none = nil),
+                                           start_order = tick(clock, seg.at),
+                                           end_order = 0)
+                records.append(reset)
             }
             case Markup_Kind.subst {
                 var substitution: Sub_Spec = (argname = seg.name)
@@ -1582,17 +1725,19 @@ private func build_style_records(segments: List[Markup_Segment])
                 let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
                                           style_tag = nil,
                                           format_spec = seg.format_spec,
-                                          substitution = substitution)
+                                          substitution = substitution,
+                                          start_order = tick(clock, seg.at),
+                                          end_order = 0)
                 records.append(slot)
             }
         }
     }
     var j: int = 0
     while j < cast[int] pending.len() {
-        records.append(span_record(pending[j], index_extends))
+        records.append(span_record(pending[j], index_extends, 0))
         j += 1
     }
-    return records
+    return settle_records(records)
 }
 
 alias litmod r = rich

@@ -58,7 +58,8 @@ func one_record() -> List[text.Style_Record] {
     var records: List[text.Style_Record] = new[List[text.Style_Record]]()
     let blank: text.Style_Record = (start_ix = nil, end_ix = nil,
                                     style_tag = nil, format_spec = nil,
-                                    substitution = (none = nil))
+                                    substitution = (none = nil),
+                                    start_order = 0, end_order = 0)
     records.append(blank)
     return records
 }
@@ -591,10 +592,8 @@ func rich_concatenation() {
     // rich + plain and plain + rich.
     check(repr_of("[b]a[/b]"'r + "c") == "r\"[b]a[/b]c\"",
           "rich_concatenation", "4")
-    // (A slot where a span ends prints inside it: the records can't say
-    // which side of the close it was written on.)
     let after_plain: string = "cd" + "[b]a[/b][#n]"'r
-    check(repr_of(after_plain) == "r\"cd[b]a[#n][/b]\"",
+    check(repr_of(after_plain) == "r\"cd[b]a[/b][#n]\"",
           "rich_concatenation", "5")
     check(slots_of(after_plain) == "name n@3", "rich_concatenation", "6")
     // A left span that runs to the end of its string stops where the left
@@ -644,6 +643,25 @@ func substitution_slots() {
           "substitution_slots", "5")
     check(repr_of(all_kinds) == "r\"x[#2:04d]y[#]z[#who:^8]w[#]\"",
           "substitution_slots", "6")
+    // A slot's place among the span boundaries at its offset is kept:
+    // after `[/b]` the value isn't bold, before it, it is.
+    let outside: string = "[b]a[/b][#]"'r
+    let inside: string = "[b]a[#][/b]"'r
+    check(repr_of(outside) == "r\"[b]a[/b][#]\"", "substitution_slots", "o1")
+    check(repr_of(inside) == "r\"[b]a[#][/b]\"", "substitution_slots", "o2")
+    check(outside != inside and outside.hash() != inside.hash(),
+          "substitution_slots", "o3")
+    check(repr_of("[i][#][b]x[/b][/i]"'r) == "r\"[i][#][b]x[/b][/i]\"",
+          "substitution_slots", "o4")
+    check(repr_of("[i][b][#]x[/b][/i]"'r) == "r\"[i][b][#]x[/b][/i]\"",
+          "substitution_slots", "o5")
+    check(repr_of("[b][/b][#]"'r) == "r\"[b][/b][#]\"", "substitution_slots",
+          "o6")
+    // ...through concatenation, where the right side's events at the join
+    // come after the left side's.
+    check(("[b]a[/b]"'r + "[#]"'r) == outside, "substitution_slots", "o7")
+    check(("[b]a[#][/b]"'r + "x") == "[b]a[#][/b]x"'r, "substitution_slots",
+          "o8")
     // Equality and hashing see the slot kind.
     check("[#]"'r != "[#0]"'r, "substitution_slots", "7")
     check("[#]"'r == "[#]"'r, "substitution_slots", "8")
@@ -669,8 +687,11 @@ func bracket_markup() {
     check(slots_of("[#é][#日本:x][#→]"'r) == "name é@0;name 日本@0:x",
           "bracket_markup", "xid")
     // `[/]` ends every open style.
-    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b]c\"")
-    check_rich("[/]x"'r, "x", "r\"x\"")
+    // The reset is recorded (even at offset 0, where it ends nothing in
+    // this literal but does on concatenation).
+    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/]c\"")
+    check_rich("[/]x"'r, "x", "r\"[/]x\"")
+    check("[b]a[/b][/]c"'r == "[b]a[/]c"'r, "bracket_markup", "reset")
     // Substitutions: auto, explicit, and named, each with and without a spec.
     check_rich("a[#]b[#:>4]c"'r, "abc", "r\"a[#]b[#:>4]c\"")
     check_rich("[#0][#1:x][#12]"'r, "", "r\"[#0][#1:x][#12]\"")

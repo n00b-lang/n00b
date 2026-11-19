@@ -48,6 +48,10 @@ package builtin {
     export string.style.Sub_Spec to text
     export string.style.Style_Record to text
     export string.style.Rich_Body to text
+    export string.style.settle_records to text
+    export string.style.record_is_span to text
+    export string.style.record_is_slot to text
+    export string.style.record_is_reset to text
     export string.style.merge to text
     export string.style.__equal to text
     export string.style.is_empty to text

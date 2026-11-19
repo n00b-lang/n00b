@@ -12,9 +12,11 @@ func rich_string(text: string, spans: List[Style_Span]) -> string {
         let span: Style_Span = spans[i]
         let rec: Style_Record = (start_ix = span.start, end_ix = span.end,
                                  style_tag = span.tag, format_spec = nil,
-                                 substitution = (none = nil))
+                                 substitution = (none = nil), start_order = 0,
+                                 end_order = 0)
         body.style_info.append(rec)
     }
+    body.style_info = settle_records(body.style_info)
     return __string_make_rich(ref body)
 }
 
@@ -95,5 +97,6 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
         rec.end_ix = rebase(re, since, upto, shift)
         out.style_info.append(rec)
     }
+    out.style_info = settle_records(out.style_info)
     return __string_make_rich(ref out)
 }
