@@ -7,6 +7,7 @@
 
 #include "ir/typelang.h"
 #include "lib/alloc.h"
+#include "lib/byteorder.h"
 #include "lib/list.h"
 #include "qualified_names.h"
 
@@ -522,6 +523,44 @@ finalizer_instance(const n00bb_abi_semantics_t *facts, th_ctx *ctx,
     return false;
 }
 
+// A record row's type, built from its fields' names and types when each
+// field's type is one the modules interned. It stands in for parsing the
+// row's name (ir_type_from_text runs the whole grammar), as an interned
+// type does: the caller takes it only when its hash is the row's. Frame
+// layout records, made as a module's code is compiled, are most of the
+// types a warm build's cached modules have not interned.
+static th_type *
+record_from_row(th_ctx *ctx, const n00bb_abi_object_view_t *view,
+                const n00b_abi_type_v1 *row, const core_dict_t *interned)
+{
+    uint32_t count = row->fields_or_arms.count;
+    if (row->kind != N00B_ABI_TYPE_RECORD || !count || count > 4096)
+        return nullptr;
+    th_member *members = core_alloc_array(th_member, count);
+    bool whole = members != nullptr;
+    for (uint32_t i = 0; whole && i < count; i++) {
+        const uint8_t *slot = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_U32_STREAM, row->fields_or_arms.first + i);
+        const n00b_abi_field_v1 *field = slot ? n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_FIELD, core_le_load_u32(slot)) : nullptr;
+        const n00b_abi_type_v1 *child = field ? n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, field->child_type_index) : nullptr;
+        n00bb_abi_string_view_t name = {0};
+        th_type *type = child ? core_dict_get((core_dict_t *)interned,
+            (void *)(uintptr_t)child->typehash, nullptr) : nullptr;
+        whole = type && n00bb_abi_object_string(view, &field->name, &name)
+            && name.length;
+        if (whole) members[i] = (th_member){
+            .name = core_string_borrow((const char *)name.bytes,
+                                       name.length),
+            .type = type,
+        };
+    }
+    th_type *record = whole ? th_record(ctx, members, count) : nullptr;
+    core_free(members);
+    return record;
+}
+
 bool
 n00bb_abi_link_semantic_rows(
     const n00bb_abi_selected_objects_t *selected,
@@ -610,6 +649,11 @@ n00bb_abi_link_semantic_rows(
                                             &name)) continue;
             th_type *type = core_dict_get(&interned,
                 (void *)(uintptr_t)row->typehash, nullptr);
+            if (!type) {
+                type = record_from_row(ctx, view, row, &interned);
+                if (type && th_hash(ctx, type) != row->typehash)
+                    type = nullptr;
+            }
             if (!type) type = ir_type_from_text(ctx, core_string_borrow(
                 (const char *)name.bytes, name.length));
             if (type && th_hash(ctx, type) == row->typehash)
