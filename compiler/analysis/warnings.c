@@ -319,6 +319,16 @@ shift_count_casts(const ir_func_t *function, core_dict_t *out)
 static core_list_t(n00bb_ir_func_ptr_t)
 source_functions(n00bb_link_analysis_t *analysis);
 
+// Whether diagnose_overflow checks `in`: trapping arithmetic the user wrote,
+// other than a shift count's cast.
+static bool
+overflow_checked(const ir_instr_t *in, core_dict_t *counts)
+{
+    return in->span.start_line && !in->span.implied
+        && ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
+        && !core_dict_contains(counts, (void *)in);
+}
+
 bool
 diagnose_overflow(n00bb_link_analysis_t *analysis)
 {
@@ -330,17 +340,21 @@ diagnose_overflow(n00bb_link_analysis_t *analysis)
             unit_for_ir_module(analysis, function->owner);
         if (!unit) continue;
         size_t scope = ir_analysis_scope_begin();
-        ir_abcd_t *ranges = ir_func_abcd(function);
         core_dict_t counts;
         core_dict_init(&counts, nullptr, nullptr);
         shift_count_casts(function, &counts);
+        // Ranges are worked out only for a function with something to check.
+        bool checked = false;
+        for (uint32_t b = 0; !checked && b < function->n_blocks; b++)
+            for (uint32_t i = 0; !checked && i < function->blocks[b]->n_instrs;
+                 i++)
+                checked = overflow_checked(function->blocks[b]->instrs[i],
+                                           &counts);
+        ir_abcd_t *ranges = checked ? ir_func_abcd(function) : nullptr;
         for (uint32_t b = 0; ranges && b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
-                if (!in->span.start_line || in->span.implied
-                    || !ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
-                    || core_dict_contains(&counts, in))
-                    continue;
+                if (!overflow_checked(in, &counts)) continue;
                 ir_interval_t left = {0}, right = {0};
                 ir_overflow_t overflow = ir_abcd_overflow(ranges, in, &left,
                                                            &right);
@@ -681,6 +695,26 @@ feasible_blocks(ir_abcd_t *ranges, ir_func_t *function)
     return seen;
 }
 
+typedef enum : uint8_t {
+    RANGE_UNCHECKED,
+    RANGE_CONDITION,
+    RANGE_OPERAND,
+} range_check_t;
+
+// What diagnose_ranges checks at `site`: a branch's condition, or a
+// divisor or shift amount the user wrote.
+static range_check_t
+range_checked(const ir_site_t *site)
+{
+    if ((site->kind == IR_SITE_BRANCH || site->kind == IR_SITE_LOOP_BOUND)
+        && site->instr->op == IR_OP_BRANCH)
+        return RANGE_CONDITION;
+    if ((site->kind == IR_SITE_DIVISOR || site->kind == IR_SITE_SHIFT_AMOUNT)
+        && user_span(site->instr))
+        return RANGE_OPERAND;
+    return RANGE_UNCHECKED;
+}
+
 bool
 diagnose_ranges(n00bb_link_analysis_t *analysis)
 {
@@ -692,20 +726,23 @@ diagnose_ranges(n00bb_link_analysis_t *analysis)
                                                            function->owner);
         if (!unit) continue;
         size_t scope = ir_analysis_scope_begin();
-        ir_abcd_t *ranges = ir_func_abcd(function);
-        ir_sites_t *sites = ranges ? ir_func_sites(function) : nullptr;
+        // Ranges are worked out only for a function with a site to check.
+        ir_sites_t *sites   = ir_func_sites(function);
+        bool        checked = false;
+        for (uint32_t s = 0; !checked && sites && s < ir_sites_count(sites);
+             s++)
+            checked = range_checked(ir_site_at(sites, s)) != RANGE_UNCHECKED;
+        ir_abcd_t *ranges = checked ? ir_func_abcd(function) : nullptr;
+        if (!ranges) sites = nullptr;
         bool *feasible = sites ? feasible_blocks(ranges, function) : nullptr;
         for (uint32_t s = 0; feasible && s < ir_sites_count(sites); s++) {
             const ir_site_t *site = ir_site_at(sites, s);
             if (!site->instr->block
                 || !feasible[site->instr->block->index]) continue;
-            if ((site->kind == IR_SITE_BRANCH
-                 || site->kind == IR_SITE_LOOP_BOUND)
-                && site->instr->op == IR_OP_BRANCH)
+            range_check_t check = range_checked(site);
+            if (check == RANGE_CONDITION)
                 check_constant_condition(unit, ranges, site->instr);
-            else if ((site->kind == IR_SITE_DIVISOR
-                      || site->kind == IR_SITE_SHIFT_AMOUNT)
-                     && user_span(site->instr))
+            else if (check == RANGE_OPERAND)
                 ok = check_operand_domain(unit, function, ranges, site)
                     && ok;
         }
