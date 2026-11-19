@@ -6023,6 +6023,16 @@ record_cache_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         restart_with_summaries(argv, argv0, cache);
 }
 
+static int
+compare_specializations(const void *left, const void *right)
+{
+    const n00bb_specialization_t *a = left, *b = right;
+    int order = core_string_cmp(ir_module_name(a->instance->owner),
+                                ir_module_name(b->instance->owner));
+    return order ? order : core_string_cmp(a->instance->name,
+                                           b->instance->name);
+}
+
 static bool
 specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                  core_diagnostics_t *diagnostics,
@@ -6056,6 +6066,13 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     core_list_free(seeds);
     if (ok && !check_only) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
+    // Instances are found in the order the program's functions are walked,
+    // which differs with which of them came from the cache; their objects
+    // and ABI rows go in their names' order instead.
+    if (ok && !check_only && analysis->specializations.len > 1)
+        qsort(analysis->specializations.data, analysis->specializations.len,
+              sizeof(*analysis->specializations.data),
+              compare_specializations);
     core_translation_unit_t *site = nullptr;
     for (size_t i = 0; !ok && failure.located && !site
          && i < analysis->units.len; i++)
