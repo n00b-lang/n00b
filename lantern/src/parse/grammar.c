@@ -365,6 +365,7 @@ parse_grammar_free(parse_grammar_t *g)
             core_dict_free(rule->first_set);
             core_free(rule->first_set);
         }
+        core_free(rule->first_bits);
     }
 
     core_list_free(g->rules);
@@ -1183,6 +1184,22 @@ compute_all_first_sets(parse_grammar_t *g)
     }
 
     core_free(first_nullable);
+
+    // Each rule's first set as bits too, for the parser's alternative
+    // filter; terminals no bit stands for stay in first_set only.
+    g->first_bits_named = g->named_terms.len;
+    size_t bits = PARSE_FIRST_BITS_LOW + g->first_bits_named + 1;
+    for (size_t i = 0; i < n_rules; i++) {
+        parse_rule_t *rule = parse_get_rule(g, (int32_t)i);
+        core_free(rule->first_bits);
+        rule->first_bits = core_alloc_array(uint64_t, (bits + 63) / 64);
+        core_dict_foreach (rule->first_set, e) {
+            int64_t tid = (int64_t)((uint64_t)(uintptr_t)e->key - 0x100);
+            size_t bit = parse_rule_first_bit(tid, g->first_bits_named);
+            if (bit != SIZE_MAX)
+                rule->first_bits[bit / 64] |= UINT64_C(1) << (bit % 64);
+        }
+    }
 }
 
 int64_t

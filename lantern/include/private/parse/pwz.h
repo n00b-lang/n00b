@@ -122,6 +122,9 @@ struct pwz_exp_t {
     pwz_list_role_t list_role;
     int16_t         rule_ix;
     int16_t         nchildren;
+    // filter_rule's answer for this expression, once filter_known.
+    bool            filter_known;
+    const parse_rule_t *filter;
     union {
         struct {
             core_string_t    name;

@@ -611,7 +611,8 @@ reset_memos(parse_pwz_parser_t *p)
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
 
 static inline bool
-rule_first_matches(parse_rule_t *rule, int64_t token_id)
+rule_first_matches(parse_grammar_t *g, const parse_rule_t *rule,
+                   int64_t token_id)
 {
     if (rule->nullable || rule->first_has_any) {
         return true;
@@ -621,6 +622,11 @@ rule_first_matches(parse_rule_t *rule, int64_t token_id)
         return true;
     }
 
+    // The bits hold exactly the first set's terminals they can stand for.
+    size_t bit = rule->first_bits
+        ? parse_rule_first_bit(token_id, g->first_bits_named) : SIZE_MAX;
+    if (bit != SIZE_MAX)
+        return (rule->first_bits[bit / 64] >> (bit % 64) & 1) != 0;
     return core_dict_contains(rule->first_set, TERM_TO_PTR(token_id));
 }
 
@@ -826,6 +832,26 @@ record_expected(parse_pwz_parser_t *p, pwz_mem_t *mem, pwz_exp_t *exp)
     core_list_push(p->expected, entry);
 }
 
+// The rule whose first set may filter `alt` out of an alternation: a plain
+// (non-list) sequence of a grammar rule. Worked out once per expression;
+// the grammar is fixed while the parser exists.
+static const parse_rule_t *
+filter_rule(parse_pwz_parser_t *p, pwz_exp_t *alt)
+{
+    if (alt->filter_known) return alt->filter;
+    const parse_rule_t *rule = nullptr;
+    if (alt->kind == PWZ_SEQ && alt->list_role == PWZ_LIST_NONE
+        && alt->nt_id >= 0 && alt->rule_ix >= 0) {
+        parse_nonterm_t *nt = parse_get_nonterm(p->grammar, alt->nt_id);
+        if (nt && alt->rule_ix < (int32_t)core_list_len(nt->rule_ids))
+            rule = parse_get_rule(p->grammar,
+                                  nt->rule_ids.data[alt->rule_ix]);
+    }
+    alt->filter = rule;
+    alt->filter_known = true;
+    return rule;
+}
+
 static void
 run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
         pwz_mem_t *mem, pwz_exp_t *exp)
@@ -900,20 +926,12 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
         for (size_t i = 0; i < nalts; i++) {
             pwz_exp_t *alt_child = exp->alt.alts.data[i];
 
-            if (can_filter_alts && alt_child->kind == PWZ_SEQ
-                && alt_child->list_role == PWZ_LIST_NONE
-                && alt_child->nt_id >= 0 && alt_child->rule_ix >= 0) {
-                parse_nonterm_t *nt = parse_get_nonterm(p->grammar,
-                                                      alt_child->nt_id);
+            if (can_filter_alts) {
+                const parse_rule_t *rule = filter_rule(p, alt_child);
 
-                if (nt && alt_child->rule_ix < (int32_t)core_list_len(nt->rule_ids)) {
-                    int32_t            rix  = nt->rule_ids.data[alt_child->rule_ix];
-                    parse_rule_t *rule = parse_get_rule(p->grammar, rix);
-
-                    if (rule && !rule_first_matches(rule,
-                                                    parse_token_tid(tok))) {
-                        continue;
-                    }
+                if (rule && !rule_first_matches(p->grammar, rule,
+                                                parse_token_tid(tok))) {
+                    continue;
                 }
             }
 
