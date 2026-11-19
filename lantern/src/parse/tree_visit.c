@@ -864,26 +864,33 @@ typedef struct {
     size_t            next;
     size_t            mark;
     bool              entered;
+    // The unit leaf reducer of the nearest ancestor that has one (the
+    // reducers are all registered before the walk runs).
+    reducer_t        *unit_leaf;
 } rframe_t;
 
 core_list_decl(rframe_t);
 
-static reducer_t *leaf_for(struct parse_reduce_state_t *st, parse_grammar_t *g,
-                           core_list_t(rframe_t) frames)
+// The unit leaf reducer `node` gives its descendants, if any.
+static reducer_t *unit_leaf_of(struct parse_reduce_state_t *st,
+                               parse_grammar_t *g, parse_tree_t *node)
 {
-    for (size_t i = frames.len - 1; i-- > 0;) {
-        parse_tree_t *p = frames.data[i].node;
+    if (!st->unit_leaf.len || !node || core_tree_is_leaf(node)) {
+        return nullptr;
+    }
 
-        if (!p || core_tree_is_leaf(p)) {
-            continue;
-        }
+    parse_nonterm_t *nt = parse_get_nonterm(g, core_tree_node_value(node).id);
 
-        parse_nonterm_t *nt = parse_get_nonterm(g, core_tree_node_value(p).id);
-        reducer_t     *hit = nt ? leaf_in_unit(st, nt->unit) : nullptr;
+    return nt ? leaf_in_unit(st, nt->unit) : nullptr;
+}
 
-        if (hit) {
-            return hit;
-        }
+// The reducer for a leaf whose frame is `leaf`: the nearest ancestor's unit
+// leaf reducer, or the default one.
+static reducer_t *leaf_for(struct parse_reduce_state_t *st,
+                           const rframe_t *leaf)
+{
+    if (leaf->unit_leaf) {
+        return leaf->unit_leaf;
     }
 
     return st->have_leaf ? &st->leaf : nullptr;
@@ -934,8 +941,11 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
         if (!core_tree_is_leaf(f->node)
             && f->next < core_tree_num_children(f->node)) {
             parse_tree_t *ch = core_tree_child(f->node, f->next++);
+            reducer_t *own = unit_leaf_of(st, w->g, f->node);
 
-            core_list_push(frames, ((rframe_t){.node = ch}));
+            core_list_push(frames, ((rframe_t){
+                .node = ch, .unit_leaf = own ? own : f->unit_leaf,
+            }));
             continue;
         }
 
@@ -944,7 +954,7 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
         reducer_t *use = nullptr;
 
         if (core_tree_is_leaf(f->node)) {
-            use = leaf_for(st, w->g, frames);
+            use = leaf_for(st, f);
         }
         else {
             parse_nt_node_t *pn = &core_tree_node_value(f->node);
