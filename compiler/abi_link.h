@@ -23,6 +23,10 @@ typedef struct {
     n00bb_abi_image_header_t header;
     n00bb_abi_directory_entry_t *directory;
     size_t directory_count;
+    // Each table kind's first directory entry, plus one; zero for none.
+    // Set by n00bb_abi_object_open; a view made otherwise is searched.
+    uint8_t table_entries[N00B_ABI_TABLE_LAST + 1];
+    bool tables_indexed;
     core_object_absolute64_relocation_t *relocations;
     uint32_t relocation_count;
     bool relocations_valid;

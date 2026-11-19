@@ -115,6 +115,12 @@ n00bb_abi_object_open(const core_target_desc_t *target,
         .header = header,
         .directory = directory, .directory_count = count,
     };
+    for (uint32_t i = 0; i < count && i < UINT8_MAX; i++) {
+        uint32_t kind = directory[i].kind;
+        if (kind <= N00B_ABI_TABLE_LAST && !out->table_entries[kind])
+            out->table_entries[kind] = (uint8_t)(i + 1);
+    }
+    out->tables_indexed = count < UINT8_MAX;
     index_relocations(out);
     return true;
 }
@@ -309,6 +315,9 @@ const n00bb_abi_directory_entry_t *
 n00bb_abi_object_table(const n00bb_abi_object_view_t *view, uint32_t kind)
 {
     if (!view || !view->directory) return nullptr;
+    if (view->tables_indexed && kind <= N00B_ABI_TABLE_LAST)
+        return view->table_entries[kind]
+            ? &view->directory[view->table_entries[kind] - 1] : nullptr;
     for (size_t i = 0; i < view->directory_count; i++)
         if (view->directory[i].kind == kind) return &view->directory[i];
     return nullptr;
