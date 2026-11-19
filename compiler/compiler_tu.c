@@ -337,12 +337,13 @@ collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
 parse_tree_t *
 n00bb_pattern_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "pattern-binding")) return nullptr;
+    if (n00bb_rule_of(grammar, node) != RULE(PATTERN_BINDING)) return nullptr;
     for (parse_tree_t *at = parse_tree_parent(node); at;
-         at = parse_tree_parent(at))
-        if (NT_IS(grammar, at, "for-stmt")
-            || NT_IS(grammar, at, "variable-decl")
-            || NT_IS(grammar, at, "assign-stmt")) return at;
+         at = parse_tree_parent(at)) {
+        n00bb_rule_t rule = n00bb_rule_of(grammar, at);
+        if (rule == RULE(FOR_STMT) || rule == RULE(VARIABLE_DECL)
+            || rule == RULE(ASSIGN_STMT)) return at;
+    }
     return nullptr;
 }
 
@@ -1387,14 +1388,16 @@ remember_link_use_site(parse_grammar_t *grammar,
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     bool varref = rule
         && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_VARREF);
-    bool trait_reference = NT_IS(grammar, node, "trait-name");
+    n00bb_rule_t node_rule = n00bb_rule_of(grammar, node);
+    bool trait_reference = node_rule == RULE(TRAIT_NAME);
     bool dotted_path = dotted_symbol_path_node(grammar, node);
     bool variant_case_candidate = false;
     core_string_t variant_case_name = {0};
-    if (n00bb_primary_node(grammar, node)) {
+    if (node_rule == RULE(PRIMARY)
+        || (node_rule == RULE(PLACE) && core_tree_num_children(node) == 1)) {
         for (parse_tree_t *at = parse_tree_parent(node); at;
              at = parse_tree_parent(at)) {
-            if (!NT_IS(grammar, at, "case-expr-item")) continue;
+            if (n00bb_rule_of(grammar, at) != RULE(CASE_EXPR_ITEM)) continue;
             parse_tree_t *expression = CHILD_NT(grammar, at, "expression");
             variant_case_candidate = !CHILD_NT(grammar, at, "range-sep")
                 && expression && node_is_within(node, expression)
@@ -1408,7 +1411,7 @@ remember_link_use_site(parse_grammar_t *grammar,
     if (varref
         && !simple_identifier_expression(grammar, node, &simple_name))
         simple_member_chain_name(grammar, node, &simple_name);
-    th_type *new_result = NT_IS(grammar, node, "new-expr")
+    th_type *new_result = node_rule == RULE(NEW_EXPR)
         ? parse_tree_type(CHILD_NT(grammar, node, "type-spec")) : nullptr;
     th_type *resolved_new_result = new_result ? th_resolve(new_result) : nullptr;
     bool new_result_is_variant = false;
@@ -2104,17 +2107,19 @@ dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node)
         || !core_tree_is_leaf(core_tree_child(node, 1))
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return false;
-    return NT_IS(grammar, node, "member-chain")
-        || n00bb_postfix_node(grammar, node);
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(MEMBER_CHAIN) || rule == RULE(POSTFIX_EXPR)
+        || rule == RULE(PLACE);
 }
 
 bool
 is_type_reference_node_at(parse_grammar_t *grammar, parse_tree_t *node,
                           parse_tree_t *parent)
 {
-    if (!NT_IS(grammar, node, "member-chain")) return false;
-    return NT_IS(grammar, parent, "base-tspec-core")
-        || NT_IS(grammar, parent, "base-tspec");
+    if (n00bb_rule_of(grammar, node) != RULE(MEMBER_CHAIN)) return false;
+    n00bb_rule_t parent_rule = n00bb_rule_of(grammar, parent);
+    return parent_rule == RULE(BASE_TSPEC_CORE)
+        || parent_rule == RULE(BASE_TSPEC);
 }
 
 static bool
@@ -3408,12 +3413,11 @@ source_typevar_name(parse_tree_t *leaf)
 static bool
 typevar_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "func-def")
-        || NT_IS(grammar, node, "trait-decl")
-        || NT_IS(grammar, node, "callback-decl")
-        || field_record_declaration(grammar, node)
-        || NT_IS(grammar, node, "variant-decl")
-        || (NT_IS(grammar, node, "alias-stmt")
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(FUNC_DEF) || rule == RULE(TRAIT_DECL)
+        || rule == RULE(CALLBACK_DECL) || n00bb_field_record_rule(rule)
+        || rule == RULE(VARIANT_DECL)
+        || (rule == RULE(ALIAS_STMT)
             && alias_declaration_is_transparent(grammar, node));
 }
 
@@ -4217,7 +4221,7 @@ apply_signature_where_tree(parse_grammar_t *grammar,
                            core_list_t(th_trait_requirement) *declared)
 {
     if (!node || core_tree_is_leaf(node)) return true;
-    if (NT_IS(grammar, node, "type-constraint")) {
+    if (n00bb_rule_of(grammar, node) == RULE(TYPE_CONSTRAINT)) {
         if (core_tree_num_children(node) < 3) return false;
         core_string_t var_name = source_typevar_name(core_tree_child(node, 0));
         if (!var_name.data) return false;
@@ -6244,18 +6248,19 @@ cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return;
     parse_tree_t *source = nullptr;
-    if (NT_IS(grammar, node, "type-spec"))
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    if (rule == RULE(TYPE_SPEC))
         source = CHILD_NT(grammar, node, "one-tspec");
-    else if (NT_IS(grammar, node, "one-tspec"))
+    else if (rule == RULE(ONE_TSPEC))
         source = CHILD_NT(grammar, node, "base-tspec");
-    else if (NT_IS(grammar, node, "base-tspec")) {
+    else if (rule == RULE(BASE_TSPEC)) {
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
             parse_tree_t *child = core_tree_child(node, i);
             if (NT_IS(grammar, child, "array-dimensions")) return;
             if (NT_IS(grammar, child, "base-tspec-core")) source = child;
         }
     }
-    else if (NT_IS(grammar, node, "base-tspec-core")) {
+    else if (rule == RULE(BASE_TSPEC_CORE)) {
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
             parse_tree_t *child = core_tree_child(node, i);
             if (NT_IS(grammar, child, "tspec-application")) return;
@@ -7481,6 +7486,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (entering) return;
     parse_annot_result_t *annotations = context;
     if (!visit->pn) return;
+    n00bb_rule_t rule = n00bb_rule_of(visit->grammar, visit->node);
     parse_sym_entry_t *declared = parse_tree_sym(visit->node);
     apply_declaration_defaults(visit);
     if (declared && declared->is_field
@@ -7498,8 +7504,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 N00B_TEXT_REMOVE_PRIVATE_HERE,
                 N00BB_NO_ARGS);
     }
-    if ((NT_IS(visit->grammar, visit->node, "sym-decl")
-         || NT_IS(visit->grammar, visit->node, "pattern-binding"))
+    if ((rule == RULE(SYM_DECL) || rule == RULE(PATTERN_BINDING))
         && declared && declared->decl_node == visit->node
         && declared->shadowed
         && declared->shadowed->kind != PARSE_SYM_MODULE
@@ -7532,7 +7537,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             "resolving names", "could not record the binding definition site");
     parse_sym_mutability_t mutability = PARSE_SYM_MUTABLE;
     bool threaded = false;
-    if ((NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern)
+    if ((rule == RULE(SYM_DECL) || declared_pattern)
         && declared_binding_kind(visit->grammar, visit->node, &mutability,
                                  &threaded)) {
         {
@@ -7763,9 +7768,7 @@ is_named_type_declaration(parse_grammar_t *grammar,
 bool
 field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "type-decl")
-        || NT_IS(grammar, node, "record-decl")
-        || NT_IS(grammar, node, "object-decl");
+    return n00bb_field_record_rule(n00bb_rule_of(grammar, node));
 }
 
 bool
@@ -9647,13 +9650,11 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
     if (!grammar || !state || !node) return false;
-    bool list_node = NT_IS(grammar, node, "list-elems")
-        || NT_IS(grammar, node, "set-entries")
-        || NT_IS(grammar, node, "dict-entries")
-        || NT_IS(grammar, node, "dict-entry")
-        || NT_IS(grammar, node, "expr-comma-list")
-        || NT_IS(grammar, node, "named-field-list")
-        || NT_IS(grammar, node, "tuple-or-paren");
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    bool list_node = rule == RULE(LIST_ELEMS) || rule == RULE(SET_ENTRIES)
+        || rule == RULE(DICT_ENTRIES) || rule == RULE(DICT_ENTRY)
+        || rule == RULE(EXPR_COMMA_LIST) || rule == RULE(NAMED_FIELD_LIST)
+        || rule == RULE(TUPLE_OR_PAREN);
     if (!list_node) return true;
 
     core_list_t(parse_tree_ptr_t) children = core_list_new(parse_tree_ptr_t);
@@ -9696,8 +9697,9 @@ bool
 cache_ordered_array_dimensions(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *node)
 {
-    bool dimensions_node = NT_IS(grammar, node, "array-dimensions");
-    bool base_node = NT_IS(grammar, node, "base-tspec");
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    bool dimensions_node = rule == RULE(ARRAY_DIMENSIONS);
+    bool base_node = rule == RULE(BASE_TSPEC);
     if (!dimensions_node && !base_node) return true;
 
     core_list_t(parse_tree_ptr_t) items = core_list_new(parse_tree_ptr_t);
@@ -9786,7 +9788,7 @@ bool
 cache_typecase_arm_types(parse_grammar_t *grammar,
                          n00bb_tu_state_t *state, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "type-spec-list")) return true;
+    if (n00bb_rule_of(grammar, node) != RULE(TYPE_SPEC_LIST)) return true;
     parse_tree_t *arm = parse_tree_parent(node);
     if (!arm || (!NT_IS(grammar, arm, "typecase-case-block")
                  && !NT_IS(grammar, arm,
@@ -10346,10 +10348,12 @@ record_type_constraints(parse_grammar_t *grammar,
                         core_translation_unit_t *unit,
                         parse_tree_t *declaration, n00bb_tu_state_t *state)
 {
-    if (!typevar_owner_node(grammar, declaration)
-        || NT_IS(grammar, declaration, "func-def")
-        || NT_IS(grammar, declaration, "trait-decl")
-        || NT_IS(grammar, declaration, "callback-decl")) return;
+    // typevar_owner_node, less the function-like owners.
+    n00bb_rule_t rule = n00bb_rule_of(grammar, declaration);
+    if (!(n00bb_field_record_rule(rule) || rule == RULE(VARIANT_DECL)
+          || (rule == RULE(ALIAS_STMT)
+              && alias_declaration_is_transparent(grammar, declaration))))
+        return;
     parse_sym_entry_t *symbol = parse_tree_sym(declaration);
     if (!symbol || !state || !state->types) return;
     core_list_t(n00bb_typevar_binding_t) variables =
@@ -10674,6 +10678,15 @@ compose_type_syntax_node(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->types || !node || core_tree_is_leaf(node))
         return nullptr;
+    // Only these rules compose a type; every test below is of one of them.
+    switch (n00bb_rule_of(grammar, node)) {
+    case RULE(ONE_TSPEC): case RULE(TSPEC_LIST): case RULE(TSPEC_FUNC_PARAM):
+    case RULE(TSPEC_FUNC_PARAMS): case RULE(TSPEC_FUNC):
+    case RULE(BASE_TSPEC_CORE): case RULE(BASE_TSPEC): case RULE(UNION_TSPEC):
+        break;
+    default:
+        return nullptr;
+    }
     if (NT_IS(grammar, node, "one-tspec")) {
         parse_tree_t *base = CHILD_NT(grammar, node, "base-tspec");
         th_type *element = base ? parse_tree_type(base) : nullptr;

@@ -1059,6 +1059,15 @@ bool scope_in_value_namespace(parse_scope_t *scope);
 bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
+
+// Whether a node of `rule` declares a type with fields: what
+// field_record_declaration asks.
+static inline bool
+n00bb_field_record_rule(n00bb_rule_t rule)
+{
+    return rule == RULE(TYPE_DECL) || rule == RULE(RECORD_DECL)
+        || rule == RULE(OBJECT_DECL);
+}
 bool n00bb_field_scope_tag(core_string_t tag);
 typedef struct {
     th_type *base;
