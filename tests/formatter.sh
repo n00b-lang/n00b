@@ -60,7 +60,6 @@ trait LongResult {
 }
 EOF
 diff -u "$tmp/channels.expected" "$tmp/channels.n"
-"$compiler" fmt --check "$tmp/channels.n"
 
 "$compiler" fmt --output "$tmp/comments.n" \
     "$program_dir/fmt_comments.n"
@@ -92,90 +91,53 @@ when comptime() {
 }
 EOF
 diff -u "$tmp/comments.expected" "$tmp/comments.n"
-"$compiler" fmt --check "$tmp/comments.n"
 
-"$compiler" fmt --output "$tmp/return_skin.n" \
-    "$program_dir/fmt_return_skin.n"
-diff -u "$program_dir/fmt_return_skin.expected" "$tmp/return_skin.n"
-"$compiler" fmt --check "$tmp/return_skin.n"
-"$compiler" fmt --normalize --output "$tmp/return_skin_normalized.n" \
-    "$program_dir/fmt_return_skin.n"
-diff -u "$program_dir/fmt_return_skin.expected" \
-    "$tmp/return_skin_normalized.n"
-
-for name in block_bodies package_body where_clauses comment_blank_lines casts \
-        not_operator sized_ints empty_result colon_blocks region_anchors \
-        function_type_entries varargs effect_queries effect_clauses \
-        effect_bodies callback_roles function_types array_dimensions \
-        binding_patterns named_fields empty_braces enum_items \
-        parenthesized_types block_values continuation_lines slices; do
-    "$compiler" fmt --output "$tmp/$name.n" "$program_dir/fmt_$name.n"
-    diff -u "$program_dir/fmt_$name.expected" "$tmp/$name.n"
-    "$compiler" fmt --check "$program_dir/fmt_$name.expected"
+# Each run of the compiler costs more than formatting a file, so the cases
+# below are formatted together: copies of fmt_NAME.n, in place, in one run
+# (`--output` takes one input; channels and comments above use it), each
+# then diffed against fmt_NAME.expected. One `fmt --check` run at the end
+# checks every file that must already be formatted; it fails if any is not.
+cases="return_skin block_bodies package_body where_clauses comment_blank_lines
+    casts not_operator sized_ints empty_result colon_blocks region_anchors
+    function_type_entries varargs effect_queries effect_clauses effect_bodies
+    callback_roles function_types array_dimensions binding_patterns
+    named_fields empty_braces enum_items parenthesized_types block_values
+    continuation_lines slices trait_receivers line_comments variants
+    default_params value_sigils try_bodies for_bindings package_exports
+    try_handlers function_spellings branches"
+mkdir "$tmp/cases"
+set --
+for name in $cases; do
+    cp "$program_dir/fmt_$name.n" "$tmp/cases/$name.n"
+    set -- "$@" "$tmp/cases/$name.n"
 done
-
 # Region anchors are trivia, not comments, and once were dropped.
-sample="$program_dir/../langtools/samples/sample.n"
-"$compiler" fmt --output "$tmp/sample.n" "$sample"
-for anchor in '#[setup#' '#]setup#'; do
-    grep -qxF "$anchor" "$tmp/sample.n"
+cp "$program_dir/../langtools/samples/sample.n" "$tmp/cases/sample.n"
+"$compiler" fmt "$@" "$tmp/cases/sample.n"
+for name in $cases; do
+    diff -u "$program_dir/fmt_$name.expected" "$tmp/cases/$name.n"
 done
-"$compiler" fmt --output "$tmp/sample_again.n" "$tmp/sample.n"
-diff -u "$tmp/sample.n" "$tmp/sample_again.n"
+for anchor in '#[setup#' '#]setup#'; do
+    grep -qxF "$anchor" "$tmp/cases/sample.n"
+done
 
-"$compiler" fmt --output "$tmp/trait_receivers.n" \
-    "$program_dir/fmt_trait_receivers.n"
-diff -u "$program_dir/fmt_trait_receivers.expected" "$tmp/trait_receivers.n"
-"$compiler" fmt --check "$program_dir/fmt_trait_receivers.expected"
-
-"$compiler" fmt --output "$tmp/line_comments.n" \
-    "$program_dir/fmt_line_comments.n"
-diff -u "$program_dir/fmt_line_comments.expected" "$tmp/line_comments.n"
-"$compiler" fmt --output "$tmp/line_comments_again.n" "$tmp/line_comments.n"
-diff -u "$tmp/line_comments.n" "$tmp/line_comments_again.n"
-
-"$compiler" fmt --output "$tmp/variants.n" "$program_dir/fmt_variants.n"
-diff -u "$program_dir/fmt_variants.expected" "$tmp/variants.n"
-"$compiler" fmt --check "$program_dir/fmt_variants.expected"
-
-"$compiler" fmt --output "$tmp/default_params.n" \
-    "$program_dir/fmt_default_params.n"
-diff -u "$program_dir/fmt_default_params.expected" "$tmp/default_params.n"
-"$compiler" fmt --check "$program_dir/fmt_default_params.expected"
-
-"$compiler" fmt --output "$tmp/value_sigils.n" \
-    "$program_dir/fmt_value_sigils.n"
-diff -u "$program_dir/fmt_value_sigils.expected" "$tmp/value_sigils.n"
-
-"$compiler" fmt --output "$tmp/try_bodies.n" "$program_dir/fmt_try_bodies.n"
-diff -u "$program_dir/fmt_try_bodies.expected" "$tmp/try_bodies.n"
-"$compiler" fmt --check "$program_dir/fmt_try_bodies.expected"
-
-"$compiler" fmt --output "$tmp/for_bindings.n" \
-    "$program_dir/fmt_for_bindings.n"
-diff -u "$program_dir/fmt_for_bindings.expected" "$tmp/for_bindings.n"
-"$compiler" fmt --check "$program_dir/fmt_for_bindings.expected"
-
-"$compiler" fmt --output "$tmp/package_exports.n" \
-    "$program_dir/fmt_package_exports.n"
-diff -u "$program_dir/fmt_package_exports.expected" "$tmp/package_exports.n"
-"$compiler" fmt --check "$program_dir/fmt_package_exports.expected"
-
-"$compiler" fmt --output "$tmp/try_handlers.n" \
-    "$program_dir/fmt_try_handlers.n"
-diff -u "$program_dir/fmt_try_handlers.expected" "$tmp/try_handlers.n"
-"$compiler" fmt --check "$program_dir/fmt_try_handlers.expected"
-
-"$compiler" fmt --output "$tmp/function_spellings.n" \
-    "$program_dir/fmt_function_spellings.n"
-diff -u "$program_dir/fmt_function_spellings.expected" \
-    "$tmp/function_spellings.n"
-"$compiler" fmt --check "$tmp/function_spellings.n"
-
-"$compiler" fmt --output "$tmp/branches.n" \
-    "$program_dir/fmt_branches.n"
-diff -u "$program_dir/fmt_branches.expected" "$tmp/branches.n"
-"$compiler" fmt --check "$tmp/branches.n"
+# Already formatted: these expected forms, and these results (formatting
+# them again leaves them as they are: sample.n and line_comments.n are
+# checked for exactly that).
+set -- "$tmp/channels.n" "$tmp/comments.n"
+for name in return_skin line_comments function_spellings branches sample; do
+    set -- "$@" "$tmp/cases/$name.n"
+done
+for name in block_bodies package_body where_clauses comment_blank_lines \
+        casts not_operator sized_ints empty_result colon_blocks \
+        region_anchors function_type_entries varargs effect_queries \
+        effect_clauses effect_bodies callback_roles function_types \
+        array_dimensions binding_patterns named_fields empty_braces \
+        enum_items parenthesized_types block_values continuation_lines \
+        slices trait_receivers variants default_params try_bodies \
+        for_bindings package_exports try_handlers; do
+    set -- "$@" "$program_dir/fmt_$name.expected"
+done
 
 cat >"$tmp/unformatted.n" <<'EOF'
 func example(value:int)->int { return value }
@@ -186,29 +148,40 @@ if "$compiler" fmt --check "$tmp/unformatted.n" \
     exit 1
 fi
 "$compiler" fmt "$tmp/unformatted.n"
-"$compiler" fmt --check "$tmp/unformatted.n"
-
-"$compiler" preprocess "$program_dir/fmt_normalize.n" \
-    >"$tmp/aliases.out" 2>"$tmp/aliases.err"
-"$compiler" fmt --normalize --output "$tmp/normalized.n" \
-    "$program_dir/fmt_normalize.n"
-"$compiler" fmt --normalize --check "$tmp/normalized.n"
-grep -q 'unsigned_input: uint' "$tmp/normalized.n"
-grep -q 'signed_input: int' "$tmp/normalized.n"
-grep -q 'let unsigned_value: uint' "$tmp/normalized.n"
-grep -q 'let signed_value: *int' "$tmp/normalized.n"
-! grep -Eq '(^|[^[:alnum:]_])(u64|i64)($|[^[:alnum:]_])' \
-    "$tmp/normalized.n"
+set -- "$@" "$tmp/unformatted.n"
 
 # Rich-string markup is plain `[...]` text to the formatter: it passes
-# through byte for byte, escapes included.
+# through byte for byte, escapes included (so --check accepts it as it is).
 cat >"$tmp/rich.n" <<'EOF2'
 let a = "[b]bold[/b] [i]it[/] \[x] [#0:a\]b] [1, 2]"'r
 let b = "[#name:>4] \[\] [bold"'rich
 let c = "[plain] \[ \]"
 EOF2
-"$compiler" fmt --output "$tmp/rich_formatted.n" "$tmp/rich.n"
-diff -u "$tmp/rich.n" "$tmp/rich_formatted.n"
+set -- "$@" "$tmp/rich.n"
+
+"$compiler" fmt --check "$@"
+
+# --normalize types the program, which costs a full check, so the two
+# normalized cases share one run, in place on copies.
+mkdir "$tmp/normalize"
+cp "$program_dir/fmt_return_skin.n" "$tmp/normalize/return_skin.n"
+cp "$program_dir/fmt_normalize.n" "$tmp/normalized.n"
+"$compiler" preprocess "$program_dir/fmt_normalize.n" \
+    >"$tmp/aliases.out" 2>"$tmp/aliases.err"
+"$compiler" fmt --normalize "$tmp/normalize/return_skin.n" "$tmp/normalized.n"
+diff -u "$program_dir/fmt_return_skin.expected" \
+    "$tmp/normalize/return_skin.n"
+"$compiler" fmt --normalize --check "$tmp/normalized.n"
+grep -q 'unsigned_input: uint' "$tmp/normalized.n"
+grep -q 'signed_input: int' "$tmp/normalized.n"
+grep -q 'let unsigned_value: uint' "$tmp/normalized.n"
+grep -q 'let signed_value: *int' "$tmp/normalized.n"
+if grep -Eq '(^|[^[:alnum:]_])(u64|i64)($|[^[:alnum:]_])' \
+    "$tmp/normalized.n"; then
+    echo 'normalized source still names u64 or i64' >&2
+    exit 1
+fi
+
 if "$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n" "$tmp/rich.n" \
     >/dev/null 2>&1; then
     echo 'fmt unexpectedly accepted the removed --ascii-tags flag' >&2
