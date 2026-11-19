@@ -6,8 +6,7 @@ record Style_Span {
 
 func rich_string(text: string, spans: List[Style_Span]) -> string {
     let n: int = cast[int] spans.len()
-    var body: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
-                           base_style = nil, opaque = false)
+    var body: Rich_Body = (s = text, style_info = new[List[Style_Record]]())
     for i from 0 until n {
         let span: Style_Span = spans[i]
         let rec: Style_Record = (start_ix = span.start, end_ix = span.end,
@@ -136,8 +135,6 @@ func rich_reslice(s: string, since: u64, upto: u64, text: string,
     }
     var out: Rich_Body = (s = inner,
                           style_info = reslice_layer(src.__value.style_info,
-                              since, upto, cast[u64] byte_len(s), shift),
-                          base_style = src.__value.base_style,
-                          opaque = src.__value.opaque)
+                              since, upto, cast[u64] byte_len(s), shift))
     return __string_make_rich(ref out)
 }

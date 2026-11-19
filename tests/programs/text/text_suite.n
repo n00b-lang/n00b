@@ -1614,11 +1614,9 @@ func border_probe_main() {
           and cast[u64](text.Border_Set.all) == 0x3f, "border_probe", "7")
 }
 
-var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record(),
-                               base_style = nil, opaque = false)
+var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record())
 let rs: string = rich_over(ref rs_body)
-var rs_outer_body: text.Rich_Body = (s = rs, style_info = one_record(),
-                                     base_style = nil, opaque = false)
+var rs_outer_body: text.Rich_Body = (s = rs, style_info = one_record())
 let rs_outer: string = rich_over(ref rs_outer_body)
 
 func rich_static_checks() {
@@ -1788,15 +1786,6 @@ func yes(v: bool?) -> bool {
     return v
 }
 
-func styled(bold: bool?, italic: bool?) -> text.Text_Style {
-    return (bold = bold, italic = italic, underline = nil,
-            double_underline = nil, strikethrough = nil, reverse = nil,
-            dim = nil, blink = nil, text_case = text.Text_Case.none,
-            font_hint = text.Font_Hint.default, font_index = nil,
-            fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-            bg_rgb = nil, font_size = nil)
-}
-
 func run_list(s: string) -> List[text.Style_Run] {
     var c: text.Cascade = new[text.Cascade](s)
     var runs: List[text.Style_Run] = new[List[text.Style_Run]]()
@@ -1825,15 +1814,6 @@ func tiles(runs: List[text.Style_Run], len: u32) -> bool {
     }
     return true
 }
-
-var outer_body: text.Rich_Body = (s = "",
-                                  style_info = new[List[text.Style_Record]](),
-                                  base_style = nil, opaque = false)
-let outer: string = rich_over(ref outer_body)
-var mid_body: text.Rich_Body = (s = "hi",
-                                style_info = new[List[text.Style_Record]](),
-                                base_style = nil, opaque = false)
-let mid: string = rich_over(ref mid_body)
 
 func nested_spans() -> string {
     var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
@@ -1878,19 +1858,6 @@ func cascade_checks() {
     runs = run_list("[b]text"'r)
     check(runs.len() == 1 and runs[0].end == 4 and yes(runs[0].style.bold),
           "cascade_probe", "7")
-
-    mid_body.base_style = styled(nil, true)
-    mid_body.opaque = false
-    outer_body.s = mid
-    outer_body.base_style = styled(true, nil)
-    runs = run_list(outer)
-    check(runs.len() == 1 and yes(runs[0].style.bold) and
-          yes(runs[0].style.italic), "cascade_probe", "8")
-
-    mid_body.opaque = true
-    runs = run_list(outer)
-    check(runs.len() == 1 and yes(runs[0].style.italic), "cascade_probe", "9")
-    check(runs.len() == 1 and !yes(runs[0].style.bold), "cascade_probe", "10")
 
     let slotted: string = "[b][#0][/b]x"'r
     check(byte_len(slotted) == 1, "cascade_probe", "11")
@@ -2437,43 +2404,19 @@ func no_records() -> List[text.Style_Record] {
     return new[List[text.Style_Record]]()
 }
 
-var plain_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                  base_style = nil, opaque = false)
-var based_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                  base_style = nil, opaque = false)
-var opaque_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                   base_style = nil, opaque = true)
+var plain_body: text.Rich_Body = (s = "hello", style_info = no_records())
 
 let plain_s: string = rich_over(ref plain_body)
-let based_s: string = rich_over(ref based_body)
-let opaque_s: string = rich_over(ref opaque_body)
 
 var bold_outer_body: text.Rich_Body = (s = "[b]hello"'r,
-                                       style_info = no_records(),
-                                       base_style = nil, opaque = false)
+                                       style_info = no_records())
 var italic_outer_body: text.Rich_Body = (s = "[i]hello"'r,
-                                         style_info = no_records(),
-                                         base_style = nil, opaque = false)
+                                         style_info = no_records())
 
 let bold_outer: string = rich_over(ref bold_outer_body)
 let italic_outer: string = rich_over(ref italic_outer_body)
 
 func style_fields_probe_main() {
-    check(plain_body.base_style == nil, "style_fields_probe", "1")
-    check(!plain_body.opaque, "style_fields_probe", "2")
-
-    let bold: text.Text_Style = (
-        bold = true, italic = nil, underline = nil, double_underline = nil,
-        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
-        text_case = text.Text_Case.none, font_hint = text.Font_Hint.default,
-        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
-        fg_rgb = nil, bg_rgb = nil, font_size = nil)
-    based_body.base_style = bold
-
-    check(plain_s != based_s, "style_fields_probe", "3")
-    check(plain_s.hash() != based_s.hash(), "style_fields_probe", "4")
-    check(plain_s != opaque_s, "style_fields_probe", "5")
-    check(plain_s.hash() != opaque_s.hash(), "style_fields_probe", "6")
     check(plain_s == plain_s and plain_s.hash() == plain_s.hash(), "style_fields_probe", "7")
 
     check(cast[u64](tag(bold_outer_body.s)) == str_tag_rich and
@@ -2482,8 +2425,7 @@ func style_fields_probe_main() {
           bold_outer.hash() != italic_outer.hash(), "style_fields_probe", "900")
 }
 
-var wrap_body: text.Rich_Body = (s = "", style_info = one_record(),
-                                 base_style = nil, opaque = false)
+var wrap_body: text.Rich_Body = (s = "", style_info = one_record())
 let wrapped: string = rich_over(ref wrap_body)
 
 func tag_is_b(r: text.Style_Record) -> bool {

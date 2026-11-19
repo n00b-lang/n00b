@@ -78,8 +78,6 @@ record Style_Record {
 record Rich_Body layout(ordered) {
     s:          string
     style_info: List[Style_Record]
-    base_style: Text_Style?
-    opaque:     bool
 }
 
 private record Intrinsic_Tag {
@@ -263,125 +261,6 @@ private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
     return cmp_sub_spec(left.substitution, right.substitution)
 }
 
-private func cmp_opt_i8(left: i8?, right: i8?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
-}
-
-private func cmp_opt_i16(left: i16?, right: i16?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
-}
-
-private func cmp_opt_color(left: Color?, right: Color?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(cast[u64] unsafe_cast[u32] left,
-                     cast[u64] unsafe_cast[u32] right)
-}
-
-private func cmp_style(left: Text_Style, right: Text_Style) -> int {
-    result = cmp_words(tri_rank(left.bold), tri_rank(right.bold))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.italic), tri_rank(right.italic))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.underline), tri_rank(right.underline))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.double_underline),
-                       tri_rank(right.double_underline))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.strikethrough),
-                       tri_rank(right.strikethrough))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.reverse), tri_rank(right.reverse))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.dim), tri_rank(right.dim))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.blink), tri_rank(right.blink))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(cast[u64] left.text_case, cast[u64] right.text_case)
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(cast[u64] left.font_hint, cast[u64] right.font_hint)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.font_index, right.font_index)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.fg_palette_ix, right.fg_palette_ix)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.bg_palette_ix, right.bg_palette_ix)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_color(left.fg_rgb, right.fg_rgb)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_color(left.bg_rgb, right.bg_rgb)
-    if result != 0 {
-        return result
-    }
-    return cmp_opt_i16(left.font_size, right.font_size)
-}
-
-private func cmp_opt_style(left: Text_Style?, right: Text_Style?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_style(left, right)
-}
-
 private func is_rich(s: string) -> bool {
     return cast[u64](string.core.tag(s)) == string.core.str_tag_rich
 }
@@ -422,17 +301,7 @@ private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
         }
         i += 1
     }
-    result = cmp_opt_style(left.__value.base_style, right.__value.base_style)
-    if result != 0 {
-        return result
-    }
-    if left.__value.opaque == right.__value.opaque {
-        return 0
-    }
-    if left.__value.opaque {
-        return 1
-    }
-    return -1
+    return 0
 }
 
 // A style span: a tag and both ends (an end of `index_extends` when it
@@ -606,9 +475,7 @@ private func right_order(order: u32, at_join: bool) -> u32 {
 // left side's byte length, and its events at the join come after the left
 // side's. A left span that was never closed flows right over the right
 // side, until the right side's first reset (`[/]`, which may sit at its
-// very start) ends it. Layers pair up from the outside in. A layer keeps
-// its base style only when both sides have that layer with the same base
-// style, and it is opaque when either side's is.
+// very start) ends it. Layers pair up from the outside in.
 func concat_rich(left: string, right: string) -> string {
     let left_rich: bool = is_rich(left)
     let right_rich: bool = is_rich(right)
@@ -618,15 +485,13 @@ func concat_rich(left: string, right: string) -> string {
     let left_len: u64 = cast[u64] string.core.byte_len(left)
     var inner_left: string = left
     var inner_right: string = right
-    var body: Rich_Body = (s = "", style_info = new[List[Style_Record]](),
-                           base_style = nil, opaque = false)
+    var body: Rich_Body = (s = "", style_info = new[List[Style_Record]]())
     var right_records: List[Style_Record] = new[List[Style_Record]]()
     var reset_at: u32? = nil
     var reset_order: u32 = 0
     if right_rich {
         let rb: Ref[Rich_Body] = rich_body(right)
         inner_right = rb.__value.s
-        body.opaque = rb.__value.opaque
         var i: int = 0
         while i < cast[int] rb.__value.style_info.len() {
             var rec: Style_Record = rb.__value.style_info[i]
@@ -649,7 +514,6 @@ func concat_rich(left: string, right: string) -> string {
     if left_rich {
         let lb: Ref[Rich_Body] = rich_body(left)
         inner_left = lb.__value.s
-        body.opaque = body.opaque or lb.__value.opaque
         var i: int = 0
         while i < cast[int] lb.__value.style_info.len() {
             var rec: Style_Record = lb.__value.style_info[i]
@@ -666,13 +530,6 @@ func concat_rich(left: string, right: string) -> string {
     while r < cast[int] right_records.len() {
         body.style_info.append(right_records[r])
         r += 1
-    }
-    if left_rich and right_rich {
-        let lb: Ref[Rich_Body] = rich_body(left)
-        let rb: Ref[Rich_Body] = rich_body(right)
-        if cmp_opt_style(lb.__value.base_style, rb.__value.base_style) == 0 {
-            body.base_style = lb.__value.base_style
-        }
     }
     body.style_info = settle_records(body.style_info)
     body.s = concat_rich(inner_left, inner_right)
@@ -747,62 +604,6 @@ private func hash_sub_spec(sub: Sub_Spec) -> u128 {
     }
 }
 
-private func hash_opt_i8(o: i8?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u8] o) + 1
-    return word.hash()
-}
-
-private func hash_opt_i16(o: i16?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u16] o) + 1
-    return word.hash()
-}
-
-private func hash_opt_color(o: Color?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u32] o) + 1
-    return word.hash()
-}
-
-private func hash_style(s: Text_Style) -> u128 {
-    let packed: u64 = tri_rank(s.bold) |
-        (tri_rank(s.italic) << 2) |
-        (tri_rank(s.underline) << 4) |
-        (tri_rank(s.double_underline) << 6) |
-        (tri_rank(s.strikethrough) << 8) |
-        (tri_rank(s.reverse) << 10) |
-        (tri_rank(s.dim) << 12) |
-        (tri_rank(s.blink) << 14) |
-        (cast[u64](s.text_case) << 16) |
-        (cast[u64](s.font_hint) << 19)
-    var acc: u128 = packed.hash()
-    acc = hash_chain(acc, hash_opt_i8(s.font_index))
-    acc = hash_chain(acc, hash_opt_i8(s.fg_palette_ix))
-    acc = hash_chain(acc, hash_opt_i8(s.bg_palette_ix))
-    acc = hash_chain(acc, hash_opt_color(s.fg_rgb))
-    acc = hash_chain(acc, hash_opt_color(s.bg_rgb))
-    acc = hash_chain(acc, hash_opt_i16(s.font_size))
-    return acc
-}
-
-private func hash_opt_style(o: Text_Style?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    return hash_style(o)
-}
-
 private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
     var acc: u128
     if is_rich(body.__value.s) {
@@ -826,12 +627,6 @@ private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
         acc = hash_chain(acc, orders.hash())
         i += 1
     }
-    acc = hash_chain(acc, hash_opt_style(body.__value.base_style))
-    var opaque: u64 = 0
-    if body.__value.opaque {
-        opaque = 1
-    }
-    acc = hash_chain(acc, opaque.hash())
     return acc
 }
 
@@ -1770,7 +1565,6 @@ alias litmod r = rich
 quotes litmod rich(raw: string) -> string fail: string {
     var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!
-    var body: Rich_Body = (s = text, style_info = build_style_records(segments)!,
-                           base_style = nil, opaque = false)
+    var body: Rich_Body = (s = text, style_info = build_style_records(segments)!)
     return string.core.__string_make_rich(ref body)
 }
