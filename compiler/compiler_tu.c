@@ -9982,18 +9982,29 @@ n00bb_imply_type_argument_constraints(core_translation_unit_t *const *units,
                                            check->alias, &parameters) : 0;
             core_list_t(th_trait_requirement) taken =
                 core_list_new(th_trait_requirement);
+            parse_sym_entry_t *owner = typevar_owner(state->grammar,
+                                                     check->site);
+            // A variable only a function's body names is given its type by
+            // the body; the check of this use (n00bb_type_arguments_fit)
+            // tests that type once it is known, so the function does not
+            // require it again.
+            bool function = owner && owner->decl_node
+                && NT_IS(state->grammar, owner->decl_node, "func-def");
             for (size_t r = 0; ok && parameter_count == check->count
                  && r < declared->len; r++) {
                 th_trait_requirement requirement = {0};
                 if (argument_requirement(state->types, declared->data[r],
                         parameters, check->arguments, check->count,
                         &requirement, &ok)
-                    && th_kind_of(th_resolve(requirement.subject)) == TH_VAR)
+                    && th_kind_of(th_resolve(requirement.subject)) == TH_VAR
+                    && (!function || (!owner->type
+                        || th_occurs(state->types,
+                                     th_resolve(requirement.subject),
+                                     owner->type))))
                     core_list_push(taken, requirement);
             }
             if (!check->alias) core_free(parameters);
-            parse_sym_entry_t *owner = ok && taken.len
-                ? typevar_owner(state->grammar, check->site) : nullptr;
+            owner = ok && taken.len ? owner : nullptr;
             ok = ok && (!owner
                 || add_owner_constraints(state->grammar, state, owner,
                                          &taken));

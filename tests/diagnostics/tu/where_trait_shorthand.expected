@@ -30,8 +30,6 @@ tests/diagnostics/tu/where_trait_shorthand.n:35:20: error N00B-T0021: `string` d
 tests/diagnostics/tu/where_trait_shorthand.n:37:14: note N00B-S0064: parameter `l` could be `view`: `counted` never writes anything reachable from it
 tests/diagnostics/tu/where_trait_shorthand.n:39:16: error N00B-T0021: `string` does not implement `Integer`, which `Ints` requires
   help: give `Ints` a type that implements `Integer`, or implement `Integer` for this one
-tests/diagnostics/tu/where_trait_shorthand.n:40:12: error N00B-T0021: `string` does not implement `Integer`, which `local` requires
-  help: give it a value whose type implements `Integer` here, or implement `Integer` for `string`
 tests/diagnostics/tu/where_trait_shorthand.n:43:9: error N00B-T0021: `string` does not implement `Integer`, which `counted` requires
   tests/diagnostics/tu/where_trait_shorthand.n:37:6: note: `counted` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
