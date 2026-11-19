@@ -1,2 +1,2 @@
 tests/diagnostics/link/reference_modes.n:11:12: note N00B-S0064: parameter `f` could be `view`: `apply` never writes anything reachable from it
-tests/diagnostics/link/reference_modes.n:25:19: error N00B-S0016: `fixed` is a `let`, so it cannot be passed to a `modify` parameter
+tests/diagnostics/link/reference_modes.n:26:19: error N00B-S0016: `fixed` is a `let`, so it cannot be passed to a `modify` parameter

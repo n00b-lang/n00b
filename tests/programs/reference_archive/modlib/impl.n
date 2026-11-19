@@ -25,5 +25,6 @@ func module_ordered() -> Ref[(int, b: int, zz: int) -> int] {
 
 func apply(f: Ref[(Tally, int) -> int], modify tally: Tally,
            by: int) -> int {
-    return f.call(tally, by)
+    var amount = by
+    return f.call(tally, amount)
 }

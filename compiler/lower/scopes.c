@@ -160,6 +160,18 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
             || ir_annot_set(ir_module_ctx(context->module), &allocation->annots,
                             (ir_annot_t){.key = N00BB_IMMUTABLE_STORAGE_KEY,
                                          .kind = IR_ANNOT_BOOL, .b = true}))
+        // Its variable's name, for a report about an argument read from it
+        // once the binding is gone (n00bb_argument_place).
+        && ir_annot_set(ir_module_ctx(context->module), &allocation->annots,
+                        (ir_annot_t){.key = N00BB_STORAGE_NAME_KEY,
+                                     .kind = IR_ANNOT_STR,
+                                     .s = local->source_name.u8_bytes
+                                         ? local->source_name
+                                         : symbol->name})
+        && (local->mutability != IR_MUT_CONST
+            || ir_annot_set(ir_module_ctx(context->module), &allocation->annots,
+                            (ir_annot_t){.key = N00BB_STORAGE_CONST_KEY,
+                                         .kind = IR_ANNOT_BOOL, .b = true}))
         && n00bb_mark_open_storage(context, allocation, local, storage_class)
         && n00bb_mark_binding_reentry(context, symbol);
 }

@@ -129,10 +129,10 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *address = value ? n00bb_place_of(context, value, true, span)
                                 : nullptr;
     lower->write_back_open_index = saved;
-    if ((!address && !accessed)
-        || (address && !n00bb_place_writable(address))) {
-        ir_local_t *local = nullptr;
-        ir_value_t *storage = nullptr;
+    ir_local_t *local = nullptr;
+    ir_value_t *storage = nullptr;
+    if (n00bb_argument_place(address, accessed, &local, &storage)
+            != N00BB_ARGUMENT_WRITABLE) {
         parse_sym_entry_t *variable = address
                 && n00bb_place_root(address, &local, &storage)
             ? ir_lower_binding_symbol(context, local, storage)

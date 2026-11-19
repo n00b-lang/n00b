@@ -1683,6 +1683,65 @@ n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 // it when there is none. `symbol` and `function` name the callee, when it
 // is known, for the report of an argument that is no place. Returns false
 // when one was reported.
+// Reports argument `value` of call `in`, which can't be given to `target`
+// (a parameter, described) for the reason `why` (n00bb_argument_place),
+// part of variable `local` or `storage` when it is one.
+static void
+n00bb_report_argument_place(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                            ir_value_t *value, n00bb_argument_place_t why,
+                            ir_local_t *local, ir_value_t *storage,
+                            core_string_t target)
+{
+    core_string_t name = {0};
+    bool constant = false;
+    ir_instr_t *alloc = storage && storage->kind == IR_VAL_INSTR
+        ? storage->def : nullptr;
+    ir_annot_t *stored = alloc && alloc->op == IR_OP_ALLOC
+        ? ir_annot_get(&alloc->annots, N00BB_STORAGE_NAME_KEY) : nullptr;
+    if (local) {
+        name = local->source_name;
+        constant = local->mutability == IR_MUT_CONST;
+    }
+    else if (stored && stored->kind == IR_ANNOT_STR) {
+        name = stored->s;
+        constant = ir_annot_get(&alloc->annots, N00BB_STORAGE_CONST_KEY);
+    }
+    else if (storage && storage->kind == IR_VAL_GLOBAL && storage->global) {
+        name = n00bb_name_leaf(storage->global->name);
+        constant = storage->global->mutability == IR_MUT_CONST;
+    }
+    else if (storage && storage->kind == IR_VAL_PARAM)
+        name = storage->name;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(rewrite->unit);
+    core_diag_location_t at = n00bb_span_location(
+        value && value->def ? value->def->span : in->span);
+    if (why == N00BB_ARGUMENT_VALUE_PARAMETER && name.u8_bytes) {
+        th_type *own = th_resolve(rewrite->context.function->type);
+        th_mode mode = th_kind_of(own) == TH_FUNCTION
+                && storage->index < th_func_nparams(own)
+            ? th_func_param(own, storage->index)->mode : TH_IN;
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_PARAMETER_CANNOT_BE_PASSED,
+            N00BB_ARGS(ARG_TEXT(name),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(mode)),
+                       ARG_TEXT(target)));
+    }
+    else if (why == N00BB_ARGUMENT_IMMUTABLE && name.u8_bytes)
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_IS_A_SO_IT_CANNOT,
+            N00BB_ARGS(ARG_TEXT(name),
+                ARG_TEXT(constant ? CORE_STRING_STATIC("const")
+                                  : CORE_STRING_STATIC("let")),
+                ARG_TEXT(target)));
+    else
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_ONLY_A_VARIABLE_FIELD_OR, N00BB_ARGS(ARG_TEXT(target)));
+}
+
 static bool
 n00bb_rewrite_by_reference_arguments(n00bb_rewrite_t *rewrite,
                                      ir_instr_t *in, th_type *signature,
@@ -1704,40 +1763,24 @@ n00bb_rewrite_by_reference_arguments(n00bb_rewrite_t *rewrite,
                     : n00bb_rewrite_temporary_place(rewrite, value, in->span)
             : n00bb_rewrite_place(rewrite, value, in->span);
         // A call through a function reference learns which arguments are
-        // passed by reference only now; one naming a `let` is reported as
-        // a direct call's is when it is lowered.
+        // passed by reference only now; one that can't be is reported as a
+        // direct call's is when it is lowered (n00bb_argument_place).
         ir_local_t *local = nullptr;
         ir_value_t *storage = nullptr;
-        bool unwritable = !symbol && !receiver && target
-            && !n00bb_place_writable(target);
-        if (unwritable && n00bb_place_root(target, &local, &storage)
-            && local && local->source_name.u8_bytes) {
-            core_string_t name = describe_parameter_target(mode, nullptr,
-                                                           (core_string_t){0});
-            n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
-                rewrite->unit, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE,
-                n00bb_span_location(value->def ? value->def->span : in->span),
-                N00B_TEXT_IS_A_SO_IT_CANNOT,
-                N00BB_ARGS(ARG_TEXT(local->source_name),
-                    ARG_TEXT(local->mutability == IR_MUT_CONST
-                        ? CORE_STRING_STATIC("const")
-                        : CORE_STRING_STATIC("let")),
-                    ARG_TEXT(name)));
+        n00bb_argument_place_t why = !symbol && !receiver
+            ? n00bb_argument_place(target, false, &local, &storage)
+            : target ? N00BB_ARGUMENT_WRITABLE : N00BB_ARGUMENT_NO_PLACE;
+        if (value && why != N00BB_ARGUMENT_WRITABLE) {
+            core_string_t name = describe_parameter_target(mode,
+                why == N00BB_ARGUMENT_NO_PLACE ? symbol : nullptr,
+                why == N00BB_ARGUMENT_NO_PLACE && function
+                        && p < function->n_params
+                    ? function->params[p]->name : (core_string_t){0});
+            n00bb_report_argument_place(rewrite, in, value, why, local,
+                                        storage, name);
             core_free(name.data);
             written = false;
             continue;
-        }
-        if (unwritable) target = nullptr;
-        if (value && !target) {
-            core_string_t name = describe_parameter_target(mode, symbol,
-                function && p < function->n_params
-                    ? function->params[p]->name : (core_string_t){0});
-            n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
-                rewrite->unit, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE,
-                n00bb_span_location(value->def ? value->def->span : in->span),
-                N00B_TEXT_ONLY_A_VARIABLE_FIELD_OR, N00BB_ARGS(ARG_TEXT(name)));
-            core_free(name.data);
-            written = false;
         }
         if (!target) continue;
         operand->value = target;
@@ -2572,6 +2615,7 @@ n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     th_param *params = places ? core_alloc_array(th_param, count + 1)
                               : nullptr;
     ok = params != nullptr;
+    bool failed = false;
     for (size_t p = 0; ok && p < count; p++) {
         // An adapter takes a keyword parameter, which is never `out` or
         // `modify` and may be omitted, as its value
@@ -2584,25 +2628,57 @@ n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ir_operand_t *operand = &in->operands[p + 1];
         if (operand->kind == IR_OPD_MISSING) continue;
         ir_value_t *value = ir_operand_value(operand);
+        ok = value != nullptr;
         // An argument the reference remembers is passed by reference is
-        // its place already.
-        if (keyword || th_mode_by_reference(formal->mode)) {
+        // its place already, and was checked as one.
+        if (ok && th_mode_by_reference(formal->mode)) {
             places[p] = value;
-            ok = value != nullptr;
             continue;
         }
-        ir_instr_t *def = value ? value->def : nullptr;
-        ir_value_t *place = value
-                && !(def && def->op == IR_OP_OPTION_GET)
-            ? n00bb_rewrite_place(rewrite, value, in->span) : nullptr;
-        if (place && (!n00bb_place_writable(place)
-                      || !ir_type_eq(module, th_ind_referent(
-                             th_resolve(place->type)), type)))
-            place = nullptr;
-        places[p] = place ? place
-            : value ? n00bb_rewrite_temporary_place(rewrite, value, in->span)
-                    : nullptr;
-        ok = places[p] != nullptr;
+        // Every other argument must be a writable place too, a varargs
+        // array's every item: passed by place to an adapter, it may be
+        // written, as an `out` or `modify` argument may be. The varargs
+        // array itself is a temporary holding them.
+        bool rest = p >= positional + keywords;
+        ir_instr_t *pack = rest && value->def
+                && value->def->op == IR_OP_AGGREGATE
+            ? value->def : nullptr;
+        for (uint32_t item = 0; ok && item < (pack ? pack->n_operands : 1);
+             item++) {
+            ir_value_t *given = pack ? ir_operand_value(&pack->operands[item])
+                                     : value;
+            ir_instr_t *def = given ? given->def : nullptr;
+            ir_value_t *place = given
+                    && !(def && def->op == IR_OP_OPTION_GET)
+                ? n00bb_rewrite_place(rewrite, given, in->span) : nullptr;
+            if (place && !ir_type_eq(module, th_ind_referent(
+                    th_resolve(place->type)), given->type))
+                place = nullptr;
+            ir_local_t *local = nullptr;
+            ir_value_t *storage = nullptr;
+            n00bb_argument_place_t why = n00bb_argument_place(place, false,
+                &local, &storage);
+            if (why != N00BB_ARGUMENT_WRITABLE) {
+                core_string_t target = n00bb_text(
+                    N00B_TEXT_UNKNOWN_REFERENCE_TARGET, N00BB_NO_ARGS);
+                n00bb_report_argument_place(rewrite, in, given, why, local,
+                                            storage, target);
+                core_free(target.data);
+                failed = true;
+                continue;
+            }
+            if (!rest && !keyword) places[p] = place;
+        }
+        if (keyword) places[p] = value;
+        else if (rest)
+            places[p] = n00bb_rewrite_temporary_place(rewrite, value,
+                                                      in->span);
+        ok = ok && (failed || places[p] != nullptr);
+    }
+    if (failed) {
+        core_free(places);
+        core_free(params);
+        return true;
     }
     th_type *by_place = ok
         ? th_func_with_error(types, th_func_ret(signature),

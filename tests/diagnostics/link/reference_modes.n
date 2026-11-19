@@ -9,7 +9,8 @@ func add(modify tally: Tally, by: int) -> int {
     return tally.count
 }
 func apply(f: Ref[(Tally, int) -> int], modify tally: Tally) -> int {
-    return f.call(tally, 1)
+    var one = 1
+    return f.call(tally, one)
 }
 func replaced(modify old: 'T, given: 'T) -> 'T {
     old = given

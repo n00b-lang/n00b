@@ -61,8 +61,13 @@ require varargs.call(1) == 2
 require varargs.call(1, 2, 3) == 12
 require varargs.call(1, 2, 3, scale = 3) == 18
 
+# A call through a reference whose function isn't known is given places it
+# may write: variables, not literals.
 func twice(f: Ref[(int, scale: int) -> int]) -> int {
-    return f.call(7) + f.call(1, scale = 100)
+    var seven = 7
+    var one = 1
+    var hundred = 100
+    return f.call(seven) + f.call(one, scale = hundred)
 }
 require twice(ref scaled) == 114
 
@@ -111,7 +116,9 @@ func counted(first: 'T, *rest: 'T, extra: int = 0) -> int {
     return len(rest) + 1 + extra
 }
 func both(f: Ref[(string, other: string) -> string]) -> string {
-    return f.call("x") + f.call("x", other = "y")
+    var x = "x"
+    var y = "y"
+    return f.call(x) + f.call(x, other = y)
 }
 let either_int: Ref[(int, other: int) -> int] = ref either
 let either_text: Ref[(string, other: string) -> string] = ref either
@@ -124,7 +131,11 @@ let counted_flags: Ref[(bool, *bool, extra: int) -> int] = ref counted
 require counted_flags.call(true, false, true) == 3
 require counted_flags.call(true, extra = 10) == 11
 func counted_through(f: Ref[(int, *int, extra: int) -> int]) -> int {
-    return f.call(1, 2, 3) + f.call(1, extra = 10)
+    var one = 1
+    var two = 2
+    var three = 3
+    var ten = 10
+    return f.call(one, two, three) + f.call(one, extra = ten)
 }
 require counted_through(ref counted) == 14
 
@@ -140,7 +151,11 @@ require later_ints.call(1) == 1
 require later_ints.call(1, b = 5) == 5
 require later_ints.call(1, zz = 7) == 1
 func later_through(f: Ref[(int, b: int, zz: int) -> int]) -> int {
-    return f.call(2, b = 9) + f.call(3, zz = 4)
+    var two = 2
+    var nine = 9
+    var three = 3
+    var four = 4
+    return f.call(two, b = nine) + f.call(three, zz = four)
 }
 require later_through(ref later) == 12
 func replaced(modify old: 'T, given: 'T) -> 'T {
@@ -149,14 +164,16 @@ func replaced(modify old: 'T, given: 'T) -> 'T {
 }
 func replaced_through(f: Ref[(int, int) -> int]) -> int {
     var value = 1
-    _ = f.call(value, 8)
+    var given = 8
+    _ = f.call(value, given)
     return value
 }
 require replaced_through(ref replaced) == 8
 func generic_held() {
     var held: Ref[(string, string) -> string] = ref replaced
     var text = "a"
-    require held.call(text, "b") == "b"
+    var b = "b"
+    require held.call(text, b) == "b"
     require text == "b"
     let kept: Ref[(int, int) -> int] = ref replaced
     var number = 1
@@ -164,8 +181,11 @@ func generic_held() {
     require number == 3
     var ordered_later: Ref[(string, b: string, zz: string) -> string] =
         ref later
-    require ordered_later.call("x", b = "y") == "y"
-    require ordered_later.call("x", zz = "z") == "x"
+    var x = "x"
+    var y = "y"
+    var z = "z"
+    require ordered_later.call(x, b = y) == "y"
+    require ordered_later.call(x, zz = z) == "x"
 }
 generic_held()
 
@@ -225,9 +245,11 @@ callback Tally_Counter {
 }
 func setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil {
     var started = state.__value
-    _ = handler.call(started, 100)
+    var hundred = 100
+    _ = handler.call(started, hundred)
     let kept = handler
-    _ = kept.call(started, 1000)
+    var thousand = 1000
+    _ = kept.call(started, thousand)
     state.__value = started
 }
 func make_counter() -> Tally_Counter {
@@ -243,7 +265,9 @@ require make_counter().call(1) == 1101
 # declared in another order (through its reference adapter), and by value
 # to any other function.
 func apply(f: Ref[(int, b: int, zz: int) -> int]) -> int {
-    return f.call(5, b = 7)
+    var five = 5
+    var seven = 7
+    return f.call(five, b = seven)
 }
 require apply(ref ordered) == 517
 
@@ -251,14 +275,17 @@ func plain_add(a: int, b: int) -> int {
     return a + b
 }
 func plain_through(f: Ref[(int, int) -> int]) -> int {
-    return f.call(3, 4)
+    var three = 3
+    var four = 4
+    return f.call(three, four)
 }
 require plain_through(ref plain_add) == 7
 
 func call_through(f: Ref[(Tally, int) -> int], start: int, by: int) -> int {
     var tally: Tally
     tally.count = start
-    let returned = f.call(tally, by)
+    var amount = by
+    let returned = f.call(tally, amount)
     return tally.count * 1000 + returned
 }
 require call_through(ref tally_add, 1, 2) == 3003
@@ -268,7 +295,8 @@ func step_through(f: Ref[(Tally, by: int) -> int]) -> int {
     var tally: Tally
     tally.count = 0
     _ = f.call(tally)
-    _ = f.call(tally, by = 10)
+    var ten = 10
+    _ = f.call(tally, by = ten)
     return tally.count
 }
 require step_through(ref tally_step) == 11
@@ -286,21 +314,27 @@ func held_modes() {
     var tally: Tally
     tally.count = 10
     var held: Ref[(Tally, int) -> int] = ref tally_add
-    require held.call(tally, 5) == 15
+    var by = 5
+    require held.call(tally, by) == 15
     require tally.count == 15
     held = ref tally_set
-    require held.call(tally, 2) == 2
+    by = 2
+    require held.call(tally, by) == 2
     require tally.count == 2
     var holder: Tally_Action
     holder.action = ref tally_add
-    require holder.action.call(tally, 3) == 5
+    by = 3
+    require holder.action.call(tally, by) == 5
     require tally.count == 5
     holder.action = ref tally_set
-    require holder.action.call(tally, 40) == 40
+    by = 40
+    require holder.action.call(tally, by) == 40
     require tally.count == 40
-    require picked(false).call(tally, 1) == 41
+    by = 1
+    require picked(false).call(tally, by) == 41
     require tally.count == 41
-    require picked(true).call(tally, 6) == 6
+    by = 6
+    require picked(true).call(tally, by) == 6
     require tally.count == 6
 }
 held_modes()
@@ -315,7 +349,8 @@ func bump_and_peek(modify count: int, seen: Ref[int]) -> int {
 }
 func aliased_through(f: Ref[(int, Ref[int]) -> int]) -> int {
     var count = 1
-    let peeked = f.call(count, ref count)
+    var seen = ref count
+    let peeked = f.call(count, seen)
     require count == 6
     return peeked
 }

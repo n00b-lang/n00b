@@ -1,24 +1,31 @@
 # Calls through function references a library made, typed and linked
-# against the library's archived interface (reference_archive.sh).
+# against the library's archived interface (reference_archive.sh). A call
+# through a reference whose function isn't known is given variables, which
+# it may write.
 import modlib
 
 func through(f: Ref[(modlib.Tally, int) -> int], start: int,
              by: int) -> int {
     var tally: modlib.Tally
     tally.count = start
-    let returned = f.call(tally, by)
+    var amount = by
+    let returned = f.call(tally, amount)
     return tally.count * 1000 + returned
 }
 
 func ordered_through(f: Ref[(int, b: int, zz: int) -> int]) -> int {
-    return f.call(5, b = 7) + f.call(5, zz = 3)
+    var five = 5
+    var seven = 7
+    var three = 3
+    return f.call(five, b = seven) + f.call(five, zz = three)
 }
 
 func run() {
     var t: modlib.Tally
     t.count = 1
+    var two = 2
     let f = modlib.module_add()
-    require f.call(t, 2) == 3
+    require f.call(t, two) == 3
     require t.count == 3
     let direct = ref modlib.tally_add
     require direct.call(t, 1) == 4
@@ -27,9 +34,12 @@ func run() {
     require through(ref modlib.tally_add, 2, 2) == 4004
     require modlib.apply(ref modlib.tally_add, t, 10) == 14
     require t.count == 14
+    var five = 5
+    var seven = 7
+    var three = 3
     let g = modlib.module_ordered()
-    require g.call(5) == 512
-    require g.call(5, b = 7, zz = 3) == 537
+    require g.call(five) == 512
+    require g.call(five, b = seven, zz = three) == 537
     require ordered_through(modlib.module_ordered()) == 517 + 532
     require ordered_through(ref modlib.ordered) == 517 + 532
 }
