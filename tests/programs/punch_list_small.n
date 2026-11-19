@@ -324,4 +324,20 @@ require where_calls(ref where_twice) == 1 and where_keyed(where_keys) == 1
 func where_not_string(x: 'T) -> 'T where 'T: != string { return x }
 func where_through(x: 'U) -> 'U { return where_not_string(x) }
 require where_not_string(3) == 3 and where_through(2.5) == 2.5
+
+# A generic alias of an array, an option or a tuple: its target owns its
+# type variables in the program's metadata.
+alias Alias_Ints = Array['T]
+alias Alias_Maybe = 'T?
+alias Alias_Pair = Tuple['A, 'B]
+func alias_count(x: Alias_Ints['U]) -> uint { return x.len() }
+func alias_values() -> int {
+    var numbers: Alias_Ints[int] = [1, 2]
+    let maybe: Alias_Maybe[int] = 3
+    let pair: Alias_Pair[int, string] = (4, "x")
+    require numbers[1] == 2 and alias_count(numbers) == 2
+    require maybe == 3 and pair[1] == "x"
+    return pair[0]
+}
+require alias_values() == 4
 __fd_write(2, "ok")

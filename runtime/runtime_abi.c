@@ -374,14 +374,14 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
         if (type && type->typevar_owner_type_index) {
             const n00b_abi_type_v1 *owner = n00b_abi_v1_type(snapshot,
                 type->typevar_owner_type_index);
-            if (!owner || (owner->kind != N00B_ABI_TYPE_TRAIT
-                && owner->kind != N00B_ABI_TYPE_RECORD
-                && owner->kind != N00B_ABI_TYPE_VARIANT
-                && owner->kind != N00B_ABI_TYPE_ENUM
-                && owner->kind != N00B_ABI_TYPE_FLAGSET
-                && owner->kind != N00B_ABI_TYPE_CALLBACK
-                && owner->kind != N00B_ABI_TYPE_WRAPPER
-                && owner->kind != N00B_ABI_TYPE_OBJECT))
+            // A declared type owns its parameters; a generic alias's are
+            // owned by its target, which can be any type that can hold a
+            // variable (`alias Ints = Array['T]` has an array own `'T`).
+            if (!owner || owner->kind == N00B_ABI_TYPE_NIL
+                || owner->kind == N00B_ABI_TYPE_PRIMITIVE
+                || owner->kind == N00B_ABI_TYPE_STRING
+                || owner->kind == N00B_ABI_TYPE_VARIABLE
+                || owner->kind == N00B_ABI_TYPE_FOREIGN)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i,
                     offsetof(n00b_abi_type_v1, typevar_owner_type_index));
         }
