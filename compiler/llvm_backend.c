@@ -13748,6 +13748,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
              size_t global_binding_count,
              ir_storage_origin_t *storage_origin,
              const pointer_set_t *reachable,
+             const pointer_set_t *cached,
              const core_list_t(callback_binding_t) *callback_bindings,
              const n00bb_llvm_index_table_t *index_table,
              core_diagnostics_t *diagnostics)
@@ -13889,10 +13890,17 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     for (size_t i = 0; i < inline_callees.items.len; i++)
         needs_allocation_callee |= summary_has(inline_callees.items.data[i],
             IR_SUMMARY_ALLOCATES_DIRECT, false);
-    for (size_t i = 0; ok && needs_allocation_callee && reachable
-         && i < reachable->items.len; i++) {
-        ir_func_t *function = reachable->items.data[i];
-        if (!is_mutator_allocator(function) || function->owner == source
+    // The allocators the program reached, compiled from source this build
+    // or from the cache (their bodies then are the cached ones): either
+    // way their bodies are inlined here.
+    size_t reached = reachable ? reachable->items.len : 0;
+    size_t candidates = reached + (cached ? cached->items.len : 0);
+    for (size_t i = 0; ok && needs_allocation_callee && i < candidates;
+         i++) {
+        ir_func_t *function = n00bb_cached_body(i < reached
+            ? reachable->items.data[i] : cached->items.data[i - reached]);
+        if (!function || !is_mutator_allocator(function)
+            || function->owner == source
             || pointer_set_has(&inline_callees, function))
             continue;
         if (ir_func_is_always_inline(function) && function->n_blocks) {
@@ -14469,6 +14477,7 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         backend->function_index_count, backend->global_bindings,
         backend->global_binding_count, backend->storage_origin,
         backend_reachable(backend),
+        backend->cached_bound ? &backend->cached : nullptr,
         backend->callback_bindings ? &backend->callback_bindings->list
                                    : nullptr,
         backend->index_table, diagnostics);
