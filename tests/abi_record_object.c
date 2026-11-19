@@ -86,11 +86,26 @@ cycle_fact(const core_object_section_t *metadata,
         N00B_ABI_TABLE_U32_STREAM);
     assert(modules && modules->record_count == 2
         && sccs && sccs->record_count == 2
-        && requirements && requirements->record_count == 2 && stream);
+        && requirements && stream);
     const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
     const n00b_abi_scc_v1 *group = row_at(metadata, sccs, 1);
-    const n00b_abi_requirement_v1 *import = row_at(metadata,
-        requirements, 1);
+    // A member requires two modules: the library's `builtin`, as every
+    // user module does, and the next member of its cycle.
+    const n00b_abi_requirement_v1 *import = nullptr;
+    bool builtin = false;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = row_at(metadata,
+            requirements, i);
+        if (SHORT_NAME_IS(&row->full_path, "builtin.__init")) {
+            assert(!builtin && row->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+            builtin = true;
+            continue;
+        }
+        if (row->symbol_kind != N00B_ABI_SYMBOL_MODULE) continue;
+        assert(!import);
+        import = row;
+    }
+    assert(builtin && import);
     assert(module->scc_index == 1 && !module->imports.count
         && group->interface_identity && group->freshness_identity
         && group->members.count == 1 && group->lexical_order.count == 1

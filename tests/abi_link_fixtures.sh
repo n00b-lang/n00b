@@ -29,17 +29,17 @@ library_dump() {
 }
 
 library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
-    abi_value_root foreign_enum_user builtin.cycle_first
+    abi_value_root foreign_enum_user cycles.cycle_first
 # These builds' linked libraries are checked below as well.
-library_dump "$abi_programs" "$tmp/cycle_long" builtin.cycle_long_a
-library_dump "$abi_programs" "$tmp/cycle_self" builtin.cycle_self
+library_dump "$abi_programs" "$tmp/cycle_long" cycles.cycle_long_a
+library_dump "$abi_programs" "$tmp/cycle_self" cycles.cycle_self
 # A module's object depends only on the module, not on what else the build
 # has in it (the cache reuses it in other programs). The other root is
 # cheap on purpose: this build is only here for the comparison.
-library_dump "$abi_programs" "$tmp/alone" empty builtin.cycle_first
-cmp "$tmp/abi/builtin.cycle_first.n00bm" \
-    "$tmp/alone/builtin.cycle_first.n00bm" || {
-    echo "builtin.cycle_first's ABI object differs with other roots" >&2
+library_dump "$abi_programs" "$tmp/alone" empty cycles.cycle_first
+cmp "$tmp/abi/cycles.cycle_first.n00bm" \
+    "$tmp/alone/cycles.cycle_first.n00bm" || {
+    echo "cycles.cycle_first's ABI object differs with other roots" >&2
     exit 1
 }
 library_dump "$records" "$tmp/records" record_root shared_link_first
@@ -106,19 +106,33 @@ N00B_PATH="$interface_programs" "$compiler" library \
 "$abi_link_input_test" --linked-flagset "$tmp/linked_flagset_abi.n00bm"
 "$abi_record_object_test" "$tmp/generic/generic_modify_parameter.n00bm" generic
 "$abi_record_object_test" "$tmp/generic/generic_local.n00bm" generic-local
-"$abi_record_object_test" "$cycle/builtin.cycle_first.n00bm" cycle \
-    "$cycle/builtin.cycle_second.n00bm"
-"$abi_record_object_test" "$cycle_long/builtin.cycle_long_a.n00bm" cycle \
-    "$cycle_long/builtin.cycle_long_b.n00bm" \
-    "$cycle_long/builtin.cycle_long_c.n00bm"
-"$abi_link_input_test" "$cycle_long/builtin.cycle_long_a.n00bm" \
-    "$cycle_long/builtin.cycle_long_b.n00bm" \
-    "$cycle_long/builtin.cycle_long_c.n00bm" \
-    "$tmp/cycle_long_archive_linked.n00bm"
+"$abi_record_object_test" "$cycle/cycles.cycle_first.n00bm" cycle \
+    "$cycle/cycles.cycle_second.n00bm"
+"$abi_record_object_test" "$cycle_long/cycles.cycle_long_a.n00bm" cycle \
+    "$cycle_long/cycles.cycle_long_b.n00bm" \
+    "$cycle_long/cycles.cycle_long_c.n00bm"
+# The library objects a build's cycle requires (every cycle module imports
+# `builtin`), which the link tests select along with it.
+cycle_library() {
+    for object in "$1"/*.n00bm; do
+        case "$(basename "$object")" in
+        linked.n00bm | cycles.*) continue ;;
+        esac
+        printf '%s\n' "$object"
+    done
+}
+# (The temporary directory's paths have no spaces.)
+# shellcheck disable=SC2046
+"$abi_link_input_test" --cycle "$tmp/cycle_long_archive_linked.n00bm" \
+    "$cycle_long/cycles.cycle_long_a.n00bm" \
+    "$cycle_long/cycles.cycle_long_b.n00bm" \
+    "$cycle_long/cycles.cycle_long_c.n00bm" $(cycle_library "$cycle_long")
 "$abi_register_object_test" "$tmp/cycle_long_archive_linked.n00bm" '>=3'
 "$abi_register_object_test" "$cycle_long/linked.n00bm" '>=3'
-"$abi_record_object_test" "$cycle_self/builtin.cycle_self.n00bm" cycle
-"$abi_link_input_test" --self "$cycle_self/builtin.cycle_self.n00bm"
+"$abi_record_object_test" "$cycle_self/cycles.cycle_self.n00bm" cycle
+# shellcheck disable=SC2046
+"$abi_link_input_test" --self "$cycle_self/cycles.cycle_self.n00bm" \
+    $(cycle_library "$cycle_self")
 "$abi_register_object_test" "$cycle_self/linked.n00bm" '>=1'
 N00B_PATH="$abi_programs" "$compiler" library \
     --output "$tmp/enum_export_linked.n00bm" enum_export.__init

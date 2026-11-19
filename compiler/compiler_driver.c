@@ -3046,11 +3046,13 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
                       core_translation_unit_t *importer,
                       core_string_t module_name)
 {
-    core_string_t name = importer->module.identifier;
     n00bb_tu_state_t *importer_state = tu_state(importer);
     if (importer_state && importer_state->interface_module) return true;
-    if (name.u8_bytes >= sizeof("builtin.") - 1
-        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
+    // The library's own package does not import itself. Which modules are
+    // its is by origin: a `builtin.x` of any other package is the user's,
+    // and imports the library's like every other module.
+    if (n00bb_system_unit(importer)
+        && core_string_eq(n00bb_package_namespace(importer), module_name))
         return true;
     if (load_runtime_module(opaque, grammar, importer, module_name))
         return true;
