@@ -71,7 +71,8 @@ emit_simple_literal(parse_grammar_t *grammar, parse_tree_t *node,
 static void
 emit_unary(parse_grammar_t *grammar, parse_tree_t *node, n00bb_emit_t *emit)
 {
-    if (child_named(grammar, node, 0, S("not-op")))
+    if (child_named(grammar, node, 0, S("not-op"))
+        || child_named(grammar, node, 0, S("not-word-op")))
         emit_set(emit, S("bool_not"), 1, 1, 0);
     else if (child_is(node, 0, S("~")))
         emit_set(emit, S("complement"), 1, 1, 0);

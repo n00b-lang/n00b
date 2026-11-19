@@ -177,6 +177,7 @@ static const struct {
     {CORE_STRING_STATIC("and-op"), PP_OP_AND},
     {CORE_STRING_STATIC("or-op"), PP_OP_OR},
     {CORE_STRING_STATIC("not-op"), PP_OP_NOT},
+    {CORE_STRING_STATIC("not-word-op"), PP_OP_NOT},
     {CORE_STRING_STATIC("unary-expr"), PP_OP_PREFIX},
     {CORE_STRING_STATIC("tuple-or-paren"), PP_OP_PAREN},
     {CORE_STRING_STATIC("formals"), PP_FORMALS},
@@ -1995,7 +1996,7 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         S("plus-op"), S("minus-op"), S("multiply-op"), S("divide-op"),
         S("remainder-op"), S("amp-op"), S("pipe-op"), S("xor-op"),
         S("left-shift-op"), S("right-shift-op"), S("or-op"), S("and-op"),
-        S("not-op"), S("nil-keyword"),
+        S("not-op"), S("not-word-op"), S("nil-keyword"),
     };
 #undef S
     if (!node || core_tree_is_leaf(node)) return true;
@@ -3520,6 +3521,7 @@ style_spelling(pp_context_t *ctx, parse_tree_t *node)
         {"or-op", PP_SPELL_OR, PP_SPELL_PIPE_PIPE},
         {"and-op", PP_SPELL_AND, PP_SPELL_AMP_AMP},
         {"not-op", PP_SPELL_BANG, PP_SPELL_NOT},
+        {"not-word-op", PP_SPELL_BANG, PP_SPELL_NOT},
         {"nil-keyword", PP_SPELL_NIL, PP_SPELL_PY_NONE},
         {"record-keyword", PP_SPELL_RECORD, PP_SPELL_STRUCT},
         {"return-sigil", PP_SPELL_ARROW, PP_SPELL_RETURN_COLON},

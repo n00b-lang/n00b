@@ -1107,7 +1107,8 @@ check_operator(parse_grammar_t *grammar, parse_tree_t *node)
 {
     return nt_is(grammar, node, CORE_STRING_STATIC("and-op"))
         || nt_is(grammar, node, CORE_STRING_STATIC("or-op"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("not-op"));
+        || nt_is(grammar, node, CORE_STRING_STATIC("not-op"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("not-word-op"));
 }
 
 static size_t
@@ -1119,7 +1120,8 @@ check_operands(parse_grammar_t *grammar, parse_tree_t *node,
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
         if (core_tree_is_leaf(child)) continue;
-        if (nt_is(grammar, child, CORE_STRING_STATIC("not-op")))
+        if (nt_is(grammar, child, CORE_STRING_STATIC("not-op"))
+            || nt_is(grammar, child, CORE_STRING_STATIC("not-word-op")))
             *negated = true;
         if (check_operator(grammar, child)) continue;
         if (count < 2) operands[count] = child;

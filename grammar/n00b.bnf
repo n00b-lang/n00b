@@ -621,8 +621,12 @@
 <left-shift-assign-op> ::= %"<<="
 <right-shift-assign-op> ::= %">>="
 
+# `!` binds to its operand (`!p`); the keyword spelling is spaced like
+# any word (`not p`), so each has its own operator rule.
 <unary-expr> @nospace ::= <not-op> <unary-expr>
-<not-op> ::= %"!" | %"not"
+<unary-expr> ::= <not-word-op> <unary-expr>
+<not-op> ::= %"!"
+<not-word-op> ::= %"not"
 <unary-expr> @nospace ::= %"~" <unary-expr>
 <unary-expr> @nospace ::= %"-" <unary-expr>
 <unary-expr> @nospace ::= %"+" <unary-expr>
@@ -907,7 +911,8 @@
 <trait-check> ::= <trait-check-and> (<or-op> <trait-check-and>)*
 <trait-check-and> ::= <trait-check-unary> (<and-op> <trait-check-unary>)*
 <trait-check-unary> ::= <trait-check-term>
-<trait-check-unary> ::= <not-op> <trait-check-unary>
+<trait-check-unary> @nospace ::= <not-op> <trait-check-unary>
+<trait-check-unary> ::= <not-word-op> <trait-check-unary>
 <trait-check-unary> ::= %"(" <trait-check> %")"
 <trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
 
