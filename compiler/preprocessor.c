@@ -404,6 +404,25 @@ leaf_text(pp_context_t *ctx, parse_tree_t *node)
     return core_string_from_raw(source.data + start, (int64_t)(end - start));
 }
 
+// leaf_text's spelling, borrowed from the token or the unit's source rather
+// than copied: for comparing a name, which is all builtin_name's callers do.
+static core_string_t
+leaf_text_view(pp_context_t *ctx, parse_tree_t *node)
+{
+    parse_token_info_t *token = parse_node_token(node);
+    if (!token) return (core_string_t){0};
+    core_option_t(core_string_t) value = parse_token_value(token);
+    if (core_option_is_set(value))
+        return core_option_get(value);
+    core_string_t source = core_source_file_contents(&ctx->unit->source);
+    size_t size = core_source_file_size(&ctx->unit->source);
+    size_t start = parse_token_start_byte(token);
+    size_t end = parse_token_end_byte(token);
+    if (start >= end || end > size)
+        return (core_string_t){0};
+    return core_string_borrow(source.data + start, end - start);
+}
+
 static core_string_t
 first_leaf_text(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -2160,7 +2179,7 @@ builtin_name(pp_context_t *ctx, parse_tree_t *node)
                && core_tree_num_children(callee) == 1)
             callee = core_tree_child(callee, 0);
         return callee && core_tree_is_leaf(callee)
-            ? leaf_text(ctx, callee) : (core_string_t){0};
+            ? leaf_text_view(ctx, callee) : (core_string_t){0};
     }
     if (core_tree_num_children(node) != 1) return (core_string_t){0};
     return builtin_name(ctx, core_tree_child(node, 0));
