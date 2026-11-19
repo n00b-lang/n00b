@@ -585,9 +585,11 @@ decode_stored_body(ir_summary_t *summary)
     *summary            = *decoded;
     core_list_free(summary->deps);
     core_list_free(summary->inputs);
+    core_list_free(summary->fields);
     core_list_free(summary->queries);
     summary->deps       = shell.deps;
     summary->inputs     = shell.inputs;
+    summary->fields     = shell.fields;
     summary->queries    = shell.queries;
     summary->queries_known = shell.queries_known;
     summary->identity   = shell.identity;
@@ -601,6 +603,7 @@ decode_stored_body(ir_summary_t *summary)
     *decoded        = shell;
     decoded->deps   = core_list_new(summary_dep_t);
     decoded->inputs = core_list_new(summary_input_t);
+    decoded->fields = core_list_new(ir_sfield_t);
     decoded->queries = (typeof(decoded->queries)){0};
     summary_free(decoded);
 }

@@ -628,6 +628,44 @@ push_cached_reach(n00bb_link_analysis_t *analysis,
     core_dict_free(&reach.seen);
 }
 
+// The bodies of the functions a build emits from the units of the root's
+// package that come from the cache. Compiled from source, those functions
+// are emitted, and so summarized, and the unused-item checks read what
+// they write from their summaries (see n00bb_report_unused_items); loaded
+// from the cache, they would otherwise have none, and a global or field
+// only they set would read as never used.
+void
+n00bb_cached_package_bodies(n00bb_link_analysis_t *analysis,
+                            core_list_t(n00bb_ir_func_ptr_t) *out)
+{
+    core_translation_unit_t *root = analysis->units.len
+        ? analysis->units.data[0] : nullptr;
+    // The cached functions belong to the modules loaded from the cache, not
+    // to the units' interface modules: match them by name.
+    core_dict_t modules;
+    core_dict_init_string(&modules);
+    for (size_t u = 0; root && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module || !state->interface_module
+            || !n00bb_same_package(analysis->units.data[u], root)
+            || n00bb_module_unanalyzed(analysis, state->ir_module))
+            continue;
+        core_string_t name = ir_module_name(state->ir_module);
+        if (!core_dict_contains(&modules, &name))
+            core_dict_put(&modules, core_dict_string_key_copy(name), 1);
+    }
+    for (size_t i = 0; modules.count && i < analysis->cached_functions.len;
+         i++) {
+        ir_func_t    *function = analysis->cached_functions.data[i];
+        ir_func_t    *body     = n00bb_cached_body(function);
+        core_string_t name     = ir_module_name(function->owner);
+        if (body && body->n_blocks && core_dict_contains(&modules, &name))
+            core_list_push(*out, body);
+    }
+    core_dict_foreach(&modules, item) core_dict_string_key_free(item->key);
+    core_dict_free(&modules);
+}
+
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
@@ -643,6 +681,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
                 analysis->emitted_functions.data[i]->owner))
             core_list_push(roots, n00bb_cached_body(
                 analysis->emitted_functions.data[i]));
+    n00bb_cached_package_bodies(analysis, &roots);
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)

@@ -446,6 +446,12 @@ stored_component(ir_summaries_t *summaries, ir_func_t *const *members,
             && inputs_hold(summaries, &found[i]->inputs);
     for (size_t i = 0; all && i < count; i++)
         core_dict_put(&summaries->by_function, members[i], found[i]);
+    // A stored summary leaves out the fields its function uses, which come
+    // from the body alone: find them as solve_component would.
+    for (size_t i = 0; all && !summaries->escapes_only && i < count; i++) {
+        found[i]->fields.len = 0;
+        summarize_fields(summaries, found[i], members[i]);
+    }
     if (all) stamp_component(summaries, members, count);
     core_free(found);
     return all;

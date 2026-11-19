@@ -1,5 +1,16 @@
 # A program whose dependency gets an error only from the analysis of the
 # whole program. A second `check` reports it again, as the first did: the
 # dependency is not stored in the cache with an error against it.
+#
+# `settings` checks clean and is stored in the cache; the warnings about
+# what only its own functions set are the same when the second check loads
+# it from there.
 import dep
+import settings
+import user
 require dep.read_counted() == 0
+
+func main() -> uint {
+    var tunings: Array[settings.Tuning][2]
+    return tunings.len()
+}

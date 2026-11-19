@@ -1956,6 +1956,10 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
     const core_list_t(n00bb_ir_func_ptr_t) *entries);
 
+void
+n00bb_cached_package_bodies(n00bb_link_analysis_t *analysis,
+                            core_list_t(n00bb_ir_func_ptr_t) *out);
+
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);
 
