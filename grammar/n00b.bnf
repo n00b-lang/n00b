@@ -795,7 +795,7 @@
                     | <sized-int-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
-                    | %"(" <union-tspec> <where-clause>? %")"
+<base-tspec-core> @nospace($1) @nospace($3) ::= %"(" <union-tspec> <where-clause>? %")"
 
 <tspec-application> @nospace ::=
     %"[" <tspec-list> %"]"
