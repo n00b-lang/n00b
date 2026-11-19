@@ -305,6 +305,22 @@ func held_modes() {
 }
 held_modes()
 
+# A `modify` argument of a call through a reference whose function isn't
+# known is the caller's own place, not a copy: the function sees its
+# writes at once through another reference to the place, and the caller
+# reads them after.
+func bump_and_peek(modify count: int, seen: Ref[int]) -> int {
+    count += 5
+    return seen.__value
+}
+func aliased_through(f: Ref[(int, Ref[int]) -> int]) -> int {
+    var count = 1
+    let peeked = f.call(count, ref count)
+    require count == 6
+    return peeked
+}
+require aliased_through(ref bump_and_peek) == 6
+
 # `ref` of a function whose parameters are all `in`, with no keyword
 # parameters to reorder, is the function itself; of any other, it is the
 # function's reference adapter (reference_keywords.sh reads which).

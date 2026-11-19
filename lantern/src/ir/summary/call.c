@@ -1132,7 +1132,10 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         // An `out` or `modify` argument is the caller's place, which the
         // call borrows: what the place holds escapes to the unknown callee,
         // and can be stored anywhere it writes, but not the place itself
-        // (as escaping_items has it for a known callee).
+        // (as escaping_items has it for a known callee that keeps no
+        // reference to it). An unknown callee is reached through a function
+        // reference, and no function that keeps a reference to a by-
+        // reference parameter can be referred to (n00b's N00B-S0106).
         th_type *signature = ir_instr_call_signature(call);
         signature = signature ? th_resolve(signature) : nullptr;
         pt_set_t *arguments = core_alloc_array(pt_set_t, call->n_operands);

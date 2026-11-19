@@ -550,8 +550,7 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
         && ir_machine_of(module, error).class != IR_CLASS_VOID;
     size_t count = th_func_nparams(callee);
     ir_value_t **arguments = core_alloc_array(ir_value_t *, count + 1);
-    ir_local_t **copies = core_alloc_array(ir_local_t *, count + 1);
-    bool ok = arguments && copies;
+    bool ok = arguments != nullptr;
     size_t given = th_func_nparams(adapter->signature);
     for (size_t i = 0; ok && i < count; i++) {
         uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
@@ -566,48 +565,17 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
         }
         // A reference adapter is given each positional parameter's place,
         // and each keyword parameter as its value, passed on as given or
-        // omitted (n00bb_reference_adapter_t). A place the target doesn't
-        // take by reference is read.
+        // omitted (n00bb_reference_adapter_t). A place the target takes by
+        // reference is passed on, the caller's own (the target keeps no
+        // reference to it, N00B-S0106); any other is read, for the target
+        // to take as its mode says.
         bool placed = adapter->by_place && th_mode_by_reference(
             th_func_param(adapter->signature, from)->mode);
-        if (!placed || !th_mode_by_reference(formal->mode)) {
-            arguments[i] = placed
-                ? n00bb_emit_indirect_read(context, adapter->inputs[from],
-                                           formal->type, IR_SPAN_UNKNOWN)
-                : adapter->inputs[from];
-            ok = arguments[i] != nullptr;
-            continue;
-        }
-        // One it takes by reference is given a copy of the place, written
-        // back after the call: a call through a function reference only
-        // lends the caller's place for the call (its address doesn't
-        // escape to an unknown callee), so the place the target may keep
-        // a reference to is the adapter's own.
-        char buffer[48];
-        copies[i] = ir_local_add(context->function,
-            n00bb_format_name(buffer, sizeof(buffer),
-                              "__n00bb_adapter_place_%llu",
-                              (unsigned long long)context->next_value_id++),
-            formal->type);
-        ir_value_t *current = copies[i] && formal->mode == TH_INOUT
+        arguments[i] = placed && !th_mode_by_reference(formal->mode)
             ? n00bb_emit_indirect_read(context, adapter->inputs[from],
                                        formal->type, IR_SPAN_UNKNOWN)
-            : nullptr;
-        ir_instr_t *take = copies[i]
-                && (formal->mode != TH_INOUT
-                    || (current && n00bb_emit_local_write(context, copies[i],
-                                       current, IR_SPAN_UNKNOWN)))
-            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF,
-                                        IR_SPAN_UNKNOWN)
-            : nullptr;
-        ok = take && ir_lower_set_temp_dest(context, take,
-                CORE_STRING_STATIC("__n00bb_adapter_place_"),
-                th_ind(ir_module_types(module), 0, formal->type))
-            && ir_instr_operand_local(take, copies[i]);
-        if (ok) {
-            copies[i]->synthetic = true;
-            arguments[i] = take->dest;
-        }
+            : adapter->inputs[from];
+        ok = arguments[i] != nullptr;
     }
     ir_instr_t *call = ok ? ir_lower_emit_instruction(context, IR_OP_CALL,
                                                       IR_SPAN_UNKNOWN)
@@ -625,18 +593,7 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
                &call->annots, (ir_annot_t){
                    .key = N00BB_FORWARDS_OPTIONAL_KEY,
                    .kind = IR_ANNOT_BOOL, .b = true}));
-    // The copies go back to the caller's places, whether the call failed
-    // or not, as a direct call's writes would be seen.
-    for (size_t i = 0; ok && i < count; i++) {
-        if (!copies[i]) continue;
-        uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
-        ir_value_t *written = n00bb_emit_local_read(context, copies[i],
-                                                    IR_SPAN_UNKNOWN);
-        ok = written && n00bb_emit_indirect_write(context,
-            adapter->inputs[from], written, IR_SPAN_UNKNOWN);
-    }
     core_free(arguments);
-    core_free(copies);
     ir_value_t *outcome = ok ? call->dest : nullptr;
     ir_value_t *value = outcome;
     if (ok && fails) {
@@ -709,8 +666,8 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
 // reference adapter (`order` given) already declares its optional
 // parameters, and passes `target`'s parameter `i` its parameter
 // `order[i]`: a positional parameter's place to one `target` takes by
-// reference (as a copy, n00bb_adapter_tail), the value read from it to any
-// other, and a keyword parameter as given or omitted.
+// reference, the value read from it to any other, and a keyword parameter
+// as given or omitted.
 static bool
 n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
                    ir_func_t *adapter, ir_func_t *target,
