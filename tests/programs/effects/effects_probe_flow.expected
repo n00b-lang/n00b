@@ -89,7 +89,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output (new in builtin.containers.dict.ensure_entries:51:9)[]... data[self.__value.entries] control[]
   output (new in builtin.containers.hash_index.reserve:181:35)[] data[key key.__value... self.__value.index.hashes.__value[]] control[]
   output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.__value.index.dead.__value[]] control[]
-  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
+  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
   output self.__value.entries.__value.storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.dict.ensure_entries:51:9)] control[]
   output self.__value.entries.__value.storage... data[self.__value.entries] control[]
   output self.__value.entries.__value.storage.__value[] data[self.__value.entries.__value.storage.__value[]] control[]
