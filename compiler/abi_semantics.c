@@ -579,9 +579,12 @@ n00bb_abi_link_semantic_rows(
     // in for parsing the row's name, which costs far more.
     core_dict_t interned;
     core_dict_init(&interned, nullptr, nullptr);
-    for (size_t m = 0; valid && m < facts->module_count; m++) {
-        ir_module_t *module = (ir_module_t *)facts->modules[m];
-        for (size_t i = 0; i < ir_type_count(module); i++) {
+    for (size_t m = 0; valid
+         && m < facts->module_count + facts->cached_module_count; m++) {
+        ir_module_t *module = (ir_module_t *)(m < facts->module_count
+            ? facts->modules[m]
+            : facts->cached_modules[m - facts->module_count]);
+        for (size_t i = 0; module && i < ir_type_count(module); i++) {
             th_type *type = ir_type_at(module, i);
             if (type && th_is_closed(ctx, type))
                 core_dict_add(&interned,

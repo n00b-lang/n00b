@@ -3250,10 +3250,26 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         modules[i] = state->ir_module;
     }
     if (!analysis->link_types) analysis->link_types = th_ctx_new();
+    // A module loaded from the cache has, in its cached IR, the types it
+    // had compiled from source (an anonymous record's, which a row's name
+    // can't give back, among them).
+    const ir_module_t **cached_modules = core_alloc_array(const ir_module_t *,
+                                                          count + 1);
+    size_t cached_module_count = 0;
+    for (size_t i = 0; valid && i < unit_count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        ir_module_t *body = unit && tu_state(unit)->interface_module
+            ? interface_body_module(analysis, unit->module.identifier)
+            : nullptr;
+        if (body) cached_modules[cached_module_count++] = body;
+    }
     n00bb_abi_semantics_t semantics = {
         .environment = analysis->environment,
         .modules = modules,
         .module_count = count,
+        .cached_modules = cached_modules,
+        .cached_module_count = cached_module_count,
         .types = analysis->link_types,
     };
     core_string_t failure_stage = {};
@@ -3268,6 +3284,7 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         &object, &object_bytes, &failure_stage, &plan_failure,
         &rebase_failure);
     core_free(modules);
+    core_free(cached_modules);
     core_free(inputs);
     if (!valid) {
         core_buffer_t message = {0};
