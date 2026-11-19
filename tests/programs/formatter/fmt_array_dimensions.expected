@@ -1,0 +1,3 @@
+var rows: Array[int][2][][]
+var grid: Array[float][][]
+var cube: Array[int][3][3][3]

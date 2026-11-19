@@ -801,7 +801,7 @@
 <tspec-field-list> ::= <tspec-field> %"," <tspec-field-list>
                     | <tspec-field>
                     | <tspec-field> %","
-<array-dimensions> ::= <array-dimension>+
+<array-dimensions> @nospace ::= <array-dimension>+
 <array-dimension> @nospace @disambig(n00bb_prefer_type_application, 100) ::=
     %"[" <expression>? %"]"
 
