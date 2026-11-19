@@ -122,6 +122,10 @@ runtime_init_analysis_build(
         ir_func_t *initializer = state && state->ir_module
             ? ir_func_find(state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)) : nullptr;
         if (!initializer) return false;
+        // An archived or cached module's initializer is a declaration
+        // whose body is attached apart: what it sets is in that body.
+        ir_func_t *body = n00bb_cached_body(initializer);
+        if (body && body->n_blocks) initializer = body;
         runtime_function_add(&runtime->initializer_roots, initializer);
     }
     return true;

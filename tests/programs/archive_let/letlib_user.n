@@ -1,0 +1,16 @@
+# Reads module variables a library's initializer sets, checked
+# against the library's archived interface (archive_let.sh).
+import letlib
+
+callback Step {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func run() {
+    require letlib.three == 3
+    let step = callback[Step](letlib.doubler)
+    require step.call(21) == 42
+}
+run()
+__fd_write(2, "ok")

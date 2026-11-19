@@ -53,6 +53,7 @@ diagnostics	pr	35	sh "$SRC/tests/diagnostics.sh" "$BUILD/n00b" "$SRC"
 imports-bring	pr	18	sh "$SRC/tests/imports_bring.sh" "$BUILD/n00b" "$SRC/tests/programs/imports_bring" && sh "$SRC/tests/global_assign.sh" "$BUILD/n00b" "$SRC/tests/programs/global_assign"
 overload-resolution	pr	17	N00B_PATH="$SRC/tests/programs/features" sh "$SRC/tests/overload_resolution.sh" "$BUILD/n00b" "$SRC/tests/programs/features/overload_specificity.n"
 library-module-n00b	pr	4	sh "$SRC/tests/library_module.sh" "$BUILD/n00b" "$SRC/tests/programs/import_cycles/declared" shape && sh "$SRC/tests/library_module.sh" "$BUILD/n00b" "$SRC/tests/programs/compile_mode" fallible_index_read
+archive-let-n00b	pr	6	sh "$SRC/tests/archive_let.sh" "$BUILD/n00b" "$SRC/tests/programs/archive_let"
 program-args	pr	3	sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/program_args.n" alpha 'two words'
 os-n00b	pr	20	sh "$SRC/tests/os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/os"
 buffer-slices	pr	8	sh "$SRC/tests/buffer_slices.sh" "$BUILD/n00b" "$SRC/tests/programs/buffer/buffer_slices.n" "$SRC/tests/programs/buffer/buffer_thread_slice.n"
