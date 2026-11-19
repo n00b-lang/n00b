@@ -1,0 +1,5 @@
+tests/diagnostics/link/reference_consumes.n:11:35: note N00B-S0064: parameter `other` could be `view`: `spend_any` never writes anything reachable from it
+tests/diagnostics/link/reference_consumes.n:23:9: error N00B-S0107: `spend` takes its parameter `token` as a `consume` parameter, so it can't be referred to with `ref`
+  help: `spend` can still be called directly
+tests/diagnostics/link/reference_consumes.n:24:9: error N00B-S0107: `spend_any` takes its parameter `value` as a `consume` parameter, so it can't be referred to with `ref`
+  help: `spend_any` can still be called directly

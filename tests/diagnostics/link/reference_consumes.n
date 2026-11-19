@@ -1,0 +1,27 @@
+# A call through a function reference may not know that its function takes
+# an argument away from its caller, so `ref` of a function with a `consume`
+# parameter is reported, a generic function's too. Such a function can
+# still be called directly.
+record Token {
+    id: int
+}
+func spend(consume token: Token) -> int {
+    return token.id
+}
+func spend_any(consume value: 'T, other: 'T) -> 'T {
+    _ = other
+    return value
+}
+func use() -> int {
+    var token: Token
+    token.id = 1
+    let direct = spend(token)
+    var again: Token
+    again.id = 3
+    var first = 1
+    var second = 2
+    let spent = ref spend
+    let generic: Ref[(int, int) -> int] = ref spend_any
+    return direct + generic.call(first, second) + spent.call(again)
+}
+require use() > 0

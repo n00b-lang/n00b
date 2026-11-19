@@ -568,7 +568,8 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
         // omitted (n00bb_reference_adapter_t). A place the target takes by
         // reference is passed on, the caller's own (the target keeps no
         // reference to it, N00B-S0106); any other is read, for the target
-        // to take as its mode says.
+        // to take as its mode says, `in` or `view` (a function with a
+        // `consume` parameter is never referred to, N00B-S0107).
         bool placed = adapter->by_place && th_mode_by_reference(
             th_func_param(adapter->signature, from)->mode);
         arguments[i] = placed && !th_mode_by_reference(formal->mode)

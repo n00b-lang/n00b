@@ -1974,22 +1974,43 @@ check_reference_kept_places(n00bb_link_analysis_t *analysis)
                         ir_func_t *target = n00bb_reference_adapter_target(
                             value->owner, nullptr, nullptr);
                         if (!target) target = value->owner;
-                        uint32_t kept = kept_place_parameter(analysis,
-                                                             target);
+                        // A function that takes an argument away from its
+                        // caller can't be called through a reference that
+                        // doesn't say so either.
+                        th_type *signature = th_resolve(target->type);
+                        uint32_t consumed = UINT32_MAX;
+                        for (uint32_t p = 0; consumed == UINT32_MAX
+                             && th_kind_of(signature) == TH_FUNCTION
+                             && p < th_func_nparams(signature); p++)
+                            if (th_func_param(signature, p)->mode
+                                    == TH_CONSUME)
+                                consumed = p;
+                        uint32_t kept = consumed == UINT32_MAX
+                            ? kept_place_parameter(analysis, target)
+                            : consumed;
                         if (kept == UINT32_MAX) continue;
                         ir_func_t *body = n00bb_cached_body(target);
                         if (!body || body->n_params <= kept) body = target;
                         core_string_t name = n00bb_name_leaf(target->name);
-                        n00bb_report(core_translation_unit_diagnostics(unit),
+                        core_string_t parameter = kept < body->n_params
+                            ? body->params[kept]->name
+                            : CORE_STRING_STATIC("?");
+                        if (consumed != UINT32_MAX)
+                            n00bb_report(
+                                core_translation_unit_diagnostics(unit),
+                                unit, N00B_DIAG_REFERENCE_CONSUMES,
+                                n00bb_span_location(in->span),
+                                N00B_TEXT_REFERENCE_CONSUMES,
+                                N00BB_ARGS(ARG_TEXT(name),
+                                           ARG_TEXT(parameter)));
+                        else n00bb_report(
+                            core_translation_unit_diagnostics(unit),
                             unit, N00B_DIAG_REFERENCE_KEEPS_PLACE,
                             n00bb_span_location(in->span),
                             N00B_TEXT_REFERENCE_KEEPS_PLACE,
-                            N00BB_ARGS(ARG_TEXT(name),
-                                ARG_TEXT(kept < body->n_params
-                                    ? body->params[kept]->name
-                                    : CORE_STRING_STATIC("?")),
+                            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(parameter),
                                 ARG_PHRASE_ID(n00bb_mode_parameter(
-                                    th_func_param(th_resolve(target->type),
+                                    th_func_param(signature,
                                                   kept)->mode))));
                         n00bb_report_help(
                             core_translation_unit_diagnostics(unit),
