@@ -1,4 +1,4 @@
-func idle() :
+func idle():
     pass
 
 func braced() {

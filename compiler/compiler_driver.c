@@ -3930,10 +3930,23 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
         }
         else if (aligned_colon && from_start >= prior_original_end) {
             size_t original_gap = from_start - prior_original_end;
+            // A `:` that ends its line opens an indented block and is
+            // written tight, as in `if x:`.
+            size_t after = from_end;
+            while (after < source.u8_bytes
+                   && (source.data[after] == ' ' || source.data[after] == '\t'))
+                after++;
+            bool opens_block = after >= source.u8_bytes
+                || source.data[after] == '\n' || source.data[after] == '\r'
+                || n00bb_format_comment_start(source.data + after,
+                                              source.u8_bytes - after);
             bool spaces_only = original_gap > gap_len;
             for (size_t j = 0; j < original_gap && spaces_only; j++)
                 spaces_only = source.data[prior_original_end + j] == ' ';
-            if (spaces_only)
+            if (opens_block) {
+                /* Nothing between the condition and its block's `:`. */
+            }
+            else if (spaces_only)
                 core_buffer_append(&result,
                     source.data + prior_original_end, original_gap);
             else core_buffer_append(&result, printed + gap_start, gap_len);

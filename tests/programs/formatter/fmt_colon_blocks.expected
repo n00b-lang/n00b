@@ -1,0 +1,6 @@
+func f(x: bool) -> int:
+    if x:
+        return 1
+    while x:
+        pass
+    return 2
