@@ -920,7 +920,7 @@
 <trait-check-unary> @nospace($1) @nospace($2) ::= %"(" <trait-check> %")"
 <trait-check-term> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
 
-<effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
+<effect-decl> @hardline($3) @indent($3) @hardline($4) ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
 <effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
 <effect-clause> ::= <effect-source> | <effect-handler> | <effect-scope>
 <effect-source> @nospace($1) ::= %"from" %":" <effect-source-item> (%"," <effect-source-item>)*
@@ -930,7 +930,7 @@
 <effect-scope> @nospace($1) ::= %"scope" %":" <effect-scope-value>
 <effect-scope-value> ::= %IDENTIFIER | %"package"
 
-<mark-decl> ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
+<mark-decl> @hardline($3) @indent($3) @hardline($4) ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
 <mark-clause-list> @hardline ::= <mark-clause> (<eos>+ <mark-clause>)*
 <mark-clause> ::= <effect-source> | <mark-clearer> | <mark-rejecter>
 <mark-clearer> @nospace($1) ::= %"cleared_by" %":" <mark-clearer-item> (%"," <mark-clearer-item>)*
