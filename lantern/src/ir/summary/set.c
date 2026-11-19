@@ -2,6 +2,10 @@
 
 enum { SET_SCAN = 16 };
 
+// While items are added to a site's contents, the site's `added` log: each
+// item insert_item puts in the set is appended to it.
+static _Thread_local pt_set_t *contents_added;
+
 static int object_order(const pt_loc_t *a, const pt_loc_t *b);
 
 static void trim_repeats(pt_item_t *item);
@@ -496,6 +500,7 @@ insert_item(pt_set_t *set, const pt_item_t *item)
     memmove(&set->data[at + 1], &set->data[at],
             (set->len - 1 - at) * sizeof(pt_item_t));
     set->data[at] = *item;
+    if (contents_added) core_list_push(*contents_added, *item);
     return true;
 }
 
@@ -554,8 +559,14 @@ trim_repeats(pt_item_t *item)
 static void
 pt_add(pt_t *pt, pt_set_t *set, uintptr_t key, pt_item_t item)
 {
-    if ((key & 3) == 1) typed_placement(pt, (uint32_t)(key >> 2), &item);
-    if (set_add(pt, set, item)) pt_notify(pt, key);
+    bool site = (key & 3) == 1;
+    if (site) {
+        typed_placement(pt, (uint32_t)(key >> 2), &item);
+        contents_added = &pt->sites.data[key >> 2].added;
+    }
+    bool added = set_add(pt, set, item);
+    contents_added = nullptr;
+    if (added) pt_notify(pt, key);
 }
 
 static pt_item_t

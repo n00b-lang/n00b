@@ -282,6 +282,10 @@ typedef struct {
     // which `origin` refines when the call fixes the storage's type (see
     // heap_site).
     uint32_t          base;
+    // Every item added to `contents`, in the order it was added (see
+    // pt_resolve_places). An item later folded into one that covers it
+    // stays here.
+    pt_set_t          added;
 } pt_site_t;
 core_list_decl(pt_site_t);
 
@@ -421,12 +425,8 @@ struct pt_t {
     pt_set_t               scratch[3];
     flow_bits_t            crossed;
     uint32_t               crossed_known;
-    pt_set_t               seen;
-    // The locations the pt_resolve walk under way has met, exactly.
-    loc_table_t            visited;
-    // The held items that walk has gone through (see resolve_through), by
-    // location, for items that are addresses and for contents.
-    loc_table_t            through[2];
+    // The pt_resolve walk under way (see pt_resolve_places).
+    struct resolved_t     *walk;
     // Whether that walk finds places to write (see resolve_into), and the
     // walks done for that, by location.
     bool                   writing;
@@ -474,10 +474,26 @@ typedef struct {
     bool                  positional;
 } pt_memo_t;
 
+// A site location a resolve walk went into, and how many of the items
+// added to the site's contents it has gone through.
 typedef struct {
+    pt_loc_t loc;
+    size_t   through;
+} resolve_node_t;
+core_list_decl(resolve_node_t);
+
+typedef struct resolved_t {
     pt_loc_t  loc;
     pt_set_t  items;
     pt_memo_t memo;
+    // The walk that found `items`, kept to carry on from when sites it went
+    // into gain contents: the locations it met, the held items it went
+    // through by location (for addresses and for contents), the places it
+    // took as covered, and the site locations it went into.
+    loc_table_t                  visited;
+    loc_table_t                  through[2];
+    pt_set_t                     seen;
+    core_list_t(resolve_node_t)  nodes;
 } resolved_t;
 
 typedef struct {

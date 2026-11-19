@@ -59,7 +59,6 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     pt->reach     = ir_reach_new(f);
     pt->aliased   = core_list_new(uint32_t);
     pt->described = core_list_new(uint32_t);
-    pt->seen      = (pt_set_t){0};
     for (size_t s = 0; s < 3; s++) pt->scratch[s] = (pt_set_t){0};
     pt->calls     = core_list_new(pt_callees_t);
     pt->context   = core_list_new(pt_access_t);
@@ -123,6 +122,7 @@ pt_free(pt_t *pt)
         core_list_free(pt->values.data[i]);
     for (size_t i = 0; i < pt->sites.len; i++) {
         core_list_free(pt->sites.data[i].contents);
+        core_list_free(pt->sites.data[i].added);
         for (size_t a = 0; a < pt->sites.data[i].aliases.len; a++)
             core_list_free(pt->sites.data[i].aliases.data[a].origins);
         core_list_free(pt->sites.data[i].aliases);
@@ -213,17 +213,13 @@ pt_free(pt_t *pt)
         core_free(pt->entry.state);
     }
     core_dict_foreach(&pt->resolved, entry) {
-        resolved_t *resolved = entry->value;
-        core_list_free(resolved->items);
-        memo_free(&resolved->memo);
-        core_free(resolved);
+        resolved_release(entry->value);
+        core_free(entry->value);
     }
     core_dict_free(&pt->resolved);
     core_dict_foreach(&pt->resolved_writes, entry) {
-        resolved_t *resolved = entry->value;
-        core_list_free(resolved->items);
-        memo_free(&resolved->memo);
-        core_free(resolved);
+        resolved_release(entry->value);
+        core_free(entry->value);
     }
     core_dict_free(&pt->resolved_writes);
     core_dict_foreach(&pt->contents_memo, entry) {
@@ -276,10 +272,6 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);
-    core_list_free(pt->seen);
-    loc_table_free(&pt->visited);
-    loc_table_free(&pt->through[0]);
-    loc_table_free(&pt->through[1]);
     alias_calls_free(&pt->alias_calls);
     core_list_free(pt->reading);
     core_list_free(pt->crossed);

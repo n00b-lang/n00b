@@ -118,13 +118,6 @@ loc_table_add(loc_table_t *table, const pt_loc_t *loc)
 }
 
 static void
-loc_table_clear(loc_table_t *table)
-{
-    if (table->len) memset(table->used, 0, table->cap * sizeof(bool));
-    table->len = 0;
-}
-
-static void
 loc_table_free(loc_table_t *table)
 {
     if (table->slots) core_free(table->slots);
@@ -143,7 +136,7 @@ loc_table_free(loc_table_t *table)
 static bool
 visited_before(pt_t *pt, const pt_loc_t *loc)
 {
-    return !loc_table_add(&pt->visited, loc);
+    return !loc_table_add(&pt->walk->visited, loc);
 }
 
 // Resolves what `held` points to, deeply. Where it points depends on its
@@ -157,7 +150,8 @@ static void
 resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
                 pt_set_t *seen)
 {
-    if (!loc_table_add(&pt->through[held->kind == PT_CONTENTS], &held->loc))
+    if (!loc_table_add(&pt->walk->through[held->kind == PT_CONTENTS],
+                       &held->loc))
         return;
     pt_loc_t next = location_of(pt, held);
     next.path.flags |= IR_SPATH_DEEP;
@@ -203,6 +197,56 @@ string_value_only(const pt_t *pt, pt_loc_t *loc)
         loc->path.flags |= SPATH_INLINE;
 }
 
+// Goes through `count` of the items a site location `loc` of the walk holds.
+static void
+resolve_held(pt_t *pt, const pt_loc_t *loc, const pt_item_t *items,
+             size_t count, pt_set_t *into, pt_set_t *seen)
+{
+    const ir_spath_t    *path  = &loc->path;
+    uint32_t             slot  = foreign_deref(pt, loc);
+    uint32_t             rest  = slot < path->depth
+        ? path->depth - slot - 1 : 0;
+    // A path with no steps has none to point into (`steps` may be null).
+    const core_string_t *tail  = rest ? path->steps + slot + 1 : nullptr;
+    uint8_t              flags = path->flags
+        & (uint8_t)(IR_SPATH_DEEP | SPATH_INLINE);
+    for (size_t i = 0; i < count; i++) {
+        pt_item_t held = items[i];
+        if (held.flow != PT_SAME) continue;
+        if (pt->writing && string_pointer(pt, loc->site, &held)) continue;
+        if (slot == path->depth) {
+            if (steps_prefix(path->depth, path->steps, held.depth,
+                             held.steps)
+                || (held.deep && steps_prefix(held.depth, held.steps,
+                                              path->depth, path->steps)))
+                resolve_through(pt, &held, into, seen);
+            continue;
+        }
+        if (!steps_prefix(held.depth, held.steps, slot, path->steps))
+            continue;
+        if (held.deep) {
+            resolve_through(pt, &held, into, seen);
+            continue;
+        }
+        uint32_t             within = slot - held.depth;
+        const core_string_t *inner = within ? path->steps + held.depth
+                                            : nullptr;
+        pt_loc_t             next   = held.loc;
+        if (held.kind == PT_CONTENTS) {
+            loc_extend(pt, &next, inner, within, false);
+            loc_push(pt, &next, value_step);
+        }
+        else if (within) {
+            resolve_through(pt, &held, into, seen);
+            continue;
+        }
+        loc_extend(pt, &next, tail, rest, false);
+        if (!loc_deep(&next)) next.path.flags |= flags;
+        else next.path.flags &= (uint8_t)~SPATH_INLINE;
+        resolve_into(pt, next, into, seen);
+    }
+}
+
 static void
 resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
 {
@@ -231,49 +275,12 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     // value, or one copied out of a string.
     if (pt->writing && slot < path->depth && within_string(pt, &loc, slot))
         return;
-    uint32_t             count = slot < path->depth
-        ? path->depth - slot - 1 : 0;
-    // A path with no steps has none to point into (`steps` may be null).
-    const core_string_t *tail  = count ? path->steps + slot + 1 : nullptr;
-    uint8_t              flags = path->flags
-        & (uint8_t)(IR_SPATH_DEEP | SPATH_INLINE);
     pt_depend(pt, contents_key(loc.site));
-    const pt_set_t *contents = &pt->sites.data[loc.site].contents;
-    for (size_t i = 0; i < contents->len; i++) {
-        pt_item_t held = contents->data[i];
-        if (held.flow != PT_SAME) continue;
-        if (pt->writing && string_pointer(pt, loc.site, &held)) continue;
-        if (slot == path->depth) {
-            if (steps_prefix(path->depth, path->steps, held.depth,
-                             held.steps)
-                || (held.deep && steps_prefix(held.depth, held.steps,
-                                              path->depth, path->steps)))
-                resolve_through(pt, &held, into, seen);
-            continue;
-        }
-        if (!steps_prefix(held.depth, held.steps, slot, path->steps))
-            continue;
-        if (held.deep) {
-            resolve_through(pt, &held, into, seen);
-            continue;
-        }
-        uint32_t             within = slot - held.depth;
-        const core_string_t *inner = within ? path->steps + held.depth
-                                            : nullptr;
-        pt_loc_t             next   = held.loc;
-        if (held.kind == PT_CONTENTS) {
-            loc_extend(pt, &next, inner, within, false);
-            loc_push(pt, &next, value_step);
-        }
-        else if (within) {
-            resolve_through(pt, &held, into, seen);
-            continue;
-        }
-        loc_extend(pt, &next, tail, count, false);
-        if (!loc_deep(&next)) next.path.flags |= flags;
-        else next.path.flags &= (uint8_t)~SPATH_INLINE;
-        resolve_into(pt, next, into, seen);
-    }
+    const pt_site_t *site = &pt->sites.data[loc.site];
+    core_list_push(pt->walk->nodes, ((resolve_node_t){
+        .loc = loc, .through = site->added.len}));
+    resolve_held(pt, &loc, site->contents.data, site->contents.len, into,
+                 seen);
 }
 
 static core_hash_value_t
@@ -421,6 +428,44 @@ memo_free(pt_memo_t *memo)
     core_list_free(memo->depends);
 }
 
+// Carries a resolve walk on from where it stopped, after sites it went
+// into gained contents. Contents only grow, and a walk only adds: what it
+// finds from a site location is what it finds from each item the site
+// holds, and from what that reaches. So the places the walk found then are
+// all still found, and what it has yet to find is reached from the items
+// added since, through the site locations it went into (and from any site
+// location that turns up on the way, which it goes into as it would have).
+// Going through those items alone, in each location's context, reaches the
+// same places as walking from the start again. An item since folded into
+// one that covers it is still gone through; what it reaches, the covering
+// item reaches too, so it adds nothing a new walk would not.
+static void
+resolve_again(pt_t *pt, resolved_t *entry)
+{
+    for (size_t n = 0; n < entry->nodes.len; n++) {
+        resolve_node_t node = entry->nodes.data[n];
+        pt_depend(pt, contents_key(node.loc.site));
+        const pt_set_t *added = &pt->sites.data[node.loc.site].added;
+        size_t          now   = added->len;
+        if (node.through == now) continue;
+        entry->nodes.data[n].through = now;
+        resolve_held(pt, &node.loc, added->data + node.through,
+                     now - node.through, &entry->items, &entry->seen);
+    }
+}
+
+static void
+resolved_release(resolved_t *entry)
+{
+    core_list_free(entry->items);
+    memo_free(&entry->memo);
+    loc_table_free(&entry->visited);
+    loc_table_free(&entry->through[0]);
+    loc_table_free(&entry->through[1]);
+    core_list_free(entry->seen);
+    core_list_free(entry->nodes);
+}
+
 // The places `loc` stands for; with `writes`, only those a write can reach
 // (see resolve_into).
 static void
@@ -441,15 +486,15 @@ pt_resolve_places(pt_t *pt, pt_loc_t loc, bool writes, pt_set_t *into)
     }
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
+        bool            again = entry->memo.computed;
         memo_begin(pt, &entry->memo, &frame);
-        entry->items.len = 0;
-        pt->seen.len     = 0;
-        pt->writing      = writes;
-        loc_table_clear(&pt->visited);
-        loc_table_clear(&pt->through[0]);
-        loc_table_clear(&pt->through[1]);
-        resolve_into(pt, loc, &entry->items, &pt->seen);
+        resolved_t *outer = pt->walk;
+        pt->walk    = entry;
+        pt->writing = writes;
+        if (!again) resolve_into(pt, loc, &entry->items, &entry->seen);
+        else resolve_again(pt, entry);
         pt->writing = false;
+        pt->walk    = outer;
         memo_end(pt, &entry->memo, &frame);
     }
     memo_use(pt, &entry->memo);
