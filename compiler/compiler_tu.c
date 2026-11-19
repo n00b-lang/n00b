@@ -2290,7 +2290,12 @@ trait_type_reference(parse_grammar_t *grammar,
     bool cast = reference && enclosing_cast_type(grammar, reference);
     parse_sym_entry_t *owner = reference && !cast
         ? typevar_owner(grammar, reference) : nullptr;
-    if (reference && !cast && !owner && state && !parse_tree_type(reference)
+    // A trait named from an import or the builtins is bound when names
+    // resolve; until then its reference holds a placeholder variable, which
+    // is no type yet.
+    th_type *previous = reference ? parse_tree_type(reference) : nullptr;
+    bool untyped = !previous || th_kind_of(th_resolve(previous)) == TH_VAR;
+    if (reference && !cast && !owner && state && untyped
         && is_trait_type_symbol(grammar, symbol)) {
         n00bb_report(core_translation_unit_diagnostics(use_unit), use_unit,
             N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION,

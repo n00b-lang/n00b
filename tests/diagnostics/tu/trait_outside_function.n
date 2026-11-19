@@ -1,0 +1,11 @@
+// A trait used as a type outside a function is N00B-T0600, with an
+// initial value or without, whether the module declares the trait or it
+// comes from the builtins.
+trait Scales {
+    func scale(self: 'S, by: int) -> int
+}
+var unset_own: Scales
+var set_own: Scales = 3
+var unset_builtin: Integer
+var set_builtin: Integer = 3
+var inside: List[Integer] = [1]
