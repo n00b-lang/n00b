@@ -145,10 +145,19 @@ visited_before(pt_t *pt, const pt_loc_t *loc)
     return !loc_table_add(&pt->visited, loc);
 }
 
+// Resolves what `held` points to, deeply. Where it points depends on its
+// location and kind alone, and once the walk has gone through one such item
+// it has met that place (see visited_before), so going through another
+// item with the same location and kind finds nothing new. Many sites hold
+// items naming the same places, and working out each one's place again (a
+// step pushed and interned, slot types looked up) only to find it visited
+// was most of what the walk did.
 static void
 resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
                 pt_set_t *seen)
 {
+    if (!loc_table_add(&pt->through[held->kind == PT_CONTENTS], &held->loc))
+        return;
     pt_loc_t next = location_of(pt, held);
     next.path.flags |= IR_SPATH_DEEP;
     next.path.flags &= (uint8_t)~SPATH_INLINE;
@@ -436,6 +445,8 @@ pt_resolve_places(pt_t *pt, pt_loc_t loc, bool writes, pt_set_t *into)
         pt->seen.len     = 0;
         pt->writing      = writes;
         loc_table_clear(&pt->visited);
+        loc_table_clear(&pt->through[0]);
+        loc_table_clear(&pt->through[1]);
         resolve_into(pt, loc, &entry->items, &pt->seen);
         pt->writing = false;
         memo_end(pt, &entry->memo, &frame);

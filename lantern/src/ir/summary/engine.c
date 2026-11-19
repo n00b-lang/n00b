@@ -270,6 +270,8 @@ pt_free(pt_t *pt)
     core_list_free(pt->described);
     core_list_free(pt->seen);
     loc_table_free(&pt->visited);
+    loc_table_free(&pt->through[0]);
+    loc_table_free(&pt->through[1]);
     alias_calls_free(&pt->alias_calls);
     core_list_free(pt->reading);
     core_list_free(pt->crossed);

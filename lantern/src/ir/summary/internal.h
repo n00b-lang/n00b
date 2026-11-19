@@ -421,6 +421,9 @@ struct pt_t {
     pt_set_t               seen;
     // The locations the pt_resolve walk under way has met, exactly.
     loc_table_t            visited;
+    // The held items that walk has gone through (see resolve_through), by
+    // location, for items that are addresses and for contents.
+    loc_table_t            through[2];
     // Whether that walk finds places to write (see resolve_into), and the
     // walks done for that, by location.
     bool                   writing;
