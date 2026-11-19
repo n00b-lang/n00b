@@ -435,6 +435,14 @@ paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
     if (!doms || !first) return nullptr;
     uint8_t *incoming = core_alloc_array(uint8_t, f->n_blocks);
     incoming[first->index] = entry;
+    // A block is worked through again only when what reaches it has grown
+    // since, and with the effects its steps had the first time: a step
+    // depends on the instruction (and outcome) alone, so asking again
+    // answers the same, and passing the same state again changes nothing.
+    // `effects[b]` holds block b's instructions' effects (UINT8_MAX until
+    // asked), then its outcome call's on success and on failure.
+    uint8_t  *done    = core_alloc_array(uint8_t, f->n_blocks);
+    uint8_t **effects = core_alloc_array(uint8_t *, f->n_blocks);
     bool changed;
     do {
         changed = false;
@@ -442,7 +450,14 @@ paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
             ir_block_t *block = f->blocks[b];
             if (!ir_block_reachable(doms, block)) continue;
             uint8_t state = incoming[block->index];
-            if (!state) continue;
+            if (!state || done[block->index] == state) continue;
+            done[block->index] = state;
+            uint8_t *known = effects[block->index];
+            if (!known) {
+                known = core_alloc_array(uint8_t, block->n_instrs + 2);
+                memset(known, UINT8_MAX, block->n_instrs + 2);
+                effects[block->index] = known;
+            }
             ir_instr_t *terminator      = ir_block_terminator(block);
             bool        true_is_success = false;
             ir_instr_t *outcome = ir_call_outcome_branch(terminator,
@@ -458,7 +473,9 @@ paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
                     deferred = true;
                     continue;
                 }
-                uint8_t effect = step_of(step, context, in, IR_PATH_ANY);
+                if (known[i] == UINT8_MAX)
+                    known[i] = step_of(step, context, in, IR_PATH_ANY);
+                uint8_t effect = known[i];
                 state = ir_path_apply(state, effect);
                 if (deferred) rest = ir_path_apply(rest, effect);
             }
@@ -479,16 +496,22 @@ paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
                 if (!succ || (only != UINT32_MAX && s != only)) continue;
                 uint8_t edge = state;
                 if (deferred) {
-                    bool success = (succ == true_block) == true_is_success;
-                    edge = ir_path_apply(ir_path_apply(before,
-                        step_of(step, context, outcome,
-                                success ? IR_PATH_SUCCESS : IR_PATH_FAILURE)),
-                        rest);
+                    bool     success = (succ == true_block) == true_is_success;
+                    uint8_t *effect  = &known[block->n_instrs + !success];
+                    if (*effect == UINT8_MAX)
+                        *effect = step_of(step, context, outcome,
+                                          success ? IR_PATH_SUCCESS
+                                                  : IR_PATH_FAILURE);
+                    edge = ir_path_apply(ir_path_apply(before, *effect),
+                                         rest);
                 }
                 changed |= merge_state(&incoming[succ->index], edge);
             }
         }
     } while (changed);
+    for (uint32_t b = 0; b < f->n_blocks; b++) core_free(effects[b]);
+    core_free(effects);
+    core_free(done);
     return incoming;
 }
 
