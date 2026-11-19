@@ -63,12 +63,69 @@ n00bb_branch_on(ir_block_t *block, ir_value_t *test, ir_block_t *yes,
         && ir_instr_operand_block(branch, no);
 }
 
+// `==` on a type with a `__cmp` and no `__equal` follows `__cmp`: the two
+// are equal when it gives `Comparison.equal`.
+static ir_value_t *
+n00bb_cmp_equal_test(ir_lower_context_t *context, n00bb_tu_state_t *state,
+                     ir_block_t *current, const th_env_method_t *selected,
+                     ir_value_t *left, ir_value_t *right, size_t field,
+                     uint32_t depth)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *comparison = th_name(types, CORE_STRING_STATIC("Comparison"));
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    parse_sym_entry_t *equal = comparison
+        ? n00bb_comparison_member(state->link_analysis, comparison,
+                                  CORE_STRING_STATIC("equal"))
+        : nullptr;
+    n00bb_enum_value_t *ordinal = equal && equal->type
+        && equal->has_comptime_value ? equal->comptime_value : nullptr;
+    char buffer[3][64];
+    ir_value_t *ordered = ordinal ? n00bb_record_field_call(context, current,
+        selected, left, right, comparison, n00bb_format_name(buffer[0],
+            sizeof buffer[0], "field_%zu_%u_cmp", field, depth)) : nullptr;
+    ir_instr_t *constant = ordered
+        ? ir_instr_add(current, IR_OP_ENUM_CONST) : nullptr;
+    if (!constant || !ir_instr_set_dest(constant, n00bb_format_name(
+                buffer[1], sizeof buffer[1], "field_%zu_%u_cmp_equal",
+                field, depth), equal->type)
+        || !ir_instr_operand_name(constant, equal->name)
+        || !ir_instr_operand_int_lit(constant, (ir_lit_t){
+                .mag = ordinal->magnitude, .neg = ordinal->negative}))
+        return nullptr;
+    ir_instr_t *test = ir_instr_add(current, IR_OP_EQ);
+    return test && ir_instr_set_dest(test, n00bb_format_name(buffer[2],
+            sizeof buffer[2], "field_%zu_%u_equal", field, depth), boolean)
+        && ir_instr_operand_value(test, ordered)
+        && ir_instr_operand_value(test, constant->dest) ? test->dest
+        : nullptr;
+}
+
+// Resolves how `==` compares values of a field's type: its `__equal`, or
+// (with `by_cmp` set) its `__cmp`, which `==` follows when the type has no
+// `__equal`.
+static bool
+n00bb_field_equality(n00bb_tu_state_t *state, th_type *type,
+                     th_env_method_t *selected, bool *by_cmp)
+{
+    *by_cmp = false;
+    th_env_method_status_t status = th_env_method_resolve(state->types,
+        type, N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"), selected);
+    if (status == TH_ENV_METHOD_NOT_FOUND) {
+        *by_cmp = true;
+        status = th_env_method_resolve(state->types, type,
+            N00BB_COMPARABLE_TRAIT, CORE_STRING_STATIC("__cmp"), selected);
+    }
+    return status == TH_ENV_METHOD_FOUND
+        && (!selected->error_type || th_is_nil(selected->error_type));
+}
+
 static bool
 n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
                    ir_block_t *current, const th_env_method_t *selected,
-                   th_type *type, ir_value_t *left, ir_value_t *right,
-                   ir_block_t *next, ir_block_t *mismatch, size_t field,
-                   uint32_t depth)
+                   bool by_cmp, th_type *type, ir_value_t *left,
+                   ir_value_t *right, ir_block_t *next, ir_block_t *mismatch,
+                   size_t field, uint32_t depth)
 {
     ir_func_t *function = current->owner;
     th_ctx *types = ir_module_types(context->module);
@@ -77,10 +134,8 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     char buffer[6][64];
     if (item) {
         th_env_method_t inner = {0};
-        if (th_env_method_resolve(state->types, item,
-                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
-                &inner) != TH_ENV_METHOD_FOUND
-            || (inner.error_type && !th_is_nil(inner.error_type)))
+        bool inner_by_cmp = false;
+        if (!n00bb_field_equality(state, item, &inner, &inner_by_cmp))
             return false;
         ir_value_t *left_nil = n00bb_equal_value(current, IR_OP_OPTION_IS_NIL,
             n00bb_format_name(buffer[0], sizeof buffer[0],
@@ -113,14 +168,17 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
                               "field_%zu_%u_right_item", field, depth),
             item, right);
         return left_item && right_item
-            && n00bb_equal_branch(context, state, both, &inner, item,
-                                  left_item, right_item, next, mismatch,
-                                  field, depth + 1);
+            && n00bb_equal_branch(context, state, both, &inner,
+                                  inner_by_cmp, item, left_item, right_item,
+                                  next, mismatch, field, depth + 1);
     }
     core_string_t test_name = n00bb_format_name(buffer[5], sizeof buffer[5],
         "field_%zu_%u_equal", field, depth);
     ir_value_t *test = nullptr;
-    if (n00bb_compiler_package(selected->package)) {
+    if (by_cmp)
+        test = n00bb_cmp_equal_test(context, state, current, selected, left,
+                                    right, field, depth);
+    else if (n00bb_compiler_package(selected->package)) {
         ir_instr_t *equal = ir_instr_add(current, IR_OP_EQ);
         if (equal && ir_instr_set_dest(equal, test_name, boolean)
             && ir_instr_operand_value(equal, left)
@@ -156,11 +214,9 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
-        if (!field || th_env_method_resolve(state->types, field->type,
-                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
-                &selected) != TH_ENV_METHOD_FOUND
-            || (selected.error_type
-                && !th_is_nil(selected.error_type)))
+        bool by_cmp = false;
+        if (!field
+            || !n00bb_field_equality(state, field->type, &selected, &by_cmp))
             return nullptr;
         char left_buffer[64], right_buffer[64], next_buffer[64];
         core_string_t left_name = n00bb_format_name(left_buffer,
@@ -180,7 +236,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
             || !ir_instr_operand_value(right_field, right)
             || !ir_instr_operand_name(right_field, field->name)
             || !n00bb_equal_branch(context, state, current, &selected,
-                                   field->type, left_field->dest,
+                                   by_cmp, field->type, left_field->dest,
                                    right_field->dest, next, mismatch, i, 0))
             return nullptr;
         current = next;

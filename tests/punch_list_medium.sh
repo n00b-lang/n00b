@@ -125,3 +125,81 @@ EOF
 }
 "$tmp/callback_names" >"$tmp/stdout" 2>"$tmp/stderr"
 test "$(cat "$tmp/stderr")" = ok
+
+# A type with its own `==` (a user `__equal`, or a `__cmp` that `==`
+# follows) and no user `hash` gets no derived hash: not a record, not an
+# object (whose identity hash would disagree with its `==`), and not a
+# record holding a field of such a type. Declaring such a record is fine
+# (it once failed to build); hashing it, directly or as a dict key, is
+# diagnosed at the use.
+cat >"$tmp/own_equality.n" <<'EOF'
+record Eq_Field {
+    v: int
+}
+func __equal(view a: Eq_Field, view b: Eq_Field) -> bool {
+    return a.v == b.v
+}
+record Eq_Holder {
+    inner: Eq_Field
+    n: int
+}
+record Cmp_Field {
+    v: int
+}
+func __cmp(view a: Cmp_Field, view b: Cmp_Field) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+record Cmp_Holder {
+    inner: Cmp_Field
+    n: int
+}
+object Point {
+    x: int
+}
+func __init(self: Point, x: int) {
+    self.x = x
+}
+func __equal(view self: Point, view other: Point) -> bool {
+    return self.x == other.x
+}
+let eq: Eq_Holder = (inner = (v = 1), n = 2)
+let cmp: Cmp_Holder = (inner = (v = 1), n = 2)
+let point = new[Point](1)
+require eq.inner.v + cmp.inner.v + eq.n + cmp.n + point.x == 7
+EOF
+"$compiler" build --no-syntax-warnings --output "$tmp/own_equality" \
+    "$tmp/own_equality.n" >"$tmp/own.out" 2>"$tmp/own.err" || {
+    echo 'types with their own equality failed to build' >&2
+    cat "$tmp/own.err" >&2
+    exit 1
+}
+"$tmp/own_equality"
+# Every use in one check: each is diagnosed, and nothing crashes.
+cp "$tmp/own_equality.n" "$tmp/own_use.n"
+for case in Eq_Holder:eq Cmp_Holder:cmp Point:point; do
+    type=${case%%:*}
+    value=${case#*:}
+    printf 'let %s_hash = %s.hash()\n' "$value" "$value" >>"$tmp/own_use.n"
+    printf 'var %s_keyed: Dict[%s, int] = new[Dict[%s, int]]()\n' \
+        "$value" "$type" "$type" >>"$tmp/own_use.n"
+done
+if "$compiler" check "$tmp/own_use.n" >"$tmp/own.out" 2>"$tmp/own.err"; then
+    echo 'hashing types with their own equality passed' >&2
+    exit 1
+fi
+for type in Eq_Holder Cmp_Holder Point; do
+    grep -Fq "no trait that \`$type\` implements provides \`hash\`" \
+        "$tmp/own.err" \
+        && grep -Fq "\`$type\` does not implement \`Hash\`" "$tmp/own.err" \
+        || {
+        echo "hashing $type: not diagnosed at the use" >&2
+        cat "$tmp/own.err" >&2
+        exit 1
+    }
+done
+if grep -q 'internal compiler error' "$tmp/own.err"; then
+    cat "$tmp/own.err" >&2
+    exit 1
+fi

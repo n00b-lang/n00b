@@ -4243,6 +4243,35 @@ n00bb_link_stage_inputs(core_link_unit_t *link, uint32_t stage_kind,
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
+// The user's own equality on a type, if any: a `__equal`, or a `__cmp`
+// with no `__equal` (then `==` follows `__cmp`).
+typedef enum {
+    USER_EQUALITY_NONE,
+    USER_EQUALITY_EQUAL,
+    USER_EQUALITY_CMP,
+} user_equality_t;
+
+// A type with its own equality gets no derived `__equal` (it has `==`
+// already) and, unless it defines `hash` too, no derived hash, since a hash
+// of the fields (or of the identity) would disagree with its `==`. This is
+// the one rule, for records, objects and the fields of a record alike.
+static user_equality_t
+user_equality(th_ctx *probe, th_type *type)
+{
+    th_env_method_t selected = {0};
+    if (!type) return USER_EQUALITY_NONE;
+    if (th_env_method_resolve(probe, type, N00BB_EQUAL_TRAIT,
+            CORE_STRING_STATIC("__equal"), &selected) == TH_ENV_METHOD_FOUND)
+        return USER_EQUALITY_EQUAL;
+    return th_env_method_resolve(probe, type, N00BB_COMPARABLE_TRAIT,
+            CORE_STRING_STATIC("__cmp"), &selected) == TH_ENV_METHOD_FOUND
+        ? USER_EQUALITY_CMP : USER_EQUALITY_NONE;
+}
+
+// Whether every field of a record has the method, or will be given a
+// derived one by register_builtin_value_defaults, under the same rules. A
+// field whose `==` follows its `__cmp` serves the derived `__equal` (it
+// compares the field with `__cmp`).
 static bool
 record_default_fields_support(th_ctx *probe, th_ctx *source,
                               th_type *receiver, core_string_t trait,
@@ -4273,9 +4302,14 @@ record_default_fields_support(th_ctx *probe, th_ctx *source,
         if (status == TH_ENV_METHOD_FOUND)
             supported = !selected.error_type
                 || th_is_nil(selected.error_type);
-        else if (status == TH_ENV_METHOD_NOT_FOUND)
-            supported = record_default_fields_support(probe, source,
-                field->type, trait, method, visiting);
+        else if (status == TH_ENV_METHOD_NOT_FOUND) {
+            user_equality_t own = user_equality(probe, field_type);
+            bool equality = core_string_eq(trait, N00BB_EQUAL_TRAIT);
+            supported = own == USER_EQUALITY_CMP && equality ? true
+                : own != USER_EQUALITY_NONE ? false
+                : record_default_fields_support(probe, source,
+                    field->type, trait, method, visiting);
+        }
         else supported = false;
     }
     core_dict_remove(visiting, receiver);
@@ -4389,24 +4423,16 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                             != TH_INDIRECTION))) continue;
                 th_type *candidate = th_type_clone(probe, receiver);
                 th_env_method_t selected = {0};
-                bool custom_equal = candidate &&
-                    th_env_method_resolve(probe, candidate,
-                        N00BB_EQUAL_TRAIT,
-                        CORE_STRING_STATIC("__equal"), &selected)
-                        == TH_ENV_METHOD_FOUND;
                 bool custom_hash = hash_available && candidate &&
                     th_env_method_resolve(probe, candidate,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &selected)
                         == TH_ENV_METHOD_FOUND;
-                // With a `__cmp` and no `__equal`, equality comes from
-                // `__cmp`, and a hash of the fields would disagree with it.
-                bool custom_cmp = !custom_equal && candidate &&
-                    th_env_method_resolve(probe, candidate,
-                        N00BB_COMPARABLE_TRAIT,
-                        CORE_STRING_STATIC("__cmp"), &selected)
-                        == TH_ENV_METHOD_FOUND;
-                custom_equal = custom_equal || custom_cmp;
+                // A user `__equal`, or a `__cmp` that `==` follows, means
+                // no derived `__equal` and, without a user `hash`, no
+                // derived hash either.
+                bool custom_equal = user_equality(probe, candidate)
+                    != USER_EQUALITY_NONE;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal

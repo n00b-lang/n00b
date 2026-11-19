@@ -189,6 +189,34 @@ let tag_two: By_Tag = (v = 1, tag = 2)
 let tag_three: By_Tag = (v = 5, tag = 1)
 require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
 
+# A record's derived `==` compares each field with the field type's own
+# `==`: a user `__equal`, or the `__cmp` that `==` follows when there is no
+# `__equal`. (A record holding such a field once failed to build at all;
+# it gets no derived hash, which tests/punch_list_medium.sh checks.)
+record Eq_Field {
+    v: int
+    tag: int
+}
+func __equal(view a: Eq_Field, view b: Eq_Field) -> bool {
+    return a.v == b.v
+}
+record Eq_Holder {
+    inner: Eq_Field
+    n: int
+}
+let eq_one: Eq_Holder = (inner = (v = 1, tag = 2), n = 3)
+let eq_two: Eq_Holder = (inner = (v = 1, tag = 5), n = 3)
+let eq_three: Eq_Holder = (inner = (v = 2, tag = 2), n = 3)
+require eq_one == eq_two and eq_one != eq_three
+record Cmp_Holder {
+    inner: By_Value
+    n: int
+}
+let cmp_one: Cmp_Holder = (inner = (v = 1, tag = 1), n = 3)
+let cmp_two: Cmp_Holder = (inner = (v = 1, tag = 2), n = 3)
+let cmp_three: Cmp_Holder = (inner = (v = 2, tag = 1), n = 3)
+require cmp_one == cmp_two and cmp_one != cmp_three
+
 # With no `fail:` clause, a function's failure type is inferred from its
 # body, mutual recursion included (#9).
 func parsed(x: int) -> int {
