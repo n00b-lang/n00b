@@ -495,6 +495,17 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
 }
 
 static bool
+publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis);
+
+static int
+compare_symbol_names(const void *left, const void *right)
+{
+    const parse_sym_entry_t *a = *(parse_sym_entry_t *const *)left;
+    const parse_sym_entry_t *b = *(parse_sym_entry_t *const *)right;
+    return core_string_cmp(a->name, b->name);
+}
+
+static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
@@ -503,6 +514,11 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
         if (!symtab) return false;
+        // By name: a module's symbols come in declaration order from source
+        // and in another order from a cached interface, and the order they
+        // are published in is the order importers intern their types in.
+        core_list_t(parse_sym_entry_ptr_t) requested =
+            core_list_new(parse_sym_entry_ptr_t);
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -510,21 +526,29 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
                 n00bb_record_layout_request_t *request = parse_sym_binding(
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
-                if (!request || request->policy != N00BB_RECORD_C) continue;
-                for (size_t d = 0; d < analysis->units.len; d++) {
-                    core_translation_unit_t *importer =
-                        analysis->units.data[d];
-                    if (importer != owner
-                        && !n00bb_unit_reaches_import(importer, owner)) continue;
-                    n00bb_tu_state_t *destination = tu_state(
-                        importer);
-                    if (!destination->ir_module
-                        || !publish_c_record_symbol(analysis, owner, symbol,
-                                                    destination->ir_module))
-                        return false;
+                if (request && request->policy == N00BB_RECORD_C)
+                    core_list_push(requested, symbol);
+            }
+        }
+        if (requested.len > 1)
+            qsort(requested.data, requested.len, sizeof(*requested.data),
+                  compare_symbol_names);
+        for (size_t s = 0; s < requested.len; s++) {
+            parse_sym_entry_t *symbol = requested.data[s];
+            for (size_t d = 0; d < analysis->units.len; d++) {
+                core_translation_unit_t *importer = analysis->units.data[d];
+                if (importer != owner
+                    && !n00bb_unit_reaches_import(importer, owner)) continue;
+                n00bb_tu_state_t *destination = tu_state(importer);
+                if (!destination->ir_module
+                    || !publish_c_record_symbol(analysis, owner, symbol,
+                                                destination->ir_module)) {
+                    core_list_free(requested);
+                    return false;
                 }
             }
         }
+        core_list_free(requested);
     }
     return true;
 }

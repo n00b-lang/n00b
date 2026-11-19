@@ -190,6 +190,28 @@ add_rows(n00bb_abi_rows_t *into, const n00bb_abi_rows_t *rows)
         core_list_push(*into, rows->data[i]);
 }
 
+typedef struct {
+    size_t declaration;
+    uint32_t index;
+} linked_trait_t;
+core_list_decl(linked_trait_t);
+
+static int
+trait_order(const void *left, const void *right)
+{
+    uint32_t a = ((const linked_trait_t *)left)->index;
+    uint32_t b = ((const linked_trait_t *)right)->index;
+    return a < b ? -1 : a > b;
+}
+
+static int
+receiver_order(const void *left, const void *right)
+{
+    uint32_t a = ((const receiver_t *)left)->index;
+    uint32_t b = ((const receiver_t *)right)->index;
+    return a < b ? -1 : a > b;
+}
+
 static int
 row_order(const void *left, const void *right)
 {
@@ -549,13 +571,56 @@ n00bb_abi_link_semantic_rows(
         valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
             th_name(ctx, declaration.qualified_name));
     }
+    // The receivers are the concrete types the linked objects name, read
+    // back from their rows, not the types the compiler happens to have
+    // interned in each module: a module compiled from source and one
+    // loaded from the cache intern different sets, and the dispatch rows
+    // must depend only on the objects. A type a module has interned stands
+    // in for parsing the row's name, which costs far more.
+    core_dict_t interned;
+    core_dict_init(&interned, nullptr, nullptr);
     for (size_t m = 0; valid && m < facts->module_count; m++) {
         ir_module_t *module = (ir_module_t *)facts->modules[m];
-        for (size_t i = 0; valid && i < ir_type_count(module); i++)
-            valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
-                ir_type_at(module, i));
+        for (size_t i = 0; i < ir_type_count(module); i++) {
+            th_type *type = ir_type_at(module, i);
+            if (type && th_is_closed(ctx, type))
+                core_dict_add(&interned,
+                    (void *)(uintptr_t)th_hash(ctx, type), type);
+        }
     }
+    for (size_t s = 0; valid && s < selected->count; s++) {
+        const n00bb_abi_object_view_t *view = &selected->views[s];
+        const n00bb_abi_directory_entry_t *rows = n00bb_abi_object_table(view,
+            N00B_ABI_TABLE_TYPE);
+        for (uint32_t r = 1; valid && rows && r < rows->record_count; r++) {
+            const n00b_abi_type_v1 *row = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_TYPE, r);
+            n00bb_abi_string_view_t name = {0};
+            // Each linked type once: most are in many of the objects.
+            uint32_t linked = row ? type_index(&link, row->typehash) : 0;
+            if (!row || !linked
+                || core_dict_contains(&seen_receivers,
+                                      (void *)(uintptr_t)linked)
+                || (row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+                || row->kind == N00B_ABI_TYPE_TRAIT
+                || !n00bb_abi_object_string(view, &row->canonical_name,
+                                            &name)) continue;
+            th_type *type = core_dict_get(&interned,
+                (void *)(uintptr_t)row->typehash, nullptr);
+            if (!type) type = ir_type_from_text(ctx, core_string_borrow(
+                (const char *)name.bytes, name.length));
+            if (type && th_hash(ctx, type) == row->typehash)
+                valid = add_receiver(ctx, &link, &receivers,
+                                     &seen_receivers, type);
+        }
+    }
+    core_dict_free(&interned);
     core_dict_free(&seen_receivers);
+    // In the linked type table's order, not the environment's declaration
+    // order, which differs with where the declarations were loaded from.
+    if (valid && receivers.len)
+        qsort(receivers.data, receivers.len, sizeof(*receivers.data),
+              receiver_order);
     for (size_t r = 0; valid && r < receivers.len; r++) {
         th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
         uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
@@ -567,7 +632,23 @@ n00bb_abi_link_semantic_rows(
     bool *matches = receivers.len
         ? core_alloc_array(bool, receivers.len) : nullptr;
     valid = valid && (!receivers.len || matches != nullptr);
+    // Traits too go in the linked type table's order.
+    core_list_t(linked_trait_t) traits = {0};
     for (size_t i = 0; valid && i < declarations; i++) {
+        th_env_declaration_view_t trait;
+        valid = th_env_declaration_at(facts->environment, i, &trait);
+        if (!valid || trait.kind != TH_ENV_DECLARATION_TRAIT
+            || !trait.contract || th_kind_of(trait.contract) != TH_TRAIT)
+            continue;
+        uint32_t trait_index = type_index(&link,
+            th_hash(ctx, trait.contract));
+        if (trait_index)
+            core_list_push(traits, ((linked_trait_t){i, trait_index}));
+    }
+    if (valid && traits.len)
+        qsort(traits.data, traits.len, sizeof(*traits.data), trait_order);
+    for (size_t t = 0; valid && t < traits.len; t++) {
+        size_t i = traits.data[t].declaration;
         th_env_declaration_view_t trait;
         valid = th_env_declaration_at(facts->environment, i, &trait);
         if (!valid || trait.kind != TH_ENV_DECLARATION_TRAIT) continue;
@@ -675,6 +756,7 @@ n00bb_abi_link_semantic_rows(
     core_list_free(dispatch);
     core_list_free(specializations);
     core_list_free(receivers);
+    core_list_free(traits);
     core_free(matches);
     link_index_close(&link);
     if (!facts->types) th_ctx_free(ctx);

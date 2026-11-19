@@ -1418,6 +1418,16 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         for (size_t j = 0; j < units->len; j++) {
             if (units->data[i] == units->data[j]
                 || !n00bb_unit_reaches_import(unit, units->data[j])) continue;
+            // A module loaded from the object cache stands in for its source,
+            // which registers nothing here (its records' symbols carry no
+            // `type` member scope), so it registers nothing either: what an
+            // importer interns mustn't depend on whether its imports were
+            // cached. A library's interface, which has no source, still
+            // registers its records.
+            if (tu_state(units->data[j])->interface_module
+                && n00bb_cache_has_module(analysis->cache,
+                                          units->data[j]->module.identifier))
+                continue;
             if (!register_imported_record_layouts(grammar, units->data[j],
                                                    tu_state(unit)->ir_module))
                 return ir_initialization_error(unit,
