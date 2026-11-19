@@ -499,13 +499,25 @@ content_entry(pt_t *pt, const pt_loc_t *loc)
         if (pt->cuts != cuts) entry->memo.computed = false;
         log_new_items(pt, &entry->log, &old, &entry->items);
         core_list_free(old);
-        pt_set_t widened = (pt_set_t){0};
-        for (size_t i = 0; i < entry->items.len; i++)
-            set_add(pt, &widened, anywhere_below(entry->items.data[i]));
-        entry->widened = intern_widened(pt, &widened);
+        entry->widened = nullptr;
     }
     memo_use(pt, &entry->memo);
     return entry;
+}
+
+// What the entry's items reach anywhere below them, interned. Built when
+// first asked for after the items change rather than on every change: most
+// recomputed contents are never read this way, and widening them all took
+// as long as computing them.
+static const pt_set_t *
+widened_contents(pt_t *pt, content_memo_t *entry)
+{
+    if (entry->widened) return entry->widened;
+    pt_set_t widened = (pt_set_t){0};
+    for (size_t i = 0; i < entry->items.len; i++)
+        set_add(pt, &widened, anywhere_below(entry->items.data[i]));
+    entry->widened = intern_widened(pt, &widened);
+    return entry->widened;
 }
 
 static void
@@ -537,7 +549,7 @@ content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into,
         merge_widened(pt, into, &reached, true);
         return;
     }
-    const pt_set_t *widened = content_entry(pt, loc)->widened;
+    const pt_set_t *widened = widened_contents(pt, content_entry(pt, loc));
     for (size_t m = 0; m < merged->len; m++)
         if (merged->data[m] == widened) return;
     core_list_push(*merged, widened);
