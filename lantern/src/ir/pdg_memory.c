@@ -190,6 +190,10 @@ call_writes_place(ir_pdg_memory_t *m, const ir_instr_t *call, uint32_t place)
     bool writes = ir_summary_call_writes(ir_analysis_summaries(), m->f,
                                          m->places, call, place);
     core_dict_put(places, key, (void *)(uintptr_t)(writes ? 2 : 1));
+    ir_analysis_note((ir_func_t *)m->f, (ir_analysis_query_t){
+        .kind = IR_ANALYSIS_QUERY_WRITES, .function = (ir_func_t *)m->f,
+        .call = call, .index = place, .answer = writes,
+    });
     return writes;
 }
 

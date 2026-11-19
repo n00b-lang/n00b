@@ -122,6 +122,10 @@ struct ir_summary_t {
     bool                       points_hashed;
     bool                       stored;
     bool                       proof_free;
+    // What the function's analyses asked of the summaries bound while this
+    // was computed (see ir_analysis_queries), when all of it is known.
+    bool                       queries_known;
+    core_list_t(ir_analysis_query_t) queries;
     bool                       bookkept;
     bool                       explained;
     // Bumped whenever the contents are replaced (a solving round, decoding
@@ -139,6 +143,7 @@ struct ir_summaries_t {
     bool                      escapes_only;
     bool                      reusable;
     bool                      proofs_changed;
+    bool                      defer_changed;
     // The summaries bound for analyses (ABCD's above all) while these were
     // computed: trap proofs see callees through them.
     const ir_summaries_t     *proof_context;
