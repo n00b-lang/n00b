@@ -51,19 +51,6 @@ var d: Dict[int, int] = {}
 var a: Array[int][3][]
 let s = {1, 2}
 EOF
-"$compiler" fmt --normalize "$tmp/normalize.n"
-grep -q 'Tuple\[u8, u8\]' "$tmp/normalize.n"
-grep -q 'Tuple\[a: u8, b: u8\]' "$tmp/normalize.n"
-grep -q 'Dict\[u8, nil\]' "$tmp/normalize.n"
-if grep -q 'builtin\.' "$tmp/normalize.n"; then
-    echo 'normalized types name builtin modules' >&2
-    exit 1
-fi
-"$compiler" check "$tmp/normalize.n" >"$tmp/check.out" 2>"$tmp/check.err" || {
-    cat "$tmp/check.err" >&2
-    exit 1
-}
-
 # Literal sizing: a product of literals fits its value; a module constant
 # sizes what it meets; set literals that meet get one element type; a
 # literal past 2^127 is `u128`.
@@ -78,7 +65,33 @@ func meet() {
     let both = small + large
 }
 EOF
-"$compiler" fmt --normalize "$tmp/sizing.n"
+# A loop counter bounded by a declared `uint` stays 64-bit even when a
+# product of it passes 64 bits: without explicit evidence the range
+# analysis caps at 64.
+cat >"$tmp/counter.n" <<'EOF'
+func g(n: uint) -> uint {
+    var i = 4
+    while i < n {
+        i += 1
+    }
+    return 32 * (i - 4)
+}
+EOF
+# One run normalizes all three, each as it would on its own.
+"$compiler" fmt --normalize "$tmp/normalize.n" "$tmp/sizing.n" \
+    "$tmp/counter.n"
+grep -q 'Tuple\[u8, u8\]' "$tmp/normalize.n"
+grep -q 'Tuple\[a: u8, b: u8\]' "$tmp/normalize.n"
+grep -q 'Dict\[u8, nil\]' "$tmp/normalize.n"
+if grep -q 'builtin\.' "$tmp/normalize.n"; then
+    echo 'normalized types name builtin modules' >&2
+    exit 1
+fi
+"$compiler" check "$tmp/normalize.n" >"$tmp/check.out" 2>"$tmp/check.err" || {
+    cat "$tmp/check.err" >&2
+    exit 1
+}
+
 # The formatter aligns the declarations, so allow spaces after the colon.
 grep -q 'let product: *uint ' "$tmp/sizing.n"
 grep -q 'let base: *uint ' "$tmp/sizing.n"
@@ -103,28 +116,24 @@ status=0
 test "$status" -eq 101
 grep -q 'overflows `u8`' "$tmp/stderr"
 
-# A loop counter bounded by a declared `uint` stays 64-bit even when a
-# product of it passes 64 bits: without explicit evidence the range
-# analysis caps at 64.
-cat >"$tmp/counter.n" <<'EOF'
-func g(n: uint) -> uint {
-    var i = 4
-    while i < n {
-        i += 1
-    }
-    return 32 * (i - 4)
-}
-EOF
-"$compiler" fmt --normalize "$tmp/counter.n"
 grep -q 'var i: *uint ' "$tmp/counter.n"
+
+# The fresh-and-cached pairs below each copy the imported module to a
+# directory of its own, which no cache has seen: the first check reads it
+# from source and caches its interface, the second reads that interface.
+# The standard library comes from the shared cache in both, which is not
+# what they compare, so it is not compiled again for each pair.
+mkdir -p "$tmp/modules"
+cp -R "$src/tests/diagnostics/modules/type_argument_arity_imported" \
+    "$src/tests/diagnostics/modules/where_imported" "$tmp/modules/"
 
 # Type arguments on an imported type are counted the same whether the
 # module comes from source or from its cached interface: both checks
 # report `Plain[int]`, `Holder[int, int]`, `Level[int]`, and the callbacks
 # `Pick[int, int]` and `Count[int]`.
 for pass in fresh cached; do
-    N00B_CACHE="$tmp/arity-cache" N00B_DIAGNOSTICS=terse \
-        N00B_PATH="$src/tests/diagnostics/modules/type_argument_arity_imported" \
+    N00B_DIAGNOSTICS=terse \
+        N00B_PATH="$tmp/modules/type_argument_arity_imported" \
         "$compiler" check "$src/tests/diagnostics/tu/type_argument_arity_imported.n" \
         >"$tmp/arity.out" 2>"$tmp/arity.err" && {
         echo "type argument check passed on the $pass pass" >&2
@@ -141,8 +150,8 @@ done
 # type from another module the same way whether that module comes from
 # source or from its cached interface.
 for pass in fresh cached; do
-    N00B_CACHE="$tmp/where-cache" N00B_DIAGNOSTICS=terse \
-        N00B_PATH="$src/tests/diagnostics/modules/where_imported" \
+    N00B_DIAGNOSTICS=terse \
+        N00B_PATH="$tmp/modules/where_imported" \
         "$compiler" check "$src/tests/diagnostics/tu/where_imported.n" \
         >"$tmp/where.out" 2>"$tmp/where.err" && {
         echo "where check passed on the $pass pass" >&2
