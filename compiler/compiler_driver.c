@@ -6260,6 +6260,11 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && core_string_eq(command, CORE_STRING_STATIC("library"));
     bool emit_interface = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--emit-interface"));
+    // A library build reads and keeps modules in the cache as a check does,
+    // with each module's ABI object. One that writes a semantic interface
+    // archives what it compiled, so it compiles everything.
+    bool library_cache = library_command && !emit_interface;
+    if (library_cache) n00bb_cache_set_library();
     core_string_t interface_output = emit_interface
         ? parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--emit-interface")) : (core_string_t){0};
@@ -6409,9 +6414,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
-    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt)
+    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt
+                            || library_cache)
         && scheduled
-        && options_valid && input_count == 1
+        && options_valid && (input_count == 1 || library_cache)
         ? open_object_cache(resolver, args, ir_context, linked_interfaces,
                             (size_t)interface_count)
         : nullptr;
@@ -6668,6 +6674,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && n00bb_cache_snapshot(cache, link, link_analysis, false);
     if (check_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
+    bool library_snapshot = located && library_cache && cache
+        && !link_analysis->effect_checks_failed
+        && n00bb_cache_snapshot(cache, link, link_analysis, false);
     // The modules that checked clean in a broken program are as good as
     // in a clean check: store them, or every check of a broken program
     // redoes them. As for a clean check, the IR is taken before
@@ -6840,6 +6849,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);
+        if (located && library_snapshot)
+            (void)n00bb_store_library_modules(link, link_analysis);
     }
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))

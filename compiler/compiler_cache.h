@@ -134,6 +134,9 @@ void n00bb_cache_capture_summaries(n00bb_cache_t *cache,
                                    n00bb_link_analysis_t *analysis,
                                    uint8_t phase);
 void n00bb_cache_set_check_only(bool check_only);
+// A library build: like a check, it makes no native code; it keeps the
+// modules' ABI objects in a phase of its own.
+void n00bb_cache_set_library(void);
 bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,
                        const n00bb_cache_module_object_t *objects,

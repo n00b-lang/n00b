@@ -225,12 +225,24 @@ sections_remove(core_list_t(cache_section_t) *sections, core_string_t name)
     }
 }
 
+// A check and a library build make no native code, so neither needs a
+// module's object; a library build does need its ABI object, the library's
+// own (its phase's), which it writes and links.
 static bool cache_check_only;
+static bool cache_library;
 
 void
 n00bb_cache_set_check_only(bool check_only)
 {
     cache_check_only = check_only;
+    cache_library = false;
+}
+
+void
+n00bb_cache_set_library(void)
+{
+    cache_check_only = true;
+    cache_library = true;
 }
 
 static bool
@@ -257,8 +269,9 @@ runtime_object_kind(void)
 static core_string_t
 phase_name(void)
 {
-    return cache_check_only ? CORE_STRING_STATIC("check")
-                            : CORE_STRING_STATIC("program");
+    return cache_library ? CORE_STRING_STATIC("library")
+        : cache_check_only ? CORE_STRING_STATIC("check")
+                           : CORE_STRING_STATIC("program");
 }
 
 static int
@@ -1208,9 +1221,10 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
         && phase_section(entry, CORE_STRING_STATIC("ir"), (core_string_t){0})
         && phase_section(entry, CORE_STRING_STATIC("interface"),
                          (core_string_t){0});
-    for (size_t m = 0; ok && !objects_optional() && m < entry->members.len;
-         m++)
-        ok = phase_section(entry, object_kind(), entry->members.data[m].name)
+    for (size_t m = 0; ok && (!objects_optional() || cache_library)
+         && m < entry->members.len; m++)
+        ok = (objects_optional() || phase_section(entry, object_kind(),
+                                       entry->members.data[m].name))
             && phase_section(entry, CORE_STRING_STATIC("abi"),
                              entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
@@ -2345,6 +2359,13 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     const cache_section_t *mutators = member
         ? phase_section(entry, CORE_STRING_STATIC("mutators"), member->name)
         : nullptr;
+    if (cache_library && abi) {
+        *object = (n00bb_cache_module_object_t){
+            .module = member->name, .abi = abi->data,
+            .abi_bytes = abi->length,
+        };
+        return true;
+    }
     if (!code || !abi || !mutators) return false;
     const cache_section_t *runtime = phase_section(entry,
         runtime_object_kind(), member->name);
@@ -2947,9 +2968,15 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         const n00bb_cache_module_object_t *object = module_object(objects,
             object_count, module);
         bool present = object && object->object && object->abi;
-        ok = present || objects_optional();
+        ok = present || (objects_optional() && !cache_library)
+            || (cache_library && object && object->abi);
         if (!ok) break;
-        if (present) {
+        if (cache_library) {
+            module_section_name(&name, CORE_STRING_STATIC("abi"), module);
+            ok = sections_set(&sections, core_buffer_string(&name),
+                              object->abi, object->abi_bytes);
+        }
+        else if (present) {
             module_section_name(&name, object_kind(), module);
             ok = sections_set(&sections, core_buffer_string(&name),
                               object->object, object->object_bytes);

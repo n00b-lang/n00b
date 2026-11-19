@@ -3208,3 +3208,32 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
     core_free(object);
     return saved;
 }
+
+bool
+n00bb_store_library_modules(core_link_unit_t *link,
+                            n00bb_link_analysis_t *analysis)
+{
+    if (!link || !analysis || !analysis->cache) return false;
+    core_list_t(n00bb_cache_module_object_t) objects =
+        core_list_new(n00bb_cache_module_object_t);
+    size_t count = core_link_unit_translation_unit_count(link);
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        if (!unit || tu_state(unit)->interface_module) continue;
+        core_link_artifact_view_t view = {0};
+        const n00bb_abi_artifact_t *artifact =
+            core_link_unit_require_artifact(link, unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+            ? view.payload : nullptr;
+        if (artifact && artifact->object && artifact->object_bytes)
+            core_list_push(objects, ((n00bb_cache_module_object_t){
+                .module = unit->module.identifier,
+                .abi = artifact->object, .abi_bytes = artifact->object_bytes,
+            }));
+    }
+    bool ok = n00bb_cache_store(analysis->cache, link, analysis, objects.data,
+                                objects.len);
+    core_list_free(objects);
+    return ok;
+}
