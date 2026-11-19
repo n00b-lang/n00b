@@ -982,7 +982,8 @@ n00bb_instance_reference_adapter(ir_ctx_t *ir_context, ir_func_t *instance,
                     adapter = nullptr;
             ok = adapter
                 && n00bb_adapter_body(nullptr, ir_context, adapter, instance,
-                                      instance->owner, nullptr, order)
+                                      instance->owner, nullptr, nullptr,
+                                      order)
                 && note_adapted(ir_context, adapter, instance, order, count)
                 && ir_annot_set(ir_context, &adapter->annots,
                        (ir_annot_t){
