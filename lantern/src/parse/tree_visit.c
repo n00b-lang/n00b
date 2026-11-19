@@ -65,6 +65,11 @@ struct parse_tree_walk_t {
     // far_phases when any visitor's phase is beyond that.
     uint64_t                annot_phases[PARSE_ANNOT_KIND_COUNT];
     bool                    far_phases;
+    // Bit p is set when a boundary at position p < 64 has an entering
+    // (exiting) callback; far_boundaries when one sits further on.
+    uint64_t                boundaries_entering;
+    uint64_t                boundaries_exiting;
+    bool                    far_boundaries;
     bool                    has_nt_visitors;
     parse_annot_kind_t     *annot_order;
     size_t                  annot_order_len;
@@ -232,7 +237,22 @@ parse_walk_on_annotation_boundary(parse_tree_walk_t *w, size_t before_kind,
         .exiting = exiting,
         .thunk = thunk,
     }));
+    if (before_kind >= 64) w->far_boundaries = true;
+    else {
+        if (entering) w->boundaries_entering |= UINT64_C(1) << before_kind;
+        if (exiting) w->boundaries_exiting |= UINT64_C(1) << before_kind;
+    }
     return true;
+}
+
+// Whether a boundary at `position` has a callback for this direction; when
+// not, running the boundaries there would call nothing.
+static inline bool
+boundary_may_run(const parse_tree_walk_t *w, size_t position, bool entering)
+{
+    if (w->far_boundaries || position >= 64) return true;
+    uint64_t at = entering ? w->boundaries_entering : w->boundaries_exiting;
+    return (at >> position & 1) != 0;
 }
 
 void
@@ -394,8 +414,8 @@ static bool
 run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
 {
     bool   descend = true;
-    size_t n_nt    = parse_nt_annot_count(v->nt);
-    size_t n_rule  = parse_rule_annot_count(v->rule);
+    size_t n_nt    = v->nt ? v->nt->annotations.len : 0;
+    size_t n_rule  = v->rule ? v->rule->annotations.len : 0;
     size_t total   = n_nt + n_rule;
 
     // The kinds this node carries: a pass over a kind it lacks, or a phase
@@ -403,8 +423,8 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
     uint64_t present[(PARSE_ANNOT_KIND_COUNT + 63) / 64] = {0};
     for (size_t i = 0; i < total; i++) {
         parse_annotation_t *a = i < n_nt
-            ? parse_nt_annot_at(v->nt, i)
-            : parse_rule_annot_at(v->rule, i - n_nt);
+            ? v->nt->annotations.data[i]
+            : v->rule->annotations.data[i - n_nt];
         if (a && a->kind >= 0 && a->kind < PARSE_ANNOT_KIND_COUNT)
             present[a->kind / 64] |= UINT64_C(1) << (a->kind % 64);
     }
@@ -427,8 +447,8 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
             for (size_t k = 0; k < total; k++) {
                 size_t i = reverse ? total - 1 - k : k;
                 parse_annotation_t *a = i < n_nt
-                    ? parse_nt_annot_at(v->nt, i)
-                    : parse_rule_annot_at(v->rule, i - n_nt);
+                    ? v->nt->annotations.data[i]
+                    : v->rule->annotations.data[i - n_nt];
                 if (!a || (w->annot_order && a->kind != selected)
                     || !annot_kind_in_phase(w, a->kind, phase)
                     || annotation_suppressed(w, a->kind)) continue;
@@ -438,8 +458,9 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
                 if (w->stopped) break;
             }
         }
-        if (w->annot_order && !w->stopped) {
-            size_t position = pre ? kind_index + 1 : kind_index;
+        size_t position = pre ? kind_index + 1 : kind_index;
+        if (w->annot_order && !w->stopped
+            && boundary_may_run(w, position, pre)) {
             if (run_annotation_boundaries(w, v, position, pre)
                 == PARSE_VISIT_PRUNE) descend = false;
         }
