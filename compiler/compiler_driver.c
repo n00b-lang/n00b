@@ -6724,13 +6724,15 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (!located && link_analysis && link_analysis->lowered_with_errors
         && specialize && (build_command || check_command)) {
+        bool specialized = specialize_quietly(link_analysis,
+                                              cli_diagnostics);
         if (defer_analysis)
             (void)n00bb_analyze_program(grammar, link, link_analysis,
                                         deferred.dump_control_flow,
                                         deferred.dump_pdg,
                                         deferred.dump_summaries);
-        bool analyzed = specialize_quietly(link_analysis, cli_diagnostics)
-            && n00bb_recompute_summaries(link_analysis);
+        bool analyzed = specialized
+            && (defer_analysis || n00bb_recompute_summaries(link_analysis));
         if (analyzed) (void)check_post_specialization(link_analysis);
         if (analyzed && failed_snapshot && defer_analysis) {
             n00bb_cache_capture_summaries(cache, link_analysis,
