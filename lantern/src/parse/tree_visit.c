@@ -61,6 +61,11 @@ struct parse_tree_walk_t {
     chain_t                 any;
     chain_t                 leaf;
     chain_t                 by_annot[PARSE_ANNOT_KIND_COUNT];
+    // Bit p is set when by_annot[kind] has a visitor for phase p < 64;
+    // far_phases when any visitor's phase is beyond that.
+    uint64_t                annot_phases[PARSE_ANNOT_KIND_COUNT];
+    bool                    far_phases;
+    bool                    has_nt_visitors;
     parse_annot_kind_t     *annot_order;
     size_t                  annot_order_len;
     core_list_t(annotation_boundary_t) boundaries;
@@ -240,6 +245,18 @@ parse_walk_on_annot_phase(parse_tree_walk_t *w, parse_annot_kind_t kind,
     }
 
     core_list_push(w->by_annot[kind], add_visitor(w, pre, post, thunk, phase));
+    if (phase < 64) w->annot_phases[kind] |= UINT64_C(1) << phase;
+    else w->far_phases = true;
+}
+
+// Whether visitors of `kind` may run in `phase`; when not, running them
+// would call nothing.
+static inline bool
+annot_kind_in_phase(const parse_tree_walk_t *w, parse_annot_kind_t kind,
+                    int32_t phase)
+{
+    return w->far_phases || phase >= 64
+        || (w->annot_phases[kind] >> phase & 1);
 }
 
 bool
@@ -267,6 +284,7 @@ parse_walk_on_nt(parse_tree_walk_t *w, core_string_t nt_name, parse_visit_fn pre
     }
 
     core_list_push(*c, add_visitor(w, pre, post, thunk, 0));
+    w->has_nt_visitors = true;
 
     return true;
 }
@@ -274,6 +292,7 @@ parse_walk_on_nt(parse_tree_walk_t *w, core_string_t nt_name, parse_visit_fn pre
 static chain_t *
 nt_chain(parse_tree_walk_t *w, int64_t nt_id)
 {
+    if (!w->has_nt_visitors) return nullptr;
     bool  found = false;
     void *c     = core_dict_get(w->by_nt, (uintptr_t)nt_id, &found);
 
@@ -379,6 +398,17 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
     size_t n_rule  = parse_rule_annot_count(v->rule);
     size_t total   = n_nt + n_rule;
 
+    // The kinds this node carries: a pass over a kind it lacks, or a phase
+    // with no visitor for that kind, would call nothing, so it is skipped.
+    uint64_t present[(PARSE_ANNOT_KIND_COUNT + 63) / 64] = {0};
+    for (size_t i = 0; i < total; i++) {
+        parse_annotation_t *a = i < n_nt
+            ? parse_nt_annot_at(v->nt, i)
+            : parse_rule_annot_at(v->rule, i - n_nt);
+        if (a && a->kind >= 0 && a->kind < PARSE_ANNOT_KIND_COUNT)
+            present[a->kind / 64] |= UINT64_C(1) << (a->kind % 64);
+    }
+
     size_t kind_passes = w->annot_order ? w->annot_order_len : 1;
     for (size_t kp = 0; kp < kind_passes && !w->stopped; kp++) {
         size_t kind_index = reverse ? kind_passes - 1 - kp : kp;
@@ -386,14 +416,21 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
         if (w->annot_order) {
             selected = w->annot_order[kind_index];
         }
-        for (int32_t p = 0; p <= w->max_phase && !w->stopped; p++) {
+        bool carried = w->annot_order
+            ? (present[selected / 64] >> (selected % 64) & 1) != 0
+            : total != 0;
+        for (int32_t p = 0; carried && p <= w->max_phase && !w->stopped;
+             p++) {
             int32_t phase = reverse ? w->max_phase - p : p;
+            if (w->annot_order && !annot_kind_in_phase(w, selected, phase))
+                continue;
             for (size_t k = 0; k < total; k++) {
                 size_t i = reverse ? total - 1 - k : k;
                 parse_annotation_t *a = i < n_nt
                     ? parse_nt_annot_at(v->nt, i)
                     : parse_rule_annot_at(v->rule, i - n_nt);
                 if (!a || (w->annot_order && a->kind != selected)
+                    || !annot_kind_in_phase(w, a->kind, phase)
                     || annotation_suppressed(w, a->kind)) continue;
                 v->annot = a;
                 if (!run_chain(w, &w->by_annot[a->kind], v, pre, reverse,
