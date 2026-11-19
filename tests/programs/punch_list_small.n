@@ -390,4 +390,22 @@ func shorthand_values() -> int {
     return shorthand_sum(two) + shorthand_count(number)
 }
 require shorthand_values() == 208
+
+# Assigning a variant's arm proves the variable holds it until something
+# could change the variable.
+variant Assigned_Shape {
+    circle: int
+    square: string
+}
+func assigned_arms(other: Assigned_Shape) -> int {
+    var s = other
+    s = (circle = 1)
+    let first = s.circle
+    var t: Assigned_Shape
+    t.square = "ab"
+    var m: Where_Maybe[int] = (none = nil)
+    m = (some = 4)
+    return first + cast[int](t.square.len()) + m.some
+}
+require assigned_arms((square = "x")) == 7
 __fd_write(2, "ok")

@@ -7684,11 +7684,76 @@ static const ir_value_t *arm_test(const ir_block_t *block, uint64_t *tag,
 
 static uint64_t other_arm(th_ctx *types, th_type *variant, uint64_t tag);
 
+// The arm an assignment shows `subject` holds, or 0. Assigning a variant
+// made with one arm, as in `v = (circle = 2.0)`, proves the variable holds
+// that arm wherever that assignment is the only one that reaches a read of
+// it. A variable whose address is taken, by `ref` or by passing it to a
+// `modify` parameter, may change through it, so nothing proves its arm.
+static uint64_t assigned_arm(const ir_pdg_t *pdg, const ir_value_t *subject)
+{
+    for (uint32_t depth = 0; pdg && subject && depth < 64; depth++) {
+        ir_instr_t *def = subject->kind == IR_VAL_INSTR ? subject->def
+                                                        : nullptr;
+
+        if (!def) {
+            return 0;
+        }
+        if (def->op == IR_OP_VARIANT_MAKE && def->n_operands == 2
+            && def->operands[0].kind == IR_OPD_NAME) {
+            return th_arm_tag(def->operands[0].name);
+        }
+        if (def->op != IR_OP_COPY || def->n_operands != 1) {
+            return 0;
+        }
+
+        ir_local_t *local = ir_operand_local(&def->operands[0]);
+
+        if (!local) {
+            subject = ir_operand_value(&def->operands[0]);
+            continue;
+        }
+        if (local->address_taken) {
+            return 0;
+        }
+
+        const ir_instr_t *assignment = nullptr;
+
+        for (uint32_t i = 0; i < ir_pdg_in_count(pdg, def); i++) {
+            const ir_dep_edge_t *edge = ir_pdg_in_at(pdg, def, i);
+
+            if (edge->kind != IR_DEP_DATA || edge->via != local) {
+                continue;
+            }
+            if (edge->certainty != IR_DEP_EXACT || assignment) {
+                return 0;
+            }
+            assignment = edge->from;
+        }
+        if (!assignment || assignment->dest_local != local
+            || assignment->op != IR_OP_COPY || assignment->n_operands != 1) {
+            return 0;
+        }
+        subject = ir_operand_value(&assignment->operands[0]);
+    }
+
+    return 0;
+}
+
 static bool arm_guarded(ir_func_t *function, ir_doms_t *doms,
                         ir_value_numbers_t *numbers, const ir_instr_t *read,
                         const ir_value_t *subject, uint64_t tag,
-                        uint64_t *other)
+                        uint64_t *other, bool *assigned_other)
 {
+    uint64_t assigned = assigned_arm(ir_func_pdg(function), subject);
+
+    if (assigned == tag) {
+        return true;
+    }
+    if (assigned) {
+        *other          = assigned;
+        *assigned_other = true;
+        return false;
+    }
     for (ir_block_t *at = read->block; at;) {
         ir_block_t *parent = ir_idom_of(doms, at);
 
@@ -7824,10 +7889,11 @@ static bool variant_arms_checked(core_translation_unit_t *const *units,
                 const ir_value_t *subject = ir_operand_value(&in->operands[0]);
                 core_string_t     arm     = in->operands[1].name;
                 uint64_t          other   = 0;
+                bool              assigned = false;
                 bool              guarded = !doms || !numbers || !subject
                     || !ir_block_reachable(doms, in->block)
                     || arm_guarded(function, doms, numbers, in, subject,
-                                   th_arm_tag(arm), &other);
+                                   th_arm_tag(arm), &other, &assigned);
 
                 if (guarded) {
                     continue;
@@ -7856,7 +7922,8 @@ static bool variant_arms_checked(core_translation_unit_t *const *units,
                     ? n00bb_report(diagnostics, unit,
                           N00B_DIAG_VARIANT_ARM_UNCHECKED,
                           n00bb_span_location(in->span),
-                          N00B_TEXT_VARIANT_ARM_OTHER,
+                          assigned ? N00B_TEXT_VARIANT_ARM_ASSIGNED
+                                   : N00B_TEXT_VARIANT_ARM_OTHER,
                           N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(arm),
                                      ARG_TEXT(held)))
                     : n00bb_report(diagnostics, unit,

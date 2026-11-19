@@ -345,6 +345,7 @@ N00B_TEXT(REMOVE_THE_LOOP_TYPE, "remove the type, or use a new name for the loop
 N00B_TEXT(VARIANT_ARM_UNCHECKED, "`{0}` is read as its `{1}` arm here, but nothing before this shows it holds `{1}`")
 N00B_TEXT(VARIANT_ARM_OTHER, "`{0}` is read as its `{1}` arm here, but this branch only knows it holds `{2}`")
 N00B_TEXT(READ_THE_ARM_IN_A_CASE, "read it inside a `switch` on `{0}`, in `case {1}`")
+N00B_TEXT(VARIANT_ARM_ASSIGNED, "`{0}` is read as its `{1}` arm here, but what was last assigned to it holds `{2}`")
 N00B_TEXT(VARIANT_LITERAL_ARMS, "a `{0}` holds one arm at a time, but this literal names {1}")
 N00B_TEXT(KEEP_ONE_ARM, "keep only the arm this value should hold")
 N00B_TEXT(NAME_EVERY_ELEMENT, "give each element a name, or `_` for the ones you do not need")

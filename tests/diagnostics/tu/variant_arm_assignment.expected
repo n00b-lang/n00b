@@ -1,0 +1,16 @@
+tests/diagnostics/tu/variant_arm_assignment.n:13:6: warning N00B-N0019: function `grow` is never called
+  help: call it or delete it
+tests/diagnostics/tu/variant_arm_assignment.n:17:9: warning N00B-S0006: the value assigned to `s` here is never read
+tests/diagnostics/tu/variant_arm_assignment.n:31:9: warning N00B-S0006: the value assigned to `m` here is never read
+tests/diagnostics/tu/variant_arm_assignment.n:43:12: error N00B-T0593: `s` is read as its `circle` arm here, but what was last assigned to it holds `square`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arm_assignment.n:48:12: error N00B-T0593: `s` is read as its `circle` arm here, but what was last assigned to it holds `square`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arm_assignment.n:55:12: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arm_assignment.n:60:12: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arm_assignment.n:65:12: error N00B-T0593: `s` is read as its `circle` arm here, but nothing before this shows it holds `circle`
+  help: read it inside a `switch` on `s`, in `case circle`
+tests/diagnostics/tu/variant_arm_assignment.n:70:12: error N00B-T0593: `m` is read as its `some` arm here, but what was last assigned to it holds `none`
+  help: read it inside a `switch` on `m`, in `case some`

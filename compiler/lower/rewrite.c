@@ -355,6 +355,24 @@ n00bb_rewrite_arm_store(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         || !ir_instr_operand_value(make, payload)
         || !n00bb_rewrite_splice(rewrite, in))
         return false;
+    // A variable given an arm is assigned the variant whole, as
+    // n00bb_store_to assigns one, rather than stored to through its address:
+    // what it was assigned then shows which arm it holds
+    // (n00bb_check_variant_arms).
+    ir_instr_t *taken = base->kind == IR_VAL_INSTR ? base->def : nullptr;
+    ir_local_t *local = taken && taken->op == IR_OP_ADDRESS_OF
+            && taken->n_operands == 1
+        ? ir_operand_local(&taken->operands[0]) : nullptr;
+    if (local) {
+        in->op = IR_OP_COPY;
+        in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                         .value = make->dest};
+        in->n_operands = 1;
+        if (!ir_instr_set_dest_local(in, local)) return false;
+        ir_instr_uses_changed(in);
+        core_list_push(rewrite->abandoned, address);
+        return true;
+    }
     in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = base};
     in->operands[1] = (ir_operand_t){.kind = IR_OPD_VALUE,
                                      .value = make->dest};
@@ -3313,6 +3331,20 @@ n00bb_apply_demotions(n00bb_rewriter_t *rewriter)
     return ok;
 }
 
+// Whether anything in `function` takes `local`'s address.
+static bool
+address_taken(const ir_func_t *function, const ir_local_t *local)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            if (in->op == IR_OP_ADDRESS_OF && in->n_operands == 1
+                && ir_operand_local(&in->operands[0]) == local)
+                return true;
+        }
+    return false;
+}
+
 static bool
 n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
 {
@@ -3331,10 +3363,14 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
             ir_instr_t *def = value ? value->def : nullptr;
             bool pure_copy = def && def->op == IR_OP_COPY
                 && def->dest_kind != IR_DEST_LOCAL;
+            // A variable's address taken only for what was abandoned.
+            ir_local_t *taken = def && def->op == IR_OP_ADDRESS_OF
+                    && def->n_operands == 1
+                ? ir_operand_local(&def->operands[0]) : nullptr;
             if (!def || !def->n_operands || core_dict_contains(&gone, def)
                 || core_dict_contains(&used, value)
                 || (def->op != IR_OP_LOAD && def->op != IR_OP_EXTRACT
-                    && def->op != IR_OP_FIELD && !pure_copy))
+                    && def->op != IR_OP_FIELD && !pure_copy && !taken))
                 continue;
             ir_value_t *source = ir_operand_value(&def->operands[0]);
             core_dict_put(&gone, def, def);
@@ -3343,6 +3379,9 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
                 core_dict_free(&gone);
                 return false;
             }
+            if (taken)
+                taken->address_taken = address_taken(
+                    rewrite->context.function, taken);
             rewrite->abandoned.data[i] = source;
             erased = true;
         }

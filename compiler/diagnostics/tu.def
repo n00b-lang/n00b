@@ -416,7 +416,12 @@ N00B_DIAG(VARIANT_ARM_UNCHECKED, "N00B-T0593", ERROR,
     "    switch shape {\n"
     "        case circle { return shape.circle }\n"
     "        else { return 0 }\n"
-    "    }")
+    "    }\n"
+    "or where assigning the arm has, until something could change the\n"
+    "variable: another assignment, passing it to a `modify` parameter, or\n"
+    "taking a `ref` to it:\n"
+    "    shape = (circle = 2.0)\n"
+    "    return shape.circle")
 N00B_DIAG(VARIANT_LITERAL_ARMS, "N00B-T0594", ERROR,
     "a variant literal names more than one arm",
     "A variant holds one arm at a time, so a literal for it names exactly\n"
