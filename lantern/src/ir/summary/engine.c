@@ -36,6 +36,8 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->contents_memo, content_hash, content_eq);
     core_dict_init(&pt->aliased_memo, aliased_hash, aliased_eq);
+    core_dict_init(&pt->visible_memo, content_hash, content_eq);
+    core_dict_init(&pt->places_memo, places_memo_hash, places_memo_eq);
     core_dict_init(&pt->widened_sets, widened_hash, widened_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
@@ -228,6 +230,20 @@ pt_free(pt_t *pt)
         core_free(aliased);
     }
     core_dict_free(&pt->aliased_memo);
+    core_dict_foreach(&pt->visible_memo, entry) {
+        visible_memo_t *visible = entry->value;
+        core_list_free(visible->visible);
+        core_free(visible);
+    }
+    core_dict_free(&pt->visible_memo);
+    core_dict_foreach(&pt->places_memo, entry) {
+        places_memo_t *places = entry->value;
+        core_list_free(places->places);
+        core_list_free(places->items);
+        memo_free(&places->memo);
+        core_free(places);
+    }
+    core_dict_free(&pt->places_memo);
     core_dict_foreach(&pt->widened_sets, entry) {
         pt_set_t *set = entry->value;
         core_list_free(*set);
@@ -242,6 +258,8 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);
     core_list_free(pt->seen);
+    loc_table_free(&pt->visited);
+    alias_calls_free(&pt->alias_calls);
     core_list_free(pt->reading);
     core_list_free(pt->crossed);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);

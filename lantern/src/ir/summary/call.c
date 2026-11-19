@@ -46,6 +46,105 @@ static core_hash_value_t resolved_hash(void *key);
 static void resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into,
                          pt_set_t *seen);
 
+static uint64_t
+visited_hash(const pt_loc_t *loc)
+{
+    const ir_spath_t *path = &loc->path;
+    uint64_t          hash = (uint64_t)loc->site * 0x9e3779b97f4a7c15ull
+        ^ ((uint64_t)path->root << 40 | (uint64_t)path->output << 32
+           | (uint64_t)path->flags << 24 | path->depth);
+    hash = hash * 31 + path->param;
+    hash = hash * 31 + (uint64_t)(uintptr_t)path->global;
+    hash = hash * 31 + (uint64_t)(uintptr_t)path->type;
+    for (uint32_t s = 0; s < path->depth; s++)
+        hash = hash * 31 + (uint64_t)(uintptr_t)path->steps[s].data
+            + path->steps[s].u8_bytes;
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdull;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ull;
+    return hash ^ hash >> 33;
+}
+
+static bool
+same_visited(const pt_loc_t *a, const pt_loc_t *b)
+{
+    const ir_spath_t *x = &a->path, *y = &b->path;
+    if (a->site != b->site || x->root != y->root || x->output != y->output
+        || x->flags != y->flags || x->depth != y->depth
+        || x->param != y->param || x->global != y->global
+        || x->type != y->type)
+        return false;
+    if (x->steps == y->steps) return true;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if ((x->steps[s].data != y->steps[s].data
+             || x->steps[s].u8_bytes != y->steps[s].u8_bytes)
+            && !core_string_eq(x->steps[s], y->steps[s]))
+            return false;
+    return true;
+}
+
+// Adds `loc` to `table`; false if it was there already.
+static bool
+loc_table_add(loc_table_t *table, const pt_loc_t *loc)
+{
+    if (2 * (table->len + 1) > table->cap) {
+        loc_table_t old = *table;
+        table->cap    = old.cap ? old.cap * 2 : 64;
+        table->slots  = core_alloc_array(pt_loc_t, table->cap);
+        table->hashes = core_alloc_array(uint64_t, table->cap);
+        table->used   = core_alloc_array(bool, table->cap);
+        memset(table->used, 0, table->cap * sizeof(bool));
+        table->len = 0;
+        for (size_t s = 0; s < old.cap; s++)
+            if (old.used[s]) loc_table_add(table, &old.slots[s]);
+        if (old.slots) core_free(old.slots);
+        if (old.hashes) core_free(old.hashes);
+        if (old.used) core_free(old.used);
+    }
+    uint64_t hash = visited_hash(loc);
+    size_t   mask = table->cap - 1;
+    size_t   at   = hash & mask;
+    for (; table->used[at]; at = (at + 1) & mask)
+        if (table->hashes[at] == hash
+            && same_visited(&table->slots[at], loc))
+            return false;
+    table->slots[at]  = *loc;
+    table->hashes[at] = hash;
+    table->used[at]   = true;
+    table->len++;
+    return true;
+}
+
+static void
+loc_table_clear(loc_table_t *table)
+{
+    if (table->len) memset(table->used, 0, table->cap * sizeof(bool));
+    table->len = 0;
+}
+
+static void
+loc_table_free(loc_table_t *table)
+{
+    if (table->slots) core_free(table->slots);
+    if (table->hashes) core_free(table->hashes);
+    if (table->used) core_free(table->used);
+    *table = (loc_table_t){0};
+}
+
+// Whether the walk under way has met exactly `loc` before, noting it if
+// not. A location met before needs nothing more: either it was resolved
+// then, adding everything it reaches, or `seen` already covered it. The
+// check stands in front of `seen`, whose covering lookups were most of the
+// time a function with many mutually reachable sites spent solving: each
+// site's contents name most of the other sites, so each site is met once
+// per site that holds it.
+static bool
+visited_before(pt_t *pt, const pt_loc_t *loc)
+{
+    return !loc_table_add(&pt->visited, loc);
+}
+
 static void
 resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
                 pt_set_t *seen)
@@ -79,7 +178,8 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
         set_add(pt, into, item_at(loc));
         return;
     }
-    if (!set_add(pt, seen, item_at(loc))) return;
+    if (visited_before(pt, &loc) || !set_add(pt, seen, item_at(loc)))
+        return;
     const ir_spath_t *path    = &loc.path;
     bool              deep    = loc_deep(&loc);
     bool              through = deep && !(path->flags & SPATH_INLINE);
@@ -296,6 +396,7 @@ pt_resolve(pt_t *pt, pt_loc_t loc, pt_set_t *into)
         memo_begin(pt, &entry->memo, &frame);
         entry->items.len = 0;
         pt->seen.len     = 0;
+        loc_table_clear(&pt->visited);
         resolve_into(pt, loc, &entry->items, &pt->seen);
         memo_end(pt, &entry->memo, &frame);
     }
@@ -524,6 +625,99 @@ valued_eq(const void *a, const void *b)
     return x->mode == y->mode && resolved_eq(&x->loc, &y->loc);
 }
 
+static core_hash_value_t
+places_hash(const pt_set_t *places, uint8_t mode)
+{
+    core_hash_value_t hash = places->len * 8 + mode;
+    for (size_t p = 0; p < places->len; p++) {
+        const pt_item_t *item = &places->data[p];
+        hash = hash * 1000003
+            ^ (spath_hash((void *)&item->loc.path) * 31 + item->loc.site);
+        hash = hash * 31
+            + ((core_hash_value_t)item->kind << 16
+               | (core_hash_value_t)item->flow << 8 | item->deep)
+            + item->depth;
+        for (uint32_t s = 0; s < item->depth; s++)
+            hash = hash * 31 + core_string_hash(item->steps[s]);
+        hash = hash * 31 + (core_hash_value_t)(uintptr_t)item->origin;
+    }
+    return hash;
+}
+
+static bool
+identical_place(const pt_item_t *a, const pt_item_t *b)
+{
+    const ir_spath_t *x = &a->loc.path, *y = &b->loc.path;
+    if (a->kind != b->kind || a->flow != b->flow || a->deep != b->deep
+        || a->depth != b->depth || a->origin != b->origin
+        || a->loc.site != b->loc.site || x->flags != y->flags
+        || x->type != y->type || compare_path_roots(x, y)
+        || x->depth != y->depth)
+        return false;
+    for (uint32_t s = 0; s < a->depth; s++)
+        if (!core_string_eq(a->steps[s], b->steps[s])) return false;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if (!core_string_eq(x->steps[s], y->steps[s])) return false;
+    return true;
+}
+
+static core_hash_value_t
+places_memo_hash(void *key)
+{
+    return ((const places_memo_t *)key)->hash;
+}
+
+static bool
+places_memo_eq(const void *a, const void *b)
+{
+    const places_memo_t *x = a, *y = b;
+    if (x->hash != y->hash || x->mode != y->mode
+        || x->places.len != y->places.len)
+        return false;
+    for (size_t p = 0; p < x->places.len; p++)
+        if (!identical_place(&x->places.data[p], &y->places.data[p]))
+            return false;
+    return true;
+}
+
+// places_value, remembered by places and mode. Many of a callee's paths
+// resolve to the same places (every path under a deeply aliased parameter
+// reaches all of it), and each recomputed its value separately, merging
+// every place's contents again; a function whose calls kept changing what
+// those places hold spent nearly all its solve doing that. The entry is an
+// ordinary memo, so it is recomputed whenever anything it read changes.
+static void
+shared_places_value(pt_t *pt, pt_set_t *places, uint8_t mode,
+                    pt_set_t *into)
+{
+    if (pt->reading.len || pt->delta_since) {
+        places_value(pt, places, mode, into);
+        return;
+    }
+    places_memo_t  probe = {.places = *places, .mode = mode,
+                            .hash   = places_hash(places, mode)};
+    bool           found = false;
+    places_memo_t *entry = core_dict_get(&pt->places_memo, &probe, &found);
+    if (!found) {
+        entry  = core_alloc(places_memo_t);
+        *entry = (places_memo_t){.mode = mode, .hash = probe.hash};
+        for (size_t p = 0; p < places->len; p++)
+            core_list_push(entry->places, places->data[p]);
+        core_dict_put(&pt->places_memo, entry, entry);
+    }
+    if (memo_stale(pt, &entry->memo)) {
+        pt_memo_frame_t frame;
+        uint64_t        cuts = pt->cuts;
+        entry->items.len = 0;
+        memo_begin(pt, &entry->memo, &frame);
+        places_value(pt, places, mode, &entry->items);
+        memo_end(pt, &entry->memo, &frame);
+        if (pt->cuts != cuts) entry->memo.computed = false;
+    }
+    memo_use(pt, &entry->memo);
+    set_merge(pt, into, &entry->items);
+}
+
 static void
 resolved_value(pt_t *pt, pt_loc_t loc, uint8_t mode, pt_set_t *into)
 {
@@ -541,7 +735,7 @@ resolved_value(pt_t *pt, pt_loc_t loc, uint8_t mode, pt_set_t *into)
         memo_begin(pt, &entry->memo, &frame);
         entry->items.len = 0;
         pt_resolve(pt, loc, &places);
-        places_value(pt, &places, mode, &entry->items);
+        shared_places_value(pt, &places, mode, &entry->items);
         core_list_free(places);
         memo_end(pt, &entry->memo, &frame);
     }

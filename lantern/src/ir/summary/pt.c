@@ -726,6 +726,46 @@ visible_aliases(pt_t *pt, const uint32_t *sites, size_t count,
     }
 }
 
+// visible_aliases for a read at `loc` from `pt->at`, remembered. A function
+// whose callees publish many places under one external root reads that
+// root over and over, and scanning every alias under it on each read made
+// the solve cubic. Only pt_alias changes an alias list, and whenever it
+// does it notifies the alias's root; an alias a read can see has the read's
+// root, so the list stays exact until that root's key changes. Fills
+// `visible` and returns its signature.
+static uint64_t
+visible_at(pt_t *pt, uintptr_t root, const core_list_t(uint32_t) *sites,
+           const pt_loc_t *loc, core_list_t(uint64_t) *visible)
+{
+    content_key_t   probe = {*loc, pt->at};
+    bool            found = false;
+    visible_memo_t *entry = core_dict_get(&pt->visible_memo, &probe, &found);
+    if (!found) {
+        entry  = core_alloc(visible_memo_t);
+        *entry = (visible_memo_t){.key     = probe,
+                                  .visible = core_list_new(uint64_t)};
+        core_dict_put(&pt->visible_memo, &entry->key, entry);
+    }
+    uintptr_t changed = (uintptr_t)core_dict_get(
+        &pt->changed, (void *)alias_root_key(root), nullptr);
+    if (!found || changed > entry->generation) {
+        bool positional    = pt->positional;
+        pt->positional     = false;
+        entry->visible.len = 0;
+        visible_aliases(pt, sites->data, sites->len, loc, &entry->visible);
+        entry->positional = pt->positional;
+        entry->generation = pt->generation;
+        entry->signature  = core_xxh3_64bits_raw(
+            entry->visible.data ? (const void *)entry->visible.data : "",
+            entry->visible.len * sizeof(*entry->visible.data));
+        pt->positional = positional;
+    }
+    pt->positional = pt->positional || entry->positional;
+    for (size_t v = 0; v < entry->visible.len; v++)
+        core_list_push(*visible, entry->visible.data[v]);
+    return entry->signature;
+}
+
 static void
 aliased_from(pt_t *pt, const core_list_t(uint64_t) *visible,
              const pt_loc_t *loc, pt_set_t *into)
@@ -790,11 +830,7 @@ external_aliased(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
                                                  (void *)root, &found);
     if (!sites) return;
     core_list_t(uint64_t) visible = core_list_new(uint64_t);
-    visible_aliases(pt, sites->data, sites->len, loc, &visible);
-    aliased_key_t   probe = {
-        *loc, core_xxh3_64bits_raw(visible.data ? (const void *)visible.data
-                                                : "",
-                                   visible.len * sizeof(*visible.data))};
+    aliased_key_t probe = {*loc, visible_at(pt, root, sites, loc, &visible)};
     aliased_memo_t *entry = !visible.len || pt->reading.len
             || pt->delta_since
         ? nullptr : core_dict_get(&pt->aliased_memo, &probe, &found);
@@ -870,6 +906,74 @@ add_origin(core_list_t(summary_instr_ptr_t) *origins,
     return true;
 }
 
+static uint64_t visited_hash(const pt_loc_t *loc);
+static bool     same_visited(const pt_loc_t *a, const pt_loc_t *b);
+
+static uint64_t
+alias_call_hash(const pt_alias_call_t *call)
+{
+    const pt_item_t *item = &call->item;
+    uint64_t         hash = visited_hash(&item->loc) * 31 + call->site;
+    hash = hash * 31 + (uint64_t)(uintptr_t)call->origin;
+    hash = hash * 31
+        + ((uint64_t)item->kind << 16 | (uint64_t)item->flow << 8
+           | item->deep) + item->depth;
+    for (uint32_t s = 0; s < item->depth; s++)
+        hash = hash * 31 + (uint64_t)(uintptr_t)item->steps[s].data;
+    return hash ^ hash >> 31;
+}
+
+static bool
+same_alias_call(const pt_alias_call_t *a, const pt_alias_call_t *b)
+{
+    const pt_item_t *x = &a->item, *y = &b->item;
+    if (a->site != b->site || a->origin != b->origin || x->kind != y->kind
+        || x->flow != y->flow || x->deep != y->deep || x->depth != y->depth
+        || x->origin != y->origin || !same_visited(&x->loc, &y->loc))
+        return false;
+    if (x->steps == y->steps) return true;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if ((x->steps[s].data != y->steps[s].data
+             || x->steps[s].u8_bytes != y->steps[s].u8_bytes)
+            && !core_string_eq(x->steps[s], y->steps[s]))
+            return false;
+    return true;
+}
+
+// Notes a pt_alias call; false if the same one was made before.
+static bool
+alias_call_add(alias_calls_t *calls, const pt_alias_call_t *call)
+{
+    if (2 * (calls->len + 1) > calls->cap) {
+        alias_calls_t old = *calls;
+        calls->cap   = old.cap ? old.cap * 2 : 64;
+        calls->slots = core_alloc_array(pt_alias_call_t, calls->cap);
+        calls->used  = core_alloc_array(bool, calls->cap);
+        memset(calls->used, 0, calls->cap * sizeof(bool));
+        calls->len = 0;
+        for (size_t s = 0; s < old.cap; s++)
+            if (old.used[s]) alias_call_add(calls, &old.slots[s]);
+        if (old.slots) core_free(old.slots);
+        if (old.used) core_free(old.used);
+    }
+    size_t mask = calls->cap - 1;
+    size_t at   = alias_call_hash(call) & mask;
+    for (; calls->used[at]; at = (at + 1) & mask)
+        if (same_alias_call(&calls->slots[at], call)) return false;
+    calls->slots[at] = *call;
+    calls->used[at]  = true;
+    calls->len++;
+    return true;
+}
+
+static void
+alias_calls_free(alias_calls_t *calls)
+{
+    if (calls->slots) core_free(calls->slots);
+    if (calls->used) core_free(calls->used);
+    *calls = (alias_calls_t){0};
+}
+
 static void
 pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
          const ir_instr_t *origin)
@@ -887,6 +991,14 @@ pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
                                 target->loc.path.depth);
         item.depth += target->loc.path.depth;
     }
+    // The same call again changes nothing: what it added then (the alias,
+    // or its origin) is still there, or has been folded into an alias that
+    // covers it, with its origins. spread_escapes makes every call again on
+    // each round, and finding that out from the site's aliases took a scan
+    // of all of them per call.
+    if (!alias_call_add(&pt->alias_calls,
+                        &(pt_alias_call_t){site, item, origin}))
+        return;
     alias_list_t *aliases = &pt->sites.data[site].aliases;
     uintptr_t     root    = external_key(&alias.path);
     bool          known   = false;

@@ -194,6 +194,27 @@ typedef struct {
     uint32_t   site;
 } pt_loc_t;
 
+// A set of locations, exactly: an open-addressed table of `cap` slots,
+// `len` of them in use.
+typedef struct {
+    pt_loc_t *slots;
+    uint64_t *hashes;
+    bool     *used;
+    size_t    cap;
+    size_t    len;
+} loc_table_t;
+
+typedef struct pt_alias_call_t pt_alias_call_t;
+
+// The pt_alias calls made so far, exactly (see pt_alias): like a
+// loc_table_t.
+typedef struct {
+    pt_alias_call_t *slots;
+    bool            *used;
+    size_t           cap;
+    size_t           len;
+} alias_calls_t;
+
 typedef struct stored_t stored_t;
 
 typedef struct {
@@ -224,6 +245,12 @@ typedef struct {
     const ir_instr_t    *origin;
 } pt_item_t;
 core_list_decl(pt_item_t);
+
+struct pt_alias_call_t {
+    uint32_t          site;
+    pt_item_t         item;
+    const ir_instr_t *origin;
+};
 typedef core_list_t(pt_item_t) pt_set_t;
 core_list_decl(pt_set_t);
 typedef const pt_set_t *pt_set_ptr_t;
@@ -242,6 +269,8 @@ typedef struct {
     bool              elements;
     pt_set_t          contents;
     alias_list_t      aliases;
+    // The generation spread_escapes last went through this site in.
+    uint64_t          spread;
     const ir_local_t *local;
     const ir_value_t *value;
     const ir_instr_t *call;
@@ -354,6 +383,8 @@ struct pt_t {
     core_dict_t            stored;
     core_dict_t            contents_memo;
     core_dict_t            aliased_memo;
+    core_dict_t            visible_memo;
+    core_dict_t            places_memo;
     core_dict_t            widened_sets;
     uint64_t               cuts;
     uint64_t               delta_since;
@@ -382,6 +413,9 @@ struct pt_t {
     flow_bits_t            crossed;
     uint32_t               crossed_known;
     pt_set_t               seen;
+    // The locations the pt_resolve walk under way has met, exactly.
+    loc_table_t            visited;
+    alias_calls_t          alias_calls;
     core_list_t(pt_frame_t) reading;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
@@ -460,6 +494,28 @@ typedef struct {
     pt_set_t              items;
     pt_memo_t             memo;
 } aliased_memo_t;
+
+// The aliases a read at `key.loc` sees from `key.at` (see visible_aliases),
+// and their signature. They stay exact until an alias under the read's root
+// changes, which notifies that root's alias_root_key: `generation` is when
+// they were found.
+typedef struct {
+    content_key_t         key;
+    core_list_t(uint64_t) visible;
+    uint64_t              signature;
+    uint64_t              generation;
+    bool                  positional;
+} visible_memo_t;
+
+// What a set of places holds, by places and value mode (see
+// places_value): many callee paths resolve to the same places.
+typedef struct {
+    pt_set_t  places;
+    uint8_t   mode;
+    uint64_t  hash;
+    pt_set_t  items;
+    pt_memo_t memo;
+} places_memo_t;
 
 typedef struct {
     pt_loc_t  loc;
