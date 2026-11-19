@@ -495,7 +495,7 @@ N00B_TEXT(USE_RECORD_FOR_A_VALUE, "use `record` for a value that is copied or `o
 N00B_TEXT(TYPE_IS_NOT_A_DECLARATION_2, "`type {0} {{ ... }` is not a declaration form")
 N00B_TEXT(USE_RECORD_FOR_A_VALUE_2, "use `record {0} {{ ... }` for a value that is copied or `object {1} {{ ... }` for a value that is shared")
 N00B_TEXT(TYPE_VARIABLE_DOES_NOT_BELONG, "type variable `{0}` does not belong to an enclosing function, record, variant or trait")
-N00B_TEXT(WHERE_ON_TYPE_UNSUPPORTED, "a `where` clause after a type is not supported yet")
+N00B_TEXT(WHERE_ON_TYPE_UNSUPPORTED, "a `where` clause outside a function, trait, record, variant or alias, or in a callback, is not supported yet")
 N00B_TEXT(WHERE_ON_FUNCTION_INSTEAD, "put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`")
 N00B_TEXT(TYPE_VARIABLES_ARE_DECLARED_BY, "type variables are declared by using them in a function signature or a generic type declaration; use a concrete type here")
 N00B_TEXT(THE_VALUE_OF_ENUM_ITEM, "the value of enum item `{0}` must be an integer literal, not `{1}`")

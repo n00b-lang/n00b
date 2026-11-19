@@ -333,12 +333,11 @@ N00B_DIAG(WITH_VALUE_DROPS, "N00B-T0604", ERROR,
     "it can only be used by a `with` statement. A manager that never drops\n"
     "a failure has an `__exit` that returns nothing.")
 N00B_DIAG(WHERE_ON_TYPE, "N00B-T0606", ERROR,
-    "a `where` clause follows a type instead of a function signature",
-    "Type constraints are checked only when the `where` clause follows a\n"
-    "function's signature, after its result type, or names a trait. A\n"
-    "`where` clause after the type of a parameter, a variable, a field or\n"
-    "an alias is not supported yet. Put the constraint on the enclosing\n"
-    "function instead:\n"
+    "a `where` clause is written where no declaration owns its variable",
+    "A `where` clause constrains a type variable of the function, trait,\n"
+    "record, variant or alias it is written in. One written outside all\n"
+    "of them, or inside a callback, is not supported yet. Put the\n"
+    "constraint on a function that uses the type instead:\n"
     "    func pick(x: 'T) -> 'T where 'T: Integer { return x }")
 N00B_DIAG(TYPE_ARGUMENT_EXCLUDED, "N00B-T0608", ERROR,
     "a type argument is a type the type's `where` clause excludes",

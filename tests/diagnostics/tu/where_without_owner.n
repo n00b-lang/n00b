@@ -1,0 +1,5 @@
+// A `where` clause no declaration owns is not supported yet; it is an
+// error rather than a constraint dropped unchecked.
+var counted: int where 'T: Integer = 1
+let narrowed = cast[int where 'T: Integer](2)
+require counted + narrowed == 3

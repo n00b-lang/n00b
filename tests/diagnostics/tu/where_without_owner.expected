@@ -1,0 +1,4 @@
+tests/diagnostics/tu/where_without_owner.n:3:18: error N00B-T0606: a `where` clause outside a function, trait, record, variant or alias, or in a callback, is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_without_owner.n:4:25: error N00B-T0606: a `where` clause outside a function, trait, record, variant or alias, or in a callback, is not supported yet
+  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
