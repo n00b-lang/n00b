@@ -234,6 +234,8 @@ add_rule_internal(parse_grammar_t *g,
     rule.link_ix      = penalty_link_ix;
 
     core_list_push(g->rules, rule);
+    // Anything built from the rules (a parser's expression graph) is stale.
+    new_grammar_version(g);
 
     int32_t ix = (int32_t)(g->rules.len - 1);
     core_list_push(nt->rule_ids, ix);

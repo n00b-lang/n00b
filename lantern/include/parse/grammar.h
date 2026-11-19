@@ -7,8 +7,9 @@
 
 // The leading member of every grammar, readable without a call. `version`
 // changes, to a value no grammar has had before, whenever the grammar gains a
-// nonterminal, so a name resolved against one version of one grammar stays
-// resolved for exactly as long as the grammar's set of names is unchanged.
+// nonterminal or a rule, so anything derived from one version of one grammar
+// (a name resolved to an id, a parser's expression graph) stays valid for
+// exactly as long as the grammar's nonterminals and rules are unchanged.
 typedef struct {
     uint64_t version;
 } parse_grammar_head_t;

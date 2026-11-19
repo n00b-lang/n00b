@@ -210,6 +210,8 @@ struct parse_pwz_parser_t {
     pwz_exp_t                   *start_exp;
     pwz_exp_ptr_t               *nt_exps;
     core_list_t(pwz_exp_ptr_t)   all_exps;
+    // The grammar version nt_exps was built for (see pwz.c's graph pool).
+    uint64_t                     graph_version;
 
     core_arena_t                 parse_arena;
     pwz_mem_t                  *free_mems;
