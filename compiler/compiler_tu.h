@@ -713,6 +713,14 @@ typedef struct {
     // The members module literals injected into this module (the only
     // symbols n00bb_injected_member is true of), in the order injected.
     core_list_t(parse_sym_entry_ptr_t) injected_members;
+    // module_scope_in_namespace's answers, per namespace: the module scope
+    // found and how far into the symbol table's scope list (newest first)
+    // that answer covers, so a later call looks only at newer scopes.
+    struct {
+        parse_namespace_t *ns;
+        parse_scope_t *scanned;
+        parse_scope_t *found;
+    } module_scope_memo[4];
 } n00bb_tu_state_t;
 bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
                                  const parse_sym_entry_t *symbol,

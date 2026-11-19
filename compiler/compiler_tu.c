@@ -7932,13 +7932,40 @@ module_scope_in_namespace(n00bb_tu_state_t *state,
     parse_namespace_t *ns = symtab
         ? parse_symtab_ns(symtab, namespace_name) : nullptr;
     if (!ns || !ns->root) return nullptr;
-    for (parse_scope_t *scope = symtab->all_scopes; scope;
+    // The answer is the newest scope under the namespace's root tagged
+    // `module`. Scopes are only added (at the head of all_scopes), and a
+    // scope's parent and tag are settled as it is opened, so an answer stays
+    // right for the scopes it covered: only newer ones need a look.
+    static pthread_mutex_t memo_lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&memo_lock);
+    size_t slots = sizeof(state->module_scope_memo)
+        / sizeof(state->module_scope_memo[0]);
+    typeof(&state->module_scope_memo[0]) memo = nullptr;
+    for (size_t i = 0; !memo && i < slots; i++)
+        if (state->module_scope_memo[i].ns == ns
+            || !state->module_scope_memo[i].ns) {
+            memo = &state->module_scope_memo[i];
+            memo->ns = ns;
+        }
+    parse_scope_t *stop = memo ? memo->scanned : nullptr;
+    parse_scope_t *found = nullptr;
+    bool newer = false;
+    for (parse_scope_t *scope = symtab->all_scopes; scope && scope != stop;
          scope = scope->all_next)
         if (scope->parent == ns->root
             && core_string_eq(scope->scope_tag,
-                              CORE_STRING_STATIC("module")))
-            return scope;
-    return nullptr;
+                              CORE_STRING_STATIC("module"))) {
+            found = scope;
+            newer = true;
+            break;
+        }
+    if (memo) {
+        if (!newer) found = memo->found;
+        memo->scanned = symtab->all_scopes;
+        memo->found = found;
+    }
+    pthread_mutex_unlock(&memo_lock);
+    return found;
 }
 
 parse_scope_t *
