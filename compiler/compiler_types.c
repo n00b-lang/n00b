@@ -172,9 +172,13 @@ static core_string_t quoted_type(th_ctx *types, th_type *type)
                       N00BB_ARGS(ARG_TEXT(n00bb_print_type(types, type))));
 }
 
+// A function type is shown as it is written: without passing modes, which
+// are no part of it.
 static core_string_t shown(th_ctx *types, th_type *type)
 {
-    return n00bb_hide_reserved_segments(th_print(types, type));
+    th_print_options_t options = {.omit_modes = true};
+    return n00bb_hide_reserved_segments(
+        th_print_with_options(types, type, &options));
 }
 
 static core_string_t span_text(core_translation_unit_t *unit, ir_span_t span)

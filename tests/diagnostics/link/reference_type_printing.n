@@ -1,0 +1,10 @@
+# A function type is printed as it is written: without the passing modes
+# a reference to the function remembers.
+record Tally {
+    count: int
+}
+func add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+let wrong: Ref[(Tally) -> int] = ref add

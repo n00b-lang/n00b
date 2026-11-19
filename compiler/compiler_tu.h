@@ -1038,6 +1038,9 @@ parse_tree_t *simple_identifier_primary(parse_grammar_t *grammar,
 bool simple_identifier_expression(parse_grammar_t *grammar,
                                   parse_tree_t *node, core_string_t *name);
 core_string_t n00bb_print_type(th_ctx *types, th_type *type);
+// A function's signature, as n00bb_print_type prints its type but with its
+// parameters' passing modes, which are no part of the type.
+core_string_t n00bb_print_signature(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_qualified(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_source(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_for_user(th_ctx *types, th_type *type);

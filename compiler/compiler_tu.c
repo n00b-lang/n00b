@@ -4649,6 +4649,23 @@ n00bb_print_type(th_ctx *types, th_type *type)
         .option_suffix = CORE_STRING_STATIC("?"),
         .omit_nil_failure = true,
         .source_spelling = true,
+        // As a function type is written: passing modes are no part of it.
+        .omit_modes = true,
+    };
+    return th_print_with_options(types, type, &options);
+}
+
+core_string_t
+n00bb_print_signature(th_ctx *types, th_type *type)
+{
+    if (!types || !type) return CORE_STRING_STATIC("_");
+    th_print_options_t options = {
+        .named = short_type_name,
+        .sequence = CORE_STRING_STATIC("Array"),
+        .reference = CORE_STRING_STATIC("Ref"),
+        .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_nil_failure = true,
+        .source_spelling = true,
     };
     return th_print_with_options(types, type, &options);
 }

@@ -1,0 +1,1 @@
+tests/diagnostics/link/reference_type_printing.n:10:5: error N00B-T0046: expected `(reference_type_printing.Tally) -> int fail: nil`, found `(reference_type_printing.Tally, int) -> int fail: nil`

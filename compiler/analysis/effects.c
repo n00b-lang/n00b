@@ -1240,7 +1240,7 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
     th_ctx *types = ir_module_types(function->owner);
     if (for_reader) {
         core_string_t name = n00bb_function_root(function->name);
-        core_string_t type = n00bb_print_type(types, function->type);
+        core_string_t type = n00bb_print_signature(types, function->type);
         fprintf(stdout, "%.*s.%.*s: %.*s\n  effects",
                 (int)owner.u8_bytes, owner.data,
                 (int)name.u8_bytes, name.data,
@@ -1795,7 +1795,7 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
     core_buffer_append_quoted(out, core_buffer_string(&name));
     core_buffer_release(&name);
     core_buffer_puts(out, ",\"type\":");
-    core_buffer_append_quoted(out, n00bb_print_type(
+    core_buffer_append_quoted(out, n00bb_print_signature(
         ir_module_types(function->owner), function->type));
     core_buffer_puts(out, ",\"effects\":[");
     for (uint32_t b = 0, n = 0; b < IR_SEFFECT_FLAG_BITS; b++)
@@ -1910,7 +1910,7 @@ explain_function(n00bb_link_analysis_t *analysis, ir_func_t *function)
     core_buffer_t out = {0};
     function_name_text(&out, function);
     core_buffer_puts(&out, ": ");
-    core_buffer_append_string(&out, n00bb_print_type(
+    core_buffer_append_string(&out, n00bb_print_signature(
         ir_module_types(function->owner), function->type));
     core_buffer_putc(&out, '\n');
     uint64_t bits = ir_summary_effect_bits(summary);
