@@ -5,7 +5,7 @@ tests/diagnostics/tu/where_on_type.n:14:11: note N00B-S0064: parameter `x` could
 tests/diagnostics/tu/where_on_type.n:18:14: note N00B-S0064: parameter `x` could be `view`: `in_body` never writes anything reachable from it
 tests/diagnostics/tu/where_on_type.n:19:9: warning N00B-S0006: the value assigned to `y` here is never read
 tests/diagnostics/tu/where_on_type.n:23:9: error N00B-T0021: `string` does not implement `Integer`, which `local` requires
-  help: implement `Integer` for `string`, or call a function that does not need it
+  help: give it a value whose type implements `Integer` here, or implement `Integer` for `string`
 tests/diagnostics/tu/where_on_type.n:25:9: error N00B-T0021: `string` does not implement `Integer`, which `middle` requires
   tests/diagnostics/tu/where_on_type.n:4:6: note: `middle` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it

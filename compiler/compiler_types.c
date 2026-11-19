@@ -490,7 +490,7 @@ static bool report_body_bound(th_ctx *types, core_translation_unit_t *unit,
                  N00B_TEXT_REQUIRED_TRAIT_MISSING,
                  N00BB_ARGS(ARG_TEXT(subject), ARG_TEXT(trait),
                             ARG_TEXT(function_name(owner))));
-    n00bb_report_help(diagnostics, N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
+    n00bb_report_help(diagnostics, N00B_TEXT_GIVE_A_VALUE_THAT_IMPLEMENTS,
                       N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
 
     return true;
