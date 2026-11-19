@@ -676,6 +676,8 @@ static void record_inputs(ir_summaries_t *summaries,
                           const core_list_t(summary_input_t) *from);
 static bool inputs_hold(ir_summaries_t *summaries,
                         const core_list_t(summary_input_t) *inputs);
+static bool inputs_grew(ir_summaries_t *summaries,
+                        const core_list_t(summary_input_t) *inputs);
 static ir_summary_t *summary_shell(ir_summaries_t *summaries,
                                    const ir_func_t *function);
 static void decode_stored_body(ir_summary_t *summary);

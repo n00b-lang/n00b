@@ -413,6 +413,63 @@ copy_paths(ir_summary_t *next, const ir_summary_t *old)
                 .function = old->deps.data[d].function}));
 }
 
+// Starts a cycle's rounds from what the previous pass found for it,
+// rather than from nothing, when that is below what this pass will find.
+// The rounds then climb to the same least fixed point in fewer steps.
+//
+// Why it is below: each round computes the members' summaries from the
+// current ones, and the parts it does not join in (paths, heaps) from them
+// alone; what it computes only grows as the members' summaries, its other
+// inputs and the trap proofs it can lean on are less precise. Here the
+// members' bodies are the same, every callee outside the cycle has the
+// summary it had then, and every input the previous pass asked about
+// answers as it did or went from "does not overlap" to "overlaps", the one
+// way reinterpretations registered between the passes change them. The
+// only other difference between the passes is that this one binds no
+// summaries for the analyses, which proves fewer traps, and so adds to
+// what the rounds compute. So each round of the previous pass computed
+// no more than the same round now, its result is no more than this
+// pass's least fixed point, and rounds started there end at that point,
+// as the rounds started from nothing do.
+static void
+seed_component(ir_summaries_t *summaries, ir_func_t *const *members,
+               size_t count)
+{
+    if (!summaries->reusable || summaries->defer_changed
+        || !summaries->previous) return;
+    ir_summary_t **olds = core_alloc_array(ir_summary_t *, count);
+    bool seedable = true;
+    for (size_t i = 0; seedable && i < count; i++) {
+        ir_summary_t *old = summary_shell(summaries->previous, members[i]);
+        seedable = old && old->identity && !old->stored
+            && !core_dict_contains(&summaries->previous->adopted, old)
+            && old->identity == ir_func_identity(members[i])
+            && inputs_grew(summaries, &old->inputs);
+        for (size_t d = 0; seedable && d < old->deps.len; d++) {
+            const summary_dep_t *dep = &old->deps.data[d];
+            if (member_index(members, count, dep->function) < count) continue;
+            seedable = summary_content(dep_summary(summaries,
+                (ir_func_t *)dep->function)) == dep->content;
+        }
+        olds[i] = old;
+    }
+    uint32_t shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
+    for (size_t i = 0; seedable && i < count; i++) {
+        ir_summary_t       *seed = ir_summary_of(summaries, members[i]);
+        const ir_summary_t *old  = olds[i];
+        copy_paths(seed, old);
+        seed->flags = (old->flags & ~shrinking)
+            | (seed->flags & old->flags & shrinking);
+        seed->own_flags = (old->own_flags & ~shrinking)
+            | (seed->own_flags & old->own_flags & shrinking);
+        seed->traps           |= old->traps;
+        seed->own_traps       |= old->own_traps;
+        seed->callback_params |= old->callback_params;
+        merge_effects(seed, old);
+    }
+    core_free(olds);
+}
+
 static bool
 adopt_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
@@ -489,6 +546,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     }
     member_callers_t *callers = member_callers(summaries, members, count);
     bool cyclic = count > 1 || callers[0].len;
+    if (cyclic) seed_component(summaries, members, count);
     const ir_summary_t *reused = reusable_paths(summaries, members, count,
                                                 cyclic);
     if (reused) record_inputs(summaries, &reused->inputs);

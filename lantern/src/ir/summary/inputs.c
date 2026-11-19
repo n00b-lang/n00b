@@ -383,6 +383,31 @@ inputs_hold(ir_summaries_t *summaries,
     return holds;
 }
 
+// Whether each input answers now as it did, or went from "does not
+// overlap" (or "not reinterpreted") to the opposite, which is how
+// reinterpretations registered since change them.
+static bool
+inputs_grew(ir_summaries_t *summaries,
+            const core_list_t(summary_input_t) *inputs)
+{
+    core_list_t(summary_input_t) *sink = summaries->sink;
+    ir_summary_t *recording = summaries->recording;
+    summaries->sink      = nullptr;
+    summaries->recording = nullptr;
+    bool grew = true;
+    for (size_t i = 0; grew && i < inputs->len; i++) {
+        const summary_input_t *input = &inputs->data[i];
+        uint64_t now = current_answer(summaries, input);
+        grew = now == input->answer
+            || ((input->kind == SUMMARY_INPUT_OVERLAP
+                 || input->kind == SUMMARY_INPUT_REINTERPRETED)
+                && input->answer == 1 && now == 2);
+    }
+    summaries->sink      = sink;
+    summaries->recording = recording;
+    return grew;
+}
+
 static bool
 stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
                  ir_func_t *const *members, size_t count)
