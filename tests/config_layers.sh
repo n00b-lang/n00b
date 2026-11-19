@@ -154,8 +154,13 @@ n00b config --contract-dir flag-contracts \
 expect_line "contract dirs accumulate" \
     "contract_dirs = [\"flag-contracts\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/home/.config/n00b/user-contracts\"] # flag --contract-dir, $native_project:2, $native_user:2"
 printf 'fn main() {\n}\n' >"$tmp/project/src/main.n"
-n00b check --contract-dir flag-contracts --contract-dir "$tmp/project/shared" \
-    main.n >"$tmp/out" 2>&1
+# The two checks of main.n below would compile the standard library into
+# the isolated home's empty cache. Where the cache is isn't what they test,
+# so they use the caller's cache when it has one.
+set --
+[ -n "${N00B_CACHE:-}" ] && set -- N00B_CACHE="$N00B_CACHE"
+isolated "$@" "$compiler" check --contract-dir flag-contracts \
+    --contract-dir "$tmp/project/shared" main.n >"$tmp/out" 2>&1
 expect_line "contract dir from a flag" \
     "warning N00B-C0034: \`--contract-dir flag-contracts\` does not exist, so it is skipped"
 expect_line "contract dir named by a flag and the project file" \
@@ -168,7 +173,7 @@ expect_line "contract dir from the user file" \
 # A missing paths.path entry named by several layers is warned about once,
 # naming the highest-precedence layer.
 printf '[paths]\npath = ["%s"]\n' "$tmp/project/src/missing-lib" >"$project"
-isolated N00B_PATH="missing-lib${sep}missing-lib" "$compiler" check \
+isolated "$@" N00B_PATH="missing-lib${sep}missing-lib" "$compiler" check \
     --path missing-lib main.n >"$tmp/out" 2>&1
 expect_line "missing path entry" \
     "warning N00B-C0033: \`--path\` entry \`missing-lib\` does not exist, so it is skipped"
