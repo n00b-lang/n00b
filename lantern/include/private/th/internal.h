@@ -36,6 +36,9 @@ typedef struct {
   th_type *errors;
   th_type *contracts;
   core_datalog_symbol_t logic_symbol;
+  // This trait's methods in method_symbols: [first, first + count).
+  size_t method_symbols_first;
+  size_t method_symbols_count;
 } th_env_trait_t;
 
 typedef struct {
@@ -79,6 +82,10 @@ typedef struct {
   size_t trait_index;
   core_string_t method_name;
   core_datalog_symbol_t logic_symbol;
+  // The functions trait_method_candidate pairs with this trait and method,
+  // in the relation's order: candidate_functions[first, first + count).
+  size_t candidates_first;
+  size_t candidates_count;
 } th_env_method_symbol_t;
 
 typedef struct {
@@ -237,6 +244,8 @@ struct th_env {
   core_list_t(th_env_intrinsic_type_t) intrinsic_types;
   core_list_t(th_env_type_origin_t) type_origins;
   core_list_t(th_env_method_symbol_t) method_symbols;
+  // Function indices, grouped by method symbol (th_env_freeze).
+  core_list_t(uint32_t) candidate_functions;
   core_list_t(th_env_metadata_record_t) metadata;
   core_datalog_engine_t *logic;
   core_datalog_relation_id_t candidate_relation;
