@@ -849,7 +849,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     bool changed = !previous
                         || th_hash(state->types, th_resolve(previous))
                             != th_hash(state->types, th_resolve(type));
-                    if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                    if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                         && alias_declaration_is_transparent(grammar,
                             symbol->decl_node)
                         && previous) {
@@ -941,7 +941,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
                 if (!is_named_type_declaration(grammar, symbol)) continue;
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && alias_declaration_is_transparent(grammar,
                                                         symbol->decl_node)
                     && transparent_alias_has_cycle(grammar, units, symbol)) {
@@ -956,7 +956,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         N00BB_NO_ARGS);
                     return false;
                 }
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && alias_declaration_is_transparent(grammar,
                                                         symbol->decl_node))
                     symbol->adt_kind = CORE_STRING_STATIC("alias");
@@ -969,7 +969,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         (int)symbol->name.u8_bytes, symbol->name.data);
                     return false;
                 }
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && !alias_declaration_is_transparent(grammar,
                                                          symbol->decl_node)) {
                     th_type *representation = declared_type_from_node(
@@ -3381,12 +3381,12 @@ nested_module_declaration_owner(parse_grammar_t *grammar,
     for (parse_tree_t *parent = declaration
             ? parse_tree_parent(declaration) : nullptr;
          parent; parent = parse_tree_parent(parent)) {
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))) return nullptr;
+        if (NT_IS(grammar, parent, "func-def")) return nullptr;
         if (field_record_declaration(grammar, parent)
-            || nt_is(grammar, parent, CORE_STRING_STATIC("enum-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("flagset-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("variant-decl"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("trait-decl"))) return parent;
+            || NT_IS(grammar, parent, "enum-stmt")
+            || NT_IS(grammar, parent, "flagset-stmt")
+            || NT_IS(grammar, parent, "variant-decl")
+            || NT_IS(grammar, parent, "trait-decl")) return parent;
     }
     return nullptr;
 }

@@ -2454,9 +2454,9 @@ collect_postprune_package_syntax(parse_grammar_t *grammar,
     core_list_t(parse_tree_ptr_t) *exports)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    bool package = nt_is(grammar, node, CORE_STRING_STATIC("package-decl"));
+    bool package = NT_IS(grammar, node, "package-decl");
     if (package && !inside_package) core_list_push(*declarations, node);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("export-stmt")))
+    if (NT_IS(grammar, node, "export-stmt"))
         core_list_push(*exports, node);
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         collect_postprune_package_syntax(grammar, core_tree_child(node, i),
