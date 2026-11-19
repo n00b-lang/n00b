@@ -951,6 +951,7 @@ n00bb_abi_index_table_release(n00bb_abi_index_table_t *table)
     if (!table) return;
     core_free(table->symbol.data);
     core_free(table->type_hashes);
+    core_free(table->types);
     core_free(table->functions);
     *table = (n00bb_abi_index_table_t){0};
 }
@@ -978,6 +979,7 @@ append_index_entry(n00bb_abi_storage_rows_t *storage, uint32_t table,
 
 static bool
 append_index_table(n00bb_abi_storage_rows_t *storage,
+                   const n00bb_abi_type_index_t *type_index,
                    const n00bb_abi_type_identity_rows_t *types,
                    const n00bb_abi_function_rows_t *functions,
                    uint64_t *offset, n00bb_abi_index_table_t *out)
@@ -990,12 +992,14 @@ append_index_table(n00bb_abi_storage_rows_t *storage,
     size_t function_count = functions->function_count
         ? functions->function_count - 1 : 0;
     out->type_hashes = core_alloc_array(uint64_t, type_count + 1);
+    out->types = core_alloc_array(th_type *, type_count + 1);
     out->functions = core_alloc_array(ir_func_t *, function_count + 1);
     out->type_count = type_count;
     out->function_count = function_count;
-    bool valid = out->type_hashes && out->functions;
+    bool valid = out->type_hashes && out->types && out->functions;
     for (size_t i = 1; valid && i <= type_count; i++) {
         out->type_hashes[i - 1] = types->rows[i].typehash;
+        out->types[i - 1] = n00bb_abi_type_index_at(type_index, (uint32_t)i);
         valid = append_index_entry(storage, N00B_ABI_TABLE_TYPE, (uint32_t)i);
     }
     for (size_t i = 1; valid && i <= function_count; i++) {
@@ -1817,6 +1821,22 @@ abi_stream_advance(size_t *offset, size_t count)
     return true;
 }
 
+// A TU emitted again (its baked values written in after its compile-time
+// run) keeps its earlier index table's types at their places: the code
+// already compiled for it reads each type's runtime index from its slot.
+static bool
+keep_earlier_type_order(n00bb_abi_type_index_t *index,
+                        const n00bb_abi_index_table_t *earlier)
+{
+    for (size_t i = 0; earlier && earlier->types && i < earlier->type_count;
+         i++) {
+        uint32_t at = 0;
+        if (!n00bb_abi_type_index_add_alone(index, earlier->types[i], &at)
+            || at != i + 1) return false;
+    }
+    return true;
+}
+
 bool
 n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
@@ -2033,6 +2053,8 @@ n00bb_abi_emit_unit(
 #define ABI_STAGE_TEXT(name, call) ((call) || ((failed_stage = (name)), false))
 #define ABI_STAGE(lit, call) ABI_STAGE_TEXT(CORE_STRING_STATIC(lit), call)
     bool valid = pool && type_index && requirement_capacity_valid
+        && ABI_STAGE("earlier index table",
+            keep_earlier_type_order(type_index, out_index_table))
         && ABI_STAGE("module type collection",
             n00bb_abi_type_index_collect_module_types(type_index,
                 (ir_module_t *)runtime_ir))
@@ -2182,7 +2204,8 @@ n00bb_abi_emit_unit(
         index_table.symbol = index_table_symbol(unit->module.identifier,
                                                 target->object_format);
         valid = index_table.symbol.data && append_index_table(&storage_rows,
-            &type_rows, &function_rows, &index_table_offset, &index_table);
+            type_index, &type_rows, &function_rows, &index_table_offset,
+            &index_table);
     }
     if (valid) {
         failed_stage = CORE_STRING_STATIC("trait method membership");

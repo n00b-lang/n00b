@@ -16,6 +16,9 @@ n00bb_abi_type_index_t *n00bb_abi_type_index_new(ir_module_t *module);
 void n00bb_abi_type_index_free(n00bb_abi_type_index_t *index);
 bool n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
                               th_type *type, uint32_t *out_index);
+/* Adds `type` without its component types (they come in their own turn). */
+bool n00bb_abi_type_index_add_alone(n00bb_abi_type_index_t *index,
+                                    th_type *type, uint32_t *out_index);
 /* Retains an imported trait's identity without copying its provider-owned
  * method type variables into this TU's declaration universe. */
 bool n00bb_abi_type_index_add_imported_trait(

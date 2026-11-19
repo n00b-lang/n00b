@@ -51,6 +51,11 @@ bool n00bb_abi_write_object(
 typedef struct {
     core_string_t symbol;
     uint64_t *type_hashes;
+    // The type at each entry. Code compiled against this table finds a
+    // type's entry by position, so a later emission of the same TU given
+    // these (as out_index_table's contents on entry) keeps each of them at
+    // its place and adds any new types after them.
+    th_type **types;
     size_t type_count;
     ir_func_t **functions;
     size_t function_count;

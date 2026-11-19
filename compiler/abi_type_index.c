@@ -264,6 +264,13 @@ n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
 }
 
 bool
+n00bb_abi_type_index_add_alone(n00bb_abi_type_index_t *index,
+                               th_type *type, uint32_t *out_index)
+{
+    return add_type_with_children(index, type, out_index, false);
+}
+
+bool
 n00bb_abi_type_index_add_imported_trait(n00bb_abi_type_index_t *index,
                                          th_type *type)
 {

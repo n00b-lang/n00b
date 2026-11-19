@@ -2946,12 +2946,21 @@ n00bb_reemit_abi_artifact(core_link_unit_t *link,
             1, &view)
         ? (n00bb_abi_artifact_t *)view.payload : nullptr;
     n00bb_abi_source_context_t sources = {0};
-    n00bb_abi_artifact_t fresh = {0};
+    // The module's code, compiled against the existing index table, stays:
+    // the new table keeps its types where they were.
+    n00bb_abi_artifact_t fresh = {
+        .index_table = existing ? (n00bb_abi_index_table_t){
+            .types = existing->index_table.types,
+            .type_count = existing->index_table.type_count,
+        } : (n00bb_abi_index_table_t){0},
+    };
     bool valid = existing && abi_sources_open(link, &sources)
         && abi_emit_source_unit(link, analysis, unit, debug_enabled,
                                 &sources, &fresh);
     abi_sources_close(&sources);
     if (!valid) {
+        if (existing && fresh.index_table.types == existing->index_table.types)
+            fresh.index_table = (n00bb_abi_index_table_t){0};
         n00bb_abi_packed_tables_release(&fresh.packed);
         n00bb_abi_index_table_release(&fresh.index_table);
         core_free(fresh.object);
