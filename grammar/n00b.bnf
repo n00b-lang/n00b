@@ -745,7 +745,7 @@
        %"{" <dict-entries> %"}"
 <dict-or-set-lit> @disambig(n00bb_prefer_dict_entries, 100) ::=
        %"{" <set-entries> %"}"
-<dict-or-set-lit> ::= %"{" %"}"
+<dict-or-set-lit> @nospace($1) ::= %"{" %"}"
 
 <dict-entries> ::= <dict-entry> %"," <dict-entries>
 <dict-entries> ::= <dict-entry>
