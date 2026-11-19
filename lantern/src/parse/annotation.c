@@ -154,9 +154,6 @@ parse_grammar_annotate(parse_grammar_t *g, parse_annotation_t *a)
     }
 
     core_list_push(g->annotations, a);
-    pthread_mutex_lock(&g->annot_cache_lock);
-    core_cache_invalidate(&g->annot_cache);
-    pthread_mutex_unlock(&g->annot_cache_lock);
 }
 
 size_t
@@ -178,38 +175,17 @@ parse_grammar_annot_at(const parse_grammar_t *g, size_t i)
 parse_annotation_t *
 parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
 {
-    void *hit = nullptr;
+    size_t n = parse_grammar_annot_count(g);
 
-    if (g) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        bool found = core_cache_get(&g->annot_cache, g,
-                                    PARSE_QUERY_GRAMMAR_ANNOT,
-                                    (uint64_t)kind, &hit);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-        if (found) {
-            return (parse_annotation_t *)hit;
-        }
-    }
-
-    size_t              n   = parse_grammar_annot_count(g);
-    parse_annotation_t *out = nullptr;
-
-    for (size_t i = 0; i < n && !out; i++) {
+    for (size_t i = 0; i < n; i++) {
         parse_annotation_t *a = parse_grammar_annot_at(g, i);
 
         if (a->kind == kind) {
-            out = a;
+            return a;
         }
     }
 
-    if (g) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        core_cache_put(&g->annot_cache, g, PARSE_QUERY_GRAMMAR_ANNOT,
-                       (uint64_t)kind, out);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-    }
-
-    return out;
+    return nullptr;
 }
 
 bool
@@ -253,41 +229,22 @@ parse_rule_annot_at(const parse_rule_t *rule, size_t i)
     return rule->annotations.data[i];
 }
 
+// A rule carries a handful of annotations, so scanning them is cheaper than
+// any shared memo (which every parsing thread would contend on).
 parse_annotation_t *
 parse_rule_find_annot(parse_grammar_t *g, const parse_rule_t *rule,
                     parse_annot_kind_t kind)
 {
-    void *hit = nullptr;
-
-    if (g && rule) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        bool found = core_cache_get(&g->annot_cache, (void *)rule,
-                                    PARSE_QUERY_RULE_ANNOT,
-                                    (uint64_t)kind, &hit);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-        if (found) {
-            return (parse_annotation_t *)hit;
-        }
-    }
-
-    parse_annotation_t *out = nullptr;
-
-    for (size_t i = 0; rule && !out && i < parse_rule_annot_count(rule); i++) {
-        parse_annotation_t *a = parse_rule_annot_at(rule, i);
+    (void)g;
+    for (size_t i = 0; rule && i < rule->annotations.len; i++) {
+        parse_annotation_t *a = rule->annotations.data[i];
 
         if (a->kind == kind) {
-            out = a;
+            return a;
         }
     }
 
-    if (g && rule) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        core_cache_put(&g->annot_cache, (void *)rule, PARSE_QUERY_RULE_ANNOT,
-                       (uint64_t)kind, out);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-    }
-
-    return out;
+    return nullptr;
 }
 
 parse_annotation_t *

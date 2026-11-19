@@ -93,9 +93,6 @@ struct parse_grammar_t {
     core_list_t(int32_t)      contextual_sources;
 
     core_list_t(parse_annotation_ptr_t) annotations;
-
-    core_cache_t annot_cache;
-    pthread_mutex_t annot_cache_lock;
 };
 
 static_assert(offsetof(parse_grammar_t, head) == 0,

@@ -322,10 +322,6 @@ parse_grammar_new(void)
     g->terminal_map = core_alloc(core_dict_t);
     core_dict_init_string(g->terminal_map);
 
-    core_cache_init(&g->annot_cache);
-    core_cache_set_enabled(&g->annot_cache, false);
-    pthread_mutex_init(&g->annot_cache_lock, nullptr);
-
     static const core_string_t BUILTIN[] = {
         CORE_STRING_STATIC("IDENTIFIER"),
         CORE_STRING_STATIC("TYPEDEF_NAME"),
@@ -358,9 +354,6 @@ parse_grammar_free(parse_grammar_t *g)
     if (!g) {
         return;
     }
-
-    core_cache_free(&g->annot_cache);
-    pthread_mutex_destroy(&g->annot_cache_lock);
 
     for (size_t i = 0; i < g->rules.len; i++) {
         parse_rule_t *rule = &g->rules.data[i];
@@ -1515,9 +1508,5 @@ parse_grammar_finalize(parse_grammar_t *g)
 
     g->finalized = true;
 
-    pthread_mutex_lock(&g->annot_cache_lock);
-    core_cache_invalidate(&g->annot_cache);
-    core_cache_set_enabled(&g->annot_cache, true);
-    pthread_mutex_unlock(&g->annot_cache_lock);
     pthread_mutex_unlock(&grammar_finalize_lock);
 }
