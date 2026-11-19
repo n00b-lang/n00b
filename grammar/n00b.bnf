@@ -308,7 +308,9 @@
 <range-step> ::= %"step" <expression>
 <range-sep> ::= %"to"
               | %"until"
-              | %":"
+# `a[i:j]`: the `:` spelling is written with no space around it, the
+# words with one.
+<range-sep> @tight ::= %":"
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
@@ -656,9 +658,9 @@
 <index-contents> ::= <expression>
 
 <slice-contents> ::= <expression> <range-sep> <expression>
-                   | <expression> %":"
-                   | %":" <expression>
-                   | %":"
+<slice-contents> @nospace($1) ::= <expression> %":"
+<slice-contents> @nospace($1) ::= %":" <expression>
+<slice-contents> ::= %":"
 
 <call-args> ::= <positional-args> (%"," <keyword-args>)? %","?
               | <keyword-args> (%"," <positional-args>)? %","?

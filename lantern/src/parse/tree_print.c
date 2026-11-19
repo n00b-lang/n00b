@@ -41,6 +41,9 @@ struct doc_t {
     bool     empty;
     bool     rigid;
     bool     standalone;
+    // Printed with no gap on either side, whatever the enclosing rule
+    // says: the node's own rule is @tight.
+    bool     tight;
 };
 
 typedef doc_t *doc_ptr_t;
@@ -87,6 +90,7 @@ typedef struct {
     bool    trivia_indent_all;
     bool    align_all;
     bool    group_all;
+    bool    tight;
 } layout_t;
 
 static doc_t *doc_new(pr_t *p, dkind_t kind)
@@ -276,6 +280,9 @@ static void layout_of(pr_t *p, parse_tree_t *node, parse_nonterm_t *nt,
             else if (named) {
                 out->slot[ix].group = true;
             }
+            break;
+        case PARSE_ANNOT_TIGHT:
+            out->tight = true;
             break;
         default:
             break;
@@ -695,6 +702,19 @@ static void *reduce_node(parse_reduce_t *r)
                group_arity(p->g, rule, i));
     }
 
+    // A @tight child takes no gap before it or after it.
+    for (size_t i = 0; i < items.len; i++) {
+        if (!items.data[i].doc->tight) {
+            continue;
+        }
+
+        items.data[i].gap = GAP_NONE;
+
+        if (i + 1 < items.len) {
+            items.data[i + 1].gap = GAP_NONE;
+        }
+    }
+
     size_t from = 0;
 
     for (size_t i = 0; i < lay.n; i++) {
@@ -732,6 +752,8 @@ static void *reduce_node(parse_reduce_t *r)
     }
 
     doc_t *d = assemble(p, &items);
+
+    d->tight = lay.tight;
 
     core_list_free(items);
 

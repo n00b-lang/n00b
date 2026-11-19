@@ -40,7 +40,8 @@
     X(DECLARATION_POINT, "declaration_point") \
     X(STATEMENT_END, "statement_end") \
     X(CONTINUE_AFTER, "continue_after") \
-    X(DISCARDS, "discards")
+    X(DISCARDS, "discards") \
+    X(TIGHT, "tight")
 
 typedef enum {
 #define PARSE_ANNOT_ENUM(sym, spelling) PARSE_ANNOT_##sym,
