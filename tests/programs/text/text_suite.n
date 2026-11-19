@@ -41,7 +41,10 @@ func rich_over(body: Ref[text.Rich_Body]) -> string {
     return s
 }
 
+// The rich body behind `s`. Only a rich string has one: any other string's
+// words are its bytes, so reading them as a body would read garbage.
 func body_of(s: string) -> Ref[text.Rich_Body] {
+    require is_rich(s)
     var copy: string = s
     let words: Ref[String_Words] = unsafe_cast[Ref[String_Words]] ref copy
     return unsafe_cast[Ref[text.Rich_Body]] words.__value.data
