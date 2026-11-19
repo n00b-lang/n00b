@@ -1547,6 +1547,17 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
                  ? HOLDS
                  : FAILS;
     }
+    case TY_PRED_EXCLUDES: {
+        th_type *excluded = p->pred.other ? th_resolve(p->pred.other)
+                                          : nullptr;
+
+        if (!excluded || !th_is_closed(s->types, subject)
+            || !th_is_closed(s->types, excluded)) {
+            return OPEN;
+        }
+
+        return th_same_type(subject, excluded) ? FAILS : HOLDS;
+    }
     }
 
     return OPEN;
@@ -1596,6 +1607,7 @@ bool ty_require(ty_solver_t *s, ty_pred_t pred, ty_why_t why)
         || (!pred.name.data
             && !(pred.kind == TY_PRED_FIELD && pred.positional)
             && !(pred.kind == TY_PRED_ONE_OF && pred.other)
+            && !(pred.kind == TY_PRED_EXCLUDES && pred.other)
             && pred.kind != TY_PRED_CONDITION)
         || (pred.kind == TY_PRED_OPERATOR && (!pred.other || !pred.result))
         || ((pred.kind == TY_PRED_FIELD || pred.kind == TY_PRED_ELEMENT
@@ -1919,8 +1931,10 @@ static void apply_defaults(ty_solver_t *s)
 
 static bool bounded(ty_solver_t *s, th_type *var)
 {
+    // Ruling a type out says nothing of what the variable implements.
     for (size_t i = 0; i < s->bounds.len; i++) {
-        if (th_resolve(s->bounds.data[i].var) == var) {
+        if (th_resolve(s->bounds.data[i].var) == var
+            && s->bounds.data[i].pred.kind != TY_PRED_EXCLUDES) {
             return true;
         }
     }

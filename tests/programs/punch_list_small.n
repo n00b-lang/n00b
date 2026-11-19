@@ -319,4 +319,9 @@ let where_keys: Dict[int, nil] = {1: nil}
 require where_ints(where_numbers) == 2
 require where_optional(where_maybe_number) == 1
 require where_calls(ref where_twice) == 1 and where_keyed(where_keys) == 1
+
+# A `!=` clause rules out only the type it names.
+func where_not_string(x: 'T) -> 'T where 'T: != string { return x }
+func where_through(x: 'U) -> 'U { return where_not_string(x) }
+require where_not_string(3) == 3 and where_through(2.5) == 2.5
 __fd_write(2, "ok")

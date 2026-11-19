@@ -32,6 +32,9 @@ typedef enum : uint8_t {
     // waiting on its failure type (`subject`): a call whose callee turns out
     // not to fail is its value.
     TY_PRED_OUTCOME_VALUE,
+    // `subject` may be any type but `other`, as a `where 'T: != other`
+    // asks; decided once `subject` is closed.
+    TY_PRED_EXCLUDES,
 } ty_pred_kind_t;
 
 typedef struct {

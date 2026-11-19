@@ -464,6 +464,41 @@ static bool report_required_trait(th_ctx *types,
     return true;
 }
 
+// A type a `where 'T: != type` clause rules out, given to the variable at
+// a call or by the function's body.
+static bool report_excluded(th_ctx *types,
+                            core_translation_unit_t *const *units,
+                            size_t count, core_translation_unit_t *unit,
+                            const ty_failure_t *failure)
+{
+    const ir_instr_t *site   = failure->why.at;
+    const ir_func_t  *callee = site ? n00bb_direct_call_target(site)
+                                    : nullptr;
+    const ir_func_t  *owner  = callee ? callee
+                             : site && site->block ? site->block->owner
+                                                   : nullptr;
+
+    if (failure->kind != TY_FAIL_PREDICATE
+        || failure->pred.kind != TY_PRED_EXCLUDES || !failure->pred.subject
+        || !owner) {
+        return false;
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       subject     = n00bb_print_type(types,
+        th_resolve(failure->pred.subject));
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_ARGUMENT_EXCLUDED,
+                 n00bb_span_location(site->span),
+                 N00B_TEXT_FUNCTION_EXCLUDES_TYPE,
+                 N00BB_ARGS(ARG_TEXT(function_name(owner)),
+                            ARG_TEXT(subject)));
+    if (callee) {
+        note_declared(units, count, unit, callee);
+    }
+
+    return true;
+}
+
 // A `where` bound on a variable that only a function's body names, broken
 // by the type the body gives it (body_bound_site).
 static bool report_body_bound(th_ctx *types, core_translation_unit_t *unit,
@@ -1114,7 +1149,8 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         report_case_mismatch(types, unit, test);
         return;
     }
-    if (report_body_bound(types, unit, failure)
+    if (report_excluded(types, units, count, unit, failure)
+        || report_body_bound(types, unit, failure)
         || report_unchecked_call(types, units, count, unit, failure)
         || report_fixed_parameter(types, unit, failure)
         || report_condition(types, unit, failure)
@@ -2003,6 +2039,18 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                                      (ty_pred_t){.kind  = TY_PRED_ONE_OF,
                                                  .other = bound.target},
                                      (ty_why_t){0});
+                }
+                if (var && bound.kind == TH_CON_EXCLUDES && bound.target) {
+                    ty_declare_bound(solver, var,
+                                     (ty_pred_t){.kind  = TY_PRED_EXCLUDES,
+                                                 .other = in_function(
+                                                     types, function,
+                                                     bound.target)},
+                                     (ty_why_t){
+                                         .at = body_bound_site(
+                                             types, function,
+                                             th_var_name(bound.subject)),
+                                     });
                 }
                 if (!var || bound.kind != TH_CON_IMPLEMENTS) {
                     continue;

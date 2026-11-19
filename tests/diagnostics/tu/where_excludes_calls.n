@@ -1,0 +1,14 @@
+// A `where 'T: != type` clause rules the type out at every call, through
+// a generic caller, and in the body; other types are accepted.
+func keep(x: 'T) -> 'T where 'T: != string { return x }
+func through(x: 'U) -> 'U { return keep(x) }
+func local() where 'T: != string {
+    var x: 'T = "hi"
+}
+let s: string = "s"
+require keep(s) == "s"
+require keep(3) == 3
+require keep("lit") == "lit"
+require through(s) == "s"
+require through(2.5) == 2.5
+local()
