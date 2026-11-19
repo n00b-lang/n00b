@@ -153,13 +153,25 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
     return false;
 }
 
+// A type's key in the index. An open type's id tells its variables apart
+// by identity (ir_type_id), as two functions' variables must be; a trait's
+// variables are its own parameters, so every copy of a trait is the same
+// trait, whichever module or cached interface it was read from.
+static uint64_t
+index_key(n00bb_abi_type_index_t *index, th_type *type)
+{
+    return th_kind_of(type) == TH_TRAIT
+        ? th_hash(ir_module_types(index->module), type)
+        : ir_type_id(index->module, type);
+}
+
 static bool
 add_type_with_children(n00bb_abi_type_index_t *index, th_type *type,
                        uint32_t *out_index, bool collect_children)
 {
     if (!index || index->failed || !type) return false;
     type = th_resolve(type);
-    type_key_t probe = {.id = ir_type_id(index->module, type)};
+    type_key_t probe = {.id = index_key(index, type)};
     const core_indexed_entry_t *entry = core_indexed_table_find(
         index->table, &probe);
     if (entry) {
@@ -297,7 +309,7 @@ n00bb_abi_type_index_find(n00bb_abi_type_index_t *index,
                            th_type *type, uint32_t *out_index)
 {
     if (!index || !type || !out_index) return false;
-    type_key_t probe = {.id = ir_type_id(index->module, th_resolve(type))};
+    type_key_t probe = {.id = index_key(index, th_resolve(type))};
     const core_indexed_entry_t *entry = core_indexed_table_find(
         index->table, &probe);
     if (!entry) return false;
