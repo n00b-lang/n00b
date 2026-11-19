@@ -4664,7 +4664,8 @@ source_type_name(core_string_t name, void *context)
 }
 
 // Qualified, and spelled as source would write it (`Tuple[u8, u8]`), for
-// text the formatter puts back into a program.
+// text the formatter puts back into a program. A function type has no
+// passing modes.
 core_string_t
 n00bb_print_type_source(th_ctx *types, th_type *type)
 {
@@ -4675,6 +4676,7 @@ n00bb_print_type_source(th_ctx *types, th_type *type)
         .option_suffix = CORE_STRING_STATIC("?"),
         .omit_nil_failure = true,
         .source_spelling = true,
+        .omit_modes = true,
     };
     return th_print_with_options(types, type, &options);
 }
@@ -6298,22 +6300,12 @@ function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                     type_node = CHILD_NT(grammar, named, "union-tspec");
                 th_type *type = type_node
                     ? parse_tree_type(type_node) : nullptr;
+                // A passing mode written before the entry is reported by
+                // the preprocessor; modes are no part of a function type.
                 if (!type) valid = false;
-                else {
-                    core_string_t spelling = first_token_text(item);
-                    th_mode mode = core_string_eq(
-                            spelling, CORE_STRING_STATIC("out")) ? TH_OUT
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("modify")) ? TH_INOUT
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("consume")) ? TH_CONSUME
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("view")) ? TH_VIEW
-                        : TH_IN;
-                    core_list_push(positional, ((th_param){
-                        .mode = mode, .type = type,
-                    }));
-                }
+                else core_list_push(positional, ((th_param){
+                    .mode = TH_IN, .type = type,
+                }));
             }
             else if (NT_IS(grammar, item, "tspec-func-params")) {
                 th_type *tail = th_resolve(

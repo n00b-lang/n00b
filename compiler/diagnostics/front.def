@@ -279,11 +279,17 @@ N00B_DIAG(PARAMETER_MODE, "N00B-P0040", ERROR,
     "varargs parameters can be `in`, `view` or `consume`.")
 N00B_DIAG(FUNCTION_TYPE_POSITIONAL_NAME, "N00B-T0609", ERROR,
     "a function type names a positional parameter",
-    "A function type writes a positional parameter as its type alone,\n"
-    "optionally after a passing mode, as in `(modify S, int) -> int`:\n"
-    "positional parameters' names are not part of the type. An entry\n"
-    "written `name: T` is a keyword parameter, and the keyword parameters\n"
-    "come after the positional ones and the varargs.")
+    "A function type writes a positional parameter as its type alone, as\n"
+    "in `(S, int) -> int`: positional parameters' names are not part of\n"
+    "the type. An entry written `name: T` is a keyword parameter, and the\n"
+    "keyword parameters come after the positional ones and the varargs.")
+N00B_DIAG(FUNCTION_TYPE_PASSING_MODE, "N00B-T0611", ERROR,
+    "a function type gives a parameter a passing mode",
+    "Passing modes (`in`, `view`, `out`, `modify`, `consume`) are not part\n"
+    "of a function's type, so a function type's parameters are written as\n"
+    "their types alone, as in `(S, int) -> int`. A reference to a function\n"
+    "remembers the function's modes: a call through it passes a `modify`\n"
+    "or `out` argument's place, whatever the reference's type.")
 N00B_DIAG(IMPORT_NOT_FOUND, "N00B-M0001", ERROR,
     "an imported module cannot be found",
     "The module is not in the current directory, in a package root on\n"

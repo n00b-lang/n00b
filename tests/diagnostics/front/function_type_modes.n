@@ -1,0 +1,6 @@
+# Passing modes are no part of a function's type, so a function type's
+# parameters are their types alone.
+alias Modified = Ref[(modify int, int) -> int]
+alias Viewed = Ref[(int, view string, consume int) -> nil]
+alias Filled = Ref[(out int, in int, value: int) -> int]
+alias Fine = Ref[(int, int) -> int]

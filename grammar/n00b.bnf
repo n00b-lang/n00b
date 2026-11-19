@@ -822,8 +822,10 @@
 
 # A positional parameter's name is not part of a function type, so a
 # positional entry is only a type; an entry written `name: T` is a keyword
-# parameter (<tspec-kargs>).
+# parameter (<tspec-kargs>). Nor are passing modes.
 <tspec-func-param> ::= <union-tspec> <where-clause>?
+# Accepted only to be reported (N00B-T0611): a passing mode before a
+# positional entry.
 <tspec-func-param> ::= <tspec-param-mode> <union-tspec> <where-clause>?
 # Accepted only to be reported (N00B-T0609): a named positional entry, and a
 # positional entry after the keyword parameters.

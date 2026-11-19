@@ -1,0 +1,15 @@
+tests/diagnostics/front/function_type_modes.n:3:23: error N00B-T0611: a function type's parameters have no passing modes, so `modify` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    3 | alias Modified = Ref[(int, int) -> int]
+tests/diagnostics/front/function_type_modes.n:4:26: error N00B-T0611: a function type's parameters have no passing modes, so `view` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    4 | alias Viewed = Ref[(int, string, consume int) -> nil]
+tests/diagnostics/front/function_type_modes.n:4:39: error N00B-T0611: a function type's parameters have no passing modes, so `consume` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    4 | alias Viewed = Ref[(int, view string, int) -> nil]
+tests/diagnostics/front/function_type_modes.n:5:21: error N00B-T0611: a function type's parameters have no passing modes, so `out` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    5 | alias Filled = Ref[(int, in int, value: int) -> int]
+tests/diagnostics/front/function_type_modes.n:5:30: error N00B-T0611: a function type's parameters have no passing modes, so `in` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    5 | alias Filled = Ref[(out int, int, value: int) -> int]

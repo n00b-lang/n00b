@@ -46,14 +46,14 @@ record Tally { count: int }
 callback Tally_Counter {
     call(value: int) -> int
     handler(modify state: Tally, value: int) -> int
-    setup(handler: Ref[(modify Tally, int) -> int],
+    setup(handler: Ref[(Tally, int) -> int],
           state: Ref[Tally]) -> nil
 }
 func tally_add(modify state: Tally, value: int) -> int {
     state.count += value
     return state.count
 }
-func setup(handler: Ref[(modify Tally, int) -> int],
+func setup(handler: Ref[(Tally, int) -> int],
            state: Ref[Tally]) -> nil {}
 var tally: Tally = (count = 0)
 let counter = callback[Tally_Counter](ref tally_add, ref tally)

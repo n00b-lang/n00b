@@ -5,7 +5,7 @@ record Archived_State {
 callback Archived_Callback {
     call(value: int) -> int fail: string
     handler(modify state: Archived_State, value: int) -> int fail: string
-    setup(handler: Ref[(modify Archived_State, int) -> int fail: string],
+    setup(handler: Ref[(Archived_State, int) -> int fail: string],
           state: Ref[Archived_State], priority: int = 1) -> nil
 }
 
@@ -20,6 +20,6 @@ callback Archived_Transform {
 }
 
 func setup(
-    handler: Ref[(modify Archived_State, int) -> int fail: string],
+    handler: Ref[(Archived_State, int) -> int fail: string],
     state: Ref[Archived_State], priority: int = 1) -> nil {
 }

@@ -3339,17 +3339,37 @@ report_formal_order(pp_discovery_t *discovery,
     core_free(text.data);
 }
 
-// A function type's positional entry is only a type, after an optional
-// passing mode; `name: T` there is a keyword parameter, and the keyword
-// parameters come last. The grammar accepts a named positional entry
-// (<tspec-named-positional>) and a positional entry after the keyword
-// parameters (<tspec-late-param>) so they are reported here.
+// A function type's positional entry is only a type, with no passing mode;
+// `name: T` there is a keyword parameter, and the keyword parameters come
+// last. The grammar accepts a passing mode (<tspec-param-mode>), a named
+// positional entry (<tspec-named-positional>) and a positional entry after
+// the keyword parameters (<tspec-late-param>) so they are reported here.
 static void
 check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node)
 {
     pp_context_t *ctx = discovery->ctx;
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(ctx->unit);
+    parse_tree_t *mode = is_name(ctx->grammar, node, "tspec-func-param")
+        ? child_nt(ctx->grammar, node, CORE_STRING_STATIC("tspec-param-mode"))
+        : nullptr;
+    parse_tree_t *moded = mode && core_tree_num_children(node) > 1
+        ? core_tree_child(node, 1) : nullptr;
+    if (moded) {
+        if (!report_formal(discovery, N00B_DIAG_FUNCTION_TYPE_PASSING_MODE,
+                mode, N00B_TEXT_FUNCTION_TYPE_PASSING_MODE,
+                N00BB_ARGS(ARG_TEXT(node_text(ctx, mode)))))
+            return;
+        n00bb_report_help(diagnostics,
+                          N00B_TEXT_FUNCTION_TYPE_PASSING_MODE_HELP,
+                          N00BB_NO_ARGS);
+        report_fix(ctx, (pp_fix_t){
+            .open = node_start(mode),
+            .resume = node_start(moded),
+            .close = node_start(moded),
+        });
+        return;
+    }
     if (is_name(ctx->grammar, node, "tspec-named-positional")) {
         parse_tree_t *name = core_tree_child(node, 0);
         parse_tree_t *type = child_nt(ctx->grammar, node,

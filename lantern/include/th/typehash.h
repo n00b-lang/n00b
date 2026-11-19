@@ -110,6 +110,9 @@ typedef struct {
     core_string_t    option_suffix;
     bool             omit_nil_failure;
     bool             source_spelling;
+    // Leave out function parameters' passing modes, for a language whose
+    // function types don't have them.
+    bool             omit_modes;
 } th_print_options_t;
 
 typedef struct {

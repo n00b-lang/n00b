@@ -1430,6 +1430,8 @@ N00B_TEXT(VARARGS_HAS_DEFAULT, "varargs parameter `{0}` cannot have a default va
 N00B_TEXT(VARARGS_HAS_DEFAULT_HELP, "remove the default; a call that passes no items gets an empty array:")
 N00B_TEXT(FUNCTION_TYPE_NAMED_POSITIONAL, "`{0}` names a positional parameter, but a function type's positional parameters have no names")
 N00B_TEXT(FUNCTION_TYPE_NAMED_POSITIONAL_HELP, "write only its type; `name: T` in a function type is a keyword parameter:")
+N00B_TEXT(FUNCTION_TYPE_PASSING_MODE, "a function type's parameters have no passing modes, so `{0}` can't be written here")
+N00B_TEXT(FUNCTION_TYPE_PASSING_MODE_HELP, "write only the parameter's type; a reference to a function remembers the function's passing modes:")
 N00B_TEXT(FUNCTION_TYPE_LATE_POSITIONAL, "this {0} comes after the keyword parameter `{1}`")
 N00B_TEXT(FUNCTION_TYPE_LATE_POSITIONAL_HELP, "in a function type, `name: T` is a keyword parameter, and keyword parameters come last; positional parameters are written as their types alone, then the varargs as `*T`")
 N00B_TEXT(TUPLE_CAST_FIELD,"cannot cast `{0}` to `{1}`: field `{2}` does not match")

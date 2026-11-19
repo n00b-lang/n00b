@@ -3,4 +3,4 @@
 alias Named = Ref[(modify state: int, value: int) -> int]
 alias Late = Ref[(scale: int, int) -> int]
 alias Late_Varargs = Ref[(int, scale: int, *int) -> int]
-alias Fine = Ref[(modify int, value: int) -> int]
+alias Fine = Ref[(int, value: int) -> int]
