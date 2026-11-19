@@ -779,6 +779,37 @@ static bool outcome_as_value(ty_solver_t *s, th_type *outcome,
                       why);
 }
 
+// Whether `a` and `b` are references to function types whose parameters'
+// passing modes differ. Passing modes are no part of a type, so they are
+// the same type here.
+static bool reference_modes_differ(th_type *a, th_type *b)
+{
+    th_type *x = a && th_kind_of(a) == TH_INDIRECTION
+                     ? th_resolve(th_ind_referent(a)) : nullptr;
+    th_type *y = b && th_kind_of(b) == TH_INDIRECTION
+                     ? th_resolve(th_ind_referent(b)) : nullptr;
+
+    if (!x || !y || th_kind_of(x) != TH_FUNCTION
+        || th_kind_of(y) != TH_FUNCTION
+        || th_func_nparams(x) != th_func_nparams(y)
+        || th_func_nkw(x) != th_func_nkw(y)
+        || !th_func_rest(x) != !th_func_rest(y)) {
+        return false;
+    }
+    for (size_t i = 0; i < th_func_nparams(x); i++) {
+        if (th_func_param(x, i)->mode != th_func_param(y, i)->mode) {
+            return true;
+        }
+    }
+    for (size_t i = 0; i < th_func_nkw(x); i++) {
+        if (th_func_kw(x, i)->mode != th_func_kw(y, i)->mode) {
+            return true;
+        }
+    }
+
+    return th_func_rest(x) && th_func_rest(x)->mode != th_func_rest(y)->mode;
+}
+
 static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
 {
     th_type *target = th_resolve(slot);
@@ -788,6 +819,11 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
     flow_site(s, root, why);
     if (target == given) {
         return true;
+    }
+    // A function reference flowing to one whose passing modes differ is
+    // the same type, but the client decides what holding it there means.
+    if (reference_modes_differ(target, given)) {
+        convert_at(s, why.at);
     }
 
     th_type *atomic = target && given

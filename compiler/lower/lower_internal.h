@@ -1448,14 +1448,8 @@ bool
 n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                ir_value_t *value, bool checked, ir_span_t span);
 
-bool
-n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage);
-
 ir_shape_t *
 n00bb_place_shape(ir_value_t *place);
-
-bool
-n00bb_place_writable(const ir_value_t *place);
 
 bool
 n00bb_accessed_element(const ir_value_t *value, ir_value_t **container,

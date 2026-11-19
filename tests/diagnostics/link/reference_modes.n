@@ -1,0 +1,25 @@
+# A function reference remembers its function's passing modes, which are no
+# part of its type. A `let` keeps them; held anywhere else, the reference
+# would lose them, which is not supported yet. A call through it passes a
+# `modify` argument's place, which a `let` can't give.
+record Tally {
+    count: int
+}
+func add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+func apply(f: Ref[(Tally, int) -> int], modify tally: Tally) -> int {
+    return f.call(tally, 1)
+}
+func use() -> int {
+    var tally: Tally
+    tally.count = 0
+    var held: Ref[(Tally, int) -> int] = ref add
+    _ = held
+    let fixed = tally
+    let kept: Ref[(Tally, int) -> int] = ref add
+    _ = kept.call(fixed, 1)
+    return apply(ref add, tally)
+}
+require use() == 1

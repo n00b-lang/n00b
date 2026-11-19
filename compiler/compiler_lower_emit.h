@@ -15,6 +15,11 @@
 #define N00BB_DECLARATION_KEY CORE_STRING_STATIC("n00bb.declaration")
 #define N00BB_REFERENCE_ESCAPES_KEY CORE_STRING_STATIC("n00bb.reference-escapes")
 #define N00BB_TRAIT_CAST_KEY CORE_STRING_STATIC("n00bb.trait-cast")
+// On a `let` (a local or a module's) bound to a function reference whose
+// type differs from the `let`'s only in its parameters' passing modes: the
+// reference's type, whose modes calls through the `let` pass by.
+#define N00BB_REMEMBERED_MODES_KEY \
+    CORE_STRING_STATIC("n00bb.reference.remembered-modes")
 // A call the compiler wrote as possibly failing (a `with` hook's), whose
 // outcome reads are settled if its callee turns out not to fail.
 #define N00BB_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.call-may-fail")
@@ -120,6 +125,9 @@ bool n00bb_emit_indirect_write(ir_lower_context_t *context,
                                ir_span_t span);
 ir_value_t *n00bb_place_of(ir_lower_context_t *context, ir_value_t *value,
                            bool writing, ir_span_t span);
+bool n00bb_place_root(ir_value_t *place, ir_local_t **local,
+                      ir_value_t **storage);
+bool n00bb_place_writable(const ir_value_t *place);
 bool n00bb_from_reference_address(ir_value_t *value);
 bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                      ir_span_t span);

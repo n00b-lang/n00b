@@ -124,6 +124,47 @@ let counted_flags: Ref[(bool, *bool, extra: int) -> int] = ref counted
 require counted_flags.call(true, false, true) == 3
 require counted_flags.call(true, extra = 10) == 11
 
+# A function reference remembers its function's passing modes, which are no
+# part of its type: a call through it passes the caller's place to a
+# `modify` or `out` parameter.
+record Tally {
+    count: int
+}
+func tally_add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+func tally_step(modify tally: Tally, by: int = 1) -> int {
+    tally.count += by
+    return tally.count
+}
+func tally_set(out tally: Tally, value: int) -> int {
+    tally.count = value
+    return value
+}
+let module_add: Ref[(Tally, int) -> int] = ref tally_add
+func remembered_modes() {
+    var tally: Tally
+    tally.count = 1
+    let add: Ref[(Tally, int) -> int] = ref tally_add
+    require add.call(tally, 2) == 3
+    require tally.count == 3
+    let inferred = ref tally_add
+    require inferred.call(tally, 1) == 4
+    require tally.count == 4
+    let step: Ref[(Tally, by: int) -> int] = ref tally_step
+    require step.call(tally) == 5
+    require step.call(tally, by = 5) == 10
+    require tally.count == 10
+    require module_add.call(tally, 1) == 11
+    require tally.count == 11
+    var fresh: Tally
+    let set: Ref[(Tally, int) -> int] = ref tally_set
+    require set.call(fresh, 7) == 7
+    require fresh.count == 7
+}
+remembered_modes()
+
 require imported_join.call("a") == "a,."
 require imported_join.call("a", "b", "c") == "a,b,c,."
 require imported_join.call("a", "b", zsep = "-") == "a-b-."

@@ -1663,6 +1663,48 @@ n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
 }
 
 th_type *
+n00bb_without_passing_modes(th_ctx *types, th_type *type)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    uint8_t attrs = 0;
+    if (resolved && th_kind_of(resolved) == TH_INDIRECTION
+        && th_ind_attrs(resolved, &attrs)) {
+        th_type *referent = th_ind_referent(resolved);
+        th_type *erased = n00bb_without_passing_modes(types, referent);
+        return erased == referent ? type
+            : erased ? th_ind(types, attrs, erased) : nullptr;
+    }
+    if (!resolved || th_kind_of(resolved) != TH_FUNCTION) return type;
+    size_t count = th_func_nparams(resolved);
+    size_t keywords = th_func_nkw(resolved);
+    const th_param *rest = th_func_rest(resolved);
+    bool moded = rest && rest->mode != TH_IN;
+    for (size_t i = 0; !moded && i < count; i++)
+        moded = th_func_param(resolved, i)->mode != TH_IN;
+    for (size_t k = 0; !moded && k < keywords; k++)
+        moded = th_func_kw(resolved, k)->mode != TH_IN;
+    if (!moded) return type;
+    th_param *params = core_alloc_array(th_param, count ? count : 1);
+    th_kwparam *named = core_alloc_array(th_kwparam,
+                                         keywords ? keywords : 1);
+    for (size_t i = 0; i < count; i++)
+        params[i] = (th_param){.mode = TH_IN,
+                               .type = th_func_param(resolved, i)->type};
+    for (size_t k = 0; k < keywords; k++)
+        named[k] = (th_kwparam){.name = th_func_kw(resolved, k)->name,
+                                .mode = TH_IN,
+                                .type = th_func_kw(resolved, k)->type};
+    th_param items = rest ? (th_param){.mode = TH_IN, .type = rest->type}
+                          : (th_param){0};
+    th_type *erased = th_func_with_error(types, th_func_ret(resolved),
+        th_func_error(resolved), params, count, rest ? &items : nullptr,
+        named, keywords);
+    core_free(params);
+    core_free(named);
+    return erased;
+}
+
+th_type *
 n00bb_keyword_order(th_ctx *types, parse_grammar_t *grammar,
                     parse_sym_entry_t *symbol, th_type *flat,
                     n00bb_keyword_order_t *order)
