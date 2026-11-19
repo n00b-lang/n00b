@@ -56,7 +56,10 @@ set -- \
     --syntax-preference record=struct \
     --syntax-preference 'return-type=return:' \
     --syntax-preference 'keyword-type=**name:'
-if ! "$compiler" "$@" lower "$preferences_program" \
+# Both programs lowered above; what the runs below test is which syntax
+# warnings appear, which `check` reports exactly as `lower` does (and at a
+# tenth of the cost, since `lower` compiles the library from source).
+if ! "$compiler" "$@" check "$preferences_program" \
     >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
@@ -67,7 +70,7 @@ if grep -q 'warning N00B-P0012:' "$tmp/err"; then
     exit 1
 fi
 
-if ! "$compiler" --no-syntax-warnings lower "$program" \
+if ! "$compiler" --no-syntax-warnings check "$program" \
     >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
