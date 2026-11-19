@@ -5915,16 +5915,17 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
         // A folded branch can leave the only writes of a value that decides
         // another branch in blocks no path reaches (a `with` manager's exit
         // reason, say), so folding goes on once those blocks are gone.
+        // When a round folds nothing the function is as its analyses found
+        // it, so hoisting uses them in the same scope instead of building
+        // the value numbers, PDG and range analysis again.
         for (;;) {
             size_t scope = ir_analysis_scope_begin();
             uint32_t folded = ir_abcd_fold(function);
+            if (!folded) (void)ir_abcd_hoist(function);
             ir_analysis_scope_end(scope);
             if (!folded) break;
             n00bb_drop_unreachable_blocks(function);
         }
-        size_t scope = ir_analysis_scope_begin();
-        (void)ir_abcd_hoist(function);
-        ir_analysis_scope_end(scope);
     }
 }
 
