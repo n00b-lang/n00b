@@ -689,8 +689,12 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) {
         ir_analysis_read_only_begin();
         bool frozen = validate_frozen_writes(analysis);
+        // Both range diagnoses use each function's ranges; their own
+        // per-function scopes would release them between the two.
+        size_t range_scope = ir_analysis_scope_begin();
         bool overflow = diagnose_overflow(analysis);
         bool ranges = diagnose_ranges(analysis);
+        ir_analysis_scope_end(range_scope);
         ir_analysis_read_only_end();
         warn_unbounded_recursion(analysis);
         warn_dead_stores(analysis);
