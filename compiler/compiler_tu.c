@@ -2143,6 +2143,25 @@ static th_type *owner_typevar(n00bb_tu_state_t *state,
                               parse_sym_entry_t *owner, core_string_t name,
                               parse_tree_t *node);
 
+// The name of a variable a type reference at `reference` gives the
+// declaration that owns it: a trait named as a type stands for one of its
+// own (`index` SIZE_MAX), and a generic alias named bare for one for each
+// of its parameters (`index` the parameter's position).
+static core_string_t
+owned_variable_name(n00bb_tu_state_t *state, core_string_t named,
+                    parse_tree_t *reference, size_t index)
+{
+    core_diag_location_t at = n00bb_node_span(reference);
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "%.*s@%u:%u", (int)named.u8_bytes, named.data,
+                       at.line, at.column);
+    if (index != SIZE_MAX) core_buffer_printf(&name, ".%zu", index);
+    core_string_t stored = store_semantic_string(state,
+                                                 core_buffer_string(&name));
+    core_buffer_release(&name);
+    return stored;
+}
+
 static bool
 record_type_bound(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
                   th_trait_requirement bound)
@@ -2286,12 +2305,8 @@ trait_type_reference(parse_grammar_t *grammar,
         || !is_trait_type_symbol(grammar, symbol)) return nullptr;
     core_buffer_t qualified = {0};
     n00bb_trait_qualified_name(declaration_unit, symbol, &qualified);
-    core_diag_location_t at = n00bb_node_span(reference);
-    core_buffer_t name = {0};
-    core_buffer_printf(&name, "%.*s@%u:%u", (int)symbol->name.u8_bytes,
-                       symbol->name.data, at.line, at.column);
-    core_string_t stored = store_semantic_string(state,
-                                                 core_buffer_string(&name));
+    core_string_t stored = owned_variable_name(state, symbol->name, reference,
+                                               SIZE_MAX);
     th_type *type = owner_typevar(state, owner, stored, nullptr);
     bool recorded = type && qualified.data
         && record_type_bound(state, owner, (th_trait_requirement){
@@ -2302,7 +2317,6 @@ trait_type_reference(parse_grammar_t *grammar,
         })
         && (!in_typecase_arm_types(grammar, reference)
             || record_typecase_trait_var(state, owner, stored));
-    core_buffer_release(&name);
     core_buffer_release(&qualified);
     return recorded ? type : nullptr;
 }
@@ -2314,6 +2328,7 @@ static bool constrain_type_arguments(parse_grammar_t *grammar,
     parse_sym_entry_t *declaration, th_type *const *arguments, size_t count,
     bool alias);
 static size_t declaration_type_parameter_count(parse_grammar_t *grammar,
+                                               n00bb_tu_state_t *state,
                                                parse_tree_t *declaration);
 
 // A generic alias named with no type arguments inside a declaration that
@@ -2346,7 +2361,8 @@ bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
         // An alias whose target is not typed yet holds an unnamed
         // placeholder; only one that declares parameters is generic.
         || (symbol->decl_node
-            && !declaration_type_parameter_count(grammar, symbol->decl_node))
+            && !declaration_type_parameter_count(grammar, state,
+                                                 symbol->decl_node))
         || !generic_alias_named(grammar, node))
         return nullptr;
     parse_sym_entry_t *owner = typevar_owner(grammar, node);
@@ -2358,17 +2374,10 @@ bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (!th_var_name(variables[i]).u8_bytes) return nullptr;
     if (!count) return nullptr;
     th_type **fresh = core_alloc_array(th_type *, count);
-    core_diag_location_t at = n00bb_node_span(node);
     bool ok = fresh != nullptr;
     for (size_t i = 0; ok && i < count; i++) {
-        core_buffer_t name = {0};
-        core_buffer_printf(&name, "%.*s@%u:%u.%zu",
-                           (int)symbol->name.u8_bytes, symbol->name.data,
-                           at.line, at.column, i);
         fresh[i] = owner_typevar(state, owner,
-            store_semantic_string(state, core_buffer_string(&name)),
-            nullptr);
-        core_buffer_release(&name);
+            owned_variable_name(state, symbol->name, node, i), nullptr);
         ok = fresh[i] != nullptr;
     }
     th_type *instance = ok
@@ -3224,39 +3233,210 @@ static bool declared_typevar(parse_sym_entry_t *owner, core_string_t name);
 static th_type *arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm,
                             core_string_t name, parse_tree_t *node);
 
-static void
-collect_owned_typevars(parse_grammar_t *grammar, parse_tree_t *node,
-                       core_list_t(core_string_t) *names)
+// The symbol a type reference names: from its resolution, or, in a
+// declaration not walked yet, by looking its name up as resolving it will
+// (resolve_local_type_reference).
+static parse_sym_entry_t *
+type_reference_symbol(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node)
 {
+    parse_node_resolution_t resolution = parse_tree_resolution(node);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
+        return resolution.target.symbol;
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_string_t name = bare_type_reference_name(grammar, node);
+    parse_sym_entry_t *symbol = symtab && name.data
+        ? lookup_named_type_reference(grammar, state, symtab,
+              parse_symtab_scope_for_node(symtab, node), name)
+        : nullptr;
+    return symbol || !name.data || !state->unit ? symbol
+        : n00bb_unqualified_import_type(state->unit, name);
+}
+
+typedef struct {
+    parse_grammar_t *grammar;
+    n00bb_tu_state_t *state;
+    // Set to give each trait the declaration names as a type its variable
+    // now (trait_type_reference), before the declaration's type is defined
+    // over its variables; resolving names later finds the same one.
+    core_translation_unit_t *binding;
+    bool bound;
+    core_list_t(core_string_t) names;
+    // The declarations being counted, so an alias that names itself bare
+    // adds nothing more.
+    core_list_t(parse_tree_ptr_t) counting;
+} type_parameter_walk_t;
+
+static void collect_type_parameters(type_parameter_walk_t *walk,
+                                    parse_tree_t *declaration);
+
+static void
+add_type_parameter_name(type_parameter_walk_t *walk, core_string_t name)
+{
+    for (size_t i = 0; name.data && i < walk->names.len; i++)
+        if (core_string_eq(walk->names.data[i], name)) return;
+    if (name.data) core_list_push(walk->names, name);
+}
+
+// The variables the type references under `node` give the declaration
+// that owns them, in the order they are written: each type variable once,
+// each trait named as a type one of its own (`x: Comparable` is
+// `x: 'T where 'T: Comparable`), and each generic alias named bare one for
+// each of its parameters (bare_generic_alias). `where` clauses are read
+// only when `where_clauses` is set.
+static void
+collect_owned_typevars(type_parameter_walk_t *walk, parse_tree_t *node,
+                       bool where_clauses)
+{
+    parse_grammar_t *grammar = walk->grammar;
     if (!node || core_tree_is_leaf(node)) return;
+    if (!where_clauses && NT_IS(grammar, node, "where-clause")) return;
     if (NT_IS(grammar, node, "tspec-tvar")) {
-        core_string_t name = core_tree_num_children(node) == 1
+        add_type_parameter_name(walk, core_tree_num_children(node) == 1
             ? source_typevar_name(core_tree_child(node, 0))
-            : (core_string_t){0};
-        for (size_t i = 0; name.data && i < names->len; i++)
-            if (core_string_eq(names->data[i], name)) return;
-        if (name.data) core_list_push(*names, name);
+            : (core_string_t){0});
         return;
+    }
+    if (is_type_reference_node(grammar, node)
+        && !enclosing_cast_type(grammar, node)) {
+        parse_sym_entry_t *symbol = type_reference_symbol(grammar,
+            walk->state, node);
+        symbol = symbol ? canonical_symbol(symbol) : nullptr;
+        if (is_trait_type_symbol(grammar, symbol)) {
+            add_type_parameter_name(walk, owned_variable_name(walk->state,
+                symbol->name, node, SIZE_MAX));
+            th_type *variable = walk->binding && walk->counting.len == 1
+                ? trait_type_reference(grammar, walk->binding,
+                      symbol->decl_node ? symbol->owner_unit : walk->binding,
+                      symbol, node)
+                : nullptr;
+            th_type *previous = variable ? parse_tree_type(node) : nullptr;
+            th_type *filled = previous ? th_fill(previous, variable)
+                                       : variable;
+            if (filled) parse_tree_set_type(node, filled);
+            if (walk->binding && walk->counting.len == 1 && !filled)
+                walk->bound = false;
+            return;
+        }
+        parse_tree_t *core = parse_tree_parent(node);
+        bool applied = NT_IS(grammar, core, "base-tspec-core")
+            && CHILD_NT(grammar, core, "tspec-application");
+        parse_tree_t *alias = symbol && !applied && symbol->decl_node
+            && NT_IS(grammar, symbol->decl_node, "alias-stmt")
+            && alias_declaration_is_transparent(grammar, symbol->decl_node)
+            ? symbol->decl_node : nullptr;
+        for (size_t i = 0; alias && i < walk->counting.len; i++)
+            if (walk->counting.data[i] == alias) alias = nullptr;
+        size_t count = 0;
+        if (alias) {
+            size_t before = walk->names.len;
+            collect_type_parameters(walk, alias);
+            count = walk->names.len - before;
+            walk->names.len = before;
+        }
+        else if (symbol && !applied && !symbol->decl_node && symbol->type
+                 && walk->state && walk->state->types
+                 && core_string_eq(symbol->adt_kind,
+                                   CORE_STRING_STATIC("alias"))) {
+            count = th_free_vars(walk->state->types,
+                                 th_resolve(symbol->type), nullptr);
+        }
+        for (size_t i = 0; i < count; i++)
+            add_type_parameter_name(walk, owned_variable_name(walk->state,
+                symbol->name, node, i));
+        if (count) return;
     }
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
         if (!typevar_owner_node(grammar, child))
-            collect_owned_typevars(grammar, child, names);
+            collect_owned_typevars(walk, child, where_clauses);
     }
 }
 
-// How many type parameters a declaration has: the distinct type variables
-// it owns, read from source so the answer does not depend on whether the
-// declaration has been processed yet.
+static void
+collect_type_parameters(type_parameter_walk_t *walk,
+                        parse_tree_t *declaration)
+{
+    core_list_push(walk->counting, declaration);
+    collect_owned_typevars(walk, declaration, false);
+    collect_owned_typevars(walk, declaration, true);
+    walk->counting.len--;
+}
+
+// The names of a declaration's type parameters, in the order its type
+// arguments are given: by first appearance among its fields, arms or
+// target, then any named only in a `where` clause. Read from source, so
+// the answer does not depend on whether the declaration has been processed
+// yet.
+static core_list_t(core_string_t)
+declaration_type_parameter_names(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state,
+                                 parse_tree_t *declaration,
+                                 core_translation_unit_t *binding,
+                                 bool *bound)
+{
+    type_parameter_walk_t walk = {
+        .grammar = grammar, .state = state, .binding = binding,
+        .bound = true,
+        .names = core_list_new(core_string_t),
+        .counting = core_list_new(parse_tree_ptr_t),
+    };
+    collect_type_parameters(&walk, declaration);
+    core_list_free(walk.counting);
+    if (bound) *bound = walk.bound;
+    return walk.names;
+}
+
+// How many type parameters a declaration has.
 static size_t
 declaration_type_parameter_count(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state,
                                  parse_tree_t *declaration)
 {
-    core_list_t(core_string_t) names = core_list_new(core_string_t);
-    collect_owned_typevars(grammar, declaration, &names);
+    core_list_t(core_string_t) names = declaration_type_parameter_names(
+        grammar, state, declaration, nullptr, nullptr);
     size_t count = names.len;
     core_list_free(names);
     return count;
+}
+
+// Gives a record, variant or alias declared in `unit` a variable for each
+// trait it names as a type, and puts its variables in the order its type
+// arguments are given (declaration_type_parameter_names), before its type
+// is defined over them. One the source does not name stays after those it
+// does, in the order it was made.
+static bool
+order_type_parameters(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                      parse_tree_t *declaration, parse_sym_entry_t *symbol)
+{
+    bool ok = true;
+    core_list_t(core_string_t) names = declaration_type_parameter_names(
+        grammar, tu_state(unit), declaration, unit, &ok);
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (!ok || !variables || variables->len < 2) {
+        core_list_free(names);
+        return ok;
+    }
+    n00bb_typevar_binding_t *ordered = core_alloc_array(
+        n00bb_typevar_binding_t, variables->len);
+    bool *placed = core_alloc_array(bool, variables->len);
+    ok = ordered && placed;
+    size_t at = 0;
+    for (size_t n = 0; ok && n <= names.len; n++)
+        for (size_t i = 0; i < variables->len; i++) {
+            if (placed[i] || (n < names.len
+                    && !core_string_eq(variables->data[i].name,
+                                       names.data[n]))) continue;
+            ordered[at++] = variables->data[i];
+            placed[i] = true;
+        }
+    if (ok) memcpy(variables->data, ordered, at * sizeof(*ordered));
+    core_free(ordered);
+    core_free(placed);
+    core_list_free(names);
+    return ok && at == variables->len;
 }
 
 th_type *
@@ -9885,7 +10065,10 @@ n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
 
 // The `where` clauses written in a record, variant or alias declaration
 // constrain its type parameters, which every use must then satisfy
-// (constrain_type_arguments).
+// (constrain_type_arguments). A trait named as a type there is such a
+// parameter, constrained to implement it: `x: Comparable` is
+// `x: 'T where 'T: Comparable`. The parameters are put in the order the
+// type's arguments are given before its type is defined over them.
 void
 record_type_constraints(parse_grammar_t *grammar,
                         core_translation_unit_t *unit,
@@ -9901,8 +10084,13 @@ record_type_constraints(parse_grammar_t *grammar,
         core_list_new(n00bb_typevar_binding_t);
     core_list_t(th_trait_requirement) declared =
         core_list_new(th_trait_requirement);
+    bool valid = order_type_parameters(grammar, unit, declaration, symbol);
     signature_typevars_for_symbol(symbol, &variables);
-    bool valid = apply_signature_constraints(grammar, unit, declaration,
+    core_list_t(th_trait_requirement) *traits = parse_sym_binding(symbol,
+        N00BB_TYPE_BOUNDS_KEY);
+    for (size_t i = 0; traits && i < traits->len; i++)
+        core_list_push(declared, traits->data[i]);
+    valid = valid && apply_signature_constraints(grammar, unit, declaration,
         state->types, &variables, &declared)
         && add_declared_where(state, symbol, &declared);
     core_list_free(variables);
@@ -9997,7 +10185,7 @@ named_type_arity(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (NT_IS(grammar, symbol->decl_node, "trait-decl")) return -1;
         *declaration = symbol;
         return (ptrdiff_t)declaration_type_parameter_count(grammar,
-                                                           symbol->decl_node);
+            tu_state(unit), symbol->decl_node);
     }
     int builtin_generic = builtin_generic_type_arity(name);
     if (builtin_generic != -1) return builtin_generic < 0 ? -1

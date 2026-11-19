@@ -248,6 +248,8 @@ core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(
     n00bb_call_lookup_t lookup);
 const core_list_t(n00bb_import_source_t) *unqualified_import_sources(
     core_translation_unit_t *unit);
+parse_sym_entry_t *n00bb_unqualified_import_type(
+    core_translation_unit_t *unit, core_string_t name);
 typedef n00bb_trait_specialization_t *n00bb_trait_specialization_ptr_t;
 core_list_decl(n00bb_trait_specialization_ptr_t);
 

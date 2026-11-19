@@ -351,4 +351,43 @@ func where_sized(a: Where_Bag, b: Alias_Ints) -> uint {
 }
 let where_strings: Alias_Ints[string] = ["x"]
 require where_sized(where_bag, where_strings) == 3
+
+# A trait named as a type in a record, variant or alias is a parameter of
+# its own, each place it is named, in the order the fields name them.
+record Shorthand_Two {
+    a: Integer
+    b: Integer
+}
+record Shorthand_Keyed {
+    k: 'K
+    v: Integer
+    w: 'K
+}
+variant Shorthand_Num {
+    count: Integer
+    none: nil
+}
+alias Shorthand_Ints = Array[Integer]
+func shorthand_sum(t: Shorthand_Two[int, u8]) -> int {
+    return t.a + cast[int](t.b)
+}
+func shorthand_count(n: Shorthand_Num[u16]) -> int {
+    switch n {
+        case count { return cast[int](n.count) }
+        case none { return 0 }
+    }
+}
+func shorthand_values() -> int {
+    let two: Shorthand_Two[int, u8] = (a = -1, b = 200)
+    let keyed: Shorthand_Keyed[string, i64] = (k = "a", v = -3, w = "b")
+    let narrow: u8 = two.b
+    let key: string = keyed.k
+    let wide: i64 = keyed.v
+    var number: Shorthand_Num[u16]
+    number.count = 9
+    let ints: Shorthand_Ints[u8] = [1, 2]
+    require narrow == 200 and key == "a" and wide == -3 and ints.len() == 2
+    return shorthand_sum(two) + shorthand_count(number)
+}
+require shorthand_values() == 208
 __fd_write(2, "ok")

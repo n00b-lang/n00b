@@ -1688,6 +1688,21 @@ unqualified_import_candidates(core_translation_unit_t *unit,
     return candidates;
 }
 
+// The type an unqualified name names from the module's imports, when
+// exactly one provides it: what resolving its use site binds it to
+// (resolve_prelude_value), known before that runs.
+parse_sym_entry_t *
+n00bb_unqualified_import_type(core_translation_unit_t *unit,
+                              core_string_t name)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        unqualified_import_candidates(unit, name, true);
+    parse_sym_entry_t *type = candidates.len == 1 ? candidates.data[0]
+                                                  : nullptr;
+    core_list_free(candidates);
+    return type;
+}
+
 static parse_sym_entry_t *
 unqualified_import_type(core_translation_unit_t *unit, core_string_t name)
 {

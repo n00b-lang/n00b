@@ -148,6 +148,13 @@ for pass in fresh cached; do
         "$tmp/where.err"
     grep -q '`string` does not implement `Integer`, which `bare` requires' \
         "$tmp/where.err"
+    # A trait named as a type is a parameter of its own, in field order.
+    # `shaped`, which gives them fitting arguments, is not reported.
+    for kind in Pair Num Ints; do
+        test "$(grep -c "\`string\` does not implement \`Integer\`, which \`$kind\` requires" \
+            "$tmp/where.err")" -eq 1
+    done
+    grep -q '`Pair` takes 2 type arguments, but 1 is given' "$tmp/where.err"
     if grep -q 'internal compiler error' "$tmp/where.err"; then
         echo "where check hit an internal error on the $pass pass" >&2
         exit 1

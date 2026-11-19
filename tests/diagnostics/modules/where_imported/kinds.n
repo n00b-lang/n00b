@@ -9,3 +9,16 @@ variant Maybe {
 }
 
 alias Bag = Dict['K, nil] where 'K: Integer
+
+// A trait named as a type is a parameter of its own.
+record Pair {
+    k: 'K
+    v: Integer
+}
+
+variant Num {
+    small: Integer
+    none: nil
+}
+
+alias Ints = Array[Integer]

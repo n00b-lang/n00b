@@ -1,0 +1,43 @@
+// A trait named as a type in a record, variant or alias is one of its type
+// parameters, constrained to implement the trait: `v: Integer` is
+// `v: 'T where 'T: Integer`. Each place it is named is a parameter of its
+// own, and the parameters are given in the order the declaration first
+// names them.
+record Box {
+    v: Integer
+}
+record Two {
+    a: Integer
+    b: Integer
+}
+record Keyed {
+    k: 'K
+    v: Integer
+    w: 'K
+}
+variant Num {
+    small: Integer
+    none: nil
+}
+alias Ints = Array[Integer]
+func boxed(b: Box[string]) -> int { return 1 }
+func second(t: Two[int, string]) -> int { return 1 }
+func keyed(k: Keyed[int, string]) -> int { return 1 }
+func numbered(n: Num[string]) -> int { return 1 }
+func listed(l: Ints[string]) -> int { return 1 }
+func too_few(t: Two[int]) -> int { return 1 }
+func too_many(b: Box[int, int]) -> int { return 1 }
+func fits(b: Box[u8], t: Two[int, u8], k: Keyed[string, int]) -> int {
+    return 1
+}
+// A variable given to one takes the trait on.
+func wrapped(x: 'T) -> Box['T] { return (v = x) }
+let wrapped_word = wrapped("x")
+// So does each bare use of the alias.
+func counted(l: Ints) -> uint { return l.len() }
+func local() -> uint {
+    var words: Ints = ["x"]
+    return words.len()
+}
+let words: Array[string] = ["x"]
+require counted(words) == 1 and local() == 1
