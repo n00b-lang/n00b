@@ -27,3 +27,6 @@ record Later {
 func counted(b: Bag['U]) -> int { return 1 }
 let words: Dict[string, nil] = {"x": nil}
 require counted(words) == 1
+// So may one after a type argument in the declaration.
+alias Keys = Dict['K where 'K: Integer, nil]
+func keyed(k: Keys[string]) -> int { return 1 }

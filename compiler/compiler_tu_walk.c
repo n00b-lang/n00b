@@ -364,14 +364,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 N00B_TEXT_TYPE_VARIABLES_ARE_DECLARED_BY,
                 N00BB_NO_ARGS);
     }
-    // A `where` clause after a type constrains the variable of its owner,
-    // but only a function's or a trait's are checked; elsewhere it would be
-    // dropped unchecked, so it is an error until it is supported.
+    // A `where` clause after a type constrains the variable of its owner.
+    // One with no owner, or in a callback, would be dropped unchecked, so
+    // it is an error until what it means there is settled.
     parse_tree_t *where_owner = step == SEMANTIC_PREPARE_ENTER
         && NT_IS(grammar, node, "where-clause")
         ? typevar_owner_declaration(grammar, node) : nullptr;
+    parse_tree_t *where_parent = where_owner || NT_IS(grammar, node,
+        "where-clause") ? named_ancestor(grammar, node) : nullptr;
     if (step == SEMANTIC_PREPARE_ENTER && NT_IS(grammar, node, "where-clause")
-        && NT_IS(grammar, named_ancestor(grammar, node), "type-spec")
+        && !NT_IS(grammar, where_parent, "func-type-signature")
+        && !NT_IS(grammar, where_parent, "trait-decl")
         && (!where_owner || NT_IS(grammar, where_owner, "callback-decl"))) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);

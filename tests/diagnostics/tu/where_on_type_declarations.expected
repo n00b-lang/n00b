@@ -18,3 +18,7 @@ tests/diagnostics/tu/where_on_type_declarations.n:27:14: note N00B-S0064: parame
 tests/diagnostics/tu/where_on_type_declarations.n:29:9: error N00B-T0021: `string` does not implement `Integer`, which `counted` requires
   tests/diagnostics/tu/where_on_type_declarations.n:27:6: note: `counted` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type_declarations.n:31:7: warning N00B-N0023: type `Keys` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type_declarations.n:32:19: error N00B-T0021: `string` does not implement `Integer`, which `Keys` requires
+  help: give `Keys` a type that implements `Integer`, or implement `Integer` for this one

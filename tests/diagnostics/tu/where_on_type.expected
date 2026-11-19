@@ -28,3 +28,19 @@ tests/diagnostics/tu/where_on_type.n:39:12: note N00B-S0064: parameter `x` could
 tests/diagnostics/tu/where_on_type.n:41:9: error N00B-T0021: `Plant` does not implement `Grows`, which `grown` requires
   tests/diagnostics/tu/where_on_type.n:39:6: note: `grown` is declared here
   help: implement `Grows` for `Plant`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:44:11: note N00B-S0064: parameter `xs` could be `view`: `ints` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:45:15: note N00B-S0064: parameter `x` could be `view`: `optional` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:46:12: note N00B-S0064: parameter `r` could be `view`: `calls` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:47:17: note N00B-S0064: parameter `r` could be `view`: `calls_back` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type.n:51:9: error N00B-T0021: `string` does not implement `Integer`, which `ints` requires
+  tests/diagnostics/tu/where_on_type.n:44:6: note: `ints` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:52:9: error N00B-T0021: `string` does not implement `Integer`, which `optional` requires
+  tests/diagnostics/tu/where_on_type.n:45:6: note: `optional` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:53:9: error N00B-T0021: `string` does not implement `Integer`, which `calls` requires
+  tests/diagnostics/tu/where_on_type.n:46:6: note: `calls` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n:54:9: error N00B-T0021: `string` does not implement `Integer`, which `calls_back` requires
+  tests/diagnostics/tu/where_on_type.n:47:6: note: `calls_back` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it

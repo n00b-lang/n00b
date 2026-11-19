@@ -39,3 +39,16 @@ func grow(self: Plant, by: string) -> Plant { return self }
 func grown(x: 'T) -> int where 'T: Grows { return 1 }
 let plant: Plant = (height = 1)
 require grown(plant) == 1
+// A clause may follow a type argument, a parameter of a function type,
+// or a parenthesized type.
+func ints(xs: List['T where 'T: Integer]) -> uint { return xs.len() }
+func optional(x: ('T where 'T: Integer)?) -> int { return 1 }
+func calls(r: Ref[('T where 'T: Integer) -> 'T]) -> int { return 1 }
+func calls_back(r: Ref[('T) -> 'T where 'T: Integer]) -> int { return 1 }
+func echo(x: string) -> string { return x }
+let words: List[string] = ["x"]
+let word: string? = "x"
+require ints(words) == 1
+require optional(word) == 1
+require calls(ref echo) == 1
+require calls_back(ref echo) == 1

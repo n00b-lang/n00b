@@ -781,7 +781,7 @@
                     | <sized-int-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
-                    | %"(" <union-tspec> %")"
+                    | %"(" <union-tspec> <where-clause>? %")"
 
 <tspec-application> @nospace ::=
     %"[" <tspec-list> %"]"
@@ -802,9 +802,12 @@
                                           | %bits %":" <integer-size>
 <integer-size> ::= %INT_LIT | %HEX_LIT
 
-<tspec-list> ::= <union-tspec> %"," <tspec-list>
-              | <union-tspec>
-              | <union-tspec> %","
+# A `where` clause may follow a type wherever one is written, as in
+# `Array['T where 'T: Shape]`; it constrains the variable of the
+# declaration the type is written in.
+<tspec-list> ::= <union-tspec> <where-clause>? %"," <tspec-list>
+              | <union-tspec> <where-clause>?
+              | <union-tspec> <where-clause>? %","
 
 <tspec-func> @nospace($1) @nospace($2) ::= %"(" <tspec-func-params> %")" <tspec-function-result>
 <tspec-func> @nospace($1) @nospace($2) @nospace($3) ::= %"(" <tspec-func-params> %"," %")" <tspec-function-result>
@@ -817,17 +820,17 @@
                        | <tspec-vargs> (%"," <tspec-kargs>)?
                        | <tspec-kargs>
 
-<tspec-func-param> ::= <union-tspec>
+<tspec-func-param> ::= <union-tspec> <where-clause>?
 <tspec-func-param> ::=
-       <tspec-param-mode> %IDENTIFIER %":" <union-tspec>
-<tspec-func-param> ::= <tspec-param-mode> <union-tspec>
-<tspec-func-param> ::= %IDENTIFIER %":" <union-tspec>
+       <tspec-param-mode> %IDENTIFIER %":" <union-tspec> <where-clause>?
+<tspec-func-param> ::= <tspec-param-mode> <union-tspec> <where-clause>?
+<tspec-func-param> ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
 <tspec-param-mode> ::= %"in" | %"view" | %"out" | %"modify" | %"consume"
 
-<tspec-field> ::= %IDENTIFIER %":" <union-tspec>
+<tspec-field> ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
-<tspec-vargs> ::= %"*" <union-tspec>
+<tspec-vargs> ::= %"*" <union-tspec> <where-clause>?
 <tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
