@@ -965,9 +965,9 @@
        <block-start> <callback-role-list> <block-end>
 <callback-role-list> @hardline ::= <callback-role> (<eos>+ <callback-role>)*
 
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"call" <func-type-signature>
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"handler" <func-type-signature>
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"setup" <func-type-signature>

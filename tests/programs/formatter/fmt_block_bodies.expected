@@ -4,8 +4,8 @@ trait Store {
 }
 
 callback Scale {
-    call (value: int) -> int
-    handler (value: int) -> int
+    call(value: int) -> int
+    handler(value: int) -> int
 }
 
 variant Shape {
