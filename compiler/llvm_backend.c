@@ -15950,8 +15950,15 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
         return backend_error(diagnostics, "could not create LTO context");
     LLVMContextSetDiagnosticHandler(context, report_lto_diagnostic,
                                     diagnostics);
-    LLVMModuleRef linked = nullptr;
-    bool ok = true;
+    // Every module is parsed and checked first, then the modules are
+    // linked pairwise, left to right, then the pairs, and so on. Each
+    // LLVMLinkModules2 call makes a new linker, which scans every type in
+    // its destination before it moves anything; linking one module at a
+    // time into one growing destination made those scans quadratic in the
+    // program's size.
+    LLVMModuleRef *modules = core_alloc_array(LLVMModuleRef, count);
+    size_t parsed = 0;
+    bool ok = modules != nullptr;
     for (size_t i = 0; ok && i < count; i++) {
         if (!inputs[i].data || !inputs[i].length) {
             ok = backend_error(diagnostics, "empty LTO bitcode module");
@@ -15966,16 +15973,17 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
             backend_error(diagnostics, "could not parse LTO bitcode module");
             break;
         }
-        if (linked) LLVMSetTarget(next, LLVMGetTarget(linked));
-        core_string_t linked_layout = linked
-            ? core_string_from_cstr(LLVMGetDataLayoutStr(linked))
+        LLVMModuleRef first = parsed ? modules[0] : nullptr;
+        if (first) LLVMSetTarget(next, LLVMGetTarget(first));
+        core_string_t first_layout = first
+            ? core_string_from_cstr(LLVMGetDataLayoutStr(first))
             : (core_string_t){0};
-        core_string_t next_layout = linked
+        core_string_t next_layout = first
             ? core_string_from_cstr(LLVMGetDataLayoutStr(next))
             : (core_string_t){0};
-        bool layouts_differ = linked
-            && !core_string_eq(linked_layout, next_layout);
-        core_free(linked_layout.data);
+        bool layouts_differ = first
+            && !core_string_eq(first_layout, next_layout);
+        core_free(first_layout.data);
         core_free(next_layout.data);
         if (layouts_differ) {
             LLVMDisposeModule(next);
@@ -15983,28 +15991,48 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
                 "LTO modules have incompatible target data layouts");
             break;
         }
-        if (linked && inputs[i].native_support) {
-            // C frames scan conservatively; do not inline them into precise frames.
+        if (first && inputs[i].native_support) {
+            // C frames scan conservatively; do not inline them into precise
+            // frames. That is, a C function an earlier module declares and
+            // none of them defines.
             LLVMContextRef module_context = LLVMGetModuleContext(next);
             unsigned kind = LLVMGetEnumAttributeKindForName(
                 "noinline", sizeof("noinline") - 1);
             for (LLVMValueRef function = LLVMGetFirstFunction(next); function;
                  function = LLVMGetNextFunction(function)) {
                 if (!LLVMCountBasicBlocks(function)) continue;
-                LLVMValueRef import = LLVMGetNamedFunction(linked,
-                    LLVMGetValueName(function));
-                if (!import || LLVMCountBasicBlocks(import)) continue;
+                const char *name = LLVMGetValueName(function);
+                bool declared = false, defined = false;
+                for (size_t m = 0; !defined && m < parsed; m++) {
+                    LLVMValueRef import = LLVMGetNamedFunction(modules[m],
+                                                               name);
+                    declared |= import != nullptr;
+                    defined = import && LLVMCountBasicBlocks(import);
+                }
+                if (!declared || defined) continue;
                 LLVMAttributeRef noinline = LLVMCreateEnumAttribute(
                     module_context, kind, 0);
                 LLVMAddAttributeAtIndex(function,
                     LLVMAttributeFunctionIndex, noinline);
             }
         }
-        if (!linked) linked = next;
-        else if (LLVMLinkModules2(linked, next)) {
-            ok = backend_error(diagnostics, "could not link LTO bitcode modules");
-        }
+        modules[parsed++] = next;
     }
+    size_t remaining = ok ? parsed : 0;
+    while (ok && remaining > 1) {
+        size_t kept = 0;
+        for (size_t i = 0; i < remaining; i += 2) {
+            if (i + 1 < remaining && ok
+                && LLVMLinkModules2(modules[i], modules[i + 1]))
+                ok = backend_error(diagnostics,
+                                   "could not link LTO bitcode modules");
+            modules[kept++] = modules[i];
+        }
+        remaining = kept;
+    }
+    // On failure, the context frees what is left of the modules.
+    LLVMModuleRef linked = ok ? modules[0] : nullptr;
+    core_free(modules);
     if (ok) {
         keep_entry_frames(linked);
         keep_call_frames(linked);
