@@ -2371,6 +2371,21 @@ bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
         || !generic_alias_named(grammar, node))
         return nullptr;
     parse_sym_entry_t *owner = typevar_owner(grammar, node);
+    // Outside every owner, the alias's constrained parameters are like a
+    // trait used as a type there: nothing to stand for a type in.
+    n00bb_declared_where_t *declared = owner ? nullptr
+        : parse_sym_binding(symbol, N00BB_DECLARED_WHERE_KEY);
+    if (declared && declared->len && !enclosing_cast_type(grammar, node)) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit,
+                N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION, n00bb_node_span(node),
+                N00B_TEXT_CONSTRAINED_ALIAS_OUTSIDE_FUNCTION,
+                N00BB_ARGS(ARG_TEXT(symbol->name))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_GIVE_THE_ALIAS_ITS_ARGUMENTS,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+    }
     th_type **variables = nullptr;
     size_t count = owner
         ? th_free_vars(state->types, th_resolve(symbol->type), &variables)

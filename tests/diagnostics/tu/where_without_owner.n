@@ -4,3 +4,14 @@
 var counted: int where 'T: Integer = 1
 let narrowed = cast[int where 'T: Integer](2)
 require counted + narrowed == 3
+// So is a generic alias with constrained parameters named without type
+// arguments there, whether a clause or a trait named as a type constrains
+// them; with its arguments, or unconstrained, it is a type.
+alias Ints = Array[Integer]
+alias Keyed = Dict['K, nil] where 'K: Integer
+alias Plain = Array['T]
+var words: Ints = ["x"]
+var keys: Keyed = {1: nil}
+var given: Ints[u8] = [1]
+var plain: Plain = [1]
+require words.len() + keys.len() + given.len() + plain.len() == 4

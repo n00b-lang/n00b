@@ -2,3 +2,7 @@ tests/diagnostics/tu/where_without_owner.n:4:24: error N00B-T0600: `'T` is a typ
   help: name a type that meets the constraint on `'T` here instead
 tests/diagnostics/tu/where_without_owner.n:5:31: error N00B-T0600: `'T` is a type variable a `where` clause constrains, which can only stand for a type inside a function
   help: name a type that meets the constraint on `'T` here instead
+tests/diagnostics/tu/where_without_owner.n:13:12: error N00B-T0600: `Ints` without type arguments has type parameters it constrains, which can only stand for types inside a function
+  help: give `Ints` type arguments that meet its constraints here instead
+tests/diagnostics/tu/where_without_owner.n:14:11: error N00B-T0600: `Keyed` without type arguments has type parameters it constrains, which can only stand for types inside a function
+  help: give `Keyed` type arguments that meet its constraints here instead

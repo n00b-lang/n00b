@@ -214,9 +214,10 @@ N00B_DIAG(TRAIT_TYPE_OUTSIDE_FUNCTION, "N00B-T0600", ERROR,
     "A trait used as a type stands for whichever implementing type a\n"
     "function is given, so it needs a function to belong to. So does a\n"
     "type variable a `where` clause constrains, as in\n"
-    "`var x: int where 'T: Integer` at module level. Outside one, name the\n"
-    "type, or `cast[Trait](value)` to check that a value implements the\n"
-    "trait.")
+    "`var x: int where 'T: Integer` at module level, and so does a\n"
+    "generic alias with constrained parameters named without type\n"
+    "arguments. Outside one, name the type, or `cast[Trait](value)` to\n"
+    "check that a value implements the trait.")
 N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "`__finalize` is defined for a type that is not an `object`",
     "Only an `object` can have a finalizer. An object is a handle to its\n"

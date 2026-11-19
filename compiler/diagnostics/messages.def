@@ -274,6 +274,8 @@ N00B_TEXT(TRAIT_TYPE_UNSETTLED_HERE, "nothing in `{1}` settles which type `{0}` 
 N00B_TEXT(STORE_OR_NAME_THE_IMPLEMENTING_TYPE, "store a value of the type that implements `{0}`, or name that type instead of `{0}`")
 N00B_TEXT(CONSTRAINED_VARIABLE_OUTSIDE_FUNCTION, "`{0}` is a type variable a `where` clause constrains, which can only stand for a type inside a function")
 N00B_TEXT(NAME_THE_CONSTRAINED_TYPE, "name a type that meets the constraint on `{0}` here instead")
+N00B_TEXT(CONSTRAINED_ALIAS_OUTSIDE_FUNCTION, "`{0}` without type arguments has type parameters it constrains, which can only stand for types inside a function")
+N00B_TEXT(GIVE_THE_ALIAS_ITS_ARGUMENTS, "give `{0}` type arguments that meet its constraints here instead")
 N00B_TEXT(CANNOT_CAST_TO_NOT_IMPLEMENTED, "cannot cast `{0}` to `{1}`: `{0}` does not implement `{1}`")
 N00B_TEXT(REINTERPRETING_A_REFERENCE_NEEDS_UNSAFE, "reinterpreting a reference needs `unsafe_cast`")
 N00B_TEXT(UNSAFE_CAST_CANNOT_CONVERT_TO, "`unsafe_cast` cannot convert `{0}` to `{1}`: their sizes are not compatible")
