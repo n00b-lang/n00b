@@ -711,6 +711,18 @@ typedef struct {
     core_list_t(n00bb_ir_instr_ptr_t) result_defaults;
     core_dict_t intrinsics;
     core_dict_t open_storage;
+    // builtin_package_type's index of one of this unit's packages: the
+    // exports with each name, in order. Rebuilt whenever the package or
+    // its export list (storage or length) is not the one indexed; an
+    // export's name is fixed once it is in the list.
+    struct {
+        const n00bb_package_declaration_t *package;
+        const n00bb_package_export_t *data;
+        size_t len;
+        bool built;
+        core_dict_t first;   // export name -> index + 1 of the first
+        size_t *next;        // index -> index + 1 of the next, or 0
+    } export_index;
     // The members module literals injected into this module (the only
     // symbols n00bb_injected_member is true of), in the order injected.
     core_list_t(parse_sym_entry_ptr_t) injected_members;

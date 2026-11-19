@@ -2266,6 +2266,52 @@ is_trait_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
                 CORE_STRING_STATIC("trait"))));
 }
 
+// The index + 1 of the first export of `package` (a package of the unit
+// whose state is `owner`) named `name`, or 0; owner->export_index.next
+// continues the chain. The index is rebuilt when the package or its
+// export list is not the one indexed, so it always matches the list.
+static size_t
+first_export_named(n00bb_tu_state_t *owner,
+                   const n00bb_package_declaration_t *package,
+                   core_string_t name)
+{
+    if (!owner) return 0;
+    typeof(&owner->export_index) index = &owner->export_index;
+    if (!index->built || index->package != package
+        || index->data != package->exports.data
+        || index->len != package->exports.len) {
+        if (index->built) {
+            core_dict_free(&index->first);
+            core_free(index->next);
+        }
+        size_t len = package->exports.len;
+        core_dict_init_string(&index->first);
+        index->next = core_alloc_array(size_t, len);
+        size_t *last = core_alloc_array(size_t, len);
+        for (size_t i = 0; i < len; i++) {
+            core_string_t *key = &package->exports.data[i].export_name;
+            bool found = false;
+            size_t head = (size_t)(uintptr_t)core_dict_get(&index->first,
+                                                           key, &found);
+            if (!found) {
+                core_dict_put(&index->first, key, i + 1);
+                last[i] = i;
+            }
+            else {
+                index->next[last[head - 1]] = i + 1;
+                last[head - 1] = i;
+            }
+        }
+        core_free(last);
+        index->package = package;
+        index->data = package->exports.data;
+        index->len = len;
+        index->built = true;
+    }
+    bool found = false;
+    return (size_t)(uintptr_t)core_dict_get(&index->first, &name, &found);
+}
+
 static parse_sym_entry_t *
 builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                      core_string_t name)
@@ -2275,8 +2321,11 @@ builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         ? find_direct_import(state->unit, package_name) : nullptr;
     n00bb_package_declaration_t *package = builtin
         ? find_package_declaration(builtin, package_name) : nullptr;
-    for (size_t i = 0; package && i < package->exports.len; i++) {
-        n00bb_package_export_t *export = &package->exports.data[i];
+    // Only exports named `name` can answer, in order: visit just those.
+    size_t at = package
+        ? first_export_named(tu_state(builtin), package, name) : 0;
+    for (; at; at = tu_state(builtin)->export_index.next[at - 1]) {
+        n00bb_package_export_t *export = &package->exports.data[at - 1];
         if (export->symbol && core_string_eq(export->export_name, name)) {
             parse_sym_entry_t *exported = canonical_symbol(export->symbol);
             if (is_named_type_symbol(grammar, exported)
@@ -7809,6 +7858,10 @@ free_tu_state(void *data)
         core_free(state->link_use_sites.data[i].trait_path_parts);
     core_list_free(state->link_use_sites);
     core_list_free(state->injected_members);
+    if (state->export_index.built) {
+        core_dict_free(&state->export_index.first);
+        core_free(state->export_index.next);
+    }
     core_list_free(state->import_sources);
     core_list_free(state->path_imports);
     core_list_free(state->restricted_imports);
