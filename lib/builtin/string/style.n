@@ -1688,7 +1688,7 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
 }
 
 private func build_style_records(segments: List[Markup_Segment])
-    -> List[Style_Record] {
+    -> List[Style_Record] fail: string {
     var records: List[Style_Record] = new[List[Style_Record]]()
     var pending: List[Pending_Style] = new[List[Pending_Style]]()
     var clock: Event_Clock = (at = 0, next = 0)
@@ -1706,16 +1706,19 @@ private func build_style_records(segments: List[Markup_Segment])
                 pending.append(opened)
             }
             case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off {
+                // A close must match an open earlier in the same literal;
+                // only `[/]` clears styling that came from elsewhere.
                 var j: int = cast[int](pending.len()) - 1
-                while j >= 0 {
-                    if closes_pending(pending[j], seg) {
-                        records.append(span_record(pending[j], seg.at,
-                                                   tick(clock, seg.at)))
-                        pending = without(pending, j)
-                        break
-                    }
+                while j >= 0 and !closes_pending(pending[j], seg) {
                     j -= 1
                 }
+                if j < 0 {
+                    fail "rich string has `[" + seg.raw_tag +
+                        "]` with no matching open tag before it; use `[/]` to clear styling from elsewhere"
+                }
+                records.append(span_record(pending[j], seg.at,
+                                           tick(clock, seg.at)))
+                pending = without(pending, j)
             }
             case Markup_Kind.reset {
                 // The reset closes this literal's open spans (innermost
@@ -1767,7 +1770,7 @@ alias litmod r = rich
 quotes litmod rich(raw: string) -> string fail: string {
     var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!
-    var body: Rich_Body = (s = text, style_info = build_style_records(segments),
+    var body: Rich_Body = (s = text, style_info = build_style_records(segments)!,
                            base_style = nil, opaque = false)
     return string.core.__string_make_rich(ref body)
 }

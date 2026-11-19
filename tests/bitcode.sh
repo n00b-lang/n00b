@@ -105,7 +105,9 @@ build-time)
     literal_failures bitcode_litmod_many_fail \
         "bitcode_litmod_many_fail.n:5:25: r: $too_large" \
         'bitcode_litmod_many_fail.n:7:24: reject: bad literal' \
-        "bitcode_litmod_many_fail.n:10:12: r: $too_large"
+        "bitcode_litmod_many_fail.n:8:25: r: rich string has \`[/i]\` with no matching open tag before it; use \`[/]\` to clear styling from elsewhere" \
+        "bitcode_litmod_many_fail.n:9:27: r: rich string has \`[/b]\` with no matching open tag before it; use \`[/]\` to clear styling from elsewhere" \
+        "bitcode_litmod_many_fail.n:12:12: r: $too_large"
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'
