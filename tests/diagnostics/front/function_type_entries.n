@@ -1,0 +1,6 @@
+# A function type's positional parameters have no names; an entry written
+# `name: T` is a keyword parameter, and the keyword parameters come last.
+alias Named = Ref[(modify state: int, value: int) -> int]
+alias Late = Ref[(scale: int, int) -> int]
+alias Late_Varargs = Ref[(int, scale: int, *int) -> int]
+alias Fine = Ref[(modify int, value: int) -> int]

@@ -3339,6 +3339,78 @@ report_formal_order(pp_discovery_t *discovery,
     core_free(text.data);
 }
 
+// A function type's positional entry is only a type, after an optional
+// passing mode; `name: T` there is a keyword parameter, and the keyword
+// parameters come last. The grammar accepts a named positional entry
+// (<tspec-named-positional>) and a positional entry after the keyword
+// parameters (<tspec-late-param>) so they are reported here.
+static void
+check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node)
+{
+    pp_context_t *ctx = discovery->ctx;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(ctx->unit);
+    if (is_name(ctx->grammar, node, "tspec-named-positional")) {
+        parse_tree_t *name = core_tree_child(node, 0);
+        parse_tree_t *type = child_nt(ctx->grammar, node,
+                                      CORE_STRING_STATIC("union-tspec"));
+        if (!name || !type
+            || !report_formal(discovery,
+                   N00B_DIAG_FUNCTION_TYPE_POSITIONAL_NAME, name,
+                   N00B_TEXT_FUNCTION_TYPE_NAMED_POSITIONAL,
+                   N00BB_ARGS(ARG_TEXT(node_text(ctx, name)))))
+            return;
+        n00bb_report_help(diagnostics,
+                          N00B_TEXT_FUNCTION_TYPE_NAMED_POSITIONAL_HELP,
+                          N00BB_NO_ARGS);
+        report_fix(ctx, (pp_fix_t){
+            .open = node_start(name),
+            .resume = node_start(type),
+            .close = node_start(type),
+        });
+        return;
+    }
+    if (!is_name(ctx->grammar, node, "tspec-kargs")) return;
+    // The keyword parameter last before the first entry that isn't one.
+    parse_tree_t *keyword = nullptr;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        size_t count = parse_tree_is_group(child)
+            ? core_tree_num_children(child) : 1;
+        for (size_t j = 0; j < count; j++) {
+            parse_tree_t *entry = parse_tree_is_group(child)
+                ? core_tree_child(child, j) : child;
+            if (is_name(ctx->grammar, entry, "tspec-karg-entry"))
+                entry = core_tree_child(entry, 0);
+            if (is_name(ctx->grammar, entry, "tspec-field")) {
+                keyword = entry;
+                continue;
+            }
+            if (!is_name(ctx->grammar, entry, "tspec-late-param")
+                || !keyword)
+                continue;
+            core_string_t kind = n00bb_text(
+                child_nt(ctx->grammar, entry,
+                         CORE_STRING_STATIC("tspec-vargs"))
+                    ? N00B_TEXT_VARARGS_PARAMETER_KIND
+                    : N00B_TEXT_POSITIONAL_PARAMETER_KIND,
+                N00BB_NO_ARGS);
+            if (report_formal(discovery,
+                    N00B_DIAG_FUNCTION_TYPE_POSITIONAL_NAME, entry,
+                    N00B_TEXT_FUNCTION_TYPE_LATE_POSITIONAL,
+                    N00BB_ARGS(ARG_TEXT(kind), ARG_TEXT(node_text(ctx,
+                        core_tree_child(keyword, 0)))))) {
+                core_diag_mark(diagnostics, node_location(keyword));
+                n00bb_report_help(diagnostics,
+                    N00B_TEXT_FUNCTION_TYPE_LATE_POSITIONAL_HELP,
+                    N00BB_NO_ARGS);
+            }
+            core_free(kind.data);
+            return;
+        }
+    }
+}
+
 static void
 check_formals(pp_discovery_t *discovery, parse_tree_t *node)
 {
@@ -3634,6 +3706,7 @@ preprocess_discover(parse_visit_t *visit)
     check_operator_mix(discovery, node);
     check_prefixed_annotation(discovery, node);
     if (nonterm_class(ctx, node) == PP_FORMALS) check_formals(discovery, node);
+    check_function_type_entry(discovery, node);
     if (is_name(ctx->grammar, node, "variable-decl")
         || is_name(ctx->grammar, node, "import-stmt"))
         report_statement_trailing_comma(ctx, node);

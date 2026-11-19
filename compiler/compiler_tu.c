@@ -6164,6 +6164,13 @@ function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                 parse_tree_t *type_node = NT_IS(grammar, item,
                         "tspec-func-param")
                     ? CHILD_NT(grammar, item, "union-tspec") : item;
+                // A named positional entry is reported by the
+                // preprocessor; its type is still the entry's type.
+                parse_tree_t *named = !type_node
+                    ? CHILD_NT(grammar, item, "tspec-named-positional")
+                    : nullptr;
+                if (named)
+                    type_node = CHILD_NT(grammar, named, "union-tspec");
                 th_type *type = type_node
                     ? parse_tree_type(type_node) : nullptr;
                 if (!type) valid = false;
@@ -6234,6 +6241,10 @@ function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                             parse_tree_is_group(field_group)
                                 ? core_tree_child(field_group, m)
                                 : field_group;
+                        // A positional entry after the keyword
+                        // parameters is reported by the preprocessor.
+                        if (NT_IS(grammar, field, "tspec-karg-entry"))
+                            field = CHILD_NT(grammar, field, "tspec-field");
                         if (!NT_IS(grammar, field, "tspec-field")) continue;
                         parse_tree_t *type_node = CHILD_NT(grammar, field,
                                                             "union-tspec");
@@ -10492,6 +10503,11 @@ compose_type_syntax_node(parse_grammar_t *grammar,
         return type_argument_pack(grammar, state->types, node);
     if (NT_IS(grammar, node, "tspec-func-param")) {
         parse_tree_t *type = CHILD_NT(grammar, node, "union-tspec");
+        // A named positional entry (reported by the preprocessor).
+        if (!type)
+            type = CHILD_NT(grammar,
+                CHILD_NT(grammar, node, "tspec-named-positional"),
+                "union-tspec");
         return type ? parse_tree_type(type) : nullptr;
     }
     if (NT_IS(grammar, node, "tspec-func-params"))
