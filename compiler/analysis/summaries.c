@@ -539,6 +539,95 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     analysis->entry_owner = nullptr;
 }
 
+typedef struct {
+    n00bb_link_analysis_t            *analysis;
+    core_dict_t                       source;
+    core_dict_t                       seen;
+    core_list_t(n00bb_ir_func_ptr_t)  work;
+    core_list_t(n00bb_ir_func_ptr_t) *roots;
+} cached_reach_t;
+
+static void
+reach_target(void *sink, ir_func_t *target)
+{
+    cached_reach_t *reach = sink;
+    ir_func_t      *body  = n00bb_cached_body(ir_func_definition(target));
+    if (!body || !body->n_blocks || !core_dict_add(&reach->seen, body, body))
+        return;
+    if (core_dict_contains(&reach->source, body->owner)) {
+        if (!n00bb_module_unanalyzed(reach->analysis, body->owner))
+            core_list_push(*reach->roots, body);
+        return;
+    }
+    core_list_push(reach->work, body);
+}
+
+// Adds as roots the functions of the units compiled from source that the
+// cached units' functions reach. Compiled cold, every function of those
+// units is emitted, and so a root, and the summaries take in whatever they
+// reach, the program's own generic implementations among them: a
+// dictionary hashing its keys reaches every `__n00bb_object_hash` it may
+// dispatch to. Loaded from the cache, those units are not emitted, and
+// without this which of the program's functions get summaries (and so
+// what its ABI object says) would depend on what was cached. The cached
+// functions are only walked here; their summaries come from the cache
+// when something summarized calls them.
+static void
+push_cached_reach(n00bb_link_analysis_t *analysis,
+                  core_list_t(n00bb_ir_func_ptr_t) *roots)
+{
+    cached_reach_t reach = {.analysis = analysis, .roots = roots,
+                            .work = core_list_new(n00bb_ir_func_ptr_t)};
+    core_dict_init(&reach.source, nullptr, nullptr);
+    core_dict_init(&reach.seen, nullptr, nullptr);
+    bool cached = false;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module) continue;
+        if (state->interface_module) cached = true;
+        else core_dict_put(&reach.source, state->ir_module, state->ir_module);
+    }
+    for (size_t u = 0; cached && u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module || !state->interface_module) continue;
+        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(
+                ir_func_at(state->ir_module, f));
+            if (body && body->n_blocks
+                && core_dict_add(&reach.seen, body, body))
+                core_list_push(reach.work, body);
+        }
+    }
+    while (reach.work.len) {
+        ir_func_t *f = reach.work.data[--reach.work.len];
+        for (uint32_t b = 0; b < f->n_blocks; b++)
+            for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = f->blocks[b]->instrs[i];
+                if (in->op == IR_OP_CALLBACK_CREATE && in->n_operands
+                    && in->operands[0].kind == IR_OPD_VALUE) {
+                    const ir_value_t *handler = in->operands[0].value;
+                    if (handler && handler->kind == IR_VAL_FUNC
+                        && handler->owner)
+                        reach_target(&reach, handler->owner);
+                }
+                if (in->op != IR_OP_CALL && in->op != IR_OP_CALLBACK_INVOKE)
+                    continue;
+                if (!n00bb_summary_call_targets(analysis, in, reach_target,
+                                                &reach)) {
+                    ir_value_t *callee = in->op == IR_OP_CALL
+                        && in->n_operands
+                        ? ir_operand_value(&in->operands[0]) : nullptr;
+                    if (callee && callee->kind == IR_VAL_FUNC
+                        && callee->owner)
+                        reach_target(&reach, callee->owner);
+                }
+            }
+    }
+    core_list_free(reach.work);
+    core_dict_free(&reach.source);
+    core_dict_free(&reach.seen);
+}
+
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
@@ -583,6 +672,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     push_effects_of_roots(analysis, &roots);
     bind_summary_hooks(analysis, false);
     n00bb_push_summary_roots(analysis, &roots);
+    push_cached_reach(analysis, &roots);
     ir_summaries_t *previous = analysis->summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
