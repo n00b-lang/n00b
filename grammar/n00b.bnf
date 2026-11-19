@@ -131,7 +131,7 @@
 <for-var-list> ::= <binding-pattern>
 <for-var-list> ::= <binding-pattern> %"," <for-var-list>
 
-<binding-pattern> @nospace($1) ::= %"(" <pattern-items> %")"
+<binding-pattern> @nospace($1) @nospace($2) ::= %"(" <pattern-items> %")"
 <pattern-items> ::= <pattern-item> %"," <pattern-items>
                   | <pattern-item>
                   | <pattern-item> %","
@@ -523,7 +523,7 @@
 # declares `x` as an implicit declaration does. The preprocessor rewrites it
 # as `x = (value): T`.
 <assign-stmt> @nospace($1) ::= <place> %":" <type-spec> <assign-op> <expression>
-<assign-pattern> @nospace($1) ::= %"(" <assign-pattern-items> %")"
+<assign-pattern> @nospace($1) @nospace($2) ::= %"(" <assign-pattern-items> %")"
 <assign-pattern-items> ::= <assign-pattern-item> %"," <assign-pattern-items>
                         | <assign-pattern-item> %"," <assign-pattern-item>
 <assign-pattern-item> ::= <assign-pattern-target>
