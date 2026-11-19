@@ -1,0 +1,9 @@
+enum Kind {
+    eof = 0, newline, rule_name, assign, pipe, lparen, rparen, question, star,
+    plus, comma, class_ref, hard_lit, lit, directive
+}
+
+flagset Flags {
+    a, b,
+    c, d
+}

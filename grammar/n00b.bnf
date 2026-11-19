@@ -483,7 +483,11 @@
 
 <enum-storage> ::= %":" <type-spec>
 
-<enum-items> @nospace($1) @nospace($2) ::= <enum-item> (<eos>* %"," <eos>* <enum-item>)* (<eos>* %",")?
+# The separator is a rule of its own so that each repetition is two
+# items, whatever line breaks it holds: the printer counts a repetition's
+# items to find where each starts.
+<enum-items> @nospace($1) @nospace($2) ::= <enum-item> (<item-separator> <enum-item>)* (<eos>* %",")?
+<item-separator> @nospace ::= <eos>* %"," <eos>*
 
 <enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
 <enum-item> @declares($0) ::= %IDENTIFIER
@@ -496,7 +500,7 @@
 
 <flagset-prefix> ::= <member-visibility>? %"flagset"
 
-<flagset-items> @nospace($1) @nospace($2) ::= <flagset-item> (<eos>* %"," <eos>* <flagset-item>)* (<eos>* %",")?
+<flagset-items> @nospace($1) @nospace($2) ::= <flagset-item> (<item-separator> <flagset-item>)* (<eos>* %",")?
 
 <flagset-item> @declares($0) ::= %IDENTIFIER
 <flagset-item> @declares($0) ::= %IDENTIFIER <assign-op> <flagset-value>
