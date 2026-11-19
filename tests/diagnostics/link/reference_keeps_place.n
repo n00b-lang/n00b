@@ -1,0 +1,34 @@
+# A call through a function reference lends the function its arguments'
+# places only for the call, so `ref` of a function that keeps a reference
+# to a `modify` or `out` parameter past the call is reported, a generic
+# function's too. Such a function can still be called directly.
+var keep: Ref[int]? = nil
+func hold(modify x: int) -> int {
+    keep = ref x
+    return x
+}
+func set_kept(out x: int) {
+    x = 1
+    keep = ref x
+}
+func held(modify x: 'T, modify slot: Ref['T]?) -> 'T {
+    slot = ref x
+    return x
+}
+func lends(modify x: int) -> int {
+    x += 1
+    return x
+}
+func use() -> int {
+    var v = 1
+    var slot: Ref[int]? = nil
+    let kept = ref hold
+    let out_kept = ref set_kept
+    let generic: Ref[(int, Ref[int]?) -> int] = ref held
+    let lent = ref lends
+    out_kept.call(v)
+    let total = hold(v) + held(v, slot) + lent.call(v) + kept.call(v)
+    return total + generic.call(v, slot)
+}
+require use() > 0
+require keep != nil

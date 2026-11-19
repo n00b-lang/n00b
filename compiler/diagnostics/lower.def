@@ -420,6 +420,15 @@ N00B_DIAG(FUNCTION_REFERENCE_CAST, "N00B-S0105", ERROR,
     "address hands native code something it can't call. For the native\n"
     "code of a function, use `native_entry`:\n"
     "    let entry: Ref[byte] = native_entry(worker)")
+N00B_DIAG(REFERENCE_KEEPS_PLACE, "N00B-S0106", ERROR,
+    "`ref` of a function that keeps a reference to a `modify` or `out` parameter",
+    "A call through a function reference may not know the function it\n"
+    "calls, so it lends the function its arguments' places only for the\n"
+    "call. A function that keeps a reference to a `modify` or `out`\n"
+    "parameter past the call (storing `ref` of it, say) would keep the\n"
+    "caller's place beyond that, so it can't be referred to with `ref`. It\n"
+    "can still be called directly, where the caller's place is kept alive\n"
+    "as long as the function needs it.")
 N00B_DIAG(INLINE_FUNCTION_REFERENCE, "N00B-S0087", ERROR,
     "a reference to an `inline func` is taken",
     "An `inline func` is inlined at every direct call, so it has no\n"

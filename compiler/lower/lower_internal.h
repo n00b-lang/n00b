@@ -2131,6 +2131,13 @@ validate_frozen_writes(n00bb_link_analysis_t *analysis);
 bool
 check_field_array_lengths(n00bb_link_analysis_t *analysis);
 
+// Reports `ref f` of a function that keeps a reference to a `modify` or
+// `out` parameter past the call (N00B-S0106), by its escape summary: a
+// call through a function reference only lends the function its
+// arguments' places for the call.
+bool
+check_reference_kept_places(n00bb_link_analysis_t *analysis);
+
 bool
 place_unit_allocations(n00bb_link_analysis_t *analysis);
 

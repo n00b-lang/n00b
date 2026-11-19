@@ -1927,6 +1927,83 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+// The parameter of `function` passed by reference whose place it keeps a
+// reference to past the call, by its escape summary; UINT32_MAX if none.
+static uint32_t
+kept_place_parameter(n00bb_link_analysis_t *analysis, ir_func_t *function)
+{
+    th_type *signature = function ? th_resolve(function->type) : nullptr;
+    ir_func_t *body = function ? n00bb_cached_body(function) : nullptr;
+    ir_summary_t *summary = !signature
+            || th_kind_of(signature) != TH_FUNCTION ? nullptr
+        : ir_summary_of(analysis->escapes, function);
+    if (!summary && body && body != function)
+        summary = ir_summary_of(analysis->escapes, body);
+    for (uint32_t p = 0; summary && p < th_func_nparams(signature); p++)
+        if (th_mode_by_reference(th_func_param(signature, p)->mode)
+            && (ir_summary_param_escape(summary, p) & IR_SESCAPE_ADDRESS))
+            return p;
+    return UINT32_MAX;
+}
+
+bool
+check_reference_kept_places(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *module = state && !state->interface_module
+            ? state->ir_module : nullptr;
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+                ir_block_t *block = function->blocks[b];
+                for (uint32_t i = 0; i < block->n_instrs; i++) {
+                    ir_instr_t *in = block->instrs[i];
+                    for (uint32_t o = 0; o < in->n_operands; o++) {
+                        ir_value_t *value = ir_operand_value(
+                            &in->operands[o]);
+                        // A function reference (`ref f`), not a callee.
+                        if (!value || value->kind != IR_VAL_FUNC
+                            || !value->owner
+                            || (in->op == IR_OP_CALL && o == 0)
+                            || th_kind_of(th_resolve(value->type))
+                                != TH_INDIRECTION)
+                            continue;
+                        ir_func_t *target = n00bb_reference_adapter_target(
+                            value->owner, nullptr, nullptr);
+                        if (!target) target = value->owner;
+                        uint32_t kept = kept_place_parameter(analysis,
+                                                             target);
+                        if (kept == UINT32_MAX) continue;
+                        ir_func_t *body = n00bb_cached_body(target);
+                        if (!body || body->n_params <= kept) body = target;
+                        core_string_t name = n00bb_name_leaf(target->name);
+                        n00bb_report(core_translation_unit_diagnostics(unit),
+                            unit, N00B_DIAG_REFERENCE_KEEPS_PLACE,
+                            n00bb_span_location(in->span),
+                            N00B_TEXT_REFERENCE_KEEPS_PLACE,
+                            N00BB_ARGS(ARG_TEXT(name),
+                                ARG_TEXT(kept < body->n_params
+                                    ? body->params[kept]->name
+                                    : CORE_STRING_STATIC("?")),
+                                ARG_PHRASE_ID(n00bb_mode_parameter(
+                                    th_func_param(th_resolve(target->type),
+                                                  kept)->mode))));
+                        n00bb_report_help(
+                            core_translation_unit_diagnostics(unit),
+                            N00B_TEXT_CALL_IT_DIRECTLY,
+                            N00BB_ARGS(ARG_TEXT(name)));
+                        ok = false;
+                    }
+                }
+            }
+        }
+    }
+    return ok;
+}
+
 bool
 place_unit_allocations(n00bb_link_analysis_t *analysis)
 {

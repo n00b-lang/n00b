@@ -528,6 +528,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             n00bb_profile_seconds() - profile_start);
     if (ok) ok = check_field_array_lengths(analysis)
         || explained_by_errors(&units);
+    if (ok) ok = check_reference_kept_places(analysis)
+        || explained_by_errors(&units);
     if (ok) ok = place_unit_allocations(analysis)
         || explained_by_errors(&units);
     exclude_failed_functions(analysis, &units, marks);

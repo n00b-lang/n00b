@@ -1,0 +1,6 @@
+tests/diagnostics/link/reference_keeps_place.n:25:9: error N00B-S0106: `hold` keeps a reference to its parameter `x` (a `modify` parameter) past the call, so it can't be referred to with `ref`
+  help: `hold` can still be called directly
+tests/diagnostics/link/reference_keeps_place.n:26:9: error N00B-S0106: `set_kept` keeps a reference to its parameter `x` (an `out` parameter) past the call, so it can't be referred to with `ref`
+  help: `set_kept` can still be called directly
+tests/diagnostics/link/reference_keeps_place.n:27:9: error N00B-S0106: `held` keeps a reference to its parameter `x` (a `modify` parameter) past the call, so it can't be referred to with `ref`
+  help: `held` can still be called directly
