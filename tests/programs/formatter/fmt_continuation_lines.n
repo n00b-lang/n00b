@@ -1,0 +1,7 @@
+func compare_key(flag: bool) -> int {
+    if flag {
+    panic.panic("cannot sort a dictionary by key: its key type is not " +
+        "`Comparable`")
+    }
+    return 0
+}

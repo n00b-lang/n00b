@@ -108,7 +108,7 @@ for name in block_bodies package_body where_clauses comment_blank_lines casts \
         function_type_entries varargs effect_queries effect_clauses \
         effect_bodies callback_roles function_types array_dimensions \
         binding_patterns named_fields empty_braces enum_items \
-        parenthesized_types block_values; do
+        parenthesized_types block_values continuation_lines; do
     "$compiler" fmt --output "$tmp/$name.n" "$program_dir/fmt_$name.n"
     diff -u "$program_dir/fmt_$name.expected" "$tmp/$name.n"
     "$compiler" fmt --check "$program_dir/fmt_$name.expected"

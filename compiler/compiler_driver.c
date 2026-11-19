@@ -3791,6 +3791,15 @@ n00bb_format_comment_gap(core_buffer_t *out, const char *printed,
     return true;
 }
 
+// The last source line whose first token also starts a line of the
+// output, with its indentation in each.
+typedef struct {
+    bool set;
+    size_t source_line;
+    size_t source_indent;
+    size_t result_indent;
+} n00bb_format_anchor_t;
+
 static core_string_t
 n00bb_format_restore_breaks(parse_grammar_t *grammar,
                             core_string_t source, core_string_t printed_text)
@@ -3818,6 +3827,7 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
     parse_token_info_t *prior_original = nullptr;
     parse_token_info_t *prior_rendered = nullptr;
     bool prior_value_sigil = false;
+    n00bb_format_anchor_t line_anchor = {0};
     bool valid = true;
     for (;;) {
         parse_token_info_t *from = n00bb_format_next_token(original,
@@ -3969,6 +3979,12 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
         }
         else if (prior_original && source_lines > printed_lines
                  && !has_comment) {
+            // The line holding the prior token, when its first token also
+            // starts a line of the output (line_anchor): how far the output
+            // moved that line.
+            size_t line = prior_original_start;
+            while (line && source.data[line - 1] != '\n') line--;
+            bool anchored = line_anchor.set && line_anchor.source_line == line;
             for (size_t j = 0; j < source_lines; j++)
                 core_buffer_putc(&result, '\n');
             size_t spaces = 0;
@@ -3980,11 +3996,19 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 }
             }
             else {
+                // The source's indentation, moved as far as the output
+                // moved the line before it.
                 size_t j = from_start;
                 while (j > 0 && source.data[j - 1] == ' ') {
                     spaces++;
                     j--;
                 }
+                if (anchored)
+                    spaces = spaces + line_anchor.result_indent
+                            > line_anchor.source_indent
+                        ? spaces + line_anchor.result_indent
+                            - line_anchor.source_indent
+                        : 0;
             }
             for (size_t j = 0; j < spaces; j++)
                 core_buffer_putc(&result, ' ');
@@ -3998,6 +4022,27 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                                gap_len - head);
         }
         else core_buffer_append(&result, printed + gap_start, gap_len);
+        // A token that starts its line in the source and in the output
+        // anchors that line: a break restored after it is indented by as
+        // much as the output moved the line.
+        size_t source_line = from_start, source_indent = 0;
+        while (source_line && source.data[source_line - 1] == ' ') {
+            source_line--;
+            source_indent++;
+        }
+        size_t result_line = result.byte_len, result_indent = 0;
+        while (result_line && result.data[result_line - 1] == ' ') {
+            result_line--;
+            result_indent++;
+        }
+        if ((!source_line || source.data[source_line - 1] == '\n')
+            && (!result_line || result.data[result_line - 1] == '\n'))
+            line_anchor = (n00bb_format_anchor_t){
+                .set = true,
+                .source_line = source_line,
+                .source_indent = source_indent,
+                .result_indent = result_indent,
+            };
         core_buffer_append(&result, printed + to_start, to_len);
         prior_original = from;
         prior_rendered = to;
