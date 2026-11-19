@@ -649,6 +649,7 @@ source_functions(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         ir_module_t *module = state && !state->interface_module
+            && !n00bb_module_unanalyzed(analysis, state->ir_module)
             ? state->ir_module : nullptr;
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);

@@ -371,6 +371,11 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(core_translation_unit_ptr_t) units;
     core_dict_t unit_of_module;
     bool unit_of_module_ready;
+    // While a program with errors is analyzed: the modules of the units
+    // that import (transitively) a unit with errors and have none of their
+    // own. Their functions are not analyzed for their own sake.
+    core_dict_t unanalyzed_modules;
+    bool unanalyzed_ready;
     bool effect_checks_failed;
     bool lowered_with_errors;
     bool defer_program_analysis;
@@ -465,6 +470,16 @@ typedef struct n00bb_link_analysis_t {
     // read the field from (see n00bb_note_lowered_field_use).
     core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
 } n00bb_link_analysis_t;
+
+// Whether `module` belongs to a unit the analysis of a program with errors
+// leaves out (see unanalyzed_modules).
+static inline bool
+n00bb_module_unanalyzed(n00bb_link_analysis_t *analysis,
+                        const ir_module_t *module)
+{
+    return analysis && analysis->unanalyzed_ready && module
+        && core_dict_contains(&analysis->unanalyzed_modules, (void *)module);
+}
 
 void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
 

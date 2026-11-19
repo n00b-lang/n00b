@@ -5998,6 +5998,92 @@ check_post_specialization(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+drop_diagnostic(void *context, core_diag_severity_t *severity,
+                core_string_t code)
+{
+    (void)context;
+    (void)severity;
+    (void)code;
+    return false;
+}
+
+// Leaves out of the analysis of a program with errors each unit that
+// imports, directly or not, a unit with errors and has none of its own:
+// what the analysis would say about it follows from what is wrong in the
+// unit it depends on, so its functions are not analyzed for their own
+// sake (see build_function_summaries) and nothing the analysis reports in
+// it is kept. The units with errors are analyzed as before.
+static void
+leave_out_dependents_of_errors(core_link_unit_t *link,
+                               n00bb_link_analysis_t *analysis)
+{
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    if (!count) return;
+    core_dict_t affected;
+    core_dict_init(&affected, nullptr, nullptr);
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        if (core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+            core_dict_put(&affected, unit, unit);
+    }
+    if (!core_dict_len(&affected)) {
+        core_dict_free(&affected);
+        return;
+    }
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (size_t i = 0; i < count; i++) {
+            core_translation_unit_t *unit =
+                core_link_unit_translation_unit(link, i);
+            if (core_dict_contains(&affected, unit)) continue;
+            for (size_t m = 0; m < unit->imports.len; m++)
+                if (core_dict_contains(&affected, unit->imports.data[m])) {
+                    core_dict_put(&affected, unit, unit);
+                    grew = true;
+                    break;
+                }
+        }
+    }
+    core_dict_init(&analysis->unanalyzed_modules, nullptr, nullptr);
+    analysis->unanalyzed_ready = true;
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!core_dict_contains(&affected, unit)
+            || core_diagnostics_failed(diagnostics) || !state)
+            continue;
+        // The unit is noted too, for restore_dependents_of_errors.
+        core_dict_put(&analysis->unanalyzed_modules, unit, unit);
+        if (state->ir_module)
+            core_dict_put(&analysis->unanalyzed_modules, state->ir_module,
+                          unit);
+        core_diagnostics_set_policy(diagnostics, drop_diagnostic, nullptr);
+    }
+    core_dict_free(&affected);
+}
+
+static void
+restore_dependents_of_errors(core_link_unit_t *link,
+                             n00bb_link_analysis_t *analysis)
+{
+    if (!analysis->unanalyzed_ready) return;
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        if (core_dict_contains(&analysis->unanalyzed_modules, unit))
+            core_diagnostics_set_policy(
+                core_translation_unit_diagnostics(unit), nullptr, nullptr);
+    }
+    core_dict_free(&analysis->unanalyzed_modules);
+    analysis->unanalyzed_ready = false;
+}
+
+static bool
 specialize_quietly(n00bb_link_analysis_t *analysis,
                    core_diagnostics_t *diagnostics)
 {
@@ -6726,11 +6812,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && specialize && (build_command || check_command)) {
         bool specialized = specialize_quietly(link_analysis,
                                               cli_diagnostics);
-        if (defer_analysis)
+        if (defer_analysis) {
+            leave_out_dependents_of_errors(link, link_analysis);
             (void)n00bb_analyze_program(grammar, link, link_analysis,
                                         deferred.dump_control_flow,
                                         deferred.dump_pdg,
                                         deferred.dump_summaries);
+            restore_dependents_of_errors(link, link_analysis);
+        }
         bool analyzed = specialized
             && (defer_analysis || n00bb_recompute_summaries(link_analysis));
         if (analyzed) (void)check_post_specialization(link_analysis);

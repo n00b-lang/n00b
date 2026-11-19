@@ -545,16 +545,23 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
+    // A unit left out of the analysis of a program with errors (see
+    // unanalyzed_modules) adds none of its functions; its initializer and
+    // entries stay roots, for the whole-program checks.
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots,
-                       n00bb_cached_body(analysis->emitted_functions.data[i]));
+        if (!n00bb_module_unanalyzed(analysis,
+                analysis->emitted_functions.data[i]->owner))
+            core_list_push(roots, n00bb_cached_body(
+                analysis->emitted_functions.data[i]));
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)
         core_list_push(roots, n00bb_cached_body(entries->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
+        if (!state || !state->ir_module || state->interface_module
+            || n00bb_module_unanalyzed(analysis, state->ir_module))
+            continue;
         th_ctx *types = ir_module_types(state->ir_module);
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
             ir_func_t *body = n00bb_cached_body(
