@@ -189,6 +189,7 @@ n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
 
 static bool n00bb_plan_operand(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                uint32_t o, th_type *target);
+static th_type *n00bb_reference_remembered(ir_value_t *reference);
 static th_type *n00bb_literal_element(n00bb_rewrite_t *rewrite,
                                       th_type *container);
 static void n00bb_report_unknown_method(n00bb_rewrite_t *rewrite,
@@ -1573,9 +1574,50 @@ n00bb_rewrite_pack_rest(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         || n00bb_rewrite_pack_operands(rewrite, in, fixed, collected);
 }
 
+// Whether callback construction `in` is given a handler reference that
+// remembers the passing modes its `handler` role declares, as a call
+// through the callback passes its arguments by them: a parameter passed
+// by reference (the state, when there is a `setup`) must be one the
+// handler takes so. A handler that doesn't is reported.
+static bool
+n00bb_callback_handler_modes(n00bb_rewrite_t *rewrite, ir_instr_t *in)
+{
+    th_type *call = nullptr, *role = nullptr, *setup = nullptr;
+    ir_value_t *handler = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    th_type *remembered = handler ? n00bb_reference_remembered(handler)
+                                  : nullptr;
+    if (!remembered || !ir_instr_callback_contract(in, &call, &role, &setup)
+        || !role)
+        return true;
+    role = th_resolve(role);
+    if (th_kind_of(role) == TH_BINDER) role = th_resolve(th_binder_body(role));
+    if (th_kind_of(role) != TH_FUNCTION
+        || th_kind_of(remembered) != TH_FUNCTION)
+        return true;
+    for (size_t p = 0; p < th_func_nparams(role)
+         && p < th_func_nparams(remembered); p++) {
+        th_mode declared = th_func_param(role, p)->mode;
+        th_mode taken = th_func_param(remembered, p)->mode;
+        if (th_mode_by_reference(declared) == th_mode_by_reference(taken))
+            continue;
+        n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
+            rewrite->unit, N00B_DIAG_CALLBACK_HANDLER_MODES,
+            n00bb_span_location(handler->def ? handler->def->span
+                                             : in->span),
+            N00B_TEXT_CALLBACK_HANDLER_MODES,
+            N00BB_ARGS(ARG_NUMBER((long long)p + 1),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(taken)),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(declared))));
+        return false;
+    }
+    return true;
+}
+
 static bool
 n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
+    if (!n00bb_callback_handler_modes(rewrite, in)) return false;
     ir_annot_t *pending = ir_annot_get(&in->annots, N00BB_CALLBACK_SETUP_KEY);
     if (!pending || !pending->b) return true;
     ir_value_t *handler = in->n_operands
@@ -1701,8 +1743,8 @@ n00bb_reference_remembered(ir_value_t *reference)
                 ? th_resolve(th_ind_referent(held)) : nullptr;
         }
         ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
-        if (!def || def->op != IR_OP_COPY || def->n_operands != 1
-            || def->operands[0].kind != IR_OPD_VALUE
+        if (!def || (def->op != IR_OP_COPY && def->op != IR_OP_RETAIN_REF)
+            || def->n_operands != 1 || def->operands[0].kind != IR_OPD_VALUE
             || !def->operands[0].value)
             break;
         value = def->operands[0].value;

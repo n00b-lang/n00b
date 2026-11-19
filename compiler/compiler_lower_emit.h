@@ -41,6 +41,8 @@ ir_value_t *n00bb_emit_hook_call(ir_lower_context_t *context,
                                  ir_value_t *argument, ir_span_t span);
 core_string_t describe_parameter_target(th_mode mode, parse_sym_entry_t *callee,
                                         core_string_t parameter);
+// "a `modify` parameter", and so on, for a parameter passed by `mode`.
+n00bb_text_t n00bb_mode_parameter(th_mode mode);
 
 n00bb_lower_context_t *n00bb_solved_lower_new(n00bb_link_analysis_t *analysis,
                                               parse_grammar_t *grammar,

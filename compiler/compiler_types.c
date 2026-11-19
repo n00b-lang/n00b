@@ -5636,22 +5636,6 @@ static bool reaches_root(th_ctx *types, const ir_value_t *address)
     return address != nullptr;
 }
 
-static n00bb_text_t mode_parameter(th_mode mode)
-{
-    switch (mode) {
-    case TH_OUT:
-        return N00B_TEXT_OUT_PARAMETER;
-    case TH_INOUT:
-        return N00B_TEXT_MODIFY_PARAMETER;
-    case TH_CONSUME:
-        return N00B_TEXT_CONSUME_PARAMETER;
-    case TH_VIEW:
-        return N00B_TEXT_VIEW_PARAMETER;
-    default:
-        return N00B_TEXT_IN_PARAMETER;
-    }
-}
-
 static bool writes_tuple_element(const ir_instr_t *store)
 {
     const ir_value_t *address = store->n_operands == 2
@@ -5710,7 +5694,7 @@ static bool check_write_site(core_translation_unit_t  *unit,
         n00bb_report(diagnostics, unit, N00B_DIAG_NOT_WRITABLE, at,
                      N00B_TEXT_PARAMETER_CANNOT_BE_ASSIGNED,
                      N00BB_ARGS(ARG_TEXT(root->name),
-                                ARG_PHRASE_ID(mode_parameter(
+                                ARG_PHRASE_ID(n00bb_mode_parameter(
                                     root->has_mode ? root->mode : TH_IN)),
                                 ARG_TEXT(subject)));
         n00bb_diag_declared_here(diagnostics, root, N00B_TEXT_IS_DECLARED_HERE);

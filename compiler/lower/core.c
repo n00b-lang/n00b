@@ -8,8 +8,6 @@ report_ir_diagnostic(void *state, ir_diags_t *d, ir_diagcode_t code,
                      core_string_t message);
 static parse_tree_t *
 leaf_named(parse_tree_t *node, core_string_t name);
-static n00bb_text_t
-mode_parameter(th_mode mode);
 
 bool
 n00bb_output_target_profile(core_target_desc_t *target)
@@ -537,8 +535,8 @@ mode_keyword(th_mode mode)
     }
 }
 
-static n00bb_text_t
-mode_parameter(th_mode mode)
+n00bb_text_t
+n00bb_mode_parameter(th_mode mode)
 {
     switch (mode) {
     case TH_OUT: return N00B_TEXT_OUT_PARAMETER;
@@ -581,7 +579,7 @@ report_unwritable_output(ir_lower_context_t *context,
         lower_report(context, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, span,
             N00B_TEXT_PARAMETER_CANNOT_BE_PASSED,
             N00BB_ARGS(ARG_TEXT(variable->name),
-                       ARG_PHRASE_ID(mode_parameter(own)), ARG_TEXT(target)));
+                       ARG_PHRASE_ID(n00bb_mode_parameter(own)), ARG_TEXT(target)));
         lower_declared_secondary(context, variable, N00B_TEXT_IS_DECLARED_HERE,
             N00BB_ARGS(ARG_TEXT(variable->name)));
         lower_help(context, N00B_TEXT_DECLARE_AS_MODIFY_OR_COPY,

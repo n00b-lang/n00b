@@ -419,19 +419,18 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
         !pattern_subsumes(general->fn.error, specific->fn.error, bindings,
                           seen))
       return false;
+    // A value of function type is accepted whatever its parameters'
+    // passing modes: they are no part of the type.
     for (size_t i = 0; i < general->fn.np; i++)
-      if (general->fn.params[i].mode != specific->fn.params[i].mode ||
-          !pattern_subsumes(general->fn.params[i].type,
+      if (!pattern_subsumes(general->fn.params[i].type,
                             specific->fn.params[i].type, bindings, seen))
         return false;
     if (general->fn.rest &&
-        (general->fn.rest->mode != specific->fn.rest->mode ||
-         !pattern_subsumes(general->fn.rest->type, specific->fn.rest->type,
-                           bindings, seen)))
+        !pattern_subsumes(general->fn.rest->type, specific->fn.rest->type,
+                          bindings, seen))
       return false;
     for (size_t i = 0; i < general->fn.nkw; i++)
       if (!core_string_eq(general->fn.kw[i].name, specific->fn.kw[i].name) ||
-          general->fn.kw[i].mode != specific->fn.kw[i].mode ||
           !pattern_subsumes(general->fn.kw[i].type, specific->fn.kw[i].type,
                             bindings, seen))
         return false;

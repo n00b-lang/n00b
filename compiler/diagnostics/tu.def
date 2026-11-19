@@ -176,6 +176,14 @@ N00B_DIAG(CALLBACK_ROLES_MISMATCH, "N00B-T0544", ERROR,
     "A callback has a `call` and a `handler` role. The handler takes the\n"
     "call's parameters, after a `modify` state when there is a `setup`\n"
     "role; `setup` takes references to the handler and the state.")
+N00B_DIAG(CALLBACK_HANDLER_MODES, "N00B-T0610", ERROR,
+    "a callback's handler takes a parameter by another passing mode",
+    "A call through a callback passes its arguments as the callback's\n"
+    "`handler` role takes them, so the function given as its handler must\n"
+    "take a parameter the role passes by reference (`modify` or `out`, as\n"
+    "the state is when there is a `setup`) the same way, and the others\n"
+    "not by reference. Passing modes are no part of a function's type; a\n"
+    "reference to the function remembers them.")
 N00B_DIAG(FUNCTION_BODY_SIGNATURE_MISMATCH, "N00B-T0546", ERROR,
     "a function body returns or fails with a type its declaration does not allow",
     "The values a function returns, and the failures it raises, must match\n"
