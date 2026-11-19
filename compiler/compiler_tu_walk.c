@@ -581,8 +581,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
     }
     n00bb_emit_t emit;
+    // Only postfix expressions and places emit a call; asking node_emit,
+    // which compares names, of every other node finds nothing.
     if (!entering && (n00bb_call_operator_node(grammar, node)
-                      || (n00bb_node_emit(grammar, node, &emit)
+                      || (n00bb_postfix_node(grammar, node)
+                          && n00bb_node_emit(grammar, node, &emit)
                           && core_string_eq(emit.action,
                                             CORE_STRING_STATIC("call")))))
         core_list_push(state->call_nodes, node);
