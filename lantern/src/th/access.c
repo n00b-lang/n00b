@@ -507,7 +507,17 @@ bool th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
     if (record->definition != definition
         && th_hash(ctx, record->definition) != th_hash(ctx, definition))
         return false;
-    if (!record->owner) record->owner = owner;
+    if (!record->owner && !record->shared) record->owner = owner;
+    return true;
+}
+
+bool th_type_define_shared(th_ctx *ctx, th_type *type, th_type *definition)
+{
+    if (!th_type_define_owned(ctx, type, definition, nullptr)) return false;
+    th_type_record_t *record = record_lookup(ctx, th_resolve(type));
+    if (!record) return false;
+    record->shared = true;
+    record->owner = nullptr;
     return true;
 }
 

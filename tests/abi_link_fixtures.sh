@@ -58,6 +58,17 @@ cmp "$tmp/abi/cycles.cycle_first.n00bm" \
     echo "cycles.cycle_first's ABI object differs with other roots" >&2
     exit 1
 }
+# Nor on where it sits among the roots: the first root is the first module
+# to define the types the compiler gives every module.
+library_dump "$abi_programs" "$tmp/first" cycles.cycle_first empty
+library_dump "$abi_programs" "$tmp/empty_first" empty
+for pair in alone:cycles.cycle_first empty_first:empty; do
+    module=${pair#*:}
+    cmp "$tmp/${pair%%:*}/$module.n00bm" "$tmp/first/$module.n00bm" || {
+        echo "$module's ABI object differs as the first root" >&2
+        exit 1
+    }
+done
 # The linked library is record_root's, checked below.
 library_dump "$records" "$tmp/records" record_root shared_link_first
 library_dump "$interface_programs" "$tmp/interfaces" \

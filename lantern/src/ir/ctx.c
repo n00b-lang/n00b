@@ -595,14 +595,17 @@ th_type *ir_type_at(ir_module_t *m, size_t i)
     return m && i < m->n_types ? m->types[i].type : nullptr;
 }
 
-bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
+static bool type_define(ir_module_t *m, th_type *named, th_type *def,
+                        bool owned)
 {
     named = th_resolve(named);
     def = th_resolve(def);
     if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
         return false;
     }
-    if (!th_type_define_owned(m->ctx->types, named, def, m)) return false;
+    if (!(owned ? th_type_define_owned(m->ctx->types, named, def, m)
+                : th_type_define_shared(m->ctx->types, named, def)))
+        return false;
 
     ir_type_intern(m, named);
     ir_type_intern(m, def);
@@ -618,6 +621,16 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (changed) ir_layout_invalidate_type(m, named);
 
     return true;
+}
+
+bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
+{
+    return type_define(m, named, def, true);
+}
+
+bool ir_type_define_shared(ir_module_t *m, th_type *named, th_type *def)
+{
+    return type_define(m, named, def, false);
 }
 
 th_type *ir_type_definition(ir_module_t *m, th_type *named)
