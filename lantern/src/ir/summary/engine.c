@@ -650,6 +650,26 @@ heap_from_callees(const pt_t *pt, ir_sheap_t *heap)
             return true;
         }
     }
+    // Storage a callee allocated, under the origin its type here refines
+    // the callee's to (see heap_site): named as the callee names it, with
+    // the type it has here.
+    for (size_t s = 0; s < pt->sites.len; s++) {
+        const pt_site_t *site = &pt->sites.data[s];
+        if (!site->call || site->origin != heap->origin
+            || site->base == site->origin)
+            continue;
+        const pt_callees_t *callees = callees_of((pt_t *)pt, site->call);
+        for (size_t t = 0; callees && t < callees->callees.len; t++) {
+            const ir_sheap_t *named = ir_summary_heap_for(
+                callees->callees.data[t], site->base);
+            if (!named || !named->name.u8_bytes) continue;
+            uint32_t origin = heap->origin;
+            *heap        = *named;
+            heap->origin = origin;
+            heap->type   = site->type;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -699,6 +719,25 @@ name_heaps(pt_t *pt, ir_summary_t *summary)
         if (!heap || heap->type || !site->type) continue;
         heap->type     = site->type;
         heap->elements = site->elements;
+    }
+    // Storage callees allocated keeps the type its calls here give it, in
+    // this function's own type variables, so that a caller's calls can
+    // instantiate it further; unless calls here give one origin different
+    // types, when the callee's stays.
+    for (size_t s = 0; s < pt->sites.len; s++) {
+        const pt_site_t *site = &pt->sites.data[s];
+        if (!site->call || !site->type || site->base != site->origin)
+            continue;
+        ir_sheap_t *heap = (ir_sheap_t *)ir_summary_heap_for(summary,
+                                                            site->origin);
+        if (!heap || heap->type == site->type) continue;
+        bool agree = true;
+        for (size_t o = 0; agree && o < pt->sites.len; o++) {
+            const pt_site_t *other = &pt->sites.data[o];
+            if (other->origin != site->origin || other == site) continue;
+            agree = other->type && th_same_type(other->type, site->type);
+        }
+        if (agree) heap->type = site->type;
     }
 }
 

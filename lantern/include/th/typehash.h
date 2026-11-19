@@ -481,6 +481,10 @@ th_type *th_text_type(th_ctx *ctx, core_string_t text);
 void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
+// `type` with each unbound variable vars[i] replaced by values[i], built
+// anew: unlike binding the variables, it changes no type.
+th_type *th_substitute(th_ctx *ctx, th_type *type, th_type *const *vars,
+                       th_type *const *values, size_t count);
 bool     th_match(th_type *pattern, th_type *concrete);
 bool     th_matches(th_type *pattern, th_type *concrete);
 typedef bool (*th_binding_fn)(void *context, th_type *variable,

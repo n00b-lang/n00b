@@ -33,6 +33,8 @@ typedef ir_summary_t *summary_ptr_t;
 core_list_decl(summary_ptr_t);
 core_list_decl(uint64_t);
 typedef core_list_t(uint64_t) flow_bits_t;
+typedef th_type *summary_type_ptr_t;
+core_list_decl(summary_type_ptr_t);
 typedef ir_spath_t *spath_ptr_t;
 core_list_decl(spath_ptr_t);
 
@@ -276,6 +278,10 @@ typedef struct {
     const ir_instr_t *call;
     bool              node;
     uint32_t          origin;
+    // For storage a callee allocated: its origin in the callee's summary,
+    // which `origin` refines when the call fixes the storage's type (see
+    // heap_site).
+    uint32_t          base;
 } pt_site_t;
 core_list_decl(pt_site_t);
 

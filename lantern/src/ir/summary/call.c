@@ -822,6 +822,80 @@ heap_site_eq(const void *a, const void *b)
     return x->call == y->call && x->origin == y->origin;
 }
 
+typedef struct {
+    core_list_t(summary_type_ptr_t) vars;
+    core_list_t(summary_type_ptr_t) values;
+} type_binding_t;
+
+// Matches `pattern` (a callee's signature) against `concrete` (the
+// signature at a call to it), collecting what each of the pattern's
+// unbound variables stands for. Binds nothing: false unless the two have
+// the same shape throughout and every variable stands for one type.
+static bool
+bind_types(type_binding_t *b, th_type *pattern, th_type *concrete,
+           uint32_t depth)
+{
+    pattern  = th_resolve(pattern);
+    concrete = th_resolve(concrete);
+    if (!pattern || !concrete) return pattern == concrete;
+    if (depth > 64) return false;
+    if (th_kind_of(pattern) == TH_VAR) {
+        for (size_t v = 0; v < b->vars.len; v++)
+            if (b->vars.data[v] == pattern)
+                return th_same_type(b->values.data[v], concrete);
+        core_list_push(b->vars, pattern);
+        core_list_push(b->values, concrete);
+        return true;
+    }
+    if (pattern == concrete) return true;
+    if (!th_same_shape(pattern, concrete)) return false;
+    size_t children = th_child_count(pattern);
+    if (children != th_child_count(concrete)) return false;
+    for (size_t c = 0; c < children; c++)
+        if (!bind_types(b, th_child(pattern, c), th_child(concrete, c),
+                        depth + 1))
+            return false;
+    return true;
+}
+
+// The type of storage a callee allocates as this call fixes it: the
+// callee's (generic) heap type with its variables replaced by what they
+// stand for here. Null when the callee's signature doesn't match the call
+// exactly, or nothing in the type changes.
+static th_type *
+heap_instance(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+              th_type *type, th_ctx *types)
+{
+    if (!type || !types || !callee->function || !callee->function->type
+        || th_is_closed(types, type))
+        return nullptr;
+    th_type *pattern = th_resolve(callee->function->type);
+    if (pattern && th_kind_of(pattern) == TH_INDIRECTION)
+        pattern = th_resolve(th_ind_referent(pattern));
+    if (pattern && th_kind_of(pattern) == TH_BINDER)
+        pattern = th_resolve(th_binder_body(pattern));
+    th_type *concrete = ir_call_function_type(call);
+    if (!pattern || !concrete || th_kind_of(pattern) != TH_FUNCTION)
+        return nullptr;
+    type_binding_t binding = {core_list_new(summary_type_ptr_t),
+                              core_list_new(summary_type_ptr_t)};
+    th_type *instance = nullptr;
+    if (bind_types(&binding, pattern, concrete, 0) && binding.vars.len)
+        instance = th_substitute(types, type, binding.vars.data,
+                                 binding.values.data, binding.vars.len);
+    core_list_free(binding.vars);
+    core_list_free(binding.values);
+    (void)pt;
+    return instance;
+}
+
+// Storage a callee allocates, as a site of this call. Its type is the
+// callee's heap type as this call instantiates it. When that type is
+// closed, the site's origin (its name in this function's summary) is the
+// callee's refined by the type: storage of two different types is never
+// the same object, so callers keep, say, a List[string]'s storage apart
+// from a List[Rule]'s that one generic allocation made. A type still open
+// keeps the callee's origin, shared as before.
 static uint32_t
 heap_site(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
           uint32_t origin)
@@ -835,12 +909,25 @@ heap_site(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     heap_site_key_t  *key  = core_alloc(heap_site_key_t);
     const ir_sheap_t *heap = callee ? ir_summary_heap_for(callee, origin)
                                     : nullptr;
+    th_ctx  *types = pt->f->owner ? ir_module_types(pt->f->owner) : nullptr;
+    th_type *type  = heap ? heap->type : nullptr;
+    th_type *found_type = heap
+        ? heap_instance(pt, call, callee, type, types) : nullptr;
+    uint32_t named = origin;
+    if (found_type) {
+        type = found_type;
+        if (th_is_closed(types, type)) {
+            uint64_t parts[2] = {origin, th_hash(types, type)};
+            uint64_t hash     = core_xxh3_64bits_raw(parts, sizeof parts);
+            named = (uint32_t)(hash ^ hash >> 32) | 1;
+        }
+    }
     *key = probe;
     site = pt->sites.len;
     core_list_push(pt->sites, ((pt_site_t){
         .key = key, .contents = (pt_set_t){0}, .aliases = (alias_list_t){0},
-        .type = heap ? heap->type : nullptr, .elements = heap && heap->elements,
-        .call = call, .origin = origin}));
+        .type = type, .elements = heap && heap->elements,
+        .call = call, .origin = named, .base = origin}));
     core_dict_put(&pt->heap_sites, key, (void *)site);
     return (uint32_t)site;
 }

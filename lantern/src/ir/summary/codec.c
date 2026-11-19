@@ -1,6 +1,7 @@
 #include "internal.h"
 
-enum { SUMMARY_CODEC_VERSION = 1 };
+// 2: callee storage named by an origin refined by its instantiated type.
+enum { SUMMARY_CODEC_VERSION = 2 };
 
 static const core_string_t callbacks_prefix =
     CORE_STRING_STATIC("ir.callbacks:");
