@@ -882,9 +882,12 @@ complete_module_object(const module_emission_t *emission,
                            item->cached_bytes);
         return true;
     }
+    // Without a frame table (n00bb_build_executable), the frames are read
+    // again when the objects are made for the runtime program.
     if (item->cached) {
-        bool ok = n00bb_native_frames_add(emission->native_frames,
-                                          item->cached, item->cached_bytes);
+        bool ok = !emission->native_frames
+            || n00bb_native_frames_add(emission->native_frames,
+                                       item->cached, item->cached_bytes);
         if (ok) *item->object_path = temporary_object_argument(item->cached,
                                                                item->cached_bytes);
         return ok && *item->object_path;
@@ -929,8 +932,9 @@ complete_module_object(const module_emission_t *emission,
         *item->bitcode = object;
         return true;
     }
-    if (ok) ok = n00bb_native_frames_add(emission->native_frames,
-        object.data, object.byte_len);
+    if (ok && emission->native_frames)
+        ok = n00bb_native_frames_add(emission->native_frames,
+                                     object.data, object.byte_len);
     if (ok) *item->object_path = temporary_object_argument(object.data,
         object.byte_len);
     core_buffer_release(&object);
@@ -2049,7 +2053,7 @@ emit_runtime_objects(core_link_unit_t *link,
             program->lto_modules[slot] = bitcode;
         }
         else if (ok) {
-            unlink(program->objects[slot]);
+            if (program->objects[slot]) unlink(program->objects[slot]);
             core_free(program->objects[slot]);
             program->objects[slot] = path;
             fresh[slot] = true;
@@ -2326,6 +2330,22 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_dict_t mutator_decisions;
     cached_mutator_decisions(link, analysis, order.data, count,
                              &mutator_decisions);
+    // This pass makes the compile-time program's objects, and the runtime
+    // program's where they are the same. With nothing to run at compile
+    // time that program is never linked, and when the runtime objects are
+    // made again (emit_runtime_objects) its C shims and frame table are
+    // replaced, as is its root when a literal generated a module. Those
+    // aren't made here, only to be thrown away.
+    bool comptime = false;
+    for (size_t i = 0; ok && !comptime && i < count; i++)
+        comptime = !tu_state(order.data[i])->interface_module
+            && n00bb_comptime_needed(order.data[i]);
+    bool generated = any_generated_unit(order.data, count);
+    bool runtime_pass = !comptime && (generated
+        || any_cached_runtime_object(analysis, order.data, count));
+    core_translation_unit_t *reemitted_root = runtime_pass && generated
+        && !tu_state(core_link_unit_root(link, 0))->interface_module
+        ? core_link_unit_root(link, 0) : nullptr;
     module_emission_t emission = {
         .kept = &kept,
         .mutator_decisions = &mutator_decisions,
@@ -2339,7 +2359,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .function_index_count = function_index_count,
         .global_bindings = global_bindings,
         .global_binding_count = global_binding_count,
-        .native_frames = native_frames, .diagnostics = diagnostics,
+        .native_frames = runtime_pass ? nullptr : native_frames,
+        .diagnostics = diagnostics,
     };
     int64_t requested_workers = n00bb_setting_int(
         N00BB_KEY_BUILD_JOBS);
@@ -2360,6 +2381,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                          count + analysis->specializations.len,
                          native_workers);
     for (size_t i = 0; ok && emitter.ok && i < count; i++) {
+        if (order.data[i] == reemitted_root) continue;
         core_link_artifact_view_t artifact_view = {0};
         const n00bb_abi_artifact_t *artifact =
             core_link_unit_require_artifact(link,
@@ -2424,12 +2446,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     bool emitted = module_emitter_finish(&emitter);
     ok = ok && emitted;
-    if (ok && !lto && native->bitcode_count) {
+    if (ok && !lto && native->bitcode_count
+        && !(runtime_pass && native->select_runtime)) {
         build_stage = "compiling C shims";
         ok = shim_object(native, analysis, debug_enabled, native_cpu,
                          &objects[modules + 3], diagnostics);
     }
-    if (ok && !lto) {
+    if (ok && !lto && !runtime_pass) {
         uint8_t *frame_object = nullptr;
         size_t frame_object_bytes = 0;
         ok = n00bb_native_frames_emit(native_frames, &analysis->target,
@@ -2492,8 +2515,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         };
         core_list_t(core_translation_unit_ptr_t) runtime_units =
             core_list_new(core_translation_unit_ptr_t);
-        ok = run_comptime(link, &program, order.data, count, lto,
-                          debug_enabled, &kept, &runtime_units, diagnostics)
+        ok = (!comptime || run_comptime(link, &program, order.data, count,
+                  lto, debug_enabled, &kept, &runtime_units, diagnostics))
             && ((!runtime_units.len
                  && !any_cached_runtime_object(analysis, order.data, count)
                  && !any_generated_unit(order.data, count))
