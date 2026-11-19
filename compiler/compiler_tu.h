@@ -1197,8 +1197,12 @@ tu_state(core_translation_unit_t *unit)
 static inline bool
 nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {
-    return node && !core_tree_is_leaf(node)
-        && core_string_eq(parse_tree_nt_name(grammar, node), name);
+    if (!node || core_tree_is_leaf(node)) return false;
+    // The comparison core_string_eq makes, inline: most calls differ in
+    // length, and the walks ask this of every node many times over.
+    core_string_t actual = parse_tree_nt_name(grammar, node);
+    return actual.u8_bytes == name.u8_bytes
+        && (!name.u8_bytes || !memcmp(actual.data, name.data, name.u8_bytes));
 }
 
 typedef struct {
