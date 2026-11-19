@@ -21,17 +21,20 @@ dump() {
     }
 }
 
+# TARGET's summaries from an empty cache, $tmp/LABEL.cold, which the check
+# leaves filled with what TARGET needs: byte for byte the cache a plain
+# `check` of TARGET leaves, so it is the shared cache for another program.
+cold() {
+    dump "$tmp/$2.cold" "$1" "$tmp/$2.cold"
+}
+
+# TARGET's summaries from SHARED, a cache other programs filled, match
+# its cold ones.
 compare() {
     target=$1
-    filler=$2
-    label=$3
-    dump "$tmp/$label.cold" "$target" "$tmp/$label.cold"
-    N00B_CACHE="$tmp/$label.shared" N00B_PATH="$programs/bitcode" \
-        "$compiler" check "$filler" >/dev/null 2>&1 || {
-        echo "filling the cache with $filler failed" >&2
-        exit 1
-    }
-    dump "$tmp/$label.shared" "$target" "$tmp/$label.warm"
+    label=$2
+    shared=$3
+    dump "$shared" "$target" "$tmp/$label.warm"
     if ! cmp -s "$tmp/$label.cold.err" "$tmp/$label.warm.err"; then
         echo "$label: diagnostics differ between cold and shared-cache runs" >&2
         diff "$tmp/$label.cold.err" "$tmp/$label.warm.err" >&2 || true
@@ -97,8 +100,7 @@ compare_repeated() {
     label=$3
     expected=$4
     for run in first second; do
-        if N00B_CACHE="$tmp/$label.cache" N00B_PATH="$path" \
-                N00B_DIAGNOSTICS=terse "$compiler" check \
+        if N00B_PATH="$path" N00B_DIAGNOSTICS=terse "$compiler" check \
                 --no-syntax-warnings "$target" \
                 >/dev/null 2>"$tmp/$label.$run.err"; then
             echo "$label: the $run check passed, but should be rejected" >&2
@@ -118,9 +120,18 @@ compare_repeated() {
     fi
 }
 
-compare_repeated "$programs/cache_errors/app.n" "$programs/cache_errors" \
-    cache_errors 2
-compare "$programs/merged/calls.n" "$programs/features/fast_suite.n" calls
-compare "$programs/features/fast_suite.n" "$programs/merged/calls.n" fast
-compare_rejected "$programs/callbacks/state_unset.n" "$tmp/fast.shared" \
+# What is cached here is the program's own dependency, so its modules are
+# copied to a directory no cache has seen and the caller's cache is used:
+# the first check reads them from source, the second from the cache. (The
+# library being cold or warm is what compare_rejected covers.)
+cp -R "$programs/cache_errors" "$tmp/cache_errors"
+compare_repeated "$tmp/cache_errors/app.n" "$tmp/cache_errors" cache_errors 2
+cold "$programs/merged/calls.n" calls
+cold "$programs/features/fast_suite.n" fast
+# calls.n from the cache fast_suite.n filled, then fast_suite.n from the
+# one calls.n filled.
+compare "$programs/merged/calls.n" calls "$tmp/fast.cold"
+compare "$programs/features/fast_suite.n" fast "$tmp/calls.cold"
+# That cache now holds what both programs need.
+compare_rejected "$programs/callbacks/state_unset.n" "$tmp/calls.cold" \
     state_unset 1
