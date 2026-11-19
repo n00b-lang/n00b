@@ -25,6 +25,11 @@ typedef struct {
     size_t runtime_object_bytes;
     const uint8_t *mutators;
     size_t mutators_bytes;
+    // The module's index table as its code was compiled against it (see
+    // n00bb_abi_index_table_t): its symbol, type hashes and the IR names of
+    // its functions, for emitting the module's code again from cached IR.
+    const uint8_t *index;
+    size_t index_bytes;
 } n00bb_cache_module_object_t;
 core_list_decl(n00bb_cache_module_object_t);
 

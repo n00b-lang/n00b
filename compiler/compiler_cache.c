@@ -2369,6 +2369,8 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     if (!code || !abi || !mutators) return false;
     const cache_section_t *runtime = phase_section(entry,
         runtime_object_kind(), member->name);
+    const cache_section_t *index = phase_section(entry,
+        CORE_STRING_STATIC("index"), member->name);
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
         .object = code->data, .object_bytes = code->length,
@@ -2376,6 +2378,8 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
         .runtime_object = runtime ? runtime->data : nullptr,
         .runtime_object_bytes = runtime ? runtime->length : 0,
         .mutators = mutators->data, .mutators_bytes = mutators->length,
+        .index = index ? index->data : nullptr,
+        .index_bytes = index ? index->length : 0,
     };
     return true;
 }
@@ -2992,6 +2996,12 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                 ok = ok && sections_set(&sections,
                     core_buffer_string(&name), object->runtime_object,
                     object->runtime_object_bytes);
+            else sections_remove(&sections, core_buffer_string(&name));
+            module_section_name(&name, CORE_STRING_STATIC("index"), module);
+            if (object->index)
+                ok = ok && sections_set(&sections,
+                    core_buffer_string(&name), object->index,
+                    object->index_bytes);
             else sections_remove(&sections, core_buffer_string(&name));
         }
         core_buffer_t warnings = {0};

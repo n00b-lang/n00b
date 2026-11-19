@@ -680,6 +680,105 @@ typedef struct {
 
 core_list_decl(module_object_t);
 
+// A module's index table, as the cache keeps it: its symbol, its types'
+// hashes and its functions' IR names, in slot order.
+static void
+put_index_word(core_buffer_t *out, uint64_t value)
+{
+    uint8_t bytes[8];
+    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
+    core_buffer_append(out, (const char *)bytes, 8);
+}
+
+static void
+put_index_text(core_buffer_t *out, core_string_t text)
+{
+    put_index_word(out, text.data ? text.u8_bytes : 0);
+    if (text.data && text.u8_bytes)
+        core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static uint8_t *
+save_index_table(const n00bb_abi_index_table_t *table, size_t *bytes)
+{
+    *bytes = 0;
+    if (!table || !table->symbol.data) return nullptr;
+    core_buffer_t out = {0};
+    put_index_text(&out, table->symbol);
+    put_index_word(&out, table->type_count);
+    for (size_t i = 0; i < table->type_count; i++)
+        put_index_word(&out, table->type_hashes[i]);
+    put_index_word(&out, table->function_count);
+    for (size_t i = 0; i < table->function_count; i++)
+        put_index_text(&out, table->functions[i]
+            ? table->functions[i]->name : (core_string_t){0});
+    uint8_t *saved = malloc(out.byte_len ? out.byte_len : 1);
+    if (saved && out.byte_len) memcpy(saved, out.data, out.byte_len);
+    *bytes = saved ? out.byte_len : 0;
+    core_buffer_release(&out);
+    return saved;
+}
+
+static bool
+take_index_word(const uint8_t *data, size_t size, size_t *at, uint64_t *out)
+{
+    if (size - *at < 8) return false;
+    *out = 0;
+    for (int i = 0; i < 8; i++)
+        *out |= (uint64_t)data[*at + i] << (8 * i);
+    *at += 8;
+    return true;
+}
+
+static bool
+take_index_text(const uint8_t *data, size_t size, size_t *at,
+                core_string_t *out)
+{
+    uint64_t length = 0;
+    if (!take_index_word(data, size, at, &length) || length > size - *at)
+        return false;
+    *out = core_string_borrow((const char *)data + *at, (size_t)length);
+    *at += (size_t)length;
+    return true;
+}
+
+// The index table of a module's code compiled from source, rebuilt over
+// the module's cached IR, whose functions have the same names.
+static bool
+load_index_table(const uint8_t *data, size_t size, ir_module_t *module,
+                 n00bb_abi_index_table_t *out)
+{
+    *out = (n00bb_abi_index_table_t){0};
+    size_t at = 0;
+    core_string_t symbol = {0};
+    uint64_t types = 0, functions = 0;
+    bool ok = data && module && take_index_text(data, size, &at, &symbol)
+        && take_index_word(data, size, &at, &types)
+        && types <= (size - at) / 8;
+    if (ok) {
+        out->symbol = core_string_dup(symbol);
+        out->type_hashes = core_alloc_array(uint64_t, types + 1);
+        out->type_count = (size_t)types;
+        for (size_t i = 0; ok && i < types; i++)
+            ok = take_index_word(data, size, &at, &out->type_hashes[i]);
+    }
+    ok = ok && take_index_word(data, size, &at, &functions)
+        && functions <= (size - at) / 8;
+    if (ok) {
+        out->functions = core_alloc_array(ir_func_t *, functions + 1);
+        out->function_count = (size_t)functions;
+        for (size_t i = 0; ok && i < functions; i++) {
+            core_string_t name = {0};
+            ok = take_index_text(data, size, &at, &name);
+            out->functions[i] = ok && name.u8_bytes
+                ? ir_func_find(module, name) : nullptr;
+            ok = ok && (!name.u8_bytes || out->functions[i]);
+        }
+    }
+    if (!ok) n00bb_abi_index_table_release(out);
+    return ok;
+}
+
 static double
 monotonic_seconds(void)
 {
@@ -915,6 +1014,9 @@ complete_module_object(const module_emission_t *emission,
     item->object = (core_buffer_t){0};
     if (ok && emission->kept && item->artifact && mutators) {
         uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
+        size_t index_bytes = 0;
+        uint8_t *index = save_index_table(&item->artifact->index_table,
+                                          &index_bytes);
         if (copy) {
             if (object.byte_len) memcpy(copy, object.data, object.byte_len);
             core_list_push(*emission->kept, ((n00bb_cache_module_object_t){
@@ -923,9 +1025,12 @@ complete_module_object(const module_emission_t *emission,
                 .abi = item->artifact->object,
                 .abi_bytes = item->artifact->object_bytes,
                 .mutators = mutators, .mutators_bytes = mutators_bytes,
+                .index = index, .index_bytes = index_bytes,
             }));
             mutators = nullptr;
+            index = nullptr;
         }
+        free(index);
     }
     free(mutators);
     if (ok && emission->lto) {
@@ -1900,6 +2005,7 @@ keep_runtime_objects(core_list_t(n00bb_cache_module_object_t) *kept,
         }
         free((void *)object->object);
         free((void *)object->mutators);
+        free((void *)object->index);
     }
     core_list_free(*runtime);
 }
@@ -2035,6 +2141,23 @@ emit_runtime_objects(core_link_unit_t *link,
                     core_list_push(item.reachable,
                                    analysis->cached_functions.data[f]);
         }
+        // The cached ABI object carries the index table its code was first
+        // compiled against; this code reads its types' and functions'
+        // runtime indices from that table too, as it does compiled from
+        // source, instead of taking the linked indices directly.
+        n00bb_abi_artifact_t indexed = {0};
+        n00bb_cache_module_object_t cached_object = {0};
+        if (cached && item.artifact && !item.artifact->index_table.symbol.data
+            && n00bb_cache_module_object(emission->analysis->cache,
+                   ir_module_name(tu_state(order[slot])->ir_module),
+                   &cached_object)
+            && cached_object.index) {
+            indexed = *item.artifact;
+            if (load_index_table(cached_object.index,
+                    cached_object.index_bytes, cached, &indexed.index_table))
+                item.artifact = &indexed;
+            else indexed = (n00bb_abi_artifact_t){0};
+        }
         // A generated module's runtime object is this program's alone, so
         // it isn't kept in the cache.
         module_emission_t unkept = runtime;
@@ -2048,6 +2171,8 @@ emit_runtime_objects(core_link_unit_t *link,
         finish_if_needed(&item);
         ok = complete_module_object(use, &item);
         release_module_object(&item);
+        if (indexed.index_table.symbol.data)
+            n00bb_abi_index_table_release(&indexed.index_table);
         if (ok && emission->lto) {
             core_buffer_release(&program->lto_modules[slot]);
             program->lto_modules[slot] = bitcode;
@@ -2558,6 +2683,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free((void *)kept.data[i].object);
         free((void *)kept.data[i].runtime_object);
         free((void *)kept.data[i].mutators);
+        free((void *)kept.data[i].index);
     }
     core_list_free(kept);
     core_dict_free(&mutator_decisions);
