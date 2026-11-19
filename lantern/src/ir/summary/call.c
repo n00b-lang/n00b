@@ -37,6 +37,7 @@ typedef struct {
     pt_set_t to;
     pt_set_t from;
     bool     must;
+    size_t   dest;
 } store_pair_t;
 
 core_list_decl(store_pair_t);
@@ -1328,6 +1329,100 @@ sole_callee(pt_t *pt, const ir_instr_t *call)
         && callees->callees.data[0]->results_known;
 }
 
+static core_hash_value_t
+stored_pair_hash(void *key)
+{
+    return core_hash_raw(key, sizeof(stored_pair_key_t));
+}
+
+static bool
+stored_pair_eq(const void *a, const void *b)
+{
+    const stored_pair_key_t *x = a, *y = b;
+    return x->call == y->call && x->callee == y->callee
+        && x->dest == y->dest;
+}
+
+static bool
+same_item(const pt_item_t *a, const pt_item_t *b)
+{
+    const ir_spath_t *x = &a->loc.path, *y = &b->loc.path;
+    if (a->depth != b->depth || a->deep != b->deep || a->kind != b->kind
+        || a->flow != b->flow || a->origin != b->origin
+        || a->loc.site != b->loc.site || x->root != y->root
+        || x->param != y->param || x->global != y->global
+        || x->type != y->type || x->depth != y->depth
+        || x->flags != y->flags || x->output != y->output)
+        return false;
+    for (uint32_t s = 0; a->steps != b->steps && s < a->depth; s++)
+        if (!step_eq(a->steps[s], b->steps[s])) return false;
+    for (uint32_t s = 0; x->steps != y->steps && s < x->depth; s++)
+        if (!step_eq(x->steps[s], y->steps[s])) return false;
+    return true;
+}
+
+// Whether `set`, sorted as sets are, holds an item identical to `item`.
+static bool
+holds_same(const pt_set_t *set, const pt_item_t *item)
+{
+    size_t low = 0, high = set->len;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (set_order(&set->data[middle], item) < 0) low = middle + 1;
+        else high = middle;
+    }
+    for (; low < set->len && !set_order(&set->data[low], item); low++)
+        if (same_item(&set->data[low], item)) return true;
+    return false;
+}
+
+static void
+copy_set(pt_set_t *into, const pt_set_t *from)
+{
+    into->len = 0;
+    for (size_t i = 0; i < from->len; i++)
+        core_list_push(*into, from->data[i]);
+}
+
+// Stores one of a call's store pairs (see apply_stores). A call is stepped
+// again whenever anything it reads changes, and storing every value at
+// every place again each time was most of what stepping it cost, though
+// nearly all of those stores were made the time before. What a store does
+// is only add what isn't there yet, so storing the same value at the same
+// place, as weakly, again changes nothing: the places and values this
+// destination stored last time are kept, and a place stored before gets
+// only the values that are new since (see store_at).
+static void
+store_pair(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+           const store_pair_t *pair)
+{
+    bool              weak  = !pair->must || pair->to.len != 1;
+    stored_pair_key_t probe = {call, callee, pair->dest};
+    bool              found = false;
+    stored_pair_t    *last  = core_dict_get(&pt->stored_pairs, &probe,
+                                            &found);
+    if (!found) {
+        last  = core_alloc(stored_pair_t);
+        *last = (stored_pair_t){.key = probe};
+        core_dict_put(&pt->stored_pairs, &last->key, last);
+    }
+    bool     known = found && last->weak == weak;
+    pt_set_t fresh = (pt_set_t){0};
+    for (size_t v = 0; known && v < pair->from.len; v++)
+        if (!holds_same(&last->from, &pair->from.data[v]))
+            core_list_push(fresh, pair->from.data[v]);
+    for (size_t a = 0; a < pair->to.len; a++) {
+        const pt_item_t *address = &pair->to.data[a];
+        store_at(pt, address, &pair->from,
+                 known && holds_same(&last->to, address) ? &fresh : nullptr,
+                 weak);
+    }
+    core_list_free(fresh);
+    last->weak = weak;
+    copy_set(&last->to, &pair->to);
+    copy_set(&last->from, &pair->from);
+}
+
 static bool
 apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
              ir_summary_t *summary)
@@ -1346,7 +1441,8 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
-        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d]};
+        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d],
+                             .dest = d};
         size_t source = shared[d] == d ? SIZE_MAX : paired[shared[d]];
         if (shared[d] == d) flowed_items(pt, &mapped, groups, d, &pair.from);
         for (size_t i = 0; source < pairs.len
@@ -1367,7 +1463,7 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     for (size_t p = 0; p < pairs.len; p++) {
         store_pair_t *pair = &pairs.data[p];
         if (summary) record_stores(pt, summary, &pair->to, &pair->from);
-        else pt_store(pt, &pair->to, &pair->from, pair->must);
+        else store_pair(pt, call, callee, pair);
         core_list_free(pair->to);
         core_list_free(pair->from);
     }

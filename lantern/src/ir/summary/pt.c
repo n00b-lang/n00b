@@ -1132,33 +1132,50 @@ owned_values(pt_t *pt, const pt_loc_t *at, const pt_set_t *values,
     return kept;
 }
 
+// Stores `values` at the place `address` names (see pt_store). With
+// `fresh`, the address has had every other value stored at it before, with
+// the same weakness, and only `fresh` is stored: storing a value again adds
+// nothing, as every step of a store only adds what isn't there. A slot
+// that owns what it holds stores copies of what the values hold now, which
+// can grow, so it always gets all of them.
+static void
+store_at(pt_t *pt, const pt_item_t *address, const pt_set_t *values,
+         const pt_set_t *fresh, bool weak)
+{
+    pt_loc_t at = location_of(pt, address);
+    if (!is_address(address)) return;
+    bool owned = owned_slot(pt, &at);
+    if (fresh && !owned) {
+        if (!fresh->len) return;
+        values = fresh;
+    }
+    pt_set_t        kept   = (pt_set_t){0};
+    const pt_set_t *stored = owned
+        ? owned_values(pt, &at, values, &kept) : values;
+    if (at.site == PT_EXTERNAL) {
+        pt_publish(pt, stored, &at);
+        note_external_write(pt, &at, stored);
+    }
+    else {
+        note_target(pt, pt->at, at.site, &at, weak);
+        for (size_t v = 0; v < stored->len; v++) {
+            pt_item_t item = item_under(at.path.steps, at.path.depth,
+                                        loc_deep(&at), stored->data[v]);
+            pt_add(pt, &pt->sites.data[at.site].contents,
+                   contents_key(at.site), item);
+            note_write(pt, at.site, &at, weak, item);
+        }
+    }
+    core_list_free(kept);
+}
+
 static void
 pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
          bool must)
 {
     bool weak = !must || addresses->len != 1;
-    for (size_t i = 0; i < addresses->len; i++) {
-        pt_loc_t at = location_of(pt, &addresses->data[i]);
-        if (!is_address(&addresses->data[i])) continue;
-        pt_set_t        kept   = (pt_set_t){0};
-        const pt_set_t *stored = owned_slot(pt, &at)
-            ? owned_values(pt, &at, values, &kept) : values;
-        if (at.site == PT_EXTERNAL) {
-            pt_publish(pt, stored, &at);
-            note_external_write(pt, &at, stored);
-        }
-        else {
-            note_target(pt, pt->at, at.site, &at, weak);
-            for (size_t v = 0; v < stored->len; v++) {
-                pt_item_t item = item_under(at.path.steps, at.path.depth,
-                                            loc_deep(&at), stored->data[v]);
-                pt_add(pt, &pt->sites.data[at.site].contents,
-                       contents_key(at.site), item);
-                note_write(pt, at.site, &at, weak, item);
-            }
-        }
-        core_list_free(kept);
-    }
+    for (size_t i = 0; i < addresses->len; i++)
+        store_at(pt, &addresses->data[i], values, nullptr, weak);
 }
 
 static bool

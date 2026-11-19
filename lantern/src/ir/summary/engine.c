@@ -53,6 +53,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->resolved_writes, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
     core_dict_init(&pt->must_dests, nullptr, nullptr);
+    core_dict_init(&pt->stored_pairs, stored_pair_hash, stored_pair_eq);
     core_dict_init(&pt->value_groups, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
     pt->reach     = ir_reach_new(f);
@@ -265,6 +266,13 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_groups);
     core_dict_foreach(&pt->must_dests, entry) core_free(entry->value);
     core_dict_free(&pt->must_dests);
+    core_dict_foreach(&pt->stored_pairs, entry) {
+        stored_pair_t *pair = entry->value;
+        core_list_free(pair->to);
+        core_list_free(pair->from);
+        core_free(pair);
+    }
+    core_dict_free(&pt->stored_pairs);
     core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);

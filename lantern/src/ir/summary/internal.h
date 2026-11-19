@@ -410,6 +410,9 @@ struct pt_t {
     core_dict_t            flow_groups;
     // Per callee, whether each of its store destinations is surely written.
     core_dict_t            must_dests;
+    // What each call's store destinations stored last, by call, callee and
+    // destination (see store_pair).
+    core_dict_t            stored_pairs;
     core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;
@@ -476,6 +479,19 @@ typedef struct {
     pt_set_t  items;
     pt_memo_t memo;
 } resolved_t;
+
+typedef struct {
+    const ir_instr_t   *call;
+    const ir_summary_t *callee;
+    size_t              dest;
+} stored_pair_key_t;
+
+typedef struct {
+    stored_pair_key_t key;
+    pt_set_t          to;
+    pt_set_t          from;
+    bool              weak;
+} stored_pair_t;
 
 typedef struct {
     pt_loc_t          loc;
