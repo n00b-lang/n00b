@@ -821,7 +821,7 @@
 
 <tspec-func> @nospace($1) @nospace($2) ::= %"(" <tspec-func-params> %")" <tspec-function-result>
 <tspec-func> @nospace($1) @nospace($2) @nospace($3) ::= %"(" <tspec-func-params> %"," %")" <tspec-function-result>
-               | %"(" %")" <tspec-function-result>
+<tspec-func> @nospace($1) ::= %"(" %")" <tspec-function-result>
 
 <tspec-function-result> ::= <return-type> <error-type>?
                           | <error-type>
