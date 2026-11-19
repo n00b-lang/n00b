@@ -470,13 +470,57 @@ private func right_order(order: u32, at_join: bool) -> u32 {
     return moved
 }
 
+// The right side's first reset, which ends every span flowing in from the
+// left, in every layer: its offset in the right side, its order there,
+// and the layer (0 = outermost) it is in.
+private record Reset_Point {
+    found: bool
+    at:    u32
+    order: u32
+    layer: int
+}
+
+private func first_reset(s: string) -> Reset_Point {
+    var point: Reset_Point = (found = false, at = 0, order = 0, layer = 0)
+    var cur: string = s
+    var layer: int = 0
+    while is_rich(cur) {
+        let body: Ref[Rich_Body] = rich_body(cur)
+        var i: int = 0
+        // Records are in event order, so a layer's first reset is its
+        // earliest.
+        while i < cast[int] body.__value.style_info.len() {
+            let r: Style_Record = body.__value.style_info[i]
+            i += 1
+            if !record_is_reset(r) {
+                continue
+            }
+            let at: u32 = r.start_ix.get_or_else(0)
+            if !point.found or at < point.at {
+                point = (found = true, at = at, order = r.start_order,
+                         layer = layer)
+            }
+            break
+        }
+        cur = body.__value.s
+        layer += 1
+    }
+    return point
+}
+
 // Joins two strings, at least one of them rich, keeping every layer's
 // style spans and substitution slots. The right side's records move by the
 // left side's byte length, and its events at the join come after the left
 // side's. A left span that was never closed flows right over the right
 // side, until the right side's first reset (`[/]`, which may sit at its
-// very start) ends it. Layers pair up from the outside in.
+// very start, in any layer) ends it: a reset clears all styling before it,
+// in every layer. Layers pair up from the outside in.
 func concat_rich(left: string, right: string) -> string {
+    return concat_layers(left, right, first_reset(right), 0)
+}
+
+private func concat_layers(left: string, right: string, reset: Reset_Point,
+                           layer: int) -> string {
     let left_rich: bool = is_rich(left)
     let right_rich: bool = is_rich(right)
     if !left_rich and !right_rich {
@@ -489,6 +533,21 @@ func concat_rich(left: string, right: string) -> string {
     var right_records: List[Style_Record] = new[List[Style_Record]]()
     var reset_at: u32? = nil
     var reset_order: u32 = 0
+    if reset.found {
+        reset_at = cast[u32](cast[u64](reset.at) + left_len)
+        // In the reset's own layer, left spans close just before it; in
+        // the others, after the left side's events at that offset and
+        // before the right side's.
+        if layer == reset.layer and right_rich {
+            reset_order = right_order(reset.order, reset.at == 0)
+        }
+        else {
+            reset_order = 2
+            if reset.at == 0 {
+                reset_order += right_first_order
+            }
+        }
+    }
     if right_rich {
         let rb: Ref[Rich_Body] = rich_body(right)
         inner_right = rb.__value.s
@@ -501,12 +560,6 @@ func concat_rich(left: string, right: string) -> string {
                                         rec.end_ix.get_or_else(1) == 0)
             rec.start_ix = shifted(rec.start_ix, left_len)
             rec.end_ix = shifted(rec.end_ix, left_len)
-            // Records are in event order, so the first reset is the
-            // earliest.
-            if reset_at == nil and record_is_reset(rec) {
-                reset_at = rec.start_ix
-                reset_order = rec.start_order
-            }
             right_records.append(rec)
             i += 1
         }
@@ -532,7 +585,7 @@ func concat_rich(left: string, right: string) -> string {
         r += 1
     }
     body.style_info = settle_records(body.style_info)
-    body.s = concat_rich(inner_left, inner_right)
+    body.s = concat_layers(inner_left, inner_right, reset, layer + 1)
     return string.core.__string_make_rich(ref body)
 }
 

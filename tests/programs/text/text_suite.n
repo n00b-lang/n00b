@@ -617,6 +617,35 @@ func rich_concatenation() {
           "rich_concatenation", "13f")
     check(body_of(reset_later).__value.style_info[0].end_ix.get_or_else(0) ==
           4, "rich_concatenation", "13g")
+    // A reset clears flowing styling in every layer, whichever layer of
+    // either side it or the flowing span is in.
+    var u_spans: List[text.Style_Span] = [(start = 0, end = 3, tag = "u")]
+    let inner_flow: string = text.rich_string("[b]abc"'r, u_spans) +
+        "[/]def"'r
+    check(repr_of(inner_flow) == "r\"[u][b]abc[/b][/]def\"",
+          "rich_concatenation", "13j")
+    let inner_reset: string = "[b]abc"'r +
+        text.rich_string("de[/]f"'r, u_spans)
+    check(repr_of(inner_reset) == "r\"[b]abc[u]de[/b][/]f[/u]\"",
+          "rich_concatenation", "13k")
+    check(body_of(inner_reset).__value.style_info[0].end_ix.get_or_else(0) ==
+          5, "rich_concatenation", "13l")
+    // ...including a reset at the very start of the right side, in a layer
+    // other than the flowing span's.
+    let inner_reset_first: string = "[b]abc"'r +
+        text.rich_string("[/]def"'r, u_spans)
+    let first_b: text.Style_Record =body_of(inner_reset_first).__value.style_info[0]
+    check(first_b.end_ix.get_or_else(0) == 3, "rich_concatenation", "13m")
+    check(yes(text.cascade_style_index(inner_reset_first, 2).bold) and
+          !yes(text.cascade_style_index(inner_reset_first, 3).bold) and
+          yes(text.cascade_style_index(inner_reset_first, 3).underline),
+          "rich_concatenation", "13n")
+    let inner_both: string = text.rich_string("[b]abc"'r, u_spans) +
+        text.rich_string("[/]def"'r, u_spans)
+    check(yes(text.cascade_style_index(inner_both, 2).bold) and
+          !yes(text.cascade_style_index(inner_both, 3).bold) and
+          !yes(text.cascade_style_index(inner_both, 5).bold),
+          "rich_concatenation", "13o")
     // A closed span stays closed, and the join is associative.
     check(repr_of("[b]abc[/b]"'r + "def") == "r\"[b]abc[/b]def\"",
           "rich_concatenation", "13h")
