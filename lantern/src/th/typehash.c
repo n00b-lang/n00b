@@ -1835,6 +1835,20 @@ th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body)
     return t;
 }
 
+th_type *th_binder_with_body(th_ctx *ctx, th_type *binder, th_type *body)
+{
+    binder = binder ? th_resolve(binder) : nullptr;
+    if (!binder || binder->kind != TH_BINDER || !body) {
+        return nullptr;
+    }
+
+    th_type *t = th_binder(ctx, binder->binder.arity, body);
+
+    t->binder.qvars = binder->binder.qvars;
+
+    return t;
+}
+
 th_type *th_bound(th_ctx *ctx, uint64_t d, uint64_t p)
 {
     th_type *t = node(ctx, TH_BOUND);

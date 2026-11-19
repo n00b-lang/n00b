@@ -1605,6 +1605,18 @@ n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
     th_type *called = flat ? th_resolve(flat) : nullptr;
     th_type *declared = symbol
         ? th_resolve(n00bb_symbol_signature(symbol)) : nullptr;
+    if (declared && th_kind_of(declared) == TH_BINDER)
+        declared = th_resolve(th_binder_body(declared));
+    // A generic function's type binds the same variables over its value
+    // type.
+    if (called && th_kind_of(called) == TH_BINDER) {
+        th_type *body = th_resolve(th_binder_body(called));
+        th_type *value = body ? n00bb_function_value_type(types, grammar,
+                                                          symbol, body)
+                              : nullptr;
+        return !value ? nullptr : value == body ? flat
+            : th_binder_with_body(types, called, value);
+    }
     if (!called || th_kind_of(called) != TH_FUNCTION) return flat;
     const th_param *rest = declared && th_kind_of(declared) == TH_FUNCTION
         ? th_func_rest(declared) : nullptr;
