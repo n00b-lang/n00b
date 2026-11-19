@@ -1,0 +1,105 @@
+# Calls through function references pass keyword parameters by name, or
+# omit them; an omitted one's default is evaluated by the function, in its
+# own scope. A function's type names its keyword parameters, in no
+# particular order.
+import keyword_lib
+
+func scaled(a: int, scale: int = 2) -> int {
+    return a * scale
+}
+
+# Defaults that use a positional parameter and an earlier keyword one.
+func digits(a: int, b: int = 10, c: int = b + a) -> int {
+    return a * 100 + b * 10 + c
+}
+
+# Declared in an order other than the one its type lists them in.
+func ordered(a: int, zz: int = 1, b: int = 2) -> int {
+    return a * 100 + zz * 10 + b
+}
+
+func summed(a: int, *rest: int, scale: int = 2) -> int {
+    var total = a
+    for item in rest {
+        total += item
+    }
+    return total * scale
+}
+
+func limited(a: int, limit: int = 5) -> int fail: string {
+    if a > limit {
+        fail "too big"
+    }
+    return a
+}
+
+let by_type: Ref[(int, scale: int) -> int] = ref scaled
+require by_type.call(3) == 6
+require by_type.call(3, scale = 4) == 12
+require by_type.call(scale = 5, 3) == 15
+
+let starred: Ref[(int, **scale: int) -> int] = ref scaled
+require starred.call(3, scale = 3) == 9
+
+let inferred = ref digits
+require inferred.call(1) == 211
+require inferred.call(1, c = 7) == 207
+require inferred.call(1, b = 2) == 123
+
+let reordered = ref ordered
+require reordered.call(5) == 512
+require reordered.call(5, b = 7) == 517
+require reordered.call(5, zz = 3) == 532
+require reordered.call(5, b = 4, zz = 3) == 534
+
+let listed: Ref[(int, b: int, zz: int) -> int] = ref ordered
+require listed.call(1, zz = 9) == 192
+
+let varargs: Ref[(int, *int, scale: int) -> int] = ref summed
+require varargs.call(1) == 2
+require varargs.call(1, 2, 3) == 12
+require varargs.call(1, 2, 3, scale = 3) == 18
+
+func twice(f: Ref[(int, scale: int) -> int]) -> int {
+    return f.call(7) + f.call(1, scale = 100)
+}
+require twice(ref scaled) == 114
+
+let failing: Ref[(int, limit: int) -> int fail: string] = ref limited
+let imported_join = ref keyword_lib.joined
+let imported_check = ref keyword_lib.checked
+
+func failures() -> int fail: string {
+    require failing.call(3)! == 3
+    require failing.call(9, limit = 20)! == 9
+    var caught = false
+    try {
+        require failing.call(9)! == 0
+    } fail(problem) {
+        caught = problem == "too big"
+    }
+    require caught
+    require imported_check.call(5)! == 512
+    require imported_check.call(5, b = 7)! == 517
+    caught = false
+    try {
+        require imported_check.call(-1, zz = 3)! == 0
+    } fail(problem) {
+        caught = problem == "negative"
+    }
+    require caught
+    return 1
+}
+
+try {
+    require failures()! == 1
+} fail(problem) {
+    require false
+}
+
+require imported_join.call("a") == "a,."
+require imported_join.call("a", "b", "c") == "a,b,c,."
+require imported_join.call("a", "b", zsep = "-") == "a-b-."
+require imported_join.call("a", "b", aend = "!") == "a,b!"
+
+__fd_write(2, "ok")

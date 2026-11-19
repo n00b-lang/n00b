@@ -1,11 +1,11 @@
-tests/diagnostics/link/callback_named_arguments.n:10:5: error N00B-T0046: expected `(int, scale: int) -> int fail: nil`, found `(int, int) -> int fail: nil`
-tests/diagnostics/link/callback_named_arguments.n:11:25: error N00B-T0003: this function has no parameter named `scale`
-  note: the parameters are `scale`
-  help: the parameters of a function reference have no names; pass the argument by position
-tests/diagnostics/link/callback_named_arguments.n:14:19: error N00B-T0003: this function has no parameter named `b`
-  help: the parameters of a function reference have no names; pass the argument by position
-tests/diagnostics/link/callback_named_arguments.n:26:32: error N00B-T0003: `call` has no parameter named `lable`
+tests/diagnostics/link/callback_named_arguments.n:14:25: error N00B-T0001: this function takes 1 positional argument, but this call passes 2
+  help: keyword parameters are only passed by name:
+    14 | require by_name.call(3, scale = 4) == 12
+tests/diagnostics/link/callback_named_arguments.n:16:19: error N00B-T0003: this function has no parameter named `b`
+  help: a function type names only its keyword parameters; pass positional arguments by position
+tests/diagnostics/link/callback_named_arguments.n:19:5: error N00B-T0046: expected `(int, int) -> int fail: nil`, found `(int, scale: int) -> int fail: nil`
+tests/diagnostics/link/callback_named_arguments.n:29:32: error N00B-T0003: `call` has no parameter named `lable`
   help: did you mean `label`?
-  tests/diagnostics/link/callback_named_arguments.n:19:5: note: `call` is declared here
-tests/diagnostics/link/callback_named_arguments.n:27:29: error N00B-T0005: parameter 2 (`count`) of `call` is `int`, but this argument is `string`
-  tests/diagnostics/link/callback_named_arguments.n:19:5: note: `call` is declared here
+  tests/diagnostics/link/callback_named_arguments.n:22:5: note: `call` is declared here
+tests/diagnostics/link/callback_named_arguments.n:30:29: error N00B-T0005: parameter 2 (`count`) of `call` is `int`, but this argument is `string`
+  tests/diagnostics/link/callback_named_arguments.n:22:5: note: `call` is declared here

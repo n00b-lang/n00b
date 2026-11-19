@@ -1924,8 +1924,7 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
 
 // A callback's arguments passed by name go where the names its `call`
 // role declares put them, as what that parameter takes; the handler is
-// invoked with them all by position. A name the role doesn't declare, and
-// any name given to a function reference (whose parameters have none), is
+// invoked with them all by position. A name the role doesn't declare is
 // reported by typing (callback_call_reports), so it is left as written.
 static bool
 n00bb_place_callback_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
@@ -1965,6 +1964,128 @@ n00bb_place_callback_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     return ok;
 }
 
+// The declaration that says which parameters of a call through a function
+// reference may be passed missing: one with the call's signature, whose
+// keyword parameters (the `keywords` after the `positional` ones) are
+// optional. It is only a shape; nothing defines it.
+static ir_func_t *
+n00bb_reference_call_shape(ir_module_t *module, th_type *signature,
+                           size_t positional, size_t keywords)
+{
+    th_ctx *types = ir_module_types(module);
+    char buffer[128];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_call_shape_%zu_%zu_%016llx", positional, keywords,
+        (unsigned long long)th_hash(types, signature));
+    ir_func_t *shape = ir_func_find(module, name);
+    if (shape) return shape;
+    shape = ir_func_add(module, name, th_type_clone(types, signature),
+                        IR_LINK_EXTERN);
+    if (shape && !th_is_closed(types, signature)
+        && !ir_func_set_callable_contract(shape, signature))
+        return nullptr;
+    for (size_t k = 0; shape && k < keywords; k++)
+        if (!ir_func_set_parameter_optional(shape,
+                (uint32_t)(positional + k), true))
+            return nullptr;
+    return shape;
+}
+
+// A call through a function reference whose type has keyword parameters
+// or varargs (`instance` is `call`'s signature, the reference first). The
+// function is called with the signature it is called with directly: its
+// positional parameters, then its keyword parameters, then its varargs as
+// an array (n00bb_function_value_type). A keyword argument passed by name
+// goes to its parameter, converted to what that parameter takes; one the
+// call omits is passed missing, so the function evaluates its default
+// itself, in its own scope, as when a trait method's call omits it
+// (n00bb_rewrite_trait_call). The keyword parameters come in the order the
+// type lists them, which doesn't depend on how it was written.
+static bool
+n00bb_rewrite_reference_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             th_type *instance)
+{
+    ir_module_t *module = rewrite->context.module;
+    th_ctx *types = ir_module_types(module);
+    size_t positional = th_func_nparams(instance) - 1;
+    size_t keywords = th_func_nkw(instance);
+    const th_param *rest = th_func_rest(instance);
+    size_t parameters = positional + keywords + (rest ? 1 : 0);
+    th_param *params = core_alloc_array(th_param, parameters + 1);
+    for (size_t i = 0; i < positional; i++)
+        params[i] = *th_func_param(instance, i + 1);
+    for (size_t k = 0; k < keywords; k++)
+        params[positional + k] = (th_param){
+            .mode = th_func_kw(instance, k)->mode,
+            .type = th_func_kw(instance, k)->type,
+        };
+    if (rest)
+        params[parameters - 1] = (th_param){
+            .mode = TH_IN, .type = th_array(types, rest->type)};
+    th_type *signature = th_func_with_error(types, th_func_ret(instance),
+        th_func_error(instance), params, parameters, nullptr, nullptr, 0);
+    core_free(params);
+    ir_func_t *shape = signature ? n00bb_reference_call_shape(module,
+        signature, positional, keywords) : nullptr;
+    if (!shape) return false;
+    // The operands as written: the reference, then the arguments, those
+    // passed by name in a block before or after the others.
+    uint32_t count = in->n_operands;
+    ir_operand_t *written = core_alloc_array(ir_operand_t, count);
+    for (uint32_t o = 0; o < count; o++) written[o] = in->operands[o];
+    ir_value_t **items = core_alloc_array(ir_value_t *, count);
+    size_t item_count = 0;
+    in->op = IR_OP_CALL;
+    in->n_operands = 1;
+    bool ok = true;
+    for (uint32_t o = 1; ok && o < count; o++) {
+        if (written[o].kind == IR_OPD_NAMED_ARG) continue;
+        // There is room: the operands only move toward the front.
+        if (in->n_operands <= positional) {
+            in->operands[in->n_operands++] = written[o];
+            continue;
+        }
+        ir_value_t *value = ir_operand_value(&written[o]);
+        ok = rest && value;
+        if (ok) items[item_count++] = value;
+    }
+    for (size_t k = 0; ok && k < keywords; k++) {
+        const th_kwparam *keyword = th_func_kw(instance, k);
+        ir_value_t *value = nullptr;
+        for (uint32_t o = 1; !value && o < count; o++)
+            if (written[o].kind == IR_OPD_NAMED_ARG
+                && core_string_eq(written[o].named.name, keyword->name))
+                value = written[o].named.value;
+        uint32_t at = in->n_operands;
+        ok = value ? ir_instr_operand_value(in, value)
+                && n00bb_rewrite_operand(rewrite, in, at, keyword->type)
+            : th_mode_is_input_only(keyword->mode)
+                && ir_instr_operand_missing(in);
+    }
+    if (ok && rest) {
+        ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
+                                                     IR_OP_AGGREGATE,
+                                                     in->span);
+        ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
+                CORE_STRING_STATIC("__n00bb_rest_"),
+                th_func_param(signature, parameters - 1)->type)
+            && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
+        for (size_t i = 0; ok && i < item_count; i++)
+            ok = ir_instr_operand_value(pack, items[i]);
+        ok = ok && n00bb_rewrite_splice(rewrite, in)
+            && ir_instr_operand_value(in, pack->dest);
+    }
+    core_free(items);
+    core_free(written);
+    if (!ok) return false;
+    ir_instr_uses_changed(in);
+    return ir_instr_set_call_signature(in, signature)
+        && ir_annot_set(ir_module_ctx(module), &in->annots,
+               (ir_annot_t){.key = N00BB_CALL_SHAPE_KEY,
+                            .kind = IR_ANNOT_VALUE,
+                            .v = ir_func_address(module, shape)});
+}
+
 static bool
 n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                        th_type *receiver_type)
@@ -1975,6 +2096,13 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     if (!instance || th_kind_of(instance) != TH_FUNCTION
         || !th_func_nparams(instance))
         return false;
+    if (th_kind_of(receiver_type) == TH_INDIRECTION
+        && (th_func_nkw(instance) || th_func_rest(instance))) {
+        for (uint32_t o = 1; o < in->n_operands; o++)
+            in->operands[o - 1] = in->operands[o];
+        in->n_operands--;
+        return n00bb_rewrite_reference_call(rewrite, in, instance);
+    }
     size_t count = th_func_nparams(instance) - 1;
     th_param *params = core_alloc_array(th_param, count ? count : 1);
     for (size_t i = 0; i < count; i++)

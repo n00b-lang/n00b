@@ -1017,6 +1017,12 @@ static bool report_fixed_parameter(th_ctx *types, core_translation_unit_t *unit,
 static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
                             core_translation_unit_t *unit,
                             const ty_failure_t      *failure);
+static bool callback_call_reports(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ir_instr_t *at,
+                                  const n00bb_written_call_t *call,
+                                  th_type *receiver);
 static bool report_literal_argument(th_ctx *types,
                                     const n00bb_dispatch_index_t *index,
                                     core_translation_unit_t *const *units,
@@ -4637,6 +4643,12 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
                               N00BB_ARGS(ARG_TEXT(type)));
         return true;
     }
+    // A function reference's or a callback's `call` that its signature
+    // can't take: the arguments are planned against that signature.
+    if (!found
+        && callback_call_reports(types, index, unit, at, call, receiver)) {
+        return true;
+    }
     if (!found) {
         core_string_t type = n00bb_print_type(types, receiver);
 
@@ -6031,7 +6043,9 @@ static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index
 // `f.call(...)` on a function reference or a callback: the written
 // arguments are planned against the called signature, without the
 // receiver. Named arguments bind by the names the callback's `call` role
-// declares; a function reference's parameters are passed by position.
+// declares. A function reference's type names only its keyword parameters
+// (its positional parameters' names are not part of the type), so those
+// are the names a call through it can use.
 // Returns whether it reported a problem.
 static bool callback_call_reports(th_ctx *types,
                                   const n00bb_dispatch_index_t *index,
@@ -6096,7 +6110,7 @@ static bool callback_call_reports(th_ctx *types,
         n00bb_call_plan_report(&plan, unit, diagnostics, call->span);
         if (!role && plan.status == N00BB_CALL_PLAN_UNKNOWN_NAME) {
             n00bb_report_help(diagnostics,
-                              N00B_TEXT_FUNCTION_REFERENCE_BY_POSITION,
+                              N00B_TEXT_FUNCTION_TYPE_POSITIONAL_UNNAMED,
                               N00BB_NO_ARGS);
         }
         n00bb_call_plan_free(&plan);

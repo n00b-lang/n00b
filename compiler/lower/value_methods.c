@@ -509,9 +509,17 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
 typedef struct {
     ir_lower_context_t *context;
     ir_func_t *target;
+    // The module whose function `target` is.
+    ir_module_t *target_module;
     th_type *signature;
     ir_value_t **inputs;
+    // The adapter's parameter that the target's parameter `i` is passed:
+    // `order[i]`, or `i` itself when there is no order.
+    const uint32_t *order;
+    // The adapter's optional parameters, by presence level, and each
+    // parameter's level (UINT32_MAX when it isn't optional).
     uint32_t *optional;
+    uint32_t *level;
     size_t optional_count;
 } dispatch_adapter_t;
 
@@ -543,21 +551,19 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
             CORE_STRING_STATIC("__n00bb_adapter_call_"),
             fails ? ir_call_outcome_type(module, callee) : success)
         && ir_instr_operand_value(call,
-               ir_func_address(module, adapter->target));
-    size_t optional_index = 0;
+               ir_func_address(adapter->target_module, adapter->target));
     size_t given = th_func_nparams(adapter->signature);
     for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
-        bool takes_missing = ir_func_parameter_is_optional(adapter->target,
-                                                           (uint32_t)i);
+        uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
         // A parameter the trait's method doesn't name is left out.
-        bool optional = i < given
-            && ir_func_parameter_is_optional(adapter->context->function,
-                                             (uint32_t)i);
-        bool omitted = i >= given
-            || (optional && (missing >> optional_index & 1u));
+        bool omitted = from >= given
+            || (adapter->level[from] != UINT32_MAX
+                && (missing >> adapter->level[from] & 1u));
+        // A keyword-order adapter declares its own optional parameters.
+        bool takes_missing = adapter->order
+            || ir_func_parameter_is_optional(adapter->target, (uint32_t)i);
         ok = omitted ? takes_missing && ir_instr_operand_missing(call)
-                     : ir_instr_operand_value(call, adapter->inputs[i]);
-        optional_index += optional;
+                     : ir_instr_operand_value(call, adapter->inputs[from]);
     }
     ok = ok && ir_instr_set_call_signature(call, adapter->target->type);
     ir_value_t *outcome = ok ? call->dest : nullptr;
@@ -623,11 +629,20 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
                                   missing | UINT64_C(1) << level);
 }
 
+// The body of an adapter that calls `target` (in `target_module`) with its
+// own parameters, passing each optional one the caller omitted as missing,
+// so `target` evaluates that default itself. A dispatch adapter passes its
+// parameters in the same order, narrowing the generic receiver to
+// `receiver`, and takes as optional the parameters `required` (the
+// trait's method, when given) or else `target` makes optional. A
+// keyword-order adapter (`order` given) already declares its optional
+// parameters, and passes `target`'s parameter `i` its parameter
+// `order[i]`.
 static bool
-n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
-                            ir_ctx_t *ir_context, ir_func_t *adapter,
-                            ir_func_t *target, ir_func_t *required,
-                            th_type *receiver)
+n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
+                   ir_func_t *adapter, ir_func_t *target,
+                   ir_module_t *target_module, ir_func_t *required,
+                   th_type *receiver, const uint32_t *order)
 {
     if (!adapter || adapter->n_blocks || !target || !target->type)
         return false;
@@ -644,11 +659,15 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
     dispatch_adapter_t state = {
         .context = &context,
         .target = target,
+        .target_module = target_module,
         .signature = signature,
+        .order = order,
         .inputs = count ? core_alloc_array(ir_value_t *, count) : nullptr,
         .optional = count ? core_alloc_array(uint32_t, count) : nullptr,
+        .level = count ? core_alloc_array(uint32_t, count) : nullptr,
     };
-    bool ok = context.block && (!count || (state.inputs && state.optional));
+    bool ok = context.block
+        && (!count || (state.inputs && state.optional && state.level));
     for (size_t i = 0; ok && i < count; i++) {
         const th_param *parameter = th_func_param(signature, i);
         char buffer[32];
@@ -662,17 +681,22 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
         ok = value != nullptr;
         // The adapter is called as the trait's method is: a parameter is
         // optional in it when the trait's method makes it optional.
-        bool optional = ir_func_parameter_is_optional(required ? required
-                                                               : target,
-                                                      (uint32_t)i);
+        bool optional = order
+            ? ir_func_parameter_is_optional(adapter, (uint32_t)i)
+            : ir_func_parameter_is_optional(required ? required : target,
+                                            (uint32_t)i);
+        state.level[i] = UINT32_MAX;
         if (ok && optional) {
             ok = state.optional_count < 64
-                && ir_func_set_parameter_optional(adapter, (uint32_t)i,
-                                                  true);
+                && (order || ir_func_set_parameter_optional(adapter,
+                                                            (uint32_t)i,
+                                                            true));
+            state.level[i] = (uint32_t)state.optional_count;
             state.optional[state.optional_count++] = (uint32_t)i;
         }
         state.inputs[i] = value;
-        if (!ok || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
+        if (!ok || !receiver
+            || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
             continue;
         th_type *narrowed = by_reference ? th_ind(types, 0, receiver)
                                          : receiver;
@@ -687,7 +711,128 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
     ok = ok && n00bb_adapter_presence(&state, 0, 0);
     core_free(state.inputs);
     core_free(state.optional);
+    core_free(state.level);
     return ok;
+}
+
+#define N00BB_KEYWORD_ORDER_TARGET_KEY \
+    CORE_STRING_STATIC("n00bb.keyword-order-target")
+#define N00BB_KEYWORD_ORDER_KEY CORE_STRING_STATIC("n00bb.keyword-order")
+
+ir_func_t *
+n00bb_keyword_order_adapter(ir_lower_context_t *context,
+                            ir_module_t *target_module, ir_func_t *target,
+                            th_type *value_type,
+                            const core_string_t *declared)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *flat = target ? th_resolve(target->type) : nullptr;
+    value_type = value_type ? th_resolve(value_type) : nullptr;
+    if (!flat || th_kind_of(flat) != TH_FUNCTION || !value_type
+        || th_kind_of(value_type) != TH_FUNCTION) return nullptr;
+    size_t positional = th_func_nparams(value_type);
+    size_t keywords = th_func_nkw(value_type);
+    size_t count = th_func_nparams(flat);
+    if (count < positional + keywords) return nullptr;
+    uint32_t *order = core_alloc_array(uint32_t, count + 1);
+    th_param *params = core_alloc_array(th_param, count + 1);
+    bool reordered = false;
+    bool ok = order && params;
+    for (size_t i = 0; ok && i < count; i++) {
+        order[i] = (uint32_t)i;
+        params[i] = *th_func_param(flat, i);
+        if (i < positional || i >= positional + keywords) continue;
+        size_t k = 0;
+        while (k < keywords && !core_string_eq(
+                   th_func_kw(value_type, k)->name, declared[i - positional]))
+            k++;
+        ok = k < keywords;
+        order[i] = (uint32_t)(positional + k);
+        reordered = reordered || order[i] != i;
+    }
+    for (size_t i = 0; ok && i < count; i++)
+        params[order[i]] = *th_func_param(flat, i);
+    ir_func_t *adapter = nullptr;
+    core_buffer_t text = {0};
+    for (size_t i = 0; ok && reordered && i < count; i++)
+        core_buffer_printf(&text, "%s%u", i ? "," : "", order[i]);
+    core_buffer_t name = {0};
+    if (ok && reordered)
+        core_buffer_printf(&name, "__n00bb_keyword_order_%.*s",
+                           (int)target->name.u8_bytes, target->name.data);
+    adapter = name.data ? ir_func_find(context->module,
+                                       core_buffer_string(&name))
+                        : nullptr;
+    th_type *signature = name.data && !adapter
+        ? th_func_with_error(types, th_func_ret(flat), th_func_error(flat),
+                             params, count, nullptr, nullptr, 0)
+        : nullptr;
+    if (signature) {
+        adapter = ir_func_add(context->module, core_buffer_string(&name),
+                              signature, IR_LINK_INTERNAL);
+        for (size_t k = 0; adapter && k < keywords; k++)
+            if (!ir_func_set_parameter_optional(adapter,
+                    (uint32_t)(positional + k), true))
+                adapter = nullptr;
+        ir_ctx_t *ir_context = ir_module_ctx(context->module);
+        if (adapter && (!ir_annot_set(ir_context, &adapter->annots,
+                (ir_annot_t){.key = N00BB_KEYWORD_ORDER_TARGET_KEY,
+                             .kind = IR_ANNOT_VALUE,
+                             .v = ir_func_address(target_module, target)})
+            || !ir_annot_set(ir_context, &adapter->annots,
+                (ir_annot_t){.key = N00BB_KEYWORD_ORDER_KEY,
+                             .kind = IR_ANNOT_STR,
+                             .s = ir_strdup(ir_context,
+                                            core_buffer_string(&text))})))
+            adapter = nullptr;
+    }
+    core_buffer_release(&name);
+    core_buffer_release(&text);
+    core_free(order);
+    core_free(params);
+    return !ok ? nullptr : reordered ? adapter : target;
+}
+
+// The body of each keyword-order adapter `module` declares
+// (n00bb_keyword_order_adapter), now that the types are known.
+static bool
+generate_keyword_order_adapters(core_translation_unit_t *unit,
+                                ir_ctx_t *ir_context, ir_module_t *module)
+{
+    for (size_t f = 0; module && f < ir_func_count(module); f++) {
+        ir_func_t *adapter = ir_func_at(module, f);
+        ir_annot_t *target = ir_annot_get(&adapter->annots,
+                                          N00BB_KEYWORD_ORDER_TARGET_KEY);
+        ir_annot_t *text = ir_annot_get(&adapter->annots,
+                                        N00BB_KEYWORD_ORDER_KEY);
+        if (!target || adapter->n_blocks) continue;
+        ir_func_t *callee = target->kind == IR_ANNOT_VALUE && target->v
+            && target->v->kind == IR_VAL_FUNC ? target->v->owner : nullptr;
+        size_t count = callee ? th_func_nparams(th_resolve(callee->type)) : 0;
+        uint32_t *order = core_alloc_array(uint32_t, count + 1);
+        size_t parsed = 0;
+        bool ok = callee && order && text && text->kind == IR_ANNOT_STR;
+        for (size_t at = 0; ok && at < text->s.u8_bytes; parsed++) {
+            uint32_t value = 0;
+            while (at < text->s.u8_bytes && text->s.data[at] >= '0'
+                   && text->s.data[at] <= '9')
+                value = value * 10 + (uint32_t)(text->s.data[at++] - '0');
+            ok = parsed < count && value < count;
+            if (ok) order[parsed] = value;
+            if (at < text->s.u8_bytes) at++;
+        }
+        ok = ok && parsed == count
+            && n00bb_adapter_body(unit, ir_context, adapter, callee,
+                                  callee->owner, nullptr, nullptr, order);
+        core_free(order);
+        if (ok) continue;
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){0}, "generating dispatch adapters",
+            "could not generate the keyword-order adapter `%.*s`",
+            (int)adapter->name.u8_bytes, adapter->name.data);
+        return false;
+    }
+    return true;
 }
 
 bool
@@ -733,9 +878,9 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                     th_var_bind(adapter_failure,
                                 th_resolve(th_func_error(target_type)));
                 if (target && target->n_blocks
-                    && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
-                                                   adapter, target, required,
-                                                   receiver)
+                    && n00bb_adapter_body(unit, analysis->ir_context,
+                                          adapter, target, adapter->owner,
+                                          required, receiver, nullptr)
                     && ir_annot_set(analysis->ir_context, &adapter->annots,
                         (ir_annot_t){
                             .key = CORE_STRING_STATIC(
@@ -753,6 +898,9 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
             }
         }
         core_list_free(scopes);
+        if (!generate_keyword_order_adapters(unit, analysis->ir_context,
+                                             unit_module(state)))
+            return false;
     }
     return true;
 }

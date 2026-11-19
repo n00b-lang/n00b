@@ -139,6 +139,15 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               size_t *index);
 parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
                                          parse_sym_entry_t *symbol);
+// The type function `symbol` has as a value, such as `ref f`'s referent:
+// its positional parameters, its varargs item type, and its keyword
+// parameters by name. `flat` is its signature as called, which passes the
+// keyword parameters by position after the positional ones (in
+// declaration order) and the varargs last, as an array. Returns `flat`
+// when the function has neither, and nullptr when its parameters can't be
+// read.
+th_type *n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
+                                   parse_sym_entry_t *symbol, th_type *flat);
 // Each of a trait's methods for a bound on `variable`, as a method
 // constraint whose target is the whole method: its receiver is `variable`,
 // and the trait's parameters (the other variables its methods name) are

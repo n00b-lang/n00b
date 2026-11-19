@@ -12182,7 +12182,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             ? ir_operand_value(&selection->operands[3]) : nullptr;
         ir_func_t *shape = target ? target
             : required && required->kind == IR_VAL_FUNC ? required->owner
-            : nullptr;
+            : n00bb_call_shape(instruction);
         size_t optional_count = 0;
         if (shape)
             for (size_t i = 0; i < th_func_nparams(shape->type); i++)

@@ -1598,6 +1598,46 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     return true;
 }
 
+th_type *
+n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
+                          parse_sym_entry_t *symbol, th_type *flat)
+{
+    th_type *called = flat ? th_resolve(flat) : nullptr;
+    th_type *declared = symbol
+        ? th_resolve(n00bb_symbol_signature(symbol)) : nullptr;
+    if (!called || th_kind_of(called) != TH_FUNCTION) return flat;
+    const th_param *rest = declared && th_kind_of(declared) == TH_FUNCTION
+        ? th_func_rest(declared) : nullptr;
+    size_t count = th_func_nparams(called);
+    if (rest && !count) return nullptr;
+    if (rest) count--;
+    parse_tree_t *formals = callable_formal_parameters(grammar, symbol);
+    core_list_t(th_param) positional = core_list_new(th_param);
+    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        const th_param *parameter = th_func_param(called, i);
+        core_string_t name = {0};
+        uint8_t flags = 0;
+        valid = parameter && function_parameter_info(grammar, symbol,
+            formals, i, nullptr, &name, &flags, nullptr);
+        if (!valid) break;
+        if (flags & 1u)
+            core_list_push(keywords, ((th_kwparam){
+                .name = name, .mode = parameter->mode,
+                .type = parameter->type}));
+        else core_list_push(positional, *parameter);
+    }
+    th_type *value = !valid ? nullptr
+        : !keywords.len && !rest ? flat
+        : th_func_with_error(types, th_func_ret(called),
+              th_func_error(called), positional.data, positional.len, rest,
+              keywords.data, keywords.len);
+    core_list_free(positional);
+    core_list_free(keywords);
+    return value;
+}
+
 bool
 function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
                          parse_tree_t *formals, core_string_t name,

@@ -24,6 +24,21 @@ n00bb_cached_body(ir_func_t *function)
         && body->v->kind == IR_VAL_FUNC ? body->v->owner : function;
 }
 
+// A call through a function reference has no callee declaration to say
+// which of its parameters may be passed missing; the call names a
+// declaration with its signature that does, as a trait method's call does
+// through its requirement (n00bb_rewrite_reference_call).
+#define N00BB_CALL_SHAPE_KEY CORE_STRING_STATIC("n00bb.call-shape")
+
+static inline ir_func_t *
+n00bb_call_shape(const ir_instr_t *call)
+{
+    ir_annot_t *shape = call ? ir_annot_get((ir_annots_t *)&call->annots,
+                                            N00BB_CALL_SHAPE_KEY) : nullptr;
+    return shape && shape->kind == IR_ANNOT_VALUE && shape->v
+        && shape->v->kind == IR_VAL_FUNC ? shape->v->owner : nullptr;
+}
+
 static inline ir_func_t *
 n00bb_direct_call_target(const ir_instr_t *instruction)
 {

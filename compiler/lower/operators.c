@@ -1697,6 +1697,48 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             }
             storage = module && function
                 ? ir_func_reference(module, function) : nullptr;
+            // The referent is the function's type, which names its keyword
+            // parameters, rather than the signature it is called with.
+            th_type *flat = storage
+                ? th_ind_referent(th_resolve(storage->type)) : nullptr;
+            th_type *value_type = flat
+                ? n00bb_function_value_type(ir_module_types(module),
+                      visit->grammar, function_target, flat)
+                : nullptr;
+            if (storage && !value_type)
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not find the type of a function reference");
+            size_t positional = value_type != flat
+                ? th_func_nparams(th_resolve(value_type)) : 0;
+            size_t keywords = value_type != flat
+                ? th_func_nkw(th_resolve(value_type)) : 0;
+            if (keywords > 1) {
+                // A call through the reference passes the keyword
+                // parameters in the order the type lists them.
+                core_string_t *declared = core_alloc_array(core_string_t,
+                                                           keywords);
+                parse_tree_t *formals = callable_formal_parameters(
+                    visit->grammar, function_target);
+                bool named = declared != nullptr;
+                for (size_t k = 0; named && k < keywords; k++)
+                    named = function_parameter_info(visit->grammar,
+                        function_target, formals, positional + k, nullptr,
+                        &declared[k], nullptr, nullptr);
+                ir_func_t *referent = named
+                    ? n00bb_keyword_order_adapter(context, module, function,
+                                                  value_type, declared)
+                    : nullptr;
+                core_free(declared);
+                if (!referent)
+                    return n00bb_operator_error(context, IR_DIAG_INTERNAL,
+                        span, "could not order a function reference's "
+                              "keyword parameters");
+                if (referent != function)
+                    storage = ir_func_reference(context->module, referent);
+            }
+            if (storage && value_type != flat)
+                storage->type = th_ind(ir_module_types(module), 0,
+                                       value_type);
         }
         else if (operand && lower)
             storage = n00bb_place_of(context,
