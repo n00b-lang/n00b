@@ -1,6 +1,7 @@
 #include "llvm_stack_maps.h"
 
 #include "lib/byteorder.h"
+#include "lib/dict.h"
 
 static bool
 take(size_t *cursor, size_t count, size_t total, size_t *at)
@@ -19,31 +20,56 @@ align8(size_t *cursor, size_t total)
     return take(cursor, padding, total, &ignored);
 }
 
-static bool
-function_symbol(const void *object, size_t object_bytes,
-                core_target_object_format_t format,
-                const core_object_section_t *section, size_t offset,
-                n00bb_llvm_stack_function_t *out)
+// The stack-map section's relocations by the offset they patch: the first
+// one at each offset, among those before the first that can't be read,
+// which is where a scan of them in order would have stopped.
+static void
+index_relocations(const core_object_section_t *section,
+                  core_target_object_format_t format, core_dict_t *out)
 {
+    core_dict_init(out, nullptr, nullptr);
     for (uint32_t i = 0; i < section->relocation_count; i++) {
         core_object_absolute64_relocation_t relocation;
         if (!core_object_absolute64_relocation_at(section, format, i,
-                                                  &relocation)) return false;
-        if (relocation.section_offset != offset) continue;
-        core_object_symbol_t symbol;
-        if (relocation.target_is_section
-            || !core_object_symbol_at(object, object_bytes, format, section,
-                   relocation.native_symbol_index, &symbol)
-            || !core_object_symbol_extent(object, object_bytes, format,
-                   section, relocation.native_symbol_index, &out->code_bytes))
-            return false;
-        out->name = symbol.name;
-        out->section = symbol.native_section_index;
-        out->offset = symbol.section_offset;
-        return true;
+                                                  &relocation)) break;
+        core_dict_add(out, (void *)(uintptr_t)(relocation.section_offset + 1),
+                      (void *)(uintptr_t)(i + 1));
     }
-    return false;
 }
+
+static bool
+function_symbol(const void *object, size_t object_bytes,
+                core_target_object_format_t format,
+                const core_object_section_t *section,
+                const core_dict_t *relocations,
+                const core_object_symbol_places_t *places, size_t offset,
+                n00bb_llvm_stack_function_t *out)
+{
+    uintptr_t at = (uintptr_t)core_dict_get((core_dict_t *)relocations,
+        (void *)(uintptr_t)(offset + 1), nullptr);
+    core_object_absolute64_relocation_t relocation;
+    if (!at || !core_object_absolute64_relocation_at(section, format,
+            (uint32_t)(at - 1), &relocation)) return false;
+    core_object_symbol_t symbol;
+    if (relocation.target_is_section
+        || !core_object_symbol_at(object, object_bytes, format, section,
+               relocation.native_symbol_index, &symbol)
+        || !core_object_symbol_extent_in(places, object, object_bytes, format,
+               section, relocation.native_symbol_index, &out->code_bytes))
+        return false;
+    out->name = symbol.name;
+    out->section = symbol.native_section_index;
+    out->offset = symbol.section_offset;
+    return true;
+}
+
+static bool
+visit_functions(const void *object, size_t object_bytes,
+                core_target_object_format_t format,
+                const core_object_section_t *stack_maps,
+                const core_dict_t *relocations,
+                const core_object_symbol_places_t *places,
+                const n00bb_llvm_stack_visitor_t *visitor);
 
 bool
 n00bb_llvm_stack_maps_visit(const void *object, size_t object_bytes,
@@ -61,6 +87,29 @@ n00bb_llvm_stack_maps_visit(const void *object, size_t object_bytes,
     if (!core_object_section_find(object, object_bytes, format, segment,
                                   name, &section)) return true;
     *found = true;
+    // Each function's symbol is looked up once per function; these turn
+    // the scans of all relocations and all symbols each lookup made into
+    // a hash lookup and a binary search.
+    core_dict_t relocations;
+    index_relocations(&section, format, &relocations);
+    core_object_symbol_places_t *places = core_object_symbol_places_new(
+        object, object_bytes, format, &section);
+    bool ok = visit_functions(object, object_bytes, format, &section,
+                              &relocations, places, visitor);
+    core_object_symbol_places_free(places);
+    core_dict_free(&relocations);
+    return ok;
+}
+
+static bool
+visit_functions(const void *object, size_t object_bytes,
+                core_target_object_format_t format,
+                const core_object_section_t *stack_maps,
+                const core_dict_t *relocations,
+                const core_object_symbol_places_t *places,
+                const n00bb_llvm_stack_visitor_t *visitor)
+{
+    const core_object_section_t section = *stack_maps;
     const uint8_t *bytes = section.bytes;
     size_t length = section.size;
     if (length < 16 || bytes[0] != 3 || bytes[1] || core_le_load_u16(bytes + 2))
@@ -80,8 +129,8 @@ n00bb_llvm_stack_maps_visit(const void *object, size_t object_bytes,
         n00bb_llvm_stack_function_t function = {
             .stack_bytes = core_le_load_u64(bytes + row + 8),
         };
-        if (!function_symbol(object, object_bytes, format, &section, row,
-                             &function)
+        if (!function_symbol(object, object_bytes, format, &section,
+                             relocations, places, row, &function)
             || (visitor->function
                 && !visitor->function(visitor->context, &function)))
             return false;

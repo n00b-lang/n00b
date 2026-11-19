@@ -89,6 +89,24 @@ bool core_object_symbol_extent(const void *image, size_t image_size,
                                uint32_t native_symbol_index,
                                uint64_t *out_bytes);
 
+// Every symbol's place, sorted, for asking core_object_symbol_extent of
+// many symbols of one image: each answer is then a binary search instead
+// of a pass over the whole symbol table.
+typedef struct core_object_symbol_places_t core_object_symbol_places_t;
+
+core_object_symbol_places_t *core_object_symbol_places_new(
+    const void *image, size_t image_size, core_target_object_format_t format,
+    const core_object_section_t *section);
+void core_object_symbol_places_free(core_object_symbol_places_t *places);
+// core_object_symbol_extent, answered from `places` (built for the same
+// image and section).
+bool core_object_symbol_extent_in(const core_object_symbol_places_t *places,
+                                  const void *image, size_t image_size,
+                                  core_target_object_format_t format,
+                                  const core_object_section_t *section,
+                                  uint32_t native_symbol_index,
+                                  uint64_t *out_bytes);
+
 bool core_object_relocation_at(const core_object_section_t *section,
                                core_target_object_format_t format,
                                uint32_t index,
