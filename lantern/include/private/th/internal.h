@@ -1,6 +1,7 @@
 #ifndef TH_INTERNAL_H
 #define TH_INTERNAL_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -112,7 +113,12 @@ struct th_type {
   th_kind kind;
   uint8_t ground;
   bool hashed;
+  // `hash` holds the hash of a type that is closed but not ground (it
+  // reaches bound variables but no unbound one), valid while
+  // th_shape_generation still equals closed_generation: see th_hash.
+  bool closed_hashed;
   uint64_t hash;
+  uint64_t closed_generation;
   th_normalizer hash_norm;
   union {
     struct {
@@ -257,6 +263,30 @@ void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
 th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n);
 void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
 void th_env_release_contents(th_env *env);
+
+// Changes whenever a type graph changes in a way that can alter what an
+// existing, variable-free resolution of it encodes to: a bound variable
+// rebound, or a record stub filled in. Binding an unbound variable doesn't
+// change it, since no closed type reaches an unbound variable; nor does a
+// match undoing its trial bindings (see th_trial_bindings).
+extern _Atomic uint64_t th_shape_generation;
+
+static inline void th_note_shape_change(void) {
+  atomic_fetch_add_explicit(&th_shape_generation, 1, memory_order_relaxed);
+}
+
+// How many matches are open with trial bindings they may undo. While any is,
+// th_hash records no closed-type hashes, since a type it sees closed may be
+// closed only by a binding about to be undone.
+extern _Atomic uint64_t th_trial_bindings;
+
+static inline void th_trial_bindings_open(void) {
+  atomic_fetch_add_explicit(&th_trial_bindings, 1, memory_order_acq_rel);
+}
+
+static inline void th_trial_bindings_close(void) {
+  atomic_fetch_sub_explicit(&th_trial_bindings, 1, memory_order_acq_rel);
+}
 
 static inline const th_type *th_resolve_c(const th_type *t) {
   while (t && t->kind == TH_VAR && t->var.ref) {

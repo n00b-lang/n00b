@@ -391,6 +391,7 @@ static th_type *dup_shallow(th_ctx *ctx, const th_type *t)
     *o = *t;
     o->ground = 0;
     o->hashed = false;
+    o->closed_hashed = false;
 
     return o;
 }

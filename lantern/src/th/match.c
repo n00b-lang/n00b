@@ -110,6 +110,10 @@ static bool walk(matcher_t *m, th_type *pattern, th_type *concrete,
     return ok;
 }
 
+// Undoing unbinds only variables the match itself bound, which were unbound
+// when it began, so no type closed before it reaches them; while a match is
+// open, th_hash keeps no closed-type hashes (th_trial_bindings), so none
+// cached during it can either.
 static void undo(matcher_t *m)
 {
     for (size_t i = m->bound.len; i > 0; i--) {
@@ -124,11 +128,13 @@ static bool run_mode(th_type *pattern, th_type *concrete, bool bind,
     matcher_t m  = {.active = core_list_new(match_pair_t),
                     .bound = core_list_new(match_var_t), .bind = bind,
                     .both = both};
+    th_trial_bindings_open();
     bool      ok = walk(&m, pattern, concrete, 0);
 
     if (!ok || !keep) {
         undo(&m);
     }
+    th_trial_bindings_close();
     core_list_free(m.bound);
     core_list_free(m.active);
 
@@ -155,12 +161,14 @@ bool th_match_each(th_type *pattern, th_type *concrete, th_binding_fn bound,
 {
     matcher_t m  = {.active = core_list_new(match_pair_t),
                     .bound = core_list_new(match_var_t), .bind = true};
+    th_trial_bindings_open();
     bool      ok = walk(&m, pattern, concrete, 0);
 
     for (size_t i = 0; ok && bound && i < m.bound.len; i++) {
         ok = bound(context, m.bound.data[i], th_resolve(m.bound.data[i]));
     }
     undo(&m);
+    th_trial_bindings_close();
     core_list_free(m.bound);
     core_list_free(m.active);
 

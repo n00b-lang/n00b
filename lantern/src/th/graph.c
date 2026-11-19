@@ -31,11 +31,15 @@ bool th_var_bind(th_type *var, th_type *to)
     return true;
 }
 
+_Atomic uint64_t th_shape_generation;
+_Atomic uint64_t th_trial_bindings;
+
 bool th_var_rebind(th_type *var, th_type *to)
 {
     if (!var || !to || var->kind != TH_VAR || var == to) {
         return false;
     }
+    if (var->var.ref) th_note_shape_change();
     var->var.ref = to;
 
     return true;
