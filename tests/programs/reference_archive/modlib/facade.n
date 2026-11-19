@@ -1,0 +1,6 @@
+# The manifest of `modlib`.
+import impl
+
+package modlib {
+    export impl
+}

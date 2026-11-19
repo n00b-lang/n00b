@@ -1,0 +1,37 @@
+# Calls through function references a library made, typed and linked
+# against the library's archived interface (reference_archive.sh).
+import modlib
+
+func through(f: Ref[(modlib.Tally, int) -> int], start: int,
+             by: int) -> int {
+    var tally: modlib.Tally
+    tally.count = start
+    let returned = f.call(tally, by)
+    return tally.count * 1000 + returned
+}
+
+func ordered_through(f: Ref[(int, b: int, zz: int) -> int]) -> int {
+    return f.call(5, b = 7) + f.call(5, zz = 3)
+}
+
+func run() {
+    var t: modlib.Tally
+    t.count = 1
+    let f = modlib.module_add()
+    require f.call(t, 2) == 3
+    require t.count == 3
+    let direct = ref modlib.tally_add
+    require direct.call(t, 1) == 4
+    require t.count == 4
+    require through(modlib.module_add(), 1, 4) == 5005
+    require through(ref modlib.tally_add, 2, 2) == 4004
+    require modlib.apply(ref modlib.tally_add, t, 10) == 14
+    require t.count == 14
+    let g = modlib.module_ordered()
+    require g.call(5) == 512
+    require g.call(5, b = 7, zz = 3) == 537
+    require ordered_through(modlib.module_ordered()) == 517 + 532
+    require ordered_through(ref modlib.ordered) == 517 + 532
+}
+run()
+__fd_write(2, "ok")
