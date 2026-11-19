@@ -1,0 +1,23 @@
+# The handler reference a callback's `setup` is given remembers the
+# `handler` role's passing modes only where it is called.
+record Tally { count: int }
+callback Counter {
+    call(value: int) -> int
+    handler(modify state: Tally, value: int) -> int
+    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
+}
+func add(modify state: Tally, value: int) -> int {
+    state.count += value
+    return state.count
+}
+func setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil {
+    let kept = handler
+    var started = state.__value
+    _ = kept.call(started, 1)
+}
+func make() -> Counter {
+    var tally: Tally
+    tally.count = 0
+    return callback[Counter](ref add, ref tally)
+}
+require make().call(1) == 1

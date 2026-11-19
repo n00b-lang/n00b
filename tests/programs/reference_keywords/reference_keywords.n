@@ -165,6 +165,25 @@ func remembered_modes() {
 }
 remembered_modes()
 
+# A callback's `setup` is given a reference to the handler, which
+# remembers the `handler` role's modes: calling it passes the state's place.
+callback Tally_Counter {
+    call(value: int) -> int
+    handler(modify tally: Tally, value: int) -> int
+    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
+}
+func setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil {
+    var started = state.__value
+    _ = handler.call(started, 100)
+    state.__value = started
+}
+func make_counter() -> Tally_Counter {
+    var tally: Tally
+    tally.count = 0
+    return callback[Tally_Counter](ref tally_add, ref tally)
+}
+require make_counter().call(1) == 101
+
 require imported_join.call("a") == "a,."
 require imported_join.call("a", "b", "c") == "a,b,c,."
 require imported_join.call("a", "b", zsep = "-") == "a-b-."

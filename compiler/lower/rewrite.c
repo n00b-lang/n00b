@@ -1614,6 +1614,69 @@ n00bb_callback_handler_modes(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     return true;
 }
 
+// The `setup` that callback construction `in` runs is given a reference to
+// the handler, as a reference whose type says nothing of its passing
+// modes: its handler parameter remembers the `handler` role's
+// (N00BB_REMEMBERED_MODES_KEY), which the handler given has
+// (n00bb_callback_handler_modes), for the calls through it, before they are
+// rewritten. Used for anything else, it would lose them, which is not
+// supported yet.
+static bool
+n00bb_plan_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
+{
+    ir_annot_t *pending = in->op == IR_OP_CALLBACK_CREATE
+        ? ir_annot_get(&in->annots, N00BB_CALLBACK_SETUP_KEY) : nullptr;
+    ir_value_t *handler = pending && pending->b && in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    th_type *call = nullptr, *role = nullptr, *setup_role = nullptr;
+    n00bb_dispatch_target_t target = {0};
+    if (!handler
+        || !ir_instr_callback_contract(in, &call, &role, &setup_role)
+        || !role
+        || !n00bb_dispatch_target(rewrite->dispatch, handler->type,
+                                  CORE_STRING_STATIC("setup"), &target)
+        || target.kind != N00BB_TARGET_FUNCTION)
+        return true;
+    ir_func_t *setup = link_ir_function_for_symbol(
+        tu_state(rewrite->unit)->link_analysis, target.function);
+    ir_value_t *parameter = setup && setup->n_params
+        ? setup->params[0] : nullptr;
+    th_ctx *types = ir_module_types(rewrite->context.module);
+    th_type *remembered = th_ind(types, 0, role);
+    if (!parameter || !remembered
+        || ir_annot_get(&parameter->annots, N00BB_REMEMBERED_MODES_KEY)
+        || n00bb_without_passing_modes(types, remembered) == remembered)
+        return true;
+    if (!ir_annot_set(ir_module_ctx(rewrite->context.module),
+            &parameter->annots, (ir_annot_t){
+                .key = N00BB_REMEMBERED_MODES_KEY, .kind = IR_ANNOT_TYPE,
+                .t = remembered}))
+        return false;
+    for (uint32_t b = 0; b < setup->n_blocks; b++) {
+        ir_block_t *block = setup->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *user = block->instrs[i];
+            for (uint32_t o = 0; o < user->n_operands; o++) {
+                bool called = (user->op == IR_OP_CALL && o == 0)
+                    || (user->op == IR_OP_DISPATCH && o == 1
+                        && user->operands[0].kind == IR_OPD_NAME
+                        && core_string_eq(user->operands[0].name,
+                                          CORE_STRING_STATIC("call")));
+                if (called || ir_operand_value(&user->operands[o])
+                                  != parameter)
+                    continue;
+                n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
+                    rewrite->unit, N00B_DIAG_NOT_SUPPORTED_YET,
+                    n00bb_span_location(user->span),
+                    N00B_TEXT_NOT_SUPPORTED_YET_SETUP_HANDLER,
+                    N00BB_NO_ARGS);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool
 n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
@@ -1733,12 +1796,15 @@ n00bb_reference_remembered(ir_value_t *reference)
 {
     ir_value_t *value = reference;
     for (size_t depth = 0; value && depth < 64; depth++) {
-        if (value->local || value->global) {
+        if (value->local || value->global || value->kind == IR_VAL_PARAM) {
             ir_annot_t *remembered = ir_annot_get(value->local
-                    ? &value->local->annots : &value->global->annots,
+                    ? &value->local->annots
+                    : value->global ? &value->global->annots
+                                    : &value->annots,
                 N00BB_REMEMBERED_MODES_KEY);
             th_type *held = th_resolve(remembered ? remembered->t
-                : value->local ? value->local->type : value->global->type);
+                : value->local ? value->local->type
+                : value->global ? value->global->type : value->type);
             return th_kind_of(held) == TH_INDIRECTION
                 ? th_resolve(th_ind_referent(held)) : nullptr;
         }
@@ -3839,6 +3905,10 @@ n00bb_rewrite_typed_ir(n00bb_link_analysis_t *analysis,
         ok = n00bb_rewrite_sites(&rewriter,
                 &tu_state(analysis->units.data[u])->rewrite_sites,
                 n00bb_plan_demotion) && ok;
+    for (size_t u = 0; u < analysis->units.len; u++)
+        ok = n00bb_rewrite_sites(&rewriter,
+                &tu_state(analysis->units.data[u])->rewrite_sites,
+                n00bb_plan_callback_setup) && ok;
     for (size_t i = 0; i < rewriter.rewrites.len; i++)
         rewriter.rewrites.data[i]->pdg = nullptr;
     ok = n00bb_apply_demotions(&rewriter) && ok;

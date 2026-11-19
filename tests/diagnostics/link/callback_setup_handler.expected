@@ -1,0 +1,1 @@
+tests/diagnostics/link/callback_setup_handler.n:14:9: error N00B-S0039: not supported yet: using the handler reference `setup` is given other than by calling it, which would lose the handler's passing modes
