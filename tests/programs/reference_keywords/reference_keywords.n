@@ -158,6 +158,12 @@ func remembered_modes() {
     require tally.count == 10
     require module_add.call(tally, 1) == 11
     require tally.count == 11
+    # A `let` bound to one remembers what that one does.
+    let again = module_add
+    require again.call(tally, 1) == 12
+    let added = add
+    require added.call(tally, 1) == 13
+    require tally.count == 13
     var fresh: Tally
     let set: Ref[(Tally, int) -> int] = ref tally_set
     require set.call(fresh, 7) == 7

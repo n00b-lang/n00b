@@ -1786,6 +1786,52 @@ n00bb_rewrite_by_reference_arguments(n00bb_rewrite_t *rewrite,
     return written;
 }
 
+// The value a `let` read as `value` (a local's, or a module's) is bound to,
+// when it is one whose binding can be found: the one copy into the local,
+// or store into the module's variable.
+static ir_value_t *
+n00bb_let_initializer(ir_value_t *value)
+{
+    ir_local_t *local = value->local;
+    ir_global_t *global = value->global
+        ? value->global->identity ? value->global->identity : value->global
+        : nullptr;
+    if ((local && local->mutability == IR_MUT_MUTABLE)
+        || (global && global->mutability == IR_MUT_MUTABLE)
+        || (!local && !global))
+        return nullptr;
+    ir_func_t *only = local ? value->owner : nullptr;
+    ir_module_t *module = global ? global->owner : nullptr;
+    if (local && !only) return nullptr;
+    size_t count = only ? 1 : module ? ir_func_count(module) : 0;
+    ir_value_t *bound = nullptr;
+    for (size_t f = 0; f < count; f++) {
+        ir_func_t *function = only ? only : ir_func_at(module, f);
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                ir_value_t *stored = in->op == IR_OP_GLOBAL_STORE
+                        && in->n_operands == 2
+                    ? ir_operand_value(&in->operands[0]) : nullptr;
+                ir_global_t *target = stored && stored->global
+                    ? stored->global->identity ? stored->global->identity
+                                               : stored->global
+                    : nullptr;
+                bool binds = local
+                    ? in->op == IR_OP_COPY && in->dest_kind == IR_DEST_LOCAL
+                        && in->dest_local == local && in->n_operands == 1
+                    : target == global;
+                if (!binds) continue;
+                // Bound more than once: no one value.
+                if (bound) return nullptr;
+                bound = ir_operand_value(&in->operands[local ? 0 : 1]);
+            }
+        }
+    }
+    return bound;
+}
+
 // The function type a function reference remembers: that of the function
 // it was taken from, whose parameters keep their passing modes, as a
 // function type's don't. A reference read from a variable remembers what
@@ -1802,6 +1848,14 @@ n00bb_reference_remembered(ir_value_t *reference)
                     : value->global ? &value->global->annots
                                     : &value->annots,
                 N00BB_REMEMBERED_MODES_KEY);
+            // A `let` of the same type as the reference it is bound to
+            // remembers what that reference does.
+            ir_value_t *bound = remembered ? nullptr
+                : n00bb_let_initializer(value);
+            if (bound) {
+                value = bound;
+                continue;
+            }
             th_type *held = th_resolve(remembered ? remembered->t
                 : value->local ? value->local->type
                 : value->global ? value->global->type : value->type);
