@@ -472,12 +472,22 @@ trivia_gap(core_string_t text)
     return newlines > 1 ? GAP_BLANK : newlines ? GAP_HARD : GAP_SPACE;
 }
 
+// Trivia printed as written: comments, and the comment-like anchors that
+// open and close a region (`#[name#` ... `#]name#`).
+static bool
+printed_trivia(const parse_trivia_t *item)
+{
+    return (item->kind == PARSE_TRIVIA_COMMENT
+            || item->kind == PARSE_TRIVIA_REGION_OPEN
+            || item->kind == PARSE_TRIVIA_REGION_CLOSE)
+        && item->text.data && item->text.u8_bytes;
+}
+
 static bool
 has_comment(parse_trivia_t *trivia)
 {
     for (parse_trivia_t *item = trivia; item; item = item->next) {
-        if (item->kind == PARSE_TRIVIA_COMMENT && item->text.data
-            && item->text.u8_bytes) {
+        if (printed_trivia(item)) {
             return true;
         }
     }
@@ -532,8 +542,7 @@ put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
-            || !item->text.u8_bytes) {
+        if (!printed_trivia(item)) {
             continue;
         }
 
@@ -562,8 +571,7 @@ put_trailing_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
-            || !item->text.u8_bytes) {
+        if (!printed_trivia(item)) {
             continue;
         }
 

@@ -104,11 +104,20 @@ diff -u "$program_dir/fmt_return_skin.expected" \
     "$tmp/return_skin_normalized.n"
 
 for name in block_bodies package_body where_clauses comment_blank_lines casts \
-        not_operator sized_ints empty_result colon_blocks; do
+        not_operator sized_ints empty_result colon_blocks region_anchors; do
     "$compiler" fmt --output "$tmp/$name.n" "$program_dir/fmt_$name.n"
     diff -u "$program_dir/fmt_$name.expected" "$tmp/$name.n"
     "$compiler" fmt --check "$program_dir/fmt_$name.expected"
 done
+
+# Region anchors are trivia, not comments, and once were dropped.
+sample="$program_dir/../langtools/samples/sample.n"
+"$compiler" fmt --output "$tmp/sample.n" "$sample"
+for anchor in '#[setup#' '#]setup#'; do
+    grep -qxF "$anchor" "$tmp/sample.n"
+done
+"$compiler" fmt --output "$tmp/sample_again.n" "$tmp/sample.n"
+diff -u "$tmp/sample.n" "$tmp/sample_again.n"
 
 "$compiler" fmt --output "$tmp/trait_receivers.n" \
     "$program_dir/fmt_trait_receivers.n"
