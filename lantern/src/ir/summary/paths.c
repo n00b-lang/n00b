@@ -11,6 +11,8 @@ static bool same_spath(const ir_spath_t *a, const ir_spath_t *b);
 static const core_string_t element_step = CORE_STRING_STATIC("[]");
 static const core_string_t value_step   = CORE_STRING_STATIC("__value");
 static const core_string_t length_step  = CORE_STRING_STATIC("__len");
+// A string's data pointer.
+static const core_string_t data_step    = CORE_STRING_STATIC("data");
 
 static pthread_mutex_t step_lock = PTHREAD_MUTEX_INITIALIZER;
 static core_dict_t     step_table;

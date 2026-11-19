@@ -421,6 +421,10 @@ struct pt_t {
     pt_set_t               seen;
     // The locations the pt_resolve walk under way has met, exactly.
     loc_table_t            visited;
+    // Whether that walk finds places to write (see resolve_into), and the
+    // walks done for that, by location.
+    bool                   writing;
+    core_dict_t            resolved_writes;
     alias_calls_t          alias_calls;
     core_list_t(pt_frame_t) reading;
     core_dict_t            resolved;

@@ -171,11 +171,37 @@ foreign_deref(const pt_t *pt, const pt_loc_t *loc)
     return slot;
 }
 
+// Whether `held`, an item of `site`'s contents, is a pointer that lies in a
+// string value there, or a value copied out of (or from inside) a string.
+static bool
+string_pointer(const pt_t *pt, uint32_t site, const pt_item_t *held)
+{
+    pt_loc_t at = {.site = site,
+                   .path = {.steps = held->steps, .depth = held->depth}};
+    if (within_string(pt, &at, held->depth)) return true;
+    return held->kind == PT_CONTENTS
+        && within_string(pt, &held->loc, held->loc.path.depth);
+}
+
+// A place to write that runs on below a string value stops at the string's
+// own storage: what lies past its data pointer is never written.
+static void
+string_value_only(const pt_t *pt, pt_loc_t *loc)
+{
+    if (loc_deep(loc) && !(loc->path.flags & SPATH_INLINE)
+        && within_string(pt, loc, loc->path.depth))
+        loc->path.flags |= SPATH_INLINE;
+}
+
 static void
 resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
 {
+    if (pt->writing) string_value_only(pt, &loc);
     if (loc.site == PT_EXTERNAL) {
-        set_add(pt, into, item_at(loc));
+        // Met before in this walk, it was added then (see visited_before).
+        if (visited_before(pt, &loc)) return;
+        if (!pt->writing || !immutable_place(pt, &loc))
+            set_add(pt, into, item_at(loc));
         return;
     }
     if (visited_before(pt, &loc) || !set_add(pt, seen, item_at(loc)))
@@ -188,6 +214,13 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
         set_add(pt, into, item_at(loc));
         if (!through) return;
     }
+    // Strings are immutable: what a string's data points to (its bytes, its
+    // rich body and everything in that) is written only while it is being
+    // made, through the storage itself, never through a string. So a place
+    // to write is never found by following a pointer that lies in a string
+    // value, or one copied out of a string.
+    if (pt->writing && slot < path->depth && within_string(pt, &loc, slot))
+        return;
     uint32_t             count = slot < path->depth
         ? path->depth - slot - 1 : 0;
     // A path with no steps has none to point into (`steps` may be null).
@@ -199,6 +232,7 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     for (size_t i = 0; i < contents->len; i++) {
         pt_item_t held = contents->data[i];
         if (held.flow != PT_SAME) continue;
+        if (pt->writing && string_pointer(pt, loc.site, &held)) continue;
         if (slot == path->depth) {
             if (steps_prefix(path->depth, path->steps, held.depth,
                              held.steps)
@@ -377,31 +411,43 @@ memo_free(pt_memo_t *memo)
     core_list_free(memo->depends);
 }
 
+// The places `loc` stands for; with `writes`, only those a write can reach
+// (see resolve_into).
 static void
-pt_resolve(pt_t *pt, pt_loc_t loc, pt_set_t *into)
+pt_resolve_places(pt_t *pt, pt_loc_t loc, bool writes, pt_set_t *into)
 {
     if (loc.site == PT_EXTERNAL) {
-        set_add(pt, into, item_at(loc));
+        if (!writes || !immutable_place(pt, &loc))
+            set_add(pt, into, item_at(loc));
         return;
     }
-    bool        found = false;
-    resolved_t *entry = core_dict_get(&pt->resolved, &loc, &found);
+    core_dict_t *memo  = writes ? &pt->resolved_writes : &pt->resolved;
+    bool         found = false;
+    resolved_t  *entry = core_dict_get(memo, &loc, &found);
     if (!found) {
         entry  = core_alloc(resolved_t);
         *entry = (resolved_t){.loc = loc};
-        core_dict_put(&pt->resolved, &entry->loc, entry);
+        core_dict_put(memo, &entry->loc, entry);
     }
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
         memo_begin(pt, &entry->memo, &frame);
         entry->items.len = 0;
         pt->seen.len     = 0;
+        pt->writing      = writes;
         loc_table_clear(&pt->visited);
         resolve_into(pt, loc, &entry->items, &pt->seen);
+        pt->writing = false;
         memo_end(pt, &entry->memo, &frame);
     }
     memo_use(pt, &entry->memo);
     set_merge(pt, into, &entry->items);
+}
+
+static void
+pt_resolve(pt_t *pt, pt_loc_t loc, pt_set_t *into)
+{
+    pt_resolve_places(pt, loc, false, into);
 }
 
 static void
@@ -463,7 +509,7 @@ fresh_entry_path(const ir_instr_t *call, const ir_spath_t *path)
 
 static void
 map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
-                bool inline_tail, pt_set_t *into)
+                bool inline_tail, bool writes, pt_set_t *into)
 {
     if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
@@ -500,7 +546,7 @@ map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         }
         else
             continue;
-        pt_resolve(pt, loc, into);
+        pt_resolve_places(pt, loc, writes, into);
     }
     core_list_free(items);
 }
@@ -509,7 +555,7 @@ static void
 map_param_path(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                pt_set_t *into)
 {
-    map_param_place(pt, call, path, false, into);
+    map_param_place(pt, call, path, false, false, into);
 }
 
 
@@ -946,6 +992,9 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
                        path->flags & IR_SPATH_DEEP);
         else extend_tail(pt, &loc, path->steps, path->depth,
                          path->flags & IR_SPATH_DEEP, inline_tail);
+        // Nothing writes through a string (see resolve_into).
+        if (!value && immutable_place(pt, &loc)) return;
+        if (!value) string_value_only(pt, &loc);
         if (!value || root) set_add(pt, into, item_at(loc));
         else if (mode == MAP_DERIVED) set_add(pt, into, contents_item(loc));
         else content_at(pt, &loc, into);
@@ -953,12 +1002,14 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     else if (path->root == IR_SPLACE_PARAM && value)
         map_param_value(pt, call, path, mode == MAP_DERIVED, into);
     else if (path->root == IR_SPLACE_PARAM)
-        map_param_place(pt, call, path, inline_tail, into);
+        map_param_place(pt, call, path, inline_tail, true, into);
     else {
         pt_loc_t loc = path_loc(path);
         if (inline_tail && loc_deep(&loc)
             && loc.path.root != IR_SPLACE_UNKNOWN)
             loc.path.flags |= SPATH_INLINE;
+        if (!value && immutable_place(pt, &loc)) return;
+        if (!value) string_value_only(pt, &loc);
         set_add(pt, into, value && !root && named_root(loc.path.root)
             ? contents_item(loc) : item_at(loc));
     }

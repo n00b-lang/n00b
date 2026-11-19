@@ -21,6 +21,8 @@ typedef struct {
     bool       maybe_pointer;
     bool       pointer;
     bool       owned;
+    // Whether the root or any place the steps pass is a string value.
+    bool       in_string;
 } slot_info_t;
 
 static bool is_call(const ir_instr_t *in);
@@ -273,11 +275,16 @@ slot_info(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
     slot_info_t *info  = core_dict_get(&pt->types->slots, &probe, &found);
     if (found) return info;
     ir_module_t *module = pt->f->owner;
+    th_ctx      *types  = module ? ir_module_types(module) : nullptr;
     th_type     *raw    = root;
     th_type     *owner  = nullptr;
+    bool         in_string = raw && types
+        && th_builtin_kind(types, raw) == TH_BUILTIN_STRING;
     for (uint32_t s = 0; raw && s < depth; s++) {
         owner = raw;
         raw   = step_through(pt, module, raw, loc->path.steps[s]);
+        in_string = in_string || (raw && types
+            && th_builtin_kind(types, raw) == TH_BUILTIN_STRING);
     }
     if (owner && th_kind_of(owner) == TH_INDIRECTION)
         owner = th_ind_referent(owner);
@@ -294,6 +301,7 @@ slot_info(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
         .owned         = raw && owner && hooks && hooks->owned_field
                       && hooks->owned_field(hooks->context, owner,
                                             loc->path.steps[depth - 1]),
+        .in_string     = in_string,
     };
     core_dict_put(&pt->types->slots, &info->key, info);
     return info;
@@ -303,6 +311,28 @@ static th_type *
 loc_type(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
 {
     return slot_info(pt, loc, depth)->slot;
+}
+
+// Whether the first `depth` steps of `loc` lead into a string value (or
+// stop at one): the place is in the string or inside it.
+static bool
+within_string(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
+{
+    if (depth > loc->path.depth) depth = loc->path.depth;
+    return slot_info(pt, loc, depth)->in_string;
+}
+
+// Whether `loc` is reached by following a pointer that lies in a string
+// value: its bytes or its rich body, which nothing writes once it is a
+// string.
+static bool
+immutable_place(const pt_t *pt, const pt_loc_t *loc)
+{
+    const ir_spath_t *path = &loc->path;
+    for (uint32_t s = 0; s < path->depth; s++)
+        if (step_eq(path->steps[s], value_step) && within_string(pt, loc, s))
+            return true;
+    return false;
 }
 
 static bool

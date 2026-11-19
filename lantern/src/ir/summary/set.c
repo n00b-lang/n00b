@@ -594,6 +594,23 @@ static void
 loc_push(const pt_t *pt, pt_loc_t *loc, core_string_t step)
 {
     if (loc_deep(loc)) return;
+    // A string's one pointer is its data: what a string value points to is
+    // what its data does. Saying so keeps the bytes or rich body apart from
+    // the string itself, rather than widening to all of the string.
+    if (step_eq(step, value_step)) {
+        th_ctx  *types = pt->f->owner ? ir_module_types(pt->f->owner)
+                                      : nullptr;
+        th_type *raw   = slot_info(pt, loc, loc->path.depth)->raw;
+        if (raw && types
+            && th_builtin_kind(types, raw) == TH_BUILTIN_STRING) {
+            th_type *string = loc_type(pt, loc, loc->path.depth);
+            if (string && step_fits(pt, string, data_step)) {
+                path_push(&loc->path, data_step);
+                loc_push(pt, loc, value_step);
+                return;
+            }
+        }
+    }
     th_type *type = loc_type(pt, loc, loc->path.depth);
     if (type && !step_fits(pt, type, step)) {
         loc->path.flags |= IR_SPATH_DEEP;

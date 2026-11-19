@@ -47,6 +47,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
     core_dict_init(&pt->escaped, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
+    core_dict_init(&pt->resolved_writes, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
     core_dict_init(&pt->must_dests, nullptr, nullptr);
     core_dict_init(&pt->value_groups, nullptr, nullptr);
@@ -214,6 +215,13 @@ pt_free(pt_t *pt)
         core_free(resolved);
     }
     core_dict_free(&pt->resolved);
+    core_dict_foreach(&pt->resolved_writes, entry) {
+        resolved_t *resolved = entry->value;
+        core_list_free(resolved->items);
+        memo_free(&resolved->memo);
+        core_free(resolved);
+    }
+    core_dict_free(&pt->resolved_writes);
     core_dict_foreach(&pt->contents_memo, entry) {
         content_memo_t *content = entry->value;
         core_list_free(content->items);
