@@ -2,7 +2,22 @@
 
 #include "parse/types.h"
 
+#include <stdint.h>
 #include <stdio.h>
+
+// The leading member of every grammar, readable without a call. `version`
+// changes, to a value no grammar has had before, whenever the grammar gains a
+// nonterminal, so a name resolved against one version of one grammar stays
+// resolved for exactly as long as the grammar's set of names is unchanged.
+typedef struct {
+    uint64_t version;
+} parse_grammar_head_t;
+
+static inline uint64_t
+parse_grammar_version(const parse_grammar_t *g)
+{
+    return ((const parse_grammar_head_t *)(const void *)g)->version;
+}
 
 parse_grammar_t *parse_grammar_new(void);
 void            parse_grammar_free(parse_grammar_t *g);

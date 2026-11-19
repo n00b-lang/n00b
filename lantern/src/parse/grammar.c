@@ -12,6 +12,15 @@
 #include <string.h>
 
 static pthread_mutex_t grammar_finalize_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t grammar_versions;
+
+// Gives `g` a version no grammar has had: see parse_grammar_head_t.
+static void
+new_grammar_version(parse_grammar_t *g)
+{
+    g->head.version = atomic_fetch_add_explicit(&grammar_versions, 1,
+                                                memory_order_relaxed) + 1;
+}
 
 static bool
 check_stack_for_nt(core_list_t(int) *stack, int64_t ruleset)
@@ -301,6 +310,7 @@ parse_grammar_new(void)
 {
     parse_grammar_t *g = core_alloc(parse_grammar_t);
 
+    new_grammar_version(g);
     g->error_rules           = true;
     g->max_penalty           = PARSE_DEFAULT_MAX_PENALTY;
     g->hide_penalty_rewrites = true;
@@ -462,6 +472,7 @@ parse_nonterm(parse_grammar_t *g, core_string_t name)
     nt->id = (int64_t)g->nt_list.len;
 
     core_list_push(g->nt_list, nt);
+    new_grammar_version(g);
 
     if (name.data) {
         core_string_t *key = core_dict_string_key_copy(name);

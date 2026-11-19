@@ -71,9 +71,6 @@ n00bb_object_type_declared(parse_grammar_t *grammar,
 static const ir_scalar_t *
 n00bb_scalar_of(th_type *type);
 
-#define NT_IS(g, n, lit) nt_is((g), (n), CORE_STRING_STATIC(lit))
-#define CHILD_NT(g, n, lit) child_nt((g), (n), CORE_STRING_STATIC(lit))
-
 core_list_decl(th_kwparam);
 core_list_decl(th_member);
 core_list_decl(size_t);

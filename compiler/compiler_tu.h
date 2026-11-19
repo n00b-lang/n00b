@@ -1205,6 +1205,13 @@ nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
         && (!name.u8_bytes || !memcmp(actual.data, name.data, name.u8_bytes));
 }
 
+// nt_is and child_nt for a nonterminal named by a string literal. The name
+// resolves to the grammar's nonterminal id once per expansion site, after
+// which each check compares ids rather than names.
+#define NT_IS(g, n, lit) PARSE_TREE_IS_NT((g), (n), lit)
+#define CHILD_NT(g, n, lit)                                                    \
+    parse_tree_find_flat_child_by_nt_id((n), PARSE_NT_ID((g), lit))
+
 typedef struct {
     core_string_t action;
     core_string_t literal;

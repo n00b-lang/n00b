@@ -6,7 +6,13 @@ const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *node)
 {
     if (!g || !node || core_tree_is_leaf(node)) return nullptr;
     parse_nt_node_t *pn = &core_tree_node_value(node);
-    parse_nonterm_t *nt = parse_find_nonterm(g, pn->name);
+    // The rule is found by the node's name. Nodes built for a nonterminal
+    // share its name's storage, which identifies it without hashing the name.
+    parse_nonterm_t *nt = pn->group_top ? nullptr
+                                        : parse_get_nonterm(g, pn->id);
+    if (!nt || !nt->name.data || nt->name.data != pn->name.data
+        || nt->name.u8_bytes != pn->name.u8_bytes)
+        nt = parse_find_nonterm(g, pn->name);
     if (!nt || pn->rule_index < 0
         || (size_t)pn->rule_index >= core_list_len(nt->rule_ids))
         return nullptr;
@@ -135,6 +141,39 @@ parse_tree_find_flat_child_by_nt_name(parse_grammar_t *g,
     size_t remaining = 0;
     return want ? find_child_by_nt_id(parent, want->id, &remaining, true)
                 : nullptr;
+}
+
+parse_tree_t *
+parse_tree_find_direct_child_by_nt_id(parse_tree_t *parent, int64_t id)
+{
+    size_t remaining = 0;
+    return id >= 0 ? find_child_by_nt_id(parent, id, &remaining, false)
+                   : nullptr;
+}
+
+parse_tree_t *
+parse_tree_find_flat_child_by_nt_id(parse_tree_t *parent, int64_t id)
+{
+    size_t remaining = 0;
+    return id >= 0 ? find_child_by_nt_id(parent, id, &remaining, true)
+                   : nullptr;
+}
+
+int64_t
+parse_nt_site_resolve(parse_grammar_t *g, parse_nt_site_t *site,
+                      core_string_t name)
+{
+    if (!g) return -1;
+    parse_nonterm_t *nt = parse_find_nonterm(g, name);
+    int64_t id = nt ? nt->id : -1;
+    uint64_t version = parse_grammar_version(g);
+    if (id + 1 < (INT64_C(1) << PARSE_NT_SITE_ID_BITS)
+        && version < (UINT64_C(1) << (64 - PARSE_NT_SITE_ID_BITS)))
+        atomic_store_explicit(&site->resolved,
+                              version << PARSE_NT_SITE_ID_BITS
+                                  | (uint64_t)(id + 1),
+                              memory_order_relaxed);
+    return id;
 }
 
 parse_tree_t *

@@ -351,7 +351,9 @@ node_named(parse_grammar_t *g, parse_tree_t *node, core_string_t name)
     return core_string_eq(node_name(g, node), name);
 }
 
-#define is_name(g, node, lit) node_named((g), (node), CORE_STRING_STATIC(lit))
+// node_named for a string literal: compares nonterminal ids, the name
+// resolving once per expansion site.
+#define is_name(g, node, lit) PARSE_TREE_IS_NT((g), (node), lit)
 
 static core_string_t leaf_text(pp_context_t *ctx, parse_tree_t *node);
 

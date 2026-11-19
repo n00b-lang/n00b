@@ -2,9 +2,6 @@
 #include "compiler_link.h"
 #include "flagset_value.h"
 
-#define NT_IS(g, n, lit) nt_is((g), (n), CORE_STRING_STATIC(lit))
-#define CHILD_NT(g, n, lit) child_nt((g), (n), CORE_STRING_STATIC(lit))
-
 typedef struct {
     parse_grammar_t *grammar;
     th_ctx *types;

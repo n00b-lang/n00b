@@ -67,6 +67,7 @@ struct parse_rule_group_t {
 };
 
 struct parse_grammar_t {
+    parse_grammar_head_t            head;   // first: parse_grammar_version
     core_list_t(parse_terminal_t)   named_terms;
     core_list_t(parse_rule_t) rules;
     core_list_t(parse_nonterm_ptr_t) nt_list;
@@ -96,6 +97,9 @@ struct parse_grammar_t {
     core_cache_t annot_cache;
     pthread_mutex_t annot_cache_lock;
 };
+
+static_assert(offsetof(parse_grammar_t, head) == 0,
+              "parse_grammar_version reads the head at the grammar's start");
 
 static inline int32_t
 parse_contextual_source_tid(const parse_grammar_t *g, int64_t terminal_id)
