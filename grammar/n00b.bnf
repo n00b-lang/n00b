@@ -836,17 +836,17 @@
 # Accepted only to be reported (N00B-T0609): a named positional entry, and a
 # positional entry after the keyword parameters.
 <tspec-func-param> ::= <tspec-param-mode> <tspec-named-positional>
-<tspec-named-positional> ::= %IDENTIFIER %":" <union-tspec>
+<tspec-named-positional> @nospace($1) ::= %IDENTIFIER %":" <union-tspec>
 <tspec-late-param> ::= <tspec-func-param> | <tspec-vargs>
 
 <tspec-param-mode> ::= %"in" | %"view" | %"out" | %"modify" | %"consume"
 
-<tspec-field> ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
+<tspec-field> @nospace($1) ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
-<tspec-vargs> ::= %"*" <union-tspec> <where-clause>?
+<tspec-vargs> @nospace($1) ::= %"*" <union-tspec> <where-clause>?
 # Writing `**` before the keyword parameters is an alternate spelling; the
 # preferred one leaves it out.
-<tspec-kargs> ::= %"**"? <tspec-field> (%"," <tspec-karg-entry>)*
+<tspec-kargs> @nospace($1) ::= %"**"? <tspec-field> (%"," <tspec-karg-entry>)*
 <tspec-karg-entry> ::= <tspec-field> | <tspec-late-param>
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?

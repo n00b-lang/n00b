@@ -53,7 +53,7 @@ let s = {1, 2}
 EOF
 "$compiler" fmt --normalize "$tmp/normalize.n"
 grep -q 'Tuple\[u8, u8\]' "$tmp/normalize.n"
-grep -q 'Tuple\[a : u8, b : u8\]' "$tmp/normalize.n"
+grep -q 'Tuple\[a: u8, b: u8\]' "$tmp/normalize.n"
 grep -q 'Dict\[u8, nil\]' "$tmp/normalize.n"
 if grep -q 'builtin\.' "$tmp/normalize.n"; then
     echo 'normalized types name builtin modules' >&2
