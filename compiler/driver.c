@@ -71,8 +71,24 @@ typedef struct {
     core_string_t relative;
     size_t root_index;
     core_module_spec_t module;
+    // The candidate's package syntax index once read from the derived
+    // product cache (see candidate_syntax_names); set at most once, under
+    // __atomic operations, since import discovery runs on several threads.
+    core_buffer_t *syntax_names;
 } n00bb_manifest_candidate_t;
 core_list_decl(n00bb_manifest_candidate_t);
+
+static void
+release_manifest_candidate(n00bb_manifest_candidate_t *candidate)
+{
+    core_free(candidate->path.data);
+    core_free(candidate->relative.data);
+    core_module_spec_release(&candidate->module);
+    if (candidate->syntax_names) {
+        core_buffer_release(candidate->syntax_names);
+        core_free(candidate->syntax_names);
+    }
+}
 
 typedef struct {
     core_string_t identifier;
@@ -269,11 +285,8 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
     for (size_t i = 0; i < resolver->roots.len; i++)
         core_free(resolver->roots.data[i].path.data);
     core_list_free(resolver->roots);
-    for (size_t i = 0; i < resolver->manifests.len; i++) {
-        core_free(resolver->manifests.data[i].path.data);
-        core_free(resolver->manifests.data[i].relative.data);
-        core_module_spec_release(&resolver->manifests.data[i].module);
-    }
+    for (size_t i = 0; i < resolver->manifests.len; i++)
+        release_manifest_candidate(&resolver->manifests.data[i]);
     core_list_free(resolver->manifests);
     for (size_t i = 0; i < resolver->generated.len; i++) {
         core_free(resolver->generated.data[i].identifier.data);
@@ -1062,6 +1075,11 @@ index_manifest_module(void *opaque, size_t root_index,
         }
         core_free(known->relative.data);
         core_module_spec_release(&known->module);
+        if (known->syntax_names) {
+            core_buffer_release(known->syntax_names);
+            core_free(known->syntax_names);
+            known->syntax_names = nullptr;
+        }
         known->relative = nearer;
         known->root_index = root_index;
         known->module = module;
@@ -1092,11 +1110,8 @@ n00bb_resolver_prepare_packages(n00bb_resolver_t *resolver)
         resolver->inventory);
     if (resolver->manifests_indexed
         && resolver->manifests_generation == generation) return true;
-    for (size_t i = 0; i < resolver->manifests.len; i++) {
-        core_free(resolver->manifests.data[i].path.data);
-        core_free(resolver->manifests.data[i].relative.data);
-        core_module_spec_release(&resolver->manifests.data[i].module);
-    }
+    for (size_t i = 0; i < resolver->manifests.len; i++)
+        release_manifest_candidate(&resolver->manifests.data[i]);
     resolver->manifests.len = 0;
     resolver->manifests_indexed = false;
     if (!core_snapshot_inventory_visit(resolver->inventory,
@@ -1123,6 +1138,45 @@ syntax_index_has_name(const core_buffer_t *names, core_string_t wanted)
     return false;
 }
 
+// The names `candidate`'s source declares, from its package syntax product
+// in the derived-product cache; false when there is no valid product. A
+// product is checked against the candidate's source snapshot when read, so
+// once read it stays valid for as long as the candidate (which is rebuilt
+// when the inventory changes) and is kept rather than read from disk at
+// every import; a missing one is looked for again, since it may be written
+// later.
+static bool
+candidate_syntax_names(n00bb_resolver_t *resolver,
+                       n00bb_manifest_candidate_t *candidate,
+                       const core_buffer_t **names)
+{
+    core_buffer_t *known = __atomic_load_n(&candidate->syntax_names,
+                                           __ATOMIC_ACQUIRE);
+    if (known) {
+        *names = known;
+        return true;
+    }
+    core_buffer_t read = {0};
+    if (!core_snapshot_inventory_product_read(resolver->inventory,
+            candidate->root_index, candidate->relative, PACKAGE_SYNTAX_KIND,
+            resolver->package_syntax_profile, &read)) {
+        core_buffer_release(&read);
+        return false;
+    }
+    core_buffer_t *kept = core_alloc(core_buffer_t);
+    *kept = read;
+    core_buffer_t *expected = nullptr;
+    if (!__atomic_compare_exchange_n(&candidate->syntax_names, &expected,
+                                     kept, false, __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        core_buffer_release(kept);
+        core_free(kept);
+        kept = expected;
+    }
+    *names = kept;
+    return true;
+}
+
 void
 n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
                                     core_string_t source_path,
@@ -1133,12 +1187,8 @@ n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
     for (size_t i = 0; i < resolver->manifests.len; i++) {
         n00bb_manifest_candidate_t *candidate = &resolver->manifests.data[i];
         if (!core_string_eq(candidate->path, source_path)) continue;
-        core_buffer_t cached = {0};
-        bool exists = core_snapshot_inventory_product_read(
-            resolver->inventory, candidate->root_index, candidate->relative,
-            PACKAGE_SYNTAX_KIND, resolver->package_syntax_profile, &cached);
-        core_buffer_release(&cached);
-        if (!exists)
+        const core_buffer_t *cached = nullptr;
+        if (!candidate_syntax_names(resolver, candidate, &cached))
             (void)core_snapshot_inventory_product_write(
                 resolver->inventory, candidate->root_index,
                 candidate->relative, PACKAGE_SYNTAX_KIND,
@@ -1184,15 +1234,11 @@ walk_manifests(n00bb_resolver_t *resolver, core_string_t declared_name,
             && !candidate_in_package(resolver, candidate, package_id))
             continue;
         if (resolver->package_syntax_profile) {
-            core_buffer_t names = {0};
-            bool cached = core_snapshot_inventory_product_read(
-                resolver->inventory, candidate->root_index,
-                candidate->relative, PACKAGE_SYNTAX_KIND,
-                resolver->package_syntax_profile, &names);
+            const core_buffer_t *names = nullptr;
+            bool cached = candidate_syntax_names(resolver, candidate, &names);
             bool matches = !cached || (declared_name.data
-                ? syntax_index_has_name(&names, declared_name)
-                : names.byte_len != 0);
-            core_buffer_release(&names);
+                ? syntax_index_has_name(names, declared_name)
+                : names->byte_len != 0);
             if (!matches) continue;
         }
         found = true;
