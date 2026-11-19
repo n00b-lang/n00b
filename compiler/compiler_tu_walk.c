@@ -83,12 +83,13 @@ untyped_module_name(n00bb_tu_state_t *state, parse_tree_t *import)
 }
 
 static void
-record_definition_site(parse_grammar_t *grammar, parse_tree_t *node)
+record_definition_site(parse_grammar_t *grammar, parse_tree_t *node,
+                       n00bb_rule_t node_rule)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    bool declaration = NT_IS(grammar, node, "sym-decl");
-    bool assignment = NT_IS(grammar, node, "assign-stmt")
-        || NT_IS(grammar, node, "binop-assign-stmt");
+    bool declaration = node_rule == RULE(SYM_DECL);
+    bool assignment = node_rule == RULE(ASSIGN_STMT)
+        || node_rule == RULE(BINOP_ASSIGN_STMT);
     if (!declaration && !assignment) return;
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     parse_annotation_t *assign = rule
@@ -404,7 +405,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
     bool type_reference = cache && cache->type_reference;
     if (entering) {
-        if (n00bb_postfix_node(grammar, node))
+        if (rule == RULE(POSTFIX_EXPR) || rule == RULE(PLACE))
             parse_tree_set_index_address_access(node,
                 n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {
@@ -584,7 +585,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     // Only postfix expressions and places emit a call; asking node_emit,
     // which compares names, of every other node finds nothing.
     if (!entering && (n00bb_call_operator_node(grammar, node)
-                      || (n00bb_postfix_node(grammar, node)
+                      || ((rule == RULE(POSTFIX_EXPR) || rule == RULE(PLACE))
                           && n00bb_node_emit(grammar, node, &emit)
                           && core_string_eq(emit.action,
                                             CORE_STRING_STATIC("call")))))
@@ -821,7 +822,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             return;
         }
         remember_link_use_site(grammar, unit, state, node);
-        record_definition_site(grammar, node);
+        record_definition_site(grammar, node, rule);
     }
 
     if (!entering && node == n00bb_tu_parsed_tree(state)) {

@@ -1237,22 +1237,23 @@ bool n00bb_node_emit(parse_grammar_t *grammar, parse_tree_t *node,
 static inline bool
 n00bb_name_place(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "place")
+    return n00bb_rule_of(grammar, node) == RULE(PLACE)
         && core_tree_num_children(node) == 1;
 }
 
 static inline bool
 n00bb_postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "postfix-expr")
-        || NT_IS(grammar, node, "place");
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(POSTFIX_EXPR) || rule == RULE(PLACE);
 }
 
 static inline bool
 n00bb_primary_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "primary")
-        || n00bb_name_place(grammar, node);
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(PRIMARY)
+        || (rule == RULE(PLACE) && core_tree_num_children(node) == 1);
 }
 
 static inline parse_tree_t *
