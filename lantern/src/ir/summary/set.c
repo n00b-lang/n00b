@@ -185,14 +185,31 @@ object_order(const pt_loc_t *a, const pt_loc_t *b)
     return (uintptr_t)x->global < (uintptr_t)y->global ? -1 : 1;
 }
 
+// The first item of `set` on `loc`'s object or past it. Sets are mostly
+// built in order, so the object is usually past the last item's, or is the
+// last item's: look there first, then gallop back, before searching all of
+// the set.
 static size_t
-object_bound(const pt_set_t *set, const pt_loc_t *loc, bool upper)
+object_start(const pt_set_t *set, const pt_loc_t *loc)
 {
-    size_t low = 0, high = set->len;
+    size_t len = set->len;
+    if (!len) return 0;
+    int last = object_order(&set->data[len - 1].loc, loc);
+    if (last < 0) return len;
+    size_t low = 0, high = len - 1;
+    if (!last) {
+        // data[high] is on the object: gallop down to an item before it.
+        size_t span = 1;
+        while (span <= high
+               && !(object_order(&set->data[high - span].loc, loc) < 0)) {
+            high -= span;
+            span *= 2;
+        }
+        low = span <= high ? high - span + 1 : 0;
+    }
     while (low < high) {
         size_t middle = low + (high - low) / 2;
-        int    order  = object_order(&set->data[middle].loc, loc);
-        if (order < 0 || (upper && !order)) low = middle + 1;
+        if (object_order(&set->data[middle].loc, loc) < 0) low = middle + 1;
         else high = middle;
     }
     return low;
@@ -350,7 +367,7 @@ static bool
 set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
               size_t *high, size_t *first, size_t *last)
 {
-    size_t start = object_bound(set, &item->loc, false);
+    size_t start = object_start(set, &item->loc);
     size_t end   = object_end(set, &item->loc, start);
     *first = start;
     *last  = end;
@@ -464,6 +481,8 @@ insert_item(pt_set_t *set, const pt_item_t *item)
     size_t before = set->len;
     drop_covered(set, item, low, high);
     size_t at = first, top = last - (before - set->len);
+    // Mostly the item goes after all of its object's (see object_start).
+    if (at < top && item_order(&set->data[top - 1], item) < 0) at = top;
     while (at < top) {
         size_t middle = at + (top - at) / 2;
         if (item_order(&set->data[middle], item) < 0) at = middle + 1;
