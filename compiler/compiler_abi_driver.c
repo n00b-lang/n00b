@@ -359,6 +359,15 @@ n00bb_finalizer_instance(const core_list_t(n00bb_specialization_t)
     return nullptr;
 }
 
+static int
+binding_order(const void *left, const void *right)
+{
+    const n00bb_llvm_finalizer_binding_t *a = left, *b = right;
+    if (a->type_index != b->type_index)
+        return a->type_index < b->type_index ? -1 : 1;
+    return core_string_cmp(a->function->name, b->function->name);
+}
+
 static bool
 n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
                        const n00bb_llvm_type_index_t *type_indices,
@@ -378,6 +387,11 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
                 };
                 break;
             }
+    // In the linked type table's order: the hooks are listed as the
+    // program's modules were analyzed, which differs with what was cached,
+    // and the dispatch made from them follows this order.
+    if (*out_count > 1)
+        qsort(*out, *out_count, sizeof(**out), binding_order);
     return true;
 }
 
