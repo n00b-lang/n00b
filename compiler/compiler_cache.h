@@ -142,6 +142,9 @@ void n00bb_cache_set_check_only(bool check_only);
 // A library build: like a check, it makes no native code; it keeps the
 // modules' ABI objects in a phase of its own.
 void n00bb_cache_set_library(void);
+// The modules a compile builds from source, comma separated: cache entries
+// holding any of them are not loaded.
+void n00bb_cache_set_roots(core_string_t names);
 bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,
                        const n00bb_cache_module_object_t *objects,

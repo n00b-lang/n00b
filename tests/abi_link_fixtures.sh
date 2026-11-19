@@ -58,6 +58,24 @@ cmp "$tmp/abi/cycles.cycle_first.n00bm" \
     echo "cycles.cycle_first's ABI object differs with other roots" >&2
     exit 1
 }
+# A root in a cycle is built from source even when the cache holds its
+# cycle, a library's roots as a program's one: built again with the cycle
+# cached, every object is the same.
+library_dump "$abi_programs" "$tmp/enum_cycle" enum_export.__init \
+    cycles.cycle_first
+library_dump "$abi_programs" "$tmp/enum_cycle_again" enum_export.__init \
+    cycles.cycle_first
+for object in "$tmp/enum_cycle"/*.n00bm; do
+    cmp "$object" "$tmp/enum_cycle_again/${object##*/}" || {
+        echo "${object##*/} differs when its library is built again" >&2
+        exit 1
+    }
+done
+cmp "$tmp/alone/cycles.cycle_first.n00bm" \
+    "$tmp/enum_cycle/cycles.cycle_first.n00bm" || {
+    echo "cycles.cycle_first's ABI object differs beside enum_export" >&2
+    exit 1
+}
 # Nor on where it sits among the roots: the first root is the first module
 # to define the types the compiler gives every module.
 library_dump "$abi_programs" "$tmp/first" cycles.cycle_first empty

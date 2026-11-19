@@ -1145,11 +1145,27 @@ name_listed(core_string_t list, core_string_t name)
     return false;
 }
 
+// The modules this compile builds from source: its roots. An entry holding
+// one isn't loaded, whatever else it holds, since a cycle's members are
+// compiled together: one compiled from source beside another loaded from
+// the cache would disagree about the cycle (its ABI SCC identity is made
+// from its members' sources).
+static core_buffer_t cache_roots;
+
+void
+n00bb_cache_set_roots(core_string_t names)
+{
+    core_buffer_release(&cache_roots);
+    core_buffer_append_string(&cache_roots, names);
+}
+
 static bool
 entry_excluded(const cache_entry_t *entry, core_string_t excluded)
 {
     for (size_t m = 0; m < entry->members.len; m++)
-        if (name_listed(excluded, entry->members.data[m].name)) return true;
+        if (name_listed(excluded, entry->members.data[m].name)
+            || name_listed(core_buffer_string(&cache_roots),
+                           entry->members.data[m].name)) return true;
     return false;
 }
 

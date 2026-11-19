@@ -5681,6 +5681,23 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
         && n00bb_locate_operand(resolver, operand, &module, &source)
             == CORE_MODULE_RESOLVED;
     n00bb_cache_t *cache = nullptr;
+    // Every root is compiled from source, a library's many as a program's
+    // one.
+    core_buffer_t roots = {0};
+    for (int32_t i = 0; located && i < parse_cmdr_arg_count(args); i++) {
+        core_module_spec_t each = {0};
+        core_source_file_t each_source = {0};
+        if (n00bb_locate_operand(resolver, parse_cmdr_arg_str(args, i),
+                &each, &each_source) == CORE_MODULE_RESOLVED
+            && each.identifier.data) {
+            if (roots.byte_len) core_buffer_putc(&roots, ',');
+            core_buffer_append_string(&roots, each.identifier);
+        }
+        core_source_file_release(&each_source);
+        core_module_spec_release(&each);
+    }
+    n00bb_cache_set_roots(core_buffer_string(&roots));
+    core_buffer_release(&roots);
     if (located) {
         core_string_t root = core_source_file_path(&source);
         core_buffer_t libraries = {0};
