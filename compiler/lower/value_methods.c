@@ -120,8 +120,7 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     core_string_t test_name = n00bb_format_name(buffer[5], sizeof buffer[5],
         "field_%zu_%u_equal", field, depth);
     ir_value_t *test = nullptr;
-    if (selected->module.data
-        && core_string_eq(selected->module, CORE_STRING_STATIC("builtins"))) {
+    if (n00bb_compiler_package(selected->package)) {
         ir_instr_t *equal = ir_instr_add(current, IR_OP_EQ);
         if (equal && ir_instr_set_dest(equal, test_name, boolean)
             && ir_instr_operand_value(equal, left)

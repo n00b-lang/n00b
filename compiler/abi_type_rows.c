@@ -1,4 +1,5 @@
 #include "abi_type_rows.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -516,8 +517,7 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             || !declaration.contract
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
-        bool builtin = core_string_eq(declaration.module,
-                                      CORE_STRING_STATIC("builtins"));
+        bool builtin = n00bb_compiler_package(declaration.package);
         uint32_t owner_index = 0;
         if (!n00bb_abi_type_index_find(index, declaration.contract,
                                        &owner_index)) {

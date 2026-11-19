@@ -1,4 +1,5 @@
 #include "abi_trait_method_rows.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -55,9 +56,7 @@ n00bb_abi_trait_method_rows_build(
                     break;
                 }
                 if (declaration.kind == TH_ENV_DECLARATION_TRAIT
-                    && declaration.module.data
-                    && core_string_eq(declaration.module,
-                                      CORE_STRING_STATIC("builtins"))
+                    && n00bb_compiler_package(declaration.package)
                     && declaration.contract
                     && n00bb_abi_type_index_find(index,
                         declaration.contract, &declaration_index)

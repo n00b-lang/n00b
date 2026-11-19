@@ -395,3 +395,48 @@ for cache in warm warm off; do
         exit 1
     }
 done
+
+# The compiler's own declarations (module `builtins`) are told by package,
+# not by that name: a default-package builtins.n is the user's, and its
+# trait, record and functions are ordinary items. The second build restores
+# the module's interface from the cache.
+names="$shadow/builtins_module"
+mkdir -p "$names"
+cat >"$names/builtins.n" <<'PROGRAM'
+trait Shape {
+    func area(self: 'S) -> int
+}
+
+record Square {
+    side: int
+}
+
+func area(self: Square) -> int {
+    return self.side * self.side
+}
+
+func double(x: int) -> int {
+    return x * 2
+}
+
+func total(view s: 'T) -> int where 'T: Shape {
+    return s.area()
+}
+PROGRAM
+cat >"$names/main.n" <<'PROGRAM'
+import builtins
+
+let s: builtins.Square = (side = 3)
+let t: builtins.Square = (side = 3)
+require s == t
+require builtins.double(builtins.total(s)) == 18
+PROGRAM
+for build in first cached; do
+    (cd "$names" && env -u N00B_NO_OBJECT_CACHE -u N00B_NO_PACKAGE_CACHE \
+        "$compiler" build --output "$tmp/builtins_user" main.n) \
+        >"$tmp/builtins.log" 2>&1 && "$tmp/builtins_user" || {
+        echo "builtins.n ($build build): not treated as a user module" >&2
+        cat "$tmp/builtins.log" >&2
+        exit 1
+    }
+done

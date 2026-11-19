@@ -1,4 +1,5 @@
 #include "abi_type_index.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -322,8 +323,7 @@ dispatched_trait(th_ctx *types, core_string_t name, bool *builtin)
             || !declaration.qualified_name.data || !declaration.contract
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
-        bool from_builtins = core_string_eq(declaration.module,
-                                            CORE_STRING_STATIC("builtins"));
+        bool from_builtins = n00bb_compiler_package(declaration.package);
         if (core_string_eq(declaration.qualified_name, name)) {
             *builtin = from_builtins;
             return declaration.contract;

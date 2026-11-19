@@ -1,4 +1,5 @@
 #include "abi_emit.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -1420,8 +1421,7 @@ imported_module_symbol(const core_link_reference_t *reference,
     if (!reference || core_link_reference_referrer(reference) != unit
         || !target || core_link_declaration_owner(target) == unit)
         return true;
-    if (core_string_eq(core_link_declaration_module(target),
-            CORE_STRING_STATIC("builtins")))
+    if (n00bb_compiler_package(core_link_declaration_module(target)))
         return true;
     uint32_t kind = core_link_declaration_kind(target);
     if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE
@@ -1502,9 +1502,7 @@ collect_environment_traits(ir_module_t *module,
         if (declaration.kind == TH_ENV_DECLARATION_TRAIT
             && declaration.contract
             && th_kind_of(th_resolve(declaration.contract)) == TH_TRAIT
-            && declaration.module.data
-            && core_string_eq(declaration.module,
-                              CORE_STRING_STATIC("builtins"))
+            && n00bb_compiler_package(declaration.package)
             && !n00bb_abi_type_index_add(index, declaration.contract,
                                          nullptr))
             return false;

@@ -1904,7 +1904,10 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
             if (!th_env_declaration_at(environment, i, &declaration)
                 || !declaration.module.data
                 || !core_string_eq(declaration.module,
-                                   unit->module.identifier))
+                                   unit->module.identifier)
+                // The compiler's own module is `builtins` too, and a
+                // user's builtins.n gets none of its declarations.
+                || n00bb_compiler_package(declaration.package))
                 continue;
             core_string_t qualified_name = declaration.qualified_name;
             core_string_t declaration_tail = n00bb_name_leaf(qualified_name);

@@ -3857,8 +3857,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
                  d++) {
                 core_link_declaration_t *candidate =
                     core_link_unit_declaration_at(link, d);
-                if (core_string_eq(core_link_declaration_module(candidate),
-                                   CORE_STRING_STATIC("builtins"))
+                if (n00bb_compiler_package(
+                        core_link_declaration_module(candidate))
                     && core_string_eq(core_link_declaration_key(candidate),
                                       name)) {
                     declaration = candidate;
@@ -3871,8 +3871,10 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
                     .visibility = 0,
                     .contract = n00bb_symbol_signature(symbol),
                 };
+                // In the compiler's own link module, which no source
+                // module shares (a user's builtins.n is module `builtins`).
                 if (!core_link_unit_require_external(link,
-                        CORE_STRING_STATIC("builtins"), name, &metadata,
+                        N00BB_COMPILER_PACKAGE, name, &metadata,
                         &declaration)) return false;
             }
             if (!core_dict_add(declarations_by_symbol, symbol, declaration))
@@ -3910,7 +3912,7 @@ register_link_use_sites(core_link_unit_t *link,
             if (n00bb_builtin_function(symbol)) {
                 core_link_reference_t *reference = nullptr;
                 bool ok = core_link_unit_reference_at_scoped_kind(link, unit,
-                    node, site->scope, CORE_STRING_STATIC("builtins"),
+                    node, site->scope, N00BB_COMPILER_PACKAGE,
                     symbol->name, PARSE_SYM_FUNCTION, &reference);
                 core_string_t provenance = core_source_file_path(&unit->source);
                 if (!ok || !core_link_reference_set_source_info(link,

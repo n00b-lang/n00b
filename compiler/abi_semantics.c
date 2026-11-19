@@ -1,5 +1,6 @@
 #include "abi_semantics.h"
 #include "abi_type_index.h"
+#include "compiler_system.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -615,9 +616,7 @@ n00bb_abi_link_semantic_rows(
                 if (status == TH_ENV_METHOD_AMBIGUOUS) continue;
                 valid = status == TH_ENV_METHOD_FOUND;
                 if (!valid) break;
-                if (chosen.module.data && core_string_eq(chosen.module,
-                        CORE_STRING_STATIC("builtins")))
-                    continue;
+                if (n00bb_compiler_package(chosen.package)) continue;
                 valid = function_index_for_method(ctx, &link, plan,
                     &chosen, false, &function_index)
                     && entries.len < UINT32_MAX;

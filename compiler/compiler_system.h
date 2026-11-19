@@ -6,6 +6,16 @@
 // `builtins`). It is no path and not "default", so no source module has it.
 #define N00BB_COMPILER_PACKAGE CORE_STRING_STATIC("<compiler>")
 
+// Whether a declaration is one the compiler makes itself: its package is
+// N00BB_COMPILER_PACKAGE, as is the link-unit module its link declarations
+// live in. This is the one test; the module name `builtins` says nothing,
+// since a default-package builtins.n is the user's.
+static inline bool
+n00bb_compiler_package(core_string_t package)
+{
+    return core_string_eq(package, N00BB_COMPILER_PACKAGE);
+}
+
 // Whether a package is a system one: the standard library's (its package
 // ids lie under the canonical library directory) or the compiler's own.
 // This is the one test of system-ness; a module's name says nothing, since

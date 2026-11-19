@@ -1227,6 +1227,7 @@ n00bb_rewrite_option_builtin_name(const n00bb_dispatch_target_t *target,
     core_string_t prefix = CORE_STRING_STATIC("builtins.");
     core_string_t name = symbol ? symbol->name
         : target->kind == N00BB_TARGET_METHOD
+            && n00bb_compiler_package(target->method.package)
             && core_string_starts_with(target->method.qualified_name, prefix)
         ? core_string_slice(target->method.qualified_name, prefix.u8_bytes,
                             target->method.qualified_name.u8_bytes)

@@ -369,8 +369,9 @@ implementations(n00bb_link_analysis_t *analysis, core_string_t trait,
     for (size_t i = 0; known && i < count; i++) {
         // A bit integer's `Integer.from_bits` is a cast with no body and no
         // effects (see register_bit_integer_from_bits).
-        if (core_string_starts_with(methods[i].qualified_name,
-                                    CORE_STRING_STATIC("builtins.Integer.")))
+        if (n00bb_compiler_package(methods[i].package)
+            && core_string_starts_with(methods[i].qualified_name,
+                                       CORE_STRING_STATIC("builtins.Integer.")))
             continue;
         parse_sym_entry_t *symbol = initializer_declaration_symbol(
             linked_method_declaration(link, &methods[i]));
