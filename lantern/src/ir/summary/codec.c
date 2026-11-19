@@ -237,6 +237,54 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     core_free(rank);
 }
 
+static int
+compare_heap_origins(const void *left, const void *right)
+{
+    uint32_t a = (*(const ir_sheap_t *const *)left)->origin;
+    uint32_t b = (*(const ir_sheap_t *const *)right)->origin;
+    return (a > b) - (a < b);
+}
+
+static int
+compare_witness_flags(const void *left, const void *right)
+{
+    uint32_t a = (*(const ir_switness_t *const *)left)->flag;
+    uint32_t b = (*(const ir_switness_t *const *)right)->flag;
+    return (a > b) - (a < b);
+}
+
+// A summary's heaps (and witnesses) in a fixed order: by origin (by flag),
+// each of which names one. Their order in the summary is the order its
+// paths and flows were met in, which depends on whether its callees'
+// summaries were computed or decoded from the cache (decoded ones come in
+// the codec's sorted order), so encoding them in it made the same summary
+// encode differently warm and cold.
+static const ir_sheap_t **
+sorted_heaps(const ir_summary_t *summary)
+{
+    const ir_sheap_t **heaps = core_alloc_array(const ir_sheap_t *,
+                                                summary->heaps.len + 1);
+    for (size_t i = 0; i < summary->heaps.len; i++)
+        heaps[i] = &summary->heaps.data[i];
+    if (summary->heaps.len > 1)
+        qsort(heaps, summary->heaps.len, sizeof(*heaps),
+              compare_heap_origins);
+    return heaps;
+}
+
+static const ir_switness_t **
+sorted_witnesses(const ir_summary_t *summary)
+{
+    const ir_switness_t **witnesses = core_alloc_array(
+        const ir_switness_t *, summary->witnesses.len + 1);
+    for (size_t i = 0; i < summary->witnesses.len; i++)
+        witnesses[i] = &summary->witnesses.data[i];
+    if (summary->witnesses.len > 1)
+        qsort(witnesses, summary->witnesses.len, sizeof(*witnesses),
+              compare_witness_flags);
+    return witnesses;
+}
+
 static bool
 encode_summary(const ir_summary_t *summary, core_buffer_t *out,
                const ir_summary_texts_t *texts, bool positions)
@@ -272,17 +320,20 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_RESULTS]);
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_STORES]);
     put_u32(out, positions ? (uint32_t)summary->witnesses.len : 0);
+    const ir_switness_t **witnesses = sorted_witnesses(summary);
     for (size_t i = 0; positions && i < summary->witnesses.len; i++) {
-        const ir_switness_t *witness = &summary->witnesses.data[i];
+        const ir_switness_t *witness = witnesses[i];
         put_u32(out, witness->flag);
         put_text(out, texts, witness->module);
         put_text(out, texts, witness->name);
         put_u32(out, witness->line);
         put_u32(out, witness->column);
     }
+    core_free(witnesses);
     put_u32(out, (uint32_t)summary->heaps.len);
+    const ir_sheap_t **heaps = sorted_heaps(summary);
     for (size_t i = 0; i < summary->heaps.len; i++) {
-        const ir_sheap_t *heap = &summary->heaps.data[i];
+        const ir_sheap_t *heap = heaps[i];
         put_u32(out, heap->origin);
         put_text(out, texts, types && heap->type
             ? ir_types_text(types, heap->type) : (core_string_t){0});
@@ -292,6 +343,7 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         put_u32(out, positions ? heap->line : 0);
         put_u32(out, positions ? heap->column : 0);
     }
+    core_free(heaps);
     return true;
 }
 
@@ -311,8 +363,9 @@ points_to_content(const ir_summary_t *summary)
     put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_RESULTS]);
     put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_STORES]);
     put_u32(&out, (uint32_t)summary->heaps.len);
+    const ir_sheap_t **heaps = sorted_heaps(summary);
     for (size_t i = 0; i < summary->heaps.len; i++) {
-        const ir_sheap_t *heap = &summary->heaps.data[i];
+        const ir_sheap_t *heap = heaps[i];
         put_u32(&out, heap->origin);
         put_text(&out, nullptr, types && heap->type
             ? ir_types_text(types, heap->type) : (core_string_t){0});
@@ -322,6 +375,7 @@ points_to_content(const ir_summary_t *summary)
         put_u32(&out, heap->line);
         put_u32(&out, heap->column);
     }
+    core_free(heaps);
     uint64_t hash = core_xxh3_64bits_raw(out.data ? out.data : "",
                                          out.byte_len) | 1;
     core_buffer_release(&out);
