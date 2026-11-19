@@ -139,6 +139,9 @@ struct ir_summaries_t {
     bool                      escapes_only;
     bool                      reusable;
     bool                      proofs_changed;
+    // The summaries bound for analyses (ABCD's above all) while these were
+    // computed: trap proofs see callees through them.
+    const ir_summaries_t     *proof_context;
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;

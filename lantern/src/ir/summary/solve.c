@@ -732,9 +732,17 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->reusable = previous && hooks && count && !escapes_only
         && !previous->escapes_only
         && same_hooks(&previous->hook_values, hooks);
+    // A summary whose trap proofs saw callees through other summaries than
+    // the ones bound now may prove other traps when computed again, so only
+    // one that proved none can be reused (see reusable_member). Reusing the
+    // others made what a function's summary says depend on whether the
+    // inputs that would have recomputed it changed between the passes,
+    // which they do on a cold build and not on a warm one.
+    summaries->proof_context  = ir_analysis_summaries();
     summaries->proofs_changed = summaries->reusable
-        && previous->hook_values.defer_trap_proofs
-               != hooks->defer_trap_proofs;
+        && (previous->hook_values.defer_trap_proofs
+                != hooks->defer_trap_proofs
+            || previous->proof_context != summaries->proof_context);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
     core_dict_init(&t.index, nullptr, nullptr);
