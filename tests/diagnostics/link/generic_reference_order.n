@@ -1,0 +1,6 @@
+# A generic function that declares its keyword parameters out of the order
+# its type lists them in has no keyword-order adapter to refer to yet.
+func later(a: 'T, zz: 'T = a, b: 'T = a) -> 'T {
+    return b
+}
+let reordered = ref later

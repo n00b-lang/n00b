@@ -1701,6 +1701,22 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             // parameters, rather than the signature it is called with.
             th_type *flat = storage
                 ? th_ind_referent(th_resolve(storage->type)) : nullptr;
+            // A generic function's reference is an instance of it, with
+            // variables of its own, as a call is: binding them must not
+            // bind the function's.
+            th_ctx *types = ir_module_types(module);
+            bool generic = flat && ir_func_callable_contract(function)
+                && !th_is_closed(types, flat);
+            if (generic) {
+                th_type *scheme = th_kind_of(th_resolve(flat)) == TH_BINDER
+                    ? flat : th_generalize(types, flat);
+                flat = scheme ? th_instantiate(types, scheme) : nullptr;
+                if (!flat)
+                    return n00bb_operator_error(context, IR_DIAG_INTERNAL,
+                        span, "could not instantiate a generic function's "
+                              "reference");
+                storage->type = th_ind(types, 0, flat);
+            }
             th_type *value_type = flat
                 ? n00bb_function_value_type(ir_module_types(module),
                       visit->grammar, function_target, flat)
@@ -1712,6 +1728,16 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             // in the order the type lists them; a function that declares
             // them in another order is referred to through its module's
             // keyword-order adapter (n00bb_keyword_order_t).
+            n00bb_keyword_order_t order = {0};
+            if (generic && value_type != flat
+                && n00bb_keyword_order(types, visit->grammar,
+                                       function_target, flat, &order)) {
+                core_free(order.order);
+                lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+                    N00B_TEXT_NOT_SUPPORTED_YET_GENERIC_KEYWORD_ORDER,
+                    N00BB_ARGS(ARG_TEXT(function_target->name)));
+                return false;
+            }
             parse_sym_entry_t *adapter = parse_sym_binding(function_target,
                 N00BB_KEYWORD_ORDER_ADAPTER_KEY);
             ir_func_t *referent = adapter && analysis

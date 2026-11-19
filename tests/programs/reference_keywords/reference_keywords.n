@@ -103,6 +103,27 @@ try {
     require false
 }
 
+# A generic function's references are instances of it.
+func either(a: 'T, other: 'T = a) -> 'T {
+    return other
+}
+func counted(first: 'T, *rest: 'T, extra: int = 0) -> int {
+    return len(rest) + 1 + extra
+}
+func both(f: Ref[(string, other: string) -> string]) -> string {
+    return f.call("x") + f.call("x", other = "y")
+}
+let either_int: Ref[(int, other: int) -> int] = ref either
+let either_text: Ref[(string, other: string) -> string] = ref either
+require either_int.call(1) == 1
+require either_int.call(1, other = 5) == 5
+require either_text.call("a") == "a"
+require either_text.call("a", other = "b") == "b"
+require both(ref either) == "xy"
+let counted_flags: Ref[(bool, *bool, extra: int) -> int] = ref counted
+require counted_flags.call(true, false, true) == 3
+require counted_flags.call(true, extra = 10) == 11
+
 require imported_join.call("a") == "a,."
 require imported_join.call("a", "b", "c") == "a,b,c,."
 require imported_join.call("a", "b", zsep = "-") == "a-b-."

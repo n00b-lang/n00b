@@ -1618,10 +1618,22 @@ n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
             : th_binder_with_body(types, called, value);
     }
     if (!called || th_kind_of(called) != TH_FUNCTION) return flat;
-    const th_param *rest = declared && th_kind_of(declared) == TH_FUNCTION
+    const th_param *declared_rest = declared
+            && th_kind_of(declared) == TH_FUNCTION
         ? th_func_rest(declared) : nullptr;
     size_t count = th_func_nparams(called);
-    if (rest && !count) return nullptr;
+    if (declared_rest && !count) return nullptr;
+    // The varargs item type is `flat`'s (whose variables may be an
+    // instance's), the item of its last parameter's array.
+    th_type *items = declared_rest
+        ? th_resolve(th_func_param(called, count - 1)->type) : nullptr;
+    th_param rest_param = {
+        .mode = declared_rest ? declared_rest->mode : TH_IN,
+        .type = items && th_kind_of(items) == TH_SEQUENCE
+            ? th_seq_elem(items) : nullptr,
+    };
+    if (declared_rest && !rest_param.type) return nullptr;
+    const th_param *rest = declared_rest ? &rest_param : nullptr;
     if (rest) count--;
     parse_tree_t *formals = callable_formal_parameters(grammar, symbol);
     core_list_t(th_param) positional = core_list_new(th_param);

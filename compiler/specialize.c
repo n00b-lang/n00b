@@ -532,6 +532,71 @@ retarget_reference(specialize_state_t *state, ir_func_t *caller,
     return true;
 }
 
+// The signature generic function `target` is called with for a reference
+// whose type is `value` (an instance of the function's type): its
+// positional parameters, its keyword parameters where it declares them,
+// then its varargs as an array. nullptr when they don't line up.
+static th_type *
+reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
+{
+    value = value ? th_resolve(value) : nullptr;
+    th_type *flat = th_resolve(target->type);
+    if (!value || th_kind_of(value) != TH_FUNCTION
+        || th_kind_of(flat) != TH_FUNCTION) return nullptr;
+    if (!th_func_nkw(value) && !th_func_rest(value)) return value;
+    size_t positional = th_func_nparams(value);
+    size_t keywords = th_func_nkw(value);
+    size_t count = positional + keywords + (th_func_rest(value) ? 1 : 0);
+    if (count != th_func_nparams(flat) || target->n_params < count)
+        return nullptr;
+    th_param *params = core_alloc_array(th_param, count);
+    bool ok = params != nullptr;
+    for (size_t i = 0; ok && i < positional; i++)
+        params[i] = *th_func_param(value, i);
+    for (size_t i = positional; ok && i < positional + keywords; i++) {
+        const th_kwparam *keyword = th_func_kw_lookup(value,
+            target->params[i]->name);
+        ok = keyword != nullptr;
+        if (ok) params[i] = (th_param){.mode = keyword->mode,
+                                       .type = keyword->type};
+    }
+    if (ok && th_func_rest(value))
+        params[count - 1] = (th_param){.mode = TH_IN,
+            .type = th_array(types, th_func_rest(value)->type)};
+    th_type *signature = ok
+        ? th_func_with_error(types, th_func_ret(value), th_func_error(value),
+                             params, count, nullptr, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    return signature;
+}
+
+// A reference to a generic function, as `operand` of `in`, is to the
+// function's instance for the reference's type.
+static bool
+specialize_reference(specialize_state_t *state, ir_func_t *caller,
+                     size_t parent, ir_operand_t *operand)
+{
+    ir_value_t *reference = operand->kind == IR_OPD_VALUE ? operand->value
+                                                          : nullptr;
+    th_type *type = reference && reference->kind == IR_VAL_FUNC
+        ? th_resolve(reference->type) : nullptr;
+    ir_func_t *target = type && th_kind_of(type) == TH_INDIRECTION
+        ? n00bb_cached_body(reference->owner) : nullptr;
+    if (!target || !target->n_blocks) return true;
+    th_ctx *types = ir_module_types(target->owner);
+    if (th_is_closed(types, target->type)) return true;
+    th_type *signature = reference_signature(types, target,
+                                             th_ind_referent(type));
+    if (!signature) return true;
+    if (!retarget_reference(state, caller, parent, &operand->value,
+                            signature))
+        return false;
+    // The instance is referred to as the function was.
+    if (operand->value != reference) operand->value->type = reference->type;
+    return true;
+}
+
 static bool
 specialize_callback(specialize_state_t *state, ir_func_t *caller,
                     size_t parent, ir_instr_t *creation)
@@ -1304,6 +1369,14 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                     valid = false;
                     break;
                 }
+                for (uint32_t o = call->op == IR_OP_CALL ? 1 : 0;
+                     valid && !open_caller && o < call->n_operands; o++)
+                    valid = specialize_reference(&state, caller, parent,
+                                                 &call->operands[o])
+                        || failed_step(failure,
+                               "could not specialize a function reference",
+                               caller);
+                if (!valid) break;
                 if (call->op != IR_OP_CALL || !call->n_operands) continue;
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
