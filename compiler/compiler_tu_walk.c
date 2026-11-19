@@ -1528,6 +1528,7 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
             || !parse_sym_set_binding(binding,
                    CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY), origin))
             return false;
+        core_list_push(tu_state(unit)->injected_members, binding);
         // A declaration from an interface has no syntax: its export origin
         // is what marks it a declaration, for the member too.
         void *export_origin = parse_sym_binding(origin,
@@ -1543,17 +1544,17 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
 // A module literal's generated module can share a component with the module
 // it's written in, so its declarations may get their types only after the
 // members standing for them are made: copy the facts again once they have.
+// Each copy reads only the member's canonical declaration, which is never a
+// member itself, so the order the members are refreshed in doesn't matter.
 static void
 refresh_literal_members(core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations) return;
-    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
-         scope; scope = scope->all_next)
-        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-             symbol = symbol->next_in_scope)
-            if (n00bb_injected_member(symbol))
-                copy_export_binding_facts(symbol, canonical_symbol(symbol));
+    for (size_t i = 0; i < state->injected_members.len; i++) {
+        parse_sym_entry_t *symbol = state->injected_members.data[i];
+        copy_export_binding_facts(symbol, canonical_symbol(symbol));
+    }
 }
 
 // A module literal's declarations are members of the module it's written

@@ -710,6 +710,9 @@ typedef struct {
     core_list_t(n00bb_ir_instr_ptr_t) result_defaults;
     core_dict_t intrinsics;
     core_dict_t open_storage;
+    // The members module literals injected into this module (the only
+    // symbols n00bb_injected_member is true of), in the order injected.
+    core_list_t(parse_sym_entry_ptr_t) injected_members;
 } n00bb_tu_state_t;
 bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
                                  const parse_sym_entry_t *symbol,

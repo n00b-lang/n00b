@@ -7805,6 +7805,7 @@ free_tu_state(void *data)
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         core_free(state->link_use_sites.data[i].trait_path_parts);
     core_list_free(state->link_use_sites);
+    core_list_free(state->injected_members);
     core_list_free(state->import_sources);
     core_list_free(state->path_imports);
     core_list_free(state->restricted_imports);

@@ -226,7 +226,10 @@ typedef struct {
 static inline bool
 n00bb_injected_member(parse_sym_entry_t *symbol)
 {
-    return symbol && parse_sym_binding(symbol,
+    // A member is given its binding origin before this key, and an origin
+    // is never cleared: a symbol without one (most of those the scans over
+    // a module's scopes ask about) is answered without hashing the key.
+    return symbol && symbol->binding_origin && parse_sym_binding(symbol,
         CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY)) != nullptr;
 }
 typedef struct {
