@@ -4001,6 +4001,11 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
                               "the modules they name");
     bool names_resolved = resolve_imported_module_symbols(analysis->grammar,
                                                           &analysis->units);
+    // Before functions are indexed by their contracts, which include what
+    // their variables take on from the constrained types given them.
+    names_resolved = names_resolved
+        && n00bb_imply_type_argument_constraints(analysis->units.data,
+                                                 analysis->units.len);
     bool brings_valid = check_import_brings(analysis);
     bool declarations_indexed = register_link_declarations(link,
         analysis->grammar, &analysis->units,

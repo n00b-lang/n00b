@@ -1,0 +1,12 @@
+tests/diagnostics/tu/where_implied.n:4:9: note N00B-S0064: parameter `x` could be `view`: `mk` never writes anything reachable from it
+tests/diagnostics/tu/where_implied.n:5:11: note N00B-S0064: parameter `m` could be `view`: `pick` never writes anything reachable from it
+tests/diagnostics/tu/where_implied.n:6:12: note N00B-S0064: parameter `b` could be `view`: `later` never writes anything reachable from it
+tests/diagnostics/tu/where_implied.n:16:17: error N00B-T0608: `Maybe` cannot take `string` as a type argument: its `where` clause excludes it
+tests/diagnostics/tu/where_implied.n:18:12: error N00B-T0608: `pick` cannot take `string` here: its `where` clause excludes it
+  tests/diagnostics/tu/where_implied.n:5:6: note: `pick` is declared here
+tests/diagnostics/tu/where_implied.n:21:9: error N00B-T0021: `string` does not implement `Integer`, which `mk` requires
+  tests/diagnostics/tu/where_implied.n:4:6: note: `mk` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_implied.n:23:9: error N00B-T0021: `string` does not implement `Integer`, which `later` requires
+  tests/diagnostics/tu/where_implied.n:6:6: note: `later` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it

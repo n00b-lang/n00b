@@ -9637,27 +9637,92 @@ constrain_type_arguments(parse_grammar_t *grammar,
             .site = site, .declaration = declaration, .arguments = kept,
             .count = count, .alias = alias,
         }));
-    n00bb_declared_where_t *declared = alias
-        ? parse_sym_binding(declaration, N00BB_DECLARED_WHERE_KEY) : nullptr;
-    if (!declared) return true;
-    th_type **parameters = nullptr;
-    size_t parameter_count = declared_type_parameters(state->types,
-        declaration, true, &parameters);
-    if (parameter_count != count) return true;
-    core_list_t(th_trait_requirement) taken =
-        core_list_new(th_trait_requirement);
+    (void)grammar;
+    return true;
+}
+
+// Adds `taken` to what `owner` requires of its variables; a trait also
+// keeps the kinds its type carries with its own clauses.
+static bool
+add_owner_constraints(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_sym_entry_t *owner,
+                      const core_list_t(th_trait_requirement) *taken)
+{
+    if (!add_declared_where(state, owner, taken)) return false;
+    if (!owner->decl_node || !NT_IS(grammar, owner->decl_node, "trait-decl"))
+        return true;
+    n00bb_declared_trait_requirements_t *previous = parse_sym_binding(owner,
+        CORE_STRING_STATIC("n00bb.trait.requirements"));
+    size_t before = previous ? previous->len : 0;
+    n00bb_declared_trait_requirements_t *facts = core_arena_alloc(
+        &state->semantic_values, sizeof(*facts));
+    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
+        (before + taken->len) * sizeof(*items));
+    if (!facts || !items) return false;
+    if (before) memcpy(items, previous->data, before * sizeof(*items));
+    size_t len = before;
+    for (size_t i = 0; i < taken->len; i++)
+        if (taken->data[i].kind == TH_CON_IMPLEMENTS
+            || taken->data[i].kind == TH_CON_EXCLUDES)
+            items[len++] = taken->data[i];
+    *facts = (n00bb_declared_trait_requirements_t){.data = items,
+                                                   .len = len};
+    return parse_sym_set_binding(owner,
+        CORE_STRING_STATIC("n00bb.trait.requirements"), facts);
+}
+
+// A variable of the declaration around a use, given to a constrained
+// record, variant or alias, takes on the type's constraint, as a clause
+// written there would give it: `func mk(x: 'T) -> Box['T]` requires of
+// its `'T` what `Box` requires. Run once every module is walked, so every
+// declaration's clauses are known, and before the program's functions are
+// indexed by their contracts.
+bool
+n00bb_imply_type_argument_constraints(core_translation_unit_t *const *units,
+                                      size_t count)
+{
     bool ok = true;
-    for (size_t r = 0; ok && r < declared->len; r++) {
-        th_trait_requirement requirement = {0};
-        if (argument_requirement(state->types, declared->data[r], parameters,
-                kept, count, &requirement, &ok)
-            && th_kind_of(th_resolve(requirement.subject)) == TH_VAR)
-            core_list_push(taken, requirement);
+    for (size_t u = 0; ok && u < count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        if (!state || !state->types || !state->grammar) continue;
+        for (size_t c = 0; ok && c < state->type_argument_checks.len; c++) {
+            n00bb_type_argument_check_t *check =
+                &state->type_argument_checks.data[c];
+            if (check->implied) continue;
+            check->implied = true;
+            parse_sym_entry_t *declaration =
+                canonical_symbol(check->declaration);
+            n00bb_declared_where_t *declared = parse_sym_binding(
+                declaration, N00BB_DECLARED_WHERE_KEY);
+            th_type **parameters = nullptr;
+            size_t parameter_count = declared
+                ? declared_type_parameters(state->types, declaration,
+                                           check->alias, &parameters) : 0;
+            core_list_t(th_trait_requirement) taken =
+                core_list_new(th_trait_requirement);
+            for (size_t r = 0; ok && parameter_count == check->count
+                 && r < declared->len; r++) {
+                th_trait_requirement requirement = {0};
+                if (argument_requirement(state->types, declared->data[r],
+                        parameters, check->arguments, check->count,
+                        &requirement, &ok)
+                    && th_kind_of(th_resolve(requirement.subject)) == TH_VAR)
+                    core_list_push(taken, requirement);
+            }
+            if (!check->alias) core_free(parameters);
+            parse_sym_entry_t *owner = ok && taken.len
+                ? typevar_owner(state->grammar, check->site) : nullptr;
+            ok = ok && (!owner
+                || add_owner_constraints(state->grammar, state, owner,
+                                         &taken));
+            core_list_free(taken);
+            if (!ok)
+                n00bb_tu_internal_error(units[u], check->site,
+                    "checking declarations",
+                    "could not give a type's where clauses to the "
+                    "variables given to it");
+        }
     }
-    parse_sym_entry_t *owner = taken.len
-        ? typevar_owner(grammar, site) : nullptr;
-    ok = ok && (!owner || add_declared_where(state, owner, &taken));
-    core_list_free(taken);
     return ok;
 }
 

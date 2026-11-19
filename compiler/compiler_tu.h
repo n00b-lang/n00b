@@ -545,6 +545,9 @@ typedef struct {
     th_type **arguments;
     size_t count;
     bool alias;
+    // Whether the variables among the arguments have taken on the type's
+    // constraints (n00bb_imply_type_argument_constraints).
+    bool implied;
 } n00bb_type_argument_check_t;
 core_list_decl(n00bb_type_argument_check_t);
 
@@ -1039,6 +1042,8 @@ void record_type_constraints(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *declaration,
     n00bb_tu_state_t *state);
 bool n00bb_type_arguments_fit(th_ctx *types,
+    core_translation_unit_t *const *units, size_t count);
+bool n00bb_imply_type_argument_constraints(
     core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *method, th_ctx *types,

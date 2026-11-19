@@ -665,13 +665,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         core_list_t(th_trait_requirement) declared =
             core_list_new(th_trait_requirement);
         signature_typevars_for_symbol(symbol, &variables);
-        // What an alias's clause gave a variable of the trait's, the clause
-        // after the trait's name and any after a type in one of its
-        // methods: the trait's variables are shared by its methods.
-        n00bb_declared_where_t *given = symbol
-            ? parse_sym_binding(symbol, N00BB_DECLARED_WHERE_KEY) : nullptr;
-        for (size_t i = 0; given && i < given->len; i++)
-            core_list_push(declared, given->data[i]);
+        // The clause after the trait's name and any after a type in one of
+        // its methods: the trait's variables are shared by its methods. A
+        // constrained type given one of them adds to these at link time
+        // (n00bb_imply_type_argument_constraints).
         bool valid = apply_signature_constraints(grammar, unit, node,
             state->types, &variables, &declared);
         core_list_free(variables);
