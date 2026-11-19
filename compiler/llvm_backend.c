@@ -150,6 +150,7 @@ typedef struct {
 
 static _Thread_local debug_info_t *active_debug;
 static _Thread_local const core_dict_t *active_mutator_decisions;
+static _Thread_local const core_dict_t *active_cached_globals;
 static _Thread_local core_buffer_t *active_mutator_entries;
 
 enum {
@@ -337,6 +338,7 @@ struct n00bb_llvm_backend_t {
     bool prepared;
     ir_summaries_t *summaries;
     const core_dict_t *mutator_decisions;
+    const core_dict_t *cached_globals;
     core_buffer_t mutator_entries;
 };
 
@@ -1604,6 +1606,15 @@ static LLVMValueRef
 frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
+    // A cached module's variable is declared, extern, by its cached
+    // interface; the cached body's own copy is the definition the module
+    // had compiled from source, initializer and all.
+    const ir_global_t *cached = identity && active_cached_globals
+        && identity->is_extern && identity->has_static_initializer
+        ? core_dict_get((core_dict_t *)active_cached_globals, identity,
+                        nullptr) : nullptr;
+    if (cached && cached->mutability == identity->mutability)
+        identity = cached;
     if (!identity || identity->is_extern
         || identity->mutability != IR_MUT_CONST
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
@@ -14407,6 +14418,13 @@ n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
     if (backend) backend->mutator_decisions = decisions;
 }
 
+void
+n00bb_llvm_backend_bind_cached_globals(n00bb_llvm_backend_t *backend,
+                                       const core_dict_t *globals)
+{
+    if (backend) backend->cached_globals = globals;
+}
+
 core_string_t
 n00bb_llvm_backend_mutator_entries(const n00bb_llvm_backend_t *backend)
 {
@@ -14467,8 +14485,10 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         ? ir_analysis_bind_summaries(backend->summaries)
         : ir_analysis_summaries();
     const core_dict_t *previous_decisions = active_mutator_decisions;
+    const core_dict_t *previous_globals = active_cached_globals;
     core_buffer_t *previous_entries = active_mutator_entries;
     active_mutator_decisions = backend->mutator_decisions;
+    active_cached_globals = backend->cached_globals;
     backend->mutator_entries.byte_len = 0;
     active_mutator_entries = &backend->mutator_entries;
     bool module_lowered = lower_module(backend->module, backend->source,
@@ -14482,6 +14502,7 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
                                    : nullptr,
         backend->index_table, diagnostics);
     active_mutator_decisions = previous_decisions;
+    active_cached_globals = previous_globals;
     active_mutator_entries = previous_entries;
     ir_analysis_bind_summaries(previous_summaries);
     active_debug = previous_debug;

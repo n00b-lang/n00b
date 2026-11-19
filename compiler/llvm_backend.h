@@ -99,6 +99,11 @@ void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     ir_summaries_t *summaries);
 void n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
     const core_dict_t *decisions);
+// The module variables of cached modules, by their identity: a cached
+// body's own copy of each, which carries its initializer when the identity
+// (a cached interface's declaration) does not.
+void n00bb_llvm_backend_bind_cached_globals(n00bb_llvm_backend_t *backend,
+    const core_dict_t *globals);
 core_string_t n00bb_llvm_backend_mutator_entries(
     const n00bb_llvm_backend_t *backend);
 void n00bb_llvm_mutator_decisions_add(core_dict_t *decisions,

@@ -645,6 +645,9 @@ typedef struct {
     core_list_t(n00bb_cache_module_object_t) *kept;
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
     const core_dict_t *mutator_decisions;
+    // Cached modules' variables whose values code may fold in
+    // (foldable_cached_globals).
+    const core_dict_t *cached_globals;
 } module_emission_t;
 
 typedef struct {
@@ -811,6 +814,8 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
+    n00bb_llvm_backend_bind_cached_globals(backend,
+                                           emission->cached_globals);
     core_string_t table_symbol = artifact
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
@@ -2261,6 +2266,28 @@ n00bb_check_start_signature(core_link_unit_t *link,
     return true;
 }
 
+// The cached modules' variables, by identity, whose cached definitions
+// code may read values from as the module compiled from source has them.
+// A module whose compile-time run baked it (one with a cached runtime
+// object) has its variables' initializers replaced by the run when it is
+// compiled from source, so code reads them from storage then: its cached
+// definitions, from before the run, are left out to read them the same way.
+static void
+foldable_cached_globals(n00bb_link_analysis_t *analysis, core_dict_t *out)
+{
+    core_dict_init(out, nullptr, nullptr);
+    if (!analysis->cached_globals_ready) return;
+    core_dict_foreach(&analysis->cached_globals, entry) {
+        const ir_global_t *global = entry->value;
+        n00bb_cache_module_object_t cached = {0};
+        if (global && global->owner
+            && n00bb_cache_module_object(analysis->cache,
+                   ir_module_name(global->owner), &cached)
+            && cached.runtime_object) continue;
+        core_dict_put(out, entry->key, entry->value);
+    }
+}
+
 bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
@@ -2456,6 +2483,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_dict_t mutator_decisions;
     cached_mutator_decisions(link, analysis, order.data, count,
                              &mutator_decisions);
+    core_dict_t cached_globals;
+    foldable_cached_globals(analysis, &cached_globals);
     // This pass makes the compile-time program's objects, and the runtime
     // program's where they are the same. With nothing to run at compile
     // time that program is never linked, and when the runtime objects are
@@ -2475,6 +2504,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     module_emission_t emission = {
         .kept = &kept,
         .mutator_decisions = &mutator_decisions,
+        .cached_globals = &cached_globals,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto,
@@ -2688,6 +2718,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     core_list_free(kept);
     core_dict_free(&mutator_decisions);
+    core_dict_free(&cached_globals);
     release_output(&plan);
     core_free(archive);
     core_free(target_flag);
