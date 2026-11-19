@@ -2307,6 +2307,86 @@ trait_type_reference(parse_grammar_t *grammar,
     return recorded ? type : nullptr;
 }
 
+static parse_sym_entry_t *generic_alias_named(parse_grammar_t *grammar,
+                                              parse_tree_t *type_node);
+static bool constrain_type_arguments(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *site,
+    parse_sym_entry_t *declaration, th_type *const *arguments, size_t count,
+    bool alias);
+static size_t declaration_type_parameter_count(parse_grammar_t *grammar,
+                                               parse_tree_t *declaration);
+
+// A generic alias named with no type arguments inside a declaration that
+// owns type variables: its target with a fresh variable of that owner
+// for each of the alias's parameters, which take on the alias's `where`
+// constraints (n00bb_imply_type_argument_constraints). Null when the name
+// is applied, is no generic alias, or has no owner.
+th_type *
+bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                   parse_sym_entry_t *symbol, parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    // A qualified name (`coll.Bag`) is nested in its member chain.
+    parse_tree_t *core = node ? parse_tree_parent(node) : nullptr;
+    while (core && !NT_IS(grammar, core, "base-tspec-core")
+           && (NT_IS(grammar, core, "member-chain")
+               || NT_IS(grammar, core, "dotted-name")
+               || NT_IS(grammar, core, "member-tail")))
+        core = parse_tree_parent(core);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    if (!state || !state->types || !symbol || !symbol->type
+        || !NT_IS(grammar, core, "base-tspec-core")
+        || CHILD_NT(grammar, core, "tspec-application")
+        || !(symbol->decl_node
+                ? NT_IS(grammar, symbol->decl_node, "alias-stmt")
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
+                : core_string_eq(symbol->adt_kind,
+                                 CORE_STRING_STATIC("alias")))
+        // An alias whose target is not typed yet holds an unnamed
+        // placeholder; only one that declares parameters is generic.
+        || (symbol->decl_node
+            && !declaration_type_parameter_count(grammar, symbol->decl_node))
+        || !generic_alias_named(grammar, node))
+        return nullptr;
+    parse_sym_entry_t *owner = typevar_owner(grammar, node);
+    th_type **variables = nullptr;
+    size_t count = owner
+        ? th_free_vars(state->types, th_resolve(symbol->type), &variables)
+        : 0;
+    for (size_t i = 0; i < count; i++)
+        if (!th_var_name(variables[i]).u8_bytes) return nullptr;
+    if (!count) return nullptr;
+    th_type **fresh = core_alloc_array(th_type *, count);
+    core_diag_location_t at = n00bb_node_span(node);
+    bool ok = fresh != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%.*s@%u:%u.%zu",
+                           (int)symbol->name.u8_bytes, symbol->name.data,
+                           at.line, at.column, i);
+        fresh[i] = owner_typevar(state, owner,
+            store_semantic_string(state, core_buffer_string(&name)),
+            nullptr);
+        core_buffer_release(&name);
+        ok = fresh[i] != nullptr;
+    }
+    th_type *instance = ok
+        ? th_type_clone_replacing(state->types, th_resolve(symbol->type),
+                                  (const th_type *const *)variables, fresh,
+                                  count)
+        : nullptr;
+    if (instance && !constrain_type_arguments(grammar, unit, node,
+            canonical_symbol(symbol), fresh, count, true))
+        instance = nullptr;
+    core_free(fresh);
+    if (!instance)
+        n00bb_tu_internal_error(unit, node, "resolving names",
+            "could not give a generic alias named without type arguments "
+            "its own type variables");
+    return instance;
+}
+
 void
 resolve_local_type_reference(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
@@ -2358,10 +2438,12 @@ resolve_local_type_reference(parse_grammar_t *grammar,
         if (type) parse_tree_set_type(node, type);
     }
     else if (symbol->type) {
+        th_type *instance = bare_generic_alias(grammar, unit, symbol, node);
+        th_type *named = instance ? instance : symbol->type;
         th_type *previous_type = parse_tree_type(node);
         th_type *resolved_type = previous_type
-            ? th_fill(previous_type, symbol->type)
-            : symbol->type;
+            ? th_fill(previous_type, named)
+            : named;
         if (!resolved_type) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "resolving names",
@@ -10022,6 +10104,16 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
         return core_string_eq(prefix, CORE_STRING_STATIC("bits"))
             ? th_bits(state->types, (uint64_t)width.mag)
             : th_bitint(state->types, (uint64_t)width.mag, is_signed);
+    }
+    if (!application && NT_IS(grammar, type_node, "member-chain")) {
+        // A generic alias named bare, qualified or not, has fresh variables
+        // of the declaration it is written in.
+        parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+        th_type *bare = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+            ? bare_generic_alias(grammar, unit, resolution.target.symbol,
+                                 type_node)
+            : nullptr;
+        if (bare) return bare;
     }
     if (!application || !NT_IS(grammar, type_node, "member-chain"))
         return base;

@@ -767,11 +767,13 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 return false;
             }
+            th_type *bare = is_trait_type_symbol(grammar, symbol) ? nullptr
+                : bare_generic_alias(grammar, unit, symbol, reference);
             th_type *target_type = is_trait_type_symbol(grammar, symbol)
                 ? trait_type_reference(grammar, unit,
                     symbol->decl_node ? symbol->owner_unit : unit, symbol,
                     reference)
-                : symbol->type;
+                : bare ? bare : symbol->type;
             th_type *previous_type = parse_tree_type(reference);
             // A generic alias applied to arguments already holds the
             // applied type; filling it from the alias's own type would bind
@@ -863,11 +865,17 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         n00bb_tu_state_t *owner_state = tu_state(owner);
                         if (!owner_state || !owner_state->types)
                             return false;
+                        // A generic alias named bare in a declaration that
+                        // owns type variables has that owner's own.
+                        th_type *bare = is_trait_type_symbol(grammar, symbol)
+                            ? nullptr
+                            : bare_generic_alias(grammar, owner, symbol,
+                                                 reference);
                         th_type *reference_type =
                             is_trait_type_symbol(grammar, symbol)
                             ? trait_type_reference(grammar, owner, unit,
                                                    symbol, reference)
-                            : type;
+                            : bare ? bare : type;
                         if (!reference_type
                             || applied_generic_alias(grammar, state->types,
                                    symbol, reference))
@@ -2485,10 +2493,13 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                             : unit
                         : nullptr;
                     th_type *previous = parse_tree_type(site->node);
+                    th_type *bare = trait ? nullptr
+                        : bare_generic_alias(grammar, unit, type_symbol,
+                                             site->node);
                     th_type *target_type = trait
                         ? trait_type_reference(grammar, unit,
                             declaration_unit, type_symbol, site->node)
-                        : type_symbol->type;
+                        : bare ? bare : type_symbol->type;
                     th_type *resolved = !target_type ? nullptr : previous
                         ? th_fill(previous,
                             target_type)

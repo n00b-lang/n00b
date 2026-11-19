@@ -1043,6 +1043,9 @@ void record_type_constraints(parse_grammar_t *grammar,
     n00bb_tu_state_t *state);
 bool n00bb_type_arguments_fit(th_ctx *types,
     core_translation_unit_t *const *units, size_t count);
+th_type *bare_generic_alias(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *symbol,
+    parse_tree_t *node);
 bool n00bb_imply_type_argument_constraints(
     core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,

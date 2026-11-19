@@ -12,3 +12,5 @@ func fine(b: kinds.Box[int], m: kinds.Maybe[int], g: kinds.Bag[u8]) -> int {
 func counted(b: kinds.Bag['U]) -> int { return 1 }
 let words: Dict[string, nil] = {"x": nil}
 require counted(words) == 1
+func bare(b: kinds.Bag) -> uint { return b.len() }
+require bare(words) == 1

@@ -1,0 +1,11 @@
+// A generic alias named without type arguments gives each use its own
+// variables, which take on the alias's `where` clause.
+alias Bag = Dict['K, nil] where 'K: Integer
+alias Pair = Dict['T, nil]
+func size(b: Bag) -> uint { return b.len() }
+func both(a: Pair, b: Pair) -> uint { return a.len() + b.len() }
+let ints: Dict[int, nil] = {1: nil}
+let words: Dict[string, nil] = {"x": nil}
+require size(ints) == 1
+require size(words) == 1
+require both(ints, words) == 2

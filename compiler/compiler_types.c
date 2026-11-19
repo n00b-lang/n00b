@@ -8421,6 +8421,13 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
 {
     th_ctx *types = ir_ctx_types(analysis->ir_context);
 
+    // A type named after the symbols stage, such as a qualified generic
+    // alias named bare, gives its constraints to its variables here, before
+    // the bounds are declared.
+    if (!n00bb_imply_type_argument_constraints(units, count)) {
+        return false;
+    }
+
     core_list_t(n00bb_ir_func_ptr_t) functions =
         core_list_new(n00bb_ir_func_ptr_t);
     core_dict_t defaults;

@@ -146,6 +146,8 @@ for pass in fresh cached; do
         "$tmp/where.err"
     grep -q '`string` does not implement `Integer`, which `counted` requires' \
         "$tmp/where.err"
+    grep -q '`string` does not implement `Integer`, which `bare` requires' \
+        "$tmp/where.err"
     if grep -q 'internal compiler error' "$tmp/where.err"; then
         echo "where check hit an internal error on the $pass pass" >&2
         exit 1

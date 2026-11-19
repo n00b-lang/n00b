@@ -1,0 +1,6 @@
+tests/diagnostics/tu/where_bare_alias.n:5:11: note N00B-S0064: parameter `b` could be `view`: `size` never writes anything reachable from it
+tests/diagnostics/tu/where_bare_alias.n:6:11: note N00B-S0064: parameter `a` could be `view`: `both` never writes anything reachable from it
+tests/diagnostics/tu/where_bare_alias.n:6:20: note N00B-S0064: parameter `b` could be `view`: `both` never writes anything reachable from it
+tests/diagnostics/tu/where_bare_alias.n:10:9: error N00B-T0021: `string` does not implement `Integer`, which `size` requires
+  tests/diagnostics/tu/where_bare_alias.n:5:6: note: `size` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it

@@ -506,7 +506,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                           symbol->decl_node ? symbol->owner_unit : unit,
                           symbol, node)
                     : nullptr;
-                parse_tree_set_type(node, trait ? trait : symbol->type);
+                // A generic alias named bare has its own variables here.
+                th_type *bare = trait ? nullptr
+                    : bare_generic_alias(grammar, unit, symbol, node);
+                parse_tree_set_type(node, trait ? trait
+                                          : bare ? bare : symbol->type);
                 if (!parse_sym_add_use(resolution.target.symbol, node))
                     n00bb_tu_internal_error(unit, node, "resolving names",
                         "could not bind the imported type reference node");

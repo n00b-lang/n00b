@@ -10,3 +10,7 @@ tests/diagnostics/tu/where_imported.n:12:14: note N00B-S0064: parameter `b` coul
 tests/diagnostics/tu/where_imported.n:14:9: error N00B-T0021: `string` does not implement `Integer`, which `counted` requires
   tests/diagnostics/tu/where_imported.n:12:6: note: `counted` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_imported.n:15:11: note N00B-S0064: parameter `b` could be `view`: `bare` never writes anything reachable from it
+tests/diagnostics/tu/where_imported.n:16:9: error N00B-T0021: `string` does not implement `Integer`, which `bare` requires
+  tests/diagnostics/tu/where_imported.n:15:6: note: `bare` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it
