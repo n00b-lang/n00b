@@ -767,7 +767,7 @@
                      | <named-field>
                      | <named-field> %","
 
-<named-field> ::=
+<named-field> @nospace($1) ::=
        %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <named-field> ::=
        %IDENTIFIER <assign-op> <expression>
