@@ -8496,6 +8496,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                                    solver)
            && arities;
     bool writable = check_write_sites(units, count);
+    bool arguments_fit = n00bb_type_arguments_fit(types, units, count);
     bool visible  = check_field_privacy(types, typing->dispatch->analysis,
                                         units, count);
 
@@ -8503,7 +8504,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     bool finalize = finalizers_fit(types, units, count, &functions);
     bool patterns = patterns_fit(types, units, count, &functions);
     bool ok       = ty_failure_count(solver) == 0 && arities && writable
-           && visible && fits && finalize && switched && !bitwise_negative
+           && arguments_fit && visible && fits && finalize && switched && !bitwise_negative
            && patterns;
 
     for (size_t i = 0; i < ty_dispatch_count(solver); i++) {

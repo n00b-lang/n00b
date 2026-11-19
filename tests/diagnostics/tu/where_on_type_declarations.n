@@ -1,5 +1,29 @@
-// A `where` clause after a field's or an alias's type is rejected.
+// A `where` clause after a type in a record, variant or alias constrains
+// the declaration's type parameter, and every use of the type must give
+// that parameter a type that satisfies it.
 record Box {
     v: 'T where 'T: Integer
 }
-alias Ints = Array['T] where 'T: Integer
+variant Maybe {
+    some: 'T where 'T: != string
+    none: nil
+}
+alias Bag = Dict['K, nil] where 'K: Integer
+// Clauses on one parameter add up.
+record Pair {
+    a: 'T where 'T: Integer
+    b: 'T where 'T: != i8
+}
+func boxed(b: Box[string]) -> int { return 1 }
+func maybe(m: Maybe[string]) -> int { return 1 }
+func bagged(b: Bag[string]) -> int { return 1 }
+func paired(p: Pair[i8]) -> int { return 1 }
+func used_first(b: Later[string]) -> int { return 1 }
+record Later {
+    v: 'T where 'T: Integer
+}
+// An alias stands for its target, clause and all: a variable of the
+// function given to it takes the constraint on.
+func counted(b: Bag['U]) -> int { return 1 }
+let words: Dict[string, nil] = {"x": nil}
+require counted(words) == 1

@@ -535,6 +535,19 @@ typedef struct {
 } n00bb_write_site_t;
 core_list_decl(n00bb_write_site_t);
 
+// Type arguments given at `site` to a record, variant or alias, checked
+// against the `where` clauses of its declaration once every declaration is
+// processed and the program's implementations are known
+// (n00bb_type_arguments_fit).
+typedef struct {
+    parse_tree_t *site;
+    parse_sym_entry_t *declaration;
+    th_type **arguments;
+    size_t count;
+    bool alias;
+} n00bb_type_argument_check_t;
+core_list_decl(n00bb_type_argument_check_t);
+
 typedef enum : uint8_t {
     N00BB_MARKS_PARAMETER,
     N00BB_MARKS_FIELD,
@@ -625,6 +638,7 @@ typedef struct {
     core_list_t(n00bb_ir_instr_ptr_t) rewrite_sites;
     core_list_t(n00bb_ir_instr_ptr_t) condition_sites;
     core_list_t(n00bb_write_site_t) write_sites;
+    core_list_t(n00bb_type_argument_check_t) type_argument_checks;
     core_list_t(n00bb_ir_instr_ptr_t) result_defaults;
     core_dict_t intrinsics;
     core_dict_t open_storage;
@@ -1021,6 +1035,11 @@ void record_cached_declared_function_signature(parse_grammar_t *grammar,
 void record_function_body_constraints(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *func,
     n00bb_tu_state_t *state);
+void record_type_constraints(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *declaration,
+    n00bb_tu_state_t *state);
+bool n00bb_type_arguments_fit(th_ctx *types,
+    core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *method, th_ctx *types,
     th_type **failure);

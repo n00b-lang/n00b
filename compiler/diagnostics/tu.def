@@ -340,6 +340,13 @@ N00B_DIAG(WHERE_ON_TYPE, "N00B-T0606", ERROR,
     "an alias is not supported yet. Put the constraint on the enclosing\n"
     "function instead:\n"
     "    func pick(x: 'T) -> 'T where 'T: Integer { return x }")
+N00B_DIAG(TYPE_ARGUMENT_EXCLUDED, "N00B-T0608", ERROR,
+    "a type argument is a type the type's `where` clause excludes",
+    "A `where` clause in a record, variant or alias declaration can rule\n"
+    "a type out for one of its type parameters with `!=`. Every use of the\n"
+    "type must then give that parameter another type:\n"
+    "    record Key { value: 'K where 'K: != float }\n"
+    "    var key: Key[float]   // error: `float` is excluded")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"

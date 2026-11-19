@@ -1,4 +1,20 @@
-tests/diagnostics/tu/where_on_type_declarations.n:3:11: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
-tests/diagnostics/tu/where_on_type_declarations.n:5:24: error N00B-T0606: a `where` clause after a type is not supported yet
-  help: put the constraint in a `where` clause after a function's signature, as in `func f(x: 'T) -> 'T where 'T: Integer`
+tests/diagnostics/tu/where_on_type_declarations.n:4:8: warning N00B-N0023: type `Box` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type_declarations.n:7:9: warning N00B-N0023: type `Maybe` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type_declarations.n:13:8: warning N00B-N0023: type `Pair` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type_declarations.n:17:18: error N00B-T0021: `string` does not implement `Integer`, which `Box` requires
+  help: give `Box` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_on_type_declarations.n:18:20: error N00B-T0608: `Maybe` cannot take `string` as a type argument: its `where` clause excludes it
+tests/diagnostics/tu/where_on_type_declarations.n:19:19: error N00B-T0021: `string` does not implement `Integer`, which `Bag` requires
+  help: give `Bag` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_on_type_declarations.n:20:20: error N00B-T0608: `Pair` cannot take `i8` as a type argument: its `where` clause excludes it
+tests/diagnostics/tu/where_on_type_declarations.n:21:25: error N00B-T0021: `string` does not implement `Integer`, which `Later` requires
+  help: give `Later` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_on_type_declarations.n:22:8: warning N00B-N0023: type `Later` is never used
+  help: remove it
+tests/diagnostics/tu/where_on_type_declarations.n:27:14: note N00B-S0064: parameter `b` could be `view`: `counted` never writes anything reachable from it
+tests/diagnostics/tu/where_on_type_declarations.n:29:9: error N00B-T0021: `string` does not implement `Integer`, which `counted` requires
+  tests/diagnostics/tu/where_on_type_declarations.n:27:6: note: `counted` is declared here
+  help: implement `Integer` for `string`, or call a function that does not need it

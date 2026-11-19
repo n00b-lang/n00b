@@ -7326,6 +7326,7 @@ free_tu_state(void *data)
     core_list_free(state->rewrite_sites);
     core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
+    core_list_free(state->type_argument_checks);
     core_list_free(state->result_defaults);
     core_dict_free(&state->intrinsics);
     core_dict_free(&state->open_storage);
@@ -7397,6 +7398,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);
+    state->type_argument_checks = core_list_new(n00bb_type_argument_check_t);
     state->result_defaults = core_list_new(n00bb_ir_instr_ptr_t);
     core_dict_init(&state->intrinsics, nullptr, nullptr);
     core_dict_init(&state->open_storage, nullptr, nullptr);
@@ -9559,6 +9561,211 @@ compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return result;
 }
 
+// The type parameters of a record, variant or alias, in the order its
+// type arguments are given: an alias's in the order its target first
+// names them, the others' in the order the declaration does.
+static size_t
+declared_type_parameters(th_ctx *types, parse_sym_entry_t *declaration,
+                         bool alias, th_type ***out)
+{
+    *out = nullptr;
+    if (alias)
+        return declaration->type
+            ? th_free_vars(types, th_resolve(declaration->type), out) : 0;
+    n00bb_signature_typevars_t *variables = parse_sym_binding(declaration,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (!variables || !variables->len) return 0;
+    *out = core_alloc_array(th_type *, variables->len);
+    for (size_t i = 0; i < variables->len; i++)
+        (*out)[i] = variables->data[i].type;
+    return variables->len;
+}
+
+// The requirement the `where` clause `declared` of a type puts on the
+// argument given for its parameter, or false when it names none of them.
+static bool
+argument_requirement(th_ctx *types, th_trait_requirement declared,
+                     th_type *const *parameters, th_type *const *arguments,
+                     size_t count, th_trait_requirement *out, bool *valid)
+{
+    th_type *subject = th_resolve(declared.subject);
+    size_t at = count;
+    for (size_t i = 0; i < count && at == count; i++)
+        if (parameters[i] && th_resolve(parameters[i]) == subject) at = i;
+    if (at == count || !arguments[at]) return false;
+    *out = declared;
+    out->subject = arguments[at];
+    if (declared.target) {
+        out->target = th_type_clone_replacing(types, declared.target,
+            (const th_type *const *)parameters, arguments, count);
+        *valid = out->target != nullptr;
+    }
+    return *valid;
+}
+
+// `arguments`, given at `site` to `declaration`, must satisfy the `where`
+// clauses of the declaration (record_type_constraints); they are checked
+// once every declaration is processed (n00bb_type_arguments_fit). An
+// alias stands for its target, clause and all, so a variable of the
+// declaration around the use, given to an alias, takes the alias's
+// constraint on, as a clause written there would give it.
+static bool
+constrain_type_arguments(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *site,
+                         parse_sym_entry_t *declaration,
+                         th_type *const *arguments, size_t count, bool alias)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!declaration || !count) return true;
+    th_type **kept = core_arena_alloc(&state->semantic_values,
+                                      count * sizeof(*kept));
+    if (!kept) return false;
+    memcpy(kept, arguments, count * sizeof(*kept));
+    // A type composed again keeps one check, with what it has now; the
+    // constraints it gave the variables around it stay given.
+    for (size_t i = 0; i < state->type_argument_checks.len; i++) {
+        n00bb_type_argument_check_t *check =
+            &state->type_argument_checks.data[i];
+        if (check->site != site) continue;
+        check->declaration = declaration;
+        check->arguments = kept;
+        check->count = count;
+        return true;
+    }
+    core_list_push(state->type_argument_checks,
+        ((n00bb_type_argument_check_t){
+            .site = site, .declaration = declaration, .arguments = kept,
+            .count = count, .alias = alias,
+        }));
+    n00bb_declared_where_t *declared = alias
+        ? parse_sym_binding(declaration, N00BB_DECLARED_WHERE_KEY) : nullptr;
+    if (!declared) return true;
+    th_type **parameters = nullptr;
+    size_t parameter_count = declared_type_parameters(state->types,
+        declaration, true, &parameters);
+    if (parameter_count != count) return true;
+    core_list_t(th_trait_requirement) taken =
+        core_list_new(th_trait_requirement);
+    bool ok = true;
+    for (size_t r = 0; ok && r < declared->len; r++) {
+        th_trait_requirement requirement = {0};
+        if (argument_requirement(state->types, declared->data[r], parameters,
+                kept, count, &requirement, &ok)
+            && th_kind_of(th_resolve(requirement.subject)) == TH_VAR)
+            core_list_push(taken, requirement);
+    }
+    parse_sym_entry_t *owner = taken.len
+        ? typevar_owner(grammar, site) : nullptr;
+    ok = ok && (!owner || add_declared_where(state, owner, &taken));
+    core_list_free(taken);
+    return ok;
+}
+
+bool
+n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
+                         size_t count)
+{
+    bool ok = true;
+    for (size_t u = 0; u < count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        if (!state || !types) continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(units[u]);
+        for (size_t c = 0; c < state->type_argument_checks.len; c++) {
+            n00bb_type_argument_check_t *check =
+                &state->type_argument_checks.data[c];
+            n00bb_declared_where_t *declared = parse_sym_binding(
+                check->declaration, N00BB_DECLARED_WHERE_KEY);
+            th_type **parameters = nullptr;
+            size_t parameter_count = declared
+                ? declared_type_parameters(types, check->declaration,
+                                           check->alias, &parameters) : 0;
+            bool valid = true;
+            for (size_t r = 0; parameter_count == check->count
+                 && r < declared->len; r++) {
+                th_trait_requirement requirement = {0};
+                if (!argument_requirement(types, declared->data[r],
+                        parameters, check->arguments, check->count,
+                        &requirement, &valid)) continue;
+                th_type *argument = th_resolve(requirement.subject);
+                // An argument that is still open is constrained, if at all,
+                // where it is declared.
+                if (!th_is_closed(types, argument)) continue;
+                core_string_t shown = n00bb_print_type(types, argument);
+                if (requirement.kind == TH_CON_IMPLEMENTS
+                    && !th_env_implements(types, argument,
+                                          requirement.iface)) {
+                    core_string_t trait = n00bb_name_leaf(requirement.iface);
+                    if (n00bb_report(diagnostics, units[u],
+                            N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION,
+                            n00bb_node_span(check->site),
+                            N00B_TEXT_REQUIRED_TRAIT_MISSING,
+                            N00BB_ARGS(ARG_TEXT(shown), ARG_TEXT(trait),
+                                       ARG_TEXT(check->declaration->name))))
+                        n00bb_report_help(diagnostics,
+                            N00B_TEXT_GIVE_A_TYPE_THAT_IMPLEMENTS,
+                            N00BB_ARGS(ARG_TEXT(trait),
+                                       ARG_TEXT(check->declaration->name)));
+                    ok = false;
+                }
+                else if (requirement.kind == TH_CON_EXCLUDES
+                         && requirement.target
+                         && th_hash(types, argument)
+                            == th_hash(types,
+                                       th_resolve(requirement.target))) {
+                    n00bb_report(diagnostics, units[u],
+                        N00B_DIAG_TYPE_ARGUMENT_EXCLUDED,
+                        n00bb_node_span(check->site),
+                        N00B_TEXT_TYPE_ARGUMENT_EXCLUDED,
+                        N00BB_ARGS(ARG_TEXT(shown),
+                                   ARG_TEXT(check->declaration->name)));
+                    ok = false;
+                }
+            }
+            if (!check->alias) core_free(parameters);
+            if (!valid) {
+                n00bb_tu_internal_error(units[u], check->site,
+                    "checking types",
+                    "could not apply a type's where clauses to its "
+                    "arguments");
+                ok = false;
+            }
+        }
+        state->type_argument_checks.len = 0;
+    }
+    return ok;
+}
+
+// The `where` clauses written in a record, variant or alias declaration
+// constrain its type parameters, which every use must then satisfy
+// (constrain_type_arguments).
+void
+record_type_constraints(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        parse_tree_t *declaration, n00bb_tu_state_t *state)
+{
+    if (!typevar_owner_node(grammar, declaration)
+        || NT_IS(grammar, declaration, "func-def")
+        || NT_IS(grammar, declaration, "trait-decl")
+        || NT_IS(grammar, declaration, "callback-decl")) return;
+    parse_sym_entry_t *symbol = parse_tree_sym(declaration);
+    if (!symbol || !state || !state->types) return;
+    core_list_t(n00bb_typevar_binding_t) variables =
+        core_list_new(n00bb_typevar_binding_t);
+    core_list_t(th_trait_requirement) declared =
+        core_list_new(th_trait_requirement);
+    signature_typevars_for_symbol(symbol, &variables);
+    bool valid = apply_signature_constraints(grammar, unit, declaration,
+        state->types, &variables, &declared)
+        && add_declared_where(state, symbol, &declared);
+    core_list_free(variables);
+    core_list_free(declared);
+    if (!valid)
+        n00bb_tu_internal_error_unless_reported(unit, declaration,
+            "checking declarations",
+            "could not apply the type's where clauses");
+}
+
 // The alias a type name refers to, when the alias has type parameters.
 static parse_sym_entry_t *
 generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
@@ -9611,6 +9818,12 @@ generic_alias_application(parse_grammar_t *grammar,
                                   (const th_type *const *)variables, to,
                                   count)
         : nullptr;
+    if (expanded && !constrain_type_arguments(grammar, unit, application,
+            alias, to, count, true)) {
+        n00bb_tu_internal_error(unit, application, "checking declarations",
+            "could not apply the alias's where clauses to its arguments");
+        expanded = th_poison(state->types);
+    }
     core_free(to);
     core_list_free(arguments);
     // The alias's name, applied here, stands for the applied type; left
@@ -9805,6 +10018,20 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
             : apply_type_arguments(state->types, name, arguments.data,
                                    arguments.len)
         : nullptr;
+    // A declared record's or variant's `where` clauses constrain these.
+    th_type **given = applied && declaration && declaration->decl_node
+        && arguments.len ? core_alloc_array(th_type *, arguments.len)
+                         : nullptr;
+    for (size_t i = 0; given && i < arguments.len; i++)
+        given[i] = arguments.data[i].kind == TH_ARG_TYPE
+            ? arguments.data[i].type : nullptr;
+    if (given && !constrain_type_arguments(grammar, unit, application,
+            declaration, given, arguments.len, false)) {
+        n00bb_tu_internal_error(unit, application, "checking declarations",
+            "could not keep the type arguments for its where clauses");
+        applied = th_poison(state->types);
+    }
+    core_free(given);
     core_list_free(arguments);
     uint8_t attrs = 0;
     th_type *referent = applied && th_ind_attrs(applied, &attrs)

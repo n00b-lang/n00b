@@ -372,8 +372,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         ? typevar_owner_declaration(grammar, node) : nullptr;
     if (step == SEMANTIC_PREPARE_ENTER && NT_IS(grammar, node, "where-clause")
         && NT_IS(grammar, named_ancestor(grammar, node), "type-spec")
-        && !NT_IS(grammar, where_owner, "func-def")
-        && !NT_IS(grammar, where_owner, "trait-decl")) {
+        && (!where_owner || NT_IS(grammar, where_owner, "callback-decl"))) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
         if (n00bb_report(diagnostics, unit, N00B_DIAG_WHERE_ON_TYPE,
@@ -663,8 +662,13 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         core_list_t(th_trait_requirement) declared =
             core_list_new(th_trait_requirement);
         signature_typevars_for_symbol(symbol, &variables);
-        // The clause after the trait's name and any after a type in one of
-        // its methods: the trait's variables are shared by its methods.
+        // What an alias's clause gave a variable of the trait's, the clause
+        // after the trait's name and any after a type in one of its
+        // methods: the trait's variables are shared by its methods.
+        n00bb_declared_where_t *given = symbol
+            ? parse_sym_binding(symbol, N00BB_DECLARED_WHERE_KEY) : nullptr;
+        for (size_t i = 0; given && i < given->len; i++)
+            core_list_push(declared, given->data[i]);
         bool valid = apply_signature_constraints(grammar, unit, node,
             state->types, &variables, &declared);
         core_list_free(variables);
@@ -694,6 +698,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             return;
         }
     }
+
+    if (!entering)
+        record_type_constraints(grammar, unit, node, state);
 
     if (!entering && NT_IS(grammar, node, "callback-role"))
         record_callback_role_signature(grammar, unit, node, state);
