@@ -1,0 +1,13 @@
+var p: bool = true
+let negated = not true == false
+let symbol = !p == false
+let both = not p and !p
+
+func f(q: bool) -> bool {
+    return not q
+}
+
+func g(x: bool) -> int {
+    if not x { return 1 }
+    return 2
+}

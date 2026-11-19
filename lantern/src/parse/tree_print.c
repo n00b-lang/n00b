@@ -788,6 +788,14 @@ static bool fits(pr_t *p, doc_t *d, int32_t avail)
     return ok;
 }
 
+// A byte that can continue a word: ASCII letters, digits and `_`, and any
+// byte of a multi-byte UTF-8 character.
+static bool word_byte(uint8_t c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_' || c >= 0x80;
+}
+
 static core_string_t render(pr_t *p, doc_t *root)
 {
     core_buffer_t *out = core_buffer_empty();
@@ -828,6 +836,14 @@ static core_string_t render(pr_t *p, doc_t *root)
                 nl  = 0;
             }
             else {
+                // A gap with no space must not run two words into one
+                // token: `not` before `p` would print as `notp`.
+                if (!spaces && out->byte_len && started
+                    && word_byte((uint8_t)out->data[out->byte_len - 1])
+                    && word_byte((uint8_t)f.doc->text.data[0])) {
+                    spaces = 1;
+                }
+
                 for (int32_t i = 0; i < spaces; i++) {
                     core_buffer_putc(out, ' ');
                 }
