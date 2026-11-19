@@ -123,6 +123,51 @@ require both(ref either) == "xy"
 let counted_flags: Ref[(bool, *bool, extra: int) -> int] = ref counted
 require counted_flags.call(true, false, true) == 3
 require counted_flags.call(true, extra = 10) == 11
+func counted_through(f: Ref[(int, *int, extra: int) -> int]) -> int {
+    return f.call(1, 2, 3) + f.call(1, extra = 10)
+}
+require counted_through(ref counted) == 14
+
+# A generic function that takes a parameter other than `in`, or declares
+# its keyword parameters in another order than its type lists them in, is
+# referred to through its instance's reference adapter: a reference to it,
+# held anywhere, passes its arguments as the instance takes them.
+func later(a: 'T, zz: 'T = a, b: 'T = a) -> 'T {
+    return b
+}
+let later_ints: Ref[(int, b: int, zz: int) -> int] = ref later
+require later_ints.call(1) == 1
+require later_ints.call(1, b = 5) == 5
+require later_ints.call(1, zz = 7) == 1
+func later_through(f: Ref[(int, b: int, zz: int) -> int]) -> int {
+    return f.call(2, b = 9) + f.call(3, zz = 4)
+}
+require later_through(ref later) == 12
+func replaced(modify old: 'T, given: 'T) -> 'T {
+    old = given
+    return given
+}
+func replaced_through(f: Ref[(int, int) -> int]) -> int {
+    var value = 1
+    _ = f.call(value, 8)
+    return value
+}
+require replaced_through(ref replaced) == 8
+func generic_held() {
+    var held: Ref[(string, string) -> string] = ref replaced
+    var text = "a"
+    require held.call(text, "b") == "b"
+    require text == "b"
+    let kept: Ref[(int, int) -> int] = ref replaced
+    var number = 1
+    require kept.call(number, 3) == 3
+    require number == 3
+    var ordered_later: Ref[(string, b: string, zz: string) -> string] =
+        ref later
+    require ordered_later.call("x", b = "y") == "y"
+    require ordered_later.call("x", zz = "z") == "x"
+}
+generic_held()
 
 # A function reference remembers its function's passing modes, which are no
 # part of its type: a call through it passes the caller's place to a

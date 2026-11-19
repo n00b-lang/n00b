@@ -1729,19 +1729,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             // function's passing modes; a function that declares them in
             // another order, or takes a parameter other than `in`, is
             // referred to through its module's reference adapter
-            // (n00bb_reference_adapter_t).
-            n00bb_reference_adapter_t order = {0};
-            if (generic && value_type != flat) {
-                th_type *adapted = n00bb_reference_adapter(types,
-                    visit->grammar, function_target, flat, &order);
-                core_free(order.order);
-                if (adapted && order.reordered) {
-                    lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
-                        N00B_TEXT_NOT_SUPPORTED_YET_GENERIC_KEYWORD_ORDER,
-                        N00BB_ARGS(ARG_TEXT(function_target->name)));
-                    return false;
-                }
-            }
+            // (n00bb_reference_adapter_t). A generic function's reference
+            // is to its instance for the reference's type, and to that
+            // instance's adapter (n00bb_instance_reference_adapter).
             parse_sym_entry_t *adapter = parse_sym_binding(function_target,
                 N00BB_FUNCTION_ADAPTER_KEY);
             ir_func_t *referent = adapter && analysis

@@ -571,6 +571,34 @@ reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
     return signature;
 }
 
+// `*slot`, a reference to a generic function's instance whose reference
+// type's referent is `value`, refers to the instance's reference adapter
+// instead when it has one, made in the instance's module.
+static bool
+adapt_instance_reference(specialize_state_t *state, ir_value_t **slot,
+                         th_type *value)
+{
+    ir_func_t *instance = (*slot)->owner;
+    bool made = false;
+    ir_func_t *adapter = n00bb_instance_reference_adapter(state->context,
+        instance, value, &made);
+    ir_value_t *bound = adapter && adapter != instance
+        ? ir_func_address(adapter->owner, adapter) : nullptr;
+    if (!adapter || (adapter != instance && !bound)) {
+        if (state->failure) {
+            core_string_t module = ir_module_name(instance->owner);
+            core_buffer_printf(state->failure,
+                "could not make the reference adapter of %.*s.%.*s",
+                (int)module.u8_bytes, module.data,
+                (int)instance->name.u8_bytes, instance->name.data);
+        }
+        return false;
+    }
+    if (made) core_list_push(*state->functions, adapter);
+    if (bound) *slot = bound;
+    return true;
+}
+
 // A reference to a generic function, as `operand` of `in`, is to the
 // function's instance for the reference's type.
 static bool
@@ -592,8 +620,15 @@ specialize_reference(specialize_state_t *state, ir_func_t *caller,
     if (!retarget_reference(state, caller, parent, &operand->value,
                             signature))
         return false;
-    // The instance is referred to as the function was.
-    if (operand->value != reference) operand->value->type = reference->type;
+    // The instance is referred to as the function was, through its
+    // reference adapter when it has one (n00bb_reference_adapter_t). A call
+    // through a reference known to hold the function calls it directly,
+    // and so the instance itself.
+    if (operand->value == reference) return true;
+    if (!adapt_instance_reference(state, &operand->value,
+                                  th_ind_referent(type)))
+        return false;
+    operand->value->type = reference->type;
     return true;
 }
 
@@ -618,8 +653,24 @@ specialize_callback(specialize_state_t *state, ir_func_t *caller,
     if (!retained || retained->op != IR_OP_RETAIN_REF
         || retained->n_operands != 1
         || retained->operands[0].kind != IR_OPD_VALUE) return true;
-    return retarget_reference(state, caller, parent,
-        &retained->operands[0].value, handler_signature);
+    ir_value_t *handler = retained->operands[0].value;
+    if (!retarget_reference(state, caller, parent,
+            &retained->operands[0].value, handler_signature))
+        return false;
+    ir_value_t *instance = retained->operands[0].value;
+    th_type *type = th_resolve(handler->type);
+    if (instance == handler || th_kind_of(type) != TH_INDIRECTION)
+        return true;
+    // The callback holds the instance; its `setup` is given the reference
+    // to it, which is to its reference adapter when it has one.
+    if (!adapt_instance_reference(state, &retained->operands[0].value,
+                                  th_ind_referent(type)))
+        return false;
+    retained->operands[0].value->type = handler->type;
+    return retained->operands[0].value == instance
+        || ir_annot_set(state->context, &creation->annots,
+               (ir_annot_t){.key = N00BB_CALLBACK_HANDLER_KEY,
+                            .kind = IR_ANNOT_VALUE, .v = instance});
 }
 
 enum { FINALIZE_DEPTH = 16 };

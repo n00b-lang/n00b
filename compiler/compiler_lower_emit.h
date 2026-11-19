@@ -36,6 +36,10 @@
 // is passed on as the adapter was given it, present or omitted.
 #define N00BB_FORWARDS_OPTIONAL_KEY \
     CORE_STRING_STATIC("n00bb.forwards-optional")
+// On a reference adapter's IR function: the function it adapts
+// (n00bb_reference_adapter_target).
+#define N00BB_REFERENCE_ADAPTER_TARGET_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter.target")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")
 #define N00BB_ZEROED_NEW_KEY CORE_STRING_STATIC("n00bb.zeroed-new")
@@ -164,6 +168,16 @@ ir_func_t *n00bb_note_reference_adapter(n00bb_link_analysis_t *analysis,
 // passed the adapter's `(*order)[i]`.
 ir_func_t *n00bb_reference_adapter_target(const ir_func_t *adapter,
                                           uint32_t **order, size_t *count);
+
+// The reference adapter of generic function instance `instance`, as
+// referred to through a reference of type `value_type` (the referent, which
+// names the keyword parameters), made in the instance's module when it
+// isn't yet (`*made`): `instance` itself when it takes only `in`
+// parameters and declares its keyword ones in the type's order. nullptr
+// when it can't be made.
+ir_func_t *n00bb_instance_reference_adapter(ir_ctx_t *ir_context,
+                                            ir_func_t *instance,
+                                            th_type *value_type, bool *made);
 ir_lower_result_t n00bb_emit_char_array(ir_lower_context_t *context,
                                         const uint8_t *bytes, size_t length,
                                         th_type *result_type, ir_span_t span);

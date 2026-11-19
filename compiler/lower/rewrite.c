@@ -502,24 +502,14 @@ n00bb_rewrite_operand(n00bb_rewrite_t *rewrite, ir_instr_t *in, uint32_t o,
     if (!value || !target
         || ir_type_eq(rewrite->context.module, value->type, target))
         return true;
-    // A function reference to a function with a parameter other than `in`
-    // is a reference adapter, which a call through it, wherever it is
-    // held, passes every argument by place. A generic function has none
-    // yet: held anywhere but a `let` (n00bb_plan_operand), its reference
-    // would lose the passing modes it remembers.
-    bool remembering = n00bb_reference_modes_differ(rewrite->context.module,
-                                                    value, target);
-    if (remembering && n00bb_let_bound(in)) return true;
-    ir_value_t *function = remembering ? n00bb_reference_function(value)
-                                       : nullptr;
-    if (function && !n00bb_reference_adapter_target(function->owner, nullptr,
-                                                    nullptr)) {
-        n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
-            rewrite->unit, N00B_DIAG_NOT_SUPPORTED_YET,
-            n00bb_span_location(in->span),
-            N00B_TEXT_NOT_SUPPORTED_YET_REFERENCE_MODES, N00BB_NO_ARGS);
-        return false;
-    }
+    // A `let` bound to a function reference keeps the passing modes it
+    // remembers (n00bb_plan_operand). Held anywhere else, a reference to a
+    // function with a parameter other than `in` is a reference adapter (a
+    // generic function's instance's, once specialization makes it), which
+    // a call through it passes every argument by place.
+    if (n00bb_reference_modes_differ(rewrite->context.module, value, target)
+        && n00bb_let_bound(in))
+        return true;
     ir_value_t *converted = n00bb_convert(rewrite, in, value, target);
     if (!converted || !n00bb_rewrite_splice(rewrite, in)) return false;
     ir_operand_t *operand = &in->operands[o];
@@ -2684,18 +2674,88 @@ n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     return ok;
 }
 
+// Call `in` through a reference known to hold `target`, which is no
+// reference adapter (a generic function's reference refers to the
+// function until specialization gives it its instance's adapter), calls
+// `target` directly: the keyword arguments, which `in` passes in the order
+// the reference's type (`instance`, the reference first) lists them, go
+// where `target` declares them.
+static bool
+n00bb_call_known_function(ir_module_t *module, ir_instr_t *in,
+                          ir_func_t *target, th_type *instance,
+                          size_t positional, size_t keywords)
+{
+    ir_func_t *body = n00bb_cached_body(target);
+    if (!body || !body->n_params) body = target;
+    th_type *signature = ir_instr_call_signature(in);
+    signature = signature ? th_resolve(signature) : nullptr;
+    size_t count = in->n_operands ? in->n_operands - 1 : 0;
+    ir_value_t *callee = ir_func_address(target->owner, target);
+    if (in->op != IR_OP_CALL || !callee || !signature
+        || th_kind_of(signature) != TH_FUNCTION
+        || th_func_nparams(signature) != count)
+        return false;
+    uint32_t *order = core_alloc_array(uint32_t, count + 1);
+    bool reordered = false;
+    bool ok = order != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        order[i] = (uint32_t)i;
+        if (keywords < 2 || i < positional || i >= positional + keywords)
+            continue;
+        size_t k = 0;
+        ok = i < body->n_params && body->params[i];
+        while (ok && k < keywords
+               && !core_string_eq(th_func_kw(instance, k)->name,
+                                  body->params[i]->name))
+            k++;
+        ok = ok && k < keywords;
+        order[i] = (uint32_t)(positional + k);
+        reordered = reordered || order[i] != i;
+    }
+    th_param *params = ok && reordered
+        ? core_alloc_array(th_param, count + 1) : nullptr;
+    ir_operand_t *given = params
+        ? core_alloc_array(ir_operand_t, count + 1) : nullptr;
+    for (size_t i = 0; given && i < count; i++)
+        given[i] = in->operands[i + 1];
+    for (size_t i = 0; given && i < count; i++) {
+        in->operands[i + 1] = given[order[i]];
+        params[i] = *th_func_param(signature, order[i]);
+    }
+    th_type *declared = given
+        ? th_func_with_error(ir_module_types(module), th_func_ret(signature),
+                             th_func_error(signature), params, count,
+                             nullptr, nullptr, 0)
+        : signature;
+    ok = ok && (!reordered || given) && declared;
+    core_free(order);
+    core_free(params);
+    core_free(given);
+    if (!ok) return false;
+    in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = callee};
+    ir_instr_uses_changed(in);
+    return ir_instr_set_call_signature(in, declared);
+}
+
 // Call `in` through a function reference, rewritten to an IR call that
 // passes its arguments by value, given `function`, the function value the
-// reference is known to hold (n00bb_reference_function), if any: a
-// reference adapter's function is called directly, and an unknown one is
-// asked whether it is an adapter (n00bb_rewrite_place_or_value).
+// reference is known to hold (n00bb_reference_function), if any, and
+// `instance`, its signature (the reference first): a known function, or
+// the one a reference adapter adapts, is called directly, and an unknown
+// one is asked whether it is an adapter (n00bb_rewrite_place_or_value).
 static bool
 n00bb_finish_reference_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
-                            ir_value_t *function, size_t positional,
-                            size_t keywords)
+                            ir_value_t *function, th_type *instance,
+                            size_t positional, size_t keywords)
 {
-    if (function) return n00bb_retarget_adapted_call(in, function->owner);
-    return n00bb_rewrite_place_or_value(rewrite, in, positional, keywords);
+    if (!function)
+        return n00bb_rewrite_place_or_value(rewrite, in, positional,
+                                            keywords);
+    if (n00bb_reference_adapter_target(function->owner, nullptr, nullptr))
+        return n00bb_retarget_adapted_call(in, function->owner);
+    return n00bb_call_known_function(rewrite->context.module, in,
+                                     function->owner, instance, positional,
+                                     keywords);
 }
 
 static bool
@@ -2726,7 +2786,7 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             in->operands[o - 1] = in->operands[o];
         in->n_operands--;
         return n00bb_rewrite_reference_call(rewrite, in, instance)
-            && n00bb_finish_reference_call(rewrite, in, function,
+            && n00bb_finish_reference_call(rewrite, in, function, instance,
                    th_func_nparams(instance) - 1, th_func_nkw(instance));
     }
     size_t count = th_func_nparams(instance) - 1;
@@ -2757,8 +2817,8 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                                      false, nullptr, nullptr,
                                                      nullptr)
             || (n00bb_rewrite_splice(rewrite, in)
-                && n00bb_finish_reference_call(rewrite, in, function, count,
-                                               0));
+                && n00bb_finish_reference_call(rewrite, in, function,
+                                               instance, count, 0));
     return !contract || !contract->stateful
         || ir_instr_set_callback_invoke_handler(in,
                n00bb_specialize_callback_role(types, contract, receiver_type,

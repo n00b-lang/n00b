@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include "compiler_lower_emit.h"
 #include "compiler_tu.h"
 #include "specialize.h"
 #include "ir/typelang.h"
@@ -192,6 +193,22 @@ append_instances(row_builder_t *builder, ir_module_t *module,
             || !append_function_row(builder, function, type_index,
                                     scope_index, 0, function->name))
             return false;
+    }
+    // An instance's reference adapter's row names the instance it adapts.
+    for (size_t r = 1; r < builder->rows->len; r++) {
+        ir_func_t *function = builder->bindings->data[r];
+        ir_annot_t *adapted = function ? ir_annot_get(&function->annots,
+            N00BB_REFERENCE_ADAPTER_TARGET_KEY) : nullptr;
+        ir_func_t *target = adapted && adapted->kind == IR_ANNOT_VALUE
+                && adapted->v && adapted->v->kind == IR_VAL_FUNC
+            ? adapted->v->owner : nullptr;
+        if (!target || builder->rows->data[r].symbol_index) continue;
+        size_t row = 1;
+        while (row < builder->bindings->len
+               && builder->bindings->data[row] != target)
+            row++;
+        if (row == builder->bindings->len) return false;
+        builder->rows->data[r].adapted_function_index = (uint32_t)row;
     }
     return true;
 }

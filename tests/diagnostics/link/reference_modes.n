@@ -1,8 +1,6 @@
 # A function reference remembers its function's passing modes, which are no
-# part of its type, wherever it is held: a call through it passes a
-# `modify` argument's place, which a `let` can't give. A generic function
-# has no reference adapter yet, so held anywhere but a `let`, its reference
-# would lose them, which is not supported yet.
+# part of its type, wherever it is held, a generic function's too: a call
+# through it passes a `modify` argument's place, which a `let` can't give.
 record Tally {
     count: int
 }

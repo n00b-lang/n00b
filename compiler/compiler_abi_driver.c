@@ -237,10 +237,14 @@ linked_instance(const core_list_t(n00bb_specialization_t) *specializations,
     if (!n00bb_specialization_module(module_name)) return nullptr;
     for (size_t s = 0; s < specializations->len; s++) {
         ir_func_t *instance = specializations->data[s].instance;
-        if (instance && instance->n_blocks
-            && core_string_eq(ir_module_name(instance->owner), module_name)
-            && core_string_eq(instance->name, function_name))
-            return instance;
+        if (!instance
+            || !core_string_eq(ir_module_name(instance->owner), module_name))
+            continue;
+        // The instance, or another function of its module: its reference
+        // adapter (n00bb_instance_reference_adapter).
+        ir_func_t *function = core_string_eq(instance->name, function_name)
+            ? instance : ir_func_find(instance->owner, function_name);
+        if (function && function->n_blocks) return function;
     }
     return nullptr;
 }

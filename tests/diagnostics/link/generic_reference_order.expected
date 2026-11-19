@@ -1,4 +1,0 @@
-tests/diagnostics/link/generic_reference_order.n:3:12: note N00B-S0064: parameter `a` could be `view`: `later` never writes anything reachable from it
-tests/diagnostics/link/generic_reference_order.n:3:19: note N00B-S0064: parameter `zz` could be `view`: `later` never writes anything reachable from it
-tests/diagnostics/link/generic_reference_order.n:3:31: note N00B-S0064: parameter `b` could be `view`: `later` never writes anything reachable from it
-tests/diagnostics/link/generic_reference_order.n:6:17: error N00B-S0039: not supported yet: `ref` to generic function `later`, which declares its keyword parameters in an order other than its type lists them in
