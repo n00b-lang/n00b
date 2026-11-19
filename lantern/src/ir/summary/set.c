@@ -401,12 +401,16 @@ set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
         // are near the range's.
         from = step_bound_near_low(set, exact, to, k, path->steps[k], false);
         to   = step_bound_near_high(set, from, to, k, path->steps[k], true);    }
-    bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);
+    // A deep place covers places below it: through pointers too unless it
+    // is inline. Either way the items under it may be covered, not only
+    // those at its own depth.
+    bool deep = loc_deep(&item->loc);
+    bool wide = deep && !(path->flags & SPATH_INLINE);
     bool full = from < to && set->data[from].loc.path.depth >= path->depth;
     bool pointee = wide && k == path->depth && k
         && step_eq(path->steps[k - 1], value_step);
     *low  = pointee ? below : from;
-    *high = pointee ? outer : !full ? from : wide ? to : exact;
+    *high = pointee ? outer : !full ? from : deep ? to : exact;
     return false;
 }
 
