@@ -650,7 +650,7 @@ n00bb_comptime_run(n00bb_link_analysis_t *analysis,
 
 typedef struct {
     core_dict_t counts;
-    // Writes that can run at run time, per global.
+    // Writes per global, in either phase.
     core_dict_t writes;
     // Whether the initializer being touched has effects the summaries
     // can't see; the units whose initializers did.
@@ -697,34 +697,6 @@ touch_write(touches_t *touches, const ir_global_t *global)
     core_dict_put(&touches->writes, identity, count + 1);
 }
 
-// The blocks of `function` that can run at run time: a branch on
-// `comptime()` only takes its runtime side.
-static bool *
-runtime_blocks(ir_func_t *function)
-{
-    ir_block_t *entry = ir_block_entry(function);
-    if (!entry) return nullptr;
-    bool *seen = core_alloc_array(bool, function->n_blocks);
-    ir_block_t **stack = core_alloc_array(ir_block_t *, function->n_blocks);
-    size_t depth = 0;
-    stack[depth++] = entry;
-    seen[entry->index] = true;
-    while (depth) {
-        ir_instr_t *term = ir_block_terminator(stack[--depth]);
-        uint32_t taken = term ? ir_phase_successor(term, false) : UINT32_MAX;
-        uint32_t count = term ? ir_succ_count(term) : 0;
-        for (uint32_t s = 0; s < count; s++) {
-            ir_block_t *next = ir_succ_at(term, s);
-            if ((taken != UINT32_MAX && s != taken) || !next
-                || seen[next->index]) continue;
-            seen[next->index] = true;
-            stack[depth++] = next;
-        }
-    }
-    core_free(stack);
-    return seen;
-}
-
 static void
 touch_summary(void *context, const ir_func_t *target,
               const ir_summary_t *summary)
@@ -768,7 +740,6 @@ static void
 touch_function(ir_summaries_t *summaries, ir_func_t *function,
                touches_t *touches)
 {
-    bool *runtime = function ? runtime_blocks(function) : nullptr;
     for (uint32_t b = 0; function && b < function->n_blocks; b++)
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = function->blocks[b]->instrs[i];
@@ -778,11 +749,11 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                 if (!value || value->kind != IR_VAL_GLOBAL) continue;
                 touch(touches, value->global, 1);
                 // A copy of a global reads it; anything else that names it
-                // may write it.
+                // may write it, in either phase. A write behind `comptime()`
+                // still changes the value comptime hands to run time.
                 bool read = in->op == IR_OP_COPY
                     || (in->op == IR_OP_GLOBAL_STORE && k == 1);
-                if (!read && runtime && runtime[b])
-                    touch_write(touches, value->global);
+                if (!read) touch_write(touches, value->global);
             }
             if (in->op == IR_OP_CALLBACK_INVOKE) touches->opaque = true;
             if (in->op == IR_OP_CALL && !comptime_only_call(in)
@@ -790,7 +761,6 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                                             touches))
                 touches->opaque = true;
         }
-    core_free(runtime);
 }
 
 static bool
@@ -1092,9 +1062,9 @@ prunable_store(purity_t *purity, ir_module_t *module,
         || !identity->has_static_initializer
         || identity->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
-        // Comptime's value is the starting value unless the runtime
-        // initializer writes the variable again: this store is its only
-        // runtime write. Reads see the comptime value.
+        // Skipping this store is only sound when comptime's value is what
+        // rerunning it gives: nothing else writes the variable, in either
+        // phase, so this store is its only write. Reads are fine.
         || (uintptr_t)core_dict_get(&touches->writes, identity, nullptr) != 1
         || !always_runs(function, in->block, true)
         || !always_runs(function, in->block, false)) return false;

@@ -314,9 +314,8 @@ func union_kind(flag: bool) -> string {
 }
 require union_kind(true) == "int" and union_kind(false) == "three"
 
-# A module variable comptime sets starts with that value at run time, its
-# declaration's initializer included, unless the runtime initializer
-# writes it again (#13).
+# A module variable's declaration initializer reruns at run time, so a
+# value comptime writes after it doesn't carry over (#13).
 var comptime_counter: int = 0
 if comptime() {
     comptime_counter = 42
@@ -333,7 +332,7 @@ func comptime_values() -> int {
     return comptime_counter * 100 + tens
 }
 if !comptime() {
-    require comptime_values() == 4200 + 10 + 1
+    require comptime_values() == 0 + 10 + 1
 }
 
 # A trait method declared `fail: 'F` may be implemented by a method that

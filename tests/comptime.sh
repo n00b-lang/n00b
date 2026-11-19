@@ -111,16 +111,20 @@ mutable at runtime" "$programs/record_list.n"
 start)
     prints comptime_main "comptime_main ran" "$programs/comptime_main.n"
     prints start_reads_comptime "ok" "$programs/start_reads_comptime.n"
-    prunes runtime_prune "bumped from comptime
+    prunes runtime_prune "bumped recomputed
 phase recomputed
-items from comptime
-kept" "runtime_prune.bumped runtime_prune.items runtime_prune.kept" \
-        "$programs/runtime_prune.n"
+items recomputed
+kept" runtime_prune.kept "$programs/runtime_prune.n"
+    prunes rerun_direct "direct read: 0" "" "$programs/rerun_direct.n"
+    prunes rerun_func "read via func: 0
+kept: 14" rerun_func.kept "$programs/rerun_func.n"
+    N00B_PATH="$programs/rerun" prunes rerun_import "no read in init: 0" "" \
+        "$programs/rerun/app.n"
     prunes prune_literal "list kept" prune_literal.names \
         "$programs/prune_literal.n" ;;
 entry)
     prints entry_exit "frozen at exit" "$programs/entry_exit.n"
-    prints runtime_branch "comptime" "$programs/runtime_branch.n"
+    prints runtime_branch "runtime" "$programs/runtime_branch.n"
     prints loop_back "loop-back ok" "$programs/loop_back.n" ;;
 failures)
     rejects entry_failure N00B-B0110 "$programs/entry_failure.n"

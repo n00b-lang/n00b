@@ -1,0 +1,3 @@
+import written
+
+__fd_write(2, "no read in init: " + decimal(written.g) + "\n")
