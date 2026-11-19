@@ -6117,6 +6117,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         }
         else {
             parse_grammar_finalize(grammar);
+            // Map the grammar's nonterminals to n00bb_rule_t now, before
+            // any worker asks.
+            (void)n00bb_rule_table(grammar);
             if (!scan_grammar_lex_compiled(grammar)) {
                 core_string_t error = scan_lex_compile_error();
                 n00bb_report(cli_diagnostics, nullptr,

@@ -23,6 +23,7 @@
 #include "compiler_system.h"
 #include "signature_typevars.h"
 #include "preprocessor.h"
+#include "n00bb_rules.h"
 #include "diagnostics.h"
 
 #define N00BB_PARAMETER_FACTS_KEY \

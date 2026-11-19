@@ -174,10 +174,10 @@ declare_result_variable(n00bb_tu_state_t *state, parse_tree_t *function)
 }
 
 static bool
-value_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
+value_owner_rule(n00bb_rule_t rule)
 {
-    return NT_IS(grammar, node, "body") || NT_IS(grammar, node, "value-body")
-        || NT_IS(grammar, node, "block-value-expr");
+    return rule == RULE(BODY) || rule == RULE(VALUE_BODY)
+        || rule == RULE(BLOCK_VALUE_EXPR);
 }
 
 // Records the control-flow shape of `node` that lowering reads: which
@@ -188,51 +188,52 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                      parse_tree_t *node, bool entering)
 {
     if (core_tree_is_leaf(node)) return;
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
     if (entering) {
         if (state->effect_query_depth) {
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
             if (facts) facts->in_effect_query = true;
         }
-        if (NT_IS(grammar, node, "effect-query")) {
+        if (rule == RULE(EFFECT_QUERY)) {
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
             if (facts && state->function_defs.len)
                 facts->query_function = parse_tree_sym(
                     state->function_defs.data[state->function_defs.len - 1]);
             state->effect_query_depth++;
         }
-        if (NT_IS(grammar, node, "func-def"))
+        if (rule == RULE(FUNC_DEF))
             core_list_push(state->function_defs, node);
-        if (NT_IS(grammar, node, "pos-param")
-            || NT_IS(grammar, node, "type-decl-one")
-            || NT_IS(grammar, node, "record-decl"))
+        if (rule == RULE(POS_PARAM) || rule == RULE(TYPE_DECL_ONE)
+            || rule == RULE(RECORD_DECL))
             core_list_push(state->mark_owners, node);
-        if (NT_IS(grammar, node, "binding-pattern")) state->pattern_depth++;
+        if (rule == RULE(BINDING_PATTERN)) state->pattern_depth++;
         if (state->pattern_depth) {
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
             if (facts) facts->in_pattern = true;
         }
-        if (NT_IS(grammar, node, "value-stmt")) {
+        if (rule == RULE(VALUE_STMT)) {
             parse_node_facts_t *facts = parse_tree_facts_for_update(node);
             if (facts) facts->value_owner = state->value_owners.len
                 ? state->value_owners.data[state->value_owners.len - 1]
                 : nullptr;
         }
-        if (value_owner_node(grammar, node))
+        if (value_owner_rule(rule))
             core_list_push(state->value_owners, node);
         return;
     }
-    if (NT_IS(grammar, node, "effect-query") && state->effect_query_depth)
+    if (rule == RULE(EFFECT_QUERY) && state->effect_query_depth)
         state->effect_query_depth--;
-    if (NT_IS(grammar, node, "func-def") && state->function_defs.len
+    if (rule == RULE(FUNC_DEF) && state->function_defs.len
         && state->function_defs.data[state->function_defs.len - 1] == node)
         state->function_defs.len--;
-    if (NT_IS(grammar, node, "mark-annotation") && state->mark_owners.len) {
+    if (rule == RULE(MARK_ANNOTATION) && state->mark_owners.len) {
         parse_tree_t *owner =
             state->mark_owners.data[state->mark_owners.len - 1];
+        n00bb_rule_t owner_rule = n00bb_rule_of(grammar, owner);
         n00bb_mark_annotation_t mark = {
             .annotation = node,
-            .kind = NT_IS(grammar, owner, "pos-param") ? N00BB_MARKS_PARAMETER
-                : NT_IS(grammar, owner, "type-decl-one") ? N00BB_MARKS_FIELD
+            .kind = owner_rule == RULE(POS_PARAM) ? N00BB_MARKS_PARAMETER
+                : owner_rule == RULE(TYPE_DECL_ONE) ? N00BB_MARKS_FIELD
                 : N00BB_MARKS_TYPE,
             .owner = parse_tree_sym(owner),
             .function = state->function_defs.len
@@ -245,18 +246,17 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                 mark.record = parse_tree_sym(state->mark_owners.data[i - 1]);
         core_list_push(state->mark_annotations, mark);
     }
-    else if (NT_IS(grammar, node, "mark-annotation")) {
+    else if (rule == RULE(MARK_ANNOTATION)) {
         core_list_push(state->mark_annotations,
             ((n00bb_mark_annotation_t){.annotation = node}));
     }
-    if ((NT_IS(grammar, node, "pos-param")
-         || NT_IS(grammar, node, "type-decl-one")
-         || NT_IS(grammar, node, "record-decl")) && state->mark_owners.len
+    if ((rule == RULE(POS_PARAM) || rule == RULE(TYPE_DECL_ONE)
+         || rule == RULE(RECORD_DECL)) && state->mark_owners.len
         && state->mark_owners.data[state->mark_owners.len - 1] == node)
         state->mark_owners.len--;
-    if (NT_IS(grammar, node, "binding-pattern") && state->pattern_depth)
+    if (rule == RULE(BINDING_PATTERN) && state->pattern_depth)
         state->pattern_depth--;
-    if (NT_IS(grammar, node, "unary-expr")) {
+    if (rule == RULE(UNARY_EXPR)) {
         bool negative = false, saw_sign = false;
         parse_tree_t *literal = n00bb_simple_switch_literal(grammar, node,
             &negative, &saw_sign);
@@ -264,7 +264,7 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             ? parse_tree_facts_for_update(literal) : nullptr;
         if (facts) facts->negated_literal = true;
     }
-    if (NT_IS(grammar, node, "case-expr-item")) {
+    if (rule == RULE(CASE_EXPR_ITEM)) {
         parse_tree_t *expression = CHILD_NT(grammar, node, "expression");
         core_string_t text = {0};
         if (expression && !CHILD_NT(grammar, node, "range-sep")
@@ -273,22 +273,21 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             if (facts) facts->case_spelled = text;
         }
     }
-    if (value_owner_node(grammar, node) && state->value_owners.len
+    if (value_owner_rule(rule) && state->value_owners.len
         && state->value_owners.data[state->value_owners.len - 1] == node)
         state->value_owners.len--;
     size_t count = core_tree_num_children(node);
     parse_tree_t *inner = count == 1 && !core_tree_is_leaf(core_tree_child(node, 0))
         ? core_tree_child(node, 0)
-        : NT_IS(grammar, node, "tuple-or-paren") && count == 3
+        : rule == RULE(TUPLE_OR_PAREN) && count == 3
         ? core_tree_child(node, 1) : nullptr;
     if (inner) (void)parse_tree_set_core(node, parse_tree_core(inner));
     parse_junction_t junction = count != 3 ? PARSE_JUNCTION_NONE
-        : NT_IS(grammar, node, "and-expr") ? PARSE_JUNCTION_AND
-        : NT_IS(grammar, node, "or-expr") ? PARSE_JUNCTION_OR
+        : rule == RULE(AND_EXPR) ? PARSE_JUNCTION_AND
+        : rule == RULE(OR_EXPR) ? PARSE_JUNCTION_OR
         : PARSE_JUNCTION_NONE;
     bool comparison = count == 3
-        && (NT_IS(grammar, node, "equality-expr")
-            || NT_IS(grammar, node, "compare-expr"));
+        && (rule == RULE(EQUALITY_EXPR) || rule == RULE(COMPARE_EXPR));
     if (junction || comparison) {
         parse_node_facts_t *facts = parse_tree_facts_for_update(node);
         if (facts) {
@@ -296,10 +295,9 @@ record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             facts->comparison = comparison;
         }
     }
-    if ((NT_IS(grammar, node, "labeled-for")
-         || NT_IS(grammar, node, "labeled-while")
-         || NT_IS(grammar, node, "labeled-typecase")
-         || NT_IS(grammar, node, "labeled-switch")) && count == 2) {
+    if ((rule == RULE(LABELED_FOR) || rule == RULE(LABELED_WHILE)
+         || rule == RULE(LABELED_TYPECASE) || rule == RULE(LABELED_SWITCH))
+        && count == 2) {
         parse_node_facts_t *facts =
             parse_tree_facts_for_update(core_tree_child(node, 1));
         if (facts) facts->control_label = first_token_text(
@@ -332,6 +330,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     parse_grammar_t *grammar = annotation_context->grammar;
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !node) return;
+    // Asked once: what follows tests the node's rule many times over.
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
     if (step == SEMANTIC_PREPARE_ENTER || step == SEMANTIC_AFTER_EXIT)
         record_control_shape(grammar, state, node,
                              step == SEMANTIC_PREPARE_ENTER);
@@ -347,7 +347,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         unit, node, parent);
     if (type_reference || path_root_past_fields)
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_VARREF);
-    if (step == SEMANTIC_PREPARE_EXIT && NT_IS(grammar, node, "tspec-tvar")
+    if (step == SEMANTIC_PREPARE_EXIT && rule == RULE(TSPEC_TVAR)
         && !signature_typevar_for_node(grammar, unit, node)) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
@@ -365,7 +365,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     // A variable it constrains outside every owner is like a trait used as
     // a type there: it has no function to stand for a type in.
     bool where_clause = step == SEMANTIC_PREPARE_ENTER
-        && NT_IS(grammar, node, "where-clause");
+        && rule == RULE(WHERE_CLAUSE);
     parse_tree_t *where_owner = where_clause
         ? typevar_owner_declaration(grammar, node) : nullptr;
     for (size_t i = 0; where_clause && !where_owner
@@ -429,7 +429,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             n00bb_check_clobbered_import(grammar, unit, node);
         }
         if (step == SEMANTIC_AFTER_REFERENCE_EXIT) {
-        if (NT_IS(grammar, node, "tuple-or-paren")
+        if (rule == RULE(TUPLE_OR_PAREN)
             && core_tree_num_children(node) == 3) {
             parse_tree_t *inner = core_tree_child(node, 1);
             parse_sym_entry_t *symbol = attached_symbol(grammar, unit, inner);
@@ -447,7 +447,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
         }
         cache_wrapped_symbol_resolution(grammar, unit, node);
-        if (NT_IS(grammar, node, "unary-expr")
+        if (rule == RULE(UNARY_EXPR)
             && core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("ref"))) {
             parse_tree_t *operand = nullptr;
@@ -464,7 +464,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 (void)parse_tree_set_reference_target(
                     node, resolution.target.symbol);
         }
-        if (NT_IS(grammar, node, "alias-stmt")
+        if (rule == RULE(ALIAS_STMT)
             && alias_declaration_is_transparent(grammar, node)) {
             parse_sym_entry_t *alias = parse_tree_sym(node);
             th_type *target = alias
@@ -473,7 +473,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             else if (alias && !alias->type) alias->type = th_var(state->types);
             if (alias) parse_tree_set_type(node, alias->type);
         }
-        else if (NT_IS(grammar, node, "alias-stmt")) {
+        else if (rule == RULE(ALIAS_STMT)) {
             parse_sym_entry_t *named = parse_tree_sym(node);
             if (named && named->type) parse_tree_set_type(node, named->type);
             th_type *representation = declared_type_from_node(grammar, unit,
@@ -493,7 +493,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 core_buffer_release(&qualified);
             }
         }
-        if (NT_IS(grammar, node, "module-import")
+        if (rule == RULE(MODULE_IMPORT)
             && !untyped_module_name(state, node)) {
             n00bb_tu_internal_error(unit, node, "resolving names",
                 "could not keep the imported module name out of value "
@@ -545,7 +545,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     parse_tree_type(node));
         }
     }
-    if (!entering && NT_IS(grammar, node, "enum-item")
+    if (!entering && rule == RULE(ENUM_ITEM)
         && !cache_enum_item_value(grammar, state, node)) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
@@ -589,10 +589,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                           && core_string_eq(emit.action,
                                             CORE_STRING_STATIC("call")))))
         core_list_push(state->call_nodes, node);
-    if (!entering && (NT_IS(grammar, node, "switch-stmt")
-                      || NT_IS(grammar, node, "switch-value-expr")
-                      || NT_IS(grammar, node, "typecase-stmt")
-                      || NT_IS(grammar, node, "typecase-value-expr")))
+    if (!entering && (rule == RULE(SWITCH_STMT)
+                      || rule == RULE(SWITCH_VALUE_EXPR)
+                      || rule == RULE(TYPECASE_STMT)
+                      || rule == RULE(TYPECASE_VALUE_EXPR)))
         (void)n00bb_narrowed_subject(grammar, unit, node);
     if (!entering && !cache_typecase_arm_types(grammar, state, node)) {
         n00bb_tu_internal_error(unit, node, "checking declarations",
@@ -600,8 +600,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         return;
     }
     if (entering
-        && (NT_IS(grammar, node, "body")
-            || NT_IS(grammar, node, "value-body")) && parent
+        && (rule == RULE(BODY)
+            || rule == RULE(VALUE_BODY)) && parent
         && (NT_IS(grammar, parent, "typecase-case-block")
             || NT_IS(grammar, parent, "typecase-value-case-block")))
         prepare_typecase_arm(grammar, unit, parent);
@@ -609,9 +609,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         cache_type_syntax_node(grammar, node);
         th_type *composed = compose_type_syntax_node(grammar, unit, node);
         if (composed) parse_tree_set_type(node, composed);
-        else if (NT_IS(grammar, node, "tspec-application"))
+        else if (rule == RULE(TSPEC_APPLICATION))
             parse_tree_set_type(node, nullptr);
-        if (NT_IS(grammar, node, "variant-decl-one")) {
+        if (rule == RULE(VARIANT_DECL_ONE)) {
             parse_sym_entry_t *arm = parse_tree_sym(node);
             parse_tree_t *type_node = CHILD_NT(grammar, node, "type-spec");
             th_type *type = type_node ? parse_tree_type(type_node) : nullptr;
@@ -625,9 +625,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_set_type(node, type);
         }
     }
-    if (!entering && (NT_IS(grammar, node, "pos-param")
-        || NT_IS(grammar, node, "default-param")
-        || NT_IS(grammar, node, "vargs-param"))) {
+    if (!entering && (rule == RULE(POS_PARAM)
+        || rule == RULE(DEFAULT_PARAM)
+        || rule == RULE(VARGS_PARAM))) {
         bind_declared_parameter(grammar, unit, node, state);
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) validate_builtin_generic_type_arity(grammar, node, unit,
@@ -638,17 +638,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             return;
         }
     }
-    if (entering && NT_IS(grammar, node, "body") && parent
+    if (entering && rule == RULE(BODY) && parent
         && NT_IS(grammar, parent, "func-def"))
         declare_result_variable(state, parent);
-    if (entering && (NT_IS(grammar, node, "fail-stmt")
-                     || NT_IS(grammar, node, "with-stmt")
-                     || NT_IS(grammar, node, "with-value-expr")
-                     || NT_IS(grammar, node, "postfix-expr")))
+    if (entering && (rule == RULE(FAIL_STMT)
+                     || rule == RULE(WITH_STMT)
+                     || rule == RULE(WITH_VALUE_EXPR)
+                     || rule == RULE(POSTFIX_EXPR)))
         note_function_may_fail(grammar, node);
-    if (entering && (NT_IS(grammar, node, "func-def")
-                     || NT_IS(grammar, node, "callback-role")
-                     || NT_IS(grammar, node, "trait-spec"))) {
+    if (entering && (rule == RULE(FUNC_DEF)
+                     || rule == RULE(CALLBACK_ROLE)
+                     || rule == RULE(TRAIT_SPEC))) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) {
             n00bb_function_parameter_facts_t *parameter_facts =
@@ -664,7 +664,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
 
-    if (!entering && NT_IS(grammar, node, "trait-spec")) {
+    if (!entering && rule == RULE(TRAIT_SPEC)) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if (symbol) {
             th_type *failure = nullptr;
@@ -681,7 +681,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
         }
     }
-    if (!entering && NT_IS(grammar, node, "trait-decl")) {
+    if (!entering && rule == RULE(TRAIT_DECL)) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         core_list_t(n00bb_typevar_binding_t) variables =
             core_list_new(n00bb_typevar_binding_t);
@@ -725,12 +725,12 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     if (!entering)
         record_type_constraints(grammar, unit, node, state);
 
-    if (!entering && NT_IS(grammar, node, "callback-role"))
+    if (!entering && rule == RULE(CALLBACK_ROLE))
         record_callback_role_signature(grammar, unit, node, state);
-    if (!entering && NT_IS(grammar, node, "callback-decl"))
+    if (!entering && rule == RULE(CALLBACK_DECL))
         finalize_callback_contract(grammar, unit, node, state);
 
-    if (!entering && NT_IS(grammar, node, "func-def")) {
+    if (!entering && rule == RULE(FUNC_DEF)) {
         record_function_body_constraints(grammar, unit, node, state);
         record_function_signature(grammar, unit, node, state);
     }
@@ -741,7 +741,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 "could not cache ordered literal child references");
             return;
         }
-        if (NT_IS(grammar, node, "top-level-stmt")) {
+        if (rule == RULE(TOP_LEVEL_STMT)) {
             parse_tree_t *statement = top_level_statement_child(grammar, node);
             if (!statement) {
                 n00bb_tu_internal_error(unit, node, "checking declarations",
@@ -753,7 +753,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (!NT_IS(grammar, statement, "top-when-body"))
                 core_list_push(state->module_top_level_statements, statement);
         }
-        if (NT_IS(grammar, node, "sym-decl")) {
+        if (rule == RULE(SYM_DECL)) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_sym_entry_t *symbol = parse_tree_sym(node);
             parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
@@ -775,7 +775,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                                                     declared);
             }
         }
-        if (NT_IS(grammar, node, "type-decl")) {
+        if (rule == RULE(TYPE_DECL)) {
             report_type_declaration_form(unit, node);
             return;
         }
@@ -799,21 +799,21 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 return;
             }
         }
-        if (NT_IS(grammar, node, "variant-decl")
+        if (rule == RULE(VARIANT_DECL)
             && !finalize_variant_symbol_type(node, unit, state)) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "checking declarations",
                 "could not resolve the declared variant type");
             return;
         }
-        if (NT_IS(grammar, node, "enum-stmt")
+        if (rule == RULE(ENUM_STMT)
             && !finalize_enum_symbol_type(grammar, node, unit, state)) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "checking declarations",
                 "could not resolve the declared enum type");
             return;
         }
-        if (NT_IS(grammar, node, "flagset-stmt")
+        if (rule == RULE(FLAGSET_STMT)
             && !finalize_flagset_symbol_type(grammar, node, unit, state)) {
             n00bb_tu_internal_error_unless_reported(unit, node,
                 "checking declarations",
