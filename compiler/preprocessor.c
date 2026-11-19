@@ -230,7 +230,8 @@ static bool evaluate_when_condition(pp_context_t *ctx,
 static core_string_t builtin_name(pp_context_t *ctx, parse_tree_t *node);
 static bool process_module(pp_context_t *ctx, core_translation_unit_t *unit,
                            parse_tree_t *tree);
-static pp_spelling_t style_spelling(pp_context_t *ctx, parse_tree_t *node);
+static pp_spelling_t style_spelling(pp_context_t *ctx, parse_tree_t *node,
+                                    n00bb_rule_t rule);
 
 static core_string_t
 own_string(pp_context_t *ctx, core_string_t value)
@@ -2641,13 +2642,12 @@ bare_annotation(pp_context_t *ctx, parse_tree_t *node)
 // Where `:` separates (dict and set literals, slices, ranges, `case`
 // ranges), an operand may not hold an unparenthesized type annotation.
 static bool
-check_separated_operands(pp_context_t *ctx, parse_tree_t *node)
+check_separated_operands(pp_context_t *ctx, parse_tree_t *node,
+                         n00bb_rule_t rule)
 {
-    bool separated = is_name(ctx->grammar, node, "dict-entry")
-        || is_name(ctx->grammar, node, "set-entries")
-        || is_name(ctx->grammar, node, "slice-contents")
-        || is_name(ctx->grammar, node, "range-parts")
-        || is_name(ctx->grammar, node, "case-expr-item");
+    bool separated = rule == RULE(DICT_ENTRY) || rule == RULE(SET_ENTRIES)
+        || rule == RULE(SLICE_CONTENTS) || rule == RULE(RANGE_PARTS)
+        || rule == RULE(CASE_EXPR_ITEM);
     bool ok = true;
     for (size_t i = 0; separated && i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
@@ -2750,13 +2750,14 @@ preprocess_prepare(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    // What follows may rewrite the node's children but never its rule.
+    n00bb_rule_t rule = n00bb_rule_of(ctx->grammar, node);
     while (walk->frames.len <= (size_t)visit->depth)
         core_list_push(walk->frames, ((pp_walk_frame_t){0}));
     pp_walk_frame_t *frame = &walk->frames.data[visit->depth];
     pp_walk_frame_t *parent = visit->depth > 0
         ? &walk->frames.data[visit->depth - 1] : nullptr;
-    if (frame->revisit_body == node
-        && is_name(ctx->grammar, node, "top-when-body")) {
+    if (frame->revisit_body == node && rule == RULE(TOP_WHEN_BODY)) {
         // A module-level `when` branch stays at module level: its imports,
         // constants and module literals are the module's own.
         frame->selected_import_body = parent ? parent->selected_import_body
@@ -2775,19 +2776,19 @@ preprocess_prepare(parse_visit_t *visit)
             .current_body = parent ? parent->current_body : nullptr,
         };
     }
-    if (is_name(ctx->grammar, node, "body")) frame->current_body = node;
-    frame->scoped_body = is_name(ctx->grammar, node, "body")
-        || is_name(ctx->grammar, node, "value-body")
-        || is_name(ctx->grammar, node, "try-body");
+    if (rule == RULE(BODY)) frame->current_body = node;
+    frame->scoped_body = rule == RULE(BODY) || rule == RULE(VALUE_BODY)
+        || rule == RULE(TRY_BODY);
     frame->binding_mark = ctx->bindings.len;
 
-    if (is_name(ctx->grammar, node, "func-def")
+    if (rule == RULE(FUNC_DEF)
         && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
-    if (is_name(ctx->grammar, node, "litmod-alias-stmt")
+    if (rule == RULE(LITMOD_ALIAS_STMT)
         && !register_litmod_alias(ctx, node)) return PARSE_VISIT_ERROR;
-    if (!rewrite_annotated_assignment(ctx, node)) return PARSE_VISIT_ERROR;
-    (void)check_separated_operands(ctx, node);
-    if (is_name(ctx->grammar, node, "import-stmt")) {
+    if (rule == RULE(ASSIGN_STMT) && !rewrite_annotated_assignment(ctx, node))
+        return PARSE_VISIT_ERROR;
+    (void)check_separated_operands(ctx, node, rule);
+    if (rule == RULE(IMPORT_STMT)) {
         if (frame->current_body
             && frame->current_body != frame->selected_import_body) {
             pp_error(ctx, node, N00B_DIAG_IMPORT_PLACEMENT,
@@ -2805,14 +2806,14 @@ preprocess_prepare(parse_visit_t *visit)
         if (!imported) return PARSE_VISIT_ERROR;
         return PARSE_VISIT_PRUNE;
     }
-    if (is_name(ctx->grammar, node, "assert-stmt")
+    if (rule == RULE(ASSERT_STMT)
         && core_string_eq(first_leaf_text(ctx, node),
                           CORE_STRING_STATIC("assert"))
         && ctx->options && ctx->options->release_mode) {
         visit->remove = true;
         return PARSE_VISIT_CONTINUE;
     }
-    if (is_name(ctx->grammar, node, "expression-stmt")) {
+    if (rule == RULE(EXPRESSION_STMT)) {
         parse_tree_t *expression = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, node, CORE_STRING_STATIC("expression"));
         core_string_t diagnostic_name = {0};
@@ -2837,25 +2838,25 @@ preprocess_prepare(parse_visit_t *visit)
             return PARSE_VISIT_CONTINUE;
         }
     }
-    if (is_name(ctx->grammar, node, "expression-stmt")
+    if (rule == RULE(EXPRESSION_STMT)
         && module_literal_statement(ctx, visit, !frame->current_body))
         return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_PRUNE;
-    if (is_name(ctx->grammar, node, "variable-decl")) {
+    if (rule == RULE(VARIABLE_DECL)) {
         if (module_literal_assigned(ctx, visit))
             return PARSE_VISIT_ERROR;
         remember_const(ctx, node);
         if (ctx->failed) return PARSE_VISIT_ERROR;
     }
     core_string_t misplaced = {0};
-    if (is_name(ctx->grammar, node, "embed-lit")
+    if (rule == RULE(EMBED_LIT)
         && module_literal_leaf(ctx, node, &misplaced)) {
         pp_error(ctx, node, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
             N00B_TEXT_A_MODULE_LITERAL_CAN_ONLY,
             N00BB_NO_ARGS);
         return PARSE_VISIT_ERROR;
     }
-    bool top_level_when = is_name(ctx->grammar, node, "top-when-stmt");
-    if (top_level_when || is_name(ctx->grammar, node, "when-stmt")) {
+    bool top_level_when = rule == RULE(TOP_WHEN_STMT);
+    if (top_level_when || rule == RULE(WHEN_STMT)) {
         parse_tree_t *body = selected_when_body(ctx, node,
             top_level_when ? &top_when : &body_when);
         if (ctx->failed) return PARSE_VISIT_ERROR;
@@ -2881,7 +2882,7 @@ preprocess_prepare(parse_visit_t *visit)
         visit->revisit_replacement = true;
         return PARSE_VISIT_CONTINUE;
     }
-    bool invocation = is_name(ctx->grammar, node, "postfix-expr")
+    bool invocation = rule == RULE(POSTFIX_EXPR)
         && postfix_has_token(node, CORE_STRING_STATIC("("));
     core_string_t processor_name = invocation ? builtin_name(ctx, node)
                                                : (core_string_t){0};
@@ -3386,12 +3387,15 @@ report_formal_order(pp_discovery_t *discovery,
 // positional entry (<tspec-named-positional>) and a positional entry after
 // the keyword parameters (<tspec-late-param>) so they are reported here.
 static void
-check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node)
+check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node,
+                          n00bb_rule_t rule)
 {
+    if (rule != RULE(TSPEC_FUNC_PARAM) && rule != RULE(TSPEC_NAMED_POSITIONAL)
+        && rule != RULE(TSPEC_KARGS)) return;
     pp_context_t *ctx = discovery->ctx;
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(ctx->unit);
-    parse_tree_t *mode = is_name(ctx->grammar, node, "tspec-func-param")
+    parse_tree_t *mode = rule == RULE(TSPEC_FUNC_PARAM)
         ? child_nt(ctx->grammar, node, CORE_STRING_STATIC("tspec-param-mode"))
         : nullptr;
     parse_tree_t *moded = mode && core_tree_num_children(node) > 1
@@ -3411,7 +3415,7 @@ check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node)
         });
         return;
     }
-    if (is_name(ctx->grammar, node, "tspec-named-positional")) {
+    if (rule == RULE(TSPEC_NAMED_POSITIONAL)) {
         parse_tree_t *name = core_tree_child(node, 0);
         parse_tree_t *type = child_nt(ctx->grammar, node,
                                       CORE_STRING_STATIC("union-tspec"));
@@ -3431,7 +3435,7 @@ check_function_type_entry(pp_discovery_t *discovery, parse_tree_t *node)
         });
         return;
     }
-    if (!is_name(ctx->grammar, node, "tspec-kargs")) return;
+    if (rule != RULE(TSPEC_KARGS)) return;
     // The keyword parameter last before the first entry that isn't one.
     parse_tree_t *keyword = nullptr;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
@@ -3556,62 +3560,60 @@ check_formals(pp_discovery_t *discovery, parse_tree_t *node)
 }
 
 static pp_spelling_t
-style_spelling(pp_context_t *ctx, parse_tree_t *node)
+style_spelling(pp_context_t *ctx, parse_tree_t *node, n00bb_rule_t rule)
 {
-    // A node is at most one of these nonterminals; its text is read only
-    // once it is one.
-    pp_spelling_t first = PP_SPELL_COUNT, last = PP_SPELL_COUNT;
-    if (is_name(ctx->grammar, node, "function-keyword"))
+    // The node's text is read only once its rule is one with a spelling.
+    pp_spelling_t first, last;
+    switch (rule) {
+    case RULE(FUNCTION_KEYWORD):
         first = PP_SPELL_FUNC, last = PP_SPELL_FUNCTION;
-    else if (is_name(ctx->grammar, node, "or-op"))
-        first = PP_SPELL_OR, last = PP_SPELL_PIPE_PIPE;
-    else if (is_name(ctx->grammar, node, "and-op"))
-        first = PP_SPELL_AND, last = PP_SPELL_AMP_AMP;
-    else if (is_name(ctx->grammar, node, "not-op")
-             || is_name(ctx->grammar, node, "not-word-op"))
-        first = PP_SPELL_BANG, last = PP_SPELL_NOT;
-    else if (is_name(ctx->grammar, node, "nil-keyword"))
-        first = PP_SPELL_NIL, last = PP_SPELL_PY_NONE;
-    else if (is_name(ctx->grammar, node, "record-keyword"))
+        break;
+    case RULE(OR_OP): first = PP_SPELL_OR, last = PP_SPELL_PIPE_PIPE; break;
+    case RULE(AND_OP): first = PP_SPELL_AND, last = PP_SPELL_AMP_AMP; break;
+    case RULE(NOT_OP):
+    case RULE(NOT_WORD_OP): first = PP_SPELL_BANG, last = PP_SPELL_NOT; break;
+    case RULE(NIL_KEYWORD): first = PP_SPELL_NIL, last = PP_SPELL_PY_NONE; break;
+    case RULE(RECORD_KEYWORD):
         first = PP_SPELL_RECORD, last = PP_SPELL_STRUCT;
-    else if (is_name(ctx->grammar, node, "return-sigil"))
+        break;
+    case RULE(RETURN_SIGIL):
         first = PP_SPELL_ARROW, last = PP_SPELL_RETURN_COLON;
-    if (first != PP_SPELL_COUNT) {
-        core_string_t text = first_leaf_text(ctx, node);
-        for (pp_spelling_t i = first; i <= last; i++)
-            if (core_string_eq(text, pp_spellings[i].spelling)) return i;
-        return PP_SPELL_COUNT;
-    }
-    if (is_name(ctx->grammar, node, "elif-keyword")) {
+        break;
+    case RULE(ELIF_KEYWORD):
         if (core_tree_num_children(node) == 2) return PP_SPELL_ELSE_IF;
         return core_string_eq(first_leaf_text(ctx, node),
                               CORE_STRING_STATIC("elseif"))
             ? PP_SPELL_ELSEIF : PP_SPELL_ELIF;
-    }
-    if (is_name(ctx->grammar, node, "block-start"))
+    case RULE(BLOCK_START):
         return core_string_eq(first_leaf_text(ctx, node),
                               CORE_STRING_STATIC("{"))
             ? PP_SPELL_BRACES : PP_SPELL_INDENT;
-    if (is_name(ctx->grammar, node, "return-type"))
+    case RULE(RETURN_TYPE):
         return core_string_eq(first_leaf_text(ctx, node),
                               CORE_STRING_STATIC("->"))
             ? PP_SPELL_ARROW : PP_SPELL_RETURN_COLON;
     // `true` / `false` versus `True` / `False`: one style per pair.
-    if (is_name(ctx->grammar, node, "bool-lit")) {
+    case RULE(BOOL_LIT): {
         core_string_t text = first_leaf_text(ctx, node);
         return core_string_eq(text, CORE_STRING_STATIC("True"))
             || core_string_eq(text, CORE_STRING_STATIC("False"))
             ? PP_SPELL_PY_TRUE : PP_SPELL_TRUE;
     }
-    if (is_name(ctx->grammar, node, "case-default-keyword"))
+    case RULE(CASE_DEFAULT_KEYWORD):
         return core_string_eq(first_leaf_text(ctx, node),
                               CORE_STRING_STATIC("default"))
             ? PP_SPELL_CASE_DEFAULT : PP_SPELL_CASE_ELSE;
     // A function type's keyword parameters, with or without a leading `**`.
-    if (is_name(ctx->grammar, node, "tspec-kargs"))
+    case RULE(TSPEC_KARGS):
         return core_string_eq(first_leaf_text(ctx, node),
                               CORE_STRING_STATIC("**"))
             ? PP_SPELL_STARRED_KEYWORD_TYPE : PP_SPELL_KEYWORD_TYPE;
+    default:
+        return PP_SPELL_COUNT;
+    }
+    core_string_t text = first_leaf_text(ctx, node);
+    for (pp_spelling_t i = first; i <= last; i++)
+        if (core_string_eq(text, pp_spellings[i].spelling)) return i;
     return PP_SPELL_COUNT;
 }
 
@@ -3774,14 +3776,15 @@ preprocess_discover(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    // The checks below may rewrite the node's children but never its rule.
+    n00bb_rule_t rule = n00bb_rule_of(ctx->grammar, node);
     check_operator_mix(discovery, node);
     check_prefixed_annotation(discovery, node);
     if (nonterm_class(ctx, node) == PP_FORMALS) check_formals(discovery, node);
-    check_function_type_entry(discovery, node);
-    if (is_name(ctx->grammar, node, "variable-decl")
-        || is_name(ctx->grammar, node, "import-stmt"))
+    check_function_type_entry(discovery, node, rule);
+    if (rule == RULE(VARIABLE_DECL) || rule == RULE(IMPORT_STMT))
         report_statement_trailing_comma(ctx, node);
-    while (is_name(ctx->grammar, node, "place")
+    while (rule == RULE(PLACE)
            && core_tree_num_children(node) == 3
            && is_name(ctx->grammar, core_tree_child(node, 1), "place")) {
         parse_tree_t *close = core_tree_remove_child(node, 2);
@@ -3802,13 +3805,11 @@ preprocess_discover(parse_visit_t *visit)
         }
         parse_tree_free(inner);
     }
-    if (is_name(ctx->grammar, node, "switch-case-block")
-        || is_name(ctx->grammar, node, "typecase-case-block")
-        || is_name(ctx->grammar, node, "case-else")
-        || is_name(ctx->grammar, node, "switch-value-case-block")
-        || is_name(ctx->grammar, node, "typecase-value-case-block")
-        || is_name(ctx->grammar, node, "switch-value-else")
-        || is_name(ctx->grammar, node, "typecase-value-else")) {
+    if (rule == RULE(SWITCH_CASE_BLOCK) || rule == RULE(TYPECASE_CASE_BLOCK)
+        || rule == RULE(CASE_ELSE) || rule == RULE(SWITCH_VALUE_CASE_BLOCK)
+        || rule == RULE(TYPECASE_VALUE_CASE_BLOCK)
+        || rule == RULE(SWITCH_VALUE_ELSE)
+        || rule == RULE(TYPECASE_VALUE_ELSE)) {
         parse_tree_t *body = parse_tree_find_direct_child_by_nt_id(
             node, PARSE_NT_ID(ctx->grammar, "body"));
         if (!body)
@@ -3824,7 +3825,7 @@ preprocess_discover(parse_visit_t *visit)
     for (size_t i = 0; i < discovery->case_openers.len && !case_opener; i++)
         case_opener = discovery->case_openers.data[i] == node;
     pp_spelling_t spelling = case_opener ? PP_SPELL_COUNT
-                                         : style_spelling(ctx, node);
+                                         : style_spelling(ctx, node, rule);
     if (spelling != PP_SPELL_COUNT && !discovery->spelling_lines[spelling]) {
         parse_token_info_t *token = parse_tree_find_first_terminal(node);
         if (token) discovery->spelling_lines[spelling] = parse_token_line(token);
@@ -3843,7 +3844,7 @@ preprocess_discover(parse_visit_t *visit)
     }
     // Statements inside a module-level `when` branch are processed when the
     // chosen branch replaces the `when`; the others are discarded with it.
-    bool top_level = is_name(ctx->grammar, node, "top-level-stmt");
+    bool top_level = rule == RULE(TOP_LEVEL_STMT);
     bool in_when_branch = false;
     for (parse_tree_t *at = top_level ? parse_tree_parent(node) : nullptr;
          at && !in_when_branch; at = parse_tree_parent(at))
