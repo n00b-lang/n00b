@@ -687,7 +687,11 @@
 
 <typespec-expr> @nospace ::= %"typespec" %"[" <type-spec> %"]"
 
-<effect-query> @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
+# Two rules rather than an optional `(<expression> %",")?`, so that a
+# space follows the comma but none follows the `(` when there is no comma.
+<effect-query> @nospace ::= <effect-query-word> %"(" <effect-query-name> %")"
+<effect-query> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::=
+       <effect-query-word> %"(" <expression> %"," <effect-query-name> %")"
 <effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"
                       | %"may_read" | %"may_write" | %"may_lend"
                       | %"may_carry"
@@ -913,8 +917,8 @@
 <trait-check-unary> ::= <trait-check-term>
 <trait-check-unary> @nospace ::= <not-op> <trait-check-unary>
 <trait-check-unary> ::= <not-word-op> <trait-check-unary>
-<trait-check-unary> ::= %"(" <trait-check> %")"
-<trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
+<trait-check-unary> @nospace($1) @nospace($2) ::= %"(" <trait-check> %")"
+<trait-check-term> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
 
 <effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
 <effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
