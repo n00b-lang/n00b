@@ -799,7 +799,7 @@
 
 <tspec-tvar> @nospace ::= %TYPE_VAR
 
-<sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
+<sized-int-tspec> @adjacent("prefix") @nospace ::= %i %":" <integer-size>
                                           | %u %":" <integer-size>
                                           | %bits %":" <integer-size>
 <integer-size> ::= %INT_LIT | %HEX_LIT
