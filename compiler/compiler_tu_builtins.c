@@ -992,6 +992,29 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     comptime->type = comptime_signature;
     comptime->error_type = nil_type;
     comptime->callable_contract = comptime_contract;
+    // `native_entry(f)`: a named function's native code address
+    // (n00bb_builtin_native_entry_function).
+    th_type *entry_function = th_var(types);
+    th_type *entry_address = th_ind(types, 0,
+                                    th_name(types, CORE_STRING_STATIC("byte")));
+    th_param entry_parameter = {.mode = TH_IN, .type = entry_function};
+    th_type *entry_signature = entry_function && entry_address
+        ? th_func_with_error(types, entry_address, nil_type,
+                             &entry_parameter, 1, nullptr, nullptr, 0)
+        : nullptr;
+    th_type *entry_contract = entry_signature
+        ? th_env_signature_contract(types, entry_signature, nil_type)
+        : nullptr;
+    parse_sym_entry_t *native_entry = entry_contract
+        ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
+            CORE_STRING_STATIC("native_entry"), PARSE_SYM_FUNCTION, nullptr)
+        : nullptr;
+    if (!native_entry || !parse_sym_set_binding(native_entry,
+            CORE_STRING_STATIC("n00bb.native_entry"), native_entry))
+        return false;
+    native_entry->type = entry_signature;
+    native_entry->error_type = nil_type;
+    native_entry->callable_contract = entry_contract;
     th_type *prefetch_item = th_var(types);
     th_type *prefetch_ref = prefetch_item
         ? th_ind(types, 0, prefetch_item) : nullptr;
@@ -1925,6 +1948,7 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_signal_fence_function(symbol)
             || n00bb_builtin_machine_function(symbol)
             || n00bb_builtin_comptime_function(symbol)
+            || n00bb_builtin_native_entry_function(symbol)
             || n00bb_builtin_prefetch_function(symbol)
             || n00bb_builtin_atomic_rmw_function(symbol)
             || n00bb_builtin_atomic_cas_function(symbol)
@@ -2034,6 +2058,14 @@ n00bb_builtin_comptime_function(parse_sym_entry_t *symbol)
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
         && !symbol->decl_node && parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.comptime"));
+}
+
+bool
+n00bb_builtin_native_entry_function(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind == PARSE_SYM_FUNCTION
+        && !symbol->decl_node && parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.native_entry"));
 }
 
 bool

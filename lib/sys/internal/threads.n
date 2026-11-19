@@ -63,10 +63,10 @@ func thread_start(entry: Thread_Entry) -> bool {
 # The collector's own thread start, which allocates nothing: the collector
 # starts its finalizer thread from code that may run before the thread has
 # a mutator, where a callback (an object on the heap) can't be made.
-func collector_thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]],
-                            argument: Ref[byte]) -> bool {
-    return n00b_os_thread_start_raw(unsafe_cast[Ref[byte]] entry,
-                                    argument) == 0
+# `entry` is the native code of a `(Ref[byte]) -> Ref[byte]` function,
+# `native_entry(f)`, which the new thread calls with `argument`.
+func collector_thread_start(entry: Ref[byte], argument: Ref[byte]) -> bool {
+    return n00b_os_thread_start_raw(entry, argument) == 0
 }
 
 func thread_is_main() -> bool {

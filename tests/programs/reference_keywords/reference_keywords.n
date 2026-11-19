@@ -319,6 +319,11 @@ func adapted_use() -> int {
 }
 require adapted_use() == 2
 
+# Native code is given a function's own code, `native_entry(f)`, never its
+# reference adapter (reference_keywords.sh reads which).
+let adapted_entry: Ref[byte] = native_entry(tally_add)
+require __abi_ref_address(adapted_entry) != 0
+
 require imported_join.call("a") == "a,."
 require imported_join.call("a", "b", "c") == "a,b,c,."
 require imported_join.call("a", "b", zsep = "-") == "a-b-."

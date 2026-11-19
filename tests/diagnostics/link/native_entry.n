@@ -1,0 +1,13 @@
+# `native_entry` takes the name of a function that isn't generic: a value,
+# even a function reference, has no native code of its own.
+func worker(argument: Ref[byte]) -> Ref[byte] {
+    return argument
+}
+func either(a: 'T, b: 'T) -> 'T {
+    return b
+}
+let held = ref worker
+let from_value: Ref[byte] = native_entry(held)
+let from_reference: Ref[byte] = native_entry(ref worker)
+let from_generic: Ref[byte] = native_entry(either)
+let named: Ref[byte] = native_entry(worker)

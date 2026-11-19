@@ -684,6 +684,43 @@ member_receiver(parse_tree_t *node)
                               CORE_STRING_STATIC("."));
 }
 
+// Whether `node`, a function's name, is the argument of a call to
+// `native_entry` (n00bb_builtin_native_entry_function).
+static bool
+native_entry_argument(parse_tree_t *node)
+{
+    parse_tree_t *at = node;
+    for (size_t depth = 0; at && depth < 16; depth++) {
+        parse_tree_t *parent = parse_tree_parent(at);
+        parse_node_facts_t *facts = parent ? parse_tree_call_facts(parent)
+                                           : nullptr;
+        if (facts && facts->call_classified && facts->call_function)
+            return facts->call_callee != at
+                && n00bb_builtin_native_entry_function(
+                       canonical_symbol(facts->call_function));
+        at = parent;
+    }
+    return false;
+}
+
+// The function `symbol` names, as what `native_entry` is given: its own
+// code, not its reference adapter.
+static ir_lower_result_t
+native_entry_function(ir_lower_context_t *context, parse_sym_entry_t *symbol,
+                      ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_link_analysis_t *analysis = lower && tu_state(lower->unit)
+        ? tu_state(lower->unit)->link_analysis : nullptr;
+    ir_func_t *function = analysis
+        ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
+    ir_value_t *address = function
+        ? ir_func_address(function->owner, function) : nullptr;
+    return address ? (ir_lower_result_t){IR_LOWER_VALUE, address}
+        : lower_internal(context, span,
+                         "could not find the function `native_entry` names");
+}
+
 static ir_lower_result_t
 lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                      parse_visit_t *visit, size_t operand_count,
@@ -722,6 +759,10 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
             return n00bb_emit_type_literal(context,
                 th_name(ir_module_types(context->module),
                         canonical_builtin_type_name(named->name)), span);
+        // What `native_entry` is given is the function itself.
+        if (named && named->kind == PARSE_SYM_FUNCTION
+            && native_entry_argument(visit->node))
+            return native_entry_function(context, named, span);
         if (named && named->kind == PARSE_SYM_FUNCTION) {
             lower_report(context, N00B_DIAG_FUNCTION_NAME_AS_VALUE, span,
                          N00B_TEXT_FUNCTION_NAME_AS_VALUE,

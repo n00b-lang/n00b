@@ -1399,6 +1399,20 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
     }
     th_type *from_definition = th_type_definition(types, from);
     th_type *to_definition = th_type_definition(types, target);
+    // A function reference may be to its function's reference adapter
+    // (n00bb_reference_adapter_t), so it is no function's native code.
+    th_type *reference = th_resolve(from);
+    th_type *referent = th_kind_of(reference) == TH_INDIRECTION
+        ? th_resolve(th_ind_referent(reference)) : nullptr;
+    if (unsafe_cast && referent && (th_kind_of(referent) == TH_FUNCTION
+                                    || th_kind_of(referent) == TH_BINDER)
+        && !ir_type_eq(context->module, reference, th_resolve(target))) {
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_FUNCTION_REFERENCE_CAST, span,
+            N00B_TEXT_FUNCTION_REFERENCE_CAST, N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_USE_NATIVE_ENTRY, N00BB_NO_ARGS);
+        return result;
+    }
     if (unsafe_cast) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_BITCAST,
                                                      span);

@@ -949,6 +949,10 @@ bool n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_signal_fence_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_machine_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_comptime_function(parse_sym_entry_t *symbol);
+// `native_entry(f)`: the native code address of function `f`, named, as a
+// `Ref[byte]` for native code to call. It is the function itself, never
+// its reference adapter (n00bb_reference_adapter_t), which `ref f` may be.
+bool n00bb_builtin_native_entry_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_prefetch_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_rmw_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_cas_function(parse_sym_entry_t *symbol);

@@ -37,7 +37,7 @@ func wake(heap: Ref[internal.gc.core.Heap]) {
         __atomic_fetch_sub(ref heap.__value.fin_live, 1)
         return
     }
-    if !internal.threads.collector_thread_start(ref thread_main,
+    if !internal.threads.collector_thread_start(native_entry(thread_main),
                                                 unsafe_cast[Ref[byte]] heap) {
         __atomic_store(ref heap.__value.fin_thread, thread_idle)
         __atomic_fetch_sub(ref heap.__value.fin_live, 1)

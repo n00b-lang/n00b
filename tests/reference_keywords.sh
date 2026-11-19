@@ -42,12 +42,13 @@ fi
 # parameters to reorder, is the function itself; of any other, it is the
 # function's reference adapter, the one the interface declares for an
 # imported function. A call through a reference known to hold an adapter
-# calls the function it adapts.
+# calls the function it adapts, and `native_entry` is the function itself.
 for expected in \
     'global.store @reference_keywords.plain_reference, @plain_add ' \
     'global.store @reference_keywords.adapted_reference, @__n00bb_reference_adapter_' \
     'global.store @reference_keywords.imported_check, @__n00bb_reference_adapter_' \
-    '= call @tally_add, '
+    '= call @tally_add, ' \
+    '= bitcast @tally_add '
 do
     if ! grep -qF "$expected" "$tmp/lower.out"; then
         echo "the lowered program has no \`$expected\`" >&2

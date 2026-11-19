@@ -740,6 +740,38 @@ n00bb_emit_intrinsic(ir_lower_context_t *context, parse_sym_entry_t *symbol,
             : lower_builtin_failure(context, valid, span, symbol,
                 N00B_TEXT_PHRASE_TAKES_NO_ARGUMENTS);
     }
+    if (n00bb_builtin_native_entry_function(symbol)) {
+        // A function's name gives the function itself (native_entry_function
+        // in walk.c), whose type is a function's, not a reference's.
+        ir_value_t *function = count == 1 && !copyouts ? operands[0]
+                                                       : nullptr;
+        th_ctx *types = ir_module_types(context->module);
+        bool named = function && function->kind == IR_VAL_FUNC
+            && function->owner
+            && th_kind_of(th_resolve(function->type)) != TH_INDIRECTION;
+        if (named && !th_is_closed(types, function->owner->type)) {
+            lower_report(context, N00B_DIAG_NATIVE_ENTRY_NOT_FUNCTION, span,
+                N00B_TEXT_NATIVE_ENTRY_GENERIC,
+                N00BB_ARGS(ARG_TEXT(function->owner->name)));
+            return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        }
+        if (!named) {
+            lower_report(context, N00B_DIAG_NATIVE_ENTRY_NOT_FUNCTION, span,
+                N00B_TEXT_NATIVE_ENTRY_NOT_FUNCTION, N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_NAME_THE_FUNCTION_ITSELF,
+                       N00BB_NO_ARGS);
+            return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        }
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_BITCAST,
+                                                     span);
+        return cast && ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_native_entry_"),
+                call_result_type)
+            && ir_instr_operand_value(cast, function)
+            ? (ir_lower_result_t){IR_LOWER_VALUE, cast->dest}
+            : lower_internal(context, span,
+                             "could not emit a function's native entry");
+    }
     if (comptime_builtin) {
         bool valid = !count && !copyouts;
         ir_value_t *flag = valid
@@ -1059,6 +1091,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool signal_fence_builtin = n00bb_builtin_signal_fence_function(symbol);
     bool machine_builtin = n00bb_builtin_machine_function(symbol);
     bool comptime_builtin = n00bb_builtin_comptime_function(symbol);
+    bool native_entry_builtin = n00bb_builtin_native_entry_function(symbol);
     bool prefetch_builtin = n00bb_builtin_prefetch_function(symbol);
     bool atomic_rmw_builtin = n00bb_builtin_atomic_rmw_function(symbol);
     bool atomic_cas_builtin = n00bb_builtin_atomic_cas_function(symbol);
@@ -1073,6 +1106,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || signal_fence_builtin
         || machine_builtin
         || comptime_builtin
+        || native_entry_builtin
         || prefetch_builtin
         || atomic_rmw_builtin
         || atomic_cas_builtin
@@ -1331,7 +1365,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             || prefetch_builtin
             || atomic_rmw_builtin || atomic_cas_builtin
             || atomic_access_builtin
-            || native_builtin
+            || native_builtin || native_entry_builtin
             || function_parameter_info(visit->grammar, symbol,
                 formal_params, i, &formal, nullptr, &flags, &mode);
         const th_param *parameter = th_func_param(signature, i);
@@ -1468,7 +1502,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || byte_diff_builtin || unsafe_arithmetic || bit_count_builtin
         || gc_memory_builtin || volatile_load_builtin || signal_fence_builtin
         || machine_builtin
-        || comptime_builtin || prefetch_builtin || atomic_rmw_builtin
+        || comptime_builtin || native_entry_builtin || prefetch_builtin
+        || atomic_rmw_builtin
         || atomic_cas_builtin || atomic_access_builtin;
     th_type *intrinsic_contract = n00bb_symbol_signature(symbol);
     bool open_intrinsic = intrinsic

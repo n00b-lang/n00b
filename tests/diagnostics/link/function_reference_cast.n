@@ -1,0 +1,11 @@
+# A function reference may be to a reference adapter rather than its
+# function's native code, so it can't be cast to an address.
+record Tally {
+    count: int
+}
+func tally_add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+let held = ref tally_add
+let address: Ref[byte] = unsafe_cast[Ref[byte]] held
