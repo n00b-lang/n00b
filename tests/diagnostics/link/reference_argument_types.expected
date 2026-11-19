@@ -1,0 +1,5 @@
+tests/diagnostics/link/reference_argument_types.n:7:33: error N00B-T0005: parameter 2 (`scale`) of `call` is `int`, but this argument is `string`
+tests/diagnostics/link/reference_argument_types.n:8:22: error N00B-T0005: parameter 1 of `call` is `int`, but this argument is `string`
+tests/diagnostics/link/reference_argument_types.n:10:36: error N00B-T0005: parameter 2 (`scale`) of `call` is `int`, but this argument is `string`
+tests/diagnostics/link/reference_argument_types.n:21:21: error N00B-T0005: parameter 1 (`label`) of `call` is `string`, but this argument is an integer
+  tests/diagnostics/link/reference_argument_types.n:14:5: note: `call` is declared here

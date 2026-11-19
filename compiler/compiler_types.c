@@ -4678,6 +4678,106 @@ static core_string_t literal_kind(core_string_t trait)
     return (core_string_t){0};
 }
 
+static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index,
+                                             th_type *receiver);
+
+// A literal that its parameter can't take, passed to a function
+// reference's or a callback's `call` (`user`, as its `operand`): said as
+// report_literal_argument says it of a direct call, naming the parameter
+// by the name the callback's `call` role declares, or the reference's type
+// gives a keyword parameter.
+static bool report_literal_call_argument(th_ctx *types,
+                                         const n00bb_dispatch_index_t *index,
+                                         core_translation_unit_t *unit,
+                                         const ir_instr_t *user,
+                                         uint32_t operand,
+                                         const ir_instr_t *literal,
+                                         core_string_t kind,
+                                         th_type *receiver)
+{
+    n00bb_dispatch_target_t target = {0};
+
+    receiver = receiver ? th_resolve(receiver) : nullptr;
+    if (!receiver
+        || !n00bb_dispatch_target(index, receiver, user->operands[0].name,
+                                  &target)
+        || target.kind != N00BB_TARGET_CALLBACK) {
+        return false;
+    }
+
+    th_type *signature = th_resolve(target.signature);
+
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || !th_func_nparams(signature)) {
+        return false;
+    }
+
+    parse_grammar_t    *grammar = index->analysis->grammar;
+    parse_sym_entry_t  *role    = callback_call_role(index, receiver);
+    const ir_operand_t *slot    = &user->operands[operand];
+    size_t              count   = th_func_nparams(signature) - 1;
+    // The receiver is the signature's first parameter, and the first
+    // argument written is its second.
+    size_t              p       = operand - 2;
+    th_type            *formal  = nullptr;
+    core_string_t       name    = {0};
+
+    if (slot->kind == IR_OPD_NAMED_ARG) {
+        const th_kwparam *keyword = th_func_kw_lookup(signature,
+                                                      slot->named.name);
+
+        if (keyword) {
+            p = count + (size_t)(keyword - th_func_kw(signature, 0));
+            formal = keyword->type;
+        }
+        else if (!role
+                 || !function_parameter_named(grammar, role,
+                        callable_formal_parameters(grammar, role),
+                        slot->named.name, &p)
+                 || p >= count) {
+            return false;
+        }
+        name = slot->named.name;
+    }
+    else if (operand < 2 || p >= count) {
+        return false;
+    }
+    else if (role) {
+        (void)function_parameter_info(grammar, role,
+            callable_formal_parameters(grammar, role), p, nullptr, &name,
+            nullptr, nullptr);
+    }
+    if (!formal) {
+        formal = th_func_param(signature, p + 1)->type;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       callee      = role ? role->name
+                                           : user->operands[0].name;
+    core_string_t       subject     = name.u8_bytes
+        ? n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
+                     N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(name),
+                                ARG_TEXT(callee)))
+        : n00bb_text(N00B_TEXT_PARAMETER_NUMBER_OF,
+                     N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(callee)));
+    core_string_t       phrase      = literal_phrase(kind);
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
+                 n00bb_span_location(literal->span),
+                 N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
+                 N00BB_ARGS(ARG_TEXT(subject),
+                            ARG_TEXT(n00bb_print_type(types, formal)),
+                            ARG_TEXT(phrase)));
+    core_free(phrase.data);
+    core_free(subject.data);
+    if (role) {
+        n00bb_diag_declared_here(diagnostics, role,
+                                 N00B_TEXT_IS_DECLARED_HERE);
+    }
+
+    return true;
+}
+
 static core_string_t literal_phrase(core_string_t kind)
 {
     if (core_string_eq(kind, CORE_STRING_STATIC("integer"))) {
@@ -4813,6 +4913,12 @@ static bool report_literal_argument(th_ctx *types,
     if (!callee && (!self
                     || !dispatch_callee(index, unit, user, self->type, method,
                                         user->n_operands - 1, &target))) {
+        if (self && report_literal_call_argument(types, index, unit, user,
+                                                 operand, literal, kind,
+                                                 self->type)) {
+            return true;
+        }
+
         core_string_t trait = self ? index_trait(method)
                                    : (core_string_t){0};
 
@@ -6118,21 +6224,32 @@ static bool callback_call_reports(th_ctx *types,
     }
 
     // Typing matched the arguments passed by position; one passed by name
-    // must fit the parameter it names.
+    // must fit the parameter it names: a parameter the callback's role
+    // declares, or a keyword parameter of the reference's type.
     bool reported = false;
 
-    for (uint32_t o = 1; role && !reported && o < at->n_operands; o++) {
+    for (uint32_t o = 1; !reported && o < at->n_operands; o++) {
         const ir_operand_t *operand = &at->operands[o];
         size_t              p       = 0;
+        const th_kwparam   *keyword = !role
+                && operand->kind == IR_OPD_NAMED_ARG
+            ? th_func_kw_lookup(called, operand->named.name) : nullptr;
 
+        if (keyword) {
+            p = count + (size_t)(keyword - th_func_kw(called, 0));
+        }
         if (operand->kind != IR_OPD_NAMED_ARG || !operand->named.value
-            || !function_parameter_named(grammar, role, plan.formals,
-                                         operand->named.name, &p)
-            || p >= count) {
+            || (!keyword
+                && (!role
+                    || !function_parameter_named(grammar, role,
+                                                 plan.formals,
+                                                 operand->named.name, &p)
+                    || p >= count))) {
             continue;
         }
 
-        th_type *formal = th_resolve(th_func_param(called, p)->type);
+        th_type *formal = th_resolve(keyword ? keyword->type
+                                             : th_func_param(called, p)->type);
         th_type *actual = th_resolve(operand->named.value->type);
 
         if (th_same_type(actual, formal) || !th_is_closed(types, formal)
@@ -6143,7 +6260,7 @@ static bool callback_call_reports(th_ctx *types,
 
         core_string_t subject  = n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
             N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(operand->named.name),
-                       ARG_TEXT(role->name)));
+                       ARG_TEXT(role ? role->name : at->operands[0].name)));
         core_string_t argument = quoted_type(types, actual);
 
         n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
@@ -6154,13 +6271,38 @@ static bool callback_call_reports(th_ctx *types,
                                 ARG_TEXT(argument)));
         core_free(argument.data);
         core_free(subject.data);
-        n00bb_diag_declared_here(diagnostics, role,
-                                 N00B_TEXT_IS_DECLARED_HERE);
+        if (role) {
+            n00bb_diag_declared_here(diagnostics, role,
+                                     N00B_TEXT_IS_DECLARED_HERE);
+        }
         reported = true;
     }
     n00bb_call_plan_free(&plan);
 
     return reported;
+}
+
+// A failure at a function reference's or a callback's `call`: its arguments
+// are planned and typed against the called signature, and what that finds
+// is the error about the call. Returns whether it reported one.
+static bool callback_call_failure(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ty_failure_t *failure)
+{
+    const ir_instr_t *at = failure->why.at;
+
+    if (!at || at->op != IR_OP_DISPATCH || at->n_operands < 2
+        || at->operands[0].kind != IR_OPD_NAME) {
+        return false;
+    }
+
+    const n00bb_written_call_t *call = core_dict_get(
+        &tu_state(unit)->dispatch_calls, (void *)at, nullptr);
+    const ir_value_t *self = dispatch_operand(at, 1);
+
+    return call && self
+        && callback_call_reports(types, index, unit, at, call, self->type);
 }
 
 static bool check_dispatch_call(th_ctx *types,
@@ -8793,9 +8935,11 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         }
     }
     core_dict_t reported;
+    core_dict_t reported_calls;
     core_dict_t tainted;
 
     core_dict_init(&reported, nullptr, nullptr);
+    core_dict_init(&reported_calls, nullptr, nullptr);
     core_dict_init(&tainted, nullptr, nullptr);
     taint_failures(solver, &functions, &tainted);
     ok = check_unpropagated_outcomes(types, units, count,
@@ -8851,6 +8995,17 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         if (test) {
             core_dict_put(&reported, (void *)test, (void *)1);
         }
+        // One error about a function reference's or callback's `call`,
+        // however many of its failures there are.
+        if (failure->why.at
+            && core_dict_contains(&reported_calls, (void *)failure->why.at)) {
+            continue;
+        }
+        if (callback_call_failure(types, typing->dispatch, unit, failure)) {
+            core_dict_put(&reported_calls, (void *)failure->why.at,
+                          (void *)1);
+            continue;
+        }
         report_failure(types, typing->dispatch, units, count, unit, failure);
 
         const ir_instr_t *site = merge_site(failure);
@@ -8860,6 +9015,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         }
     }
     core_dict_free(&tainted);
+    core_dict_free(&reported_calls);
     core_dict_free(&reported);
     ok = check_empty_lists(types, units, count, &functions) && ok;
     // A unit with errors already may have left types open on their account.
