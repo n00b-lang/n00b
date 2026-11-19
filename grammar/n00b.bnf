@@ -705,7 +705,7 @@
 
 <callback-expr> @nospace ::= %"callback" %"[" <type-spec> %"]" %"(" <call-args>? %")"
 
-<block-value-expr> @scope("block") ::= <block-start> <value-body-stmts> <block-end>
+<block-value-expr> @scope("block") @hardline($1) @indent($1) @hardline($2) ::= <block-start> <value-body-stmts> <block-end>
 
 # EMBED is a free-form fence literal. The lexer expresses the proposed syntax
 # with fill("-") and pad("required"): [- ws... ws -]. The opening and closing

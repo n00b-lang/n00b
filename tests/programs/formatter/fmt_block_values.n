@@ -1,0 +1,20 @@
+func block_around_if(c: bool) -> int {
+    let y = {
+        let z = if c { -> 10 } else { -> 20 }
+        -> z + 1
+    }
+    -> y
+}
+func one(c: bool) -> int {
+    let v = { -> 3 }
+    return v
+}
+func pick(c: bool) -> int {
+    let x = {
+        if c {
+            -> 1
+        }
+        -> 2
+    }
+    -> x
+}
