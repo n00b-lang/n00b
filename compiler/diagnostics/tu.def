@@ -210,11 +210,13 @@ N00B_DIAG(FINALIZE_RETURNS_VALUE, "N00B-T0554", ERROR,
     "`__finalize` returns a value",
     "A finalizer returns nothing.")
 N00B_DIAG(TRAIT_TYPE_OUTSIDE_FUNCTION, "N00B-T0600", ERROR,
-    "a trait is used as a type outside a function",
+    "a trait or a constrained type variable is used outside a function",
     "A trait used as a type stands for whichever implementing type a\n"
-    "function is given, so it needs a function to belong to. Outside one,\n"
-    "name the implementing type, or `cast[Trait](value)` to check that a\n"
-    "value implements the trait.")
+    "function is given, so it needs a function to belong to. So does a\n"
+    "type variable a `where` clause constrains, as in\n"
+    "`var x: int where 'T: Integer` at module level. Outside one, name the\n"
+    "type, or `cast[Trait](value)` to check that a value implements the\n"
+    "trait.")
 N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "`__finalize` is defined for a type that is not an `object`",
     "Only an `object` can have a finalizer. An object is a handle to its\n"
@@ -333,11 +335,11 @@ N00B_DIAG(WITH_VALUE_DROPS, "N00B-T0604", ERROR,
     "it can only be used by a `with` statement. A manager that never drops\n"
     "a failure has an `__exit` that returns nothing.")
 N00B_DIAG(WHERE_ON_TYPE, "N00B-T0606", ERROR,
-    "a `where` clause is written where no declaration owns its variable",
+    "a `where` clause follows a type in a callback",
     "A `where` clause constrains a type variable of the function, trait,\n"
-    "record, variant or alias it is written in. One written outside all\n"
-    "of them, or inside a callback, is not supported yet. Put the\n"
-    "constraint on a function that uses the type instead:\n"
+    "record, variant or alias it is written in. One after a type inside a\n"
+    "callback is not supported yet. Put the constraint on a function that\n"
+    "uses the callback instead:\n"
     "    func pick(x: 'T) -> 'T where 'T: Integer { return x }")
 N00B_DIAG(TYPE_ARGUMENT_EXCLUDED, "N00B-T0608", ERROR,
     "a type variable is given a type its `where` clause excludes",

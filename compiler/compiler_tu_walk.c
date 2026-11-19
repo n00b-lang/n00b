@@ -365,17 +365,36 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 N00BB_NO_ARGS);
     }
     // A `where` clause after a type constrains the variable of its owner.
-    // One with no owner, or in a callback, would be dropped unchecked, so
-    // it is an error until what it means there is settled.
-    parse_tree_t *where_owner = step == SEMANTIC_PREPARE_ENTER
-        && NT_IS(grammar, node, "where-clause")
+    // A variable it constrains outside every owner is like a trait used as
+    // a type there: it has no function to stand for a type in.
+    bool where_clause = step == SEMANTIC_PREPARE_ENTER
+        && NT_IS(grammar, node, "where-clause");
+    parse_tree_t *where_owner = where_clause
         ? typevar_owner_declaration(grammar, node) : nullptr;
-    parse_tree_t *where_parent = where_owner || NT_IS(grammar, node,
-        "where-clause") ? named_ancestor(grammar, node) : nullptr;
-    if (step == SEMANTIC_PREPARE_ENTER && NT_IS(grammar, node, "where-clause")
-        && !NT_IS(grammar, where_parent, "func-type-signature")
-        && !NT_IS(grammar, where_parent, "trait-decl")
-        && (!where_owner || NT_IS(grammar, where_owner, "callback-decl"))) {
+    for (size_t i = 0; where_clause && !where_owner
+         && i < core_tree_num_children(node); i++) {
+        parse_tree_t *constraint = core_tree_child(node, i);
+        if (!NT_IS(grammar, constraint, "type-constraint")
+            || !core_tree_num_children(constraint)) continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        core_string_t spelling = parse_tree_leaf_text(
+            core_tree_child(constraint, 0));
+        if (n00bb_report(diagnostics, unit,
+                N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION,
+                link_source_location(constraint),
+                N00B_TEXT_CONSTRAINED_VARIABLE_OUTSIDE_FUNCTION,
+                N00BB_ARGS(ARG_TEXT(spelling))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_NAME_THE_CONSTRAINED_TYPE,
+                N00BB_ARGS(ARG_TEXT(spelling)));
+    }
+    // One in a callback would be dropped unchecked, so it is an error
+    // until callbacks are redesigned.
+    parse_tree_t *where_parent = where_clause
+        ? named_ancestor(grammar, node) : nullptr;
+    if (where_clause && NT_IS(grammar, where_owner, "callback-decl")
+        && !NT_IS(grammar, where_parent, "func-type-signature")) {
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(unit);
         if (n00bb_report(diagnostics, unit, N00B_DIAG_WHERE_ON_TYPE,
