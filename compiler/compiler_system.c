@@ -1,11 +1,9 @@
 #include "compiler_system.h"
 
-static const core_string_t system_roots[] = {
-    CORE_STRING_STATIC("builtin"),
-    CORE_STRING_STATIC("sys"),
-};
+#include "lib/alloc.h"
 
-static const core_string_t compiler_provenance = CORE_STRING_STATIC("builtins");
+#include <stdatomic.h>
+
 static const core_string_t reserved_prefix     = CORE_STRING_STATIC("__");
 static const core_string_t dereference_member  = CORE_STRING_STATIC("__value");
 static const core_string_t generated_prefix    = CORE_STRING_STATIC("<generated:");
@@ -16,19 +14,35 @@ n00bb_generated_source(core_string_t path)
     return path.data && core_string_starts_with(path, generated_prefix);
 }
 
-bool
-n00bb_system_module(core_string_t module)
+// Set once, by the resolver, before any module is located; read by workers.
+static _Atomic(core_string_t *) stdlib_directory;
+
+void
+n00bb_system_set_stdlib(core_string_t canonical)
 {
-    if (core_string_eq(module, compiler_provenance)) return true;
-    for (size_t i = 0; i < sizeof(system_roots) / sizeof(system_roots[0]);
-         i++) {
-        core_string_t root = system_roots[i];
-        if (core_string_eq(module, root)) return true;
-        if (module.u8_bytes > root.u8_bytes
-            && core_string_starts_with(module, root)
-            && module.data[root.u8_bytes] == '.') return true;
+    if (!canonical.data || atomic_load(&stdlib_directory)) return;
+    core_string_t *stored = core_alloc(core_string_t);
+    *stored = core_string_dup(canonical);
+    core_string_t *expected = nullptr;
+    if (!atomic_compare_exchange_strong(&stdlib_directory, &expected,
+                                        stored)) {
+        core_free(stored->data);
+        core_free(stored);
     }
-    return false;
+}
+
+bool
+n00bb_system_package(core_string_t package_id)
+{
+    if (!package_id.data) return false;
+    if (core_string_eq(package_id, N00BB_COMPILER_PACKAGE)) return true;
+    core_string_t *stdlib = atomic_load(&stdlib_directory);
+    if (!stdlib || !stdlib->u8_bytes
+        || !core_string_starts_with(package_id, *stdlib)) return false;
+    size_t length = stdlib->u8_bytes;
+    return package_id.u8_bytes == length
+        || package_id.data[length] == '/' || package_id.data[length] == '\\'
+        || stdlib->data[length - 1] == '/' || stdlib->data[length - 1] == '\\';
 }
 
 bool

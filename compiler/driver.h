@@ -23,6 +23,9 @@ core_string_t n00bb_canonical_cwd(void);
 // current directory, or a file named on the command line), which holds no
 // system package.
 bool n00bb_default_package(const core_translation_unit_t *unit);
+// True for a module of a system package, judged by where it came from (see
+// n00bb_system_package), for source and cached modules alike.
+bool n00bb_system_unit(const core_translation_unit_t *unit);
 bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t identifier,
                                   core_string_t text,

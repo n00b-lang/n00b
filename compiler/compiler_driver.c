@@ -1972,7 +1972,7 @@ accept_package_exports(import_driver_t *driver,
         ? direct_subpackage_count(&names, name) : 2;
     core_buffer_release(&names);
     if (subpackages > 1
-        || (subpackages && n00bb_system_module(manifest->module.identifier)))
+        || (subpackages && n00bb_system_unit(manifest)))
         return true;
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(importer);

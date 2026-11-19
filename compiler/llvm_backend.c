@@ -14093,10 +14093,12 @@ n00bb_llvm_set_opt_level(int level)
     opt_level_override = level;
 }
 
+// The opt-level override is for the program's code; system packages keep
+// the normal level. Which modules those are is the caller's to say (see
+// n00bb_llvm_backend_set_system), from where each came from.
 static uint8_t
-resolved_opt_level(bool debug_enabled, core_string_t module)
+resolved_opt_level(bool debug_enabled, bool library)
 {
-    bool library = module.data && n00bb_system_module(module);
     if (!library && opt_level_override >= 0 && opt_level_override <= 3)
         return (uint8_t)opt_level_override;
     return debug_enabled ? 2 : 3;
@@ -14120,7 +14122,7 @@ n00bb_llvm_backend_prepare(const ir_module_t *ir, bool debug_enabled,
                    native_type_key_eq);
     backend->native_types_ready = true;
     backend->debug_enabled = debug_enabled;
-    backend->opt_level = resolved_opt_level(debug_enabled, ir_module_name(ir));
+    backend->opt_level = resolved_opt_level(debug_enabled, false);
     backend->target_features = target_features;
     if (native_cpu) {
         backend->cpu_name = take_llvm_message(LLVMGetHostCPUName());
@@ -14154,6 +14156,14 @@ fail:
     if (!diagnostics || !core_diagnostics_failed(diagnostics))
         backend_error(diagnostics, "could not initialize the LLVM module");
     return nullptr;
+}
+
+void
+n00bb_llvm_backend_set_system(n00bb_llvm_backend_t *backend, bool system)
+{
+    if (backend)
+        backend->opt_level = resolved_opt_level(backend->debug_enabled,
+                                                system);
 }
 
 void
@@ -16066,7 +16076,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     if (ok) {
         n00bb_llvm_backend_t backend = {
             .debug_enabled = debug_enabled,
-            .opt_level = resolved_opt_level(debug_enabled, (core_string_t){0}),
+            .opt_level = resolved_opt_level(debug_enabled, false),
             .emit_frame_maps = emit_frame_maps,
             .target_features = target_features,
         };

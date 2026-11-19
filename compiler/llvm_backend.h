@@ -46,6 +46,10 @@ typedef struct {
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(const ir_module_t *ir,
     bool debug_enabled, bool native_cpu, uint64_t target_features,
     core_diagnostics_t *diagnostics);
+// Marks the module emitted as one of a system package, which keeps the
+// normal optimization level whatever override the program's code gets.
+void n00bb_llvm_backend_set_system(n00bb_llvm_backend_t *backend,
+                                   bool system);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 bool n00bb_llvm_backend_bind_type_indices(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,

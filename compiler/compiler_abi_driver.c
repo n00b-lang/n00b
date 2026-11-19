@@ -701,6 +701,14 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
         analysis->target.enabled_features, module_diagnostics);
     item->backend = backend;
     if (!backend) return item->ok = false;
+    core_string_t module_name = ir_module_name(item->module);
+    for (size_t u = 0; module_name.data && u < analysis->units.len; u++)
+        if (core_string_eq(analysis->units.data[u]->module.identifier,
+                           module_name)) {
+            n00bb_llvm_backend_set_system(backend,
+                n00bb_system_unit(analysis->units.data[u]));
+            break;
+        }
     n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);

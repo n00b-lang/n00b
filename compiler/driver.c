@@ -3,6 +3,7 @@
 
 #include "driver.h"
 #include "cache_location.h"
+#include "compiler_system.h"
 #include "config.h"
 #include "diagnostics.h"
 #include "toolchain.h"
@@ -220,6 +221,8 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
     resolver->shadows = core_list_new(n00bb_stdlib_shadow_ptr_t);
     pthread_mutex_init(&resolver->shadows_lock, nullptr);
     add_root(resolver, n00bb_toolchain()->stdlib, ROOT_STDLIB, 0);
+    if (resolver->roots.len)
+        n00bb_system_set_stdlib(resolver->roots.data[0].path);
     if (!resolver->roots.len
         || !path_within(cwd, resolver->roots.data[0].path))
         add_root(resolver, cwd, ROOT_DEFAULT, 0);
@@ -910,6 +913,15 @@ n00bb_source_file_is_interface(const core_source_file_t *source)
     const n00bb_source_origin_t *origin = source
         ? core_source_file_user_data(source) : nullptr;
     return origin && origin->interface_module;
+}
+
+bool
+n00bb_system_unit(const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    return origin && !origin->is_default_package
+        && n00bb_system_package(origin->package_id);
 }
 
 bool

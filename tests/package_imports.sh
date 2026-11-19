@@ -350,3 +350,48 @@ rm -r "$shadow/project/unicode"
     cat "$tmp/shadow.log" >&2
     exit 1
 }
+
+# System-ness is by package origin, not name: a default-package builtin.n
+# is the user's, so a trait it declares with a `__` method defines no
+# language hook, and a function by that name elsewhere is still rejected,
+# while a real hook (`__equal`) is accepted. The library's hooks come from
+# cached interfaces as well as from source, so the same holds either way.
+hooks="$shadow/hooks"
+mkdir -p "$hooks"
+printf "trait Fancy {\n    func __fancy(self: 'F) -> int\n}\n" >"$hooks/builtin.n"
+cat >"$hooks/uses.n" <<'PROGRAM'
+object Point {
+    x: int
+}
+
+func __fancy(view self: Point) -> int {
+    return self.x
+}
+
+func __equal(view self: Point, view other: Point) -> bool {
+    return self.x == other.x
+}
+PROGRAM
+reserved='is not a language hook, and names starting with `__` are reserved for the language'
+for cache in warm warm off; do
+    if [ "$cache" = off ]; then
+        set -- env N00B_NO_OBJECT_CACHE=1 N00B_NO_PACKAGE_CACHE=1
+    else
+        set -- env -u N00B_NO_OBJECT_CACHE -u N00B_NO_PACKAGE_CACHE
+    fi
+    if (cd "$hooks" && "$@" "$compiler" check builtin.n uses.n) \
+            >"$tmp/hooks.log" 2>&1; then
+        echo "hooks (cache $cache): a user trait made a language hook" >&2
+        cat "$tmp/hooks.log" >&2
+        exit 1
+    fi
+    grep -Fxq "builtin.n:2:10: error N00B-N0008: \`__fancy\` $reserved" \
+        "$tmp/hooks.log" \
+        && grep -Fxq "uses.n:5:6: error N00B-N0008: \`__fancy\` $reserved" \
+            "$tmp/hooks.log" \
+        && [ "$(grep -c 'N00B-N0008' "$tmp/hooks.log")" -eq 2 ] || {
+        echo "hooks (cache $cache): user names treated as system ones" >&2
+        cat "$tmp/hooks.log" >&2
+        exit 1
+    }
+done

@@ -2,7 +2,17 @@
 
 #include "lib/string.h"
 
-bool n00bb_system_module(core_string_t module);
+// The package id of the declarations the compiler makes itself (module
+// `builtins`). It is no path and not "default", so no source module has it.
+#define N00BB_COMPILER_PACKAGE CORE_STRING_STATIC("<compiler>")
+
+// Whether a package is a system one: the standard library's (its package
+// ids lie under the canonical library directory) or the compiler's own.
+// This is the one test of system-ness; a module's name says nothing, since
+// a default-package module may be called `builtin` or `sys`.
+bool n00bb_system_package(core_string_t package_id);
+// Records the canonical standard library directory; the resolver sets it.
+void n00bb_system_set_stdlib(core_string_t canonical);
 bool n00bb_generated_source(core_string_t path);
 bool n00bb_reserved_name(core_string_t name);
 bool n00bb_builtin_member(core_string_t name);

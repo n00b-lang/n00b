@@ -382,10 +382,8 @@ diagnose_reserved_declarations(core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || state->interface_module || !state->annotations
         || !state->annotations->symtab) return true;
-    // A default-package module named like a system package (builtin.n) is
-    // the user's, not the system's.
-    bool system = (n00bb_system_module(unit->module.identifier)
-                   && !n00bb_default_package(unit))
+    // By origin, not name: a default-package builtin.n is the user's.
+    bool system = n00bb_system_unit(unit)
         || n00bb_generated_source(core_source_file_path(&unit->source));
     bool clean = true;
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;

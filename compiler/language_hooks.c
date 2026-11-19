@@ -34,7 +34,7 @@ language_hooks(const th_env *environment)
         th_env_declaration_view_t view = {0};
         if (!th_env_declaration_at(environment, d, &view)
             || view.kind != TH_ENV_DECLARATION_TRAIT
-            || !n00bb_system_module(view.module)) continue;
+            || !n00bb_system_package(view.package)) continue;
         size_t members = 0;
         const th_type *methods = trait_methods(&view, &members);
         for (size_t m = 0; m < members; m++) {
