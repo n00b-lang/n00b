@@ -25,5 +25,4 @@ tests/diagnostics/lower/zeroed_new.n:59:17: error N00B-T1017: `Shape` has no `__
   help: create it with `new()` and set it afterwards, or define an `__init` for `Shape`
 tests/diagnostics/lower/zeroed_new.n:64:17: error N00B-T1017: `Point` has no `__init`, so `new` takes no arguments for it
   help: create it with `new()` and set it afterwards, or define an `__init` for `Point`
-tests/diagnostics/lower/zeroed_new.n:65:17: error N00B-T1017: `Inner` has no `__init`, so `new` takes no arguments for it
-  help: create it with `new()` and set it afterwards, or define an `__init` for `Inner`
+tests/diagnostics/lower/zeroed_new.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

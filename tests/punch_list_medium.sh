@@ -189,6 +189,26 @@ if "$compiler" check "$tmp/own_use.n" >"$tmp/own.out" 2>"$tmp/own.err"; then
     echo 'hashing types with their own equality passed' >&2
     exit 1
 fi
+if grep -q 'internal compiler error' "$tmp/own.err"; then
+    cat "$tmp/own.err" >&2
+    exit 1
+fi
+# Six errors, of which the file shows its first five (`--stop-on-error`);
+# the last, `Point`'s `Hash`, is checked on its own below.
+grep -Fq 'errors not shown: 1 ' "$tmp/own.err" || {
+    echo 'hashing: the sixth error is not counted as left out' >&2
+    cat "$tmp/own.err" >&2
+    exit 1
+}
+cp "$tmp/own_equality.n" "$tmp/own_point.n"
+printf 'var point_keyed: Dict[Point, int] = new[Dict[Point, int]]()\n' \
+    >>"$tmp/own_point.n"
+if "$compiler" check "$tmp/own_point.n" >"$tmp/point.out" 2>"$tmp/point.err"
+then
+    echo 'keying by Point passed' >&2
+    exit 1
+fi
+cat "$tmp/point.err" >>"$tmp/own.err"
 for type in Eq_Holder Cmp_Holder Point; do
     grep -Fq "no trait that \`$type\` implements provides \`hash\`" \
         "$tmp/own.err" \
@@ -199,7 +219,3 @@ for type in Eq_Holder Cmp_Holder Point; do
         exit 1
     }
 done
-if grep -q 'internal compiler error' "$tmp/own.err"; then
-    cat "$tmp/own.err" >&2
-    exit 1
-fi

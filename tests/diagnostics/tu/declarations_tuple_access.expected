@@ -1,0 +1,14 @@
+tests/diagnostics/tu/declarations_tuple_access.n:5:22: error N00B-T0582: the compiler cannot tell which element this tuple index picks
+  help: each element can have its own type, so the index must have a single known value here, such as `0`
+tests/diagnostics/tu/declarations_tuple_access.n:6:22: error N00B-T0583: this tuple has 2 elements, so index 2 is out of range
+tests/diagnostics/tu/declarations_tuple_access.n:8:1: error N00B-T0581: cannot assign to an element of a tuple; tuples are immutable
+  help: build a new tuple and assign that instead
+tests/diagnostics/tu/declarations_tuple_access.n:9:5: warning N00B-N0024: `trailing` is never used
+  help: remove it
+tests/diagnostics/tu/declarations_tuple_access.n:9:17: warning N00B-P0034: this trailing comma ends the statement, but it reads as though the list continues on the next line
+  help: remove the comma
+tests/diagnostics/tu/declarations_tuple_access.n:15:8: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/tu/declarations_tuple_access.n:17:13: error N00B-N0502: `x` cannot be declared here because the outer `x` is already used earlier in this block
+  tests/diagnostics/tu/declarations_tuple_access.n:14:9: note: the outer `x` is declared here
+  tests/diagnostics/tu/declarations_tuple_access.n:16:17: note: the outer `x` is used here
+  help: give the inner binding a different name

@@ -27,5 +27,4 @@ tests/diagnostics/lower/read_only_views.n:37:5: error N00B-S0083: this stores a 
   tests/diagnostics/lower/read_only_views.n:10:7: note: `plain` is declared here
   tests/diagnostics/lower/read_only_views.n:13:5: note: `raw` is not constant
   help: keep a `View` of it instead, or store a copy
-tests/diagnostics/lower/read_only_views.n:40:6: warning N00B-N0019: function `allowed` is never called
-  help: call it or delete it
+tests/diagnostics/lower/read_only_views.n: note N00B-C0106: this file reached the error limit of 5; its later warnings are not shown (`--stop-on-error=all` shows every one)

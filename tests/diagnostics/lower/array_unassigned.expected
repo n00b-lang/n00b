@@ -1,0 +1,5 @@
+tests/diagnostics/lower/array_unassigned.n:5:9: error N00B-S0099: `never` can be read before it is assigned, but its assignment gives it no length known here
+  help: assign `never` on every path before reading it, or give it a size, as in `Array[T][n]`
+tests/diagnostics/lower/array_unassigned.n:12:5: warning N00B-N0020: field `x` of `Tuple_Target` is read but never set
+tests/diagnostics/lower/array_unassigned.n:16:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
+  help: use a field tuple, which names each field: `(name = value, ...)`

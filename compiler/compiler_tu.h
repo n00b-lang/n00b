@@ -701,6 +701,9 @@ typedef struct {
     bool semantic_annotation_complete;
     bool initializer_excluded;
     bool semantic_annotation_failed;
+    // Set once this module has reported as many errors as `--stop-on-error`
+    // allows (see n00bb_unit_stopped).
+    bool stopped_on_errors;
     bool type_symbols_indexed;
     core_dict_t type_symbol_index;
     parse_tree_t *flagset_scope;
@@ -936,6 +939,17 @@ n00bb_unit_failed(core_translation_unit_t *unit)
     return unit
         && core_diagnostics_failed(core_translation_unit_diagnostics(unit));
 }
+
+// The module had reached the error limit (`--stop-on-error`, 5 by
+// default) when its front end was done, so it has failed
+// (n00bb_unit_failed). Only its first errors in the file print; a later
+// stage that leaves it alone must not lose one of those, which come in
+// file order, not stage order.
+bool n00bb_unit_stopped(core_translation_unit_t *unit);
+
+// Marks the module stopped if its errors have reached the limit; lowering
+// calls it as it starts on each module. Returns whether it is stopped.
+bool n00bb_unit_stop_at_error_limit(core_translation_unit_t *unit);
 
 static inline void
 n00bb_tu_internal_error(core_translation_unit_t *unit, parse_tree_t *node,

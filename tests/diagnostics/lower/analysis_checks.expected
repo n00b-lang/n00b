@@ -13,31 +13,4 @@ tests/diagnostics/lower/analysis_checks.n:47:46: error N00B-S0052: this initiali
   tests/diagnostics/lower/analysis_checks.n:43:5: note: `pointer_state` is declared here
 tests/diagnostics/lower/analysis_checks.n:48:15: error N00B-S0052: this initializer reads global `p` before it is guaranteed to be initialized through the call to `total`
   tests/diagnostics/lower/analysis_checks.n:44:5: note: `p` is declared here
-tests/diagnostics/lower/analysis_checks.n:50:19: error N00B-S0052: this initializer reads global `q` before it is guaranteed to be initialized through the call to `first`
-  tests/diagnostics/lower/analysis_checks.n:45:5: note: `q` is declared here
-tests/diagnostics/lower/analysis_checks.n:52:1: error N00B-S0001: `x` is a `let`, so it cannot be assigned again
-  tests/diagnostics/lower/analysis_checks.n:51:5: note: `x` is declared here
-  tests/diagnostics/lower/analysis_checks.n:51:9: note: it is first initialized here
-  help: declare `x` with `var` to allow assignment
-tests/diagnostics/lower/analysis_checks.n:54:6: error N00B-S0012: `f_4` can reach the end of its body without returning a value
-  tests/diagnostics/lower/analysis_checks.n:58:1: note: a path through the body reaches its end here
-  help: add a `return` on every path through the body
-tests/diagnostics/lower/analysis_checks.n:65:12: error N00B-S0013: this `switch` has no case for `Color.Blue`, so `name` can reach its end without returning a value
-  tests/diagnostics/lower/analysis_checks.n:64:6: note: `name` returns `int`
-  help: add the missing cases, an `else`, or a `return` after the `switch`
-tests/diagnostics/lower/analysis_checks.n:74:8: warning N00B-N0023: type `Point` is never used
-  help: remove it
-tests/diagnostics/lower/analysis_checks.n:79:5: warning N00B-N0021: field `count` of `Counter_5` is set but never read
-tests/diagnostics/lower/analysis_checks.n:88:1: error N00B-S0010: this call may write memory reachable from constant `FIXED`, which must not change
-  tests/diagnostics/lower/analysis_checks.n:82:7: note: `FIXED` is declared here
-  help: write to a copy of the constant instead
-tests/diagnostics/lower/analysis_checks.n:90:12: error N00B-S0009: `x` may be nil here
-  help: use its value only where a test such as `x != nil` proves it, with no assignment to it in between
-tests/diagnostics/lower/analysis_checks.n:97:6: warning N00B-N0019: function `clear` is never called
-  help: call it or delete it
-tests/diagnostics/lower/analysis_checks.n:105:16: error N00B-S0009: `copy.value` may be nil here
-  tests/diagnostics/lower/analysis_checks.n:104:9: note: `copy.value` is assigned here, after the test
-  help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between
-tests/diagnostics/lower/analysis_checks.n:117:1: error N00B-S0015: this `assert` condition has a side effect: it calls `loud`; `loud` may produce output
-  tests/diagnostics/lower/analysis_checks.n:117:8: note: the side effect starts here
-  help: `assert` conditions do not run in release builds; compute the value before the `assert`
+tests/diagnostics/lower/analysis_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 8 (`--stop-on-error=all` shows every one)

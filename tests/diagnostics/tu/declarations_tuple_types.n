@@ -1,0 +1,7 @@
+// Shift amounts and tuple types (moved out of declarations.n, which
+// reaches the error limit first).
+let a: u8 = 1
+let b = a << 9
+let repeated: Tuple[x: int, x: int] = (x = 1)
+let listed:   List[x: int]          = []
+let lonely:   Tuple[int]            = 1

@@ -402,6 +402,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         n00bb_tu_state_t *state = tu_state(unit);
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
         bool unit_ok = true;
+        // The front end is done with this module: note whether it reached
+        // the error limit, for the stages after lowering. Lowering itself
+        // goes on: its errors can come before the front end's in the
+        // file, and the ones printed must be the file's first.
+        (void)n00bb_unit_stop_at_error_limit(unit);
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {

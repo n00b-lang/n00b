@@ -1,0 +1,32 @@
+// Mixed literals and a body that fails with the wrong type (moved out of
+// type_checks.n, which reaches the error limit first).
+func risky(n: int) -> int fail: string {
+    if n < 0 {
+        fail 3
+    }
+    return n
+}
+let mixed = [1, 2, "three"]
+// One variable passed to two `out` parameters, and a `fail` handler on a
+// `try` that cannot fail (moved out of control_flow.n, which reaches the
+// error limit first).
+func pick(t: string) -> string {
+    let s: string = try {
+        -> t
+    } fail(e) {
+        -> "none"
+    }
+    return s
+}
+
+require pick("abc") == "abc"
+func fill(out a: int, out b: int) {
+    a = 1
+    b = 2
+}
+func f_7() -> int {
+    var x = 0
+    fill(x, x)
+    return x
+}
+require f_7() == 2

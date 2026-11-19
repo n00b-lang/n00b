@@ -177,3 +177,11 @@ N00B_DIAG(CONFIG_UNREADABLE, "N00B-C0105", ERROR,
     "a configuration file exists but cannot be read",
     "The message names the file and the reason the operating system gave.\n"
     "Fix its permissions, or move it aside.")
+N00B_DIAG(ERROR_LIMIT_REACHED, "N00B-C0106", INFO,
+    "a file reached the error limit, so its later diagnostics are not shown",
+    "Each file's diagnostics stop after a number of errors, 5 unless\n"
+    "`--stop-on-error` or the `diagnostics.stop_on_error` setting says\n"
+    "otherwise: the first errors in the file are shown, and this note says\n"
+    "how many more were left out. Fix the errors shown, or pass\n"
+    "`--stop-on-error=all` to see every one:\n"
+    "    n00b check --stop-on-error=all main.n")

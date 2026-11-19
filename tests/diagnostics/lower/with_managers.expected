@@ -32,14 +32,4 @@ tests/diagnostics/lower/with_managers.n:57:5: warning N00B-S0005: this code can 
 tests/diagnostics/lower/with_managers.n:60:12: error N00B-S0025: `opened` can fail with `string`, so this call needs a trailing `!` or a `try`
   tests/diagnostics/lower/with_managers.n:55:6: note: `opened` is declared here
   help: write `opened(...)!` to pass the failure to the caller, or handle it with `try`
-tests/diagnostics/lower/with_managers.n:66:5: warning N00B-N0021: field `n` of `Dropper` is set but never read
-tests/diagnostics/lower/with_managers.n:68:6: warning N00B-N0019: function `dropper` is never called
-  help: call it or delete it
-tests/diagnostics/lower/with_managers.n:73:6: warning N00B-N0019: function `dropped_statement` is never called
-  help: call it or delete it
-tests/diagnostics/lower/with_managers.n:77:21: error N00B-T0604: `dropper()` can drop a failure (its `__exit` returns `bool`), but this `with` is used as a value, which a dropped failure would leave without one
-  help: use a `with` statement here, or have this manager's `__exit` return nothing if it never drops a failure
-tests/diagnostics/lower/with_managers.n:84:6: warning N00B-N0019: function `counter` is never called
-  help: call it or delete it
-tests/diagnostics/lower/with_managers.n:90:10: error N00B-T0603: `__exit` for `Counter` returns `int`; it returns nothing, or a `bool` saying whether to drop the failure
-  help: return nothing if it never drops a failure
+tests/diagnostics/lower/with_managers.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 2 (`--stop-on-error=all` shows every one)

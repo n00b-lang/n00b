@@ -153,6 +153,24 @@ is_text(n00bb_setting_type_t type)
         || type == N00BB_SETTING_PROGRAM;
 }
 
+// A limit's text: `all` (stored as 0) or a whole number in its range.
+static bool
+parse_limit(const n00bb_setting_spec_t *spec, core_string_t text,
+            int64_t *out)
+{
+    if (core_string_eq(text, CORE_STRING_STATIC("all"))) {
+        *out = 0;
+        return true;
+    }
+    int64_t number = 0;
+    if (!text.u8_bytes || text.data[0] < '0' || text.data[0] > '9'
+        || !core_string_parse_i64(text, 10, &number, nullptr)
+        || number < spec->minimum || number > spec->maximum)
+        return false;
+    *out = number;
+    return true;
+}
+
 static setting_value_t
 default_value(const n00bb_setting_spec_t *spec)
 {
@@ -164,6 +182,9 @@ default_value(const n00bb_setting_spec_t *spec)
         break;
     case N00BB_SETTING_INT:
         core_string_parse_i64(text, 10, &value.integer, nullptr);
+        break;
+    case N00BB_SETTING_LIMIT:
+        (void)parse_limit(spec, text, &value.integer);
         break;
     default:
         if (is_text(spec->type)) value.text = core_string_dup(text);
@@ -231,6 +252,7 @@ type_description(n00bb_setting_type_t type)
     switch (type) {
     case N00BB_SETTING_BOOL: return N00B_TEXT_TRUE_OR_FALSE;
     case N00BB_SETTING_INT: return N00B_TEXT_A_WHOLE_NUMBER;
+    case N00BB_SETTING_LIMIT: return N00B_TEXT_A_WHOLE_NUMBER_OR_ALL;
     case N00BB_SETTING_CHOICE: return N00B_TEXT_A_QUOTED_WORD;
     case N00BB_SETTING_STRINGS: return N00B_TEXT_A_LIST_OF_STRINGS;
     case N00BB_SETTING_PATHS: return N00B_TEXT_A_LIST_OF_PATHS;
@@ -412,6 +434,12 @@ example_help(const setting_t *setting)
         n00bb_report_help(config.diagnostics,
                           N00B_TEXT_WRITE_A_NUMBER_WITHOUT_QUOTES,
             N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(spec->default_value)));
+        break;
+    case N00BB_SETTING_LIMIT:
+        n00bb_report_help(config.diagnostics,
+                          N00B_TEXT_WRITE_A_NUMBER_OR_ALL,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(spec->default_value),
+                       ARG_TEXT(name)));
         break;
     case N00BB_SETTING_CHOICE:
         n00bb_report_help(config.diagnostics,
@@ -597,6 +625,23 @@ read_value(const reader_t *reader, const setting_t *setting,
         }
         out->integer = number;
         return true;
+    }
+    case N00BB_SETTING_LIMIT: {
+        core_string_t text = {0};
+        if (kind == VALUE_STRING) {
+            if (!string_value(reader, value, &text)) return false;
+        }
+        else if (kind == VALUE_INTEGER)
+            text = core_string_dup(token_text(reader, leaf(value, 0)));
+        else return wrong_type(reader, setting, value, expected);
+        bool parsed = parse_limit(spec, text, &out->integer);
+        if (!parsed)
+            report(N00B_DIAG_CONFIG_INVALID_VALUE, reader->path, location,
+                N00B_TEXT_MUST_BE_OR_MORE_OR_ALL_NOT,
+                N00BB_ARGS(ARG_TEXT(setting->key),
+                    ARG_NUMBER((long long)spec->minimum), ARG_TEXT(text)));
+        core_free(text.data);
+        return parsed;
     }
     case N00BB_SETTING_CHOICE: {
         if (kind != VALUE_STRING)
@@ -1001,6 +1046,9 @@ apply_environment(setting_t *setting)
             && value.integer >= spec->minimum
             && value.integer <= spec->maximum;
         break;
+    case N00BB_SETTING_LIMIT:
+        usable = parse_limit(spec, text, &value.integer);
+        break;
     case N00BB_SETTING_CHOICE:
         value.text = core_string_dup(spec->environment_match.u8_bytes
                                          ? spec->environment_match : text);
@@ -1053,6 +1101,23 @@ apply_flag(parse_cmdr_result_t *parsed, const parse_cmdr_flag_t *flag)
         value.integer = parse_cmdr_flag_int(parsed, flag->name,
                                             setting->value.integer);
         break;
+    case N00BB_SETTING_LIMIT: {
+        core_string_t word = parse_cmdr_flag_str(parsed, flag->name);
+        if (!parse_limit(spec, word, &value.integer)) {
+            config.flag_failed = true;
+            core_buffer_t form = {0};
+            core_buffer_printf(&form, "a whole number from %lld, or `all`",
+                               (long long)spec->minimum);
+            report(N00B_DIAG_INVALID_OPTION_VALUE, (core_string_t){0},
+                (core_diag_location_t){}, N00B_TEXT_TAKES_NOT,
+                N00BB_ARGS(ARG_TEXT(flag->name),
+                           ARG_TEXT(core_buffer_string(&form)),
+                           ARG_TEXT(word)));
+            core_buffer_release(&form);
+            return;
+        }
+        break;
+    }
     case N00BB_SETTING_CHOICE:
         value.text = core_string_dup(parse_cmdr_flag_str(parsed, flag->name));
         if (!valid_choice(spec, value.text)) {
@@ -1281,6 +1346,11 @@ print_value(core_buffer_t *out, const setting_t *setting)
         break;
     case N00BB_SETTING_INT:
         core_buffer_printf(out, "%lld", (long long)value->integer);
+        break;
+    case N00BB_SETTING_LIMIT:
+        if (value->integer)
+            core_buffer_printf(out, "%lld", (long long)value->integer);
+        else print_quoted(out, CORE_STRING_STATIC("all"));
         break;
     case N00BB_SETTING_STRINGS:
     case N00BB_SETTING_PATHS:

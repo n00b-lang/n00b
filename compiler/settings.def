@@ -29,6 +29,10 @@ N00BB_SETTING(SYNTAX_WARNINGS, "syntax", "warnings", BOOL, "true")
 N00BB_SETTING(DIAGNOSTICS_TERSE, "diagnostics", "terse", BOOL, "false",
     ENVIRONMENT_MATCH("N00B_DIAGNOSTICS", "terse"))
 N00BB_SETTING(DIAGNOSTICS_HINTS, "diagnostics", "hints", BOOL, "true")
+// Errors a file reports before its later diagnostics are dropped and the
+// compiler stops working on it; "all" has no limit.
+N00BB_SETTING(DIAGNOSTICS_STOP_ON_ERROR, "diagnostics", "stop_on_error",
+    LIMIT, "5", RANGE(1, INT64_MAX))
 N00BB_SETTING(DIAGNOSTICS_CODES, "diagnostics", "codes", BOOL, "false",
     ENVIRONMENT("N00B_DIAGNOSTIC_CODES"))
 N00BB_SETTING(DEV_ERRORS_ONLY, "dev", "errors_only", BOOL, "false")

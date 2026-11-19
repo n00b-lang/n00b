@@ -1,0 +1,19 @@
+// A `let` array without a size takes its length from its assignment
+// (moved out of array_zero_elements.n, which reaches the error limit
+// first).
+func unassigned() -> uint {
+    let never: Array[int]
+    return never.len()
+}
+require unassigned() == 0
+// A positional tuple never converts to a record (moved out of
+// value_checks.n, which reaches the error limit first).
+record Tuple_Target {
+    x: int
+}
+
+func positional_cast() -> int {
+    let converted = cast[Tuple_Target] ((1, 2))
+    return converted.x
+}
+require positional_cast() == 1

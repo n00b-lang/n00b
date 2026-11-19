@@ -12,6 +12,9 @@ typedef enum {
     N00BB_SETTING_PATH,
     N00BB_SETTING_PATHS,
     N00BB_SETTING_PROGRAM,
+    // A whole number in the setting's range, or `all` for no limit, which
+    // `n00bb_setting_int` reports as 0.
+    N00BB_SETTING_LIMIT,
 } n00bb_setting_type_t;
 
 typedef struct {

@@ -1,0 +1,22 @@
+// Indexing and assigning tuples, and a trailing comma (moved out of
+// declarations.n, which reaches the error limit first).
+let indexed = (1, "one")
+var where_at = len([1, 2])
+let picked = indexed[where_at]
+let beyond = indexed[2]
+var ordered = (1, 2)
+ordered[0] = 5
+var trailing = 1,
+// An inner declaration may not take a name the block has already used
+// from outside it (moved out of declarations.n, which reaches the error
+// limit first).
+func f_2() -> int {
+    let x = 1
+    if x > 0 {
+        let y = x
+        let x = 2
+        return x + y
+    }
+    return x
+}
+require f_2() == 3

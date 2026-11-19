@@ -1,0 +1,21 @@
+// Fields, type variables out of scope and assignments to a type
+// parameter (moved out of type_checks.n, which reaches the error limit
+// first).
+record Point {
+    x: int
+    y: int
+}
+
+let p: Point = (x = 1, y = 2)
+require p.z == 3
+func reset(modify value: 'T) -> nil {
+    value = 0
+}
+let x: 'T = 5
+// A parameter given an argument both by position and by name (moved out
+// of call_arguments.n, which reaches the error limit first).
+func area(width: int, height: int) -> int {
+    return width * height
+}
+
+require area(2, width = 3) == 6

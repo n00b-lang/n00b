@@ -159,5 +159,10 @@ bool core_diagnostics_failed(const core_diagnostics_t *diagnostics);
 bool core_diagnostics_has_fatal(const core_diagnostics_t *diagnostics);
 core_string_t core_diagnostics_render(const core_diagnostics_t *diagnostics,
                                       core_diag_render_t options);
+// The indices of the diagnostics in the order `core_diagnostics_render`
+// prints them (a note or help stays after the diagnostic it belongs to);
+// one per diagnostic, freed with `core_free`.
+size_t *core_diagnostics_render_order(const core_diagnostics_t *diagnostics,
+                                      bool sorted);
 core_string_t core_diagnostics_render_json(
     const core_diagnostics_t *diagnostics);

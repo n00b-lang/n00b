@@ -1,0 +1,11 @@
+tests/diagnostics/tu/type_checks_names.n:5:5: warning N00B-N0021: field `x` of `Point` is set but never read
+tests/diagnostics/tu/type_checks_names.n:6:5: warning N00B-N0021: field `y` of `Point` is set but never read
+tests/diagnostics/tu/type_checks_names.n:10:11: error N00B-N0005: `Point` has no field `z`
+  note: `Point` has fields `x` and `y`
+  tests/diagnostics/tu/type_checks_names.n:4:8: note: type `Point` is declared here
+tests/diagnostics/tu/type_checks_names.n:12:13: error N00B-T0504: cannot assign `0` to `value`: its type is the type parameter `'T`, which can be any type
+  help: only a value of type `'T`, such as another parameter of that type, can be stored in `value`
+tests/diagnostics/tu/type_checks_names.n:14:8: error N00B-T0502: type variable `'T` does not belong to an enclosing function, record, variant or trait
+  help: type variables are declared by using them in a function signature or a generic type declaration; use a concrete type here
+tests/diagnostics/tu/type_checks_names.n:21:17: error N00B-T0004: parameter `width` is given an argument twice
+  tests/diagnostics/tu/type_checks_names.n:21:14: note: `width` is first given here

@@ -52,25 +52,4 @@ tests/diagnostics/lower/value_checks.n:185:6: warning N00B-N0019: function `leak
 tests/diagnostics/lower/value_checks.n:186:5: error N00B-S0011: this stores a reference reachable from view parameter `o` where it outlives the call
   tests/diagnostics/lower/value_checks.n:179:5: note: `kept_leaf` outlives the call
   help: store a copy, or return the reference instead of keeping it
-tests/diagnostics/lower/value_checks.n:193:12: error N00B-S0004: `x` is read on a path where it has no value
-  tests/diagnostics/lower/value_checks.n:189:9: note: `x` is declared here
-tests/diagnostics/lower/value_checks.n:198:12: error N00B-S0004: `value` is read on a path where it has no value
-  tests/diagnostics/lower/value_checks.n:197:9: note: `value` is declared here
-tests/diagnostics/lower/value_checks.n:208:9: error N00B-S0026: `abs` can't fail, so there's nothing for this `!` to pass along
-  tests/diagnostics/lower/value_checks.n:204:1: note: `abs` is declared here
-  help: remove the `!`
-tests/diagnostics/lower/value_checks.n:210:8: warning N00B-N0023: type `Tuple_Target` is never used
-  help: remove it
-tests/diagnostics/lower/value_checks.n:214:8: warning N00B-N0023: type `Tuple_Built` is never used
-  help: remove it
-tests/diagnostics/lower/value_checks.n:218:6: warning N00B-N0019: function `__init` is never called
-  help: call it or delete it
-tests/diagnostics/lower/value_checks.n:223:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
-  help: use a field tuple, which names each field: `(name = value, ...)`
-tests/diagnostics/lower/value_checks.n:228:21: error N00B-T0585: cannot cast `Tuple[y: u8]` to `Tuple_Target`: field `y` does not match
-tests/diagnostics/lower/value_checks.n:232:6: warning N00B-N0019: function `constructed_cast` is never called
-  help: call it or delete it
-tests/diagnostics/lower/value_checks.n:237:6: warning N00B-N0019: function `constructed_literal` is never called
-  help: call it or delete it
-tests/diagnostics/lower/value_checks.n:242:6: warning N00B-N0019: function `append_unread` is never called
-  help: call it or delete it
+tests/diagnostics/lower/value_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 5 (`--stop-on-error=all` shows every one)

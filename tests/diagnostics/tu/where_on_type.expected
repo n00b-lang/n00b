@@ -18,29 +18,4 @@ tests/diagnostics/tu/where_on_type.n:27:9: error N00B-T0021: `string` does not i
 tests/diagnostics/tu/where_on_type.n:28:9: error N00B-T0021: `f64` does not implement `Integer`, which `both` requires
   tests/diagnostics/tu/where_on_type.n:14:6: note: `both` is declared here
   help: implement `Integer` for `f64`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:29:9: error N00B-T0021: `string` does not implement `Integer`, which `in_body` requires
-  tests/diagnostics/tu/where_on_type.n:18:6: note: `in_body` is declared here
-  help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:37:16: warning N00B-N0021: field `height` of `Plant` is set but never read
-tests/diagnostics/tu/where_on_type.n:38:6: warning N00B-N0019: function `grow` is never called
-  help: call it or delete it
-tests/diagnostics/tu/where_on_type.n:39:12: note N00B-S0064: parameter `x` could be `view`: `grown` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:41:9: error N00B-T0021: `Plant` does not implement `Grows`, which `grown` requires
-  tests/diagnostics/tu/where_on_type.n:39:6: note: `grown` is declared here
-  help: implement `Grows` for `Plant`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:44:11: note N00B-S0064: parameter `xs` could be `view`: `ints` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:45:15: note N00B-S0064: parameter `x` could be `view`: `optional` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:46:12: note N00B-S0064: parameter `r` could be `view`: `calls` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:47:17: note N00B-S0064: parameter `r` could be `view`: `calls_back` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:51:9: error N00B-T0021: `string` does not implement `Integer`, which `ints` requires
-  tests/diagnostics/tu/where_on_type.n:44:6: note: `ints` is declared here
-  help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:52:9: error N00B-T0021: `string` does not implement `Integer`, which `optional` requires
-  tests/diagnostics/tu/where_on_type.n:45:6: note: `optional` is declared here
-  help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:53:9: error N00B-T0021: `string` does not implement `Integer`, which `calls` requires
-  tests/diagnostics/tu/where_on_type.n:46:6: note: `calls` is declared here
-  help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:54:9: error N00B-T0021: `string` does not implement `Integer`, which `calls_back` requires
-  tests/diagnostics/tu/where_on_type.n:47:6: note: `calls_back` is declared here
-  help: implement `Integer` for `string`, or call a function that does not need it
+tests/diagnostics/tu/where_on_type.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 6 (`--stop-on-error=all` shows every one)

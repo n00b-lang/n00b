@@ -1180,6 +1180,12 @@ render_order(const core_diagnostics_t *d, bool sorted)
     return order;
 }
 
+size_t *
+core_diagnostics_render_order(const core_diagnostics_t *d, bool sorted)
+{
+    return d ? render_order(d, sorted) : nullptr;
+}
+
 core_string_t
 core_diagnostics_render(const core_diagnostics_t *d, core_diag_render_t options)
 {

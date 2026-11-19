@@ -13,6 +13,4 @@ tests/diagnostics/tu/type_argument_arity_imported.n:9:25: error N00B-T0515: `Pic
 tests/diagnostics/tu/type_argument_arity_imported.n:12:27: error N00B-T0515: `Count` takes no type arguments, but 1 is given
   tests/diagnostics/modules/type_argument_arity_imported/shapes.n:17:10: note: `Count` is declared here
   help: remove the type argument
-tests/diagnostics/tu/type_argument_arity_imported.n:15:6: warning N00B-N0019: function `fine` is never called
-  help: call it or delete it
-tests/diagnostics/tu/type_argument_arity_imported.n:15:11: note N00B-S0064: parameter `f` could be `view`: `fine` never writes anything reachable from it
+tests/diagnostics/tu/type_argument_arity_imported.n: note N00B-C0106: this file reached the error limit of 5; its later warnings are not shown (`--stop-on-error=all` shows every one)

@@ -14,15 +14,4 @@ tests/diagnostics/tu/where_imported.n:15:11: note N00B-S0064: parameter `b` coul
 tests/diagnostics/tu/where_imported.n:16:9: error N00B-T0021: `string` does not implement `Integer`, which `bare` requires
   tests/diagnostics/tu/where_imported.n:15:6: note: `bare` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_imported.n:18:26: error N00B-T0021: `string` does not implement `Integer`, which `Pair` requires
-  help: give `Pair` a type that implements `Integer`, or implement `Integer` for this one
-tests/diagnostics/tu/where_imported.n:19:27: error N00B-T0021: `string` does not implement `Integer`, which `Num` requires
-  help: give `Num` a type that implements `Integer`, or implement `Integer` for this one
-tests/diagnostics/tu/where_imported.n:20:26: error N00B-T0021: `string` does not implement `Integer`, which `Ints` requires
-  help: give `Ints` a type that implements `Integer`, or implement `Integer` for this one
-tests/diagnostics/tu/where_imported.n:21:25: error N00B-T0515: `Pair` takes 2 type arguments, but 1 is given
-  tests/diagnostics/modules/where_imported/kinds.n:14:8: note: `Pair` is declared here
-  help: add the missing type argument
-tests/diagnostics/tu/where_imported.n:22:6: warning N00B-N0019: function `shaped` is never called
-  help: call it or delete it
-tests/diagnostics/tu/where_imported.n:23:13: note N00B-S0064: parameter `l` could be `view`: `shaped` never writes anything reachable from it
+tests/diagnostics/tu/where_imported.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 4 (`--stop-on-error=all` shows every one)

@@ -1,0 +1,7 @@
+let v1: int = "1"
+let v2: int = "2"
+let v3: int = "3"
+let v4: int = "4"
+let v5: int = "5"
+let v6: int = "6"
+let v7: int = "7"

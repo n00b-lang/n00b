@@ -167,15 +167,27 @@ for pass in fresh cached; do
         "$tmp/where.err"
     grep -q '`string` does not implement `Integer`, which `bare` requires' \
         "$tmp/where.err"
-    # A trait named as a type is a parameter of its own, in field order.
-    # `shaped`, which gives them fitting arguments, is not reported.
-    for kind in Pair Num Ints; do
-        test "$(grep -c "\`string\` does not implement \`Integer\`, which \`$kind\` requires" \
-            "$tmp/where.err")" -eq 1
-    done
-    grep -q '`Pair` takes 2 type arguments, but 1 is given' "$tmp/where.err"
     if grep -q 'internal compiler error' "$tmp/where.err"; then
         echo "where check hit an internal error on the $pass pass" >&2
+        exit 1
+    fi
+    # A trait named as a type is a parameter of its own, in field order.
+    # `shaped`, which gives them fitting arguments, is not reported.
+    N00B_CACHE="$tmp/where-traits-cache" N00B_DIAGNOSTICS=terse \
+        N00B_PATH="$src/tests/diagnostics/modules/where_imported_traits" \
+        "$compiler" check \
+        "$src/tests/diagnostics/tu/where_imported_traits.n" \
+        >"$tmp/traits.out" 2>"$tmp/traits.err" && {
+        echo "where check of traits passed on the $pass pass" >&2
+        exit 1
+    }
+    for kind in Pair Num Ints; do
+        test "$(grep -c "\`string\` does not implement \`Integer\`, which \`$kind\` requires" \
+            "$tmp/traits.err")" -eq 1
+    done
+    grep -q '`Pair` takes 2 type arguments, but 1 is given' "$tmp/traits.err"
+    if grep -q 'internal compiler error' "$tmp/traits.err"; then
+        echo "where check of traits hit an internal error on the $pass pass" >&2
         exit 1
     fi
 done

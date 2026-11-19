@@ -14,5 +14,4 @@ tests/diagnostics/tu/patterns.n:5:28: error N00B-T0500: `2` is an integer, which
 tests/diagnostics/tu/patterns.n:6:1: error N00B-T0537: this pattern has 3 elements, but `Tuple[int, int]` has 2
 tests/diagnostics/tu/patterns.n:9:15: error N00B-T0538: `loop_count` is `int`, which cannot be iterated
   help: a `for` loop needs a value whose type implements the `Iterable` trait, such as a `List` or a range
-tests/diagnostics/tu/patterns.n:11:15: error N00B-T0538: `(1, "two")` is `Tuple[u8, string]`, which cannot be iterated
-  help: a tuple's elements can each have their own type, so a `for` loop cannot walk them; put values of one type in a `List` instead
+tests/diagnostics/tu/patterns.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

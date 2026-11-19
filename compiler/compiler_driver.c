@@ -330,10 +330,131 @@ add_locate_request(core_work_queue_t *queue,
 static size_t printed_errors;
 static size_t printed_warnings;
 
+typedef struct {
+    core_string_t path;
+    int64_t       errors;
+    size_t        omitted_errors;
+    size_t        omitted_other;
+} file_error_count_t;
+core_list_decl(file_error_count_t);
+
+static bool
+renders(const core_diagnostic_t *item, n00bb_diagnostic_filter_t *filter,
+        core_diag_render_t options)
+{
+    if (filter && !n00bb_diagnostic_visible(filter, item)) return false;
+    if (item->severity == CORE_DIAG_INFO && !options.hints) return false;
+    return !options.errors_only || item->severity == CORE_DIAG_ERROR
+        || item->severity == CORE_DIAG_INTERNAL;
+}
+
+// Each file's diagnostics, in the order they print, up to its error limit
+// (`--stop-on-error`): once a file has shown that many errors its later
+// diagnostics are dropped. Returns the diagnostics kept, or null when the
+// limit drops nothing; `summary` then gets, for each file that lost any,
+// a note saying how many errors it lost. An internal error is never
+// dropped, and a diagnostic of no file has no limit.
+static core_diagnostics_t *
+limit_file_errors(const core_diagnostics_t *diagnostics,
+                  n00bb_diagnostic_filter_t *filter,
+                  core_diagnostics_t *summary)
+{
+    int64_t limit = n00bb_setting_int(N00BB_KEY_DIAGNOSTICS_STOP_ON_ERROR);
+    size_t count = core_diagnostics_count(diagnostics);
+    if (limit <= 0 || !count) return nullptr;
+    size_t *order = core_diagnostics_render_order(diagnostics, true);
+    bool *kept = core_alloc_array(bool, count);
+    size_t *anchor = core_alloc_array(size_t, count);
+    if (!order || !kept || !anchor) {
+        core_free(order);
+        core_free(kept);
+        core_free(anchor);
+        return nullptr;
+    }
+    for (size_t i = 0; i < count; i++) {
+        core_diag_severity_t severity =
+            core_diagnostics_at(diagnostics, i)->severity;
+        anchor[i] = i && (severity == CORE_DIAG_NOTE
+                          || severity == CORE_DIAG_HELP)
+            ? anchor[i - 1] : i;
+    }
+    core_diag_render_t options = n00bb_diag_render_options();
+    core_list_t(file_error_count_t) files =
+        core_list_new(file_error_count_t);
+    bool dropped = false;
+    for (size_t k = 0; k < count; k++) {
+        size_t i = order[k];
+        const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
+        kept[i] = true;
+        // A note or help prints after the diagnostic it belongs to, and
+        // goes with it.
+        if (anchor[i] != i) {
+            kept[i] = kept[anchor[i]];
+            continue;
+        }
+        if (!item->path.u8_bytes || item->severity == CORE_DIAG_INTERNAL
+            || !renders(item, filter, options))
+            continue;
+        file_error_count_t *file = nullptr;
+        for (size_t f = 0; !file && f < files.len; f++)
+            if (core_string_eq(files.data[f].path, item->path))
+                file = &files.data[f];
+        if (!file) {
+            core_list_push(files, ((file_error_count_t){.path = item->path}));
+            file = &files.data[files.len - 1];
+        }
+        bool error = item->severity == CORE_DIAG_ERROR
+            || item->severity == CORE_DIAG_FATAL;
+        if (file->errors < limit) {
+            if (error) file->errors++;
+            continue;
+        }
+        kept[i] = false;
+        dropped = true;
+        if (error) file->omitted_errors++;
+        else file->omitted_other++;
+    }
+    core_diagnostics_t *limited = nullptr;
+    if (dropped) {
+        limited = core_diagnostics_new();
+        for (size_t i = 0; i < count; i++)
+            if (kept[i])
+                core_diagnostics_append(limited,
+                                        core_diagnostics_at(diagnostics, i));
+        if (filter)
+            core_diagnostics_set_filter(limited, n00bb_diagnostic_visible,
+                                        filter);
+    }
+    for (size_t f = 0; f < files.len; f++) {
+        const file_error_count_t *file = &files.data[f];
+        if (!file->omitted_errors && !file->omitted_other) continue;
+        if (file->omitted_errors)
+            n00bb_report(summary, nullptr, N00B_DIAG_ERROR_LIMIT_REACHED,
+                (core_diag_location_t){}, N00B_TEXT_ERRORS_NOT_SHOWN_AFTER_LIMIT,
+                N00BB_ARGS(ARG_NUMBER((long long)file->omitted_errors),
+                           ARG_NUMBER((long long)limit)));
+        else
+            n00bb_report(summary, nullptr, N00B_DIAG_ERROR_LIMIT_REACHED,
+                (core_diag_location_t){},
+                N00B_TEXT_DIAGNOSTICS_NOT_SHOWN_AFTER_LIMIT,
+                N00BB_ARGS(ARG_NUMBER((long long)limit)));
+        core_diagnostic_set_path(summary, core_diagnostics_count(summary) - 1,
+                                 file->path);
+    }
+    core_list_free(files);
+    core_free(order);
+    core_free(kept);
+    core_free(anchor);
+    return limited;
+}
+
 static void
-print_counted_diagnostics(const core_diagnostics_t *diagnostics,
+print_counted_diagnostics(const core_diagnostics_t *all,
                           n00bb_diagnostic_filter_t *filter)
 {
+    core_diagnostics_t *summary = core_diagnostics_new();
+    core_diagnostics_t *limited = limit_file_errors(all, filter, summary);
+    const core_diagnostics_t *diagnostics = limited ? limited : all;
     for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         if (filter && !n00bb_diagnostic_visible(filter, item)) continue;
@@ -343,7 +464,23 @@ print_counted_diagnostics(const core_diagnostics_t *diagnostics,
                  || item->severity == CORE_DIAG_INTERNAL)
             printed_errors++;
     }
-    n00bb_print_diagnostics(diagnostics);
+    core_diag_render_t options = n00bb_diag_render_options();
+    core_string_t printed = core_diagnostics_render(diagnostics, options);
+    if (printed.data) fwrite(printed.data, 1, printed.u8_bytes, stderr);
+    // The notes on files that reached the limit print last, and print even
+    // where hints are off: nothing is dropped without a word.
+    if (core_diagnostics_count(summary)) {
+        bool separate = !options.terse && printed.u8_bytes;
+        options.hints = true;
+        options.errors_only = false;
+        core_string_t text = core_diagnostics_render(summary, options);
+        if (separate) fputc('\n', stderr);
+        if (text.data) fwrite(text.data, 1, text.u8_bytes, stderr);
+        core_free(text.data);
+    }
+    core_free(printed.data);
+    core_diagnostics_free(summary);
+    core_diagnostics_free(limited);
 }
 
 static void
