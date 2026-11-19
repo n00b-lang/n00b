@@ -1,0 +1,19 @@
+effect Audited {
+    from:note,  stamp
+}
+
+effect Handled {
+    handled_by:flush
+}
+
+effect Scoped {
+    scope:caller
+}
+
+mark Cleared {
+    cleared_by:check ( path ),  vet ( path )
+}
+
+mark Rejected {
+    rejected_by:open ( path )
+}
