@@ -530,7 +530,8 @@ func settle_records(records: List[Style_Record]) -> List[Style_Record] {
     var i: int = 0
     while i < cast[int] records.len() {
         var r: Style_Record = records[i]
-        if record_is_span(r) and
+        // Only a closed span has a close event to order.
+        if !record_is_span(r) or
             r.end_ix.get_or_else(0) == index_extends {
             r.end_order = 0
         }
@@ -576,7 +577,6 @@ func settle_records(records: List[Style_Record]) -> List[Style_Record] {
 // renumbers them: the left side's orders are dense from 0, so anything
 // from the right side at the join offset is placed after them all.
 private const right_first_order: u32 = 0x40000000
-private const left_last_order: u32 = 0x3fffffff
 
 private func shifted(at: u32?, by: u64) -> u32? {
     if at == nil {
@@ -590,13 +590,25 @@ private func shifted(at: u32?, by: u64) -> u32? {
     return cast[u32] moved
 }
 
+// A right-side event order, made room for: doubled (so a left span ended
+// by a right reset can close just before it) and, at the join offset,
+// placed after every left event there.
+private func right_order(order: u32, at_join: bool) -> u32 {
+    var moved: u32 = order * 2 + 2
+    if at_join {
+        moved += right_first_order
+    }
+    return moved
+}
+
 // Joins two strings, at least one of them rich, keeping every layer's
 // style spans and substitution slots. The right side's records move by the
-// left side's byte length; a left span that runs to the end of its string
-// now ends where the left side does. Layers pair up from the outside in.
-// A layer keeps its base style only when both sides have that layer with
-// the same base style (one side's base style can't cover just that side),
-// and it is opaque when either side's is.
+// left side's byte length, and its events at the join come after the left
+// side's. A left span that was never closed flows right over the right
+// side, until the right side's first reset (`[/]`, which may sit at its
+// very start) ends it. Layers pair up from the outside in. A layer keeps
+// its base style only when both sides have that layer with the same base
+// style, and it is opaque when either side's is.
 func concat_rich(left: string, right: string) -> string {
     let left_rich: bool = is_rich(left)
     let right_rich: bool = is_rich(right)
@@ -608,41 +620,52 @@ func concat_rich(left: string, right: string) -> string {
     var inner_right: string = right
     var body: Rich_Body = (s = "", style_info = new[List[Style_Record]](),
                            base_style = nil, opaque = false)
+    var right_records: List[Style_Record] = new[List[Style_Record]]()
+    var reset_at: u32? = nil
+    var reset_order: u32 = 0
+    if right_rich {
+        let rb: Ref[Rich_Body] = rich_body(right)
+        inner_right = rb.__value.s
+        body.opaque = rb.__value.opaque
+        var i: int = 0
+        while i < cast[int] rb.__value.style_info.len() {
+            var rec: Style_Record = rb.__value.style_info[i]
+            rec.start_order = right_order(rec.start_order,
+                                          rec.start_ix.get_or_else(1) == 0)
+            rec.end_order = right_order(rec.end_order,
+                                        rec.end_ix.get_or_else(1) == 0)
+            rec.start_ix = shifted(rec.start_ix, left_len)
+            rec.end_ix = shifted(rec.end_ix, left_len)
+            // Records are in event order, so the first reset is the
+            // earliest.
+            if reset_at == nil and record_is_reset(rec) {
+                reset_at = rec.start_ix
+                reset_order = rec.start_order
+            }
+            right_records.append(rec)
+            i += 1
+        }
+    }
     if left_rich {
         let lb: Ref[Rich_Body] = rich_body(left)
         inner_left = lb.__value.s
-        body.opaque = lb.__value.opaque
+        body.opaque = body.opaque or lb.__value.opaque
         var i: int = 0
         while i < cast[int] lb.__value.style_info.len() {
             var rec: Style_Record = lb.__value.style_info[i]
-            if rec.end_ix != nil and rec.end_ix == index_extends {
-                rec.end_ix = cast[u32] left_len
-                rec.end_order = left_last_order
+            if reset_at != nil and record_is_span(rec) and
+                rec.end_ix.get_or_else(0) == index_extends {
+                rec.end_ix = reset_at
+                rec.end_order = reset_order - 1
             }
             body.style_info.append(rec)
             i += 1
         }
     }
-    if right_rich {
-        let rb: Ref[Rich_Body] = rich_body(right)
-        inner_right = rb.__value.s
-        body.opaque = body.opaque or rb.__value.opaque
-        var i: int = 0
-        while i < cast[int] rb.__value.style_info.len() {
-            var rec: Style_Record = rb.__value.style_info[i]
-            // The right side's events at its start come after the left
-            // side's events at its end, which share that offset.
-            if rec.start_ix != nil and rec.start_ix == 0 {
-                rec.start_order += right_first_order
-            }
-            if rec.end_ix != nil and rec.end_ix == 0 {
-                rec.end_order += right_first_order
-            }
-            rec.start_ix = shifted(rec.start_ix, left_len)
-            rec.end_ix = shifted(rec.end_ix, left_len)
-            body.style_info.append(rec)
-            i += 1
-        }
+    var r: int = 0
+    while r < cast[int] right_records.len() {
+        body.style_info.append(right_records[r])
+        r += 1
     }
     if left_rich and right_rich {
         let lb: Ref[Rich_Body] = rich_body(left)

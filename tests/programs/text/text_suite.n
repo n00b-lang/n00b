@@ -596,14 +596,32 @@ func rich_concatenation() {
     check(repr_of(after_plain) == "r\"cd[b]a[/b][#n]\"",
           "rich_concatenation", "5")
     check(slots_of(after_plain) == "name n@3", "rich_concatenation", "6")
-    // A left span that runs to the end of its string stops where the left
-    // side does.
-    let open_left: string = "[b]open"'r + "tail"
-    check(body_of(open_left).__value.style_info[0].end_ix.get_or_else(0) == 4,
-          "rich_concatenation", "7")
-    // A span ending where the next starts closes first in repr.
-    check(repr_of("[b]open"'r + "[i]x[/i]"'r) == "r\"[b]open[/b][i]x[/i]\"",
+    // A span that was never closed flows right over what follows...
+    let open_left: string = "[b]abc"'r + "def"
+    check(repr_of(open_left) == "r\"[b]abcdef\"", "rich_concatenation", "7")
+    check(body_of(open_left).__value.style_info[0].end_ix.get_or_else(0) ==
+          text.index_extends, "rich_concatenation", "7b")
+    check(repr_of("[b]open"'r + "[i]x[/i]"'r) == "r\"[b]open[i]x[/i]\"",
           "rich_concatenation", "13")
+    check(("[b]a"'r + "[#]"'r) == "[b]a[#]"'r, "rich_concatenation", "13b")
+    // ...until a reset on the right ends it, at the right side's very start
+    // or later on.
+    let reset_first: string = "[b]abc"'r + "[/]def"'r
+    check(repr_of(reset_first) == "r\"[b]abc[/]def\"", "rich_concatenation",
+          "13c")
+    check(body_of(reset_first).__value.style_info[0].end_ix.get_or_else(0) ==
+          3, "rich_concatenation", "13d")
+    check(reset_first == "[b]abc[/]def"'r, "rich_concatenation", "13e")
+    let reset_later: string = "[b]abc"'r + "d[#][/]ef"'r
+    check(repr_of(reset_later) == "r\"[b]abcd[#][/]ef\"",
+          "rich_concatenation", "13f")
+    check(body_of(reset_later).__value.style_info[0].end_ix.get_or_else(0) ==
+          4, "rich_concatenation", "13g")
+    // A closed span stays closed, and the join is associative.
+    check(repr_of("[b]abc[/b]"'r + "def") == "r\"[b]abc[/b]def\"",
+          "rich_concatenation", "13h")
+    check((("[b]a"'r + "b") + "[/]c"'r) == ("[b]a"'r + ("b" + "[/]c"'r)),
+          "rich_concatenation", "13i")
     check(repr_of("[b]a[/b][b]c[/b]"'r) == "r\"[b]a[/b][b]c[/b]\"",
           "rich_concatenation", "14")
     // The result is the string the whole literal would have made.
