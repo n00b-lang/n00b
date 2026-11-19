@@ -58,53 +58,97 @@ free_graph(void *opaque)
     core_free(graph);
 }
 
+// A thread's pooled graphs, one per grammar version in use (a thread may
+// alternate grammars: annotation arguments are parsed while a grammar file
+// is), the most recently pooled first.
+#define GRAPH_POOL_SLOTS 4
+
+typedef struct {
+    pwz_graph_t *slots[GRAPH_POOL_SLOTS];
+} graph_pool_t;
+
 static pthread_key_t graph_pool_key;
 static pthread_once_t graph_pool_once = PTHREAD_ONCE_INIT;
 
-// Threads that exit free their graph through the key's destructor; the
+static void
+free_graph_pool(void *opaque)
+{
+    graph_pool_t *pool = opaque;
+    if (!pool) return;
+    for (size_t i = 0; i < GRAPH_POOL_SLOTS; i++) free_graph(pool->slots[i]);
+    core_free(pool);
+}
+
+// Threads that exit free their pool through the key's destructor; the
 // thread that ends the process, through this.
 static void
-free_exiting_thread_graph(void)
+free_exiting_thread_graphs(void)
 {
-    pwz_graph_t *graph = pthread_getspecific(graph_pool_key);
+    graph_pool_t *pool = pthread_getspecific(graph_pool_key);
     (void)pthread_setspecific(graph_pool_key, nullptr);
-    free_graph(graph);
+    free_graph_pool(pool);
 }
 
 static void
 graph_pool_init(void)
 {
-    if (!pthread_key_create(&graph_pool_key, free_graph))
-        atexit(free_exiting_thread_graph);
+    if (!pthread_key_create(&graph_pool_key, free_graph_pool))
+        atexit(free_exiting_thread_graphs);
+}
+
+static graph_pool_t *
+thread_graph_pool(bool create)
+{
+    pthread_once(&graph_pool_once, graph_pool_init);
+    graph_pool_t *pool = pthread_getspecific(graph_pool_key);
+    if (!pool && create) {
+        pool = core_alloc(graph_pool_t);
+        if (pthread_setspecific(graph_pool_key, pool)) {
+            core_free(pool);
+            pool = nullptr;
+        }
+    }
+    return pool;
 }
 
 static pwz_graph_t *
 take_pooled_graph(parse_grammar_t *g, uint64_t version)
 {
-    pthread_once(&graph_pool_once, graph_pool_init);
-    pwz_graph_t *graph = pthread_getspecific(graph_pool_key);
-    if (!graph || graph->grammar != g || graph->version != version)
-        return nullptr;
-    (void)pthread_setspecific(graph_pool_key, nullptr);
-    return graph;
+    graph_pool_t *pool = thread_graph_pool(false);
+    for (size_t i = 0; pool && i < GRAPH_POOL_SLOTS; i++) {
+        pwz_graph_t *graph = pool->slots[i];
+        if (!graph || graph->grammar != g || graph->version != version)
+            continue;
+        pool->slots[i] = nullptr;
+        return graph;
+    }
+    return nullptr;
 }
 
 static void
 pool_graph(parse_grammar_t *g, uint64_t version,
            core_list_t(pwz_exp_ptr_t) all_exps, pwz_exp_ptr_t *nt_exps)
 {
-    pthread_once(&graph_pool_once, graph_pool_init);
     pwz_graph_t *graph = core_alloc(pwz_graph_t);
     *graph = (pwz_graph_t){
         .grammar = g, .version = version,
         .all_exps = all_exps, .nt_exps = nt_exps,
     };
-    pwz_graph_t *old = pthread_getspecific(graph_pool_key);
-    if (pthread_setspecific(graph_pool_key, graph)) {
+    graph_pool_t *pool = thread_graph_pool(true);
+    if (!pool) {
         free_graph(graph);
         return;
     }
-    free_graph(old);
+    // Replace a graph for the same grammar, or else the oldest.
+    size_t at = GRAPH_POOL_SLOTS - 1;
+    for (size_t i = 0; i < GRAPH_POOL_SLOTS; i++)
+        if (!pool->slots[i] || pool->slots[i]->grammar == g) {
+            at = i;
+            break;
+        }
+    free_graph(pool->slots[at]);
+    for (size_t i = at; i > 0; i--) pool->slots[i] = pool->slots[i - 1];
+    pool->slots[0] = graph;
 }
 
 static inline parse_token_info_t *
@@ -2483,7 +2527,11 @@ parse_pwz_free(parse_pwz_parser_t *p)
     core_list_free(p->ambiguities);
     core_arena_free(&p->parse_arena);
 
-    free_exps(&p->all_exps, p->nt_exps);
+    // reset_memos cleared the graph's memos: the thread's next parser of
+    // this grammar may use it.
+    if (p->all_exps.len) pool_graph(p->grammar, p->graph_version, p->all_exps,
+                                    p->nt_exps);
+    else free_exps(&p->all_exps, p->nt_exps);
     core_list_free(p->expected);
     core_list_free(p->statement_ends);
     core_list_free(p->continue_after);
