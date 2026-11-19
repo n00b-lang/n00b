@@ -649,11 +649,23 @@ static void
 extend_tail(const pt_t *pt, pt_loc_t *loc, const core_string_t *steps,
             uint32_t depth, bool deep, bool inline_tail)
 {
-    loc_extend(pt, loc, steps, depth, false);
-    if (!deep) return;
-    bool exact = !loc_deep(loc);
+    // loc_push widens a step it can't follow (one the type doesn't have, or
+    // a repeat in a recursive object) to everything below where it got to.
+    // When no step from there on dereferences, the place is still in that
+    // spot's own storage, so the widened place stays inline; leaving it
+    // plainly deep let it run on through every pointer below.
+    bool     before  = loc_deep(loc);
+    uint32_t widened = depth;
+    for (uint32_t s = 0; s < depth; s++) {
+        loc_push(pt, loc, steps[s]);
+        if (widened == depth && !before && loc_deep(loc)) widened = s;
+    }
+    if (!deep && widened == depth) return;
     loc->path.flags |= IR_SPATH_DEEP;
-    if (inline_tail && exact) loc->path.flags |= SPATH_INLINE;
+    if (before || (deep && !inline_tail)) return;
+    if (widened == depth
+        || first_deref(steps + widened, depth - widened) == depth - widened)
+        loc->path.flags |= SPATH_INLINE;
 }
 
 static pt_item_t
