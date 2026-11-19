@@ -192,7 +192,10 @@ static const struct {
 typedef struct {
     parse_grammar_t *grammar;
     parse_grammar_t *class_grammar;
-    parse_nonterm_t *classes[PP_CLASSIFIED_NONTERMS];
+    // The class of each classified nonterminal, by nonterminal id; ids at
+    // or past class_count are unclassified (PP_OP_NONE).
+    uint8_t *class_of;
+    size_t class_count;
     core_translation_unit_t *unit;
     core_list_t(pp_binding_t) bindings;
     core_list_t(core_string_t) owned_strings;
@@ -423,10 +426,33 @@ canonical_logical_spelling(core_string_t spelling)
 static pp_class_t
 nonterm_class(const pp_context_t *ctx, parse_tree_t *node)
 {
-    parse_nonterm_t *nt = parse_tree_nonterm(ctx->grammar, node);
-    for (size_t i = 0; nt && i < PP_CLASSIFIED_NONTERMS; i++)
-        if (ctx->classes[i] == nt) return classified_nonterms[i].op;
-    return PP_OP_NONE;
+    if (!node || core_tree_is_leaf(node)) return PP_OP_NONE;
+    const parse_nt_node_t *pn = &core_tree_node_value(node);
+    if (pn->group_top || pn->id < 0 || (uint64_t)pn->id >= ctx->class_count)
+        return PP_OP_NONE;
+    return (pp_class_t)ctx->class_of[pn->id];
+}
+
+// Fills the class table for `grammar` from classified_nonterms; the first
+// entry naming a nonterminal decides its class.
+static void
+build_class_table(pp_context_t *ctx, parse_grammar_t *grammar)
+{
+    int64_t ids[PP_CLASSIFIED_NONTERMS];
+    size_t count = 0;
+    for (size_t i = 0; i < PP_CLASSIFIED_NONTERMS; i++) {
+        parse_nonterm_t *nt = parse_find_nonterm(grammar,
+                                                 classified_nonterms[i].name);
+        ids[i] = nt ? parse_nonterm_id(nt) : -1;
+        if (ids[i] >= 0 && (size_t)ids[i] + 1 > count)
+            count = (size_t)ids[i] + 1;
+    }
+    core_free(ctx->class_of);
+    ctx->class_of = count ? core_alloc_array(uint8_t, count) : nullptr;
+    ctx->class_count = count;
+    for (size_t i = PP_CLASSIFIED_NONTERMS; i > 0; i--)
+        if (ids[i - 1] >= 0)
+            ctx->class_of[ids[i - 1]] = (uint8_t)classified_nonterms[i - 1].op;
 }
 
 static pp_class_t
@@ -3513,50 +3539,59 @@ check_formals(pp_discovery_t *discovery, parse_tree_t *node)
 static pp_spelling_t
 style_spelling(pp_context_t *ctx, parse_tree_t *node)
 {
-    core_string_t text = first_leaf_text(ctx, node);
-    struct {
-        const char *nonterminal;
-        pp_spelling_t first;
-        pp_spelling_t last;
-    } static const groups[] = {
-        {"function-keyword", PP_SPELL_FUNC, PP_SPELL_FUNCTION},
-        {"or-op", PP_SPELL_OR, PP_SPELL_PIPE_PIPE},
-        {"and-op", PP_SPELL_AND, PP_SPELL_AMP_AMP},
-        {"not-op", PP_SPELL_BANG, PP_SPELL_NOT},
-        {"not-word-op", PP_SPELL_BANG, PP_SPELL_NOT},
-        {"nil-keyword", PP_SPELL_NIL, PP_SPELL_PY_NONE},
-        {"record-keyword", PP_SPELL_RECORD, PP_SPELL_STRUCT},
-        {"return-sigil", PP_SPELL_ARROW, PP_SPELL_RETURN_COLON},
-    };
-    for (size_t g = 0; g < sizeof(groups) / sizeof(groups[0]); g++) {
-        if (!node_named(ctx->grammar, node,
-                        core_string_from_cstr(groups[g].nonterminal))) continue;
-        for (pp_spelling_t i = groups[g].first; i <= groups[g].last; i++)
+    // A node is at most one of these nonterminals; its text is read only
+    // once it is one.
+    pp_spelling_t first = PP_SPELL_COUNT, last = PP_SPELL_COUNT;
+    if (is_name(ctx->grammar, node, "function-keyword"))
+        first = PP_SPELL_FUNC, last = PP_SPELL_FUNCTION;
+    else if (is_name(ctx->grammar, node, "or-op"))
+        first = PP_SPELL_OR, last = PP_SPELL_PIPE_PIPE;
+    else if (is_name(ctx->grammar, node, "and-op"))
+        first = PP_SPELL_AND, last = PP_SPELL_AMP_AMP;
+    else if (is_name(ctx->grammar, node, "not-op")
+             || is_name(ctx->grammar, node, "not-word-op"))
+        first = PP_SPELL_BANG, last = PP_SPELL_NOT;
+    else if (is_name(ctx->grammar, node, "nil-keyword"))
+        first = PP_SPELL_NIL, last = PP_SPELL_PY_NONE;
+    else if (is_name(ctx->grammar, node, "record-keyword"))
+        first = PP_SPELL_RECORD, last = PP_SPELL_STRUCT;
+    else if (is_name(ctx->grammar, node, "return-sigil"))
+        first = PP_SPELL_ARROW, last = PP_SPELL_RETURN_COLON;
+    if (first != PP_SPELL_COUNT) {
+        core_string_t text = first_leaf_text(ctx, node);
+        for (pp_spelling_t i = first; i <= last; i++)
             if (core_string_eq(text, pp_spellings[i].spelling)) return i;
         return PP_SPELL_COUNT;
     }
     if (is_name(ctx->grammar, node, "elif-keyword")) {
         if (core_tree_num_children(node) == 2) return PP_SPELL_ELSE_IF;
-        return core_string_eq(text, CORE_STRING_STATIC("elseif"))
+        return core_string_eq(first_leaf_text(ctx, node),
+                              CORE_STRING_STATIC("elseif"))
             ? PP_SPELL_ELSEIF : PP_SPELL_ELIF;
     }
     if (is_name(ctx->grammar, node, "block-start"))
-        return core_string_eq(text, CORE_STRING_STATIC("{"))
+        return core_string_eq(first_leaf_text(ctx, node),
+                              CORE_STRING_STATIC("{"))
             ? PP_SPELL_BRACES : PP_SPELL_INDENT;
     if (is_name(ctx->grammar, node, "return-type"))
-        return core_string_eq(text, CORE_STRING_STATIC("->"))
+        return core_string_eq(first_leaf_text(ctx, node),
+                              CORE_STRING_STATIC("->"))
             ? PP_SPELL_ARROW : PP_SPELL_RETURN_COLON;
     // `true` / `false` versus `True` / `False`: one style per pair.
-    if (is_name(ctx->grammar, node, "bool-lit"))
+    if (is_name(ctx->grammar, node, "bool-lit")) {
+        core_string_t text = first_leaf_text(ctx, node);
         return core_string_eq(text, CORE_STRING_STATIC("True"))
             || core_string_eq(text, CORE_STRING_STATIC("False"))
             ? PP_SPELL_PY_TRUE : PP_SPELL_TRUE;
+    }
     if (is_name(ctx->grammar, node, "case-default-keyword"))
-        return core_string_eq(text, CORE_STRING_STATIC("default"))
+        return core_string_eq(first_leaf_text(ctx, node),
+                              CORE_STRING_STATIC("default"))
             ? PP_SPELL_CASE_DEFAULT : PP_SPELL_CASE_ELSE;
     // A function type's keyword parameters, with or without a leading `**`.
     if (is_name(ctx->grammar, node, "tspec-kargs"))
-        return core_string_eq(text, CORE_STRING_STATIC("**"))
+        return core_string_eq(first_leaf_text(ctx, node),
+                              CORE_STRING_STATIC("**"))
             ? PP_SPELL_STARRED_KEYWORD_TYPE : PP_SPELL_KEYWORD_TYPE;
     return PP_SPELL_COUNT;
 }
@@ -3748,28 +3783,23 @@ preprocess_discover(parse_visit_t *visit)
         }
         parse_tree_free(inner);
     }
-    const core_string_t case_blocks[] = {
-        CORE_STRING_STATIC("switch-case-block"),
-        CORE_STRING_STATIC("typecase-case-block"),
-        CORE_STRING_STATIC("case-else"),
-        CORE_STRING_STATIC("switch-value-case-block"),
-        CORE_STRING_STATIC("typecase-value-case-block"),
-        CORE_STRING_STATIC("switch-value-else"),
-        CORE_STRING_STATIC("typecase-value-else"),
-    };
-    for (size_t i = 0; i < sizeof(case_blocks) / sizeof(case_blocks[0]); i++) {
-        if (!node_named(ctx->grammar, node, case_blocks[i])) continue;
-        parse_tree_t *body = parse_tree_find_direct_child_by_nt_name(
-            ctx->grammar, node, CORE_STRING_STATIC("body"));
+    if (is_name(ctx->grammar, node, "switch-case-block")
+        || is_name(ctx->grammar, node, "typecase-case-block")
+        || is_name(ctx->grammar, node, "case-else")
+        || is_name(ctx->grammar, node, "switch-value-case-block")
+        || is_name(ctx->grammar, node, "typecase-value-case-block")
+        || is_name(ctx->grammar, node, "switch-value-else")
+        || is_name(ctx->grammar, node, "typecase-value-else")) {
+        parse_tree_t *body = parse_tree_find_direct_child_by_nt_id(
+            node, PARSE_NT_ID(ctx->grammar, "body"));
         if (!body)
-            body = parse_tree_find_direct_child_by_nt_name(
-                ctx->grammar, node, CORE_STRING_STATIC("value-body"));
+            body = parse_tree_find_direct_child_by_nt_id(
+                node, PARSE_NT_ID(ctx->grammar, "value-body"));
         parse_tree_t *opener = body
-            ? parse_tree_find_direct_child_by_nt_name(
-                  ctx->grammar, body, CORE_STRING_STATIC("block-start"))
+            ? parse_tree_find_direct_child_by_nt_id(
+                  body, PARSE_NT_ID(ctx->grammar, "block-start"))
             : nullptr;
         if (opener) core_list_push(discovery->case_openers, opener);
-        break;
     }
     bool case_opener = false;
     for (size_t i = 0; i < discovery->case_openers.len && !case_opener; i++)
@@ -3794,11 +3824,12 @@ preprocess_discover(parse_visit_t *visit)
     }
     // Statements inside a module-level `when` branch are processed when the
     // chosen branch replaces the `when`; the others are discarded with it.
+    bool top_level = is_name(ctx->grammar, node, "top-level-stmt");
     bool in_when_branch = false;
-    for (parse_tree_t *at = parse_tree_parent(node); at && !in_when_branch;
-         at = parse_tree_parent(at))
+    for (parse_tree_t *at = top_level ? parse_tree_parent(node) : nullptr;
+         at && !in_when_branch; at = parse_tree_parent(at))
         in_when_branch = is_name(ctx->grammar, at, "top-when-body");
-    if (is_name(ctx->grammar, node, "top-level-stmt") && !in_when_branch) {
+    if (top_level && !in_when_branch) {
         parse_tree_t *import = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, node, CORE_STRING_STATIC("import-stmt"));
         if (import) {
@@ -4036,9 +4067,7 @@ n00bb_preprocessor_run(n00bb_preprocessor_t *preprocessor,
     pp_context_t *ctx = &preprocessor->context;
     ctx->grammar = grammar;
     if (ctx->class_grammar != grammar) {
-        for (size_t i = 0; i < PP_CLASSIFIED_NONTERMS; i++)
-            ctx->classes[i] = parse_find_nonterm(grammar,
-                                                   classified_nonterms[i].name);
+        build_class_table(ctx, grammar);
         ctx->class_grammar = grammar;
     }
     if (!ctx->module_stack.len) {
@@ -4077,6 +4106,7 @@ n00bb_preprocessor_free(n00bb_preprocessor_t *preprocessor)
     core_list_free(ctx->bindings);
     core_list_free(ctx->modules);
     core_list_free(ctx->module_stack);
+    core_free(ctx->class_of);
     core_free(preprocessor);
 }
 
