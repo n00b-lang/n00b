@@ -426,7 +426,12 @@ static doc_t *assemble(pr_t *p, core_list_t(item_t) *items)
         held    = false;
     }
 
-    if (any && held && pending >= GAP_SOFT) {
+    // A required break before trailing empty items still ends the line,
+    // but an optional one has nothing left to break before. Passing it
+    // on would break before whatever follows this sequence: in
+    // `func idle():`, the empty result's @newline put the block's `:` on
+    // a line of its own.
+    if (any && held && pending >= GAP_HARD) {
         core_list_push(parts, doc_gap(p, pending));
     }
 
