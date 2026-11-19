@@ -126,3 +126,28 @@ for pass in fresh cached; do
     grep -q '`Pick` takes 1 type argument, but 2 are given' "$tmp/arity.err"
     grep -q '`Count` takes no type arguments, but 1 is given' "$tmp/arity.err"
 done
+
+# A record's, variant's or alias's `where` clauses constrain a use of the
+# type from another module the same way whether that module comes from
+# source or from its cached interface.
+for pass in fresh cached; do
+    N00B_CACHE="$tmp/where-cache" N00B_DIAGNOSTICS=terse \
+        N00B_PATH="$src/tests/diagnostics/modules/where_imported" \
+        "$compiler" check "$src/tests/diagnostics/tu/where_imported.n" \
+        >"$tmp/where.out" 2>"$tmp/where.err" && {
+        echo "where check passed on the $pass pass" >&2
+        exit 1
+    }
+    grep -q '`string` does not implement `Integer`, which `Box` requires' \
+        "$tmp/where.err"
+    grep -q '`Maybe` cannot take `string` as a type argument' \
+        "$tmp/where.err"
+    grep -q '`string` does not implement `Integer`, which `Bag` requires' \
+        "$tmp/where.err"
+    grep -q '`string` does not implement `Integer`, which `counted` requires' \
+        "$tmp/where.err"
+    if grep -q 'internal compiler error' "$tmp/where.err"; then
+        echo "where check hit an internal error on the $pass pass" >&2
+        exit 1
+    fi
+done

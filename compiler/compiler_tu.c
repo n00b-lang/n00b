@@ -10018,10 +10018,10 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
             : apply_type_arguments(state->types, name, arguments.data,
                                    arguments.len)
         : nullptr;
-    // A declared record's or variant's `where` clauses constrain these.
-    th_type **given = applied && declaration && declaration->decl_node
-        && arguments.len ? core_alloc_array(th_type *, arguments.len)
-                         : nullptr;
+    // A declared record's or variant's `where` clauses, from its source or
+    // its interface, constrain these.
+    th_type **given = applied && declaration && arguments.len
+        ? core_alloc_array(th_type *, arguments.len) : nullptr;
     for (size_t i = 0; given && i < arguments.len; i++)
         given[i] = arguments.data[i].kind == TH_ARG_TYPE
             ? arguments.data[i].type : nullptr;

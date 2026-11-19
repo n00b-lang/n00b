@@ -855,6 +855,85 @@ restore_interface_function_typevars(n00bb_interface_context_t *loader,
         CORE_STRING_STATIC("n00b.function-typevars"), symbol->type);
 }
 
+// The `where` constraints an interface keeps for a record, variant, object
+// or alias (register_type_constraints), on the type's own parameters,
+// matched by name: an alias's are its target's variables, the others'
+// the ones interface_type_template restored.
+static bool
+restore_interface_type_constraints(n00bb_interface_context_t *loader,
+                                   n00bb_tu_state_t *state,
+                                   parse_sym_entry_t *symbol,
+                                   core_string_t qualified_name)
+{
+    core_buffer_t name = {0};
+    th_type *carrier = callback_protocol_name(qualified_name,
+            CORE_STRING_STATIC("__type_where__"), &name)
+        ? interface_value_type(loader, core_buffer_string(&name)) : nullptr;
+    core_buffer_release(&name);
+    if (!carrier) return true;
+    carrier = th_resolve(carrier);
+    size_t count = th_kind_of(carrier) == TH_TRAIT
+        ? th_trait_requirement_count(carrier) : 0;
+    if (!count || !symbol->type) return false;
+    th_type **parameters = nullptr;
+    size_t parameter_count = 0;
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("alias")))
+        parameter_count = th_free_vars(state->types,
+                                       th_resolve(symbol->type), &parameters);
+    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
+                                                   count * sizeof(*items));
+    bool ok = items != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        ok = th_trait_requirement_at(carrier, i, &items[i]);
+        core_string_t subject = ok
+            ? th_var_name(th_resolve(items[i].subject)) : (core_string_t){0};
+        th_type *found = nullptr;
+        for (size_t p = 0; subject.data && p < parameter_count && !found; p++)
+            if (core_string_eq(th_var_name(parameters[p]), subject))
+                found = parameters[p];
+        for (size_t v = 0; subject.data && variables && !found
+             && v < variables->len; v++)
+            if (core_string_eq(variables->data[v].name, subject))
+                found = variables->data[v].type;
+        ok = found != nullptr;
+        if (!ok) break;
+        items[i].subject = found;
+        // An excluded type naming the type's parameters names them too.
+        th_type **named = nullptr;
+        size_t named_count = items[i].target
+            ? th_free_vars(state->types, items[i].target, &named) : 0;
+        th_type **to = named_count
+            ? core_alloc_array(th_type *, named_count) : nullptr;
+        for (size_t n = 0; to && n < named_count; n++) {
+            core_string_t var = th_var_name(named[n]);
+            to[n] = nullptr;
+            for (size_t p = 0; p < parameter_count && !to[n]; p++)
+                if (core_string_eq(th_var_name(parameters[p]), var))
+                    to[n] = parameters[p];
+            for (size_t v = 0; variables && !to[n] && v < variables->len;
+                 v++)
+                if (core_string_eq(variables->data[v].name, var))
+                    to[n] = variables->data[v].type;
+            ok = ok && to[n] != nullptr;
+        }
+        if (named_count)
+            items[i].target = ok && to ? th_type_clone_replacing(
+                state->types, items[i].target,
+                (const th_type *const *)named, to, named_count) : nullptr;
+        core_free(to);
+        ok = ok && (!named_count || items[i].target);
+        if (items[i].iface.u8_bytes)
+            items[i].iface = store_semantic_string(state, items[i].iface);
+    }
+    n00bb_declared_where_t *facts = ok ? core_arena_alloc(
+        &state->semantic_values, sizeof(*facts)) : nullptr;
+    if (!facts) return false;
+    *facts = (n00bb_declared_where_t){.data = items, .len = count};
+    return parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY, facts);
+}
+
 static th_type *
 interface_type_template(n00bb_interface_context_t *loader,
                         n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
@@ -1829,9 +1908,13 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                 continue;
             core_string_t qualified_name = declaration.qualified_name;
             core_string_t declaration_tail = n00bb_name_leaf(qualified_name);
+            // A callback's role contract and a type's `where` constraints
+            // ride on private values; their types restore them.
             if (declaration.kind == TH_ENV_DECLARATION_VALUE
-                && core_string_starts_with(declaration_tail,
-                       CORE_STRING_STATIC("__callback_contract__")))
+                && (core_string_starts_with(declaration_tail,
+                        CORE_STRING_STATIC("__callback_contract__"))
+                    || core_string_starts_with(declaration_tail,
+                        CORE_STRING_STATIC("__type_where__"))))
                 continue;
             core_string_t declaration_module = declaration.module;
             bool is_value = declaration.kind == TH_ENV_DECLARATION_VALUE;
@@ -2104,6 +2187,13 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                             "interface type has invalid record layout metadata");
                         return false;
                     }
+                }
+                if (declaration.kind == TH_ENV_DECLARATION_TYPE
+                    && !restore_interface_type_constraints(loader, state,
+                           symbol, declaration.qualified_name)) {
+                    if (failure) *failure = CORE_STRING_STATIC(
+                        "interface type has invalid where constraints");
+                    return false;
                 }
                 size_t exposure_size = 0;
                 const uint8_t *exposure = interface_owned_metadata(loader,

@@ -414,6 +414,37 @@ register_declared_bounds(th_env *environment, parse_sym_entry_t *symbol,
     return ok;
 }
 
+// The `where` constraints of a record, variant, object or alias, so a use
+// of the type from this interface is checked as one from source is
+// (n00bb_type_arguments_fit): kept as the requirements of a private
+// `__type_where__` value's trait type, which the interface archives with
+// their variables by name.
+static bool
+register_type_constraints(th_ctx *types, th_env *environment,
+                          parse_sym_entry_t *symbol, core_string_t module,
+                          core_string_t package, core_string_t qualified)
+{
+    n00bb_declared_where_t *declared = parse_sym_binding(symbol,
+        N00BB_DECLARED_WHERE_KEY);
+    core_list_t(th_trait_requirement) kept =
+        core_list_new(th_trait_requirement);
+    for (size_t i = 0; declared && i < declared->len; i++)
+        if (declared->data[i].kind == TH_CON_IMPLEMENTS
+            || declared->data[i].kind == TH_CON_EXCLUDES)
+            core_list_push(kept, declared->data[i]);
+    core_buffer_t name = {0};
+    bool ok = !kept.len
+        || (callback_protocol_name(qualified,
+                CORE_STRING_STATIC("__type_where__"), &name)
+            && th_env_register_value(environment, core_buffer_string(&name),
+                core_buffer_string(&name), module, package, TH_ENV_PRIVATE,
+                th_trait(types, qualified, nullptr, 0, kept.data,
+                         kept.len)));
+    core_buffer_release(&name);
+    core_list_free(kept);
+    return ok;
+}
+
 bool
 n00bb_replace_function_typevars(th_ctx *types, th_env *environment,
                                 parse_sym_entry_t *symbol, th_type *contract,
@@ -656,6 +687,10 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                 ok = register_typevar_order(state->types, environment,
                     symbol, shape, TH_ENV_METADATA_TYPE, core_buffer_string(&qualified),
                     CORE_STRING_STATIC("n00b.type-typevars"));
+            if (ok)
+                ok = register_type_constraints(state->types, environment,
+                    symbol, module_text, package_text,
+                    core_buffer_string(&qualified));
             n00bb_record_layout_request_t *layout = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.record-layout-request"));
             // The policy, then for `align(N)` N as 4 little-endian bytes.
