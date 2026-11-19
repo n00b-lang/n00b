@@ -732,7 +732,6 @@ static bool
 comptime_only_call(const ir_instr_t *call)
 {
     return calls_native(call, CORE_STRING_STATIC(N00BB_COMPTIME_FREEZE_NATIVE))
-        || calls_native(call, CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME))
         || ir_pdg_asks_frozen(call);
 }
 
