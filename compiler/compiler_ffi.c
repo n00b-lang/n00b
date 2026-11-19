@@ -484,6 +484,13 @@ clear_strings(core_list_t(core_string_t) *list)
     list->len = 0;
 }
 
+static int
+record_order(const ffi_literal_t *left, const ffi_literal_t *right)
+{
+    int order = core_string_cmp(left->module, right->module);
+    return order ? order : core_string_cmp(left->prefix, right->prefix);
+}
+
 static void
 refresh_selection(n00bb_ffi_t *ffi)
 {
@@ -492,8 +499,21 @@ refresh_selection(n00bb_ffi_t *ffi)
     clear_strings(&ffi->frameworks);
     clear_strings(&ffi->search_paths);
     ffi->selected_shims.len = 0;
-    for (size_t i = 0; i < ffi->records.len; i++) {
-        const ffi_literal_t *record = &ffi->records.data[i];
+    // The literals in their modules' and prefixes' order, not the order
+    // they were registered in, which differs with whether their modules
+    // came from source or from the cache: it is the order of the shim
+    // object's functions and of the libraries on the link line.
+    size_t *order = core_alloc_array(size_t, ffi->records.len + 1);
+    for (size_t i = 0; i < ffi->records.len; i++) order[i] = i;
+    for (size_t i = 1; i < ffi->records.len; i++)
+        for (size_t j = i; j > 0 && record_order(&ffi->records.data[order[j]],
+                 &ffi->records.data[order[j - 1]]) < 0; j--) {
+            size_t swap = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = swap;
+        }
+    for (size_t o = 0; o < ffi->records.len; o++) {
+        const ffi_literal_t *record = &ffi->records.data[order[o]];
         if (!record->used) {
             continue;
         }
@@ -504,6 +524,7 @@ refresh_selection(n00bb_ffi_t *ffi)
         push_all(&ffi->frameworks, &record->frameworks);
         push_all(&ffi->search_paths, &record->search_paths);
     }
+    core_free(order);
 }
 
 void
