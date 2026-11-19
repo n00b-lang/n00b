@@ -2711,9 +2711,16 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
+        // A warning that a library module is passed over depends on files
+        // outside the module, which its key does not cover: each compile
+        // reports it afresh (report_shadow_sites), so it is not kept.
         attached = note ? attached
             : core_diag_is_advisory(item->severity)
-                && !n00bb_diag_reports_unused(item->code);
+                && !n00bb_diag_reports_unused(item->code)
+                && !core_string_eq(item->code, n00bb_diag_code(
+                       N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB))
+                && !core_string_eq(item->code, n00bb_diag_code(
+                       N00B_DIAG_MODULE_SHADOWS_STDLIB));
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){

@@ -130,7 +130,22 @@ shadowed_case() {
             cat "$tmp/shadow.log" >&2
             exit 1
         }
+        same_warm "$label (cache $cache)" "$@"
     done
+}
+# The run above is cold for the program's own modules. Run warm, with the
+# program's modules from the cache, the output must not change.
+same_warm() {
+    label=$1
+    shift
+    (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
+        "$compiler" check "$program") \
+        >"$tmp/shadow-warm.log" 2>&1 || true
+    if ! cmp -s "$tmp/shadow.log" "$tmp/shadow-warm.log"; then
+        echo "$label: warm, the output changed" >&2
+        diff -u "$tmp/shadow.log" "$tmp/shadow-warm.log" >&2
+        exit 1
+    fi
 }
 # The last shadowed_case run must also say how the module was reached.
 expect_note() {
@@ -164,6 +179,7 @@ passed_over_case() {
             cat "$tmp/shadow.log" >&2
             exit 1
         }
+        same_warm "$label (cache $cache)" "$@"
     done
 }
 module='func one() -> int { return 1 }\n'

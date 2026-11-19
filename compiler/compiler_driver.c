@@ -220,6 +220,11 @@ typedef struct {
     core_list_t(shadow_site_t) shadow_sites;
     // Every import statement outside the library (`cause` unset).
     core_list_t(shadow_site_t) import_sites;
+    // Each module outside the library that comes from the cache, with the
+    // module it imports implicitly (`cause` unset). Such a module does not
+    // load its implicit import again, but from source it would have, and
+    // been a place to report what that import finds.
+    core_list_t(shadow_site_t) cached_implicit_sites;
     pthread_mutex_t shadow_sites_lock;
 } import_driver_t;
 
@@ -3184,13 +3189,25 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
                       core_string_t module_name)
 {
     n00bb_tu_state_t *importer_state = tu_state(importer);
-    if (importer_state && importer_state->interface_module) return true;
     // The library's own package does not import itself. Which modules are
     // its is by origin: a `builtin.x` of any other package is the user's,
     // and imports the library's like every other module.
     if (n00bb_system_unit(importer)
         && core_string_eq(n00bb_package_namespace(importer), module_name))
         return true;
+    if (importer_state && importer_state->interface_module) {
+        import_driver_t *driver = opaque;
+        if (!n00bb_resolver_unit_in_stdlib(driver->resolver, importer)) {
+            pthread_mutex_lock(&driver->shadow_sites_lock);
+            core_list_push(driver->cached_implicit_sites, ((shadow_site_t){
+                .unit = importer,
+                .loaded = core_string_dup(module_name),
+                .implicit = true,
+            }));
+            pthread_mutex_unlock(&driver->shadow_sites_lock);
+        }
+        return true;
+    }
     if (load_runtime_module(opaque, grammar, importer, module_name))
         return true;
     n00bb_lex_result_t *lex = importer_state ? importer_state->lex : nullptr;
@@ -3259,6 +3276,18 @@ report_shadow_sites(import_driver_t *driver)
                 || (best->implicit == site->implicit
                     && compare_positions(site->unit, site->at, best->unit,
                                          best->at) < 0))
+                best = site;
+        }
+        // A module from the cache imports implicitly what the modules
+        // compiled now do, and from source would have found this the same
+        // way: it is a place too, so a warm compile picks where a cold one
+        // does.
+        for (size_t s = 0; best && best->implicit
+             && s < driver->cached_implicit_sites.len; s++) {
+            shadow_site_t *site = &driver->cached_implicit_sites.data[s];
+            if (core_string_eq(site->loaded, best->loaded)
+                && compare_positions(site->unit, site->at, best->unit,
+                                     best->at) < 0)
                 best = site;
         }
         if (n00bb_resolver_claim_shadow(resolver, cause)) {
@@ -3453,6 +3482,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         .types = types,
         .shadow_sites = core_list_new(shadow_site_t),
         .import_sites = core_list_new(shadow_site_t),
+        .cached_implicit_sites = core_list_new(shadow_site_t),
     };
     pthread_mutex_init(&import_driver.shadow_sites_lock, nullptr);
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
@@ -3669,6 +3699,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     for (size_t i = 0; i < import_driver.import_sites.len; i++)
         core_free(import_driver.import_sites.data[i].loaded.data);
     core_list_free(import_driver.import_sites);
+    for (size_t i = 0; i < import_driver.cached_implicit_sites.len; i++)
+        core_free(import_driver.cached_implicit_sites.data[i].loaded.data);
+    core_list_free(import_driver.cached_implicit_sites);
     pthread_mutex_destroy(&import_driver.shadow_sites_lock);
 
     for (size_t i = 0; i < requests->ordered.len; i++) {
