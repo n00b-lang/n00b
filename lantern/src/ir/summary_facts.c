@@ -231,6 +231,8 @@ struct ir_summary_facts_t {
     int64_t                         unknown_place;
     ir_summary_t                   *unknown_callee;
     int64_t                         next_site;
+    // The engine's symbol for each integer asked for so far.
+    core_dict_t                     integers;
 };
 
 static core_datalog_symbol_t
@@ -239,10 +241,19 @@ constant(ir_summary_facts_t *facts, core_string_t name)
     return core_datalog_constant(facts->engine, name);
 }
 
+// The symbol for `value`. The engine names an integer by its decimal text,
+// formatting and interning it on every call, and every query about a call
+// asks for one: the symbol is asked of the engine once and kept.
 static core_datalog_symbol_t
 integer(ir_summary_facts_t *facts, int64_t value)
 {
-    return core_datalog_integer(facts->engine, value);
+    void *key   = (void *)(uintptr_t)value;
+    bool  found = false;
+    void *known = core_dict_get(&facts->integers, key, &found);
+    if (found) return (core_datalog_symbol_t)(uintptr_t)known;
+    core_datalog_symbol_t symbol = core_datalog_integer(facts->engine, value);
+    core_dict_put(&facts->integers, key, (void *)(uintptr_t)symbol);
+    return symbol;
 }
 
 static void
@@ -572,6 +583,7 @@ ir_summary_facts_build(ir_summaries_t *summaries, ir_func_t *const *functions,
     core_dict_init(&facts->site_symbols, core_hash_word, nullptr);
     core_dict_init(&facts->place_ids, core_hash_word, nullptr);
     core_dict_init(&facts->param_place_ids, core_hash_word, nullptr);
+    core_dict_init(&facts->integers, core_hash_word, nullptr);
     core_datalog_set_provenance(facts->engine, provenance);
     for (int r = 0; r < REL_COUNT; r++)
         facts->ids[r] = core_datalog_relation(facts->engine,
@@ -615,6 +627,7 @@ ir_summary_facts_free(ir_summary_facts_t *facts)
     core_dict_free(&facts->site_symbols);
     core_dict_free(&facts->place_ids);
     core_dict_free(&facts->param_place_ids);
+    core_dict_free(&facts->integers);
     core_free(facts);
 }
 
