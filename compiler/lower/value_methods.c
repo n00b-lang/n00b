@@ -444,7 +444,8 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                 th_type *receiver = parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
                 if (!receiver || parse_sym_binding(symbol,
-                        CORE_STRING_STATIC("n00bb.dispatch-adapter")))
+                        CORE_STRING_STATIC("n00bb.dispatch-adapter"))
+                    || parse_sym_binding(symbol, N00BB_KEYWORD_ORDER_KEY))
                     continue;
                 bool record_hash = symbol->name.data
                     && core_string_starts_with(symbol->name,
@@ -715,124 +716,34 @@ n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
     return ok;
 }
 
-#define N00BB_KEYWORD_ORDER_TARGET_KEY \
-    CORE_STRING_STATIC("n00bb.keyword-order-target")
-#define N00BB_KEYWORD_ORDER_KEY CORE_STRING_STATIC("n00bb.keyword-order")
-
-ir_func_t *
-n00bb_keyword_order_adapter(ir_lower_context_t *context,
-                            ir_module_t *target_module, ir_func_t *target,
-                            th_type *value_type,
-                            const core_string_t *declared)
-{
-    th_ctx *types = ir_module_types(context->module);
-    th_type *flat = target ? th_resolve(target->type) : nullptr;
-    value_type = value_type ? th_resolve(value_type) : nullptr;
-    if (!flat || th_kind_of(flat) != TH_FUNCTION || !value_type
-        || th_kind_of(value_type) != TH_FUNCTION) return nullptr;
-    size_t positional = th_func_nparams(value_type);
-    size_t keywords = th_func_nkw(value_type);
-    size_t count = th_func_nparams(flat);
-    if (count < positional + keywords) return nullptr;
-    uint32_t *order = core_alloc_array(uint32_t, count + 1);
-    th_param *params = core_alloc_array(th_param, count + 1);
-    bool reordered = false;
-    bool ok = order && params;
-    for (size_t i = 0; ok && i < count; i++) {
-        order[i] = (uint32_t)i;
-        params[i] = *th_func_param(flat, i);
-        if (i < positional || i >= positional + keywords) continue;
-        size_t k = 0;
-        while (k < keywords && !core_string_eq(
-                   th_func_kw(value_type, k)->name, declared[i - positional]))
-            k++;
-        ok = k < keywords;
-        order[i] = (uint32_t)(positional + k);
-        reordered = reordered || order[i] != i;
-    }
-    for (size_t i = 0; ok && i < count; i++)
-        params[order[i]] = *th_func_param(flat, i);
-    ir_func_t *adapter = nullptr;
-    core_buffer_t text = {0};
-    for (size_t i = 0; ok && reordered && i < count; i++)
-        core_buffer_printf(&text, "%s%u", i ? "," : "", order[i]);
-    core_buffer_t name = {0};
-    if (ok && reordered)
-        core_buffer_printf(&name, "__n00bb_keyword_order_%.*s",
-                           (int)target->name.u8_bytes, target->name.data);
-    adapter = name.data ? ir_func_find(context->module,
-                                       core_buffer_string(&name))
-                        : nullptr;
-    th_type *signature = name.data && !adapter
-        ? th_func_with_error(types, th_func_ret(flat), th_func_error(flat),
-                             params, count, nullptr, nullptr, 0)
-        : nullptr;
-    if (signature) {
-        adapter = ir_func_add(context->module, core_buffer_string(&name),
-                              signature, IR_LINK_INTERNAL);
-        for (size_t k = 0; adapter && k < keywords; k++)
-            if (!ir_func_set_parameter_optional(adapter,
-                    (uint32_t)(positional + k), true))
-                adapter = nullptr;
-        ir_ctx_t *ir_context = ir_module_ctx(context->module);
-        if (adapter && (!ir_annot_set(ir_context, &adapter->annots,
-                (ir_annot_t){.key = N00BB_KEYWORD_ORDER_TARGET_KEY,
-                             .kind = IR_ANNOT_VALUE,
-                             .v = ir_func_address(target_module, target)})
-            || !ir_annot_set(ir_context, &adapter->annots,
-                (ir_annot_t){.key = N00BB_KEYWORD_ORDER_KEY,
-                             .kind = IR_ANNOT_STR,
-                             .s = ir_strdup(ir_context,
-                                            core_buffer_string(&text))})))
-            adapter = nullptr;
-    }
-    core_buffer_release(&name);
-    core_buffer_release(&text);
-    core_free(order);
-    core_free(params);
-    return !ok ? nullptr : reordered ? adapter : target;
-}
-
-// The body of each keyword-order adapter `module` declares
-// (n00bb_keyword_order_adapter), now that the types are known.
+// The body of keyword-order adapter `symbol` (n00bb_keyword_order_t), now
+// that the types are known.
 static bool
-generate_keyword_order_adapters(core_translation_unit_t *unit,
-                                ir_ctx_t *ir_context, ir_module_t *module)
+generate_keyword_order_adapter(n00bb_link_analysis_t *analysis,
+                               core_translation_unit_t *unit,
+                               parse_sym_entry_t *symbol,
+                               const n00bb_keyword_order_t *order)
 {
-    for (size_t f = 0; module && f < ir_func_count(module); f++) {
-        ir_func_t *adapter = ir_func_at(module, f);
-        ir_annot_t *target = ir_annot_get(&adapter->annots,
-                                          N00BB_KEYWORD_ORDER_TARGET_KEY);
-        ir_annot_t *text = ir_annot_get(&adapter->annots,
-                                        N00BB_KEYWORD_ORDER_KEY);
-        if (!target || adapter->n_blocks) continue;
-        ir_func_t *callee = target->kind == IR_ANNOT_VALUE && target->v
-            && target->v->kind == IR_VAL_FUNC ? target->v->owner : nullptr;
-        size_t count = callee ? th_func_nparams(th_resolve(callee->type)) : 0;
-        uint32_t *order = core_alloc_array(uint32_t, count + 1);
-        size_t parsed = 0;
-        bool ok = callee && order && text && text->kind == IR_ANNOT_STR;
-        for (size_t at = 0; ok && at < text->s.u8_bytes; parsed++) {
-            uint32_t value = 0;
-            while (at < text->s.u8_bytes && text->s.data[at] >= '0'
-                   && text->s.data[at] <= '9')
-                value = value * 10 + (uint32_t)(text->s.data[at++] - '0');
-            ok = parsed < count && value < count;
-            if (ok) order[parsed] = value;
-            if (at < text->s.u8_bytes) at++;
-        }
-        ok = ok && parsed == count
-            && n00bb_adapter_body(unit, ir_context, adapter, callee,
-                                  callee->owner, nullptr, nullptr, order);
-        core_free(order);
-        if (ok) continue;
+    ir_func_t *adapter = link_ir_function_for_symbol(analysis, symbol);
+    ir_func_t *target = link_ir_function_for_symbol(analysis, order->target);
+    // A function whose errors are reported has no body to adapt.
+    if (target && !target->n_blocks && n00bb_unit_failed(unit)) return true;
+    bool ok = adapter && target && target->n_blocks
+        && th_func_nparams(th_resolve(target->type)) == order->count
+        && n00bb_adapter_body(unit, analysis->ir_context, adapter, target,
+                              target->owner, nullptr, nullptr,
+                              order->order)
+        && ir_annot_set(analysis->ir_context, &adapter->annots,
+               (ir_annot_t){
+                   .key = CORE_STRING_STATIC("n00bb.generated-value-method"),
+                   .kind = IR_ANNOT_BOOL, .b = true});
+    if (!ok)
         n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
-            (core_diag_location_t){0}, "generating dispatch adapters",
-            "could not generate the keyword-order adapter `%.*s`",
-            (int)adapter->name.u8_bytes, adapter->name.data);
-        return false;
-    }
-    return true;
+            link_source_location(order->target->decl_node),
+            "generating dispatch adapters",
+            "could not generate the keyword-order adapter for `%.*s`",
+            (int)order->target->name.u8_bytes, order->target->name.data);
+    return ok;
 }
 
 bool
@@ -846,6 +757,15 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
+                n00bb_keyword_order_t *order = parse_sym_binding(symbol,
+                    N00BB_KEYWORD_ORDER_KEY);
+                if (order) {
+                    if (generate_keyword_order_adapter(analysis, unit,
+                                                       symbol, order))
+                        continue;
+                    core_list_free(scopes);
+                    return false;
+                }
                 parse_sym_entry_t *implementation = parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.dispatch-adapter"));
                 th_type *receiver = implementation ? parse_sym_binding(symbol,
@@ -898,9 +818,6 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
             }
         }
         core_list_free(scopes);
-        if (!generate_keyword_order_adapters(unit, analysis->ir_context,
-                                             unit_module(state)))
-            return false;
     }
     return true;
 }

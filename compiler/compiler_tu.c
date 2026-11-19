@@ -1638,6 +1638,59 @@ n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
     return value;
 }
 
+th_type *
+n00bb_keyword_order(th_ctx *types, parse_grammar_t *grammar,
+                    parse_sym_entry_t *symbol, th_type *flat,
+                    n00bb_keyword_order_t *order)
+{
+    *order = (n00bb_keyword_order_t){.target = symbol};
+    th_type *called = flat ? th_resolve(flat) : nullptr;
+    th_type *value = called
+        ? n00bb_function_value_type(types, grammar, symbol, called)
+        : nullptr;
+    value = value ? th_resolve(value) : nullptr;
+    if (!value || value == called || th_kind_of(value) != TH_FUNCTION
+        || th_func_nkw(value) < 2)
+        return nullptr;
+    order->count = th_func_nparams(called);
+    order->positional = th_func_nparams(value);
+    order->keywords = th_func_nkw(value);
+    if (order->count < order->positional + order->keywords) return nullptr;
+    order->order = core_alloc_array(uint32_t, order->count);
+    th_param *params = core_alloc_array(th_param, order->count);
+    parse_tree_t *formals = callable_formal_parameters(grammar, symbol);
+    bool reordered = false;
+    bool ok = order->order && params;
+    for (size_t i = 0; ok && i < order->count; i++) {
+        order->order[i] = (uint32_t)i;
+        if (i < order->positional
+            || i >= order->positional + order->keywords) continue;
+        core_string_t name = {0};
+        ok = function_parameter_info(grammar, symbol, formals, i, nullptr,
+                                     &name, nullptr, nullptr);
+        size_t k = 0;
+        while (ok && k < order->keywords
+               && !core_string_eq(th_func_kw(value, k)->name, name))
+            k++;
+        ok = ok && k < order->keywords;
+        order->order[i] = (uint32_t)(order->positional + k);
+        reordered = reordered || order->order[i] != i;
+    }
+    for (size_t i = 0; ok && i < order->count; i++)
+        params[order->order[i]] = *th_func_param(called, i);
+    th_type *adapter = ok && reordered
+        ? th_func_with_error(types, th_func_ret(called),
+                             th_func_error(called), params, order->count,
+                             nullptr, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    if (!adapter) {
+        core_free(order->order);
+        order->order = nullptr;
+    }
+    return adapter;
+}
+
 bool
 function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
                          parse_tree_t *formals, core_string_t name,

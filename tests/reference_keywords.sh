@@ -23,10 +23,10 @@ if test -s "$tmp/stdout" || test "$(cat "$tmp/stderr")" != ok; then
     exit 1
 fi
 
-# The keyword parameters' names come from the interface when the imported
-# module is only an archived interface.
+# The keyword parameters' names, and the keyword-order adapters, come from
+# the interface when the imported modules are only an archived interface.
 if ! N00B_PATH="$programs" "$compiler" library \
-    --emit-interface "$tmp/keyword_lib.n00bi" keyword_lib \
+    --emit-interface "$tmp/keyword_lib.n00bi" keyword_lib keyword_refs \
     >"$tmp/interface.out" 2>"$tmp/interface.err"; then
     cat "$tmp/interface.out" "$tmp/interface.err" >&2
     exit 1

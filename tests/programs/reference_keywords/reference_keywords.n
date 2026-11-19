@@ -3,6 +3,7 @@
 # own scope. A function's type names its keyword parameters, in no
 # particular order.
 import keyword_lib
+import keyword_refs
 
 func scaled(a: int, scale: int = 2) -> int {
     return a * scale
@@ -68,6 +69,11 @@ require twice(ref scaled) == 114
 let failing: Ref[(int, limit: int) -> int fail: string] = ref limited
 let imported_join = ref keyword_lib.joined
 let imported_check = ref keyword_lib.checked
+# Every module's `ref` of a function is the same reference, however its
+# keyword parameters are declared.
+require imported_check == keyword_refs.checked_ref()
+let local_order: Ref[(int, b: int, zz: int) -> int] = ref ordered
+require local_order == reordered
 
 func failures() -> int fail: string {
     require failing.call(3)! == 3

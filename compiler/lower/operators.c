@@ -1708,34 +1708,20 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             if (storage && !value_type)
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not find the type of a function reference");
-            size_t positional = value_type != flat
-                ? th_func_nparams(th_resolve(value_type)) : 0;
-            size_t keywords = value_type != flat
-                ? th_func_nkw(th_resolve(value_type)) : 0;
-            if (keywords > 1) {
-                // A call through the reference passes the keyword
-                // parameters in the order the type lists them.
-                core_string_t *declared = core_alloc_array(core_string_t,
-                                                           keywords);
-                parse_tree_t *formals = callable_formal_parameters(
-                    visit->grammar, function_target);
-                bool named = declared != nullptr;
-                for (size_t k = 0; named && k < keywords; k++)
-                    named = function_parameter_info(visit->grammar,
-                        function_target, formals, positional + k, nullptr,
-                        &declared[k], nullptr, nullptr);
-                ir_func_t *referent = named
-                    ? n00bb_keyword_order_adapter(context, module, function,
-                                                  value_type, declared)
-                    : nullptr;
-                core_free(declared);
-                if (!referent)
-                    return n00bb_operator_error(context, IR_DIAG_INTERNAL,
-                        span, "could not order a function reference's "
-                              "keyword parameters");
-                if (referent != function)
-                    storage = ir_func_reference(context->module, referent);
-            }
+            // A call through the reference passes the keyword parameters
+            // in the order the type lists them; a function that declares
+            // them in another order is referred to through its module's
+            // keyword-order adapter (n00bb_keyword_order_t).
+            parse_sym_entry_t *adapter = parse_sym_binding(function_target,
+                N00BB_KEYWORD_ORDER_ADAPTER_KEY);
+            ir_func_t *referent = adapter && analysis
+                ? link_ir_function_for_symbol(analysis, adapter) : nullptr;
+            if (storage && adapter && !referent)
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not find the keyword-order adapter of a "
+                    "function reference");
+            if (storage && referent)
+                storage = ir_func_reference(module, referent);
             if (storage && value_type != flat)
                 storage->type = th_ind(ir_module_types(module), 0,
                                        value_type);

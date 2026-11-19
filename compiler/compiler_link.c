@@ -4591,6 +4591,79 @@ dispatch_adapter_signature(th_ctx *types, th_type *signature,
     return adapter;
 }
 
+// The keyword-order adapter (n00bb_keyword_order_t) of each function of
+// `unit` that declares its keyword parameters in an order its type doesn't
+// list them in. It is a function of that module, as a dispatch adapter is,
+// so every `ref` of the function, from any module, refers to the one
+// adapter.
+static bool
+register_keyword_order_adapters(core_link_unit_t *link,
+                                parse_grammar_t *grammar,
+                                n00bb_link_analysis_t *analysis,
+                                core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symbols = state->annotations->symtab;
+    core_list_t(parse_sym_entry_ptr_t) functions =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (parse_scope_t *scope = symbols->all_scopes; scope;
+         scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope)
+            if (symbol->kind == PARSE_SYM_FUNCTION && !symbol->is_synthetic
+                && !parse_sym_binding(symbol, N00BB_KEYWORD_ORDER_KEY))
+                core_list_push(functions, symbol);
+    bool ok = true;
+    for (size_t f = 0; ok && f < functions.len; f++) {
+        parse_sym_entry_t *symbol = functions.data[f];
+        n00bb_keyword_order_t *order = core_alloc(n00bb_keyword_order_t);
+        th_type *flat = th_func_collect_rest(state->types,
+                                             n00bb_symbol_signature(symbol));
+        // A generic function's adapter would share its type variables, and
+        // typing the adapter would bind the function's.
+        th_type *adapter_type = order && th_is_closed(state->types, flat)
+            ? n00bb_keyword_order(state->types, grammar, symbol, flat, order)
+            : nullptr;
+        if (!adapter_type) {
+            core_free(order);
+            continue;
+        }
+        core_buffer_t qualified = {0};
+        core_buffer_t name = {0};
+        if (append_environment_symbol_name(grammar, unit, symbol,
+                                           &qualified) && qualified.data)
+            core_buffer_printf(&name, "__n00bb_keyword_order_%016llx",
+                (unsigned long long)core_xxh3_64bits_raw(qualified.data,
+                                                         qualified.byte_len));
+        core_buffer_release(&qualified);
+        parse_symtab_enter_scope_all(symbols, module_scope(state));
+        parse_sym_entry_t *adapter = name.data
+            ? parse_symtab_add(symbols, CORE_STRING_STATIC(""),
+                core_buffer_string(&name), PARSE_SYM_FUNCTION, nullptr)
+            : nullptr;
+        parse_symtab_leave_scope_all(symbols);
+        core_buffer_release(&name);
+        ok = adapter != nullptr;
+        if (!ok) break;
+        adapter->type = adapter->callable_contract = adapter_type;
+        adapter->error_type = th_func_error(adapter_type);
+        adapter->adt_kind = symbol->adt_kind;
+        adapter->is_synthetic = true;
+        // Generated, as a dispatch adapter is: emitted with its module,
+        // and not a declaration of the source.
+        ok = parse_sym_set_binding(adapter,
+                CORE_STRING_STATIC("n00bb.generated-value-method"),
+                adapter_type)
+            && parse_sym_set_binding(adapter, N00BB_KEYWORD_ORDER_KEY, order)
+            && parse_sym_set_binding(symbol, N00BB_KEYWORD_ORDER_ADAPTER_KEY,
+                                     adapter)
+            && register_link_declaration(link, unit, grammar,
+                   &analysis->declarations_by_symbol, adapter);
+    }
+    core_list_free(functions);
+    return ok;
+}
+
 bool
 register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
                            parse_grammar_t *grammar,
@@ -4686,6 +4759,10 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
             }
         }
         core_list_free(targets);
+        if (!register_keyword_order_adapters(link, grammar, analysis, unit)) {
+            trait_method_index_free(&index);
+            return false;
+        }
     }
     trait_method_index_free(&index);
     return true;

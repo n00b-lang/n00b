@@ -1265,21 +1265,6 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis);
 bool
 n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis);
 
-// What `ref` of `target` (a function of `target_module`) refers to. A
-// call through the reference passes the keyword parameters of its type,
-// `value_type`, in the order that type lists them; `target` takes them in
-// the order it declares them (`declared`, the names of its parameters
-// after the positional ones). When those differ, this is an adapter in
-// the current module that takes them in the type's order, passes each to
-// `target` where it declares it, and passes an omitted one as missing, so
-// `target` still evaluates its default. Its body is made with the dispatch
-// adapters'. Otherwise it is `target`; nullptr if it can't be made.
-ir_func_t *
-n00bb_keyword_order_adapter(ir_lower_context_t *context,
-                            ir_module_t *target_module, ir_func_t *target,
-                            th_type *value_type,
-                            const core_string_t *declared);
-
 ir_value_t *
 n00bb_emit_iteration_call(ir_lower_context_t *context, core_string_t method,
                           ir_value_t *receiver, bool write_back,

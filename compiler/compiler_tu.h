@@ -148,6 +148,34 @@ parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
 // read.
 th_type *n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
                                    parse_sym_entry_t *symbol, th_type *flat);
+
+// A call through a function reference passes the keyword parameters in the
+// order the function's type lists them; a function that declares them in
+// another order is referred to through its keyword-order adapter, a
+// function of the same module that takes them in the type's order. The
+// adapter's symbol is bound under N00BB_KEYWORD_ORDER_KEY to this; the
+// function's, under N00BB_KEYWORD_ORDER_ADAPTER_KEY, to the adapter's.
+typedef struct {
+    parse_sym_entry_t *target;
+    // The function's parameters as it is called: its positional ones, its
+    // keyword ones, then its varargs array, if any.
+    size_t count;
+    size_t positional;
+    size_t keywords;
+    // The function's parameter `i` is passed the adapter's `order[i]`.
+    uint32_t *order;
+} n00bb_keyword_order_t;
+#define N00BB_KEYWORD_ORDER_KEY CORE_STRING_STATIC("n00bb.keyword-order")
+#define N00BB_KEYWORD_ORDER_ADAPTER_KEY \
+    CORE_STRING_STATIC("n00bb.keyword-order-adapter")
+
+// When function `symbol` (whose signature as called is `flat`) declares
+// its keyword parameters in an order its type doesn't list them in: the
+// signature its keyword-order adapter is called with, with `*order`
+// filled in (its `order` allocated). Otherwise nullptr.
+th_type *n00bb_keyword_order(th_ctx *types, parse_grammar_t *grammar,
+                             parse_sym_entry_t *symbol, th_type *flat,
+                             n00bb_keyword_order_t *order);
 // Each of a trait's methods for a bound on `variable`, as a method
 // constraint whose target is the whole method: its receiver is `variable`,
 // and the trait's parameters (the other variables its methods name) are
