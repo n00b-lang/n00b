@@ -2079,10 +2079,14 @@ emit_runtime_objects(core_link_unit_t *link,
     module_emission_t runtime = *emission;
     runtime.kept = &runtime_kept;
     runtime.runtime_functions = &runtime_functions;
-    runtime.native_frames = n00bb_native_frames_new(
+    // The frame table takes every object's frames in slot order, once the
+    // objects are made, not the re-emitted ones first: which modules are
+    // re-emitted depends on what the cache held.
+    n00bb_native_frames_t *frame_table = n00bb_native_frames_new(
         emission->analysis->target.object_format);
+    runtime.native_frames = nullptr;
     size_t modules = program->object_slots - 4;
-    bool ok = runtime.native_frames != nullptr;
+    bool ok = frame_table != nullptr;
     // The compile-time program links every shim its code may call; the
     // runtime program only those its runtime code calls, and only their
     // libraries.
@@ -2107,7 +2111,6 @@ emit_runtime_objects(core_link_unit_t *link,
                 emission->debug_enabled, emission->native_cpu,
                 &program->objects[modules + 3], diagnostics);
     }
-    bool *fresh = core_alloc_array(bool, program->object_slots);
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t u = 0; ok && u < units->len; u++) {
         size_t slot = 0;
@@ -2181,16 +2184,15 @@ emit_runtime_objects(core_link_unit_t *link,
             if (program->objects[slot]) unlink(program->objects[slot]);
             core_free(program->objects[slot]);
             program->objects[slot] = path;
-            fresh[slot] = true;
         }
     }
     for (size_t i = 0; ok && !emission->lto && i < modules; i++) {
-        if (!program->objects[i] || fresh[i]) continue;
+        if (!program->objects[i]) continue;
         core_string_t name = core_string_from_cstr(program->objects[i]);
         char *contents = nullptr;
         size_t size = 0;
         ok = core_os_read_file(name, &contents, &size)
-            && n00bb_native_frames_add(runtime.native_frames,
+            && n00bb_native_frames_add(frame_table,
                                        (const uint8_t *)contents, size);
         core_free(contents);
         core_free(name.data);
@@ -2198,7 +2200,7 @@ emit_runtime_objects(core_link_unit_t *link,
     if (ok && !emission->lto) {
         uint8_t *frame_object = nullptr;
         size_t frame_object_bytes = 0;
-        char *frames = n00bb_native_frames_emit(runtime.native_frames,
+        char *frames = n00bb_native_frames_emit(frame_table,
                 &emission->analysis->target, &frame_object,
                 &frame_object_bytes)
             ? temporary_object_argument(frame_object, frame_object_bytes)
@@ -2211,11 +2213,10 @@ emit_runtime_objects(core_link_unit_t *link,
             program->objects[modules + 1] = frames;
         }
     }
-    if (runtime.native_frames) n00bb_native_frames_free(runtime.native_frames);
+    if (frame_table) n00bb_native_frames_free(frame_table);
     keep_runtime_objects(emission->kept, &runtime_kept);
     core_list_free(runtime_functions);
     core_list_free(reemitted);
-    core_free(fresh);
     if (!ok && !core_diagnostics_failed(diagnostics))
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
             "emitting runtime code", "could not re-emit baked modules");
