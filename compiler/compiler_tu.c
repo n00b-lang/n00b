@@ -4752,23 +4752,32 @@ n00bb_print_signature(th_ctx *types, th_type *type)
 }
 
 // Builtin types are in scope everywhere under their short names, and their
-// qualified names (`builtin.containers.dict.Dict`) do not resolve.
+// qualified names (`builtin.containers.dict.Dict`) do not resolve; nor does
+// a module's own name inside it, where its types go by their short names.
 static core_string_t
 source_type_name(core_string_t name, void *context)
 {
-    name = object_of_shape(name, context);
-    return core_string_starts_with(name, CORE_STRING_STATIC("builtin."))
-        ? short_type_name(name, context) : name;
+    name = object_of_shape(name, nullptr);
+    if (core_string_starts_with(name, CORE_STRING_STATIC("builtin.")))
+        return short_type_name(name, nullptr);
+    const core_string_t *module = context;
+    if (module && module->u8_bytes && name.u8_bytes > module->u8_bytes
+        && core_string_starts_with(name, *module)
+        && name.data[module->u8_bytes] == '.')
+        return core_string_slice(name, module->u8_bytes + 1,
+                                 name.u8_bytes - module->u8_bytes - 1);
+    return name;
 }
 
-// Qualified, and spelled as source would write it (`Tuple[u8, u8]`), for
-// text the formatter puts back into a program. A function type has no
-// passing modes.
+// Qualified, and spelled as source would write it (`Tuple[u8, u8]`) in
+// `module`, for text the formatter puts back into a program. A function
+// type has no passing modes.
 core_string_t
-n00bb_print_type_source(th_ctx *types, th_type *type)
+n00bb_print_type_source(th_ctx *types, th_type *type, core_string_t module)
 {
     th_print_options_t options = {
         .named = source_type_name,
+        .context = &module,
         .sequence = CORE_STRING_STATIC("Array"),
         .reference = CORE_STRING_STATIC("Ref"),
         .option_suffix = CORE_STRING_STATIC("?"),

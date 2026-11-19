@@ -1108,7 +1108,8 @@ core_string_t n00bb_print_type(th_ctx *types, th_type *type);
 // parameters' passing modes, which are no part of the type.
 core_string_t n00bb_print_signature(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_qualified(th_ctx *types, th_type *type);
-core_string_t n00bb_print_type_source(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_source(th_ctx *types, th_type *type,
+                                      core_string_t module);
 core_string_t n00bb_print_type_for_user(th_ctx *types, th_type *type);
 core_string_t n00bb_hide_reserved_segments(core_string_t printed);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,

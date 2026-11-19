@@ -1,0 +1,51 @@
+// Inferred types `fmt --normalize` writes only where the source can say
+// them: a module's own types by their short names, and neither a trait
+// method's result on a generic receiver nor an anonymous union.
+trait Opens {
+    func opened(self: 'T) -> 'V
+}
+record Door {
+    n: int
+}
+func opened(self: Door) -> int {
+    return self.n
+}
+func open_twice(o: 'O) -> int where 'O: Opens {
+    let first = o.opened()
+    let second = o.opened()
+    return 2
+}
+trait Scales {
+    func scale(self: 'S, by: int) -> int
+}
+record Box {
+    v: int
+}
+func scale(self: Box, by: int) -> int {
+    return self.v * by
+}
+func scaled() -> int {
+    let b = cast[Box]((v = 5))
+    let s = cast[Scales](b)
+    return s.scale(2)
+}
+func either(flag: bool) -> int | string {
+    if flag {
+        return 3
+    }
+    return "three"
+}
+func either_kind(flag: bool) -> string {
+    let x = either(flag)
+    typecase x {
+        case int {
+            return "int"
+        }
+        case string {
+            return x
+        }
+    }
+}
+let door: Door = (n = 1)
+require open_twice(door) == 2 and scaled() == 10
+require either_kind(true) == "int"

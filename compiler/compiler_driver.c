@@ -4895,9 +4895,33 @@ n00bb_format_canonical_type(core_string_t printed)
     return core_buffer_string(&result);
 }
 
+// A type the normalizer cannot write on a declaration: one still holding a
+// variable that inference left unnamed (the result of a trait method on a
+// generic receiver, say), which the source printer writes as `_`, no type
+// at all; or an anonymous union, which a declared variable may not hold.
+static bool
+n00bb_format_unspellable_type(th_ctx *types, th_type *type)
+{
+    th_comb combination;
+    th_type *resolved = th_resolve(th_apply_subst(types, type));
+    if (resolved && th_sum_comb(resolved, &combination)
+        && combination == TH_UNION)
+        return true;
+    th_type **variables = nullptr;
+    size_t count = th_free_vars(types, type, &variables);
+    for (size_t i = 0; i < count; i++) {
+        th_type *variable = th_resolve(variables[i]);
+        if (variable && th_kind_of(variable) == TH_VAR
+            && !th_var_name(variable).data)
+            return true;
+    }
+    return false;
+}
+
 static core_string_t
 n00bb_format_inferred_types(parse_grammar_t *grammar,
-                            n00bb_tu_state_t *state, core_string_t source)
+                            n00bb_tu_state_t *state, core_string_t source,
+                            core_string_t module)
 {
     parse_symtab_t *symtab = state->annotations
         ? state->annotations->symtab : nullptr;
@@ -4942,8 +4966,10 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                 || memcmp(source.data + start,
                           symbol->name.data, symbol->name.u8_bytes))
                 continue;
+            if (n00bb_format_unspellable_type(state->types, symbol->type))
+                continue;
             core_string_t printed = n00bb_print_type_source(state->types,
-                                                            symbol->type);
+                symbol->type, module);
             if (!printed.data || !printed.u8_bytes
                 || core_string_find_byte(printed, '<') >= 0
                 || core_string_find_byte(printed, '$') >= 0
@@ -5016,7 +5042,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             core_source_file_contents(&unit->source).data,
             core_source_file_size(&unit->source));
         core_string_t normalized = normalize
-            ? n00bb_format_inferred_types(grammar, state, source)
+            ? n00bb_format_inferred_types(grammar, state, source,
+                                          unit->module.identifier)
             : (core_string_t){0};
         parse_token_stream_t *normalized_tokens = nullptr;
         parse_pwz_parser_t *normalized_parser = normalized.data

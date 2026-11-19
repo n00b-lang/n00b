@@ -182,6 +182,16 @@ if grep -Eq '(^|[^[:alnum:]_])(u64|i64)($|[^[:alnum:]_])' \
     exit 1
 fi
 
+# Normalizing writes only types the source can say: the result is a
+# program that checks, and normalizes to itself.
+"$compiler" fmt --normalize --output "$tmp/unspellable.n" \
+    "$program_dir/fmt_normalize_unspellable.n"
+"$compiler" fmt --normalize --check "$tmp/unspellable.n"
+"$compiler" check "$tmp/unspellable.n" >/dev/null 2>&1
+grep -q 'let s: Box = cast\[Scales\]' "$tmp/unspellable.n"
+grep -q 'let first = o.opened()' "$tmp/unspellable.n"
+grep -q 'let x = either(flag)' "$tmp/unspellable.n"
+
 if "$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n" "$tmp/rich.n" \
     >/dev/null 2>&1; then
     echo 'fmt unexpectedly accepted the removed --ascii-tags flag' >&2
