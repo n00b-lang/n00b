@@ -1,4 +1,5 @@
 #include "lower/lower_internal.h"
+#include "compiler_system.h"
 
 static bool
 thread_runtime_entry_function(parse_grammar_t *grammar,
@@ -559,7 +560,14 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
         core_list_push(roots, n00bb_cached_body(entries->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module
+        // A cached module a module literal generated is emitted again for
+        // each program (see cached_generated_unit), so its functions need
+        // the summaries the backend reads, as when it was compiled.
+        core_translation_unit_t *unit = analysis->units.data[u];
+        bool generated = state && state->interface_module
+            && n00bb_generated_source(core_source_file_path(&unit->source));
+        if (!state || !state->ir_module
+            || (state->interface_module && !generated)
             || n00bb_module_unanalyzed(analysis, state->ir_module))
             continue;
         th_ctx *types = ir_module_types(state->ir_module);
