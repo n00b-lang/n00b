@@ -3027,7 +3027,10 @@ load_runtime_module(import_driver_t *driver, parse_grammar_t *grammar,
                     core_translation_unit_t *importer,
                     core_string_t module_name)
 {
-    if (core_string_eq(importer->module.identifier, module_name)) return true;
+    // A module need not load itself; but a default-package module is never
+    // the library's module of its name (builtin.n still loads `builtin`).
+    if (core_string_eq(importer->module.identifier, module_name)
+        && !n00bb_default_package(importer)) return true;
     core_module_spec_t module = {0};
     if (!core_module_spec_init(&module, module_name)) return false;
     core_translation_unit_t *imported = nullptr;

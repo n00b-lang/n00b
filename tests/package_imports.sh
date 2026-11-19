@@ -297,15 +297,36 @@ shadowed_case 'module operand' unicode '' unicode unicode/__init.n \
 rm "$shadow/path/unicode.n"
 # A file operand, like a top-level module of the current directory, is in
 # the default package, so `unicode.n` is no clash: it builds, with no
-# warning or error.
+# warning or error. A default-package module has its own identity, so the
+# library package of its name is still the library's from inside it:
+# unicode.n importing `unicode` gets the library's, and builtin.n gets the
+# implicit `builtin`.
+# (Each in a directory of its own: beside the other, either file would be a
+# passed-over namesake, with its warning.)
+mkdir -p "$shadow/operand_unicode" "$shadow/operand_builtin"
+printf "import unicode\nrequire unicode.general_category('A') == unicode.Gc.lu\n" \
+    >"$shadow/operand_unicode/unicode.n"
+printf 'var items: List[int] = [1, 2]\nrequire items.len() == 2\n' \
+    >"$shadow/operand_builtin/builtin.n"
+for cache in on off; do
+    if [ "$cache" = on ]; then
+        set -- env -u N00B_NO_PACKAGE_CACHE
+    else
+        set -- env N00B_NO_PACKAGE_CACHE=1
+    fi
+    for operand in unicode builtin; do
+        (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
+            "$compiler" build --output "$tmp/${operand}_file" "$operand.n") \
+            >"$tmp/shadow.log" 2>&1 \
+            && "$tmp/${operand}_file" \
+            && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
+            echo "file operand $operand.n (cache $cache): did not build cleanly against the library" >&2
+            cat "$tmp/shadow.log" >&2
+            exit 1
+        }
+    done
+done
 printf "$module" >"$shadow/project/unicode.n"
-(cd "$shadow/project" && N00B_PATH="$shadow/path" "$compiler" build \
-    --output "$tmp/unicode_file" unicode.n) >"$tmp/shadow.log" 2>&1 \
-    && "$tmp/unicode_file" && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
-    echo 'a file operand named like a library package did not build cleanly' >&2
-    cat "$tmp/shadow.log" >&2
-    exit 1
-}
 mkdir -p "$shadow/path/sys"
 printf "$module" >"$shadow/path/sys/env.n"
 shadowed_case 'module operand on N00B_PATH' sys.env '' sys.env \

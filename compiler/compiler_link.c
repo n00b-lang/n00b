@@ -382,7 +382,10 @@ diagnose_reserved_declarations(core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || state->interface_module || !state->annotations
         || !state->annotations->symtab) return true;
-    bool system = n00bb_system_module(unit->module.identifier)
+    // A default-package module named like a system package (builtin.n) is
+    // the user's, not the system's.
+    bool system = (n00bb_system_module(unit->module.identifier)
+                   && !n00bb_default_package(unit))
         || n00bb_generated_source(core_source_file_path(&unit->source));
     bool clean = true;
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
@@ -2798,8 +2801,13 @@ unit_for_module_site(core_translation_unit_t *unit,
                      n00bb_link_use_site_t *site, bool allow_suffix)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (module_path_matches_site(state, site, unit->module.identifier,
-                                 allow_suffix)) return unit;
+    // A default-package module has its own identity: a name it imports, a
+    // standard library package's above all, means the import, even when
+    // the module's own name is the same (`import unicode` in unicode.n).
+    bool self_first = !n00bb_default_package(unit);
+    if (self_first && module_path_matches_site(state, site,
+                                               unit->module.identifier,
+                                               allow_suffix)) return unit;
     for (size_t i = 0; state && i < state->import_aliases.len; i++) {
         n00bb_import_alias_t *alias = &state->import_aliases.data[i];
         if ((alias->renamed || !import_path_hidden(state, alias->unit))
@@ -2815,6 +2823,9 @@ unit_for_module_site(core_translation_unit_t *unit,
                                         imported->module.identifier,
                                         allow_suffix)) return imported;
     }
+    if (!self_first && module_path_matches_site(state, site,
+                                                unit->module.identifier,
+                                                allow_suffix)) return unit;
     return nullptr;
 }
 
