@@ -5226,6 +5226,28 @@ restart_excluding_cached(char **argv, core_string_t argv0,
     core_free(compiler.data);
 }
 
+static void
+restart_if_cache_unusable(const n00bb_cache_t *cache, char **argv,
+                          core_string_t argv0)
+{
+    core_buffer_t unloadable = {0};
+    n00bb_cache_unloadable_modules(cache, &unloadable);
+    if (unloadable.byte_len) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "cached IR names a function this program does not define"));
+        restart_excluding_cached(argv, argv0, &unloadable);
+    }
+    core_buffer_release(&unloadable);
+    core_buffer_t refreeze = {0};
+    n00bb_cache_refreeze_modules(cache, &refreeze);
+    if (refreeze.byte_len) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "comptime_main changes the state of cached modules"));
+        restart_excluding_cached(argv, argv0, &refreeze);
+    }
+    core_buffer_release(&refreeze);
+}
+
 static char **
 check_arguments_for(int argc, char **argv, parse_cmdr_result_t *args,
                     int32_t input_count, int32_t kept)
@@ -5923,7 +5945,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool lower_command = check_command || (!show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("lower")));
     collect_located_diagnostics = check_command;
-    n00bb_cache_set_check_only(check_command);
+    // `fmt --normalize` types the program as `check` does and emits no
+    // code, so it reads the cache as a check and stores nothing.
+    n00bb_cache_set_check_only(check_command || normalize_fmt);
     bool build_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("build"));
     bool library_command = !show_ffi
@@ -6079,7 +6103,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
-    n00bb_cache_t *cache = (build_command || check_command) && scheduled
+    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt)
+        && scheduled
         && options_valid && input_count == 1
         ? open_object_cache(resolver, args, ir_context, linked_interfaces,
                             (size_t)interface_count)
@@ -6264,9 +6289,12 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
+    // A restart re-runs the command: settle it before writing anything.
+    if (located && normalize_fmt) restart_if_cache_unusable(cache, argv, argv0);
     if (located && normalize_fmt)
         located = n00bb_format_units(grammar, queue, &requests, args);
-    if (located && cache && !check_command && !defer_analysis)
+    if (located && cache && !check_command && !normalize_fmt
+        && !defer_analysis)
         record_cache_summaries(cache, link, link_analysis, optimistic_cache,
                                argv, argv0);
     core_string_t header_output = parse_cmdr_flag_str(args,
@@ -6538,22 +6566,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     core_string_t late_retry = optimistic_cache && !located
         ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
         : (core_string_t){0};
-    core_buffer_t unloadable = {0};
-    n00bb_cache_unloadable_modules(cache, &unloadable);
-    if (unloadable.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "cached IR names a function this program does not define"));
-        restart_excluding_cached(argv, argv0, &unloadable);
-    }
-    core_buffer_release(&unloadable);
-    core_buffer_t refreeze = {0};
-    n00bb_cache_refreeze_modules(cache, &refreeze);
-    if (refreeze.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_main changes the state of cached modules"));
-        restart_excluding_cached(argv, argv0, &refreeze);
-    }
-    core_buffer_release(&refreeze);
+    restart_if_cache_unusable(cache, argv, argv0);
 
     core_link_unit_free(link);
     th_env_free(environment);
