@@ -53,6 +53,9 @@ typedef struct {
     uint8_t *interface;
     size_t interface_bytes;
     core_list_t(size_t) inlined;
+    // The hash of the SCC's serialized IR, once an instance key needed it.
+    uint64_t ir_hash;
+    bool ir_hashed;
     bool root;
     bool cached;
 } cache_scc_t;
@@ -3211,10 +3214,16 @@ compare_indices(const void *left, const void *right)
     return (a > b) - (a < b);
 }
 
+// Every instance of a generic in the SCC keys on this hash, and the IR it
+// hashes (a loaded entry's section, or the snapshot taken before
+// specializing) doesn't change once there, so it is hashed once per SCC.
 static bool
-scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
-            uint64_t *out)
+scc_ir_hash(const n00bb_cache_t *cache, cache_scc_t *scc, uint64_t *out)
 {
+    if (scc->ir_hashed) {
+        *out = scc->ir_hash;
+        return true;
+    }
     core_string_t first = scc->members.data[0]->module.identifier;
     const cache_entry_t *entry = nullptr;
     if (scc->cached && loaded_member(cache, first, &entry)) {
@@ -3222,11 +3231,14 @@ scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
             CORE_STRING_STATIC("ir"), (core_string_t){0});
         if (!ir) return false;
         *out = core_xxh3_64bits_raw(ir->data, ir->length);
-        return true;
     }
-    const cache_snapshot_t *snapshot = snapshot_for(cache, first);
-    if (!snapshot) return false;
-    *out = buffer_hash(&snapshot->ir);
+    else {
+        const cache_snapshot_t *snapshot = snapshot_for(cache, first);
+        if (!snapshot) return false;
+        *out = buffer_hash(&snapshot->ir);
+    }
+    scc->ir_hash = *out;
+    scc->ir_hashed = true;
     return true;
 }
 
@@ -3259,7 +3271,7 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     if (owners.len)
         qsort(owners.data, owners.len, sizeof(*owners.data), compare_indices);
     uint64_t generic_ir = 0;
-    bool saved = scc_ir_hash(cache, &sccs->data[generic], &generic_ir);
+    bool saved = scc_ir_hash(cache, &cache->sccs.data[generic], &generic_ir);
     core_buffer_t input = {0};
     core_buffer_puts(&input, "n00b.instance.key.v3");
     put_u64(&input, sccs->data[generic].key);
