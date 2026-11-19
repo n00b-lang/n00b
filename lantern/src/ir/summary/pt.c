@@ -419,18 +419,34 @@ set_holds(const pt_set_t *set, const pt_item_t *item)
     return false;
 }
 
+// Logs the items of `now` that `old` doesn't hold; if `old` held one that
+// `now` doesn't, the log starts again with all of `now`. Both sets are in
+// set_order, so they are walked together rather than searched once per
+// item: a recomputed content memo did this for every item it held.
 static void
 log_new_items(pt_t *pt, core_list_t(pt_logged_t) *log, const pt_set_t *old,
               const pt_set_t *now)
 {
     bool removed = false;
-    for (size_t i = 0; !removed && i < old->len; i++)
-        removed = !set_holds(now, &old->data[i]);
+    for (size_t i = 0, n = 0; !removed && i < old->len; i++) {
+        while (n < now->len && set_order(&now->data[n], &old->data[i]) < 0)
+            n++;
+        removed = n == now->len
+            || set_order(&now->data[n], &old->data[i]) != 0;
+    }
     if (removed) log->len = 0;
-    for (size_t i = 0; i < now->len; i++)
-        if (removed || !set_holds(old, &now->data[i]))
+    for (size_t i = 0, o = 0; i < now->len; i++) {
+        bool held = false;
+        if (!removed) {
+            while (o < old->len
+                   && set_order(&old->data[o], &now->data[i]) < 0)
+                o++;
+            held = o < old->len && !set_order(&old->data[o], &now->data[i]);
+        }
+        if (!held)
             core_list_push(*log, ((pt_logged_t){now->data[i],
                                                 pt->generation}));
+    }
 }
 
 static core_hash_value_t
