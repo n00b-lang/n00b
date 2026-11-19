@@ -364,18 +364,12 @@ record Shorthand_Keyed {
     w: 'K
 }
 variant Shorthand_Num {
-    count: Integer
+    small: Integer
     none: nil
 }
 alias Shorthand_Ints = Array[Integer]
 func shorthand_sum(t: Shorthand_Two[int, u8]) -> int {
     return t.a + cast[int](t.b)
-}
-func shorthand_count(n: Shorthand_Num[u16]) -> int {
-    switch n {
-        case count { return cast[int](n.count) }
-        case none { return 0 }
-    }
 }
 func shorthand_values() -> int {
     let two: Shorthand_Two[int, u8] = (a = -1, b = 200)
@@ -384,10 +378,14 @@ func shorthand_values() -> int {
     let key: string = keyed.k
     let wide: i64 = keyed.v
     var number: Shorthand_Num[u16]
-    number.count = 9
+    number.small = 9
     let ints: Shorthand_Ints[u8] = [1, 2]
     require narrow == 200 and key == "a" and wide == -3 and ints.len() == 2
-    return shorthand_sum(two) + shorthand_count(number)
+    # `small` is also a module-level `let`; a case names the arm.
+    switch number {
+        case small { return shorthand_sum(two) + cast[int](number.small) }
+        case none { return 0 }
+    }
 }
 require shorthand_values() == 208
 

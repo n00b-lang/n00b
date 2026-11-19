@@ -2881,10 +2881,13 @@ n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
     parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
                                                 expression);
     // A function is never a value a case can match, so a function of the
-    // same name doesn't hide an arm or enum member.
+    // same name doesn't hide an arm or enum member. A case of a switch on a
+    // variant names one of its arms, whatever else has that name.
     if (symbol && symbol->kind != PARSE_SYM_ENUM_CONST
         && symbol->kind != PARSE_SYM_FUNCTION
-        && !n00bb_variant_arm_symbol(symbol)) return false;
+        && !n00bb_variant_arm_symbol(symbol)
+        && !identifier_is_variant_case_expression(grammar, lower->unit,
+                                                  expression)) return false;
     if (name) *name = text;
     return true;
 }
