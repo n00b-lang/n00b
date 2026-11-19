@@ -156,12 +156,21 @@ th_type *n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
 // nullptr when it can't be built.
 th_type *n00bb_without_passing_modes(th_ctx *types, th_type *type);
 
-// A call through a function reference passes the keyword parameters in the
-// order the function's type lists them; a function that declares them in
-// another order is referred to through its keyword-order adapter, a
-// function of the same module that takes them in the type's order. The
-// adapter's symbol is bound under N00BB_KEYWORD_ORDER_KEY to this; the
-// function's, under N00BB_KEYWORD_ORDER_ADAPTER_KEY, to the adapter's.
+// A function reference's type says nothing of its function's passing
+// modes, and lists its keyword parameters in an order of its own. A
+// function that takes a parameter other than `in`, or declares its keyword
+// parameters in another order, is referred to through its reference
+// adapter: a function of the same module that takes its positional
+// parameters and its varargs array (last) by place (`modify`), and its
+// keyword ones, which are never `out` or `modify`, in the type's order, as
+// optional values it passes on as given or omitted. It calls the function
+// with its own modes, reading the parameters it takes as values from their
+// places. A call through a
+// reference whose function isn't known passes its arguments by place when
+// the runtime function table says the reference is an adapter
+// (n00b_abi_v1_runtime_adapted_function_index), and by value otherwise. The
+// adapter's symbol is bound under N00BB_REFERENCE_ADAPTER_KEY to this; the
+// function's, under N00BB_FUNCTION_ADAPTER_KEY, to the adapter's.
 typedef struct {
     parse_sym_entry_t *target;
     // The function's parameters as it is called: its positional ones, its
@@ -169,20 +178,26 @@ typedef struct {
     size_t count;
     size_t positional;
     size_t keywords;
+    // Whether the type lists the keyword parameters in another order than
+    // the function declares them in.
+    bool reordered;
     // The function's parameter `i` is passed the adapter's `order[i]`.
     uint32_t *order;
-} n00bb_keyword_order_t;
-#define N00BB_KEYWORD_ORDER_KEY CORE_STRING_STATIC("n00bb.keyword-order")
-#define N00BB_KEYWORD_ORDER_ADAPTER_KEY \
-    CORE_STRING_STATIC("n00bb.keyword-order-adapter")
+} n00bb_reference_adapter_t;
+#define N00BB_REFERENCE_ADAPTER_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter")
+#define N00BB_FUNCTION_ADAPTER_KEY \
+    CORE_STRING_STATIC("n00bb.function-reference-adapter")
 
-// When function `symbol` (whose signature as called is `flat`) declares
-// its keyword parameters in an order its type doesn't list them in: the
-// signature its keyword-order adapter is called with, with `*order`
-// filled in (its `order` allocated). Otherwise nullptr.
-th_type *n00bb_keyword_order(th_ctx *types, parse_grammar_t *grammar,
-                             parse_sym_entry_t *symbol, th_type *flat,
-                             n00bb_keyword_order_t *order);
+// When function `symbol` (whose signature as called is `flat`) takes a
+// parameter other than `in`, or declares its keyword parameters in an
+// order its type doesn't list them in: the signature its reference adapter
+// is called with, with `*adapter` filled in (its `order` allocated).
+// Otherwise nullptr, with `*adapter` still saying whether the keyword
+// parameters are reordered.
+th_type *n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
+                                 parse_sym_entry_t *symbol, th_type *flat,
+                                 n00bb_reference_adapter_t *adapter);
 // Each of a trait's methods for a bound on `variable`, as a method
 // constraint whose target is the whole method: its receiver is `variable`,
 // and the trait's parameters (the other variables its methods name) are

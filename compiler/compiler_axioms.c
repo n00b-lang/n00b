@@ -114,6 +114,11 @@ static const n00bb_axiom_t axioms[] = {
      .returns = IR_SRETURN_FRESH},
     COLLECTION_FREE_NATIVE("__abi_ref_address",
                            "n00b_builtin_abi_ref_address", 0, 0, 0),
+    // Asked by a call through a function reference whose function isn't
+    // known (n00bb_rewrite_place_or_value); no source names it.
+    COLLECTION_FREE_NATIVE("__reference_adapted_function",
+                           "n00b_abi_v1_runtime_adapted_function_index", 0,
+                           0, 0),
     COLLECTION_FREE_NATIVE("__load_le_u64", "n00bb_load_le_u64", 0, 0x1, 0),
     COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
     NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize",

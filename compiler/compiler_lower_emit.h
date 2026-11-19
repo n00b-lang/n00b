@@ -27,6 +27,15 @@
 // able to drop a failure.
 #define N00BB_WITH_VALUE_EXIT_KEY CORE_STRING_STATIC("n00bb.with-value-exit")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
+// On a callback construction whose handler reference is a reference
+// adapter: the function it adapts, which the callback holds.
+#define N00BB_CALLBACK_HANDLER_KEY \
+    CORE_STRING_STATIC("n00bb.callback-handler")
+// On a reference adapter's call of its function: each argument that is one
+// of the adapter's own optional parameters, given to an optional parameter,
+// is passed on as the adapter was given it, present or omitted.
+#define N00BB_FORWARDS_OPTIONAL_KEY \
+    CORE_STRING_STATIC("n00bb.forwards-optional")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")
 #define N00BB_ZEROED_NEW_KEY CORE_STRING_STATIC("n00bb.zeroed-new")
@@ -133,6 +142,28 @@ bool n00bb_place_writable(const ir_value_t *place);
 bool n00bb_from_reference_address(ir_value_t *value);
 bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                      ir_span_t span);
+ir_value_t *n00bb_emit_local_read(ir_lower_context_t *context,
+                                  ir_local_t *local, ir_span_t span);
+ir_block_t *n00bb_branch_block_named(ir_lower_context_t *context,
+                                     n00bb_lower_context_t *lower,
+                                     core_string_t role);
+ir_instr_t *n00bb_emit_uint_constant(ir_lower_context_t *context,
+                                     th_type *uint_type, uint64_t value,
+                                     ir_span_t span, core_string_t prefix);
+
+// The IR function of reference adapter `symbol` (n00bb_reference_adapter_t),
+// noted with the function it adapts and the order it passes its
+// parameters in, for n00bb_reference_adapter_target. nullptr if `symbol`
+// is no reference adapter or its functions can't be found.
+ir_func_t *n00bb_note_reference_adapter(n00bb_link_analysis_t *analysis,
+                                        parse_sym_entry_t *symbol);
+
+// The function reference adapter `adapter` adapts, when it is one that was
+// noted (n00bb_note_reference_adapter), else nullptr. With `order`, also
+// the order (allocated) and its `count`: the function's parameter `i` is
+// passed the adapter's `(*order)[i]`.
+ir_func_t *n00bb_reference_adapter_target(const ir_func_t *adapter,
+                                          uint32_t **order, size_t *count);
 ir_lower_result_t n00bb_emit_char_array(ir_lower_context_t *context,
                                         const uint8_t *bytes, size_t length,
                                         th_type *result_type, ir_span_t span);

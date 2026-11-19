@@ -65,6 +65,7 @@ static const abi_ref_column_t abi_index_columns[] = {
     ABI_REF(FUNCTION, function, success_type_index, TYPE),
     ABI_REF(FUNCTION, function, failure_type_index, TYPE),
     ABI_OPTIONAL_TYPE(FUNCTION, function, variadic_type_index),
+    ABI_REF(FUNCTION, function, adapted_function_index, FUNCTION),
     ABI_REQUIRED_REF(CALL_SIGNATURE, call_signature, type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, success_type_index, TYPE),
     ABI_REF(CALL_SIGNATURE, call_signature, failure_type_index, TYPE),

@@ -1,7 +1,8 @@
 # A function reference remembers its function's passing modes, which are no
-# part of its type. A `let` keeps them; held anywhere else, the reference
-# would lose them, which is not supported yet. A call through it passes a
-# `modify` argument's place, which a `let` can't give.
+# part of its type, wherever it is held: a call through it passes a
+# `modify` argument's place, which a `let` can't give. A generic function
+# has no reference adapter yet, so held anywhere but a `let`, its reference
+# would lose them, which is not supported yet.
 record Tally {
     count: int
 }
@@ -12,6 +13,10 @@ func add(modify tally: Tally, by: int) -> int {
 func apply(f: Ref[(Tally, int) -> int], modify tally: Tally) -> int {
     return f.call(tally, 1)
 }
+func replaced(modify old: 'T, given: 'T) -> 'T {
+    old = given
+    return given
+}
 func use() -> int {
     var tally: Tally
     tally.count = 0
@@ -20,6 +25,8 @@ func use() -> int {
     let fixed = tally
     let kept: Ref[(Tally, int) -> int] = ref add
     _ = kept.call(fixed, 1)
+    var generic: Ref[(int, int) -> int] = ref replaced
+    _ = generic
     return apply(ref add, tally)
 }
 require use() == 1

@@ -1419,6 +1419,8 @@ static LLVMTypeRef native_function_type(LLVMModuleRef target,
                                         bool native_binding);
 static LLVMTypeRef optional_record_type(LLVMModuleRef target,
                                         ir_func_t *function);
+static LLVMValueRef parameter_omitted(lower_state_t *state,
+                                      const ir_value_t *parameter);
 typedef struct {
     core_string_t text;
     n00bb_operand_format_t format;
@@ -8484,40 +8486,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         const ir_value_t *parameter = count == 1
             && operands[0].kind == IR_OPD_VALUE
             ? operands[0].value : nullptr;
-        if (!parameter || parameter->kind != IR_VAL_PARAM
-            || parameter->owner != state->function) break;
-        size_t input_index = 0, optional_index = 0;
-        bool found = false;
-        for (size_t i = 0; i < th_func_nparams(state->function->type); i++) {
-            const th_param *formal = th_func_param(state->function->type, i);
-            if (!formal) continue;
-            if (input_index++ == parameter->index) {
-                found = ir_func_parameter_is_optional(state->function, i);
-                break;
-            }
-            if (ir_func_parameter_is_optional(state->function, i))
-                optional_index++;
-        }
-        LLVMTypeRef record_type = optional_record_type(state->module,
-                                                        state->function);
-        unsigned native_count = LLVMCountParams(state->target_function);
-        if (!found || !record_type
-            || native_count <= (unsigned)state->with_mutator
-            || optional_index >= 64)
-            break;
-        LLVMValueRef record = LLVMGetParam(state->target_function,
-            native_count - 1 - (unsigned)state->with_mutator);
-        LLVMValueRef slot = LLVMBuildStructGEP2(state->builder, record_type,
-                                                record, 0, "omissions.address");
-        LLVMTypeRef word = LLVMInt64TypeInContext(
-            LLVMGetModuleContext(state->module));
-        LLVMValueRef omissions = LLVMBuildLoad2(state->builder, word, slot,
-                                                "omissions");
-        LLVMValueRef bit = LLVMBuildAnd(state->builder, omissions,
-            LLVMConstInt(word, UINT64_C(1) << optional_index, false),
-            "omitted.bit");
-        result = LLVMBuildICmp(state->builder, LLVMIntEQ, bit,
-                               LLVMConstNull(word), "parameter.present");
+        LLVMValueRef omitted = parameter
+            ? parameter_omitted(state, parameter) : nullptr;
+        if (!omitted) break;
+        result = LLVMBuildICmp(state->builder, LLVMIntEQ, omitted,
+            LLVMConstNull(LLVMTypeOf(omitted)), "parameter.present");
         return save_result(state, instruction, result);
     }
     case IR_OP_CONST: {
@@ -11467,6 +11440,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             && retained->operands[0].kind == IR_OPD_VALUE
             ? retained->operands[0].value : nullptr;
         if (!handler) break;
+        // A handler reference to a reference adapter holds the function
+        // it adapts, which the callback calls.
+        ir_annot_t *adapted = ir_annot_get(&instruction->annots,
+            CORE_STRING_STATIC("n00bb.callback-handler"));
+        if (handler->kind == IR_VAL_FUNC && adapted
+            && adapted->kind == IR_ANNOT_VALUE && adapted->v
+            && adapted->v->kind == IR_VAL_FUNC)
+            handler = adapted->v;
         uint32_t handler_index = handler->kind == IR_VAL_FUNC
             ? runtime_function_index(state, handler->owner) : 0;
         if (handler->kind == IR_VAL_FUNC && !handler_index) {
@@ -11510,10 +11491,12 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
             LLVMTypeRef index_signature = LLVMFunctionType(i32,
                 &pointer, 1, false);
+            // A reference adapter's handler is the function it adapts.
             LLVMValueRef lookup = LLVMGetNamedFunction(state->module,
-                "n00b_abi_v1_runtime_function_index");
+                "n00b_abi_v1_runtime_handler_function_index");
             if (!lookup) lookup = LLVMAddFunction(state->module,
-                "n00b_abi_v1_runtime_function_index", index_signature);
+                "n00b_abi_v1_runtime_handler_function_index",
+                index_signature);
             if (!address || LLVMTypeOf(address) != pointer || !lookup
                 || LLVMGlobalGetValueType(lookup) != index_signature) break;
             index_value = LLVMBuildCall2(state->builder, index_signature,
@@ -12235,6 +12218,12 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         bool valid = !optional_count || record;
         size_t native_index = result_base, optional_index = 0;
         uint64_t omissions = 0;
+        ir_annot_t *forwarding = ir_annot_get(&instruction->annots,
+            CORE_STRING_STATIC("n00bb.forwards-optional"));
+        bool forwards = forwarding && forwarding->kind == IR_ANNOT_BOOL
+            && forwarding->b;
+        LLVMValueRef forwarded = LLVMConstNull(LLVMInt64TypeInContext(
+            LLVMGetModuleContext(state->module)));
         if (valid && result_base) {
             arguments[0] = prepare_result_box(state, instruction,
                                               formal_signature);
@@ -12283,6 +12272,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                             "optional.argument.address");
                         LLVMBuildStore(state->builder, value, slot);
                     }
+                    // One of the caller's own optional parameters, passed on
+                    // as given or omitted (N00BB_FORWARDS_OPTIONAL_KEY).
+                    LLVMValueRef omitted = valid && forwards
+                        ? parameter_omitted(state, operands[i].value)
+                        : nullptr;
+                    if (omitted)
+                        forwarded = LLVMBuildOr(state->builder, forwarded,
+                            LLVMBuildShl(state->builder, omitted,
+                                LLVMConstInt(LLVMTypeOf(omitted),
+                                             optional_index, false),
+                                "forwarded.omission"),
+                            "forwarded.omissions");
                     optional_index++;
                     continue;
                 }
@@ -12317,10 +12318,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (valid && optional_count) {
             LLVMValueRef slot = LLVMBuildStructGEP2(state->builder,
                 record_type, record, 0, "omissions.address");
-            LLVMBuildStore(state->builder,
+            LLVMValueRef omitted = LLVMBuildOr(state->builder,
                 LLVMConstInt(LLVMInt64TypeInContext(
                     LLVMGetModuleContext(state->module)), omissions, false),
-                slot);
+                forwarded, "omissions");
+            LLVMBuildStore(state->builder, omitted, slot);
             arguments[native_index++] = record;
         }
         if (valid && mutator_call) {
@@ -12544,6 +12546,46 @@ native_function_type(LLVMModuleRef target, ir_module_t *owner,
         (unsigned)(count + base), false);
     free(parameters);
     return native_signature;
+}
+
+// 1 when optional `parameter` of the function being lowered was omitted,
+// 0 when it was given, as an i64; nullptr when it is no such parameter.
+static LLVMValueRef
+parameter_omitted(lower_state_t *state, const ir_value_t *parameter)
+{
+    if (!parameter || parameter->kind != IR_VAL_PARAM
+        || parameter->owner != state->function) return nullptr;
+    size_t input_index = 0, optional_index = 0;
+    bool found = false;
+    for (size_t i = 0; i < th_func_nparams(state->function->type); i++) {
+        const th_param *formal = th_func_param(state->function->type, i);
+        if (!formal) continue;
+        if (input_index++ == parameter->index) {
+            found = ir_func_parameter_is_optional(state->function, i);
+            break;
+        }
+        if (ir_func_parameter_is_optional(state->function, i))
+            optional_index++;
+    }
+    LLVMTypeRef record_type = optional_record_type(state->module,
+                                                    state->function);
+    unsigned native_count = LLVMCountParams(state->target_function);
+    if (!found || !record_type
+        || native_count <= (unsigned)state->with_mutator
+        || optional_index >= 64)
+        return nullptr;
+    LLVMValueRef record = LLVMGetParam(state->target_function,
+        native_count - 1 - (unsigned)state->with_mutator);
+    LLVMValueRef slot = LLVMBuildStructGEP2(state->builder, record_type,
+                                            record, 0, "omissions.address");
+    LLVMTypeRef word = LLVMInt64TypeInContext(
+        LLVMGetModuleContext(state->module));
+    LLVMValueRef omissions = LLVMBuildLoad2(state->builder, word, slot,
+                                            "omissions");
+    LLVMValueRef shifted = LLVMBuildLShr(state->builder, omissions,
+        LLVMConstInt(word, optional_index, false), "omissions.shifted");
+    return LLVMBuildAnd(state->builder, shifted, LLVMConstInt(word, 1, false),
+                        "omitted.bit");
 }
 
 static LLVMTypeRef

@@ -3,9 +3,11 @@
 #include <limits.h>
 #include <string.h>
 
+#include "compiler_tu.h"
 #include "specialize.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
+#include "lib/dict.h"
 #include "lib/list.h"
 
 core_list_decl(n00b_abi_function_v1);
@@ -215,6 +217,8 @@ n00bb_abi_function_rows_build(
     core_list_push(bindings, nullptr);
     bool valid = true;
     uint32_t initializer_index = 0;
+    core_dict_t row_of_symbol;
+    core_dict_init(&row_of_symbol, nullptr, nullptr);
     row_builder_t builder = {
         .index = index, .types = types, .signatures = signatures,
         .signature_stream_base = signature_stream_base,
@@ -273,9 +277,33 @@ n00bb_abi_function_rows_build(
             || function_symbol_needs_qualified_name(
                 ir_module_types(module), symbol))
             ? function->name : symbol->name;
+        core_dict_put(&row_of_symbol, symbol, (void *)(uintptr_t)rows.len);
         valid = append_function_row(&builder, function, type_index,
             scope_index, (uint32_t)i, row_name);
     }
+    // A reference adapter's row names the function it adapts.
+    for (size_t r = 1; valid && r < rows.len; r++) {
+        parse_sym_entry_t *symbol = rows.data[r].symbol_index
+            ? n00bb_abi_decl_symbol_at(declarations,
+                                       rows.data[r].symbol_index)
+            : nullptr;
+        const n00bb_reference_adapter_t *adapter = symbol
+            ? parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY)
+            : nullptr;
+        if (!adapter) continue;
+        bool found = false;
+        uintptr_t target = (uintptr_t)core_dict_get(&row_of_symbol,
+                                                    adapter->target, &found);
+        if (found && target) {
+            rows.data[r].adapted_function_index = (uint32_t)target;
+            continue;
+        }
+        out->failed_name = adapter->target->name;
+        out->failed_reason = CORE_STRING_STATIC(
+            "its reference adapter's function has no ABI row");
+        valid = false;
+    }
+    core_dict_free(&row_of_symbol);
     if (valid && n00bb_specialization_module(ir_module_name(module)))
         valid = append_instances(&builder, module,
             n00bb_abi_decl_module_scope_index(declarations));

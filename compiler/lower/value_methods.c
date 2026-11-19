@@ -445,7 +445,7 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
                 if (!receiver || parse_sym_binding(symbol,
                         CORE_STRING_STATIC("n00bb.dispatch-adapter"))
-                    || parse_sym_binding(symbol, N00BB_KEYWORD_ORDER_KEY))
+                    || parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY))
                     continue;
                 bool record_hash = symbol->name.data
                     && core_string_starts_with(symbol->name,
@@ -517,6 +517,8 @@ typedef struct {
     // The adapter's parameter that the target's parameter `i` is passed:
     // `order[i]`, or `i` itself when there is no order.
     const uint32_t *order;
+    // A reference adapter's: each parameter is given by place.
+    bool by_place;
     // The adapter's optional parameters, by presence level, and each
     // parameter's level (UINT32_MAX when it isn't optional).
     uint32_t *optional;
@@ -546,27 +548,95 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
     th_type *error = th_func_error(callee);
     bool fails = error && th_is_closed(ir_module_types(module), error)
         && ir_machine_of(module, error).class != IR_CLASS_VOID;
-    ir_instr_t *call = ir_lower_emit_instruction(context, IR_OP_CALL,
-                                                 IR_SPAN_UNKNOWN);
-    bool ok = call && success && ir_lower_set_temp_dest(context, call,
+    size_t count = th_func_nparams(callee);
+    ir_value_t **arguments = core_alloc_array(ir_value_t *, count + 1);
+    ir_local_t **copies = core_alloc_array(ir_local_t *, count + 1);
+    bool ok = arguments && copies;
+    size_t given = th_func_nparams(adapter->signature);
+    for (size_t i = 0; ok && i < count; i++) {
+        uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
+        const th_param *formal = th_func_param(callee, i);
+        // A parameter the trait's method doesn't name is left out, as is
+        // an optional one the caller omitted; the target takes it missing.
+        if (from >= given
+            || (adapter->level[from] != UINT32_MAX
+                && (missing >> adapter->level[from] & 1u))) {
+            ok = ir_func_parameter_is_optional(adapter->target, (uint32_t)i);
+            continue;
+        }
+        // A reference adapter is given each positional parameter's place,
+        // and each keyword parameter as its value, passed on as given or
+        // omitted (n00bb_reference_adapter_t). A place the target doesn't
+        // take by reference is read.
+        bool placed = adapter->by_place && th_mode_by_reference(
+            th_func_param(adapter->signature, from)->mode);
+        if (!placed || !th_mode_by_reference(formal->mode)) {
+            arguments[i] = placed
+                ? n00bb_emit_indirect_read(context, adapter->inputs[from],
+                                           formal->type, IR_SPAN_UNKNOWN)
+                : adapter->inputs[from];
+            ok = arguments[i] != nullptr;
+            continue;
+        }
+        // One it takes by reference is given a copy of the place, written
+        // back after the call: a call through a function reference only
+        // lends the caller's place for the call (its address doesn't
+        // escape to an unknown callee), so the place the target may keep
+        // a reference to is the adapter's own.
+        char buffer[48];
+        copies[i] = ir_local_add(context->function,
+            n00bb_format_name(buffer, sizeof(buffer),
+                              "__n00bb_adapter_place_%llu",
+                              (unsigned long long)context->next_value_id++),
+            formal->type);
+        ir_value_t *current = copies[i] && formal->mode == TH_INOUT
+            ? n00bb_emit_indirect_read(context, adapter->inputs[from],
+                                       formal->type, IR_SPAN_UNKNOWN)
+            : nullptr;
+        ir_instr_t *take = copies[i]
+                && (formal->mode != TH_INOUT
+                    || (current && n00bb_emit_local_write(context, copies[i],
+                                       current, IR_SPAN_UNKNOWN)))
+            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF,
+                                        IR_SPAN_UNKNOWN)
+            : nullptr;
+        ok = take && ir_lower_set_temp_dest(context, take,
+                CORE_STRING_STATIC("__n00bb_adapter_place_"),
+                th_ind(ir_module_types(module), 0, formal->type))
+            && ir_instr_operand_local(take, copies[i]);
+        if (ok) {
+            copies[i]->synthetic = true;
+            arguments[i] = take->dest;
+        }
+    }
+    ir_instr_t *call = ok ? ir_lower_emit_instruction(context, IR_OP_CALL,
+                                                      IR_SPAN_UNKNOWN)
+                          : nullptr;
+    ok = call && success && ir_lower_set_temp_dest(context, call,
             CORE_STRING_STATIC("__n00bb_adapter_call_"),
             fails ? ir_call_outcome_type(module, callee) : success)
         && ir_instr_operand_value(call,
                ir_func_address(adapter->target_module, adapter->target));
-    size_t given = th_func_nparams(adapter->signature);
-    for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
+    for (size_t i = 0; ok && i < count; i++)
+        ok = arguments[i] ? ir_instr_operand_value(call, arguments[i])
+                          : ir_instr_operand_missing(call);
+    ok = ok && ir_instr_set_call_signature(call, adapter->target->type)
+        && (!adapter->by_place || ir_annot_set(ir_module_ctx(module),
+               &call->annots, (ir_annot_t){
+                   .key = N00BB_FORWARDS_OPTIONAL_KEY,
+                   .kind = IR_ANNOT_BOOL, .b = true}));
+    // The copies go back to the caller's places, whether the call failed
+    // or not, as a direct call's writes would be seen.
+    for (size_t i = 0; ok && i < count; i++) {
+        if (!copies[i]) continue;
         uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
-        // A parameter the trait's method doesn't name is left out.
-        bool omitted = from >= given
-            || (adapter->level[from] != UINT32_MAX
-                && (missing >> adapter->level[from] & 1u));
-        // A keyword-order adapter declares its own optional parameters.
-        bool takes_missing = adapter->order
-            || ir_func_parameter_is_optional(adapter->target, (uint32_t)i);
-        ok = omitted ? takes_missing && ir_instr_operand_missing(call)
-                     : ir_instr_operand_value(call, adapter->inputs[from]);
+        ir_value_t *written = n00bb_emit_local_read(context, copies[i],
+                                                    IR_SPAN_UNKNOWN);
+        ok = written && n00bb_emit_indirect_write(context,
+            adapter->inputs[from], written, IR_SPAN_UNKNOWN);
     }
-    ok = ok && ir_instr_set_call_signature(call, adapter->target->type);
+    core_free(arguments);
+    core_free(copies);
     ir_value_t *outcome = ok ? call->dest : nullptr;
     ir_value_t *value = outcome;
     if (ok && fails) {
@@ -636,9 +706,11 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
 // parameters in the same order, narrowing the generic receiver to
 // `receiver`, and takes as optional the parameters `required` (the
 // trait's method, when given) or else `target` makes optional. A
-// keyword-order adapter (`order` given) already declares its optional
+// reference adapter (`order` given) already declares its optional
 // parameters, and passes `target`'s parameter `i` its parameter
-// `order[i]`.
+// `order[i]`: a positional parameter's place to one `target` takes by
+// reference (as a copy, n00bb_adapter_tail), the value read from it to any
+// other, and a keyword parameter as given or omitted.
 static bool
 n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
                    ir_func_t *adapter, ir_func_t *target,
@@ -663,6 +735,7 @@ n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
         .target_module = target_module,
         .signature = signature,
         .order = order,
+        .by_place = order != nullptr,
         .inputs = count ? core_alloc_array(ir_value_t *, count) : nullptr,
         .optional = count ? core_alloc_array(uint32_t, count) : nullptr,
         .level = count ? core_alloc_array(uint32_t, count) : nullptr,
@@ -681,17 +754,18 @@ n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
             ? th_ind(types, 0, parameter->type) : parameter->type);
         ok = value != nullptr;
         // The adapter is called as the trait's method is: a parameter is
-        // optional in it when the trait's method makes it optional.
-        bool optional = order
-            ? ir_func_parameter_is_optional(adapter, (uint32_t)i)
-            : ir_func_parameter_is_optional(required ? required : target,
-                                            (uint32_t)i);
+        // optional in it when the trait's method makes it optional. A
+        // reference adapter passes each optional parameter on as given
+        // or omitted (N00BB_FORWARDS_OPTIONAL_KEY), with no tail for each
+        // combination of omitted ones, which would be exponential in them.
+        bool optional = !order
+            && ir_func_parameter_is_optional(required ? required : target,
+                                             (uint32_t)i);
         state.level[i] = UINT32_MAX;
         if (ok && optional) {
             ok = state.optional_count < 64
-                && (order || ir_func_set_parameter_optional(adapter,
-                                                            (uint32_t)i,
-                                                            true));
+                && ir_func_set_parameter_optional(adapter, (uint32_t)i,
+                                                  true);
             state.level[i] = (uint32_t)state.optional_count;
             state.optional[state.optional_count++] = (uint32_t)i;
         }
@@ -716,13 +790,89 @@ n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
     return ok;
 }
 
-// The body of keyword-order adapter `symbol` (n00bb_keyword_order_t), now
+#define N00BB_REFERENCE_ADAPTER_TARGET_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter.target")
+#define N00BB_REFERENCE_ADAPTER_ORDER_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter.order")
+
+ir_func_t *
+n00bb_note_reference_adapter(n00bb_link_analysis_t *analysis,
+                             parse_sym_entry_t *symbol)
+{
+    const n00bb_reference_adapter_t *order = symbol
+        ? parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY) : nullptr;
+    ir_func_t *adapter = order
+        ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
+    ir_func_t *target = adapter
+        ? link_ir_function_for_symbol(analysis, order->target) : nullptr;
+    if (!target) return nullptr;
+    if (ir_annot_get(&adapter->annots, N00BB_REFERENCE_ADAPTER_TARGET_KEY))
+        return adapter;
+    core_buffer_t text = {0};
+    for (size_t i = 0; i < order->count; i++)
+        core_buffer_printf(&text, "%s%u", i ? "," : "", order->order[i]);
+    ir_value_t *address = ir_func_address(target->owner, target);
+    bool ok = address
+        && ir_annot_set(analysis->ir_context, &adapter->annots,
+               (ir_annot_t){.key = N00BB_REFERENCE_ADAPTER_ORDER_KEY,
+                            .kind = IR_ANNOT_STR,
+                            .s = ir_strdup(analysis->ir_context,
+                                           core_buffer_string(&text))})
+        && ir_annot_set(analysis->ir_context, &adapter->annots,
+               (ir_annot_t){.key = N00BB_REFERENCE_ADAPTER_TARGET_KEY,
+                            .kind = IR_ANNOT_VALUE, .v = address});
+    core_buffer_release(&text);
+    return ok ? adapter : nullptr;
+}
+
+ir_func_t *
+n00bb_reference_adapter_target(const ir_func_t *adapter, uint32_t **order,
+                               size_t *count)
+{
+    ir_annot_t *target = adapter
+        ? ir_annot_get((ir_annots_t *)&adapter->annots,
+                       N00BB_REFERENCE_ADAPTER_TARGET_KEY)
+        : nullptr;
+    ir_annot_t *text = target
+        ? ir_annot_get((ir_annots_t *)&adapter->annots,
+                       N00BB_REFERENCE_ADAPTER_ORDER_KEY)
+        : nullptr;
+    ir_func_t *callee = target && target->kind == IR_ANNOT_VALUE && target->v
+            && target->v->kind == IR_VAL_FUNC
+        ? target->v->owner : nullptr;
+    if (!order) return callee;
+    *order = nullptr;
+    *count = 0;
+    size_t expected = callee ? th_func_nparams(th_resolve(callee->type)) : 0;
+    uint32_t *parsed = callee && text && text->kind == IR_ANNOT_STR
+        ? core_alloc_array(uint32_t, expected + 1) : nullptr;
+    size_t parsed_count = 0;
+    bool ok = parsed != nullptr;
+    for (size_t at = 0; ok && at < text->s.u8_bytes; parsed_count++) {
+        uint32_t value = 0;
+        while (at < text->s.u8_bytes && text->s.data[at] >= '0'
+               && text->s.data[at] <= '9')
+            value = value * 10 + (uint32_t)(text->s.data[at++] - '0');
+        ok = parsed_count < expected && value < expected;
+        if (ok) parsed[parsed_count] = value;
+        if (at < text->s.u8_bytes) at++;
+    }
+    if (!ok || parsed_count != expected) {
+        core_free(parsed);
+        return nullptr;
+    }
+    *order = parsed;
+    *count = parsed_count;
+    return callee;
+}
+
+// The body of reference adapter `symbol` (n00bb_reference_adapter_t), now
 // that the types are known.
 static bool
-generate_keyword_order_adapter(n00bb_link_analysis_t *analysis,
-                               core_translation_unit_t *unit,
-                               parse_sym_entry_t *symbol,
-                               const n00bb_keyword_order_t *order)
+generate_reference_adapter(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *symbol,
+                           const n00bb_reference_adapter_t *order)
 {
     ir_func_t *adapter = link_ir_function_for_symbol(analysis, symbol);
     ir_func_t *target = link_ir_function_for_symbol(analysis, order->target);
@@ -733,6 +883,7 @@ generate_keyword_order_adapter(n00bb_link_analysis_t *analysis,
         && n00bb_adapter_body(unit, analysis->ir_context, adapter, target,
                               target->owner, nullptr, nullptr,
                               order->order)
+        && n00bb_note_reference_adapter(analysis, symbol) == adapter
         && ir_annot_set(analysis->ir_context, &adapter->annots,
                (ir_annot_t){
                    .key = CORE_STRING_STATIC("n00bb.generated-value-method"),
@@ -741,7 +892,7 @@ generate_keyword_order_adapter(n00bb_link_analysis_t *analysis,
         n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
             link_source_location(order->target->decl_node),
             "generating dispatch adapters",
-            "could not generate the keyword-order adapter for `%.*s`",
+            "could not generate the reference adapter for `%.*s`",
             (int)order->target->name.u8_bytes, order->target->name.data);
     return ok;
 }
@@ -757,11 +908,11 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
-                n00bb_keyword_order_t *order = parse_sym_binding(symbol,
-                    N00BB_KEYWORD_ORDER_KEY);
+                n00bb_reference_adapter_t *order = parse_sym_binding(symbol,
+                    N00BB_REFERENCE_ADAPTER_KEY);
                 if (order) {
-                    if (generate_keyword_order_adapter(analysis, unit,
-                                                       symbol, order))
+                    if (generate_reference_adapter(analysis, unit, symbol,
+                                                   order))
                         continue;
                     core_list_free(scopes);
                     return false;

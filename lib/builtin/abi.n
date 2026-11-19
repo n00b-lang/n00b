@@ -217,6 +217,8 @@ record Function_Record layout(c) {
     variadic_type_index: u32
     summary_offset:      u32
     valid_keyword_bits:  u64
+    adapted_function_index: u32
+    reserved_zero:       u32
 }
 
 record Baked_Node_Record layout(c) {

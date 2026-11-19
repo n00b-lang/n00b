@@ -833,6 +833,13 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
             if (!value_method && declared)
                 value_method = ir_annot_get(&declared->annots,
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
+            // A reference adapter is emitted as its function is: when
+            // something refers to it, or with the rest of its module.
+            if (value_method && (n00bb_reference_adapter_target(function,
+                                     nullptr, nullptr)
+                                 || n00bb_reference_adapter_target(declared,
+                                     nullptr, nullptr)))
+                value_method = nullptr;
             if (function && function->n_blocks && value_method
                 && th_is_closed(ir_module_types(function->owner),
                                 function->type))

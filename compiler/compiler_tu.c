@@ -1705,56 +1705,68 @@ n00bb_without_passing_modes(th_ctx *types, th_type *type)
 }
 
 th_type *
-n00bb_keyword_order(th_ctx *types, parse_grammar_t *grammar,
-                    parse_sym_entry_t *symbol, th_type *flat,
-                    n00bb_keyword_order_t *order)
+n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
+                        parse_sym_entry_t *symbol, th_type *flat,
+                        n00bb_reference_adapter_t *adapter)
 {
-    *order = (n00bb_keyword_order_t){.target = symbol};
+    *adapter = (n00bb_reference_adapter_t){.target = symbol};
     th_type *called = flat ? th_resolve(flat) : nullptr;
-    th_type *value = called
+    th_type *value = called && th_kind_of(called) == TH_FUNCTION
         ? n00bb_function_value_type(types, grammar, symbol, called)
         : nullptr;
     value = value ? th_resolve(value) : nullptr;
-    if (!value || value == called || th_kind_of(value) != TH_FUNCTION
-        || th_func_nkw(value) < 2)
+    if (!value || th_kind_of(value) != TH_FUNCTION) return nullptr;
+    adapter->count = th_func_nparams(called);
+    adapter->positional = value == called ? adapter->count
+                                          : th_func_nparams(value);
+    adapter->keywords = value == called ? 0 : th_func_nkw(value);
+    if (adapter->count < adapter->positional + adapter->keywords)
         return nullptr;
-    order->count = th_func_nparams(called);
-    order->positional = th_func_nparams(value);
-    order->keywords = th_func_nkw(value);
-    if (order->count < order->positional + order->keywords) return nullptr;
-    order->order = core_alloc_array(uint32_t, order->count);
-    th_param *params = core_alloc_array(th_param, order->count);
-    parse_tree_t *formals = callable_formal_parameters(grammar, symbol);
-    bool reordered = false;
-    bool ok = order->order && params;
-    for (size_t i = 0; ok && i < order->count; i++) {
-        order->order[i] = (uint32_t)i;
-        if (i < order->positional
-            || i >= order->positional + order->keywords) continue;
+    adapter->order = core_alloc_array(uint32_t, adapter->count + 1);
+    th_param *params = core_alloc_array(th_param, adapter->count + 1);
+    parse_tree_t *formals = adapter->keywords > 1
+        ? callable_formal_parameters(grammar, symbol) : nullptr;
+    bool moded = false;
+    bool ok = adapter->order && params;
+    for (size_t i = 0; ok && i < adapter->count; i++) {
+        adapter->order[i] = (uint32_t)i;
+        moded = moded || th_func_param(called, i)->mode != TH_IN;
+        if (adapter->keywords < 2 || i < adapter->positional
+            || i >= adapter->positional + adapter->keywords) continue;
         core_string_t name = {0};
         ok = function_parameter_info(grammar, symbol, formals, i, nullptr,
                                      &name, nullptr, nullptr);
         size_t k = 0;
-        while (ok && k < order->keywords
+        while (ok && k < adapter->keywords
                && !core_string_eq(th_func_kw(value, k)->name, name))
             k++;
-        ok = ok && k < order->keywords;
-        order->order[i] = (uint32_t)(order->positional + k);
-        reordered = reordered || order->order[i] != i;
+        ok = ok && k < adapter->keywords;
+        adapter->order[i] = (uint32_t)(adapter->positional + k);
+        adapter->reordered = adapter->reordered || adapter->order[i] != i;
     }
-    for (size_t i = 0; ok && i < order->count; i++)
-        params[order->order[i]] = *th_func_param(called, i);
-    th_type *adapter = ok && reordered
+    // Every positional parameter is taken by place. A keyword one, which
+    // is never `out` or `modify` and may be omitted, is taken as its value,
+    // in the optional record (n00b_abi_function_v1's omission bitmap), to
+    // be passed on as given.
+    for (size_t i = 0; ok && i < adapter->count; i++) {
+        uint32_t at = adapter->order[i];
+        th_type *type = th_func_param(called, i)->type;
+        bool keyword = at >= adapter->positional
+            && at < adapter->positional + adapter->keywords;
+        params[at] = (th_param){.mode = keyword ? TH_IN : TH_INOUT,
+                                .type = type};
+    }
+    th_type *signature = ok && (moded || adapter->reordered)
         ? th_func_with_error(types, th_func_ret(called),
-                             th_func_error(called), params, order->count,
+                             th_func_error(called), params, adapter->count,
                              nullptr, nullptr, 0)
         : nullptr;
     core_free(params);
-    if (!adapter) {
-        core_free(order->order);
-        order->order = nullptr;
+    if (!signature) {
+        core_free(adapter->order);
+        adapter->order = nullptr;
     }
-    return adapter;
+    return signature;
 }
 
 bool

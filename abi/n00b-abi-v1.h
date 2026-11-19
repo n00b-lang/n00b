@@ -574,6 +574,13 @@ typedef struct {
     uint32_t variadic_type_index;
     uint32_t summary_offset;
     uint64_t valid_keyword_bits;
+    /* A reference adapter's: the function it adapts, whose parameter rows
+     * give the passing modes it calls that function with. The adapter
+     * itself takes its positional parameters and its variadic array by
+     * place (MODIFY), and its keyword ones, in the order of the function's
+     * type, as IN values. 0 for any other function. */
+    uint32_t adapted_function_index;
+    uint32_t reserved_zero;
 } n00b_abi_function_v1;
 
 typedef struct {
@@ -882,6 +889,16 @@ int32_t n00b_abi_v1_bind_runtime_function_addresses(
     const void *const *addresses, uint32_t count);
 const void *n00b_abi_v1_runtime_function_address(uint32_t function_index);
 uint32_t n00b_abi_v1_runtime_function_index(const void *address);
+/* When `address` is a reference adapter's (n00b_abi_function_v1's
+ * adapted_function_index), the index of the function it adapts, whose
+ * parameter rows give the passing modes the adapter calls it with; a call
+ * through a function reference passes every argument by place to an
+ * adapter. 0 for any other address. */
+uint32_t n00b_abi_v1_runtime_adapted_function_index(const void *address);
+/* The function a callback with handler `address` calls: the function a
+ * reference adapter adapts, or else the function at `address`
+ * (n00b_abi_v1_runtime_function_index). */
+uint32_t n00b_abi_v1_runtime_handler_function_index(const void *address);
 const void *n00b_abi_v1_runtime_trait_method_address(
     uint32_t trait_type_index, uint32_t method_ordinal,
     uint32_t receiver_type_index);
@@ -1013,7 +1030,7 @@ _Static_assert(offsetof(n00b_abi_tag_extractor_v1, kind) == 28,
 _Static_assert(sizeof(n00b_abi_trace_v1) == 48, "trace width");
 _Static_assert(sizeof(n00b_abi_trace_child_v1) == 56, "trace child width");
 _Static_assert(sizeof(n00b_abi_trace_arm_v1) == 16, "trace arm width");
-_Static_assert(sizeof(n00b_abi_function_v1) == 96, "function width");
+_Static_assert(sizeof(n00b_abi_function_v1) == 104, "function width");
 _Static_assert(sizeof(n00b_abi_parameter_v1) == 40, "parameter width");
 _Static_assert(sizeof(n00b_abi_code_range_v1) == 24, "code range width");
 _Static_assert(sizeof(n00b_abi_scope_v1) == 56, "scope width");
@@ -1054,6 +1071,8 @@ _Static_assert(offsetof(n00b_abi_function_v1, symbol_index) == 24,
                "function symbol offset");
 _Static_assert(offsetof(n00b_abi_function_v1, valid_keyword_bits) == 88,
                "function keyword offset");
+_Static_assert(offsetof(n00b_abi_function_v1, adapted_function_index) == 96,
+               "function adapted offset");
 _Static_assert(offsetof(n00b_abi_symbol_v1, storage_class_name) == 48,
                "symbol storage class offset");
 _Static_assert(offsetof(n00b_abi_constraint_v1, kind) == 48,

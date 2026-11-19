@@ -1129,19 +1129,43 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         note_unknown(pt, CORE_STRING_STATIC("a call whose target is unknown"),
                      nullptr);
         pt_loc_t unknown = unknown_loc();
-        for (uint32_t o = 1; o < call->n_operands; o++) {
-            pt_set_t items = (pt_set_t){0};
-            pt_read(pt, referenced(call, o), &items);
-            pt_publish(pt, &items, &unknown);
-            for (size_t i = 0; i < items.len; i++)
-                if (items.data[i].loc.site != PT_EXTERNAL
-                    && items.data[i].flow == PT_SAME) {
-                    pt_loc_t whole = items.data[i].loc;
-                    whole.path.flags |= IR_SPATH_DEEP;
-                    write_reach(pt, &whole, &reach);
-                }
-            core_list_free(items);
+        // An `out` or `modify` argument is the caller's place, which the
+        // call borrows: what the place holds escapes to the unknown callee,
+        // and can be stored anywhere it writes, but not the place itself
+        // (as escaping_items has it for a known callee).
+        th_type *signature = ir_instr_call_signature(call);
+        signature = signature ? th_resolve(signature) : nullptr;
+        pt_set_t *arguments = core_alloc_array(pt_set_t, call->n_operands);
+        pt_set_t written = (pt_set_t){0};
+        for (uint32_t o = 1; arguments && o < call->n_operands; o++) {
+            pt_read(pt, referenced(call, o), &arguments[o]);
+            bool borrowed = call->op == IR_OP_CALL && signature
+                && th_kind_of(signature) == TH_FUNCTION
+                && o - 1 < th_func_nparams(signature)
+                && th_mode_by_reference(th_func_param(signature, o - 1)->mode);
+            pt_set_t held = (pt_set_t){0};
+            if (borrowed) pt_load(pt, &arguments[o], &held);
+            pt_set_t *escaping = borrowed ? &held : &arguments[o];
+            pt_publish(pt, escaping, &unknown);
+            merge_widened(pt, &written, escaping, false);
+            core_list_free(held);
         }
+        set_add(pt, &written, deep_item(unknown));
+        // Known callees among the targets may write what they read too.
+        if (callees->callees.len) merge_widened(pt, &written, &reach, false);
+        for (uint32_t o = 1; arguments && o < call->n_operands; o++) {
+            pt_set_t *items = &arguments[o];
+            for (size_t i = 0; i < items->len; i++)
+                if (items->data[i].loc.site != PT_EXTERNAL
+                    && items->data[i].flow == PT_SAME) {
+                    pt_loc_t whole = items->data[i].loc;
+                    whole.path.flags |= IR_SPATH_DEEP;
+                    write_reach(pt, &whole, &written);
+                }
+            core_list_free(*items);
+        }
+        core_free(arguments);
+        core_list_free(written);
         set_add(pt, &result, deep_item(unknown));
     }
     bool settled = true;

@@ -1725,30 +1725,36 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not find the type of a function reference");
             // A call through the reference passes the keyword parameters
-            // in the order the type lists them; a function that declares
-            // them in another order is referred to through its module's
-            // keyword-order adapter (n00bb_keyword_order_t).
-            n00bb_keyword_order_t order = {0};
-            if (generic && value_type != flat
-                && n00bb_keyword_order(types, visit->grammar,
-                                       function_target, flat, &order)) {
+            // in the order the type lists them, and doesn't know the
+            // function's passing modes; a function that declares them in
+            // another order, or takes a parameter other than `in`, is
+            // referred to through its module's reference adapter
+            // (n00bb_reference_adapter_t).
+            n00bb_reference_adapter_t order = {0};
+            if (generic && value_type != flat) {
+                th_type *adapted = n00bb_reference_adapter(types,
+                    visit->grammar, function_target, flat, &order);
                 core_free(order.order);
-                lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
-                    N00B_TEXT_NOT_SUPPORTED_YET_GENERIC_KEYWORD_ORDER,
-                    N00BB_ARGS(ARG_TEXT(function_target->name)));
-                return false;
+                if (adapted && order.reordered) {
+                    lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+                        N00B_TEXT_NOT_SUPPORTED_YET_GENERIC_KEYWORD_ORDER,
+                        N00BB_ARGS(ARG_TEXT(function_target->name)));
+                    return false;
+                }
             }
             parse_sym_entry_t *adapter = parse_sym_binding(function_target,
-                N00BB_KEYWORD_ORDER_ADAPTER_KEY);
+                N00BB_FUNCTION_ADAPTER_KEY);
             ir_func_t *referent = adapter && analysis
-                ? link_ir_function_for_symbol(analysis, adapter) : nullptr;
+                ? n00bb_note_reference_adapter(analysis, adapter) : nullptr;
             if (storage && adapter && !referent)
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-                    "could not find the keyword-order adapter of a "
-                    "function reference");
+                    "could not find the reference adapter of a function "
+                    "reference");
             if (storage && referent)
                 storage = ir_func_reference(module, referent);
-            if (storage && value_type != flat)
+            // The reference's type is the function's, whose parameters
+            // keep their passing modes: the reference remembers them.
+            if (storage && (referent || value_type != flat))
                 storage->type = th_ind(ir_module_types(module), 0,
                                        value_type);
         }

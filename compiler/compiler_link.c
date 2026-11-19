@@ -6,6 +6,7 @@
 #include "language_hooks.h"
 #include "storage_placement.h"
 #include "compiler_tu.h"
+#include "compiler_visibility.h"
 #include "qualified_names.h"
 #include "diagnostics.h"
 #include "preprocessor.h"
@@ -4591,38 +4592,88 @@ dispatch_adapter_signature(th_ctx *types, th_type *signature,
     return adapter;
 }
 
-// The keyword-order adapter (n00bb_keyword_order_t) of each function of
-// `unit` that declares its keyword parameters in an order its type doesn't
-// list them in. It is a function of that module, as a dispatch adapter is,
-// so every `ref` of the function, from any module, refers to the one
-// adapter.
+static parse_sym_entry_t *named_function(parse_grammar_t *grammar,
+                                         core_translation_unit_t *unit,
+                                         parse_tree_t *operand);
+
+// The functions `unit`'s `ref` operators name.
+static void
+referenced_functions(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                     core_dict_t *referenced)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; i < state->call_nodes.len; i++) {
+        parse_tree_t *node = state->call_nodes.data[i];
+        const parse_rule_t *rule = node && !core_tree_is_leaf(node)
+            ? parse_tree_rule(grammar, node) : nullptr;
+        parse_annotation_t *operator = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
+            : nullptr;
+        if (!operator
+            || !core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref")))
+            continue;
+        parse_tree_t *operand = nullptr;
+        for (size_t c = 0; !operand && c < core_tree_num_children(node); c++)
+            if (!core_tree_is_leaf(core_tree_child(node, c)))
+                operand = core_tree_child(node, c);
+        parse_sym_entry_t *function = named_function(grammar, unit, operand);
+        if (function) {
+            function = canonical_symbol(function);
+            core_dict_put(referenced, function, function);
+        }
+    }
+}
+
+// The reference adapter (n00bb_reference_adapter_t) of each function of
+// `unit` that takes a parameter other than `in`, or declares its keyword
+// parameters in an order its type doesn't list them in, when another
+// module can refer to it (it is exported) or this one does (`ref` names
+// it). It is a function of that module, as a dispatch adapter is, so every
+// `ref` of the function, from any module, refers to the one adapter.
 static bool
-register_keyword_order_adapters(core_link_unit_t *link,
-                                parse_grammar_t *grammar,
-                                n00bb_link_analysis_t *analysis,
-                                core_translation_unit_t *unit)
+register_reference_adapters(core_link_unit_t *link,
+                            parse_grammar_t *grammar,
+                            n00bb_link_analysis_t *analysis,
+                            core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_symtab_t *symbols = state->annotations->symtab;
+    core_dict_t referenced;
+    core_dict_init(&referenced, nullptr, nullptr);
+    referenced_functions(grammar, unit, &referenced);
     core_list_t(parse_sym_entry_ptr_t) functions =
         core_list_new(parse_sym_entry_ptr_t);
     for (parse_scope_t *scope = symbols->all_scopes; scope;
          scope = scope->all_next)
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope)
+            // A name bound to another module's function (an alias or an
+            // import) refers to that function's adapter, and a native
+            // binding's function has no ABI function row for an adapter to
+            // name, so it has none yet.
             if (symbol->kind == PARSE_SYM_FUNCTION && !symbol->is_synthetic
-                && !parse_sym_binding(symbol, N00BB_KEYWORD_ORDER_KEY))
+                && !symbol->binding_origin
+                && !parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY)
+                && !parse_sym_binding(symbol, N00BB_FUNCTION_ADAPTER_KEY)
+                && !parse_sym_binding(symbol,
+                       CORE_STRING_STATIC("n00bb.generated-extern"))
+                && ((!symbol->owner_type && !symbol_is_private(symbol))
+                    || core_dict_contains(&referenced, symbol)))
                 core_list_push(functions, symbol);
+    core_dict_free(&referenced);
     bool ok = true;
     for (size_t f = 0; ok && f < functions.len; f++) {
         parse_sym_entry_t *symbol = functions.data[f];
-        n00bb_keyword_order_t *order = core_alloc(n00bb_keyword_order_t);
+        n00bb_reference_adapter_t *order =
+            core_alloc(n00bb_reference_adapter_t);
         th_type *flat = th_func_collect_rest(state->types,
                                              n00bb_symbol_signature(symbol));
         // A generic function's adapter would share its type variables, and
         // typing the adapter would bind the function's.
-        th_type *adapter_type = order && th_is_closed(state->types, flat)
-            ? n00bb_keyword_order(state->types, grammar, symbol, flat, order)
+        th_type *adapter_type = order && flat
+                && th_is_closed(state->types, flat)
+            ? n00bb_reference_adapter(state->types, grammar, symbol, flat,
+                                      order)
             : nullptr;
         if (!adapter_type) {
             core_free(order);
@@ -4632,7 +4683,7 @@ register_keyword_order_adapters(core_link_unit_t *link,
         core_buffer_t name = {0};
         if (append_environment_symbol_name(grammar, unit, symbol,
                                            &qualified) && qualified.data)
-            core_buffer_printf(&name, "__n00bb_keyword_order_%016llx",
+            core_buffer_printf(&name, "__n00bb_reference_adapter_%016llx",
                 (unsigned long long)core_xxh3_64bits_raw(qualified.data,
                                                          qualified.byte_len));
         core_buffer_release(&qualified);
@@ -4648,14 +4699,16 @@ register_keyword_order_adapters(core_link_unit_t *link,
         adapter->type = adapter->callable_contract = adapter_type;
         adapter->error_type = th_func_error(adapter_type);
         adapter->adt_kind = symbol->adt_kind;
+        adapter->visibility = symbol->visibility;
         adapter->is_synthetic = true;
         // Generated, as a dispatch adapter is: emitted with its module,
         // and not a declaration of the source.
         ok = parse_sym_set_binding(adapter,
                 CORE_STRING_STATIC("n00bb.generated-value-method"),
                 adapter_type)
-            && parse_sym_set_binding(adapter, N00BB_KEYWORD_ORDER_KEY, order)
-            && parse_sym_set_binding(symbol, N00BB_KEYWORD_ORDER_ADAPTER_KEY,
+            && parse_sym_set_binding(adapter, N00BB_REFERENCE_ADAPTER_KEY,
+                                     order)
+            && parse_sym_set_binding(symbol, N00BB_FUNCTION_ADAPTER_KEY,
                                      adapter)
             && register_link_declaration(link, unit, grammar,
                    &analysis->declarations_by_symbol, adapter);
@@ -4759,7 +4812,7 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
             }
         }
         core_list_free(targets);
-        if (!register_keyword_order_adapters(link, grammar, analysis, unit)) {
+        if (!register_reference_adapters(link, grammar, analysis, unit)) {
             trait_method_index_free(&index);
             return false;
         }

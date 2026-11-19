@@ -23,8 +23,8 @@ if test -s "$tmp/stdout" || test "$(cat "$tmp/stderr")" != ok; then
     exit 1
 fi
 
-# The keyword parameters' names, and the keyword-order adapters, come from
-# the interface when the imported modules are only an archived interface.
+# The keyword parameters' names, and the reference adapters, come from the
+# interface when the imported modules are only an archived interface.
 if ! N00B_PATH="$programs" "$compiler" library \
     --emit-interface "$tmp/keyword_lib.n00bi" keyword_lib keyword_refs \
     >"$tmp/interface.out" 2>"$tmp/interface.err"; then
@@ -37,3 +37,20 @@ then
     cat "$tmp/lower.err" >&2
     exit 1
 fi
+
+# `ref` of a function whose parameters are all `in`, with no keyword
+# parameters to reorder, is the function itself; of any other, it is the
+# function's reference adapter, the one the interface declares for an
+# imported function. A call through a reference known to hold an adapter
+# calls the function it adapts.
+for expected in \
+    'global.store @reference_keywords.plain_reference, @plain_add ' \
+    'global.store @reference_keywords.adapted_reference, @__n00bb_reference_adapter_' \
+    'global.store @reference_keywords.imported_check, @__n00bb_reference_adapter_' \
+    '= call @tally_add, '
+do
+    if ! grep -qF "$expected" "$tmp/lower.out"; then
+        echo "the lowered program has no \`$expected\`" >&2
+        exit 1
+    fi
+done

@@ -94,6 +94,12 @@ directory_entry(image_t *image, uint32_t ordinal, uint32_t kind,
         + (size_t)ordinal * N00BB_ABI_DIRECTORY_BYTES, &entry);
 }
 
+// The code of a reference adapter in the image.
+static void
+adapter_code(void)
+{
+}
+
 int
 main(int argc, char **argv)
 {
@@ -827,13 +833,30 @@ main(int argc, char **argv)
         && (getauxval(AT_HWCAP) & HWCAP_USCAT))
         image.header.cpu_profile = N00B_ABI_CPU_NATIVE_ATOMIC128;
 #endif
+    // Function 2 is a reference adapter of function 1.
+    image.functions[2].adapted_function_index = 1;
+    image.code_ranges[2].start = (const void *)(uintptr_t)adapter_code;
     assert(n00b_abi_v1_validate_image(&descriptor, &error)
         == N00B_ABI_OK && !error.status
         && !n00b_abi_v1_current_snapshot());
+    assert(!n00b_abi_v1_runtime_adapted_function_index(
+        (const void *)(uintptr_t)adapter_code));
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)
         == N00B_ABI_OK && !error.status && generation == 1);
     const n00b_abi_snapshot_v1 *snapshot =
         n00b_abi_v1_current_snapshot();
+    // A lookup by address yields the function an adapter adapts, whose
+    // parameter rows give its modes; any other function is no adapter.
+    assert(n00b_abi_v1_runtime_adapted_function_index(
+            (const void *)(uintptr_t)adapter_code) == 1
+        && !n00b_abi_v1_runtime_adapted_function_index(
+            (const void *)(uintptr_t)main)
+        && n00b_abi_v1_runtime_handler_function_index(
+            (const void *)(uintptr_t)adapter_code) == 1
+        && n00b_abi_v1_runtime_handler_function_index(
+            (const void *)(uintptr_t)main) == 1
+        && n00b_abi_v1_runtime_function_index(
+            (const void *)(uintptr_t)adapter_code) == 2);
     assert(snapshot && n00b_abi_v1_generation(snapshot) == 1
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_TYPE) == 6
         && n00b_abi_v1_table_count(snapshot, N00B_ABI_TABLE_MODULE) == 2);

@@ -1186,10 +1186,10 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
                                      ir_func_t *function, bool named)
 {
     if (!symbol || !function) return false;
-    // A keyword-order adapter takes its keyword parameters after its
+    // A reference adapter takes its keyword parameters after its
     // positional ones, as the function it adapts does.
-    n00bb_keyword_order_t *order = parse_sym_binding(symbol,
-                                                     N00BB_KEYWORD_ORDER_KEY);
+    n00bb_reference_adapter_t *order = parse_sym_binding(symbol,
+        N00BB_REFERENCE_ADAPTER_KEY);
     for (size_t k = 0; order && k < order->keywords; k++)
         if (!ir_func_set_parameter_optional(function,
                 (uint32_t)(order->positional + k), true))

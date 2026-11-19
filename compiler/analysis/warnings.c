@@ -1863,16 +1863,23 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                     ir_value_t *function_value = in->op == IR_OP_RETAIN_REF
                         && in->n_operands
                         ? ir_operand_value(&in->operands[0]) : nullptr;
-                    if (function_value && function_value->kind == IR_VAL_FUNC
-                        && function_value->owner
-                        && ir_annot_get(&function_value->owner->annots,
+                    // A reference adapter is to the function it adapts.
+                    ir_func_t *referred = function_value
+                            && function_value->kind == IR_VAL_FUNC
+                        ? function_value->owner : nullptr;
+                    ir_func_t *adapted = referred
+                        ? n00bb_reference_adapter_target(referred, nullptr,
+                                                         nullptr)
+                        : nullptr;
+                    if (adapted) referred = adapted;
+                    if (referred && ir_annot_get(&referred->annots,
                                N00BB_FIXED_REFERENCES_KEY)) {
                         n00bb_report(core_translation_unit_diagnostics(unit),
                             unit, N00B_DIAG_FIXED_REFERENCE_FUNCTION_VALUE,
                             n00bb_span_location(in->span),
                             N00B_TEXT_FIXED_REFERENCE_FUNCTION_VALUE,
                             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(
-                                function_value->owner->name))));
+                                referred->name))));
                         ok = false;
                         continue;
                     }
