@@ -497,7 +497,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             else summarize_function(summaries, next, members[i],
                                     cyclic ? &settled[i] : nullptr);
             if (reused) copy_paths(next, reused);
-            else summarize_paths(summaries, next, members[i]);
+            else summarize_paths(summaries, next, members[i], !cyclic);
             const ir_summary_hooks_t *hooks = summaries->hooks;
             uint64_t bookkept = hooks && hooks->bookkeeping
                 ? hooks->bookkeeping(hooks->context, members[i], next) : 0;

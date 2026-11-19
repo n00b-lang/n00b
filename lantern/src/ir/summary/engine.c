@@ -11,6 +11,9 @@ typedef core_list_t(pt_region_t) region_list_t;
 typedef struct {
     pt_t     *pt;
     uint64_t  fingerprint;
+    // Kept from summarizing the function (see keep_engine), and not yet
+    // checked against what its calls resolve to now.
+    bool      kept;
 } engine_t;
 
 static void escape_item(pt_t *pt, const pt_item_t *item,
@@ -339,12 +342,50 @@ engine_release(engine_t *engine)
     engine->pt = nullptr;
 }
 
+// Whether `pt`'s calls resolve now to the targets, and through the views
+// of their summaries, that they did when it was made: if they do, solving
+// again would start from the same callees. Resolves every call as pt_init
+// would.
+static bool
+same_callees(pt_t *pt)
+{
+    const ir_func_t *f    = pt->f;
+    size_t           call = 0;
+    bool             same = true;
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (!is_call(in)) continue;
+            const pt_callees_t *was = call < pt->calls.len
+                ? &pt->calls.data[call] : nullptr;
+            call++;
+            call_targets_t targets;
+            resolve_targets(pt->summaries, in, &targets);
+            same = same && was && targets.unknown == was->targets.unknown
+                && targets.targets.len == was->targets.targets.len
+                && targets.targets.len == was->callees.len;
+            for (size_t t = 0; t < targets.targets.len; t++) {
+                ir_summary_t *callee = call_summary(
+                    pt->summaries, f, targets.targets.data[t]);
+                same = same
+                    && targets.targets.data[t] == was->targets.targets.data[t]
+                    && callee == was->callees.data[t];
+            }
+            core_list_free(targets.targets);
+        }
+    return same && call == pt->calls.len;
+}
+
 static pt_t *
 function_engine(ir_summaries_t *summaries, ir_func_t *f)
 {
     bool      found  = false;
     uint64_t  now    = ir_func_shape(f);
     engine_t *engine = core_dict_get(&summaries->engines, f, &found);
+    if (found && engine->fingerprint == now && engine->kept) {
+        engine->kept = false;
+        if (!same_callees(engine->pt)) engine->fingerprint = ~now;
+    }
     if (found && engine->fingerprint == now) return engine->pt;
     if (!found) {
         engine = core_alloc(engine_t);
@@ -783,20 +824,52 @@ explain_unknown(ir_summary_t *summary, const ir_switness_t *witness)
     summary->explained = true;
 }
 
+// Keeps the solve that summarized `f`'s escapes as its engine (see
+// function_engine), which is the solve an engine would make: the same
+// function, the same summaries with value flow off, and callees whose
+// summaries are final, since `f` is not in a cycle. Recording the summary
+// only read the solution. Analyses the solve pointed into belong to the
+// scope summarizing `f`, which releases them, so the engine fetches them
+// again if it needs them.
+static void
+keep_engine(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt)
+{
+    pt->places       = nullptr;
+    pt->pdg          = nullptr;
+    pt->flow.sourced = false;
+    pt->flow.memory  = nullptr;
+    pt->flow.rd      = nullptr;
+    engine_t *engine = core_alloc(engine_t);
+    *engine = (engine_t){.pt = pt, .fingerprint = ir_func_shape(f),
+                         .kept = true};
+    bool      found = false;
+    engine_t *old   = core_dict_get(&summaries->engines, f, &found);
+    if (found) {
+        engine_release(old);
+        core_free(old);
+    }
+    core_dict_put(&summaries->engines, f, engine);
+}
+
 static void
 summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
-                ir_func_t *f)
+                ir_func_t *f, bool final_callees)
 {
-    pt_t pt;
-    pt_init(&pt, summaries, f, !summaries->escapes_only);
-    pt_solve(&pt);
-    pt.places = ir_func_places(f);
-    pt_record(&pt, summary);
-    summarize_results(&pt, summary);
-    describe_heap(&pt, summary, &pt.described);
-    name_heaps(&pt, summary);
-    if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
+    pt_t *pt = core_alloc(pt_t);
+    pt_init(pt, summaries, f, !summaries->escapes_only);
+    pt_solve(pt);
+    pt->places = ir_func_places(f);
+    pt_record(pt, summary);
+    summarize_results(pt, summary);
+    describe_heap(pt, summary, &pt->described);
+    name_heaps(pt, summary);
+    if (pt->unknown_at) explain_unknown(summary, &pt->unknown);
     if (!summaries->escapes_only)
-        summarize_writes(summaries, f, &pt, summary);
-    pt_free(&pt);
+        summarize_writes(summaries, f, pt, summary);
+    if (summaries->escapes_only && final_callees) {
+        keep_engine(summaries, f, pt);
+        return;
+    }
+    pt_free(pt);
+    core_free(pt);
 }
