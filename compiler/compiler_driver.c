@@ -6888,6 +6888,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         }
     }
     if (located && emit_program) {
+        n00bb_abi_emit_function_summaries(link_analysis->keep_summaries);
         located = n00bb_emit_abi_artifacts(link, link_analysis,
             !preprocessor_options.release_mode);
         if (profile_compile) {

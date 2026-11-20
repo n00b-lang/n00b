@@ -67,6 +67,14 @@ core_string_t n00bb_abi_baked_node_symbol(core_string_t package,
                                           size_t ordinal,
                                           core_target_object_format_t format);
 
+// Whether a module's ABI object carries its functions' summaries (a
+// SUMMARY_STREAM and the names it uses). On by default; a program build
+// that won't keep them (no --function-summaries) turns it off: the link
+// strips them anyway, and they are what the whole program found, so a
+// cached module's ABI object would carry the summaries of whichever
+// program built it first.
+void n00bb_abi_emit_function_summaries(bool keep);
+
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,

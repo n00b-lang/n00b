@@ -429,11 +429,20 @@ intern_summary_name(void *context, core_string_t text)
     return (uint32_t)names->names.len;
 }
 
+static bool abi_function_summaries = true;
+
+void
+n00bb_abi_emit_function_summaries(bool keep)
+{
+    abi_function_summaries = keep;
+}
+
 static bool
 append_function_summaries(n00bb_abi_function_rows_t *functions,
                           ir_module_t *runtime, abi_summary_rows_t *rows)
 {
-    ir_summaries_t *summaries = ir_analysis_summaries();
+    ir_summaries_t *summaries = abi_function_summaries
+        ? ir_analysis_summaries() : nullptr;
     core_dict_init_string(&rows->string_rows);
     rows->keys = core_list_new(summary_key_t);
     rows->strings = core_alloc_array(n00b_abi_static_string_v1, 1);
