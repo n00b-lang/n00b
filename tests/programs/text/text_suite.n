@@ -607,13 +607,13 @@ func rich_concatenation() {
     // ...until a reset on the right ends it, at the right side's very start
     // or later on.
     let reset_first: string = "[b]abc"'r + "[/]def"'r
-    check(repr_of(reset_first) == "r\"[b]abc[/]def\"", "rich_concatenation",
+    check(repr_of(reset_first) == "r\"[b]abc[/b][/]def\"", "rich_concatenation",
           "13c")
     check(body_of(reset_first).__value.style_info[0].end_ix.get_or_else(0) ==
           3, "rich_concatenation", "13d")
     check(reset_first == "[b]abc[/]def"'r, "rich_concatenation", "13e")
     let reset_later: string = "[b]abc"'r + "d[#][/]ef"'r
-    check(repr_of(reset_later) == "r\"[b]abcd[#][/]ef\"",
+    check(repr_of(reset_later) == "r\"[b]abcd[#][/b][/]ef\"",
           "rich_concatenation", "13f")
     check(body_of(reset_later).__value.style_info[0].end_ix.get_or_else(0) ==
           4, "rich_concatenation", "13g")
@@ -622,7 +622,7 @@ func rich_concatenation() {
     var u_spans: List[text.Style_Span] = [(start = 0, end = 3, tag = "u")]
     let inner_flow: string = text.rich_string("[b]abc"'r, u_spans) +
         "[/]def"'r
-    check(repr_of(inner_flow) == "r\"[u][b]abc[/b][/]def\"",
+    check(repr_of(inner_flow) == "r\"[u][b]abc[/b][/u][/]def\"",
           "rich_concatenation", "13j")
     let inner_reset: string = "[b]abc"'r +
         text.rich_string("de[/]f"'r, u_spans)
@@ -736,7 +736,7 @@ func bracket_markup() {
     // `[/]` ends every open style.
     // The reset is recorded (even at offset 0, where it ends nothing in
     // this literal but does on concatenation).
-    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/]c\"")
+    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b][/]c\"")
     check_rich("[/]x"'r, "x", "r\"[/]x\"")
     check("[b]a[/b][/]c"'r == "[b]a[/]c"'r, "bracket_markup", "reset")
     // Substitutions: auto, explicit, and named, each with and without a spec.

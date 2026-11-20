@@ -752,31 +752,12 @@ private func rich_layers(s: string) -> List[string] {
     return layers
 }
 
-// Whether the close event at `at` is one of a run of closes that a reset
-// right after it ends anyway; repr then shows just the `[/]`.
-private func closes_into_reset(body: Ref[Rich_Body],
-                               events: List[Markup_Event], at: int) -> bool {
-    let offset: u32 = events[at].offset
-    var k: int = at
-    while k < cast[int](events.len()) and events[k].offset == offset {
-        let ev: Markup_Event = events[k]
-        if !ev.closing {
-            return record_is_reset(body.__value.style_info[ev.rec])
-        }
-        k += 1
-    }
-    return false
-}
-
 private func print_event(fd: int, body: Ref[Rich_Body],
                          events: List[Markup_Event], at: int)
     -> uint fail: int {
     let ev: Markup_Event = events[at]
     let r: Style_Record = body.__value.style_info[ev.rec]
     if ev.closing {
-        if closes_into_reset(body, events, at) {
-            return 0
-        }
         return format_style_tag(fd, r.style_tag.get_or_else(""), true)!
     }
     if record_is_reset(r) {
