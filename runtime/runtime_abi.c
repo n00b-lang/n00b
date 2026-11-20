@@ -2945,64 +2945,40 @@ n00b_abi_v1_runtime_function_address(uint32_t function_index)
         ? addresses[function_index] : nullptr;
 }
 
-uint32_t
-n00b_abi_v1_runtime_function_index(const void *address)
-{
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    if (!snapshot || !address) return 0;
-    uint32_t count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_FUNCTION);
-    for (uint32_t i = 1; i < count; i++)
-        if (n00b_abi_v1_runtime_function_address(i) == address)
-            return i;
-    return 0;
-}
-
-// The reference adapters of the current snapshot whose code has an
-// address, sorted by it: a call through a function reference asks for
-// each call, so it is found by a binary search, not a walk of the table.
+// The functions of the current snapshot whose code has an address, sorted
+// by it (the first of those at one address first): a call through a
+// function reference asks for each call, so a function is found by a
+// binary search, not a walk of the table.
 typedef struct {
     const void *address;
-    uint32_t adapted;
-} adapter_entry_t;
+    uint32_t index;
+} function_entry_t;
 
 typedef struct {
     const n00b_abi_snapshot_v1 *snapshot;
     const void *const *addresses;
     size_t bytes;
     uint32_t count;
-    adapter_entry_t entries[];
-} adapter_table_t;
+    function_entry_t entries[];
+} function_table_t;
 
-static _Atomic(adapter_table_t *) adapter_table;
+static _Atomic(function_table_t *) function_table;
 
-static adapter_table_t *
-build_adapter_table(const n00b_abi_snapshot_v1 *snapshot,
-                    const void *const *addresses)
+static function_table_t *
+build_function_table(const n00b_abi_snapshot_v1 *snapshot,
+                     const void *const *addresses)
 {
     uint32_t count = n00b_abi_v1_table_count(snapshot,
                                              N00B_ABI_TABLE_FUNCTION);
-    uint32_t adapters = 0;
-    for (uint32_t i = 1; i < count; i++) {
-        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
-                                                                    i);
-        if (function && function->adapted_function_index) adapters++;
-    }
-    size_t bytes = sizeof(adapter_table_t)
-        + (size_t)adapters * sizeof(adapter_entry_t);
-    adapter_table_t *table = snapshot_alloc(bytes);
+    size_t bytes = sizeof(function_table_t)
+        + (size_t)count * sizeof(function_entry_t);
+    function_table_t *table = snapshot_alloc(bytes);
     if (!table) return nullptr;
     table->snapshot = snapshot;
     table->addresses = addresses;
     table->bytes = bytes;
-    for (uint32_t i = 1; i < count && table->count < adapters; i++) {
-        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
-                                                                    i);
-        uint32_t adapted = function ? function->adapted_function_index : 0;
-        const n00b_abi_function_v1 *target = adapted && adapted < count
-            ? n00b_abi_v1_function(snapshot, adapted) : nullptr;
-        const void *address = target && !target->adapted_function_index
-            ? n00b_abi_v1_runtime_function_address(i) : nullptr;
+    for (uint32_t i = 1; i < count; i++) {
+        const void *address = n00b_abi_v1_runtime_function_address(i);
         if (!address) continue;
         // Insertion keeps the entries sorted by address.
         uint32_t at = table->count++;
@@ -3011,27 +2987,27 @@ build_adapter_table(const n00b_abi_snapshot_v1 *snapshot,
             table->entries[at] = table->entries[at - 1];
             at--;
         }
-        table->entries[at] = (adapter_entry_t){address, adapted};
+        table->entries[at] = (function_entry_t){address, i};
     }
     return table;
 }
 
 uint32_t
-n00b_abi_v1_runtime_adapted_function_index(const void *address)
+n00b_abi_v1_runtime_function_index(const void *address)
 {
     const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
     if (!snapshot || !address) return 0;
     const void *const *addresses = atomic_load_explicit(
         &runtime_function_addresses, memory_order_acquire);
-    adapter_table_t *table = atomic_load_explicit(&adapter_table,
-                                                  memory_order_acquire);
+    function_table_t *table = atomic_load_explicit(&function_table,
+                                                   memory_order_acquire);
     if (!table || table->snapshot != snapshot
         || table->addresses != addresses) {
-        adapter_table_t *built = build_adapter_table(snapshot, addresses);
+        function_table_t *built = build_function_table(snapshot, addresses);
         if (!built) return 0;
         // A table another thread built first is as good; one for an older
         // snapshot may still be read, so it is kept.
-        if (atomic_compare_exchange_strong_explicit(&adapter_table, &table,
+        if (atomic_compare_exchange_strong_explicit(&function_table, &table,
                 built, memory_order_acq_rel, memory_order_acquire)
             || !table || table->snapshot != snapshot
             || table->addresses != addresses)
@@ -3041,12 +3017,27 @@ n00b_abi_v1_runtime_adapted_function_index(const void *address)
     uint32_t low = 0, high = table->count;
     while (low < high) {
         uint32_t middle = low + (high - low) / 2;
-        uintptr_t at = (uintptr_t)table->entries[middle].address;
-        if (at == (uintptr_t)address) return table->entries[middle].adapted;
-        if (at < (uintptr_t)address) low = middle + 1;
+        if ((uintptr_t)table->entries[middle].address < (uintptr_t)address)
+            low = middle + 1;
         else high = middle;
     }
-    return 0;
+    return low < table->count && table->entries[low].address == address
+        ? table->entries[low].index : 0;
+}
+
+// The function the reference adapter at `address` adapts, which its row
+// names; 0 for any other function.
+uint32_t
+n00b_abi_v1_runtime_adapted_function_index(const void *address)
+{
+    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
+    uint32_t index = n00b_abi_v1_runtime_function_index(address);
+    const n00b_abi_function_v1 *function = index
+        ? n00b_abi_v1_function(snapshot, index) : nullptr;
+    uint32_t adapted = function ? function->adapted_function_index : 0;
+    const n00b_abi_function_v1 *target = adapted
+        ? n00b_abi_v1_function(snapshot, adapted) : nullptr;
+    return target && !target->adapted_function_index ? adapted : 0;
 }
 
 uint32_t
