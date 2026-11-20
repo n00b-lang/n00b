@@ -72,6 +72,12 @@ done
 # user files add their entries too. When two layers hold the same module, the
 # --path copy wins.
 layers="$tmp/layers"
+# The compiler spells paths natively (D:/... on Windows), and on Windows reads
+# the user file from %APPDATA% and splits N00B_PATH at ';'.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) nlayers=$(cygpath -m "$layers") sep=';' ;;
+    *) nlayers=$layers sep=: ;;
+esac
 mkdir -p "$layers/flag" "$layers/env" "$layers/home/.config/n00b" \
     "$layers/user" "$layers/project/plib"
 printf 'func pick() -> int { return 1 }\n' >"$layers/flag/both.n"
@@ -80,7 +86,7 @@ printf 'func e() -> int { return 3 }\n' >"$layers/env/envonly.n"
 printf 'func p() -> int { return 4 }\n' >"$layers/project/plib/projonly.n"
 printf 'func u() -> int { return 5 }\n' >"$layers/user/useronly.n"
 printf '[paths]\npath = ["plib"]\n' >"$layers/project/n00b.cfg"
-printf '[paths]\npath = ["%s"]\n' "$layers/user" \
+printf '[paths]\npath = ["%s"]\n' "$nlayers/user" \
     >"$layers/home/.config/n00b/config.cfg"
 cat >"$layers/project/main.n" <<'PROGRAM'
 import both
@@ -91,8 +97,9 @@ require both.pick() == 1
 require envonly.e() + projonly.p() + useronly.u() == 12
 PROGRAM
 cd "$layers/project"
-if ! env -u XDG_CONFIG_HOME HOME="$layers/home" N00B_PATH="$layers/env" \
-        "$compiler" build --path "$layers/flag" --output "$tmp/layers.bin" \
+if ! env -u XDG_CONFIG_HOME HOME="$layers/home" \
+        APPDATA="$nlayers/home/.config" N00B_PATH="$nlayers/env" \
+        "$compiler" build --path "$nlayers/flag" --output "$tmp/layers.bin" \
         main.n >"$tmp/layers.log" 2>&1; then
     echo 'paths.path layers did not all contribute roots' >&2
     cat "$tmp/layers.log" >&2
@@ -105,8 +112,9 @@ fi
 printf 'import nowhere\n' >"$layers/project/missing.n"
 labels() {
     env -u XDG_CONFIG_HOME HOME="$layers/home" \
-        N00B_PATH="$layers/env:$layers/env:$layers/flag:." "$compiler" \
-        "$@" --path "$layers/flag" --path "$layers/flag"
+        APPDATA="$nlayers/home/.config" \
+        N00B_PATH="$nlayers/env$sep$nlayers/env$sep$nlayers/flag$sep." \
+        "$compiler" "$@" --path "$nlayers/flag" --path "$nlayers/flag"
 }
 if labels check missing.n >"$tmp/labels.log" 2>&1; then
     echo 'a missing module was found' >&2
@@ -123,13 +131,13 @@ expect_once() {
 expect_once "$tmp/labels.log" '  note: searched the toolchain library'
 expect_once "$tmp/labels.log" '  note: searched the current directory'
 expect_once "$tmp/labels.log" \
-    "  note: searched \`--path\` entry \`$layers/flag\`"
+    "  note: searched \`--path\` entry \`$nlayers/flag\`"
 expect_once "$tmp/labels.log" \
-    "  note: searched \`N00B_PATH\` entry \`$layers/env\`"
+    "  note: searched \`N00B_PATH\` entry \`$nlayers/env\`"
 expect_once "$tmp/labels.log" \
-    "  note: searched \`paths.path\` entry \`plib\` from $layers/project/n00b.cfg:2"
+    "  note: searched \`paths.path\` entry \`plib\` from $nlayers/project/n00b.cfg:2"
 expect_once "$tmp/labels.log" \
-    "  note: searched \`paths.path\` entry \`$layers/user\` from $layers/home/.config/n00b/config.cfg:2"
+    "  note: searched \`paths.path\` entry \`$nlayers/user\` from $nlayers/home/.config/n00b/config.cfg:2"
 [ "$(grep -c 'note: searched' "$tmp/labels.log")" -eq 6 ] || {
     echo 'duplicate roots were searched more than once' >&2
     cat "$tmp/labels.log" >&2
@@ -137,12 +145,12 @@ expect_once "$tmp/labels.log" \
 }
 labels env >"$tmp/env.log" 2>&1 || true
 sed -n '/^package roots$/,/^$/p' "$tmp/env.log" >"$tmp/roots.log"
-expect_once "$tmp/roots.log" "  --path     $layers/flag"
-expect_once "$tmp/roots.log" "  N00B_PATH  $layers/env"
+expect_once "$tmp/roots.log" "  --path     $nlayers/flag"
+expect_once "$tmp/roots.log" "  N00B_PATH  $nlayers/env"
 expect_once "$tmp/roots.log" \
-    "  project    $layers/project/plib  (from $layers/project/n00b.cfg:2)"
+    "  project    $nlayers/project/plib  (from $nlayers/project/n00b.cfg:2)"
 expect_once "$tmp/roots.log" \
-    "  user       $layers/user  (from $layers/home/.config/n00b/config.cfg:2)"
+    "  user       $nlayers/user  (from $nlayers/home/.config/n00b/config.cfg:2)"
 [ "$(grep -c '^  ' "$tmp/roots.log")" -eq 6 ] || {
     echo 'n00b env listed a root more than once' >&2
     cat "$tmp/roots.log" >&2
@@ -154,10 +162,11 @@ expect_once "$tmp/roots.log" \
 mkdir -p "$layers/project/sub"
 ln -s "$layers/project" "$tmp/linked"
 (cd "$tmp/linked" && env -u XDG_CONFIG_HOME HOME="$layers/home" \
-    "$compiler" env --path sub --path "$layers/project/sub") \
+    APPDATA="$nlayers/home/.config" \
+    "$compiler" env --path sub --path "$nlayers/project/sub") \
     >"$tmp/linked.log" 2>&1 || true
 sed -n '/^package roots$/,/^$/p' "$tmp/linked.log" >"$tmp/roots.log"
-expect_once "$tmp/roots.log" "  default    $layers/project"
+expect_once "$tmp/roots.log" "  default    $nlayers/project"
 expect_once "$tmp/roots.log" "  --path     sub"
 if grep -q 'problem' "$tmp/roots.log" \
         || [ "$(grep -c '^  --path' "$tmp/roots.log")" -ne 1 ]; then
