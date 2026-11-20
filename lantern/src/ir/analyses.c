@@ -95,76 +95,16 @@ mix_annots(uint64_t h, const ir_annots_t *annots, bool with)
     return h;
 }
 
-// The types a fingerprint has walked into: a set of pointers, open
-// addressed, starting in place. Every analysis lookup outside a read-only
-// stretch fingerprints its function, and a general dict (allocated, grown
-// and freed each time, with its hash and key functions called through
-// pointers) was most of what walking the types cost.
-enum { TYPE_SEEN_LOCAL = 128 };
-
-typedef struct {
-    th_type **slots;
-    size_t    cap;
-    size_t    len;
-    th_type  *local[TYPE_SEEN_LOCAL];
-} type_seen_t;
-
-static void
-type_seen_init(type_seen_t *seen)
-{
-    memset(seen->local, 0, sizeof(seen->local));
-    seen->slots = seen->local;
-    seen->cap   = TYPE_SEEN_LOCAL;
-    seen->len   = 0;
-}
-
-static void
-type_seen_free(type_seen_t *seen)
-{
-    if (seen->slots != seen->local) core_free(seen->slots);
-}
-
-static size_t
-type_seen_slot(const th_type *type, size_t mask)
-{
-    uint64_t x = (uint64_t)(uintptr_t)type;
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdull;
-    x ^= x >> 33;
-    return (size_t)x & mask;
-}
-
-// Adds `type`; false if it was there already.
-static bool
-type_seen_add(type_seen_t *seen, th_type *type)
-{
-    if (2 * (seen->len + 1) > seen->cap) {
-        th_type **old = seen->slots;
-        size_t    cap = seen->cap;
-        seen->cap   = cap * 2;
-        seen->slots = core_alloc_array(th_type *, seen->cap);
-        for (size_t s = 0; s < cap; s++) {
-            if (!old[s]) continue;
-            size_t at = type_seen_slot(old[s], seen->cap - 1);
-            while (seen->slots[at]) at = (at + 1) & (seen->cap - 1);
-            seen->slots[at] = old[s];
-        }
-        if (old != seen->local) core_free(old);
-    }
-    size_t mask = seen->cap - 1;
-    size_t at   = type_seen_slot(type, mask);
-    for (; seen->slots[at]; at = (at + 1) & mask)
-        if (seen->slots[at] == type) return false;
-    seen->slots[at] = type;
-    seen->len++;
-    return true;
-}
+// The types a fingerprint has walked into. Every analysis lookup outside a
+// read-only stretch fingerprints its function, so the set is kept per
+// thread and cleared, not allocated and freed, for each fingerprint.
+static _Thread_local core_dict_t type_seen;
 
 static uint64_t
-mix_type(uint64_t h, th_type *type, type_seen_t *seen, uint32_t depth)
+mix_type(uint64_t h, th_type *type, core_dict_t *seen, uint32_t depth)
 {
     h = mix(h, (uint64_t)(uintptr_t)type);
-    if (!type || depth > 64 || !type_seen_add(seen, type)) return h;
+    if (!type || depth > 64 || !core_dict_add(seen, type, 0)) return h;
     if (th_kind_of(type) == TH_VAR) {
         th_type *resolved = th_resolve(type);
         return resolved == type ? h
@@ -177,7 +117,7 @@ mix_type(uint64_t h, th_type *type, type_seen_t *seen, uint32_t depth)
 
 static uint64_t
 mix_value(uint64_t h, const ir_value_t *value, bool annots,
-          type_seen_t *seen)
+          core_dict_t *seen)
 {
     if (!value) return mix(h, 0);
     h = mix(h, (uint64_t)(uintptr_t)value);
@@ -186,7 +126,7 @@ mix_value(uint64_t h, const ir_value_t *value, bool annots,
 }
 
 static uint64_t
-mix_outside_types(uint64_t h, const ir_instr_t *in, type_seen_t *seen)
+mix_outside_types(uint64_t h, const ir_instr_t *in, core_dict_t *seen)
 {
     for (uint32_t o = 0; o < in->n_operands; o++) {
         const ir_value_t *value = ir_operand_value(&in->operands[o]);
@@ -200,19 +140,20 @@ mix_outside_types(uint64_t h, const ir_instr_t *in, type_seen_t *seen)
 static uint64_t
 fingerprint(const ir_func_t *f, bool annots)
 {
-    type_seen_t seen;
-    type_seen_init(&seen);
+    core_dict_t *seen = &type_seen;
+    if (seen->buckets) core_dict_clear(seen);
+    else core_dict_init(seen, nullptr, nullptr);
     uint64_t h = mix(0, f->n_blocks);
-    h = mix_type(h, f->type, &seen, 0);
+    h = mix_type(h, f->type, seen, 0);
     h = mix_annots(h, &f->annots, annots);
     h = mix(h, f->n_params);
     for (uint32_t p = 0; p < f->n_params; p++)
-        h = mix_value(h, f->params[p], annots, &seen);
+        h = mix_value(h, f->params[p], annots, seen);
     h = mix(h, f->n_locals);
     for (uint32_t l = 0; l < f->n_locals; l++) {
         const ir_local_t *local = f->locals[l];
         h = mix(h, (uint64_t)(uintptr_t)local);
-        h = mix_type(h, local->type, &seen, 0);
+        h = mix_type(h, local->type, seen, 0);
         h = mix(h, local->address_taken);
         if (local->value) h = mix_annots(h, &local->value->annots, annots);
     }
@@ -225,13 +166,13 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix(h, (uint64_t)(uintptr_t)in);
             h = mix(h, in->op);
             h = mix(h, in->dest_kind);
-            h = mix_value(h, in->dest, annots, &seen);
+            h = mix_value(h, in->dest, annots, seen);
             h = mix(h, (uint64_t)(uintptr_t)in->dest_local);
             h = mix(h, in->n_operands);
             if (in->n_operands)
                 h = mix(h, core_xxh3_64bits_raw(in->operands,
                     in->n_operands * sizeof(ir_operand_t)));
-            h = mix_outside_types(h, in, &seen);
+            h = mix_outside_types(h, in, seen);
             h = mix(h, in->n_mods);
             if (in->n_mods)
                 h = mix(h, core_xxh3_64bits_raw(in->mods,
@@ -241,7 +182,6 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix_annots(h, &in->annots, annots);
         }
     }
-    type_seen_free(&seen);
     return h;
 }
 
