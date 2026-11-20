@@ -4290,31 +4290,6 @@ n00bb_link_stage_inputs(core_link_unit_t *link, uint32_t stage_kind,
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
-// The user's own equality on a type, if any: a `__equal`, or a `__cmp`
-// with no `__equal` (then `==` follows `__cmp`).
-typedef enum {
-    USER_EQUALITY_NONE,
-    USER_EQUALITY_EQUAL,
-    USER_EQUALITY_CMP,
-} user_equality_t;
-
-// A type with its own equality gets no derived `__equal` (it has `==`
-// already) and, unless it defines `hash` too, no derived hash, since a hash
-// of the fields (or of the identity) would disagree with its `==`. This is
-// the one rule, for records, objects and the fields of a record alike.
-static user_equality_t
-user_equality(th_ctx *probe, th_type *type)
-{
-    th_env_method_t selected = {0};
-    if (!type) return USER_EQUALITY_NONE;
-    if (th_env_method_resolve(probe, type, N00BB_EQUAL_TRAIT,
-            CORE_STRING_STATIC("__equal"), &selected) == TH_ENV_METHOD_FOUND)
-        return USER_EQUALITY_EQUAL;
-    return th_env_method_resolve(probe, type, N00BB_COMPARABLE_TRAIT,
-            CORE_STRING_STATIC("__cmp"), &selected) == TH_ENV_METHOD_FOUND
-        ? USER_EQUALITY_CMP : USER_EQUALITY_NONE;
-}
-
 // Whether every field of a record has the method, or will be given a
 // derived one by register_builtin_value_defaults, under the same rules. A
 // field whose `==` follows its `__cmp` serves the derived `__equal` (it
@@ -4350,10 +4325,13 @@ record_default_fields_support(th_ctx *probe, th_ctx *source,
             supported = !selected.error_type
                 || th_is_nil(selected.error_type);
         else if (status == TH_ENV_METHOD_NOT_FOUND) {
-            user_equality_t own = user_equality(probe, field_type);
-            bool equality = core_string_eq(trait, N00BB_EQUAL_TRAIT);
-            supported = own == USER_EQUALITY_CMP && equality ? true
-                : own != USER_EQUALITY_NONE ? false
+            // A field with its own equality has no derived hash; one whose
+            // `==` follows its `__cmp` serves a derived `__equal`.
+            bool by_cmp = false;
+            bool own = field_type && n00bb_user_equality(probe, field_type,
+                &selected, &by_cmp) == TH_ENV_METHOD_FOUND;
+            supported = own
+                ? by_cmp && core_string_eq(trait, N00BB_EQUAL_TRAIT)
                 : record_default_fields_support(probe, source,
                     field->type, trait, method, visiting);
         }
@@ -4478,8 +4456,9 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 // A user `__equal`, or a `__cmp` that `==` follows, means
                 // no derived `__equal` and, without a user `hash`, no
                 // derived hash either.
-                bool custom_equal = user_equality(probe, candidate)
-                    != USER_EQUALITY_NONE;
+                bool by_cmp = false;
+                bool custom_equal = candidate && n00bb_user_equality(probe,
+                    candidate, &selected, &by_cmp) == TH_ENV_METHOD_FOUND;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal

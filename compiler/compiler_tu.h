@@ -1207,6 +1207,11 @@ th_type *bare_generic_alias(parse_grammar_t *grammar,
 th_type *n00bb_type_reference_type(parse_grammar_t *grammar,
     core_translation_unit_t *unit, core_translation_unit_t *declaration,
     parse_sym_entry_t *symbol, parse_tree_t *reference, th_type *type);
+// The user's own equality on `type`: its `__equal` or else, with `*by_cmp`
+// set, its `__cmp`, which `==` follows when the type has no `__equal`. A
+// type with its own gets no derived `__equal`.
+th_env_method_status_t n00bb_user_equality(th_ctx *types, th_type *type,
+    th_env_method_t *selected, bool *by_cmp);
 bool n00bb_imply_type_argument_constraints(
     core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,

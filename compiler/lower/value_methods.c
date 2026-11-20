@@ -101,22 +101,29 @@ n00bb_cmp_equal_test(ir_lower_context_t *context, n00bb_tu_state_t *state,
         : nullptr;
 }
 
-// Resolves how `==` compares values of a field's type: its `__equal`, or
-// (with `by_cmp` set) its `__cmp`, which `==` follows when the type has no
-// `__equal`.
+th_env_method_status_t
+n00bb_user_equality(th_ctx *types, th_type *type, th_env_method_t *selected,
+                    bool *by_cmp)
+{
+    *by_cmp = false;
+    th_env_method_status_t status = th_env_method_resolve(types, type,
+        N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"), selected);
+    if (status == TH_ENV_METHOD_NOT_FOUND) {
+        *by_cmp = true;
+        status = th_env_method_resolve(types, type, N00BB_COMPARABLE_TRAIT,
+            CORE_STRING_STATIC("__cmp"), selected);
+    }
+    return status;
+}
+
+// How `==` compares values of a field's type (n00bb_user_equality), when
+// it can't fail.
 static bool
 n00bb_field_equality(n00bb_tu_state_t *state, th_type *type,
                      th_env_method_t *selected, bool *by_cmp)
 {
-    *by_cmp = false;
-    th_env_method_status_t status = th_env_method_resolve(state->types,
-        type, N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"), selected);
-    if (status == TH_ENV_METHOD_NOT_FOUND) {
-        *by_cmp = true;
-        status = th_env_method_resolve(state->types, type,
-            N00BB_COMPARABLE_TRAIT, CORE_STRING_STATIC("__cmp"), selected);
-    }
-    return status == TH_ENV_METHOD_FOUND
+    return n00bb_user_equality(state->types, type, selected, by_cmp)
+            == TH_ENV_METHOD_FOUND
         && (!selected->error_type || th_is_nil(selected->error_type));
 }
 
