@@ -7,12 +7,19 @@ shift 2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if ! "$compiler" build --output "$tmp/program" "$program" \
-    >"$tmp/compile.out" 2>"$tmp/compile.err"; then
+# A step that dies without a word (a crash, or an abort on running out of
+# memory) is told apart by its exit status, so each failure names it.
+status=0
+"$compiler" build --output "$tmp/program" "$program" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err" || status=$?
+if [ "$status" -ne 0 ]; then
+    echo "the compile exited with status $status" >&2
     cat "$tmp/compile.out" "$tmp/compile.err" >&2
     exit 1
 fi
-if ! "$tmp/program" "$@" >"$tmp/stdout" 2>"$tmp/stderr"; then
+"$tmp/program" "$@" >"$tmp/stdout" 2>"$tmp/stderr" || status=$?
+if [ "$status" -ne 0 ]; then
+    echo "the program exited with status $status" >&2
     cat "$tmp/stdout" "$tmp/stderr" >&2
     exit 1
 fi
