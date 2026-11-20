@@ -20,6 +20,9 @@ Usage: ./build.sh [command] [args]
   test-lantern        compile, then run lantern's tests
   test-writ           compile, then run writ's tests
   bench               compile, then run lantern's benchmarks and gates
+  guardrails [range]  run the source guardrails and check each change in
+                      range (default main..@ with jj, origin/main..HEAD with
+                      git) for its Budget: and Goldens: trailers
   perf [opts] [names] compile, then run the performance suite in tests/perf
                       (--baseline REV|COMPILER|RESULTS.json, --runs N,
                       --threshold PCT); fails on regressions past threshold.
@@ -157,6 +160,7 @@ case "${1:-}" in
             run_make test T="$*"
         else run_make test; fi ;;
     test-pr|test-all|test-lantern|test-writ|bench) run_make "$1" ;;
+    guardrails) run_make guardrails RANGE="${2:-}" ;;
     perf)
         shift
         run_make all >/dev/null && python3 "$ROOT/tools/perf.py" --source "$ROOT" \
