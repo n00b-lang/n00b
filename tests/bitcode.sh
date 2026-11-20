@@ -72,6 +72,26 @@ runtime)
     "$compiler" build --output "$tmp/generic_finalizer_probe" \
         "$program_dir/bitcode_generic_finalizer_probe.n"
     "$tmp/generic_finalizer_probe"
+    # Ranges the analyses share, checked as they are computed.
+    "$compiler" build --verify-analyses --output "$tmp/shared_ranges" \
+        "$program_dir/bitcode_shared_ranges.n"
+    "$tmp/shared_ranges"
+    # A local only `typeof` reads keeps automatic storage: nothing moves
+    # it to the heap.
+    "$compiler" build --output "$tmp/typeof_storage" \
+        "$program_dir/bitcode_typeof_storage.n"
+    test "$("$tmp/typeof_storage" 2>&1)" = ok
+    "$compiler" lower --dump-symbols --dump-ir \
+        "$program_dir/bitcode_typeof_storage.n" >"$tmp/typeof_storage.dump"
+    grep -q 'probe: variable.*storage-duration=automatic' \
+        "$tmp/typeof_storage.dump"
+    if awk '/^  func @check_type_only_probe/ { inside = 1 }
+            inside && /^  }/ { inside = 0 }
+            inside && / = alloc / { found = 1 }
+            END { exit !found }' "$tmp/typeof_storage.dump"; then
+        echo 'type-only probe was moved to heap storage' >&2
+        exit 1
+    fi
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
