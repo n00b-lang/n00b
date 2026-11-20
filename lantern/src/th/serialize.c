@@ -3,12 +3,24 @@
 #include "private/th/internal.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
+#include "lib/hash.h"
 
+// Types are not hash-consed: a program can hold two nodes for one type, and
+// which nodes it holds depends on the program. The writer writes each
+// structure once, whichever node it is reached through, so what it writes
+// depends only on the types (canonical, by_key, keying).
 struct th_type_writer {
     core_list_t(th_type_ptr_t) nodes;
     core_dict_t                index;
     core_dict_t                var_indices;
     core_dict_t                var_origins;
+    // Each node seen to the node written for its structure.
+    core_dict_t                canonical;
+    // A structure's key hash to the first node written for it.
+    core_dict_t                by_key;
+    // Set while put_node writes a node's key: references are written as
+    // the canonical node's address, and type variables by their own ids.
+    bool                       keying;
 };
 
 struct th_type_reader {
@@ -39,6 +51,8 @@ th_type_writer_new(void)
     core_dict_init(&writer->index, nullptr, nullptr);
     core_dict_init(&writer->var_indices, nullptr, nullptr);
     core_dict_init(&writer->var_origins, nullptr, nullptr);
+    core_dict_init(&writer->canonical, nullptr, nullptr);
+    core_dict_init(&writer->by_key, nullptr, nullptr);
     return writer;
 }
 
@@ -50,13 +64,66 @@ th_type_writer_free(th_type_writer_t *writer)
     core_dict_free(&writer->index);
     core_dict_free(&writer->var_indices);
     core_dict_free(&writer->var_origins);
+    core_dict_free(&writer->canonical);
+    core_dict_free(&writer->by_key);
     core_free(writer);
+}
+
+static void put_node(th_type_writer_t *writer, core_buffer_t *out,
+                     const th_type *type);
+
+// What put_node writes for `type`, with each reference as its canonical
+// node: two nodes with the same key write the same bytes.
+static void
+node_key(th_type_writer_t *writer, const th_type *type, core_buffer_t *out)
+{
+    bool keying = writer->keying;
+    writer->keying = true;
+    put_node(writer, out, type);
+    writer->keying = keying;
+}
+
+// The node written for `type`'s structure: the first node with the same
+// key, found children first. A node met again while its own children are
+// being found (a cycle) stands for itself.
+static const th_type *
+canonical(th_type_writer_t *writer, const th_type *type)
+{
+    static const char visiting;
+    type = th_resolve_c(type);
+    if (!type) return nullptr;
+    bool found = false;
+    const th_type *known = core_dict_get(&writer->canonical, (void *)type,
+                                         &found);
+    if (found) return known == (const th_type *)&visiting ? type : known;
+    core_dict_put(&writer->canonical, (void *)type, (void *)&visiting);
+    core_buffer_t key = {0};
+    node_key(writer, type, &key);
+    uint64_t hash = core_xxh3_64bits_raw(key.data ? key.data : "",
+                                         key.byte_len) | 1;
+    const th_type *first = core_dict_get(&writer->by_key,
+                                         (void *)(uintptr_t)hash, &found);
+    const th_type *chosen = type;
+    if (!found)
+        core_dict_put(&writer->by_key, (void *)(uintptr_t)hash, (void *)type);
+    else {
+        core_buffer_t other = {0};
+        node_key(writer, first, &other);
+        if (other.byte_len == key.byte_len
+            && (!key.byte_len
+                || !memcmp(other.data, key.data, key.byte_len)))
+            chosen = first;
+        core_buffer_release(&other);
+    }
+    core_buffer_release(&key);
+    core_dict_put(&writer->canonical, (void *)type, (void *)chosen);
+    return chosen;
 }
 
 static uint32_t
 writer_node(th_type_writer_t *writer, const th_type *type)
 {
-    type = th_resolve_c(type);
+    type = canonical(writer, type);
     if (!type) return 0;
     bool found = false;
     void *slot = core_dict_get(&writer->index, (void *)type, &found);
@@ -153,7 +220,9 @@ put_text(core_buffer_t *out, core_string_t text)
 static void
 put_ref(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
 {
-    put_u32(out, writer_node(writer, type));
+    if (writer->keying)
+        put_u64(out, (uint64_t)(uintptr_t)canonical(writer, type));
+    else put_u32(out, writer_node(writer, type));
 }
 
 static void
@@ -251,9 +320,11 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
             put_ref(writer, out, type->sum.arms[i]);
         break;
     case TH_VAR:
-        put_u64(out, dense_id(&writer->var_indices, type->var.index));
-        put_u64(out, type->var.origin
-            ? dense_id(&writer->var_origins, type->var.origin) : 0);
+        put_u64(out, writer->keying ? type->var.index
+            : dense_id(&writer->var_indices, type->var.index));
+        put_u64(out, !type->var.origin ? 0 : writer->keying
+            ? type->var.origin
+            : dense_id(&writer->var_origins, type->var.origin));
         put_u32(out, type->var.has_index);
         put_text(out, type->var.name);
         put_ref(writer, out, type->var.ref);
