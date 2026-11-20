@@ -1,0 +1,8 @@
+import bounded
+import shapes
+
+let box: shapes.Box = (side = 4)
+require bounded.rendered(box) == 44
+require bounded.needs_render(box) == 1
+require bounded.not_string(1) == 2
+require bounded.needs_integer(4) == 3

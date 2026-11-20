@@ -1,0 +1,12 @@
+bounds_rejected.n:7:9: error N00B-T0021: `Dot` does not implement `Render`, which `needs_render` requires
+  lib/bounded.n:7:6: note: `needs_render` is declared here
+  help: implement `Render` for `Dot`, or call a function that does not need it
+bounds_rejected.n:8:9: error N00B-T0021: `Dot` does not implement `Render`, which `rendered` requires
+  lib/bounded.n:20:6: note: `rendered` is declared here
+  help: implement `Render` for `Dot`, or call a function that does not need it
+bounds_rejected.n:9:9: error N00B-T0608: `not_string` cannot take `string` here: its `where` clause excludes it
+  lib/bounded.n:11:6: note: `not_string` is declared here
+bounds_rejected.n:10:9: error N00B-T0021: `f64` does not implement `Integer`, which `needs_integer` requires
+  lib/bounded.n:15:6: note: `needs_integer` is declared here
+  help: implement `Integer` for `f64`, or call a function that does not need it
+status 1

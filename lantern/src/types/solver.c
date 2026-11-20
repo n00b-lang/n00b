@@ -2112,7 +2112,10 @@ static th_type *renamed(ty_solver_t *s, th_type *t)
     return copy;
 }
 
-th_type *ty_instantiate_declared(ty_solver_t *s, th_type *t, ty_why_t why)
+// A fresh copy of `t`'s variables (only its rigid ones, with `rigid_only`),
+// requiring of each copy the bounds declared on the variable it copies.
+static th_type *instantiate_bounded(ty_solver_t *s, th_type *t, ty_why_t why,
+                                    bool rigid_only)
 {
     if (!s || !t) {
         return t;
@@ -2123,7 +2126,7 @@ th_type *ty_instantiate_declared(ty_solver_t *s, th_type *t, ty_why_t why)
 
     free_vars(t, &vars);
     for (size_t i = 0; i < vars.len; i++) {
-        if (rigid(s, vars.data[i])) {
+        if (!rigid_only || rigid(s, vars.data[i])) {
             core_list_push(named, vars.data[i]);
         }
     }
@@ -2157,6 +2160,16 @@ th_type *ty_instantiate_declared(ty_solver_t *s, th_type *t, ty_why_t why)
     core_list_free(vars);
 
     return copy;
+}
+
+th_type *ty_instantiate_declared(ty_solver_t *s, th_type *t, ty_why_t why)
+{
+    return instantiate_bounded(s, t, why, true);
+}
+
+th_type *ty_instantiate_bounded(ty_solver_t *s, th_type *t, ty_why_t why)
+{
+    return instantiate_bounded(s, t, why, false);
 }
 
 th_type *ty_generalize(ty_solver_t *s, th_type *t)

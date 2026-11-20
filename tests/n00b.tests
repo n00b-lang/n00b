@@ -115,7 +115,7 @@ ffi-zlib-const	pr	20	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/progr
 ffi-zlib-litmod	pr	21	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" litmod
 unicode-conformance	pr	13	cd "$SRC/tests/programs/unicode" && sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/unicode/conformance.n" grapheme word sentence line normalization bidi collation idna
 storage-facts-n00b	pr	5	sh "$SRC/tests/storage_facts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_storage_facts.n"
-incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes
+incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes && sh "$SRC/tests/cache_parity.sh" "$BUILD/n00b" "$SRC/tests/programs/cache_parity"
 incremental-cache-instances	pr	38	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
 incremental-cache-contexts	pr	40	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" contexts
 incremental-cache-lto	pr	70	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" lto --lto
