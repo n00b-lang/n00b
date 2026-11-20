@@ -28,6 +28,15 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++)
             core_list_push(roots, ir_func_at(state->ir_module, f));
     }
+    // A cached module's bodies are facts too, as they are when the module
+    // is compiled: which globals' addresses escape is collected from them
+    // (n00bb_collect_escaped_globals), and a body no root reaches would see
+    // its callees through conservative summaries, so every address it
+    // passes on would escape. A cached module's private global would then
+    // be visible to callers it hides from when compiled, and the summaries
+    // a program keeps would depend on what was cached.
+    for (size_t f = 0; f < analysis->cached_functions.len; f++)
+        core_list_push(roots, analysis->cached_functions.data[f]);
     bind_summary_hooks(analysis, true);
     n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_free(analysis->escapes);
