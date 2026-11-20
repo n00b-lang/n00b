@@ -143,6 +143,13 @@ bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
                               uint32_t local_index, uint32_t *out_index);
 const core_index_remap_t *n00bb_abi_index_plan_remap(
     const n00bb_abi_index_plan_t *plan, size_t input_index, uint32_t kind);
+/* Whether the linked image copies this input row. Rows matched by identity
+ * all map to one linked row, which is copied from one input's; stream
+ * entries and trace arms and children that only uncopied rows refer to
+ * have no linked index at all. */
+bool n00bb_abi_index_plan_copies(const n00bb_abi_index_plan_t *plan,
+                                 size_t input_index, uint32_t kind,
+                                 uint32_t local_index);
 
 /* `values` is the merged U32 stream; `kinds` is a same-length zeroed build
  * buffer that detects conflicting interpretations of a source slot. Neither

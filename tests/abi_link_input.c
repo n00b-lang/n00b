@@ -359,6 +359,10 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
             assert(row);
             for (uint32_t local = 0; local < entry->record_count; local++) {
                 uint32_t final_index;
+                // The linked image copies one input's row for an identity;
+                // only that row's ranges are placed.
+                if (!n00bb_abi_index_plan_copies(plan, input, entry->kind,
+                                                 local)) continue;
                 assert(n00bb_abi_remap_row(selected, plan, input,
                     entry->kind, local, row, entry->record_bytes,
                     &stream)
@@ -539,7 +543,12 @@ test_cycle_selection(const core_string_t *paths, size_t count,
             && stream && n00bb_abi_index_plan_map(plan, v,
                 N00B_ABI_TABLE_U32_STREAM, 0, &mapped)
             && mapped == stream_base);
-        stream_base += stream->record_count;
+        // An input's stream entries that no linked row refers to are
+        // dropped; the next input's follow the ones that are kept.
+        for (uint32_t local = 0; local < stream->record_count; local++)
+            if (n00bb_abi_index_plan_map(plan, v,
+                    N00B_ABI_TABLE_U32_STREAM, local, &mapped))
+                stream_base++;
         if (v == inputs[0] || v == inputs[1] || v == inputs[2]) continue;
         assert(n00bb_abi_index_plan_map(plan, v, N00B_ABI_TABLE_PACKAGE, 1,
             &mapped) && mapped != package);
@@ -2772,8 +2781,12 @@ test_type_backlinks_remap(void)
         .directory_count = sizeof(directory) / sizeof(*directory),
     };
     n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    // The plan places the stream entries the rows refer to when it is
+    // built, so it sees the longest member range the checks below use.
+    metadata.types[1].fields_or_arms.count = 2;
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
+    metadata.types[1].fields_or_arms.count = 1;
     uint32_t values[2] = {0}, kinds[2] = {0};
     n00bb_abi_u32_stream_build_t stream = {
         .values = values, .kinds = kinds, .count = 2,
