@@ -94,6 +94,11 @@ done
 # it is in and whether it is a file or a manifest.
 shadow=$(cd "$tmp" && pwd -P)/shadow
 stdlib_lib=$(cd "$program_dir/../../../lib" && pwd -P)
+# The compiler names files natively (D:/... on Windows), as these expect.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        shadow=$(cygpath -m "$shadow") stdlib_lib=$(cygpath -m "$stdlib_lib") ;;
+esac
 mkdir -p "$shadow/project" "$shadow/path"
 printf 'import unicode\n' >"$shadow/project/uses_unicode.n"
 printf 'import sys.env\n' >"$shadow/project/uses_env.n"
