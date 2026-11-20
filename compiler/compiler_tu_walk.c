@@ -676,44 +676,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
     }
     if (!entering && rule == RULE(TRAIT_DECL)) {
-        parse_sym_entry_t *symbol = parse_tree_sym(node);
-        core_list_t(n00bb_typevar_binding_t) variables =
-            core_list_new(n00bb_typevar_binding_t);
-        core_list_t(th_trait_requirement) declared =
-            core_list_new(th_trait_requirement);
-        signature_typevars_for_symbol(symbol, &variables);
         // The clause after the trait's name and any after a type in one of
         // its methods: the trait's variables are shared by its methods. A
         // constrained type given one of them adds to these at link time
         // (n00bb_imply_type_argument_constraints).
-        bool valid = apply_signature_constraints(grammar, unit, node,
-            state->types, &variables, &declared);
-        core_list_free(variables);
-        if (valid && symbol) {
-            n00bb_declared_trait_requirements_t *facts = core_arena_alloc(
-                &state->semantic_values, sizeof(*facts));
-            th_trait_requirement *items = declared.len
-                ? core_arena_alloc(&state->semantic_values,
-                    declared.len * sizeof(*items)) : nullptr;
-            valid = facts && (!declared.len || items);
-            if (valid) {
-                if (declared.len)
-                    memcpy(items, declared.data,
-                        declared.len * sizeof(*items));
-                *facts = (n00bb_declared_trait_requirements_t){
-                    .data = items, .len = declared.len,
-                };
-                valid = parse_sym_set_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.trait.requirements"), facts);
-            }
-        }
-        core_list_free(declared);
-        if (!valid) {
-            n00bb_tu_internal_error_unless_reported(unit, node,
-                "checking declarations",
-                "could not apply the trait's where clause");
+        if (!n00bb_record_where_clauses(grammar, unit, parse_tree_sym(node),
+                node, node, N00BB_TRAIT_REQUIREMENTS_KEY, nullptr,
+                "could not apply the trait's where clause"))
             return;
-        }
     }
 
     if (!entering)

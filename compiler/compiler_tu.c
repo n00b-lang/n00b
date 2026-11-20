@@ -3967,23 +3967,26 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
 // Adds `declared` to the requirements `symbol` already has under `key`:
 // its `where` requirements (N00BB_DECLARED_WHERE_KEY) or, for a trait,
 // those its type carries (N00BB_TRAIT_REQUIREMENTS_KEY). With
-// `bounds_only`, just the implements and excludes ones.
+// `bounds_only`, just the implements and excludes ones. A symbol with none
+// yet holds an empty list.
 static bool
 add_declared_where(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
                    core_string_t key,
                    const core_list_t(th_trait_requirement) *declared,
                    bool bounds_only)
 {
-    if (!declared->len) return true;
     n00bb_declared_where_t *previous = parse_sym_binding(symbol, key);
     size_t before = previous ? previous->len : 0;
+    if (previous && !declared->len) return true;
     if (declared->len > SIZE_MAX / sizeof(th_trait_requirement) - before)
         return false;
     n00bb_declared_where_t *facts = core_arena_alloc(
         &state->semantic_values, sizeof(*facts));
-    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
-        (before + declared->len) * sizeof(*items));
-    if (!facts || !items) return false;
+    th_trait_requirement *items = before + declared->len
+        ? core_arena_alloc(&state->semantic_values,
+                           (before + declared->len) * sizeof(*items))
+        : nullptr;
+    if (!facts || (before + declared->len && !items)) return false;
     if (before) memcpy(items, previous->data, before * sizeof(*items));
     size_t len = before;
     for (size_t i = 0; i < declared->len; i++)
@@ -4005,21 +4008,37 @@ record_function_body_constraints(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol = parse_tree_sym(func);
     parse_tree_t *body = CHILD_NT(grammar, func, "body");
     if (!symbol || !body || !state || !state->types) return;
+    n00bb_record_where_clauses(grammar, unit, symbol, body, func,
+        N00BB_DECLARED_WHERE_KEY, nullptr,
+        "could not apply the where clauses in the function's body");
+}
+
+bool
+n00bb_record_where_clauses(parse_grammar_t *grammar,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *symbol, parse_tree_t *clauses,
+                           parse_tree_t *declaration, core_string_t key,
+                           const core_list_t(th_trait_requirement) *before,
+                           const char *failure)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
     core_list_t(n00bb_typevar_binding_t) variables =
         core_list_new(n00bb_typevar_binding_t);
     core_list_t(th_trait_requirement) declared =
         core_list_new(th_trait_requirement);
+    for (size_t i = 0; before && i < before->len; i++)
+        core_list_push(declared, before->data[i]);
     signature_typevars_for_symbol(symbol, &variables);
-    bool valid = apply_signature_constraints(grammar, unit, body,
+    bool valid = apply_signature_constraints(grammar, unit, clauses,
         state->types, &variables, &declared)
-        && add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
-                              &declared, false);
+        && (!symbol
+            || add_declared_where(state, symbol, key, &declared, false));
     core_list_free(variables);
     core_list_free(declared);
     if (!valid)
-        n00bb_tu_internal_error_unless_reported(unit, func,
-            "checking declarations",
-            "could not apply the where clauses in the function's body");
+        n00bb_tu_internal_error_unless_reported(unit, declaration,
+            "checking declarations", failure);
+    return valid;
 }
 
 static void
@@ -10458,26 +10477,14 @@ record_type_constraints(parse_grammar_t *grammar,
         return;
     parse_sym_entry_t *symbol = parse_tree_sym(declaration);
     if (!symbol || !state || !state->types) return;
-    core_list_t(n00bb_typevar_binding_t) variables =
-        core_list_new(n00bb_typevar_binding_t);
-    core_list_t(th_trait_requirement) declared =
-        core_list_new(th_trait_requirement);
-    bool valid = order_type_parameters(grammar, unit, declaration, symbol);
-    signature_typevars_for_symbol(symbol, &variables);
-    core_list_t(th_trait_requirement) *traits = parse_sym_binding(symbol,
-        N00BB_TYPE_BOUNDS_KEY);
-    for (size_t i = 0; traits && i < traits->len; i++)
-        core_list_push(declared, traits->data[i]);
-    valid = valid && apply_signature_constraints(grammar, unit, declaration,
-        state->types, &variables, &declared)
-        && add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
-                              &declared, false);
-    core_list_free(variables);
-    core_list_free(declared);
-    if (!valid)
+    const char *failure = "could not apply the type's where clauses";
+    if (!order_type_parameters(grammar, unit, declaration, symbol))
         n00bb_tu_internal_error_unless_reported(unit, declaration,
-            "checking declarations",
-            "could not apply the type's where clauses");
+            "checking declarations", failure);
+    else
+        n00bb_record_where_clauses(grammar, unit, symbol, declaration,
+            declaration, N00BB_DECLARED_WHERE_KEY,
+            parse_sym_binding(symbol, N00BB_TYPE_BOUNDS_KEY), failure);
 }
 
 // The alias a type name refers to, when the alias has type parameters.

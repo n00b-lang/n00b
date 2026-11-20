@@ -1188,6 +1188,13 @@ void record_function_body_constraints(parse_grammar_t *grammar,
 void record_type_constraints(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *declaration,
     n00bb_tu_state_t *state);
+// Applies the `where` clauses under `clauses` to the variables `symbol`
+// owns, adding what they require, after `before`, to what `symbol` holds
+// under `key`. Reports `failure` at `declaration` when it can't.
+bool n00bb_record_where_clauses(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *symbol,
+    parse_tree_t *clauses, parse_tree_t *declaration, core_string_t key,
+    const core_list_t(th_trait_requirement) *before, const char *failure);
 bool n00bb_type_arguments_fit(th_ctx *types,
     core_translation_unit_t *const *units, size_t count);
 th_type *bare_generic_alias(parse_grammar_t *grammar,
