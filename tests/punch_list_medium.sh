@@ -70,16 +70,11 @@ EOF
 
 # The state a callback retains is read through it later, so it must be
 # set in full when the callback is made. (The analysis reports it, so
-# `check` stops where `build` would.)
+# `check` stops where `build` would. Checked below, in the same rejected
+# file as the `Point` key.)
 sed -e 's/^    var local: Tally = (count = 10)$/    var local: Tally/' \
+    -e '/^__fd_write(2, "ok")$/d' \
     "$tmp/callback_state.n" >"$tmp/unset_state.n"
-if "$compiler" check --no-syntax-warnings \
-        "$tmp/unset_state.n" >"$tmp/compile.out" 2>"$tmp/compile.err"; then
-    echo 'callback state with no value was retained' >&2
-    exit 1
-fi
-grep -q '`local.count` is read on a path where it has no value' \
-    "$tmp/compile.err"
 
 # A callback's `call` takes its arguments by the names its role declares,
 # in any order, as well as by position.
@@ -107,21 +102,7 @@ require joiner.call("y", 2) == "yy"
 require joined() == "ababab"
 __fd_write(2, "ok")
 EOF
-# The two callback programs are built and run as one: both make callbacks,
-# so neither runs at comptime either way, and each part's requires run as
-# they did on their own. The result writes `ok` once, after all of them.
-{
-    sed '/^__fd_write(2, "ok")$/d' "$tmp/callback_state.n"
-    cat "$tmp/callback_names.n"
-} >"$tmp/callbacks.n"
-"$compiler" build --no-syntax-warnings \
-    --output "$tmp/callbacks" "$tmp/callbacks.n" \
-    >"$tmp/compile.out" 2>"$tmp/compile.err" || {
-    cat "$tmp/compile.err" >&2
-    exit 1
-}
-"$tmp/callbacks" >"$tmp/stdout" 2>"$tmp/stderr"
-test "$(cat "$tmp/stderr")" = ok
+# (Built and run with own_equality.n below.)
 
 # A type with its own `==` (a user `__equal`, or a `__cmp` that `==`
 # follows) and no user `hash` gets no derived hash: not a record, not an
@@ -166,13 +147,23 @@ let cmp: Cmp_Holder = (inner = (v = 1), n = 2)
 let point = new[Point](1)
 require eq.inner.v + cmp.inner.v + eq.n + cmp.n + point.x == 7
 EOF
-"$compiler" build --no-syntax-warnings --output "$tmp/own_equality" \
-    "$tmp/own_equality.n" >"$tmp/own.out" 2>"$tmp/own.err" || {
-    echo 'types with their own equality failed to build' >&2
-    cat "$tmp/own.err" >&2
+# The two callback programs and own_equality.n are built and run as one:
+# their names don't clash, the callbacks keep the module from running at
+# comptime either way, and each part's requires run as they did on their
+# own. The result writes `ok` once, after all of them.
+{
+    sed '/^__fd_write(2, "ok")$/d' "$tmp/callback_state.n"
+    cat "$tmp/own_equality.n" "$tmp/callback_names.n"
+} >"$tmp/callbacks.n"
+"$compiler" build --no-syntax-warnings \
+    --output "$tmp/callbacks" "$tmp/callbacks.n" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err" || {
+    echo 'the callbacks or types with their own equality failed to build' >&2
+    cat "$tmp/compile.err" >&2
     exit 1
 }
-"$tmp/own_equality"
+"$tmp/callbacks" >"$tmp/stdout" 2>"$tmp/stderr"
+test "$(cat "$tmp/stderr")" = ok
 # Every use in one check: each is diagnosed, and nothing crashes.
 cp "$tmp/own_equality.n" "$tmp/own_use.n"
 for case in Eq_Holder:eq Cmp_Holder:cmp Point:point; do
@@ -200,12 +191,19 @@ grep -Fq 'errors not shown: 1 ' "$tmp/own.err" || {
 cp "$tmp/own_equality.n" "$tmp/own_point.n"
 printf 'var point_keyed: Dict[Point, int] = new[Dict[Point, int]]()\n' \
     >>"$tmp/own_point.n"
-cat "$tmp/maybe.n" >>"$tmp/own_point.n"
-if "$compiler" check "$tmp/own_point.n" >"$tmp/point.out" 2>"$tmp/point.err"
+cat "$tmp/maybe.n" "$tmp/unset_state.n" >>"$tmp/own_point.n"
+if "$compiler" check --no-syntax-warnings "$tmp/own_point.n" \
+        >"$tmp/point.out" 2>"$tmp/point.err"
 then
     echo 'keying by Point passed' >&2
     exit 1
 fi
+grep -q '`local.count` is read on a path where it has no value' \
+    "$tmp/point.err" || {
+    echo 'callback state with no value was retained' >&2
+    cat "$tmp/point.err" >&2
+    exit 1
+}
 # A variable that may still be `nil` on some path stays an option: both
 # of maybe.n's functions are reported (and only they say so).
 test "$(grep -c 'may be `nil`' "$tmp/point.err")" -eq 2 || {
