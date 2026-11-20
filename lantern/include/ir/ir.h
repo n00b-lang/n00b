@@ -593,6 +593,9 @@ ir_func_t   *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
                                 th_type *const *to, size_t count,
                                 core_string_t *failure);
 ir_func_t   *ir_func_find(ir_module_t *m, core_string_t name);
+// Exchanges the module's functions at positions `i` and `j` (the order
+// ir_func_at walks them in).
+bool         ir_func_swap(ir_module_t *m, size_t i, size_t j);
 bool         ir_func_discard_body(ir_func_t *function);
 bool         ir_func_set_callable_contract(ir_func_t *function,
                                            th_type *contract);

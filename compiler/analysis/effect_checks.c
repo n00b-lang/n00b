@@ -1637,6 +1637,18 @@ bounded_target(n00bb_link_analysis_t *analysis, const ir_instr_t *call,
                 (ir_annot_t){.key = n00bb_callback_bound_key,
                              .kind = IR_ANNOT_STR,
                              .s = ir_strdup(analysis->ir_context, label)});
+        // These are made as the analysis comes to the calls, in an order
+        // that depends on the whole program; keep a module's in name order
+        // among themselves, so that its IR (and its cache entry) doesn't.
+        size_t at = ir_func_count(module) - 1;
+        for (size_t i = at; target && i-- > 0;) {
+            ir_func_t *other = ir_func_at(module, i);
+            if (!core_string_starts_with(other->name,
+                    CORE_STRING_STATIC("__n00bb_callback_bound#"))) continue;
+            if (core_string_cmp(other->name, target->name) < 0) break;
+            (void)ir_func_swap(module, i, at);
+            at = i;
+        }
     }
     core_buffer_release(&name);
     return target;

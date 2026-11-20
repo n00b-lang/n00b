@@ -599,6 +599,15 @@ ir_func_t *ir_func_at(ir_module_t *m, size_t i)
     return m && i < m->n_funcs ? m->funcs[i] : nullptr;
 }
 
+bool ir_func_swap(ir_module_t *m, size_t i, size_t j)
+{
+    if (!m || i >= m->n_funcs || j >= m->n_funcs) return false;
+    ir_func_t *held = m->funcs[i];
+    m->funcs[i] = m->funcs[j];
+    m->funcs[j] = held;
+    return true;
+}
+
 bool ir_func_erase(ir_func_t *f)
 {
     ir_module_t *m  = f ? f->owner : nullptr;
