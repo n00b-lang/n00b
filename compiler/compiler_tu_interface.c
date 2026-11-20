@@ -855,6 +855,22 @@ restore_interface_function_typevars(n00bb_interface_context_t *loader,
         CORE_STRING_STATIC("n00b.function-typevars"), symbol->type);
 }
 
+// The type parameter named `name`: one of `parameters` (an alias's target's
+// variables), or else of `variables` (the others').
+static th_type *
+type_parameter_named(core_string_t name, th_type **parameters,
+                     size_t parameter_count,
+                     const n00bb_signature_typevars_t *variables)
+{
+    for (size_t p = 0; p < parameter_count; p++)
+        if (core_string_eq(th_var_name(parameters[p]), name))
+            return parameters[p];
+    for (size_t v = 0; variables && v < variables->len; v++)
+        if (core_string_eq(variables->data[v].name, name))
+            return variables->data[v].type;
+    return nullptr;
+}
+
 // The `where` constraints an interface keeps for a record, variant, object
 // or alias (register_type_constraints), on the type's own parameters,
 // matched by name: an alias's are its target's variables, the others'
@@ -889,14 +905,10 @@ restore_interface_type_constraints(n00bb_interface_context_t *loader,
         ok = th_trait_requirement_at(carrier, i, &items[i]);
         core_string_t subject = ok
             ? th_var_name(th_resolve(items[i].subject)) : (core_string_t){0};
-        th_type *found = nullptr;
-        for (size_t p = 0; subject.data && p < parameter_count && !found; p++)
-            if (core_string_eq(th_var_name(parameters[p]), subject))
-                found = parameters[p];
-        for (size_t v = 0; subject.data && variables && !found
-             && v < variables->len; v++)
-            if (core_string_eq(variables->data[v].name, subject))
-                found = variables->data[v].type;
+        th_type *found = subject.data
+            ? type_parameter_named(subject, parameters, parameter_count,
+                                   variables)
+            : nullptr;
         ok = found != nullptr;
         if (!ok) break;
         items[i].subject = found;
@@ -907,15 +919,8 @@ restore_interface_type_constraints(n00bb_interface_context_t *loader,
         th_type **to = named_count
             ? core_alloc_array(th_type *, named_count) : nullptr;
         for (size_t n = 0; to && n < named_count; n++) {
-            core_string_t var = th_var_name(named[n]);
-            to[n] = nullptr;
-            for (size_t p = 0; p < parameter_count && !to[n]; p++)
-                if (core_string_eq(th_var_name(parameters[p]), var))
-                    to[n] = parameters[p];
-            for (size_t v = 0; variables && !to[n] && v < variables->len;
-                 v++)
-                if (core_string_eq(variables->data[v].name, var))
-                    to[n] = variables->data[v].type;
+            to[n] = type_parameter_named(th_var_name(named[n]), parameters,
+                                         parameter_count, variables);
             ok = ok && to[n] != nullptr;
         }
         if (named_count)
