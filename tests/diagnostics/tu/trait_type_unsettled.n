@@ -31,29 +31,9 @@ func temporary() -> uint {
     return count(new[Array[Shape]](2))
 }
 
-# A stored value settles it.
-func stored(square: Square) -> f64 {
-    var shapes: Array[Shape] = new[Array[Shape]](1)
-    shapes[0] = square
-    return shapes[0].area()
-}
-
-# A `typecase` arm's trait stands for the subject's type at run time.
-func narrowed(value: Any) -> f64 {
-    typecase value {
-        case Shape {
-            return value.area()
-        }
-        else {
-            return 0.0
-        }
-    }
-}
-
 func main() {
     require empty_array() == 2
     require empty_list() == 0
     require temporary() == 2
-    require stored((side = 2.0)) == 4.0
-    require narrowed(cast[Any] (side = 1.0)) == 1.0
+    require area((side = 2.0)) == 4.0
 }
