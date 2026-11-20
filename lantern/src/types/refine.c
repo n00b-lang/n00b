@@ -8,8 +8,10 @@
 #include "lib/list.h"
 
 typedef ir_instr_t *ty_instr_ptr_t;
+typedef ir_block_t *ty_block_ptr_t;
 
 core_list_decl(ty_instr_ptr_t);
+core_list_decl(ty_block_ptr_t);
 
 typedef struct {
     ir_value_t    *subject;
@@ -359,6 +361,60 @@ static ir_instr_t *test_branch(const test_t *t)
     return t->branch->instrs[t->branch->n_instrs - 1];
 }
 
+// Whether `write` reaches `use` without passing through the test's branch:
+// a path through the branch tests the place again, and its present edge
+// sets the shadow afresh, so a write before it is no write after the test.
+// (A loop re-tests its condition at its header before each pass.)
+static bool reaches_untested(const test_t *t, ir_instr_t *write,
+                             ir_instr_t *use)
+{
+    ir_block_t *from = write->block;
+    ir_block_t *to   = use->block;
+
+    if (from == to && write->index < use->index) {
+        return true;
+    }
+    if (from == t->branch) {
+        // Only a write between the test's read and its branch escapes it.
+        return t->read && t->read->block == from
+            && write->index > t->read->index;
+    }
+
+    ir_func_t                  *f     = from->owner;
+    core_list_t(ty_block_ptr_t) stack = core_list_new(ty_block_ptr_t);
+    core_dict_t                 seen;
+    bool                        found = false;
+
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_push(stack, from);
+    while (stack.len && !found) {
+        ir_block_t *block = stack.data[--stack.len];
+        ir_instr_t *end   = ir_block_terminator(block);
+
+        for (uint32_t s = 0; end && !found && s < ir_succ_count(end); s++) {
+            ir_block_t *next    = ir_succ_at(end, s);
+            bool        visited = false;
+
+            if (!next || next == t->branch) {
+                continue;
+            }
+            if (next == to) {
+                found = true;
+                break;
+            }
+            core_dict_get(&seen, next, &visited);
+            if (!visited && next->owner == f) {
+                core_dict_put(&seen, next, next);
+                core_list_push(stack, next);
+            }
+        }
+    }
+    core_dict_free(&seen);
+    core_list_free(stack);
+
+    return found;
+}
+
 static bool shadow_reaches(refine_t *r, const test_t *t, ir_instr_t *use)
 {
     const void *location = location_of(t->read);
@@ -371,7 +427,8 @@ static bool shadow_reaches(refine_t *r, const test_t *t, ir_instr_t *use)
 
             if (writes_location(in, location) && !present_value(in)
                 && ir_instr_reaches(r->reach, branch, in)
-                && ir_instr_reaches(r->reach, in, use)) {
+                && ir_instr_reaches(r->reach, in, use)
+                && reaches_untested(t, in, use)) {
                 return false;
             }
         }

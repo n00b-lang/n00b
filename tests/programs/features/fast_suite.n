@@ -599,7 +599,22 @@ func when_main() -> bool {
         and point.x == 5 and when_answer == 42
 }
 
+# A global the loop condition proves present, set to nil after its read in
+# the body: the condition tests it again before each pass.
+var loop_cursor: int? = 3
+
+func loop_bindings_main() -> bool {
+    var total: int = 0
+    while loop_cursor != nil {
+        let value: int = loop_cursor
+        total += value
+        loop_cursor = nil
+    }
+    return total == 3
+}
+
 gc_collect_main()
+require loop_bindings_main()
 require random_main()
 require options_main()
 require atomics_main()
