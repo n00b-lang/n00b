@@ -1,0 +1,4 @@
+binding kv for rust import {
+    strip_prefix "kv_"
+    name kv_open "Db::open"
+}

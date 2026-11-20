@@ -1,0 +1,12 @@
+library sqlite3
+link    "sqlite3"
+header  <sqlite3.h>
+header  <sqlite3ext.h>
+define  SQLITE_ENABLE_COLUMN_METADATA
+include_path "/opt/sqlite/include"
+compile_commands "build/compile_commands.json"
+encoding utf8
+platforms any
+lang    c
+
+import <sqlite3.h> raw

@@ -1,0 +1,2 @@
+handle WeakRef = *GWeakRef release g_weak_ref_clear
+fn g_weak_ref_get(w: WeakRef) -> own ?GObj

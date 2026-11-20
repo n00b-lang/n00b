@@ -1,0 +1,4 @@
+refine some_api {
+    -> *cstr unknown
+    note "docs say 'valid until next call' but unclear if per-thread"
+}

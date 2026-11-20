@@ -1,0 +1,12 @@
+fn write(fd: c_int, buf: *[u8; count], count: usize) -> isize error ret < 0 via errno
+
+fn read(fd: c_int, buf: out *[u8; cap count, len ret], count: usize) -> isize
+  error ret < 0 via errno
+
+fn snprintf(buf: out ?[c_char; cap n, len min(ret, n - 1)], n: usize, fmt: *cstr, ...) -> c_int
+  sizing query(buf = null, n = 0) needs ret + 1
+
+fn execv(path: *cstr, argv: *[*cstr; until null]) -> c_int error ret == -1 via errno
+
+struct iovec { iov_base: *[u8; iov_len], iov_len: usize }
+fn writev(fd: c_int, iov: *[iovec; iovcnt], iovcnt: c_int) -> isize error ret < 0 via errno

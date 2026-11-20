@@ -1,0 +1,17 @@
+fn errno_location() -> *c_int static per thread
+  source "errno" macro
+  symbol "__errno_location" when libc == glibc
+  symbol "__error"          when os == macos
+  symbol "_errno"           when os == windows
+
+fn stat(path: *cstr, buf: out *Stat) -> c_int error ret != 0 via errno
+  symbol "stat$INODE64" when os == macos and arch == x86_64
+
+fn CreateFile(name: *cstr(utf16), ...) -> own ?Handle release CloseHandle
+  symbol "CreateFileW"
+
+fn memcpy(...)
+  symbol "memcpy" version "GLIBC_2.14" when libc == glibc
+
+fn bswap32(x: u32) -> u32
+  symbol none

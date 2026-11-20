@@ -1,0 +1,10 @@
+library audio_host
+interface host provided by library {
+    fn host_log(level: c_int, msg: *cstr)
+    fn host_alloc(n: usize) -> own ?void release host_free
+}
+interface plugin provided by client {
+    fn plugin_init(host_version: u32) -> c_int
+    fn plugin_process(buf: inout *[f32; n], n: usize)  thread any
+    var plugin_name: [c_char; until 0] const
+}

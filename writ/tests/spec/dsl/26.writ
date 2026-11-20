@@ -1,0 +1,13 @@
+error_channel errno per thread {
+    value errno_location()
+}
+
+error_channel last_error per thread {
+    text resharp_last_error(buf, cap)
+    valid until next failure on thread
+}
+
+error_channel db_message per handle Db {
+    text sqlite3_errmsg(db)
+    valid until next any(db)
+}

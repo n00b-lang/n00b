@@ -1,0 +1,3 @@
+fn kv_open(path: *cstr, out_db: out *Db) -> c_int
+  source "kv_open"
+  symbol "kv_open"

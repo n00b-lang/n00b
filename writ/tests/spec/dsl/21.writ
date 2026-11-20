@@ -1,0 +1,12 @@
+handle Doc = *xmlDoc release xmlFreeDoc
+
+struct xmlNode {
+    parent:   ?xmlNode with doc
+    children: ?xmlNode with doc
+    next:     ?xmlNode with doc
+    doc:      *xmlDoc   with doc
+}
+
+fn xmlDocGetRootElement(doc: Doc) -> ?xmlNode with doc
+fn xmlUnlinkNode(n: *xmlNode)
+fn xmlFreeNode(n: consume *xmlNode)

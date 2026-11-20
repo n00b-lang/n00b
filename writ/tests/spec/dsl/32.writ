@@ -1,0 +1,2 @@
+fn deflateInit(strm: inout *z_stream, level: c_int) -> c_int
+  expands deflateInit_(strm, level, ZLIB_VERSION, sizeof(z_stream))

@@ -1,0 +1,53 @@
+library resharp
+link "resharp_writ"
+
+enum Status : c_int {
+    Status_Ok = 0,
+    Status_None = 1,
+    Status_Error = 2,
+    Status_Panic = 3,
+} closed
+
+fn error_message(buf: out *[u8; cap cap, len min(ret, cap)], cap: usize) -> usize
+    sizing retry needs ret
+    symbol "writ_resharp_last_error"
+
+error_channel last_error per thread {
+    text error_message(buf, cap)
+    valid until next failure on thread
+}
+
+struct Match {
+    start: usize,
+    end: usize,
+}
+
+opaque writ_resharp_regex
+handle Regex = *writ_resharp_regex release regex_free shared
+fn regex_free(value: consume ?writ_resharp_regex) symbol "writ_resharp_regex_free"
+
+fn regex_new(
+    pattern: utf8[pattern_len] null if empty,
+    pattern_len: usize,
+    out: out *Regex own,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    symbol "writ_resharp_regex_new"
+
+fn regex_find_all(
+    self: Regex,
+    input: bytes[input_len] null if empty,
+    input_len: usize,
+    out: out *[Match; cap out_cap, len min(*out_total, out_cap)],
+    out_cap: usize,
+    out_total: out *usize,
+) -> c_int as Status
+    outcome ok success when ret == Status_Ok
+    outcome failed failure when ret == Status_Error via last_error
+    outcome panicked failure via last_error
+    on error out: unset
+    sizing retry for out needs *out_total
+    symbol "writ_resharp_regex_find_all"

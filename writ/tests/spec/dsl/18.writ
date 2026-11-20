@@ -1,0 +1,2 @@
+allocator malloc       alloc malloc        release free
+allocator sqlite       alloc sqlite3_malloc release sqlite3_free

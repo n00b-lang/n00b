@@ -1,0 +1,24 @@
+library resharp
+lang rust
+crate resharp "0.7.6"
+feature capture_groups = cargo "experimental_capture_groups"
+
+struct Match { start: usize, end: usize }
+enum UnicodeMode { Ascii, Default, Full, Javascript }
+opaque RegexOptions
+opaque Regex
+error resharp::Error display
+
+impl RegexOptions {
+    fn default() -> RegexOptions
+    fn unicode(self, mode: UnicodeMode) -> RegexOptions
+    fn hardened(self, on: bool) -> RegexOptions
+}
+
+impl Regex {
+    fn new(pattern: &str) -> Result<Regex, resharp::Error>
+    fn with_options(pattern: &str, options: RegexOptions) -> Result<Regex, resharp::Error>
+    fn is_match(&self, haystack: &[u8]) -> Result<bool, resharp::Error>
+    fn find_all(&self, haystack: &[u8]) -> Result<Vec<Match>, resharp::Error>
+    fn find_anchored(&self, haystack: &[u8]) -> Result<Option<Match>, resharp::Error>
+}

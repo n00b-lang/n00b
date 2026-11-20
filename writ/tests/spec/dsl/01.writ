@@ -1,0 +1,14 @@
+library zlib
+link    "z"
+header  <zlib.h>
+
+const Z_OK: c_int = 0
+
+fn compress2(
+    dest:      out *[u8; cap destLen.in, len destLen.out],
+    destLen:   inout *c_ulong,
+    source:    *[u8; sourceLen],
+    sourceLen: c_ulong,
+    level:     c_int,
+) -> c_int
+  error ret != Z_OK

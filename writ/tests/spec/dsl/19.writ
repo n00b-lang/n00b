@@ -1,0 +1,7 @@
+struct Config {
+    name:   own *cstr release free
+    parent: ?Config with self
+    label:  *cstr static
+}
+
+fn config_free(c: consume *Config)

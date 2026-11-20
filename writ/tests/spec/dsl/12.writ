@@ -1,0 +1,2 @@
+struct Span { start: usize, end: usize } none { start: usize_max, end: usize_max }
+handle Fd = c_int none -1 release close

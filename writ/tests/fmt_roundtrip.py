@@ -3,7 +3,7 @@ import subprocess
 import sys
 import tempfile
 
-from spec_examples import TAGS, blocks
+from spec_examples import EMBEDDED, examples
 
 writ = os.path.abspath(sys.argv[1])
 inputs = sys.argv[2:]
@@ -15,19 +15,12 @@ def run(flags, *args):
 
 def sources(scratch):
     for path in inputs:
-        if not path.endswith(".md"):
+        if not os.path.isdir(path):
             embedded = os.sep + "embedded" + os.sep in path
-            yield path, path, TAGS["writ-embedded" if embedded else "writ"]
+            yield path, path, EMBEDDED if embedded else []
             continue
-        ordinal = 0
-        for _, tag, body in blocks(path):
-            if tag not in TAGS:
-                continue
-            ordinal += 1
-            name = os.path.join(scratch, f"{os.path.basename(path)}-{ordinal}.writ")
-            with open(name, "w", encoding="utf-8") as out:
-                out.write("\n".join(body) + "\n")
-            yield name, f"{path} example {ordinal}", TAGS[tag]
+        for ordinal, flags, source in examples(path):
+            yield source, f"{path} example {ordinal}", flags
 
 
 failures = 0

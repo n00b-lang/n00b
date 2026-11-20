@@ -1,0 +1,20 @@
+callback Cmp = fn(a: *void, b: *void) -> c_int
+  thread same
+  unwind no
+
+fn qsort(
+    base:   inout *[u8; nmemb * size],
+    nmemb:  usize,
+    size:   usize,
+    compar: Cmp for call,
+)
+
+callback Handler = fn(ud: *void userdata, ev: *Event) -> void
+  thread any
+  reentrant no
+
+fn bus_subscribe(
+    bus: Bus,
+    cb:  keep Handler until bus_unsubscribe(bus, ret), release(bus),
+    ud:  ?void userdata cb,
+) -> SubId

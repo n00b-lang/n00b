@@ -1,30 +1,20 @@
 import concurrent.futures
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 CONTRACTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "contracts")
-TAGS = {
-    "writ": [],
-    "writ-embedded": ["--embedded", "n00b", "--contract-dir", CONTRACTS],
-}
+EMBEDDED = ["--embedded", "n00b", "--contract-dir", CONTRACTS]
 
 
-def blocks(path):
-    with open(path, encoding="utf-8") as source:
-        lines = source.read().split("\n")
-    current = None
-    for number, line in enumerate(lines, 1):
-        if line.startswith("```"):
-            if current is None:
-                current = (number, line[3:].strip(), [])
-            else:
-                yield current
-                current = None
-        elif current is not None:
-            current[2].append(line)
+def examples(directory):
+    for name in sorted(os.listdir(directory)):
+        if name.endswith(".writ"):
+            embedded = name.endswith(".embedded.writ")
+            yield int(name.split(".", 1)[0]), EMBEDDED if embedded else [], os.path.join(directory, name)
 
 
 def run_example(writ, flags, path):
@@ -39,22 +29,17 @@ def main():
     failed = False
     with tempfile.TemporaryDirectory() as scratch:
         prefix = re.compile(r"[^\s`]*" + re.escape(os.path.basename(scratch)) + r"[/\\]")
-        examples = []
-        for document in sys.argv[2:]:
-            name = os.path.basename(document)
-            ordinal = 0
-            for _, tag, body in blocks(document):
-                if tag not in TAGS:
-                    continue
-                ordinal += 1
-                path = os.path.join(scratch, f"{name}-{ordinal}.writ")
-                with open(path, "w", encoding="utf-8") as out:
-                    out.write("\n".join(body) + "\n")
-                examples.append((name, ordinal, TAGS[tag], path))
+        found = []
+        for directory in sys.argv[2:]:
+            label = os.path.basename(os.path.normpath(directory))
+            for ordinal, flags, source in examples(directory):
+                path = os.path.join(scratch, f"{label}-{ordinal}.writ")
+                shutil.copyfile(source, path)
+                found.append((label, ordinal, flags, path))
         with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
-            results = list(pool.map(lambda example: run_example(writ, example[2], example[3]), examples))
-        for (name, ordinal, _, _), (parsed, output) in zip(examples, results):
-            print(f"== {name} example {ordinal}")
+            results = list(pool.map(lambda example: run_example(writ, example[2], example[3]), found))
+        for (label, ordinal, _, _), (parsed, output) in zip(found, results):
+            print(f"== {label} example {ordinal}")
             if parsed != 0:
                 failed = True
                 print("parse failed")

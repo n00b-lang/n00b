@@ -1,0 +1,9 @@
+when os == windows {
+    type wchar = u16
+} else {
+    type wchar = u32
+}
+
+when platform in [x86_64-*, aarch64-*] {
+    type reg = u64
+}

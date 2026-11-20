@@ -1,0 +1,34 @@
+library kernel
+platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+  number 1 when arch == x86_64
+  number 64 when arch == aarch64
+  effects output, blocking
+
+syscall read(fd: c_int, buf: *u8, count: usize) -> isize
+  number 0 when arch == x86_64
+  number 63 when arch == aarch64
+  effects input, blocking
+
+syscall openat(dirfd: c_int, path: *u8, flags: c_int, mode: c_uint) -> c_int
+  number 257 when arch == x86_64
+  number 56 when arch == aarch64
+  effects input
+
+syscall mmap(addr: *void, len: usize, prot: c_int, flags: c_int,
+             fd: c_int, offset: isize) -> *void
+  number 9 when arch == x86_64
+  number 222 when arch == aarch64
+  effects none
+
+syscall getpid() -> c_int
+  number 39 when arch == x86_64
+  number 172 when arch == aarch64
+  infallible
+  effects none
+
+syscall exit_group(status: c_int)
+  number 231 when arch == x86_64
+  number 94 when arch == aarch64
+  effects noreturn

@@ -1,0 +1,8 @@
+type uLong = c_ulong
+
+opaque sqlite3
+opaque sqlite3_stmt
+opaque stat_buf source "struct stat"
+
+handle Db   = *sqlite3       release sqlite3_close_v2
+handle Stmt = *sqlite3_stmt  release sqlite3_finalize
