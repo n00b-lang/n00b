@@ -1,6 +1,0 @@
-func idle():
-    pass
-
-func braced() {
-    pass
-}

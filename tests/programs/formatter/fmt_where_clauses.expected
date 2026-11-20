@@ -1,7 +1,0 @@
-import hashing
-func key_hash(key: 'K) -> u128 where 'K: hashing.Hash {
-    return 1
-}
-func both(a: 'A, b: 'B) -> int where 'A: Container[int] + hashing.Hash, 'B: != int {
-    return 1
-}

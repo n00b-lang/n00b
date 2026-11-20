@@ -1,0 +1,398 @@
+// Each case below is formatted with the others, so a comment heads each
+// one: a comment ends a run of aligned declarations.
+
+// Array dimensions
+var rows: Array[int][2] [] []
+var grid: Array[float] [] []
+var cube: Array[int][3][3] [3]
+
+// Binding patterns
+const (answer, (other, _ ) ) = (1, (2, 0))
+let ( first, second: int ) = (1, 2)
+for (k, v ) in pairs {
+    _ = k
+}
+(target_a, target_b ) = (1, 2)
+(left, (right, _ ) ) = (1, (2, 3))
+
+// Block bodies
+trait Store {
+  func fixup(modify self: 'T) -> nil fail: string
+        func take(consume self: 'T, count: int) -> int
+}
+
+callback Scale {
+call (value: int) -> int
+      handler (value: int) -> int
+}
+
+variant Shape {
+      circle: int
+  square: int
+}
+
+// Block values
+func block_around_if(c: bool) -> int {
+    let y = {
+        let z = if c { -> 10 } else { -> 20 }
+        -> z + 1
+    }
+    -> y
+}
+func one(c: bool) -> int {
+    let v = { -> 3 }
+    return v
+}
+
+// Branches
+func classify(value: int) -> int {
+    switch value {
+        case 1 { return 10 }
+        else { return 0 }
+    }
+}
+
+func classify_type(value: Any) -> int {
+    typecase value {
+        case int { return value }
+        else { return 0 }
+    }
+}
+
+func choose(value: int) -> int {
+    return switch value {
+        case 1 { -> 10 }
+        else { -> 0 }
+    }
+}
+
+func compact(value: int) -> int { return switch value { case 1 { -> 2 } else { -> 3 } } }
+
+func compact_type(value: Any) -> int { return typecase value { case int { -> value } case string { -> 4 } else { -> 0 } } }
+
+func nested(value: int) -> int {
+    switch value {
+        case 1 {
+            // Keep this comment with the inner switch.
+            switch value {
+                case 1 { return 11 }
+                else { return 0 }
+            }
+        }
+        else { return 3 }
+    }
+}
+
+// Callback roles
+callback Counter {
+    call (value: int) -> int
+    handler  (modify state: Tally, value: int) -> int
+    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
+}
+
+// Casts
+func f(bits: u32, n: int, m: u128) -> u8 {
+    let a: u8 = cast[u8]bits
+    let b: int = cast[int](n - 1)
+    let c: u64 = unsafe_cast[u64](m >> 64)
+    let d: u64 = unsafe_cast[u64]m
+    let e: Array[u8] = new[Array[u8]](cast[int] n)
+    let g: u8 = cast[u8] '\n'
+    let h: i8 = cast[i8] -1
+    let k: List[int] = cast[List[int]] [1, 2]
+    return a
+}
+
+// Continuation lines
+func compare_key(flag: bool) -> int {
+    if flag {
+    panic.panic("cannot sort a dictionary by key: its key type is not " +
+        "`Comparable`")
+    }
+    return 0
+}
+
+// Default parameters
+func concat(self: int, src: string, to_front:bool = false) {
+}
+func two(a: int, b:int = 1) {
+}
+func one(b:int = 1) {
+}
+func modes(view v:int = 1, modify m: int = 2) {
+}
+func untyped(b = 1) {
+}
+
+// Effect bodies
+effect Audited {
+    from: note
+  handled_by: flush
+        scope: caller
+}
+
+mark Untrusted {
+from: read_env
+    cleared_by: check(path)
+    rejected_by: open(path)
+}
+
+// Effect clauses
+effect Audited {
+    from:note,  stamp
+}
+
+effect Handled {
+    handled_by:flush
+}
+
+effect Scoped {
+    scope:caller
+}
+
+mark Cleared {
+    cleared_by:check ( path ),  vet ( path )
+}
+
+mark Rejected {
+    rejected_by:open ( path )
+}
+
+// Effect queries
+trait Render {
+    func render(self: 'T) -> string
+    func size(self: 'T) -> int
+    !may_effect(render,output) or has_effect(render,clock)
+    ! ( may_effect(size,input) and may_effect(size,output) )
+    forbids_effect(render,input) or forbids_effect(size,input)
+    not (has_effect(size,clock))
+}
+
+has_effect(g,alpha.Audited)
+forbids_effect(h,alpha.Audited)
+
+func checked() -> bool {
+    return may_effect(io.Read) and forbids_effect(checked,impure)
+}
+
+// Empty braces
+var themes: Dict[string, int] = { }
+let pair = (left = 1, right = {  })
+func mirror() -> int {
+    return { }'mirror
+}
+
+// Enum items
+enum Kind {
+    eof = 0, newline, rule_name, assign, pipe, lparen, rparen, question, star,
+    plus,comma,  class_ref, hard_lit, lit, directive
+}
+
+flagset Flags {
+    a, b,
+    c,d
+}
+
+// For bindings
+func total(items: List[int], n: uint) -> int {
+    var sum: int = 0
+    for i:uint from 0 until n {
+        sum += 1
+    }
+    for item:int in items {
+        sum += item
+    }
+    return sum
+}
+
+// Function spellings
+fn a_very_long_function_name_that_should_wrap(first_parameter_with_a_long_name: int, second_parameter_with_a_long_name: int) -> int {
+    return first_parameter_with_a_long_name
+}
+
+function another_long_function_name(first_parameter_with_a_long_name: int, second: int) -> int {
+    return second
+}
+
+private fn private_long_function_name(first_parameter_with_a_long_name: int, second: int) -> int {
+    return second
+}
+
+int litmod meters_from_a_long_literal(contents: string, site_with_a_long_name: int) -> int {
+    return site_with_a_long_name
+}
+
+// Function type entries
+alias Keyed = Ref[(int, scale:int) -> int]
+alias Two = Ref[(int, b:int, zz:  int) -> int]
+alias Starred = Ref[(int, ** scale:int, zz:int) -> int]
+alias Spread = Ref[(int, * int) -> int]
+alias Spread_Keyed = Ref[(int, *  int, scale:int) -> int]
+let by_name: Ref[(int, scale:int) -> int] = nil
+
+// Function types
+let reader: Ref[( )->int] = nil
+let failing: Ref[()  fail: string] = nil
+let paired: Ref[(int,)->int] = nil
+let plain: Ref[(int)->int] = nil
+
+// Named fields
+let typed = (left:int = 1, right:  int = 2)
+
+// Not operator
+let stacked = not!p
+let grouped = not(p)
+
+func g(x: bool) -> int {
+    if not x { return 1 }
+    return 2
+}
+
+// Package exports (one package per file: fmt_package_body.n has another)
+import a
+
+package demo . pkg {
+    export shape
+    export a.limit
+    export a.size as measure
+    export a . inner.area to other .pkg
+}
+
+// Parenthesized types
+func pick(view x: ( int | string )) -> int {
+    return 0
+}
+let maybe: (int | string)? = nil
+let bounded: Array[( 'T where 'T: Integer )] = nil
+
+// Region anchors
+#[outer#
+func total(items: List[int]) -> int {
+  var sum: int = 0
+#[loop#
+    for item in items {
+        sum += item
+    }
+        #]loop#
+    return sum
+}
+#]outer#
+
+// Return skin (fmt_return_skin.n is normalized too)
+fn spaced(a: bool) return : bool
+{
+    return a
+}
+
+// Sized integers
+let raw: bits:10 = cast[bits:10](3)
+let small: i:7 = 3
+let wide: u:0x10 = 4
+
+// Slices
+let a = [1, 2, 3, 4]
+let b = a[2:  -2]
+let c = a[:  3]
+let d = a[1:]
+let e = a[1  to  2]
+let f = a[1 until   3]
+let g = a[-3  to -1]
+let h = a[(1: int):   3]
+let i = a[:]
+
+// Trait receivers
+trait Fixup {
+    func fixup(modify self:'T) -> nil fail: string
+}
+
+trait Peek {
+    func peek(view self:'T) -> int
+}
+
+trait Take {
+    func take(consume self:'T) -> int
+}
+
+// Try bodies
+func a() -> int {
+    try {
+        let x: int = risky()!
+  let y: int = x + 1
+            return y
+    } fail(e) {
+        let z: int = 0
+        return z
+    }
+}
+
+// Try handlers
+func a() -> int {
+    try {
+        return risky()!
+    } fail ( diags ) {
+        return 0
+    }
+}
+
+func c() -> int {
+    try {
+        return risky()!
+    } fail ( ) {
+        return 2
+    }
+}
+
+func d() -> int {
+    let v = try {
+        -> risky()!
+    } fail (e) {
+        -> 3
+    }
+    return v
+}
+
+// Varargs
+func total(first: int, * rest:int) -> int {
+    return first
+}
+func count(* items:'T) -> int {
+    return 0
+}
+func viewed(view * items:string) -> int {
+    return 0
+}
+func earlier(a: int, * rest:int, k: int = len(rest)) -> int {
+    return a
+}
+func untyped(* rest) -> int {
+    return 0
+}
+
+// Variants
+record Alt {
+    weight: int
+}
+
+variant Atom {
+    rule:uint
+    literal:uint
+    group:List[Alt]
+}
+
+// Where clauses
+import hashing
+func key_hash(key: 'K) -> u128 where 'K:hashing . Hash {
+    return 1
+}
+func both(a: 'A, b: 'B) -> int where 'A: Container [int] + hashing.Hash, 'B: != int {
+    return 1
+}
+
+// Colon blocks: last, as a comment after an indented block would belong
+// to the block
+func f(x: bool) -> int :
+    if x :
+        return 1
+    while x  :
+        pass
+    return 2

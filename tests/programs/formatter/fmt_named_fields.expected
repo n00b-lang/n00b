@@ -1,2 +1,0 @@
-let typed = (left: int = 1, right: int = 2)
-let plain = (left = 1, right = 2)

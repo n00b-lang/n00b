@@ -1,5 +1,0 @@
-func pick(view x: ( int | string )) -> int {
-    return 0
-}
-let maybe: (int | string)? = nil
-let bounded: Array[( 'T where 'T: Integer )] = nil

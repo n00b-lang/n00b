@@ -1,5 +1,0 @@
-callback Counter {
-    call (value: int) -> int
-    handler  (modify state: Tally, value: int) -> int
-    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
-}

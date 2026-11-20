@@ -1,5 +1,0 @@
-var themes: Dict[string, int] = {}
-let pair = (left = 1, right = {})
-func mirror() -> int {
-    return {}'mirror
-}

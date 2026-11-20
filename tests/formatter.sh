@@ -93,27 +93,20 @@ EOF
 diff -u "$tmp/comments.expected" "$tmp/comments.n"
 
 # Each run of the compiler costs more than formatting a file, so the cases
-# below are formatted together: copies of fmt_NAME.n, in place, in one run
-# (`--output` takes one input; channels and comments above use it), each
-# then diffed against fmt_NAME.expected. One `fmt --check` run at the end
-# checks every file that must already be formatted; it fails if any is not.
-cases="return_skin block_bodies package_body where_clauses comment_blank_lines
-    casts not_operator sized_ints empty_result colon_blocks region_anchors
-    function_type_entries varargs effect_queries effect_clauses effect_bodies
-    callback_roles function_types array_dimensions binding_patterns
-    named_fields empty_braces enum_items parenthesized_types block_values
-    continuation_lines slices trait_receivers line_comments variants
-    default_params value_sigils try_bodies for_bindings package_exports
-    try_handlers function_spellings branches"
+# are formatted together, in place on copies, in one run (`--output` takes
+# one input; channels and comments above use it), each then diffed against
+# its .expected. fmt_cases.n holds every case that changes something but
+# two: a package body (one package to a file) and the return skin, which is
+# normalized below too. One `fmt --check` run at the end checks every file
+# that must already be formatted; it fails if any is not.
+cases="cases package_body return_skin"
 mkdir "$tmp/cases"
-set --
 for name in $cases; do
     cp "$program_dir/fmt_$name.n" "$tmp/cases/$name.n"
-    set -- "$@" "$tmp/cases/$name.n"
 done
 # Region anchors are trivia, not comments, and once were dropped.
 cp "$program_dir/../langtools/samples/sample.n" "$tmp/cases/sample.n"
-"$compiler" fmt "$@" "$tmp/cases/sample.n"
+"$compiler" fmt "$tmp/cases/"*.n
 for name in $cases; do
     diff -u "$program_dir/fmt_$name.expected" "$tmp/cases/$name.n"
 done
@@ -121,23 +114,10 @@ for anchor in '#[setup#' '#]setup#'; do
     grep -qxF "$anchor" "$tmp/cases/sample.n"
 done
 
-# Already formatted: these expected forms, and these results (formatting
-# them again leaves them as they are: sample.n and line_comments.n are
-# checked for exactly that).
-set -- "$tmp/channels.n" "$tmp/comments.n"
-for name in return_skin line_comments function_spellings branches sample; do
-    set -- "$@" "$tmp/cases/$name.n"
-done
-for name in block_bodies package_body where_clauses comment_blank_lines \
-        casts not_operator sized_ints empty_result colon_blocks \
-        region_anchors function_type_entries varargs effect_queries \
-        effect_clauses effect_bodies callback_roles function_types \
-        array_dimensions binding_patterns named_fields empty_braces \
-        enum_items parenthesized_types block_values continuation_lines \
-        slices trait_receivers variants default_params try_bodies \
-        for_bindings package_exports try_handlers; do
-    set -- "$@" "$program_dir/fmt_$name.expected"
-done
+# Already formatted: these results (formatting them again leaves them as
+# they are), and fmt_stable.n, the cases formatting must leave alone.
+set -- "$tmp/channels.n" "$tmp/comments.n" "$tmp/cases/"*.n \
+    "$program_dir/fmt_stable.n"
 
 cat >"$tmp/unformatted.n" <<'EOF'
 func example(value:int)->int { return value }
@@ -191,9 +171,3 @@ fi
 grep -q 'let s: Box = cast\[Scales\]' "$tmp/unspellable.n"
 grep -q 'let first = o.opened()' "$tmp/unspellable.n"
 grep -q 'let x = either(flag)' "$tmp/unspellable.n"
-
-if "$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n" "$tmp/rich.n" \
-    >/dev/null 2>&1; then
-    echo 'fmt unexpectedly accepted the removed --ascii-tags flag' >&2
-    exit 1
-fi

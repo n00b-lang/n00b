@@ -1,7 +1,0 @@
-const (answer, (other, _ ) ) = (1, (2, 0))
-let ( first, second: int ) = (1, 2)
-for (k, v ) in pairs {
-    _ = k
-}
-(target_a, target_b ) = (1, 2)
-(left, (right, _ ) ) = (1, (2, 3))

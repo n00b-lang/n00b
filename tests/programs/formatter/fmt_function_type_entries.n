@@ -1,6 +1,0 @@
-alias Keyed = Ref[(int, scale:int) -> int]
-alias Two = Ref[(int, b:int, zz:  int) -> int]
-alias Starred = Ref[(int, ** scale:int, zz:int) -> int]
-alias Spread = Ref[(int, * int) -> int]
-alias Spread_Keyed = Ref[(int, *  int, scale:int) -> int]
-let by_name: Ref[(int, scale:int) -> int] = nil

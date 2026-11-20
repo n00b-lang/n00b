@@ -1,4 +1,0 @@
-let reader: Ref[( )->int] = nil
-let failing: Ref[()  fail: string] = nil
-let paired: Ref[(int,)->int] = nil
-let plain: Ref[(int)->int] = nil
