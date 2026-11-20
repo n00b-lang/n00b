@@ -1,0 +1,7 @@
+import contract
+import int_impl
+
+// Exports the trait, not the module implementing it for `int`.
+package hidden_impls {
+    export contract.Render
+}

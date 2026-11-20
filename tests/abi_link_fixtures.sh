@@ -44,7 +44,7 @@ library_dump() {
 # own (the first root's object is not the same as another root's), and its
 # other roots only add modules the check doesn't look at.
 library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
-    abi_value_root foreign_enum_user cycles.cycle_first
+    abi_value_root foreign_enum_user cycles.cycle_first partial_method_root
 # These builds' linked libraries are checked below as well.
 library_dump "$abi_programs" "$tmp/cycle_long" cycles.cycle_long_a
 library_dump "$abi_programs" "$tmp/cycle_self" cycles.cycle_self
@@ -144,6 +144,12 @@ N00B_PATH="$abi_programs" "$compiler" library \
     --output "$tmp/abi_value_library_multi.n00bm" abi_value_root abi_value_dep
 "$abi_link_input_test" --linked-library "$tmp/abi_value_library_multi.n00bm"
 "$abi_record_object_test" "$abi/foreign_enum_user.n00bm" import-enum
+# A trait-bound generic whose implementations sit in a module its package's
+# manifest doesn't export: its bound is one IMPLEMENTS constraint, with no
+# call shapes for the trait's methods it calls.
+"$abi_record_object_test" "$abi/partial_method_root.n00bm" partial-call-shape
+"$abi_record_object_test" "$abi/linked.n00bm" partial-call-shape
+"$abi_register_object_test" "$abi/linked.n00bm" '>=4'
 "$abi_record_object_test" "$tmp/interfaces/foreign_flagset_user.n00bm" \
     import-flagset
 [ -s "$tmp/interfaces/operator_enum_signed_user.n00bm" ]

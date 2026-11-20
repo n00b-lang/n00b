@@ -13,4 +13,3 @@ tests/programs/abi/string_storage.n ABI fixtures, rewritten after the ABI row ch
 tests/programs/abi/trait_methods.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
 tests/programs/abi/variant.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
 tests/programs/abi/where_excludes.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
-tests/programs/abi/partial_method_root.n call shapes for trait-bound generics, under review

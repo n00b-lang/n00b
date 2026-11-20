@@ -1,0 +1,10 @@
+// A type implements a trait with functions found anywhere in the program,
+// including a module its package's manifest doesn't export.
+import hidden_impls
+
+func generic_render(view item: 'T) -> int where 'T: hidden_impls.Render {
+    return item.render() + item.measure()
+}
+
+let three: int = 3
+require generic_render(three) == 6

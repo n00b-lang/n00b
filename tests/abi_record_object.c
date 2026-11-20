@@ -819,31 +819,34 @@ check_partial_call_shape(const core_object_section_t *metadata,
                          const n00bb_abi_directory_entry_t *entries,
                          size_t count)
 {
-    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
-        N00B_ABI_TABLE_TYPE);
+    // A generic bound by a trait (`'T: partial_method_package.Render`) that
+    // calls some of the trait's methods records the bound itself: the
+    // trait's own method rows give the calls' signatures, so no call shapes
+    // are needed for them (a cross-module program linking such a generic
+    // with an implementing type in a third module builds and runs).
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
+        N00B_ABI_TABLE_FUNCTION);
     const n00bb_abi_directory_entry_t *constraints = entry_for(entries,
         count, N00B_ABI_TABLE_CONSTRAINT);
-    const n00bb_abi_directory_entry_t *shapes = entry_for(entries, count,
-        N00B_ABI_TABLE_CALL_SHAPE);
-    assert(types && constraints && shapes && shapes->record_count > 1);
-    const n00b_abi_type_v1 *nil_type = row_at(metadata, types, 0);
-    assert(nil_type && nil_type->kind == N00B_ABI_TYPE_NIL);
-    bool found = false;
-    for (uint32_t i = 1; i < constraints->record_count; i++) {
-        const n00b_abi_constraint_v1 *constraint = row_at(metadata,
-            constraints, i);
-        if (constraint->kind != N00B_ABI_CONSTRAINT_METHOD
-            || !constraint->call_shape_index) continue;
-        assert(constraint->call_shape_index < shapes->record_count);
-        const n00b_abi_call_shape_v1 *shape = row_at(metadata, shapes,
-            constraint->call_shape_index);
-        if (shape->failure_type_index != 0)
-            continue;
-        assert(shape->success_type_index < types->record_count
-            && !shape->reserved_zero);
-        found = true;
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(functions && constraints && stream);
+    const n00b_abi_function_v1 *generic = nullptr;
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = row_at(metadata, functions,
+                                                       i);
+        if (SHORT_NAME_IS(&function->name, "generic_render"))
+            generic = function;
     }
-    assert(found);
+    assert(generic && generic->constraints.count == 1
+        && generic->constraints.first < stream->record_count);
+    uint32_t index = *(const uint32_t *)row_at(metadata, stream,
+                                               generic->constraints.first);
+    assert(index && index < constraints->record_count);
+    const n00b_abi_constraint_v1 *bound = row_at(metadata, constraints,
+                                                 index);
+    assert(bound->kind == N00B_ABI_CONSTRAINT_IMPLEMENTS
+        && bound->variable_ordinal == 0 && !bound->call_shape_index);
 }
 
 static void
