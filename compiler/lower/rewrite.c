@@ -1895,21 +1895,13 @@ n00bb_storage_value(ir_value_t *address)
 // one `ref` made, read through copies, through `let`s bound to it, and
 // through `var`s only ever given it (n00bb_let_initializer,
 // n00bb_storage_value). nullptr when it isn't known, as for one passed
-// in, or held in a field. A reference adapter whose function
-// isn't known (it wasn't noted, n00bb_note_reference_adapter) is no known
-// function either.
+// in, or held in a field.
 static ir_value_t *
 n00bb_reference_function(ir_value_t *reference)
 {
     ir_value_t *value = reference;
-    for (size_t depth = 0; value && depth < 64; depth++) {
-        if (value->kind == IR_VAL_FUNC)
-            return !value->owner
-                || (core_string_find(value->owner->name,
-                        CORE_STRING_STATIC("__n00bb_reference_adapter_")) >= 0
-                    && !n00bb_reference_adapter_target(value->owner,
-                                                       nullptr, nullptr))
-                ? nullptr : value;
+    while (value) {
+        if (value->kind == IR_VAL_FUNC) return value;
         if (value->local || value->global || value->kind == IR_VAL_PARAM) {
             value = value->kind == IR_VAL_PARAM ? nullptr
                                                 : n00bb_let_initializer(value);
@@ -2552,15 +2544,10 @@ n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     ir_lower_context_t *context = &rewrite->context;
     ir_module_t *module = context->module;
     th_ctx *types = ir_module_types(module);
-    th_type *signature = ir_instr_call_signature(in);
-    signature = signature ? th_resolve(signature) : nullptr;
-    size_t count = signature && th_kind_of(signature) == TH_FUNCTION
-        ? th_func_nparams(signature) : 0;
+    th_type *signature = th_resolve(ir_instr_call_signature(in));
+    size_t count = th_func_nparams(signature);
     // A function that takes no parameters has no adapter.
     if (!count) return true;
-    if (in->op != IR_OP_CALL || in->n_operands != count + 1
-        || in->operands[0].kind != IR_OPD_VALUE)
-        return false;
     // The arguments are what the parameters take before their places are.
     bool ok = true;
     for (uint32_t o = 1; ok && o < in->n_operands; o++)
@@ -2583,7 +2570,6 @@ n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ir_operand_t *operand = &in->operands[p + 1];
         if (operand->kind == IR_OPD_MISSING) continue;
         ir_value_t *value = ir_operand_value(operand);
-        ok = value != nullptr;
         // Every argument must be a writable place, a varargs
         // array's every item: passed by place to an adapter, it may be
         // written, as an `out` or `modify` argument may be. The varargs
