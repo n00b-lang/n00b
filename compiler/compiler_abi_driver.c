@@ -662,6 +662,7 @@ typedef struct {
     core_diagnostics_t *diagnostics;
     double seconds;
     bool needs_native;
+    bool linked_indices;
     bool ok;
     bool done;
 } module_object_t;
@@ -694,7 +695,7 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
             ? analysis->library_summaries : analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
-    core_string_t table_symbol = artifact
+    core_string_t table_symbol = artifact && !item->linked_indices
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
         && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
@@ -1906,7 +1907,7 @@ units_to_reemit(const n00bb_link_analysis_t *analysis,
         if (core_dict_contains(&listed, order[i])) continue;
         bool root = state->link
             && order[i] == core_link_unit_root(state->link, 0);
-        if (cached_generated_unit(order[i])
+        if (n00bb_generated_source(core_source_file_path(&order[i]->source))
             || (!state->interface_module
                 && (core_dict_contains(&stale, state->ir_module)
                     || (generated && root))))
@@ -1983,6 +1984,8 @@ emit_runtime_objects(core_link_unit_t *link,
                 ? view.payload : nullptr,
             .object_path = &path,
             .bitcode = emission->lto ? &bitcode : nullptr,
+            .linked_indices = n00bb_generated_source(
+                core_source_file_path(&order[slot]->source)),
         };
         ir_module_t *cached = cached_generated_unit(order[slot])
             ? n00bb_cache_module(emission->analysis->cache,

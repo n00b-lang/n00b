@@ -569,7 +569,10 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
             core_list_push(roots, n00bb_cached_body(lists[l]->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
+        if (!state || !state->ir_module
+            || (state->interface_module && !n00bb_generated_source(
+                    core_source_file_path(&analysis->units.data[u]->source))))
+            continue;
         th_ctx *types = ir_module_types(state->ir_module);
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
             ir_func_t *body = n00bb_cached_body(
