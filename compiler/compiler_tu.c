@@ -10571,25 +10571,21 @@ named_type_arity(parse_grammar_t *grammar, core_translation_unit_t *unit,
     int builtin_generic = builtin_generic_type_arity(name);
     if (builtin_generic != -1) return builtin_generic < 0 ? -1
                                                           : builtin_generic;
-    // A type from a cached module's interface has no syntax to count. Enums
-    // and flagsets take no parameters; a record, object, variant or
-    // callback has its type variables restored from the interface's
-    // `n00b.type-typevars` metadata, which is written for every one of
-    // them and left out only when there are none.
-    if (symbol && symbol->kind == PARSE_SYM_TYPEDEF
-        && (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("enum"))
-            || core_string_eq(symbol->adt_kind,
-                              CORE_STRING_STATIC("flagset")))) {
-        *declaration = symbol;
-        return 0;
-    }
+    // A type from a cached module's interface has no syntax to count. A
+    // record, object, variant or callback has its type variables restored
+    // from the interface's `n00b.type-typevars` metadata, which is written
+    // for every one of them and left out only when there are none, as it
+    // is for an enum or flagset, which takes no parameters.
     bool defined_shape = symbol
         && (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("record"))
             || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("object"))
             || core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("variant"))
             || core_string_eq(symbol->adt_kind,
-                              CORE_STRING_STATIC("callback")));
+                              CORE_STRING_STATIC("callback"))
+            || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("enum"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("flagset")));
     if (defined_shape && symbol->kind == PARSE_SYM_TYPEDEF) {
         n00bb_signature_typevars_t *variables =
             parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
