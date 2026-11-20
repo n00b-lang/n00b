@@ -10,6 +10,10 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 export N00B_DIAGNOSTICS=terse N00B_DIAGNOSTIC_CODES=1
 export XDG_CONFIG_HOME="$tmp/config"
+# Windows reads the user file from %APPDATA% instead.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) APPDATA=$(cygpath -m "$tmp/config"); export APPDATA ;;
+esac
 cd "$src/tests/programs/stop_on_error"
 
 # Runs `n00b check` with the given arguments; its stderr and exit status go
