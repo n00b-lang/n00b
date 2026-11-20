@@ -534,8 +534,9 @@ retarget_reference(specialize_state_t *state, ir_func_t *caller,
 
 // The signature generic function `target` is called with for a reference
 // whose type is `value` (an instance of the function's type): its
-// positional parameters, its keyword parameters where it declares them,
-// then its varargs as an array. nullptr when they don't line up.
+// positional parameters, by the function's passing modes (which the
+// reference's type doesn't say), its keyword parameters where it declares
+// them, then its varargs as an array. nullptr when they don't line up.
 static th_type *
 reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
 {
@@ -543,7 +544,6 @@ reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
     th_type *flat = th_resolve(target->type);
     if (!value || th_kind_of(value) != TH_FUNCTION
         || th_kind_of(flat) != TH_FUNCTION) return nullptr;
-    if (!th_func_nkw(value) && !th_func_rest(value)) return value;
     size_t positional = th_func_nparams(value);
     size_t keywords = th_func_nkw(value);
     size_t count = positional + keywords + (th_func_rest(value) ? 1 : 0);
@@ -552,7 +552,8 @@ reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
     th_param *params = core_alloc_array(th_param, count);
     bool ok = params != nullptr;
     for (size_t i = 0; ok && i < positional; i++)
-        params[i] = *th_func_param(value, i);
+        params[i] = (th_param){.mode = th_func_param(flat, i)->mode,
+                               .type = th_func_param(value, i)->type};
     for (size_t i = positional; ok && i < positional + keywords; i++) {
         const th_kwparam *keyword = th_func_kw_lookup(value,
             target->params[i]->name);

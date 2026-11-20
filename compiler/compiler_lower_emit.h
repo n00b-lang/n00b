@@ -15,11 +15,6 @@
 #define N00BB_DECLARATION_KEY CORE_STRING_STATIC("n00bb.declaration")
 #define N00BB_REFERENCE_ESCAPES_KEY CORE_STRING_STATIC("n00bb.reference-escapes")
 #define N00BB_TRAIT_CAST_KEY CORE_STRING_STATIC("n00bb.trait-cast")
-// On a `let` (a local or a module's) bound to a function reference whose
-// type differs from the `let`'s only in its parameters' passing modes: the
-// reference's type, whose modes calls through the `let` pass by.
-#define N00BB_REMEMBERED_MODES_KEY \
-    CORE_STRING_STATIC("n00bb.reference.remembered-modes")
 // A call the compiler wrote as possibly failing (a `with` hook's), whose
 // outcome reads are settled if its callee turns out not to fail.
 #define N00BB_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.call-may-fail")

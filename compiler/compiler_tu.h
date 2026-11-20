@@ -152,7 +152,6 @@ th_type *n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
 
 // Function type `type` (or a reference to one) as a type: passing modes
 // are not part of a function's type, so each of its parameters is `in`.
-// A function reference remembers its function's modes; its type doesn't.
 // Returns `type` when it has no other mode or is no function type, and
 // nullptr when it can't be built.
 th_type *n00bb_without_passing_modes(th_ctx *types, th_type *type);

@@ -1756,11 +1756,13 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                     "reference");
             if (storage && referent)
                 storage = ir_func_reference(module, referent);
-            // The reference's type is the function's, whose parameters
-            // keep their passing modes: the reference remembers them.
-            if (storage && (referent || value_type != flat))
-                storage->type = th_ind(ir_module_types(module), 0,
-                                       value_type);
+            // The reference's type is the function's as a function type is
+            // written, without passing modes: a call through it learns
+            // them from the function it holds (n00bb_reference_function).
+            th_type *written = storage
+                ? n00bb_without_passing_modes(types, value_type) : nullptr;
+            if (storage && (referent || written != flat))
+                storage->type = th_ind(types, 0, written);
         }
         else if (operand && lower)
             storage = n00bb_place_of(context,

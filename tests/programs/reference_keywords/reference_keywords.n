@@ -259,6 +259,18 @@ func make_counter() -> Tally_Counter {
 }
 require make_counter().call(1) == 1101
 
+# A handler held in a `var` only ever given a `ref` of one function is
+# that function, as one held in a `let` is.
+func make_var_counter() -> Tally_Counter {
+    var tally: Tally
+    tally.count = 0
+    var handler = ref tally_add
+    return callback[Tally_Counter](handler, ref tally)
+}
+let var_counter = make_var_counter()
+require var_counter.call(2) == 1102
+require var_counter.call(3) == 1105
+
 # A reference whose function isn't known where it is called (a parameter, a
 # `var`, a field, a call's result) passes its arguments by place to a
 # function with a parameter other than `in`, or with keyword parameters

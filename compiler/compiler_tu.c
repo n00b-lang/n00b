@@ -5326,13 +5326,11 @@ finalize_callback_contract(parse_grammar_t *grammar,
         th_type *state_referent = state_ref
             ? th_ind_referent(th_resolve(state_ref->type)) : nullptr;
         // The handler's reference is to a function of the handler's type,
-        // which says nothing of its passing modes: the reference given
-        // when the callback is made remembers its function's, which must
-        // be the handler's (n00bb_callback_handler_modes).
+        // which says nothing of its passing modes: the function the
+        // callback is made with must take the handler's
+        // (n00bb_callback_handler_modes).
         bool setup_valid = handler_ref && state_ref
-            && callback_type_equal(state->types,
-                   n00bb_without_passing_modes(state->types,
-                                               handler_referent),
+            && callback_type_equal(state->types, handler_referent,
                    n00bb_without_passing_modes(state->types, handler_type))
             && callback_type_equal(state->types, state_referent, state_type)
             && th_is_nil(th_func_ret(setup_type));
