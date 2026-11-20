@@ -1,0 +1,8 @@
+compiler/analysis/effect_checks.c	#%zu	1
+compiler/analysis/effect_checks.c	__n00bb_callback_bound#%016llx	1
+compiler/analysis/unused.c	@%u:%u	1
+compiler/compiler_tu.c	%.*s@%u:%u	1
+compiler/lower/places.c	__n00bb_ref_address_mut_open#%016llx	1
+compiler/lower/places.c	__n00bb_ref_address_open#%016llx	1
+compiler/specialize.c	%.*s$spec$%016	1
+lantern/src/types/solver.c	#%u	1
