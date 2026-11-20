@@ -83,7 +83,7 @@ core_diag_severity_t n00bb_diag_severity(n00bb_diag_t id);
 core_string_t n00bb_diag_title(n00bb_diag_t id);
 core_string_t n00bb_diag_explanation(n00bb_diag_t id);
 bool n00bb_diag_lookup(core_string_t code, n00bb_diag_t *out);
-bool n00bb_diag_reports_unused(core_string_t code);
+bool n00bb_diag_reported_afresh(core_string_t code);
 
 bool n00bb_diag_did_you_mean(core_diagnostics_t *diagnostics,
                              core_string_t name,

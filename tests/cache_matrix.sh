@@ -31,7 +31,7 @@ image() {
 }
 
 run() {
-    label=$1 cache=$2 command=$3 target=$4
+    label=$1 cache=$2 command=$3 target=$4 extra=${5:-}
     out="$tmp/$label"
     mkdir -p "$out"
     if [ "$cache" = off ]; then
@@ -40,6 +40,11 @@ run() {
         set -- env N00B_CACHE="$tmp/cache.$cache"
     fi
     case $command in
+        syntax)
+            (cd "$tmp/syntax" && "$@" "$compiler" check $extra main.n \
+                >/dev/null 2>"$out/diagnostics")
+            echo "status $?" >>"$out/diagnostics"
+            ;;
         check)
             "$@" "$compiler" check --dump-summaries "$target" \
                 >"$out/dump" 2>"$out/diagnostics"
@@ -130,6 +135,24 @@ built_hello() {
     run build.hello.warm bh build "$hello"
 }
 
+syntax_settings() {
+    mkdir -p "$tmp/syntax"
+    cp "$programs/syntax_aliases.n" "$tmp/syntax/aliases.n"
+    cp "$programs/syntax_preferences.n" "$tmp/syntax/prefs.n"
+    printf 'import aliases\nimport prefs\n' >"$tmp/syntax/main.n"
+    run syntax.fill s syntax ""
+    for setting in default no-warnings function-fn block-colon; do
+        case $setting in
+            default) flags= ;;
+            no-warnings) flags=--no-syntax-warnings ;;
+            function-fn) flags="--syntax-preference function=fn" ;;
+            block-colon) flags="--syntax-preference block=:" ;;
+        esac
+        run "syntax.off.$setting" off syntax "" "$flags"
+        run "syntax.warm.$setting" s syntax "" "$flags"
+    done
+}
+
 if [ "$scope" = pr ]; then
     filled_by_hello
     filled_by_records
@@ -144,7 +167,12 @@ else
     filled_by_hello &
     filled_by_records &
     library_cache &
+    syntax_settings &
     wait
+    for setting in default no-warnings function-fn block-colon; do
+        same "check.syntax-warnings.$setting" "syntax.off.$setting" \
+            "syntax.warm.$setting"
+    done
     same check.hello.cold-again check.hello.off check.hello.off2
     same check.hello.fill check.hello.off check.hello.fill
     same check.hello.warm check.hello.off check.hello.warm
