@@ -4283,6 +4283,73 @@ n00bb_format_rich_tags(parse_grammar_t *grammar, core_string_t input,
     return core_buffer_string(&out);
 }
 
+static void
+n00bb_format_cut_comments(core_buffer_t *out, core_list_t(size_t) *marks,
+                          core_string_t in, size_t *copied,
+                          const parse_trivia_t *trivia)
+{
+    for (; trivia; trivia = trivia->next) {
+        size_t start = trivia->start_byte, end = trivia->end_byte;
+        if (trivia->kind != PARSE_TRIVIA_COMMENT || start < *copied
+            || end > in.u8_bytes) continue;
+        bool block = end - start > 1 && in.data[start] == '/'
+            && in.data[start + 1] == '*';
+        unsigned char before = start ? in.data[start - 1] : 0;
+        if (block && (before == ' ' || before == '\t') && end < in.u8_bytes
+            && in.data[end] == ' ') end++;
+        unsigned char after = end < in.u8_bytes ? in.data[end] : 0;
+        core_buffer_append(out, in.data + *copied, start - *copied);
+        if (block && before > ' ' && after > ' ') core_buffer_putc(out, ' ');
+        core_list_push(*marks, (size_t)out->byte_len);
+        *copied = end;
+    }
+}
+
+static core_string_t
+n00bb_format_strip_comments(parse_grammar_t *grammar, core_string_t in)
+{
+    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, in);
+    if (!tokens) return (core_string_t){0};
+    while (scan_stream_next(tokens)) {}
+    core_buffer_t text = {0}, out = {0};
+    core_list_t(size_t) marks = {0};
+    size_t copied = 0, mark = 0, kept = 0;
+    for (int32_t i = 0; i < scan_stream_token_count(tokens); i++) {
+        parse_token_info_t *token = scan_stream_get(tokens, i);
+        if (!token) continue;
+        n00bb_format_cut_comments(&text, &marks, in, &copied,
+                                  parse_token_leading_trivia(token));
+        n00bb_format_cut_comments(&text, &marks, in, &copied,
+                                  parse_token_trailing_trivia(token));
+    }
+    scan_token_stream_free(tokens);
+    core_buffer_append(&text, in.data + copied, in.u8_bytes - copied);
+    bool dropped = false, last_blank = true;
+    for (size_t at = 0, eol, end; at < text.byte_len; at = eol + 1) {
+        for (eol = at; eol < text.byte_len && text.data[eol] != '\n'; eol++) {}
+        bool touched = false, blank = true;
+        for (; mark < marks.len && marks.data[mark] <= eol; mark++)
+            touched |= marks.data[mark] >= at;
+        for (end = eol; touched && end > at
+             && (text.data[end - 1] == ' ' || text.data[end - 1] == '\t'); end--) {}
+        for (size_t k = at; k < end; k++)
+            blank &= strchr(" \t\r\f\v", text.data[k]) && text.data[k];
+        if (touched && blank) dropped = true;
+        else if (!(blank && dropped && last_blank)) {
+            core_buffer_append(&out, text.data + at, end - at);
+            if (eol < text.byte_len) core_buffer_putc(&out, '\n');
+            last_blank = blank;
+            if (!blank) dropped = false, kept = out.byte_len;
+        }
+    }
+    if (dropped) out.byte_len = kept;
+    core_list_free(marks);
+    core_free(text.data);
+    core_buffer_ensure(&out, 1);
+    out.data[out.byte_len] = '\0';
+    return core_buffer_string(&out);
+}
+
 static bool
 n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
                    locate_requests_t *requests, parse_cmdr_result_t *args)
@@ -4292,6 +4359,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         CORE_STRING_STATIC("--normalize"));
     bool keep_layout = normalize && parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--keep-layout"));
+    bool strip_comments = parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--strip-comments"));
     bool ascii_tags = n00bb_setting_bool(N00BB_KEY_FMT_ASCII_TAGS);
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
@@ -4337,7 +4406,13 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         }
         core_string_t print_source = normalized.data ? normalized : source;
         core_string_t formatted = {0};
-        if (keep_layout) {
+        if (strip_comments) {
+            formatted = n00bb_format_strip_comments(grammar, print_source);
+            parse_pwz_free(normalized_parser);
+            scan_token_stream_free(normalized_tokens);
+            core_free(normalized.data);
+        }
+        else if (keep_layout) {
             formatted = core_string_dup(print_source);
             parse_pwz_free(normalized_parser);
             scan_token_stream_free(normalized_tokens);

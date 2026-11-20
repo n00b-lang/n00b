@@ -6,3 +6,4 @@ tests/programs/langtools/samples/*
 tests/programs/langtools/lex/*
 tests/programs/langtools/grammars/*
 tests/diagnostics/front/lexical_to_end.n
+tests/programs/ffi/contracts/limits.writ

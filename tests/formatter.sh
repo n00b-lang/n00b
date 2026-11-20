@@ -138,3 +138,13 @@ let a = "[:b:]bold[:/b:] [:i:]it[:/i:] \[:x:] [:odd»:]"'r
 let b = "[:plain:]"
 EOF2
 diff -u "$tmp/rich_ascii.expected" "$tmp/rich_ascii.n"
+
+"$compiler" fmt --strip-comments --output "$tmp/stripped.n" \
+    "$program_dir/fmt_strip_comments.n"
+diff -u "$program_dir/fmt_strip_comments.expected" "$tmp/stripped.n"
+"$compiler" fmt --strip-comments --check "$tmp/stripped.n"
+if "$compiler" fmt --strip-comments --check \
+    "$program_dir/fmt_strip_comments.n" >"$tmp/strip_check.out"; then
+    echo 'fmt --strip-comments --check accepted source with comments' >&2
+    exit 1
+fi

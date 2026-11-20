@@ -1,0 +1,12 @@
+func strip_layout(flag: bool) -> int {
+
+    let value: int = 1 + 2
+    let text = "# not // a /* comment */"
+    let mark = '#'
+    let fenced = [- # kept inside a fence -]
+    if flag {
+
+        return value
+    }
+    return value + text.len() + fenced.len()
+}

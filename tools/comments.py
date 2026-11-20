@@ -1,258 +1,250 @@
 import ast
+import ctypes
+import functools
+import glob
 import io
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import tokenize
 
-C_SUFFIXES = {".c", ".h", ".def"}
-HASH_SUFFIXES = {".sh": "shell", ".bash": "shell", ".py": "python", ".mk": "make",
-                 ".yml": "yaml", ".yaml": "yaml", ".bnf": "grammar", ".lex": "grammar",
-                 ".tests": "manifest", ".n": "n00b"}
-NAMES = {"Makefile": "make", "GNUmakefile": "make", "build.sh": "shell", "budget": "manifest",
-         "Dockerfile": "shell"}
+LANGS = {".c": "c", ".h": "c", ".def": "c", ".py": "python", ".sh": "shell", ".tests": "shell",
+         ".mk": "make", ".yml": "yaml", ".yaml": "yaml", ".bnf": "grammar", ".lex": "grammar",
+         ".writ": "writ", ".n": "n00b"}
+NAMES = {"Makefile": "make", "build.sh": "shell", "budget": "shell", "Dockerfile": "shell"}
+HASH = {"shell": ("'\"", " \"", True, True, True), "make": ("'\"", " \"", True, False, False),
+        "yaml": ("'\"", "", True, False, False), "grammar": ("'\"", "", False, False, True),
+        "writ": ("\"", "\"", False, False, False)}
 
 DIRECTIVE = re.compile(
     r"(?:#|//|/\*)\s*(?:shellcheck\s|pragma\b|noqa\b|type:\s*ignore|NOLINT|"
     r"clang-format\s+(?:on|off)|-\*-|fmt:\s*(?:on|off|skip))")
+HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-C_LEX = re.compile(r'"(?:\\.|[^"\\\n])*"?|\'(?:\\.|[^\'\\\n])*\'?|//(?:\\\n|[^\n])*'
-                   r'|/\*[\s\S]*?(?:\*/|\Z)|^[ \t]*#[ \t]*if[ \t]+0\b[^\n]*', re.M)
-SHELL_WORD_START = set(" \t\n;|&()")
+
+class LexError(Exception):
+    pass
 
 
 def language(path):
     path = pathlib.PurePath(path)
-    if path.suffix in C_SUFFIXES:
-        return "c"
-    if path.name in NAMES:
-        return NAMES[path.name]
-    if path.name.endswith(".Dockerfile"):
-        return "shell"
-    return HASH_SUFFIXES.get(path.suffix)
+    if path.name in NAMES or path.name.endswith(".Dockerfile"):
+        return NAMES.get(path.name, "shell")
+    return LANGS.get(path.suffix)
 
 
-def _c_spans(text):
-    for m in C_LEX.finditer(text):
-        token = m.group(0).lstrip()
-        if token.startswith(("//", "/*", "#")):
-            yield m.start() + len(m.group(0)) - len(token), m.end()
-
-
-def _grammar_spans(text):
-    single = double = False
-    i = 0
-    while i < len(text):
-        c = text[i]
-        if c == "'" and not double:
-            single = not single
-        elif c == '"' and not single:
-            double = not double
-        if c == "#" and not single and not double:
-            end = text.find("\n", i)
-            end = len(text) if end < 0 else end
-            yield i, end
-            i = end
+def _hash_spans(text, lang):
+    quotes, escapes, word_start, heredocs, multiline = HASH[lang]
+    spans, quote, pending, offset = [], None, [], 0
+    for line in text.splitlines(keepends=True):
+        body, quote = line.rstrip("\r\n"), quote if multiline else None
+        if pending:
+            if (body.lstrip("\t") if pending[0][0] else body) == pending[0][1]:
+                pending.pop(0)
+            offset += len(line)
             continue
-        i += 1
+        i = 0
+        while i < len(body):
+            c = body[i]
+            if c == "\\" and (quote or " ") in escapes:
+                i += 2
+                continue
+            if quote:
+                quote = None if c == quote else quote
+            elif c in quotes:
+                quote = c
+            elif c == "#" and (not word_start or i == 0 or body[i - 1] in " \t;|&()"):
+                spans.append((offset + i, offset + len(body)))
+                break
+            elif heredocs and body.startswith("<<", i) and not body.startswith("<<<", i):
+                m = HEREDOC.match(body, i)
+                if m:
+                    pending.append((m.group(1) == "-", m.group(3)))
+                    i = m.end()
+                    continue
+            i += 1
+        offset += len(line)
+    return spans
 
 
 def _python_spans(text):
-    lines = text.splitlines(keepends=True)
-    offsets = [0]
-    for line in lines:
-        offsets.append(offsets[-1] + len(line))
-
-    def at(row, col):
-        return offsets[row - 1] + col
-
-    spans = []
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
     try:
-        for token in tokenize.generate_tokens(io.StringIO(text).readline):
-            if token.type == tokenize.COMMENT:
-                spans.append((at(*token.start), at(*token.end)))
+        spans = [(starts[t.start[0] - 1] + t.start[1], starts[t.end[0] - 1] + t.end[1])
+                 for t in tokenize.generate_tokens(io.StringIO(text).readline)
+                 if t.type == tokenize.COMMENT]
         tree = ast.parse(text)
-    except (SyntaxError, tokenize.TokenError):
-        return spans
+    except (SyntaxError, tokenize.TokenError) as err:
+        raise LexError(f"python: {err}")
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            body = node.body
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) or (
+                isinstance(node, ast.Module) and "__doc__" not in text):
             if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
                     and isinstance(body[0].value.value, str):
-                doc = body[0]
-                spans.append((at(doc.lineno, doc.col_offset), at(doc.end_lineno, doc.end_col_offset)))
+                doc, lines = body[0], text.splitlines(keepends=True)
+                at = [starts[row - 1] + len(lines[row - 1].encode()[:col].decode(errors="ignore"))
+                      for row, col in ((doc.lineno, doc.col_offset),
+                                       (doc.end_lineno, doc.end_col_offset))]
+                spans.append(tuple(at))
     return sorted(spans)
 
 
-class _Shell:
-    def __init__(self, text):
-        self.text = text
-        self.spans = []
-        self.heredocs = []
-
-    def run(self):
-        self.code(0, None)
-        return self.spans
-
-    def word_start(self, i):
-        return i == 0 or self.text[i - 1] in SHELL_WORD_START
-
-    def newline(self, i):
-        text = self.text
-        while self.heredocs:
-            word, tabs = self.heredocs.pop(0)
-            while i < len(text):
-                end = text.find("\n", i)
-                end = len(text) if end < 0 else end + 1
-                line = text[i:end].rstrip("\n")
-                i = end
-                if (line.lstrip("\t") if tabs else line) == word:
-                    break
-        return i
-
-    def code(self, i, closer):
-        text = self.text
-        depth = 0
-        while i < len(text):
-            c = text[i]
-            if c == "\\":
-                i += 2
-            elif c == "'":
-                end = text.find("'", i + 1)
-                i = len(text) if end < 0 else end + 1
-            elif c == '"':
-                i = self.double(i + 1)
-            elif c == "`":
-                end = text.find("`", i + 1)
-                i = len(text) if end < 0 else end + 1
-            elif c == "$" and text.startswith("$(", i):
-                i = self.code(i + 2, ")")
-            elif c == "$" and text.startswith("${", i):
-                end = text.find("}", i)
-                i = len(text) if end < 0 else end + 1
-            elif c == "#" and self.word_start(i):
-                end = text.find("\n", i)
-                end = len(text) if end < 0 else end
-                self.spans.append((i, end))
-                i = end
-            elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i):
-                m = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2").match(text, i)
-                if m:
-                    self.heredocs.append((m.group(3), bool(m.group(1))))
-                    i = m.end()
-                else:
-                    i += 2
-            elif c == "\n":
-                i = self.newline(i + 1)
-            elif c == "(":
-                depth += 1
-                i += 1
-            elif c == ")" and closer and depth == 0:
-                return i + 1
-            elif c == ")":
-                depth = max(0, depth - 1)
-                i += 1
-            else:
-                i += 1
-        return i
-
-    def double(self, i):
-        text = self.text
-        while i < len(text):
-            c = text[i]
-            if c == "\\":
-                i += 2
-            elif c == '"':
-                return i + 1
-            elif text.startswith("$(", i):
-                i = self.code(i + 2, ")")
-            elif c == "`":
-                end = text.find("`", i + 1)
-                i = len(text) if end < 0 else end + 1
-            else:
-                i += 1
-        return i
+class _Loc(ctypes.Structure):
+    _fields_ = [("p", ctypes.c_void_p * 2), ("d", ctypes.c_uint)]
 
 
-def _shell_spans(text):
-    return _Shell(text).run()
+class _Range(ctypes.Structure):
+    _fields_ = [("p", ctypes.c_void_p * 2), ("b", ctypes.c_uint), ("e", ctypes.c_uint)]
 
 
-def _make_spans(text):
-    spans = []
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        if line.startswith("\t"):
-            spans += [(offset + a, offset + b) for a, b in _shell_spans(line)]
-        else:
-            m = re.search(r"(?<!\\)#", line)
-            if m:
-                spans.append((offset + m.start(), offset + len(line.rstrip("\n"))))
-        offset += len(line)
+class _Token(ctypes.Structure):
+    _fields_ = [("d", ctypes.c_uint * 4), ("p", ctypes.c_void_p)]
+
+
+class _Unsaved(ctypes.Structure):
+    _fields_ = [("name", ctypes.c_char_p), ("data", ctypes.c_char_p), ("size", ctypes.c_ulong)]
+
+
+def _llvm_dirs():
+    config = pathlib.Path(os.environ.get("BUILD") or ROOT / "build") / "config.mk"
+    if config.exists():
+        found = dict(re.findall(r"^(LLVM_LIBDIR|LLVM_BINDIR) := (.*)$", config.read_text(), re.M))
+        yield from found.values()
+    if os.environ.get("LLVM_CONFIG"):
+        for flag in ("--libdir", "--bindir"):
+            yield subprocess.run([os.environ["LLVM_CONFIG"], flag], capture_output=True,
+                                 text=True).stdout.strip()
+
+
+@functools.lru_cache(maxsize=None)
+def _libclang():
+    for directory in _llvm_dirs():
+        if not os.path.isdir(directory) and shutil.which("cygpath"):
+            directory = subprocess.run(["cygpath", "-u", directory], capture_output=True,
+                                       text=True).stdout.strip()
+        for path in sorted(glob.glob(os.path.join(directory, "libclang[.-]*"))):
+            try:
+                lib = ctypes.CDLL(path)
+                lib.clang_createIndex
+            except (OSError, AttributeError):
+                continue
+            p, u = ctypes.c_void_p, ctypes.c_uint
+            for name, res, args in (
+                    ("createIndex", p, [ctypes.c_int, ctypes.c_int]),
+                    ("parseTranslationUnit", p, [p, ctypes.c_char_p, p, ctypes.c_int,
+                                                 ctypes.POINTER(_Unsaved), u, u]),
+                    ("getFile", p, [p, ctypes.c_char_p]),
+                    ("getLocationForOffset", _Loc, [p, p, u]),
+                    ("getRange", _Range, [_Loc, _Loc]),
+                    ("tokenize", None, [p, _Range, ctypes.POINTER(ctypes.POINTER(_Token)),
+                                        ctypes.POINTER(u)]),
+                    ("getTokenKind", u, [_Token]),
+                    ("getTokenExtent", _Range, [p, _Token]),
+                    ("getRangeStart", _Loc, [_Range]),
+                    ("getRangeEnd", _Loc, [_Range]),
+                    ("getFileLocation", None, [_Loc, p, p, p, ctypes.POINTER(u)]),
+                    ("disposeTokens", None, [p, ctypes.POINTER(_Token), u]),
+                    ("disposeTranslationUnit", None, [p])):
+                getattr(lib, "clang_" + name).restype = res
+                getattr(lib, "clang_" + name).argtypes = args
+            return lib, lib.clang_createIndex(0, 0)
+    raise LexError("libclang not found: build first, or set BUILD or LLVM_CONFIG")
+
+
+def _c_spans(text):
+    if "//" not in text and "/*" not in text:
+        return []
+    lib, index = _libclang()
+    data, name = text.encode("utf-8", "surrogateescape"), b"source.c"
+    tu = lib.clang_parseTranslationUnit(index, name, None, 0,
+                                        ctypes.byref(_Unsaved(name, data, len(data))), 1, 0x400)
+    if not tu:
+        raise LexError("libclang could not read the file")
+    file = lib.clang_getFile(tu, name)
+    whole = lib.clang_getRange(lib.clang_getLocationForOffset(tu, file, 0),
+                               lib.clang_getLocationForOffset(tu, file, len(data)))
+    tokens, count, spans = ctypes.POINTER(_Token)(), ctypes.c_uint(), []
+    lib.clang_tokenize(tu, whole, ctypes.byref(tokens), ctypes.byref(count))
+    for k in range(count.value):
+        if lib.clang_getTokenKind(tokens[k]) == 4:
+            extent, ends = lib.clang_getTokenExtent(tu, tokens[k]), []
+            for loc in (lib.clang_getRangeStart(extent), lib.clang_getRangeEnd(extent)):
+                at = ctypes.c_uint()
+                lib.clang_getFileLocation(loc, None, None, None, ctypes.byref(at))
+                ends.append(len(data[:at.value].decode("utf-8", "surrogateescape")))
+            spans.append(tuple(ends))
+    lib.clang_disposeTokens(tu, tokens, count)
+    lib.clang_disposeTranslationUnit(tu)
     return spans
 
 
-def _yaml_spans(text):
-    spans = []
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        quote = None
-        for i, c in enumerate(line):
-            if quote:
-                if c == quote:
-                    quote = None
-            elif c in "'\"" and (i == 0 or line[i - 1] in " \t:[{,-"):
-                quote = c
-            elif c == "#" and (i == 0 or line[i - 1] in " \t"):
-                spans.append((offset + i, offset + len(line.rstrip("\n"))))
-                break
-        offset += len(line)
-    return spans
-
-
-def _manifest_spans(text):
-    return [(m.start(), m.end()) for m in re.finditer(r"^#[^\n]*", text, re.M)]
-
-
-SCANNERS = {"c": _c_spans, "grammar": _grammar_spans,
-            "python": _python_spans, "shell": _shell_spans, "make": _make_spans,
-            "yaml": _yaml_spans, "manifest": _manifest_spans}
-
-
-def is_directive(text, start, end):
-    body = text[start:end]
-    return (start == 0 and body.startswith("#!")) or bool(DIRECTIVE.match(body))
+@functools.lru_cache(maxsize=4096)
+def _scan(text, lang):
+    if lang == "c":
+        return tuple(_c_spans(text))
+    if lang == "python":
+        return tuple(_python_spans(text))
+    return tuple(_hash_spans(text, lang))
 
 
 def comment_spans(text, lang, directives=False):
-    return [(a, b) for a, b in SCANNERS[lang](text)
-            if b > a and (directives or not is_directive(text, a, b))]
+    return [(a, b) for a, b in _scan(text, lang) if b > a and (directives or not (
+        (a == 0 and text.startswith("#!")) or DIRECTIVE.match(text, a)))]
 
 
 def comments(text, lang):
-    return [(text.count("\n", 0, a) + 1, text[a:b]) for a, b in comment_spans(text, lang)]
+    try:
+        return [(text.count("\n", 0, a) + 1, text[a:b]) for a, b in comment_spans(text, lang)]
+    except LexError as err:
+        return [(1, f"cannot be lexed: {err}")]
 
 
 def blank(text, lang):
-    out = []
-    last = 0
-    for a, b in comment_spans(text, lang, directives=True):
-        out.append(text[last:a])
-        out.append(re.sub(r"[^\n]", " ", text[a:b]))
+    try:
+        spans = comment_spans(text, lang, directives=True)
+    except LexError:
+        return text
+    out, last = [], 0
+    for a, b in spans:
+        out += [text[last:a], re.sub(r"[^\n]", " ", text[a:b])]
         last = b
-    out.append(text[last:])
-    return "".join(out)
+    return "".join(out) + text[last:]
 
 
 def strip(text, lang):
-    out = []
-    last = 0
+    out, marks, last = [], [], 0
     for a, b in comment_spans(text, lang):
+        block, before, after = text.startswith("/*", a), text[a - 1:a], text[b:b + 1]
+        if block and before in (" ", "\t") and after == " ":
+            b += 1
+            after = text[b:b + 1]
         out.append(text[last:a])
-        out.append("\n" * text.count("\n", a, b))
+        if block and before.strip() and after.strip():
+            out.append(" ")
+        marks.append(sum(map(len, out)))
         last = b
-    out.append(text[last:])
-    original = text.splitlines()
-    stripped = "".join(out).splitlines()
-    kept = [new.rstrip() if new != old else new for old, new in zip(original, stripped)
-            if new.strip() or not old.strip()]
-    return "\n".join(kept) + ("\n" if text.endswith("\n") else "")
+    joined = "".join(out) + text[last:]
+    result, at, dropped, last_blank, kept = [], 0, False, True, 0
+    for line in joined.splitlines(keepends=True):
+        end = at + len(line.rstrip("\n"))
+        touched = any(at <= mark <= end for mark in marks)
+        body = line.rstrip("\n").rstrip(" \t") if touched else line.rstrip("\n")
+        blank_line = not body.strip(" \t\r\f\v")
+        if touched and blank_line:
+            dropped = True
+        elif not (blank_line and dropped and last_blank):
+            result.append(body + line[len(line.rstrip("\n")):])
+            last_blank = blank_line
+            if not blank_line:
+                dropped, kept = False, len(result)
+        at += len(line)
+    new = "".join(result[:kept] if dropped else result)
+    if lang == "python":
+        ast.parse(new)
+    return new
