@@ -1418,24 +1418,24 @@ type_row_less_complete(const n00b_abi_type_v1 *held,
 }
 
 // Whether the linked row is copied from `candidate` rather than `held`,
-// whatever order the inputs come in: a type row that keeps its
-// declaration's facts, a record's or variant's member with its symbol, and
-// a type variable with its declaring scope (a module that imports the
-// variable's function names it through its requirement instead).
+// whatever order the inputs come in. There is one rule, the declaration
+// flag's: a type row that keeps its declaration's facts replaces one that
+// leaves them out, and a record's or variant's member comes from the same
+// input as its type's row.
 static bool
-source_row_less_complete(uint32_t kind, const void *held,
-                         const void *candidate)
+source_row_less_complete(uint32_t kind, const abi_link_key_t *held,
+                         const abi_link_key_t *candidate)
 {
-    if (kind == N00B_ABI_TABLE_TYPE) {
-        const n00b_abi_type_v1 *old = held, *next = candidate;
-        return type_row_less_complete(old, next)
-            || (old->kind == N00B_ABI_TYPE_VARIABLE
-                && old->typevar_import_requirement_index
-                && next->typevar_declaring_scope_index);
-    }
+    if (kind == N00B_ABI_TABLE_TYPE)
+        return type_row_less_complete(held->row, candidate->row);
     if (kind == N00B_ABI_TABLE_FIELD || kind == N00B_ABI_TABLE_ARM) {
-        const n00b_abi_field_v1 *old = held, *next = candidate;
-        return !old->symbol_index && next->symbol_index;
+        const n00b_abi_field_v1 *old = held->row, *next = candidate->row;
+        const n00b_abi_type_v1 *old_parent = n00bb_abi_object_row(
+            held->view, N00B_ABI_TABLE_TYPE, old->parent_type_index);
+        const n00b_abi_type_v1 *next_parent = n00bb_abi_object_row(
+            candidate->view, N00B_ABI_TABLE_TYPE, next->parent_type_index);
+        return old_parent && next_parent
+            && type_row_less_complete(old_parent, next_parent);
     }
     return false;
 }
@@ -2413,7 +2413,7 @@ n00bb_abi_index_plan_build_detailed(
                 // brought a using module's row first.
                 if (compatible && !inserted
                     && source_row_less_complete(kind,
-                        ((const abi_link_key_t *)entry->value)->row, row))
+                        (const abi_link_key_t *)entry->value, key))
                     ((core_indexed_entry_t *)entry)->value = key;
                 valid = compatible && core_index_remap_set(remap, local,
                                                             entry->index);

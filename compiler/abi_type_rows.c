@@ -451,6 +451,7 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
         }
         row->typevar_import_requirement_index = requirement_index;
         row->typevar_ordinal = (uint32_t)ordinal;
+        row->flags |= N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     }
     th_type **free_vars = nullptr;
     size_t free_count = th_free_vars(types, signature, &free_vars);
@@ -487,6 +488,7 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
         }
         row->typevar_import_requirement_index = requirement_index;
         row->typevar_ordinal = (uint32_t)next_ordinal++;
+        row->flags |= N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     }
     return true;
 }

@@ -3704,11 +3704,17 @@ test_imported_generic_owner(core_string_t consumer_path,
             if (!file) {
                 if (type->typevar_import_requirement_index
                     != requirement_index) continue;
-                assert(!type->typevar_declaring_scope_index);
+                // The importing module's row leaves out the declaring
+                // scope, and says so.
+                assert(!type->typevar_declaring_scope_index
+                    && (type->flags
+                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
             }
             else {
                 if (!type->typevar_declaring_scope_index) continue;
-                assert(!type->typevar_import_requirement_index);
+                assert(!type->typevar_import_requirement_index
+                    && !(type->flags
+                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
                 const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
                     &view, N00B_ABI_TABLE_SCOPE,
                     type->typevar_declaring_scope_index);
@@ -3742,6 +3748,34 @@ test_imported_generic_owner(core_string_t consumer_path,
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
     n00bb_abi_index_plan_free(plan);
+    // The linked variable is copied from the declaring module's row, by the
+    // declaration flag alone, whichever input comes first.
+    for (size_t order = 0; order < 2; order++) {
+        n00bb_abi_object_view_t ordered[2] = {
+            views[order], views[1 - order],
+        };
+        n00bb_abi_selected_objects_t pair = {.views = ordered, .count = 2};
+        n00bb_abi_index_plan_t *ordered_plan =
+            n00bb_abi_index_plan_build(&pair);
+        assert(ordered_plan);
+        uint32_t copied = 0;
+        for (size_t input = 0; input < 2; input++) {
+            const n00bb_abi_directory_entry_t *input_types =
+                n00bb_abi_object_table(&ordered[input], N00B_ABI_TABLE_TYPE);
+            for (uint32_t i = 1; i < input_types->record_count; i++) {
+                const n00b_abi_type_v1 *type = n00bb_abi_object_row(
+                    &ordered[input], N00B_ABI_TABLE_TYPE, i);
+                if (type->kind != N00B_ABI_TYPE_VARIABLE
+                    || !(type->flags
+                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)) continue;
+                assert(!n00bb_abi_index_plan_copies(ordered_plan, input,
+                    N00B_ABI_TABLE_TYPE, i));
+                copied++;
+            }
+        }
+        assert(copied);
+        n00bb_abi_index_plan_free(ordered_plan);
+    }
     const n00b_abi_function_v1 *provider_function =
         n00bb_abi_object_row(&views[1], N00B_ABI_TABLE_FUNCTION, 1);
     assert(provider_function && provider_function->constraints.count == 1);
@@ -3838,6 +3872,10 @@ test_type_variable_shape(void)
     assert(!n00bb_abi_index_plan_build(&selected));
     image.types[1].size_bits = 0;
     image.types[1].flags |= N00B_ABI_TYPE_FLAG_SIGNED;
+    assert(!n00bb_abi_index_plan_build(&selected));
+    // Only a row that names an import requirement leaves out the scope.
+    image.types[1].flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE
+        | N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     assert(!n00bb_abi_index_plan_build(&selected));
     image.types[1].flags = 0;
     image.types[1].kind = N00B_ABI_TYPE_PRIMITIVE;

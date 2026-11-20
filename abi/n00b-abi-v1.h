@@ -208,9 +208,11 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_BOOL = 1u << 7,
     // The row is a using module's: it omits the members only the type's
     // declaration has (an enum's or flagset's items, a declared trait's
-    // methods, a callback's role signatures: its declaration's symbols).
-    // Every other fact of the row is the same in every module. Linking
-    // keeps the declaring module's row.
+    // methods, a callback's role signatures: its declaration's symbols), or,
+    // for a type variable an imported function declares, its declaring
+    // scope (the row names its import requirement instead). Every other
+    // fact of the row is the same in every module. Linking keeps the
+    // declaring module's row.
     N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED = 1u << 8,
 } n00b_abi_type_flag_v1;
 
