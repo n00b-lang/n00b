@@ -1,7 +1,7 @@
 check-programs-a	dev	36	N00B_PATH="$SRC/tests/programs/bitcode" "$BUILD/n00b" check "$SRC/tests/programs/features/fast_suite.n" "$SRC/tests/programs/bitcode/bitcode_gc_units.n" "$SRC/tests/programs/bitcode/bitcode_lang_suite.n" "$SRC/tests/programs/text/text_suite.n"
 check-programs-b	dev	36	N00B_PATH="$SRC/tests/programs/consts_literals:$SRC/tests/programs/static_encoding:$SRC/tests/programs/import_cycles/cycles" "$BUILD/n00b" check "$SRC/tests/programs/merged/lto.n" "$SRC/tests/programs/merged/arrays.n" "$SRC/tests/programs/merged/records.n" "$SRC/tests/programs/merged/calls.n" "$SRC/tests/programs/merged/generics.n" "$SRC/tests/programs/merged/generics_text.n" "$SRC/tests/programs/consts_literals/consts_literals.n" "$SRC/tests/programs/static_encoding/static_encoding.n" "$SRC/tests/programs/import_cycles/cycles/cycles.n"
 test-gates	dev	2	sh "$SRC/tests/gates.sh" "$SRC"
-guardrails	dev	2	python3 "$SRC/tools/guardrails.py" "$SRC" comments docs warm_paths
+guardrails	dev	2	python3 "$SRC/tools/guardrails.py" "$SRC" comments docs warm_paths sideband
 guardrails-clones	dev	3	python3 "$SRC/tools/guardrails.py" "$SRC" clones
 guardrails-planted	dev	2	sh "$SRC/tests/guardrails_planted.sh" "$SRC"
 writ-diagnostics-current	dev	2	python3 "$SRC/tools/gen_writ_diagnostics.py" "$SRC/writ/include/writ/diag_codes.def" "$SRC/compiler/diagnostics/writ.def" --check

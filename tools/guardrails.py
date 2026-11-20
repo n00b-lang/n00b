@@ -2,7 +2,7 @@ import importlib
 import sys
 import time
 
-CHECKS = ("comments", "docs", "clones", "warm_paths")
+CHECKS = ("comments", "docs", "clones", "warm_paths", "sideband")
 
 
 def main(argv):
