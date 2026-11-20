@@ -1,5 +1,6 @@
 #include "lower_internal.h"
 #include "comptime.h"
+#include "compiler_layout.h"
 #include "static_branches.h"
 
 static int
@@ -15,7 +16,8 @@ report_view_candidates(parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
                        ir_summaries_t *summaries);
 static bool
-reintern_unit_types(core_list_t(core_translation_unit_ptr_t) *units);
+reintern_unit_types(n00bb_link_analysis_t *analysis,
+                    core_list_t(core_translation_unit_ptr_t) *units);
 
 static void
 n00bb_mark_synthetic_locals(ir_module_t *module)
@@ -185,13 +187,17 @@ n00bb_solved_lower_new(n00bb_link_analysis_t *analysis,
 }
 
 static bool
-reintern_unit_types(core_list_t(core_translation_unit_ptr_t) *units)
+reintern_unit_types(n00bb_link_analysis_t *analysis,
+                    core_list_t(core_translation_unit_ptr_t) *units)
 {
     bool ok = true;
     for (size_t i = 0; i < units->len; i++) {
         ir_module_t *module = tu_state(units->data[i])->ir_module;
         ok = (!module || ir_module_reintern_types(module)) && ok;
     }
+    // Reinterning renumbers a module's types, so laying them out starts
+    // over.
+    n00bb_layout_progress_release(analysis);
     return ok;
 }
 
@@ -443,11 +449,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     double typing_start = profile ? n00bb_profile_seconds() : 0;
     if (ok && !n00bb_infer_types(analysis, units.data, units.len, &typing))
         ok = typing.recovered && explained_by_errors(&units);
-    ok = ok && reintern_unit_types(&units);
+    ok = ok && reintern_unit_types(analysis, &units);
     double rewrite_start = profile ? n00bb_profile_seconds() : 0;
     if (ok && !n00bb_rewrite_typed_ir(analysis, grammar, &typing))
         ok = explained_by_errors(&units);
-    ok = ok && reintern_unit_types(&units)
+    ok = ok && reintern_unit_types(analysis, &units)
         && n00bb_generate_dispatch_adapters(analysis);
     if (ok && !n00bb_check_required_fields(analysis))
         ok = explained_by_errors(&units);

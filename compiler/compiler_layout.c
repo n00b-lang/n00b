@@ -720,6 +720,46 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return valid;
 }
 
+typedef struct {
+    size_t seen;
+    core_list_t(uint32_t) pending;
+} layout_progress_t;
+
+// A module's types are walked once, and its named types laid out as soon
+// as they can be, however many times the module is asked to lay them out
+// (each pass that publishes layouts, then the ABI emitter as it interns the
+// types its rows describe).
+static layout_progress_t *
+layout_progress(n00bb_link_analysis_t *analysis, ir_module_t *module)
+{
+    if (!analysis->layout_progress_ready) {
+        core_dict_init(&analysis->layout_progress, nullptr, nullptr);
+        analysis->layout_progress_ready = true;
+    }
+    bool found = false;
+    layout_progress_t *progress = core_dict_get(&analysis->layout_progress,
+                                                module, &found);
+    if (!progress) {
+        progress = core_alloc(layout_progress_t);
+        progress->pending = core_list_new(uint32_t);
+        core_dict_put(&analysis->layout_progress, module, progress);
+    }
+    return progress;
+}
+
+void
+n00bb_layout_progress_release(n00bb_link_analysis_t *analysis)
+{
+    if (!analysis->layout_progress_ready) return;
+    core_dict_foreach(&analysis->layout_progress, item) {
+        layout_progress_t *progress = item->value;
+        core_list_free(progress->pending);
+        core_free(progress);
+    }
+    core_dict_free(&analysis->layout_progress);
+    analysis->layout_progress_ready = false;
+}
+
 // Lays out the module's types and every type a value of one reaches, until
 // no more can be laid out. The ABI emitter calls it again after interning
 // the types its rows describe, so each row's layout follows from the type.
@@ -729,21 +769,22 @@ n00bb_layout_module_types(n00bb_link_analysis_t *analysis,
 {
     bool valid = true;
     {
-        core_list_t(uint32_t) pending = core_list_new(uint32_t);
-        size_t seen = 0;
+        layout_progress_t *state = layout_progress(analysis, module);
         bool progress;
         do {
             progress = false;
-            for (; seen < ir_type_count(module); seen++)
-                core_list_push(pending, (uint32_t)seen);
+            for (; state->seen < ir_type_count(module); state->seen++)
+                core_list_push(state->pending, (uint32_t)state->seen);
             size_t kept = 0;
-            for (size_t p = 0; valid && p < pending.len; p++) {
-                uint32_t i = pending.data[p];
+            for (size_t p = 0; valid && p < state->pending.len; p++) {
+                uint32_t i = state->pending.data[p];
                 th_type *registered = ir_type_at(module, i);
                 // The module lays out every type its code can reach a
-                // value of, as well as the types it names itself.
-                if (registered && th_is_closed(ir_module_types(module),
-                                               registered))
+                // value of, as well as the types it names itself. (A named
+                // type waiting on its layout is walked again: what it
+                // reaches can follow from a definition it gets later.)
+                if (registered
+                    && th_is_closed(ir_module_types(module), registered))
                     intern_reached_types(module, registered);
                 if (!registered
                     || th_kind_of(th_resolve(registered)) != TH_NAMED)
@@ -753,7 +794,7 @@ n00bb_layout_module_types(n00bb_link_analysis_t *analysis,
                 if (!type) { valid = false; break; }
                 if (ir_layout_final(module, type, analysis->target.triple))
                     continue;
-                pending.data[kept++] = i;
+                state->pending.data[kept++] = i;
                 th_type *definition = ir_type_definition(module, type);
                 if (n00bb_object_type(ir_module_types(module), type)
                     && th_is_closed(ir_module_types(module), type)) {
@@ -866,10 +907,9 @@ n00bb_layout_module_types(n00bb_link_analysis_t *analysis,
                 core_free(arms);
                 core_free(members);
             }
-            pending.len = kept;
-            progress = progress || seen < ir_type_count(module);
+            state->pending.len = kept;
+            progress = progress || state->seen < ir_type_count(module);
         } while (valid && progress);
-        core_list_free(pending);
     }
     return valid;
 }

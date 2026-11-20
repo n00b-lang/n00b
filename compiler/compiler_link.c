@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "call_plan.h"
+#include "compiler_layout.h"
 #include "compiler_link.h"
 #include "interface_summaries.h"
 #include "language_hooks.h"
@@ -4221,6 +4222,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     }
     if (analysis->cached_bodies_ready)
         core_dict_free(&analysis->cached_bodies);
+    n00bb_layout_progress_release(analysis);
     core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
     th_ctx_free(analysis->link_types);

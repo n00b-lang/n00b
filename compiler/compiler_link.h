@@ -469,6 +469,10 @@ typedef struct n00bb_link_analysis_t {
     // Field uses name resolution could not type, with the IR value lowering
     // read the field from (see n00bb_note_lowered_field_use).
     core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
+    // Per IR module, how far n00bb_layout_module_types has got: the types
+    // it has walked and the named ones still waiting on a layout.
+    core_dict_t layout_progress;
+    bool layout_progress_ready;
 } n00bb_link_analysis_t;
 
 // Whether `module` belongs to a unit the analysis of a program with errors
