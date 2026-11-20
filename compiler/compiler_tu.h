@@ -50,6 +50,9 @@ core_diag_location_t n00bb_name_location(core_translation_unit_t *unit,
 #define N00BB_FAILED_KEY CORE_STRING_STATIC("n00bb.failed")
 #define N00BB_UNTYPED_CONST_KEY CORE_STRING_STATIC("n00bb.untyped-const")
 #define N00BB_PATTERN_ARITY_KEY CORE_STRING_STATIC("n00bb.pattern-arity")
+// The kinds of n00bb_tu_state_t.arm_typevars entries.
+#define N00BB_ARM_PATTERN_VAR ((void *)1)
+#define N00BB_ARM_TRAIT_VAR ((void *)2)
 #define N00BB_LOOP_OUTER_NAME_KEY CORE_STRING_STATIC("n00bb.loop-outer-name")
 #define N00BB_FIELD_LITERAL_SET_KEY CORE_STRING_STATIC("n00bb.field-literal-set")
 #define N00BB_STATEMENT_KEY CORE_STRING_STATIC("n00bb.statement")
@@ -690,8 +693,11 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
     core_dict_t shared_state_types;
-    // The type variables `typecase` arm patterns introduce (see
-    // n00bb_node_facts_t.arm_typevars), which inference holds rigid.
+    // The type variables `typecase` arms introduce: N00BB_ARM_PATTERN_VAR
+    // for one a pattern names (`case Array['T]`; see
+    // n00bb_node_facts_t.arm_typevars), which inference holds rigid, and
+    // N00BB_ARM_TRAIT_VAR for a trait arm's (`case Shape`), which stands
+    // for the subject's type at run time, so nothing in the body settles it.
     core_dict_t arm_typevars;
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;

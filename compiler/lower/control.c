@@ -1935,7 +1935,8 @@ narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
 
 // Whether a `case` of `frame` takes a value of type `member` of the subject
 // type `subject`: one naming `member` (alone or among others), or naming
-// the whole subject type.
+// the whole subject type. A trait is a constraint, which other cases may
+// overlap, so a trait case covers no type.
 static bool
 typecase_arm_covers(th_ctx *types, n00bb_typecase_frame_t *frame,
                     th_type *member, th_type *subject)
@@ -1943,11 +1944,21 @@ typecase_arm_covers(th_ctx *types, n00bb_typecase_frame_t *frame,
     member = th_resolve(member);
     for (size_t a = 0; a < frame->arms.len; a++) {
         th_type *test = frame->arms.data[a].test;
-        uint64_t hash = test ? th_hash(types, th_resolve(test)) : 0;
-        if (test && (hash == th_hash(types, member)
-                     || hash == th_hash(types, subject)
-                     || n00bb_static_pattern_accepts(types, member, test)
-                            > 0)) return true;
+        th_type *wanted = test ? th_resolve(test) : nullptr;
+        th_comb comb;
+        bool several = wanted && th_sum_comb(wanted, &comb)
+            && comb == TH_UNION;
+        for (size_t i = 0; wanted && i < (several ? th_sum_len(wanted) : 1);
+             i++) {
+            th_type *named = several ? th_resolve(th_sum_arm(wanted, i))
+                                     : wanted;
+            if (th_kind_of(named) != TH_TRAIT
+                && (th_hash(types, named) == th_hash(types, member)
+                    || n00bb_static_pattern_accepts(types, member, named)
+                           > 0)) return true;
+        }
+        if (wanted && th_hash(types, wanted) == th_hash(types, subject))
+            return true;
     }
     return false;
 }

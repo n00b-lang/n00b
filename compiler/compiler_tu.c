@@ -2467,43 +2467,6 @@ enclosing_cast_type(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
-// Whether `node` is a type a `typecase` arm names (`case Shape`).
-static bool
-in_typecase_arm_types(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
-        parse_tree_t *up = parse_tree_parent(at);
-        if (up && NT_IS(grammar, at, "type-spec-list")
-            && (NT_IS(grammar, up, "typecase-case-block")
-                || NT_IS(grammar, up, "typecase-value-case-block")))
-            return true;
-        if (NT_IS(grammar, at, "func-def")
-            || NT_IS(grammar, at, "typecase-case-block")
-            || NT_IS(grammar, at, "typecase-value-case-block"))
-            return false;
-    }
-    return false;
-}
-
-// Notes `name` as a variable a `typecase` arm of `owner` introduces.
-static bool
-record_typecase_trait_var(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
-                          core_string_t name)
-{
-    core_list_t(core_string_t) *names = parse_sym_binding(owner,
-        N00BB_TYPECASE_TRAIT_VARS_KEY);
-    if (!names) {
-        names = core_arena_alloc(&state->semantic_values, sizeof(*names));
-        if (!names || !parse_sym_set_binding(owner,
-                N00BB_TYPECASE_TRAIT_VARS_KEY, names)) return false;
-        *names = core_list_new(core_string_t);
-    }
-    for (size_t i = 0; i < names->len; i++)
-        if (core_string_eq(names->data[i], name)) return true;
-    core_list_push(*names, name);
-    return true;
-}
-
 // The trait `spec`, the type of a `cast[...]`, names directly.
 static parse_sym_entry_t *
 first_named_symbol(parse_tree_t *node)
@@ -2546,6 +2509,9 @@ n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
                             symbol->name.data);
 }
 
+static parse_tree_t *typecase_pattern_arm(parse_grammar_t *grammar,
+                                          parse_tree_t *node);
+
 th_type *
 trait_type_reference(parse_grammar_t *grammar,
                      core_translation_unit_t *use_unit,
@@ -2587,9 +2553,9 @@ trait_type_reference(parse_grammar_t *grammar,
             .kind = TH_CON_IMPLEMENTS,
             .iface = store_semantic_string(state,
                                            core_buffer_string(&qualified)),
-        })
-        && (!in_typecase_arm_types(grammar, reference)
-            || record_typecase_trait_var(state, owner, stored));
+        });
+    if (recorded && typecase_pattern_arm(grammar, reference))
+        core_dict_put(&state->arm_typevars, type, N00BB_ARM_TRAIT_VAR);
     core_buffer_release(&qualified);
     return recorded ? type : nullptr;
 }
@@ -3514,8 +3480,6 @@ typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
 }
 
-static parse_tree_t *typecase_pattern_arm(parse_grammar_t *grammar,
-                                          parse_tree_t *node);
 static bool declared_typevar(parse_sym_entry_t *owner, core_string_t name);
 static th_type *arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm,
                             core_string_t name, parse_tree_t *node);
@@ -3799,7 +3763,7 @@ arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm, core_string_t name,
             (void **)&variables->data, &variables->cap,
             variables->len + 1, sizeof(*variables->data))) return nullptr;
     variables->data[variables->len++] = (n00bb_typevar_binding_t){name, type};
-    core_dict_put(&state->arm_typevars, type, (void *)1);
+    core_dict_put(&state->arm_typevars, type, N00BB_ARM_PATTERN_VAR);
     parse_tree_set_type(node, type);
     return type;
 }

@@ -1992,8 +1992,11 @@ static void declare_narrowed_rigid(ty_solver_t *solver,
                                    size_t count)
 {
     for (size_t u = 0; u < count; u++) {
-        core_dict_foreach(&tu_state(units[u])->arm_typevars, item)
-            ty_declare_rigid(solver, item->key);
+        core_dict_foreach(&tu_state(units[u])->arm_typevars, item) {
+            if (item->value == N00BB_ARM_PATTERN_VAR) {
+                ty_declare_rigid(solver, item->key);
+            }
+        }
     }
 }
 
@@ -6029,22 +6032,6 @@ static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
     return false;
 }
 
-// Whether `name` is a variable one of `symbol`'s `typecase` arms
-// introduces.
-static bool typecase_trait_var(parse_sym_entry_t *symbol, core_string_t name)
-{
-    core_list_t(core_string_t) *names = parse_sym_binding(
-        symbol, N00BB_TYPECASE_TRAIT_VARS_KEY);
-
-    for (size_t i = 0; names && i < names->len; i++) {
-        if (core_string_eq(names->data[i], name)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static bool check_unsettled_traits(th_ctx *types,
                                    const n00bb_dispatch_index_t *index,
                                    core_translation_unit_t *const *units,
@@ -6082,7 +6069,9 @@ static bool check_unsettled_traits(th_ctx *types,
             // run time, so it stays open, and so does anything it reached.
             for (size_t v = 0; function && v < variables->len; v++) {
                 if (variables->data[v].type
-                    && typecase_trait_var(symbol, variables->data[v].name)) {
+                    && core_dict_get(&tu_state(unit)->arm_typevars,
+                                     variables->data[v].type, nullptr)
+                           == N00BB_ARM_TRAIT_VAR) {
                     core_list_push(reported,
                                    th_resolve(variables->data[v].type));
                 }

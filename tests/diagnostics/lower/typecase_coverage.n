@@ -8,5 +8,19 @@ func option_without_nil(x: int?) -> int {
         case int { return x }
     }
 }
+# A trait is a constraint other cases may overlap: it covers no type.
+trait Sized {
+    func size(self: 'T) -> int
+}
+func size(self: int) -> int {
+    return self
+}
+func option_by_trait(x: int?) -> int {
+    typecase x {
+        case Sized { return 1 }
+        case nil { return 0 }
+    }
+}
 let n: int = 1
 require any_without_else(cast[Any] n) == 1 and option_without_nil(1) == 1
+require option_by_trait(1) == 1
