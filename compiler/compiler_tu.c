@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "compiler_axioms.h"
-#include "config.h"
 #include "compiler_system.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
@@ -4832,32 +4831,6 @@ n00bb_print_type_source(th_ctx *types, th_type *type, core_string_t module)
         .omit_modes = true,
     };
     return th_print_with_options(types, type, &options);
-}
-
-bool
-n00bb_unit_stopped(core_translation_unit_t *unit)
-{
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    return state && state->stopped_on_errors;
-}
-
-bool
-n00bb_unit_stop_at_error_limit(core_translation_unit_t *unit)
-{
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    if (!state) return false;
-    if (state->stopped_on_errors) return true;
-    int64_t limit = n00bb_setting_int(N00BB_KEY_DIAGNOSTICS_STOP_ON_ERROR);
-    if (limit <= 0) return false;
-    const core_diagnostics_t *diagnostics =
-        core_translation_unit_diagnostics(unit);
-    int64_t errors = (int64_t)(
-        core_diagnostics_count_severity(diagnostics, CORE_DIAG_ERROR)
-        + core_diagnostics_count_severity(diagnostics, CORE_DIAG_FATAL));
-    // An internal error goes on as before: it is never cut from the output.
-    state->stopped_on_errors = errors >= limit
-        && !core_diagnostics_count_severity(diagnostics, CORE_DIAG_INTERNAL);
-    return state->stopped_on_errors;
 }
 
 core_string_t
