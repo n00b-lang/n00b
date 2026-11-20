@@ -1048,8 +1048,13 @@ dump_flows(const ir_func_t *function, const ir_summary_t *summary)
     static const ir_sflow_kind_t kinds[] = {IR_SFLOW_ALIAS, IR_SFLOW_COPY,
                                             IR_SFLOW_DATA, IR_SFLOW_CONTROL};
     static const char *const labels[] = {"", "copy ", "data ", "control "};
+    // Each table's lines in sorted order: a summary's flows are in the
+    // order they were met in, which differs between a summary computed
+    // and the same summary decoded from the cache (the codec's order), so
+    // the dump would depend on what was cached and by which program.
     for (int t = 0; t < 2; t++) {
         ir_sflow_table_t table = t ? IR_SFLOW_STORES : IR_SFLOW_RESULTS;
+        text_list_t lines = core_list_new(core_string_t);
         for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
             const ir_spath_t *to = ir_summary_flow_to(summary, table, f);
             for (int k = 0; k < 4; k++)
@@ -1059,19 +1064,30 @@ dump_flows(const ir_func_t *function, const ir_summary_t *summary)
                         continue;
                     const ir_spath_t *from =
                         ir_summary_flow_source(summary, table, s);
+                    core_buffer_t *line = core_buffer_empty();
                     if (table == IR_SFLOW_RESULTS)
-                        fprintf(stdout, "  result %u ", to->output);
+                        core_buffer_printf(line, "  result %u ", to->output);
                     else {
-                        fputs("  store ", stdout);
-                        dump_spath(function, summary, to);
-                        fputs(" <- ", stdout);
+                        core_buffer_puts(line, "  store ");
+                        spath_text(line, function, summary, to);
+                        core_buffer_puts(line, " <- ");
                     }
-                    fputs(labels[k], stdout);
-                    dump_spath(function, summary, from);
-                    if (from->flags & IR_SPATH_ROOT) fputs(" root", stdout);
-                    fputc('\n', stdout);
+                    core_buffer_append(line, labels[k], strlen(labels[k]));
+                    spath_text(line, function, summary, from);
+                    if (from->flags & IR_SPATH_ROOT)
+                        core_buffer_puts(line, " root");
+                    core_list_push(lines, core_buffer_take_string(line));
                 }
         }
+        if (lines.len > 1)
+            qsort(lines.data, lines.len, sizeof(core_string_t),
+                  compare_texts);
+        for (size_t i = 0; i < lines.len; i++) {
+            fprintf(stdout, "%.*s\n", (int)lines.data[i].u8_bytes,
+                    lines.data[i].data);
+            core_free((void *)lines.data[i].data);
+        }
+        core_list_free(lines);
     }
 }
 

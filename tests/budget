@@ -17,6 +17,7 @@ exempt ffi 28
 exempt ffi-zlib 23
 exempt text-theme-builtin-immutable 25
 exempt incremental-cache 35
+exempt shared-cache-summaries 55
 exempt install 23
 exempt gc-units-n00b 30
 exempt lang-suite-n00b 28

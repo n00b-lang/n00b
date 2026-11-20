@@ -120,6 +120,40 @@ compare_repeated() {
     fi
 }
 
+# TARGET checked with every module cached prints the same summaries, byte
+# for byte, whether another program (FILLER) filled the cache with the
+# library or TARGET did: what the cache keeps of a library module may not
+# depend on the program that compiled it.
+compare_warm() {
+    filler=$1
+    target=$2
+    label=$3
+    N00B_CACHE="$tmp/$label.shared" "$compiler" check "$filler" \
+        >/dev/null 2>"$tmp/$label.filler.err" || {
+        echo "$label: check of $filler failed" >&2
+        cat "$tmp/$label.filler.err" >&2
+        exit 1
+    }
+    for cache in shared own; do
+        for run in first second; do
+            N00B_CACHE="$tmp/$label.$cache" "$compiler" check \
+                --dump-summaries "$target" \
+                >"$tmp/$label.$cache.$run" 2>&1 || {
+                echo "$label: check of $target failed ($cache, $run)" >&2
+                cat "$tmp/$label.$cache.$run" >&2
+                exit 1
+            }
+        done
+    done
+    if ! cmp -s "$tmp/$label.own.second" "$tmp/$label.shared.second"; then
+        echo "$label: summaries differ between a cache $filler filled and" \
+            "the program's own" >&2
+        diff "$tmp/$label.own.second" "$tmp/$label.shared.second" \
+            | head -40 >&2
+        exit 1
+    fi
+}
+
 # What is cached here is the program's own dependency, so its modules are
 # copied to a directory no cache has seen and the caller's cache is used:
 # the first check reads them from source, the second from the cache. (The
@@ -135,3 +169,7 @@ compare "$programs/features/fast_suite.n" fast "$tmp/calls.cold"
 # That cache now holds what both programs need.
 compare_rejected "$programs/callbacks/state_unset.n" "$tmp/calls.cold" \
     state_unset 1
+# A program that starts threads, after one that starts none filled the
+# cache with the library.
+compare_warm "$programs/shared_cache/lex_import.n" \
+    "$programs/buffer/buffer_thread_slice.n" threads
