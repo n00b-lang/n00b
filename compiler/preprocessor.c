@@ -158,44 +158,8 @@ typedef enum {
     PP_KEYWORD_PARAM,
 } pp_class_t;
 
-static const struct {
-    core_string_t name;
-    pp_class_t op;
-} classified_nonterms[] = {
-    {CORE_STRING_STATIC("plus-op"), PP_OP_ADD},
-    {CORE_STRING_STATIC("minus-op"), PP_OP_ADD},
-    {CORE_STRING_STATIC("multiply-op"), PP_OP_MULTIPLY},
-    {CORE_STRING_STATIC("divide-op"), PP_OP_DIVIDE},
-    {CORE_STRING_STATIC("remainder-op"), PP_OP_REMAINDER},
-    {CORE_STRING_STATIC("amp-op"), PP_OP_BIT_AND},
-    {CORE_STRING_STATIC("pipe-op"), PP_OP_BIT_OR},
-    {CORE_STRING_STATIC("xor-op"), PP_OP_BIT_XOR},
-    {CORE_STRING_STATIC("left-shift-op"), PP_OP_SHIFT},
-    {CORE_STRING_STATIC("right-shift-op"), PP_OP_SHIFT},
-    {CORE_STRING_STATIC("equality-op"), PP_OP_COMPARE},
-    {CORE_STRING_STATIC("compare-op"), PP_OP_COMPARE},
-    {CORE_STRING_STATIC("and-op"), PP_OP_AND},
-    {CORE_STRING_STATIC("or-op"), PP_OP_OR},
-    {CORE_STRING_STATIC("not-op"), PP_OP_NOT},
-    {CORE_STRING_STATIC("not-word-op"), PP_OP_NOT},
-    {CORE_STRING_STATIC("unary-expr"), PP_OP_PREFIX},
-    {CORE_STRING_STATIC("tuple-or-paren"), PP_OP_PAREN},
-    {CORE_STRING_STATIC("formals"), PP_FORMALS},
-    {CORE_STRING_STATIC("pos-param"), PP_POSITIONAL_PARAM},
-    {CORE_STRING_STATIC("vargs-param"), PP_VARARGS_PARAM},
-    {CORE_STRING_STATIC("default-param"), PP_KEYWORD_PARAM},
-};
-
-#define PP_CLASSIFIED_NONTERMS \
-    (sizeof(classified_nonterms) / sizeof(classified_nonterms[0]))
-
 typedef struct {
     parse_grammar_t *grammar;
-    parse_grammar_t *class_grammar;
-    // The class of each classified nonterminal, by nonterminal id; ids at
-    // or past class_count are unclassified (PP_OP_NONE).
-    uint8_t *class_of;
-    size_t class_count;
     core_translation_unit_t *unit;
     core_list_t(pp_binding_t) bindings;
     core_list_t(core_string_t) owned_strings;
@@ -446,33 +410,31 @@ canonical_logical_spelling(core_string_t spelling)
 static pp_class_t
 nonterm_class(const pp_context_t *ctx, parse_tree_t *node)
 {
-    if (!node || core_tree_is_leaf(node)) return PP_OP_NONE;
-    const parse_nt_node_t *pn = &core_tree_node_value(node);
-    if (pn->group_top || pn->id < 0 || (uint64_t)pn->id >= ctx->class_count)
-        return PP_OP_NONE;
-    return (pp_class_t)ctx->class_of[pn->id];
-}
-
-// Fills the class table for `grammar` from classified_nonterms; the first
-// entry naming a nonterminal decides its class.
-static void
-build_class_table(pp_context_t *ctx, parse_grammar_t *grammar)
-{
-    int64_t ids[PP_CLASSIFIED_NONTERMS];
-    size_t count = 0;
-    for (size_t i = 0; i < PP_CLASSIFIED_NONTERMS; i++) {
-        parse_nonterm_t *nt = parse_find_nonterm(grammar,
-                                                 classified_nonterms[i].name);
-        ids[i] = nt ? parse_nonterm_id(nt) : -1;
-        if (ids[i] >= 0 && (size_t)ids[i] + 1 > count)
-            count = (size_t)ids[i] + 1;
+    switch (n00bb_rule_of(ctx->grammar, node)) {
+    case RULE(PLUS_OP):
+    case RULE(MINUS_OP): return PP_OP_ADD;
+    case RULE(MULTIPLY_OP): return PP_OP_MULTIPLY;
+    case RULE(DIVIDE_OP): return PP_OP_DIVIDE;
+    case RULE(REMAINDER_OP): return PP_OP_REMAINDER;
+    case RULE(AMP_OP): return PP_OP_BIT_AND;
+    case RULE(PIPE_OP): return PP_OP_BIT_OR;
+    case RULE(XOR_OP): return PP_OP_BIT_XOR;
+    case RULE(LEFT_SHIFT_OP):
+    case RULE(RIGHT_SHIFT_OP): return PP_OP_SHIFT;
+    case RULE(EQUALITY_OP):
+    case RULE(COMPARE_OP): return PP_OP_COMPARE;
+    case RULE(AND_OP): return PP_OP_AND;
+    case RULE(OR_OP): return PP_OP_OR;
+    case RULE(NOT_OP):
+    case RULE(NOT_WORD_OP): return PP_OP_NOT;
+    case RULE(UNARY_EXPR): return PP_OP_PREFIX;
+    case RULE(TUPLE_OR_PAREN): return PP_OP_PAREN;
+    case RULE(FORMALS): return PP_FORMALS;
+    case RULE(POS_PARAM): return PP_POSITIONAL_PARAM;
+    case RULE(VARGS_PARAM): return PP_VARARGS_PARAM;
+    case RULE(DEFAULT_PARAM): return PP_KEYWORD_PARAM;
+    default: return PP_OP_NONE;
     }
-    core_free(ctx->class_of);
-    ctx->class_of = count ? core_alloc_array(uint8_t, count) : nullptr;
-    ctx->class_count = count;
-    for (size_t i = PP_CLASSIFIED_NONTERMS; i > 0; i--)
-        if (ids[i - 1] >= 0)
-            ctx->class_of[ids[i - 1]] = (uint8_t)classified_nonterms[i - 1].op;
 }
 
 static pp_class_t
@@ -4086,10 +4048,6 @@ n00bb_preprocessor_run(n00bb_preprocessor_t *preprocessor,
     if (!preprocessor || !grammar || !tree || !unit) return false;
     pp_context_t *ctx = &preprocessor->context;
     ctx->grammar = grammar;
-    if (ctx->class_grammar != grammar) {
-        build_class_table(ctx, grammar);
-        ctx->class_grammar = grammar;
-    }
     if (!ctx->module_stack.len) {
         ctx->cycle_warning_emitted = false;
         ctx->failed = false;
@@ -4126,7 +4084,6 @@ n00bb_preprocessor_free(n00bb_preprocessor_t *preprocessor)
     core_list_free(ctx->bindings);
     core_list_free(ctx->modules);
     core_list_free(ctx->module_stack);
-    core_free(ctx->class_of);
     core_free(preprocessor);
 }
 
