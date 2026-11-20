@@ -394,6 +394,13 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
+    put_u32(out, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    put_u32(out, (uint32_t)n00bb_setting_count(preferences));
+    for (size_t i = 0; i < n00bb_setting_count(preferences); i++) {
+        core_string_t value = n00bb_setting_at(preferences, i);
+        put_bytes(out, value.data, value.u8_bytes);
+    }
     put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
@@ -2386,7 +2393,7 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
             || item->severity == CORE_DIAG_HELP;
         attached = note ? attached
             : core_diag_is_advisory(item->severity)
-                && !n00bb_diag_reports_unused(item->code);
+                && !n00bb_diag_reported_afresh(item->code);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){
