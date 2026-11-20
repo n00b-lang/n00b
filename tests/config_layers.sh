@@ -171,8 +171,10 @@ expect_line "contract dir from the user file" \
     || fail "contract dirs: a directory named twice was reported twice"
 
 # A missing paths.path entry named by several layers is warned about once,
-# naming the highest-precedence layer.
-printf '[paths]\npath = ["%s"]\n' "$tmp/project/src/missing-lib" >"$project"
+# naming the highest-precedence layer. (The file holds the native spelling:
+# on Windows the compiler reads `/tmp/...` as relative to the file.)
+printf '[paths]\npath = ["%s"]\n' "$native_tmp/project/src/missing-lib" \
+    >"$project"
 # (The path settings are resolved, and their warnings given, before any
 # command reads its input, so `parse` reports exactly what `check` does
 # here, without loading the library.)
