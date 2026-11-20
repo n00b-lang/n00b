@@ -1,0 +1,39 @@
+# A local only ever bound to a `new`, whose reference escapes, lives in the
+# object `new` makes: `prepend` allocates one node and no storage of its own.
+record Chain_Node {
+    value: int
+    next:  Ref[Chain_Node]?
+}
+
+func __init(modify self: Chain_Node, value: int, next: Ref[Chain_Node]?) {
+    self.value = value
+    self.next = next
+}
+
+func prepend(value: int, next: Ref[Chain_Node]?) -> Ref[Chain_Node] {
+    var node: Chain_Node = new[Chain_Node](value, next)
+    return ref node
+}
+
+func build_and_walk() -> bool {
+    var head: Ref[Chain_Node]? = nil
+    var index: int = 0
+    while index < 64 {
+        head = prepend(index, head)
+        index += 1
+    }
+    var expected: int = 63
+    var current: Ref[Chain_Node]? = head
+    while current != nil {
+        let node: Ref[Chain_Node] = current
+        if node.__value.value != expected {
+            return false
+        }
+        expected -= 1
+        current = node.__value.next
+    }
+    return expected == -1
+}
+
+require build_and_walk()
+__fd_write(2, "ok")

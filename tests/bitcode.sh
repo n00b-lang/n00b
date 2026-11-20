@@ -92,6 +92,15 @@ runtime)
         echo 'type-only probe was moved to heap storage' >&2
         exit 1
     fi
+    # A local only bound to a `new` lives in the object `new` makes: one
+    # node allocation in `prepend`, none for the local itself.
+    "$compiler" build --output "$tmp/escaping_new" \
+        "$program_dir/bitcode_escaping_new.n"
+    test "$("$tmp/escaping_new" 2>&1)" = ok
+    "$compiler" lower --dump-ir "$program_dir/bitcode_escaping_new.n" \
+        >"$tmp/escaping_new.ir"
+    test "$(awk '/^  func @prepend\(/, /^  }/' "$tmp/escaping_new.ir" \
+        | grep -c ' = alloc bitcode_escaping_new\.Chain_Node ')" = 1
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
