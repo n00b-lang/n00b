@@ -105,96 +105,100 @@ printf 'import sys.env\n' >"$shadow/project/uses_env.n"
 printf 'import helper\nrequire helper.one() == 1\n' \
     >"$shadow/project/uses_helper.n"
 printf 'func one() -> int { return 1 }\n' >"$shadow/project/helper.n"
-# The clash is reported once: at the user's import that finds it, or, when
-# only library modules or an implicit import reach it, once loading is over,
-# with no location. SITE is what precedes `error` on the line (the import's
-# position, or nothing), as an extended regular expression. A note names
-# both files.
-shadowed_case() {
-    label=$1 program=$2 site=$3 name=$4 library=$5 other=$6 modes=${7:-on}
-    for cache in $modes; do
-        if [ "$cache" = on ]; then
-            set -- env -u N00B_NO_PACKAGE_CACHE
-        else
-            set -- env N00B_NO_PACKAGE_CACHE=1
+# Sets $cache_env to `env`'s arguments for a run with the package cache on
+# or off (with `objects`, the object cache too).
+set_cache_env() {
+    if [ "$1" = off ]; then
+        cache_env=N00B_NO_PACKAGE_CACHE=1
+        if [ "${2:-}" = objects ]; then
+            cache_env="$cache_env N00B_NO_OBJECT_CACHE=1"
         fi
-        if (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
-                "$compiler" check "$program") \
-                >"$tmp/shadow.log" 2>&1; then
+    else
+        cache_env='-u N00B_NO_PACKAGE_CACHE'
+        if [ "${2:-}" = objects ]; then
+            cache_env="$cache_env -u N00B_NO_OBJECT_CACHE"
+        fi
+    fi
+}
+# Checks PROGRAM in $shadow/project, with N00B_PATH=$shadow/path and the
+# package cache on, or each of MODES, and then again warm, with the
+# program's modules from the cache, which must not change the output.
+# - shadowed: the check fails. The clash is reported once: at the user's
+#   import that finds it, or, when only library modules or an implicit
+#   import reach it, once loading is over, with no location.
+# - passed_over: a top-level module of the current directory is in the
+#   default package, which holds no system package, so one named like a
+#   library package is no clash: the program builds against the library,
+#   and warning N00B-M0026, once, with the program's module and no
+#   location, says so.
+# SITE is what precedes `error` or `warning` on the line (the import's
+# position, the program's module, or nothing), as an extended regular
+# expression. A note names both files.
+namesake_case() {
+    kind=$1 label=$2 program=$3 site=$4 name=$5 library=$6 other=$7
+    modes=${8:-on}
+    if [ "$kind" = shadowed ]; then
+        code=N00B-M0025
+        line="error $code: standard library module \`$name\` is shadowed by another file with the same module path"
+        failure='not reported once, at the expected place'
+    else
+        code=N00B-M0026
+        line="warning $code: \`$name\` loads the standard library's module, not the top-level module of the same name in the current directory"
+        failure='not built against the library with one warning'
+    fi
+    for cache in $modes; do
+        set_cache_env "$cache"
+        status=0
+        # shellcheck disable=SC2086 # $cache_env is several arguments.
+        (cd "$shadow/project" && env $cache_env N00B_PATH="$shadow/path" \
+            "$compiler" check "$program") >"$tmp/shadow.log" 2>&1 \
+            || status=$?
+        if [ "$kind" = shadowed ] && [ "$status" = 0 ]; then
             echo "$label (cache $cache): shadowing the standard library checked" >&2
             exit 1
         fi
-        grep -Eq "^${site}error N00B-M0025: standard library module \`$name\` is shadowed by another file with the same module path\$" \
-            "$tmp/shadow.log" \
+        { [ "$kind" = shadowed ] || [ "$status" = 0 ]; } \
+            && grep -Eq "^${site}$line\$" "$tmp/shadow.log" \
             && grep -Fxq "  note: the standard library's \`$name\` is \`$stdlib_lib/$library\`; the other file is \`$shadow/$other\`" \
                 "$tmp/shadow.log" \
-            && [ "$(grep -c 'N00B-M0025' "$tmp/shadow.log")" -eq 1 ] \
-            && ! grep -q "^$stdlib_lib" "$tmp/shadow.log" || {
-            echo "$label (cache $cache): not reported once, at the expected place" >&2
+            && [ "$(grep -c "$code" "$tmp/shadow.log")" -eq 1 ] \
+            && if [ "$kind" = shadowed ]; then
+                ! grep -q "^$stdlib_lib" "$tmp/shadow.log"
+            else
+                ! grep -q 'N00B-M0025' "$tmp/shadow.log"
+            fi || {
+            echo "$label (cache $cache): $failure" >&2
             cat "$tmp/shadow.log" >&2
             exit 1
         }
-        same_warm "$label (cache $cache)" "$@"
-    done
-}
-# The run above is cold for the program's own modules. Run warm, with the
-# program's modules from the cache, the output must not change.
-same_warm() {
-    label=$1
-    shift
-    (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
-        "$compiler" check "$program") \
-        >"$tmp/shadow-warm.log" 2>&1 || true
-    if ! cmp -s "$tmp/shadow.log" "$tmp/shadow-warm.log"; then
-        echo "$label: warm, the output changed" >&2
-        diff -u "$tmp/shadow.log" "$tmp/shadow-warm.log" >&2
-        exit 1
-    fi
-}
-# A top-level module of the current directory is in the default package,
-# which holds no system package, so one named like a library package is no
-# clash: the program builds against the library, and warning N00B-M0026,
-# once, with the program's module and no location, names both files.
-passed_over_case() {
-    label=$1 program=$2 site=$3 name=$4 library=$5 other=$6 modes=${7:-on}
-    for cache in $modes; do
-        if [ "$cache" = on ]; then
-            set -- env -u N00B_NO_PACKAGE_CACHE
-        else
-            set -- env N00B_NO_PACKAGE_CACHE=1
+        # shellcheck disable=SC2086
+        (cd "$shadow/project" && env $cache_env N00B_PATH="$shadow/path" \
+            "$compiler" check "$program") \
+            >"$tmp/shadow-warm.log" 2>&1 || true
+        if ! cmp -s "$tmp/shadow.log" "$tmp/shadow-warm.log"; then
+            echo "$label (cache $cache): warm, the output changed" >&2
+            diff -u "$tmp/shadow.log" "$tmp/shadow-warm.log" >&2
+            exit 1
         fi
-        (cd "$shadow/project" && "$@" N00B_PATH="$shadow/path" \
-            "$compiler" check "$program") >"$tmp/shadow.log" 2>&1 \
-            && grep -Eq "^${site}warning N00B-M0026: \`$name\` loads the standard library's module, not the top-level module of the same name in the current directory\$" \
-                "$tmp/shadow.log" \
-            && grep -Fxq "  note: the standard library's \`$name\` is \`$stdlib_lib/$library\`; the other file is \`$shadow/$other\`" \
-                "$tmp/shadow.log" \
-            && [ "$(grep -c 'N00B-M0026' "$tmp/shadow.log")" -eq 1 ] \
-            && ! grep -q 'N00B-M0025' "$tmp/shadow.log" || {
-            echo "$label (cache $cache): not built against the library with one warning" >&2
-            cat "$tmp/shadow.log" >&2
-            exit 1
-        }
-        same_warm "$label (cache $cache)" "$@"
     done
 }
 module='func one() -> int { return 1 }\n'
 printf "$module" >"$shadow/project/unicode.n"
 printf "import unicode\nrequire unicode.general_category('A') == unicode.Gc.lu\n" \
     >"$shadow/project/uses_library_unicode.n"
-passed_over_case 'default-package unicode.n' uses_library_unicode.n \
+namesake_case passed_over 'default-package unicode.n' uses_library_unicode.n \
     'uses_library_unicode\.n: ' unicode unicode/__init.n \
     project/unicode.n 'on off'
 rm "$shadow/project/unicode.n"
 # `builtin` reaches unicode as well, but the error goes to the user's own
 # import of it.
 printf "$module" >"$shadow/path/unicode.n"
-shadowed_case 'file on N00B_PATH' uses_unicode.n \
+namesake_case shadowed 'file on N00B_PATH' uses_unicode.n \
     'uses_unicode\.n:1:8: ' unicode unicode/__init.n path/unicode.n
 rm "$shadow/path/unicode.n"
 mkdir "$shadow/project/sys"
 printf "$module" >"$shadow/project/sys/env.n"
-shadowed_case 'nested file' uses_env.n 'uses_env\.n:1:8: ' sys.env \
+namesake_case shadowed 'nested file' uses_env.n 'uses_env\.n:1:8: ' sys.env \
     sys/env/__init.n project/sys/env.n
 rm -r "$shadow/project/sys"
 # (langtools is not loaded by `builtin`, so the user's import is the only way
@@ -202,18 +206,18 @@ rm -r "$shadow/project/sys"
 printf 'import langtools\n' >"$shadow/project/uses_langtools.n"
 mkdir "$shadow/project/langtools"
 printf 'package langtools {\n}\n' >"$shadow/project/langtools/__init.n"
-shadowed_case 'manifest at the library path' uses_langtools.n \
+namesake_case shadowed 'manifest at the library path' uses_langtools.n \
     '' langtools.__init langtools/__init.n project/langtools/__init.n
 rm -r "$shadow/project/langtools"
 mkdir "$shadow/path/mine"
 printf 'package unicode {\n}\n' >"$shadow/path/mine/__init.n"
-shadowed_case 'manifest elsewhere' uses_unicode.n \
+namesake_case shadowed 'manifest elsewhere' uses_unicode.n \
     'uses_unicode\.n:1:8: ' unicode unicode/__init.n path/mine/__init.n \
     'on off'
 rm -r "$shadow/path/mine"
 mkdir -p "$shadow/project/langtools/internal"
 printf "$module" >"$shadow/project/langtools/internal/diag.n"
-shadowed_case 'library source module' uses_langtools.n \
+namesake_case shadowed 'library source module' uses_langtools.n \
     '' langtools.internal.diag \
     langtools/internal/diag.n project/langtools/internal/diag.n 'on off'
 # With several imports of it, it is still reported once.
@@ -221,7 +225,7 @@ printf 'import b_langtools_user\nimport langtools\n' \
     >"$shadow/project/z_langtools_root.n"
 printf 'require 1 == 1\nimport langtools\n' \
     >"$shadow/project/b_langtools_user.n"
-shadowed_case 'several importers' z_langtools_root.n \
+namesake_case shadowed 'several importers' z_langtools_root.n \
     '' langtools.internal.diag \
     langtools/internal/diag.n project/langtools/internal/diag.n
 rm -r "$shadow/project/langtools"
@@ -231,7 +235,7 @@ rm -r "$shadow/project/langtools"
 # `sys.gc`, found only as the parent of the package imported.
 mkdir -p "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/__init.n"
-shadowed_case 'implicit builtin manifest' uses_helper.n '' \
+namesake_case shadowed 'implicit builtin manifest' uses_helper.n '' \
     builtin.__init builtin/__init.n project/builtin/__init.n
 rm -r "$shadow/project/builtin"
 # A file on the package path taking the name of the package loaded
@@ -239,16 +243,16 @@ rm -r "$shadow/project/builtin"
 # default-package module, passed over with a warning, and the implicit
 # import still loads the library's `builtin`.
 printf "$module" >"$shadow/path/builtin.n"
-shadowed_case 'file named like the implicit package' uses_helper.n \
+namesake_case shadowed 'file named like the implicit package' uses_helper.n \
     '' builtin builtin/__init.n path/builtin.n
 mv "$shadow/path/builtin.n" "$shadow/project/builtin.n"
 # (Both modules load `builtin` implicitly; the warning is the program's.)
-passed_over_case 'default-package builtin.n' uses_helper.n \
+namesake_case passed_over 'default-package builtin.n' uses_helper.n \
     'uses_helper\.n: ' builtin builtin/__init.n project/builtin.n
 rm "$shadow/project/builtin.n"
 mkdir "$shadow/project/builtin"
 printf "$module" >"$shadow/project/builtin/sort.n"
-shadowed_case 'module of the builtin package' uses_helper.n \
+namesake_case shadowed 'module of the builtin package' uses_helper.n \
     '' builtin.sort builtin/sort.n project/builtin/sort.n
 rm -r "$shadow/project/builtin"
 mkdir "$shadow/project/sys"
@@ -256,7 +260,7 @@ printf "$module" >"$shadow/project/sys/gc.n"
 printf 'import sys.gc.alloc\n' >"$shadow/project/uses_gc.n"
 # The implicit `builtin` reaches `sys.gc` too, but the user's import of a
 # package inside it is where the error goes.
-shadowed_case 'parent of an imported package' uses_gc.n \
+namesake_case shadowed 'parent of an imported package' uses_gc.n \
     'uses_gc\.n:1:8: ' sys.gc sys/gc/__init.n project/sys/gc.n 'on off'
 rm -r "$shadow/project/sys"
 
@@ -272,7 +276,7 @@ printf "$module" >"$shadow/project/text.n"
 # A module or file named on the command line follows the same rule.
 rm "$shadow/project/text.n"
 printf "$module" >"$shadow/path/unicode.n"
-shadowed_case 'module operand' unicode '' unicode unicode/__init.n \
+namesake_case shadowed 'module operand' unicode '' unicode unicode/__init.n \
     path/unicode.n 'on off'
 rm "$shadow/path/unicode.n"
 # A file operand, like a top-level module of the current directory, is in
@@ -288,12 +292,9 @@ printf "import unicode\nrequire unicode.general_category('A') == unicode.Gc.lu\n
     >"$shadow/operand_unicode/unicode.n"
 printf 'var items: List[int] = [1, 2]\nrequire items.len() == 2\n' \
     >"$shadow/operand_builtin/builtin.n"
+# shellcheck disable=SC2086 # $cache_env is several arguments.
 for cache in on off; do
-    if [ "$cache" = on ]; then
-        set -- env -u N00B_NO_PACKAGE_CACHE
-    else
-        set -- env N00B_NO_PACKAGE_CACHE=1
-    fi
+    set_cache_env "$cache"
     for operand in unicode builtin; do
         # With the package cache off, what differs is how the modules are
         # found, which `check` does in full: were `unicode` or `builtin`
@@ -301,12 +302,14 @@ for cache in on off; do
         # general_category, nor a List). Building and running is done once,
         # with the cache on.
         if [ "$cache" = on ]; then
-            (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
+            (cd "$shadow/operand_$operand" \
+                && env $cache_env N00B_PATH="$shadow/path" \
                 "$compiler" build --output "$tmp/${operand}_file" \
                 "$operand.n") >"$tmp/shadow.log" 2>&1 \
                 && "$tmp/${operand}_file"
         else
-            (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
+            (cd "$shadow/operand_$operand" \
+                && env $cache_env N00B_PATH="$shadow/path" \
                 "$compiler" check "$operand.n") >"$tmp/shadow.log" 2>&1
         fi && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
             echo "file operand $operand.n (cache $cache): did not build cleanly against the library" >&2
@@ -318,12 +321,12 @@ done
 printf "$module" >"$shadow/project/unicode.n"
 mkdir -p "$shadow/path/sys"
 printf "$module" >"$shadow/path/sys/env.n"
-shadowed_case 'module operand on N00B_PATH' sys.env '' sys.env \
+namesake_case shadowed 'module operand on N00B_PATH' sys.env '' sys.env \
     sys/env/__init.n path/sys/env.n
 rm -r "$shadow/path/sys"
 mkdir -p "$shadow/project/unicode/internal"
 printf "$module" >"$shadow/project/unicode/internal/types.n"
-shadowed_case 'library module operand' unicode.internal.types '' \
+namesake_case shadowed 'library module operand' unicode.internal.types '' \
     unicode.internal.types unicode/internal/types.n \
     project/unicode/internal/types.n
 rm -r "$shadow/project/unicode"
@@ -356,13 +359,10 @@ func __equal(view self: Point, view other: Point) -> bool {
 }
 PROGRAM
 reserved='is not a language hook, and names starting with `__` are reserved for the language'
+# shellcheck disable=SC2086
 for cache in warm warm off; do
-    if [ "$cache" = off ]; then
-        set -- env N00B_NO_OBJECT_CACHE=1 N00B_NO_PACKAGE_CACHE=1
-    else
-        set -- env -u N00B_NO_OBJECT_CACHE -u N00B_NO_PACKAGE_CACHE
-    fi
-    if (cd "$hooks" && "$@" "$compiler" check builtin.n uses.n) \
+    set_cache_env "$cache" objects
+    if (cd "$hooks" && env $cache_env "$compiler" check builtin.n uses.n) \
             >"$tmp/hooks.log" 2>&1; then
         echo "hooks (cache $cache): a user trait made a language hook" >&2
         cat "$tmp/hooks.log" >&2
