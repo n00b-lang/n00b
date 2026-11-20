@@ -26,33 +26,8 @@ build_time_failure() {
 }
 
 # A literal handler that fails at build time is a source diagnostic at the
-# literal, not a panic of the comptime run. Each further argument is a
-# `file:line:col: modifier: message` failure that must be reported.
-literal_failures() {
-    name=$1
-    shift
-    if "$compiler" build --output "$tmp/$name" "$program_dir/$name.n" \
-        >"$tmp/$name.out" 2>&1; then
-        echo "$name unexpectedly built" >&2
-        exit 1
-    fi
-    expected=0
-    for failure in "$@"; do
-        location=${failure%%: *}
-        rest=${failure#*: }
-        modifier=${rest%%: *}
-        message=${rest#*: }
-        grep -qF "$location: error N00B-B0116: literal modifier \`'$modifier\` failed: $message" \
-            "$tmp/$name.out"
-        expected=$((expected + 1))
-    done
-    test "$(grep -c 'error N00B-B0116' "$tmp/$name.out")" = "$expected"
-    if grep -q '^panic:\|comptime run of' "$tmp/$name.out"; then
-        echo "$name reported a literal failure as a failed comptime run" >&2
-        exit 1
-    fi
-    test ! -e "$tmp/$name"
-}
+# literal, not a panic of the comptime run: tests/diagnostics/build/litmod_*
+# hold those builds' goldens.
 
 case $part in
 runtime)
@@ -118,19 +93,6 @@ build-time)
     "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
-    literal_failures bitcode_litmod_comptime_fail \
-        'bitcode_litmod_comptime_fail.n:7:5: noop: prelude failed'
-    literal_failures bitcode_litmod_fence_nil_fail \
-        'bitcode_litmod_fence_nil_fail.n:6:1: noop: fence failed'
-    literal_failures bitcode_litmod_string_fail \
-        'bitcode_litmod_string_fail.n:7:12: reject: bad literal'
-    too_large='rich string substitution index is too large'
-    literal_failures bitcode_litmod_many_fail \
-        "bitcode_litmod_many_fail.n:5:25: r: $too_large" \
-        'bitcode_litmod_many_fail.n:7:24: reject: bad literal' \
-        "bitcode_litmod_many_fail.n:8:25: r: rich string has \`[/i]\` with no matching open tag before it; use \`[/]\` to clear styling from elsewhere" \
-        "bitcode_litmod_many_fail.n:9:27: r: rich string has \`[/b]\` with no matching open tag before it; use \`[/]\` to clear styling from elsewhere" \
-        "bitcode_litmod_many_fail.n:12:12: r: $too_large"
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'

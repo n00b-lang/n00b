@@ -1,0 +1,3 @@
+tests/diagnostics/build/litmod_fence_nil_fail.n:2:25: warning N00B-S0063: parameter `contents` is never used
+  help: if a signature requires it, name it `_contents`
+tests/diagnostics/build/litmod_fence_nil_fail.n:6:1: error N00B-B0116: literal modifier `'noop` failed: fence failed
