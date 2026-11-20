@@ -1,0 +1,16 @@
+# Files no test reads yet, kept until the change named beside each lands;
+# tools/test_orphans.py (run by tests/gates.sh) fails once a test reads one
+# or it is gone, so each line goes with its change.
+tests/programs/abi/alias.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/array_storage.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/callback.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/enum.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/function.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/initializers.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/record.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/storage.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/string_storage.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/trait_methods.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/variant.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/where_excludes.n ABI fixtures, rewritten after the ABI row change (type ownership removal)
+tests/programs/abi/partial_method_root.n call shapes for trait-bound generics, under review

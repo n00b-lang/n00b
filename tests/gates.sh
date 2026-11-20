@@ -51,26 +51,10 @@ awk -F'\t' -v releasing="$releasing" '
 ' tests/budget tests/n00b.tests lantern/tests/lantern.tests writ/tests/writ.tests \
     || status=1
 
-find tests/programs -type f -name '*.n' | awk '
-    FILENAME != "-" { refs = refs "\n" $0; next }
-    function quote(text) { gsub(/[.+*?()\[\]{}|^$]/, "\\\\&", text); return text }
-    {
-        path = substr($0, length("tests/programs/") + 1)
-        candidate = path
-        found = 0
-        while (!found && candidate != "") {
-            if (match(refs, "(programs/|\"|[ \t]|/)" quote(candidate) "([^A-Za-z0-9_]|$)"))
-                found = 1
-            else if (index(candidate, "/")) sub(/\/[^\/]*$/, "", candidate)
-            else candidate = ""
-        }
-        if (!found) {
-            print "tests/programs/" path ": no test reads this program" > "/dev/stderr"
-            status = 1
-        }
-    }
-    END { exit status }
-' tests/n00b.tests tests/*.sh - || status=1
+# Every test program, and every file beside one, is read by some test; so
+# is every script. (Per file: a test that reads one file of a directory
+# doesn't vouch for the rest.)
+python3 tools/test_orphans.py || status=1
 
 for helper in tests/diagnostics/modules/*/; do
     name=${helper%/}
