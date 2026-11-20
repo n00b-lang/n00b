@@ -331,11 +331,20 @@ for cache in on off; do
         set -- env N00B_NO_PACKAGE_CACHE=1
     fi
     for operand in unicode builtin; do
-        (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
-            "$compiler" build --output "$tmp/${operand}_file" "$operand.n") \
-            >"$tmp/shadow.log" 2>&1 \
-            && "$tmp/${operand}_file" \
-            && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
+        # With the package cache off, what differs is how the modules are
+        # found, which `check` does in full: were `unicode` or `builtin`
+        # the file itself, the check would fail (the file has no
+        # general_category, nor a List). Building and running is done once,
+        # with the cache on.
+        if [ "$cache" = on ]; then
+            (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
+                "$compiler" build --output "$tmp/${operand}_file" \
+                "$operand.n") >"$tmp/shadow.log" 2>&1 \
+                && "$tmp/${operand}_file"
+        else
+            (cd "$shadow/operand_$operand" && "$@" N00B_PATH="$shadow/path" \
+                "$compiler" check "$operand.n") >"$tmp/shadow.log" 2>&1
+        fi && ! grep -q 'N00B-M002[56]' "$tmp/shadow.log" || {
             echo "file operand $operand.n (cache $cache): did not build cleanly against the library" >&2
             cat "$tmp/shadow.log" >&2
             exit 1
@@ -470,18 +479,30 @@ printf 'import helper\nrequire helper.f() == 1\n' >"$lone_case/main.n"
 lone_count() {
     (cd "$1" && "$compiler" check main.n 2>&1) | grep -c 'N00B-M0010' || true
 }
+# Checks lone_case (warm, but for its first check) and a fresh copy of it,
+# which no cache has seen. With `first`, lone_case has never been checked,
+# so its check is the cold one and a copy would only repeat it.
 lone_expect() {
     count=$(lone_count "$lone_case")
-    rm -rf "$tmp/lone_cold"
-    cp -R "$lone_case" "$tmp/lone_cold"
-    cold=$(lone_count "$tmp/lone_cold")
+    if [ "${3:-}" = first ]; then
+        cold=$count
+    else
+        rm -rf "$tmp/lone_cold"
+        cp -R "$lone_case" "$tmp/lone_cold"
+        cold=$(lone_count "$tmp/lone_cold")
+    fi
     if [ "$count" != "$2" ] || [ "$cold" != "$2" ]; then
         echo "single subpackage warning, $1: warm $count, cold $cold, expected $2" >&2
         exit 1
     fi
 }
-lone_expect "one subpackage" 1
-lone_expect "one subpackage, warm" 1
+lone_expect "one subpackage" 1 first
+# Warm now; the cold check of the same sources was the one above.
+count=$(lone_count "$lone_case")
+[ "$count" = 1 ] || {
+    echo "single subpackage warning, one subpackage, warm: warm $count, expected 1" >&2
+    exit 1
+}
 mkdir "$lone_case/lone/other"
 printf 'package lone.other {\n}\n' >"$lone_case/lone/other/manifest.n"
 lone_expect "a sibling added" 0
