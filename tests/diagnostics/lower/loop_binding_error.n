@@ -1,0 +1,7 @@
+# A top-level loop with an error is left out of the module's code, binding
+# and all: what is reported is the error.
+var count: int = 0
+while count < 3 {
+    let label: int = "three"
+    count += 1
+}

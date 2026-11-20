@@ -415,6 +415,10 @@ bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
 ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value);
 bool ir_value_set_binding_reentry(ir_value_t *value,
                                   ir_block_t *loop_header);
+// Drops the re-entry marks naming `loop_header` from `function`'s locals and
+// parameters: erasing the header (ir_block_erase) takes their loop away.
+void ir_func_forget_binding_reentry(ir_func_t *function,
+                                    core_string_t loop_header);
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
                                  core_string_t requested, bool required,
                                  core_string_t selected);
