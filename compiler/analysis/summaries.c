@@ -501,6 +501,25 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
         || core_dict_contains(import_closure(analysis, from), to);
 }
 
+// The bodies of the modules reused from the cache: their reinterpretations
+// are the program's as much as those of the modules compiled from source,
+// which are summarized whether anything reaches them or not.
+static void
+reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
+{
+    n00bb_link_analysis_t *analysis = context;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module || !state->interface_module)
+            continue;
+        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(
+                ir_func_at(state->ir_module, f));
+            if (body && body->n_blocks) add(sink, body);
+        }
+    }
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
@@ -526,6 +545,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,
+        .reinterpretation_sources = reinterpretation_sources,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);

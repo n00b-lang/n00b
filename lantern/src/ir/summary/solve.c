@@ -756,6 +756,13 @@ strongconnect(tarjan_t *t, ir_func_t *root)
 }
 
 static void
+push_pending(void *sink, ir_func_t *function)
+{
+    core_list_t(summary_func_ptr_t) *pending = sink;
+    if (function) core_list_push(*pending, function);
+}
+
+static void
 collect_reinterpretations(ir_summaries_t *summaries,
                           ir_func_t *const *functions, size_t count)
 {
@@ -765,6 +772,10 @@ collect_reinterpretations(ir_summaries_t *summaries,
     core_list_t(summary_func_ptr_t) pending = core_list_new(summary_func_ptr_t);
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (hooks && hooks->reinterpretation_sources)
+        hooks->reinterpretation_sources(hooks->context, push_pending,
+                                        &pending);
     for (size_t i = 0; i < count; i++) core_list_push(pending, functions[i]);
     while (pending.len) {
         ir_func_t *f = ir_func_definition(pending.data[--pending.len]);
@@ -804,7 +815,8 @@ same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
         && a->callee_effects == b->callee_effects
         && a->call_flags == b->call_flags
         && a->call_finalizers == b->call_finalizers
-        && a->owned_field == b->owned_field && a->stored == b->stored;
+        && a->owned_field == b->owned_field && a->stored == b->stored
+        && a->reinterpretation_sources == b->reinterpretation_sources;
 }
 
 static ir_summaries_t *

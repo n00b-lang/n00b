@@ -139,6 +139,12 @@ typedef struct {
     bool (*owned_field)(void *context, th_type *record, core_string_t field);
     ir_summary_t *(*stored)(void *context, ir_summaries_t *summaries,
                             const ir_func_t *function);
+    // Adds the bodies in the program that the functions being summarized
+    // don't stand for but whose reinterpretations still count: a program's
+    // reinterpretations are all its code's, whichever of it is summarized
+    // afresh (collect_reinterpretations).
+    void (*reinterpretation_sources)(void *context, ir_summary_target_fn add,
+                                     void *sink);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
