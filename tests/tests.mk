@@ -19,6 +19,7 @@ serial = $$2 ~ /(^|,)serial(,|$$)/
 N00B_DEV := $(call select,$(N00B_MANIFEST),$(dev))
 N00B_PR := $(call select,$(N00B_MANIFEST),$(pr) && !($(serial)))
 N00B_SERIAL := $(call select,$(N00B_MANIFEST),$(pr) && $(serial))
+N00B_CI := $(call select,$(N00B_MANIFEST),$$2 ~ /(^|,)ci(,|$$)/)
 N00B_ALL := $(call select,$(N00B_MANIFEST),1)
 LANTERN_DEV := $(call select,$(LANTERN_MANIFEST),$(dev))
 LANTERN_PR := $(call select,$(LANTERN_MANIFEST),$(pr))
@@ -75,7 +76,7 @@ endif
 test-pr: $(PR_TESTS)
 	@TEST_TIER=pr tools/test_summary.sh
 
-test-all: $(DEV_TESTS) $(PR_TESTS)
+test-all: $(DEV_TESTS) $(PR_TESTS) $(N00B_CI:%=serial/n00b/%)
 	@tools/test_summary.sh
 
 test-lantern: $(LANTERN_ALL:%=test/lantern/%)
