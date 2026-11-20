@@ -7,6 +7,7 @@
 #include "ir/storage_origin.h"
 #include "ir/summary.h"
 #include "lib/buffer.h"
+#include "lib/dict.h"
 #include "diag/diagnostics.h"
 #include "lib/target.h"
 
@@ -91,8 +92,17 @@ void n00bb_llvm_backend_enable_panic_trap(n00bb_llvm_backend_t *backend);
 uint32_t n00bb_llvm_mutator_flags(const ir_func_t *function, uint32_t flags);
 void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     ir_summaries_t *summaries);
+typedef ir_func_t *n00bb_llvm_func_ptr_t;
+core_list_decl(n00bb_llvm_func_ptr_t);
+
+typedef struct {
+    core_dict_t decisions;
+    core_dict_t definitions;
+    core_list_t(n00bb_llvm_func_ptr_t) allocators;
+} n00bb_llvm_cached_facts_t;
+
 void n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
-    const core_dict_t *decisions);
+    const n00bb_llvm_cached_facts_t *facts);
 core_string_t n00bb_llvm_backend_mutator_entries(
     const n00bb_llvm_backend_t *backend);
 void n00bb_llvm_mutator_decisions_add(core_dict_t *decisions,

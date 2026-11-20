@@ -25,6 +25,7 @@ typedef struct {
     size_t runtime_object_bytes;
     const uint8_t *mutators;
     size_t mutators_bytes;
+    ir_module_t *ir;
 } n00bb_cache_module_object_t;
 core_list_decl(n00bb_cache_module_object_t);
 

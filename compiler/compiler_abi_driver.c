@@ -28,6 +28,7 @@
 #include "qualified_names.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
+#include "compiler_axioms.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
 #include "global_metadata.h"
@@ -634,7 +635,7 @@ typedef struct {
     core_diagnostics_t *diagnostics;
     core_list_t(n00bb_cache_module_object_t) *kept;
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
-    const core_dict_t *mutator_decisions;
+    const n00bb_llvm_cached_facts_t *mutator_decisions;
 } module_emission_t;
 
 typedef struct {
@@ -1761,26 +1762,43 @@ static void
 cached_mutator_decisions(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
                          core_translation_unit_t *const *order, size_t count,
-                         core_dict_t *decisions)
+                         n00bb_llvm_cached_facts_t *facts)
 {
-    core_dict_init(decisions, nullptr, nullptr);
-    if (!analysis->cache) return;
+    core_dict_init(&facts->decisions, nullptr, nullptr);
+    core_dict_init(&facts->definitions, nullptr, nullptr);
+    facts->allocators = core_list_new(n00bb_llvm_func_ptr_t);
     n00bb_cache_module_object_t cached = {0};
     for (size_t i = 0; i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order[i]);
-        if (state->interface_module
-            && n00bb_cache_module_object(analysis->cache,
+        for (size_t f = 0; state->ir_module
+             && f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(ir_func_at(state->ir_module,
+                                                           f));
+            if (body && body->n_blocks && n00bb_axiom_function_has(body,
+                    N00BB_AXIOM_MUTATOR_ALLOCATOR))
+                core_list_push(facts->allocators, body);
+        }
+        if (!analysis->cache || !state->interface_module
+            || !n00bb_cache_module_object(analysis->cache,
                    ir_module_name(state->ir_module), &cached))
-            n00bb_llvm_mutator_decisions_add(decisions, state->ir_module,
-                core_string_borrow((const char *)cached.mutators,
-                                   cached.mutators_bytes));
+            continue;
+        n00bb_llvm_mutator_decisions_add(&facts->decisions, state->ir_module,
+            core_string_borrow((const char *)cached.mutators,
+                               cached.mutators_bytes));
+        ir_module_t *body = cached.runtime_object ? nullptr : cached.ir;
+        for (size_t g = 0; body && g < ir_global_count(body); g++)
+            if (!ir_global_at(body, g)->is_extern)
+                core_dict_put(&facts->definitions,
+                    ir_global_identity(ir_global_at(body, g)),
+                    ir_global_at(body, g));
     }
-    for (size_t i = 0; i < analysis->specializations.len; i++) {
+    for (size_t i = 0; analysis->cache
+         && i < analysis->specializations.len; i++) {
         const n00bb_specialization_t *item =
             &analysis->specializations.data[i];
         if (n00bb_cache_instance_object(analysis->cache, link, analysis,
                                         item, &cached))
-            n00bb_llvm_mutator_decisions_add(decisions,
+            n00bb_llvm_mutator_decisions_add(&facts->decisions,
                 item->instance->owner,
                 core_string_borrow((const char *)cached.mutators,
                                    cached.mutators_bytes));
@@ -2292,7 +2310,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (ok && !native_frames) ok = false;
     core_list_t(n00bb_cache_module_object_t) kept =
         core_list_new(n00bb_cache_module_object_t);
-    core_dict_t mutator_decisions;
+    n00bb_llvm_cached_facts_t mutator_decisions;
     cached_mutator_decisions(link, analysis, order.data, count,
                              &mutator_decisions);
     module_emission_t emission = {
@@ -2506,7 +2524,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free((void *)kept.data[i].mutators);
     }
     core_list_free(kept);
-    core_dict_free(&mutator_decisions);
+    core_dict_free(&mutator_decisions.decisions);
+    core_dict_free(&mutator_decisions.definitions);
+    core_list_free(mutator_decisions.allocators);
     release_output(&plan);
     core_free(archive);
     core_free(target_flag);

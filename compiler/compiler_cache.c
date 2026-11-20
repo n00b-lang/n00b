@@ -2005,6 +2005,7 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
         .runtime_object = runtime ? runtime->data : nullptr,
         .runtime_object_bytes = runtime ? runtime->length : 0,
         .mutators = mutators->data, .mutators_bytes = mutators->length,
+        .ir = member->module,
     };
     return true;
 }
