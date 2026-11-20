@@ -459,15 +459,14 @@ private func shifted(at: u32?, by: u64) -> u32? {
     return cast[u32] moved
 }
 
-// A right-side event order, made room for: doubled (so a left span ended
-// by a right reset can close just before it) and, at the join offset,
-// placed after every left event there.
+// A right-side event order: at the join offset, placed after every left
+// event there. An event of the left side given the same order still sorts
+// first, since the left side's records come first (event_before).
 private func right_order(order: u32, at_join: bool) -> u32 {
-    var moved: u32 = order * 2 + 2
     if at_join {
-        moved += right_first_order
+        return order + right_first_order
     }
-    return moved
+    return order
 }
 
 // The right side's first reset, which ends every span flowing in from the
@@ -535,18 +534,15 @@ private func concat_layers(left: string, right: string, reset: Reset_Point,
     var reset_order: u32 = 0
     if reset.found {
         reset_at = cast[u32](cast[u64](reset.at) + left_len)
-        // In the reset's own layer, left spans close just before it; in
-        // the others, after the left side's events at that offset and
-        // before the right side's.
+        // Left spans close with the reset's order in its own layer, so
+        // just before it, and in the others with the first right order
+        // there, so after the left side's events at that offset and before
+        // the right side's.
+        var order: u32 = 0
         if layer == reset.layer and right_rich {
-            reset_order = right_order(reset.order, reset.at == 0)
+            order = reset.order
         }
-        else {
-            reset_order = 2
-            if reset.at == 0 {
-                reset_order += right_first_order
-            }
-        }
+        reset_order = right_order(order, reset.at == 0)
     }
     if right_rich {
         let rb: Ref[Rich_Body] = rich_body(right)
@@ -573,7 +569,7 @@ private func concat_layers(left: string, right: string, reset: Reset_Point,
             if reset_at != nil and record_is_span(rec) and
                 rec.end_ix.get_or_else(0) == index_extends {
                 rec.end_ix = reset_at
-                rec.end_order = reset_order - 1
+                rec.end_order = reset_order
             }
             body.style_info.append(rec)
             i += 1
