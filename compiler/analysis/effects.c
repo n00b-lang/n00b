@@ -1375,9 +1375,15 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
 void
 dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
-    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
-        dump_function_summary(analysis->summaries,
-            n00bb_cached_body(analysis->reachable_functions.data[f]), false);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
+        ir_func_t *body = n00bb_cached_body(
+            analysis->reachable_functions.data[f]);
+        if (core_dict_add(&seen, body, body))
+            dump_function_summary(analysis->summaries, body, false);
+    }
+    core_dict_free(&seen);
 }
 
 static int

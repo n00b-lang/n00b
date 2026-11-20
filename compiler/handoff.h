@@ -6,9 +6,7 @@
 #include <stdint.h>
 
 typedef struct {
-    bool          cache_strict;
     core_string_t cache_exclude;
-    core_string_t cache_summaries;
     core_string_t toolchain_reason;
 } n00bb_handoff_t;
 
