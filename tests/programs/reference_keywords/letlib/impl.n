@@ -1,0 +1,19 @@
+# A library whose module variables are set by computed initializers, built
+# into an archived interface.
+func double(value: int) -> int {
+    return value * 2
+}
+
+func compute_three() -> int {
+    return 3
+}
+
+let doubler = ref double
+let three: int = compute_three()
+
+# Nothing sets this until an importer calls `set_unset`.
+var unset: int
+
+func set_unset(value: int) {
+    unset = value
+}

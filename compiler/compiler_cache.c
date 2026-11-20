@@ -53,6 +53,9 @@ typedef struct {
     uint8_t *interface;
     size_t interface_bytes;
     core_list_t(size_t) inlined;
+    // The hash of the SCC's serialized IR, once an instance key needed it.
+    uint64_t ir_hash;
+    bool ir_hashed;
     bool root;
     bool cached;
 } cache_scc_t;
@@ -222,12 +225,24 @@ sections_remove(core_list_t(cache_section_t) *sections, core_string_t name)
     }
 }
 
+// A check and a library build make no native code, so neither needs a
+// module's object; a library build does need its ABI object, the library's
+// own (its phase's), which it writes and links.
 static bool cache_check_only;
+static bool cache_library;
 
 void
 n00bb_cache_set_check_only(bool check_only)
 {
     cache_check_only = check_only;
+    cache_library = false;
+}
+
+void
+n00bb_cache_set_library(void)
+{
+    cache_check_only = true;
+    cache_library = true;
 }
 
 static bool
@@ -254,8 +269,9 @@ runtime_object_kind(void)
 static core_string_t
 phase_name(void)
 {
-    return cache_check_only ? CORE_STRING_STATIC("check")
-                            : CORE_STRING_STATIC("program");
+    return cache_library ? CORE_STRING_STATIC("library")
+        : cache_check_only ? CORE_STRING_STATIC("check")
+                           : CORE_STRING_STATIC("program");
 }
 
 static int
@@ -394,9 +410,15 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE,
         N00BB_KEY_BUILD_UNCHECKED_WIDE_NARROWING, N00BB_KEY_BUILD_PANIC_TRAP,
         N00BB_KEY_BUILD_LTO, N00BB_KEY_BUILD_ATOMIC128,
+        // A module's kept syntax warnings (P0011, P0012, P0034) follow these.
+        N00BB_KEY_SYNTAX_WARNINGS,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    put_u32(out, (uint32_t)n00bb_setting_count(preferences));
+    for (size_t i = 0; i < n00bb_setting_count(preferences); i++)
+        put_text(out, n00bb_setting_at(preferences, i));
     put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
@@ -1129,11 +1151,27 @@ name_listed(core_string_t list, core_string_t name)
     return false;
 }
 
+// The modules this compile builds from source: its roots. An entry holding
+// one isn't loaded, whatever else it holds, since a cycle's members are
+// compiled together: one compiled from source beside another loaded from
+// the cache would disagree about the cycle (its ABI SCC identity is made
+// from its members' sources).
+static core_buffer_t cache_roots;
+
+void
+n00bb_cache_set_roots(core_string_t names)
+{
+    core_buffer_release(&cache_roots);
+    core_buffer_append_string(&cache_roots, names);
+}
+
 static bool
 entry_excluded(const cache_entry_t *entry, core_string_t excluded)
 {
     for (size_t m = 0; m < entry->members.len; m++)
-        if (name_listed(excluded, entry->members.data[m].name)) return true;
+        if (name_listed(excluded, entry->members.data[m].name)
+            || name_listed(core_buffer_string(&cache_roots),
+                           entry->members.data[m].name)) return true;
     return false;
 }
 
@@ -1205,9 +1243,10 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
         && phase_section(entry, CORE_STRING_STATIC("ir"), (core_string_t){0})
         && phase_section(entry, CORE_STRING_STATIC("interface"),
                          (core_string_t){0});
-    for (size_t m = 0; ok && !objects_optional() && m < entry->members.len;
-         m++)
-        ok = phase_section(entry, object_kind(), entry->members.data[m].name)
+    for (size_t m = 0; ok && (!objects_optional() || cache_library)
+         && m < entry->members.len; m++)
+        ok = (objects_optional() || phase_section(entry, object_kind(),
+                                       entry->members.data[m].name))
             && phase_section(entry, CORE_STRING_STATIC("abi"),
                              entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
@@ -1886,6 +1925,32 @@ n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
 }
 
 bool
+n00bb_cache_warning_inputs(const n00bb_cache_t *cache, core_string_t module,
+                           const uint8_t **data, size_t *length)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = loaded_member(cache, module, &entry);
+    const cache_section_t *section = member
+        ? phase_section(entry, CORE_STRING_STATIC("warning-inputs"),
+                        member->name)
+        : nullptr;
+    if (!section) return false;
+    *data = section->data;
+    *length = section->length;
+    return true;
+}
+
+void
+n00bb_cache_mark_stale(n00bb_cache_t *cache, core_string_t module)
+{
+    const cache_entry_t *found = nullptr;
+    if (!cache || !loaded_member(cache, module, &found) || !found) return;
+    for (size_t e = 0; e < cache->entries.len; e++)
+        if (&cache->entries.data[e] == found)
+            cache->entries.data[e].stale = true;
+}
+
+bool
 n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
                              core_string_t kind, const uint8_t **data,
                              size_t *length)
@@ -2301,9 +2366,18 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     const cache_section_t *mutators = member
         ? phase_section(entry, CORE_STRING_STATIC("mutators"), member->name)
         : nullptr;
+    if (cache_library && abi) {
+        *object = (n00bb_cache_module_object_t){
+            .module = member->name, .abi = abi->data,
+            .abi_bytes = abi->length,
+        };
+        return true;
+    }
     if (!code || !abi || !mutators) return false;
     const cache_section_t *runtime = phase_section(entry,
         runtime_object_kind(), member->name);
+    const cache_section_t *index = phase_section(entry,
+        CORE_STRING_STATIC("index"), member->name);
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
         .object = code->data, .object_bytes = code->length,
@@ -2311,6 +2385,8 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
         .runtime_object = runtime ? runtime->data : nullptr,
         .runtime_object_bytes = runtime ? runtime->length : 0,
         .mutators = mutators->data, .mutators_bytes = mutators->length,
+        .index = index ? index->data : nullptr,
+        .index_bytes = index ? index->length : 0,
     };
     return true;
 }
@@ -2696,6 +2772,24 @@ warning_group_order(const void *left_raw, const void *right_raw)
     return order;
 }
 
+// A warning that depends on more than its module's key covers is not kept
+// with the module: each compile reports it afresh, cached modules
+// included.
+// - A data race (S0060): the program's threads (report_race reports it in
+//   cached modules too).
+// Warnings kept that depend on other things beyond the key are checked
+// when the module is reused instead (n00bb_cache_warning_inputs).
+static bool
+reported_afresh(core_string_t code)
+{
+    static const n00bb_diag_t afresh[] = {
+        N00B_DIAG_DATA_RACE,
+    };
+    for (size_t i = 0; i < sizeof(afresh) / sizeof(afresh[0]); i++)
+        if (core_string_eq(code, n00bb_diag_code(afresh[i]))) return true;
+    return false;
+}
+
 static void
 put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 {
@@ -2713,7 +2807,8 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
             || item->severity == CORE_DIAG_HELP;
         attached = note ? attached
             : core_diag_is_advisory(item->severity)
-                && !n00bb_diag_reports_unused(item->code);
+                && !n00bb_diag_reports_unused(item->code)
+                && !reported_afresh(item->code);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){
@@ -2880,9 +2975,15 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         const n00bb_cache_module_object_t *object = module_object(objects,
             object_count, module);
         bool present = object && object->object && object->abi;
-        ok = present || objects_optional();
+        ok = present || (objects_optional() && !cache_library)
+            || (cache_library && object && object->abi);
         if (!ok) break;
-        if (present) {
+        if (cache_library) {
+            module_section_name(&name, CORE_STRING_STATIC("abi"), module);
+            ok = sections_set(&sections, core_buffer_string(&name),
+                              object->abi, object->abi_bytes);
+        }
+        else if (present) {
             module_section_name(&name, object_kind(), module);
             ok = sections_set(&sections, core_buffer_string(&name),
                               object->object, object->object_bytes);
@@ -2899,19 +3000,41 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                     core_buffer_string(&name), object->runtime_object,
                     object->runtime_object_bytes);
             else sections_remove(&sections, core_buffer_string(&name));
+            module_section_name(&name, CORE_STRING_STATIC("index"), module);
+            if (object->index)
+                ok = ok && sections_set(&sections,
+                    core_buffer_string(&name), object->index,
+                    object->index_bytes);
+            else sections_remove(&sections, core_buffer_string(&name));
         }
         core_buffer_t warnings = {0};
+        core_buffer_t inputs = {0};
         core_translation_unit_t *root = analysis->units.len
             ? analysis->units.data[0] : nullptr;
         if (root && n00bb_resolver_same_root(analysis->resolver, root,
-                                             scc->members.data[m]))
+                                             scc->members.data[m])) {
             put_warnings(&warnings, scc->members.data[m]);
+            // What the kept warnings depend on beyond the key, checked when
+            // the module is reused (n00bb_cache_warning_inputs).
+            const core_buffer_t *recorded =
+                &tu_state(scc->members.data[m])->warning_inputs;
+            if (recorded->byte_len)
+                core_buffer_append(&inputs, recorded->data,
+                                   recorded->byte_len);
+        }
         else put_u32(&warnings, 0);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 warnings.data ? (const uint8_t *)warnings.data
                                               : (const uint8_t *)"",
                                 warnings.byte_len);
+        module_section_name(&name, CORE_STRING_STATIC("warning-inputs"),
+                            module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                inputs.data ? (const uint8_t *)inputs.data
+                                            : (const uint8_t *)"",
+                                inputs.byte_len);
+        core_buffer_release(&inputs);
         core_buffer_release(&warnings);
         const core_buffer_t *unused =
             &tu_state(scc->members.data[m])->unused_facts;
@@ -3129,10 +3252,16 @@ compare_indices(const void *left, const void *right)
     return (a > b) - (a < b);
 }
 
+// Every instance of a generic in the SCC keys on this hash, and the IR it
+// hashes (a loaded entry's section, or the snapshot taken before
+// specializing) doesn't change once there, so it is hashed once per SCC.
 static bool
-scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
-            uint64_t *out)
+scc_ir_hash(const n00bb_cache_t *cache, cache_scc_t *scc, uint64_t *out)
 {
+    if (scc->ir_hashed) {
+        *out = scc->ir_hash;
+        return true;
+    }
     core_string_t first = scc->members.data[0]->module.identifier;
     const cache_entry_t *entry = nullptr;
     if (scc->cached && loaded_member(cache, first, &entry)) {
@@ -3140,11 +3269,14 @@ scc_ir_hash(const n00bb_cache_t *cache, const cache_scc_t *scc,
             CORE_STRING_STATIC("ir"), (core_string_t){0});
         if (!ir) return false;
         *out = core_xxh3_64bits_raw(ir->data, ir->length);
-        return true;
     }
-    const cache_snapshot_t *snapshot = snapshot_for(cache, first);
-    if (!snapshot) return false;
-    *out = buffer_hash(&snapshot->ir);
+    else {
+        const cache_snapshot_t *snapshot = snapshot_for(cache, first);
+        if (!snapshot) return false;
+        *out = buffer_hash(&snapshot->ir);
+    }
+    scc->ir_hash = *out;
+    scc->ir_hashed = true;
     return true;
 }
 
@@ -3177,7 +3309,7 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     if (owners.len)
         qsort(owners.data, owners.len, sizeof(*owners.data), compare_indices);
     uint64_t generic_ir = 0;
-    bool saved = scc_ir_hash(cache, &sccs->data[generic], &generic_ir);
+    bool saved = scc_ir_hash(cache, &cache->sccs.data[generic], &generic_ir);
     core_buffer_t input = {0};
     core_buffer_puts(&input, "n00b.instance.key.v3");
     put_u64(&input, sccs->data[generic].key);
@@ -3396,9 +3528,17 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
     core_buffer_release(&modules_directory);
     core_buffer_release(&shared_directory);
     core_list_t(cache_scc_t) *sccs = &cache->sccs;
+    // A module snapshotted clean can still be reported against afterwards,
+    // by the analysis of the whole program (a read of one of its variables
+    // before anything sets it): a module with errors, or one that imports
+    // one, is not stored, so the next run reports them again, as it does for
+    // a module that failed to check.
+    uint8_t *clean = ok ? core_alloc_array(uint8_t, sccs->len ? sccs->len : 1)
+                        : nullptr;
     for (size_t s = 0; ok && s < sccs->len; s++) {
         cache_scc_t *scc = &sccs->data[s];
-        bool unstored = scc_uses_library(cache, sccs, scc);
+        bool unstored = scc_uses_library(cache, sccs, scc)
+            || !scc_clean(sccs, s, clean);
         for (size_t m = 0; !unstored && m < scc->members.len; m++)
             unstored = name_listed(core_buffer_string(&cache->unstored),
                                    scc->members.data[m]->module.identifier);
@@ -3423,6 +3563,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
             core_buffer_release(&members);
         }
     }
+    core_free(clean);
     for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
         const n00bb_specialization_t *item =
             &analysis->specializations.data[i];

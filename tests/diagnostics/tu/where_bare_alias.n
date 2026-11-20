@@ -1,0 +1,20 @@
+// A generic alias named without type arguments gives each use its own
+// variables, which take on the alias's `where` clause.
+alias Bag = Dict['K, nil] where 'K: Integer
+alias Pair = Dict['T, nil]
+func size(b: Bag) -> uint { return b.len() }
+func both(a: Pair, b: Pair) -> uint { return a.len() + b.len() }
+let ints: Dict[int, nil] = {1: nil}
+let words: Dict[string, nil] = {"x": nil}
+require size(ints) == 1
+require size(words) == 1
+require both(ints, words) == 2
+// A body's own use of one is reported once, at the use, whether a clause
+// or a trait named as a type constrains it.
+alias Ints = Array[Integer]
+func local() -> uint {
+    var keys: Bag = {"k": nil}
+    var words: Ints = ["x"]
+    return keys.len() + words.len()
+}
+require local() == 2

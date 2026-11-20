@@ -755,10 +755,10 @@ directory_problem(path_state_t state)
 }
 
 static void
-describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
+describe_layer(core_buffer_t *out, n00bb_setting_id_t key,
+               n00bb_setting_source_t source, core_string_t origin)
 {
-    core_string_t origin = n00bb_setting_origin(key);
-    switch (n00bb_setting_source(key)) {
+    switch (source) {
     case N00BB_SETTING_FROM_ENVIRONMENT:
         core_buffer_append_string(out, origin);
         break;
@@ -775,22 +775,33 @@ describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
 }
 
 static void
+describe_setting_source(core_buffer_t *out, n00bb_setting_id_t key)
+{
+    describe_layer(out, key, n00bb_setting_source(key),
+                   n00bb_setting_origin(key));
+}
+
+static void
 warn_contract_dirs(core_diagnostics_t *d)
 {
     n00bb_setting_id_t key = N00BB_KEY_PATHS_CONTRACT_DIRS;
-    bool from_flag = n00bb_setting_source(key) == N00BB_SETTING_FROM_FLAG;
+    // Layers accumulate, so each entry names the layer it came from, and a
+    // directory named twice is reported once.
     for (size_t i = 0; i < n00bb_setting_count(key); i++) {
+        if (!n00bb_setting_path_is_first(key, i)) continue;
         core_string_t value = n00bb_setting_at(key, i);
         path_state_t state = directory_state(value);
         if (state == PATH_IS_DIRECTORY) continue;
-        if (from_flag)
+        n00bb_setting_source_t layer = n00bb_setting_source_at(key, i);
+        if (layer == N00BB_SETTING_FROM_FLAG)
             n00bb_report(d, nullptr, N00B_DIAG_CONTRACT_DIR_MISSING, nowhere,
                 N00B_TEXT_CONTRACT_DIR_SO_IT_IS,
                 N00BB_ARGS(ARG_TEXT(value),
                            ARG_PHRASE_ID(directory_problem(state))));
         else {
             core_buffer_t source = {0};
-            describe_setting_source(&source, key);
+            describe_layer(&source, key, layer,
+                           n00bb_setting_origin_at(key, i));
             n00bb_report(d, nullptr, N00B_DIAG_CONTRACT_DIR_MISSING, nowhere,
                 N00B_TEXT_CONTRACT_DIRECTORY_FROM_SO_IT,
                 N00BB_ARGS(ARG_TEXT(value),
@@ -801,31 +812,39 @@ warn_contract_dirs(core_diagnostics_t *d)
     }
 }
 
-typedef void (*package_path_visit_t)(void *context, core_string_t entry,
+typedef void (*package_path_visit_t)(void *context, size_t index,
+                                     core_string_t entry,
                                      core_string_t resolved);
 
 static void
 each_package_path(package_path_visit_t visit, void *context)
 {
     n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
-    core_string_t cwd = core_os_current_directory();
+    // The resolver joins relative entries to the canonical directory.
+    core_string_t cwd = n00bb_canonical_cwd();
     for (size_t i = 0; i < n00bb_setting_count(key); i++) {
         core_string_t entry = n00bb_setting_at(key, i);
         core_string_t resolved = core_os_is_absolute(entry)
             ? core_string_dup(entry) : core_os_path_join(cwd, entry);
-        visit(context, entry, resolved);
+        visit(context, i, entry, resolved);
         core_free(resolved.data);
     }
     core_free(cwd.data);
 }
 
 static void
-warn_package_path(void *context, core_string_t entry, core_string_t resolved)
+warn_package_path(void *context, size_t index, core_string_t entry,
+                  core_string_t resolved)
 {
+    n00bb_setting_id_t key = N00BB_KEY_PATHS_PATH;
+    // An entry repeated across layers is one root, so one warning, naming
+    // the first, highest-precedence layer.
+    if (!n00bb_setting_path_is_first(key, index)) return;
     path_state_t state = directory_state(resolved);
     if (state == PATH_IS_DIRECTORY) return;
     core_buffer_t source = {0};
-    describe_setting_source(&source, N00BB_KEY_PATHS_PATH);
+    describe_layer(&source, key, n00bb_setting_source_at(key, index),
+                   n00bb_setting_origin_at(key, index));
     n00bb_report(context, nullptr, N00B_DIAG_PACKAGE_PATH_MISSING, nowhere,
         N00B_TEXT_ENTRY_SO_IT_IS_SKIPPED,
         N00BB_ARGS(ARG_TEXT(core_buffer_string(&source)), ARG_TEXT(entry),
@@ -1059,42 +1078,37 @@ env_tool(const char *label, const char *path, n00bb_setting_id_t key,
     core_free(value.data);
 }
 
+// The resolver's package roots, in search order, each with its directory
+// and what the resolver's notes call it; then each entry the resolver
+// rejects.
 static void
-env_package_path(void *context, core_string_t entry, core_string_t resolved)
+env_package_roots(core_string_t argv0)
 {
-    (void)context;
-    path_state_t state = directory_state(resolved);
-    const char *problem = state == PATH_IS_MISSING ? "does not exist"
-        : state == PATH_IS_NOT_DIRECTORY ? "not a directory" : nullptr;
-    if (!problem && !core_os_is_absolute(entry)) {
-        core_string_t cwd = core_os_current_directory();
-        core_string_t canonical = core_os_real_path(resolved);
-        core_string_t real_cwd = core_os_real_path(cwd);
-        bool inside = canonical.data && real_cwd.data
-            && core_string_starts_with(canonical, real_cwd)
-            && (canonical.u8_bytes == real_cwd.u8_bytes
-                || core_os_is_separator(canonical.data[real_cwd.u8_bytes]));
-        if (!inside)
-            problem = "a relative entry must stay inside the current "
-                      "directory";
-        core_free(real_cwd.data);
-        core_free(canonical.data);
-        core_free(cwd.data);
-    }
-    env_line("N00B_PATH", entry, problem);
-}
-
-static void
-env_package_roots(void)
-{
-    const n00bb_toolchain_t *toolchain = n00bb_toolchain();
+    core_diagnostics_t *rejected = core_diagnostics_new();
+    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0, rejected);
     printf("\npackage roots\n");
-    printf("  %-10s %.*s\n", "stdlib", (int)toolchain->stdlib.u8_bytes,
-           toolchain->stdlib.data);
-    core_string_t cwd = core_os_current_directory();
-    printf("  %-10s %.*s\n", "default", (int)cwd.u8_bytes, cwd.data);
-    core_free(cwd.data);
-    each_package_path(env_package_path, nullptr);
+    for (size_t i = 0; i < n00bb_resolver_root_count(resolver); i++) {
+        core_string_t shown = {0};
+        core_string_t path = n00bb_resolver_root(resolver, i, &shown);
+        path_state_t state = directory_state(path);
+        if (state != PATH_IS_DIRECTORY) env_problems++;
+        printf("  %.*s  (%.*s)%s\n", (int)path.u8_bytes, path.data,
+               (int)shown.u8_bytes, shown.data,
+               state == PATH_IS_MISSING ? "  (problem: does not exist)"
+               : state == PATH_IS_NOT_DIRECTORY
+                   ? "  (problem: not a directory)" : "");
+        core_free(shown.data);
+    }
+    for (size_t i = 0; i < core_diagnostics_count(rejected); i++) {
+        const core_diagnostic_t *item = core_diagnostics_at(rejected, i);
+        if (item->severity == CORE_DIAG_NOTE
+            || item->severity == CORE_DIAG_HELP) continue;
+        env_problems++;
+        printf("  (problem: %.*s)\n", (int)item->message.u8_bytes,
+               item->message.data);
+    }
+    n00bb_resolver_free(resolver);
+    core_diagnostics_free(rejected);
 }
 
 static void
@@ -1171,7 +1185,7 @@ n00bb_env_command(core_string_t argv0)
     else
         printf("  %-10s (off: rebuild with N00B_RUST=1 for Rust transports)\n",
                "cargo");
-    env_package_roots();
+    env_package_roots(argv0);
     core_string_t cache = n00bb_cache_directory(CORE_STRING_STATIC(""));
     int failure = 0;
     n00bb_text_t problem = cache_problem(cache, &failure);

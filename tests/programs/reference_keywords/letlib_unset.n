@@ -1,0 +1,8 @@
+# Reads a library's module variable that nothing may have set yet: an error
+# against the archived interface as in the whole program.
+import letlib
+
+func run() -> int {
+    return letlib.unset
+}
+run()

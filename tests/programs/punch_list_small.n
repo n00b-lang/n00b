@@ -70,7 +70,8 @@ func same_name(a: Name, b: Name) -> bool {
 require arithmetic_when
 require known_arch
 require bare_define
-require "\« \» \[" == "« » ["
+require "\[ \] \[\]" == "[ ] []"
+require byte_len("\[\]") == 2
 require counted(3) == 4
 require counted(nil) == -1
 require inside_try(nil) == 7
@@ -211,4 +212,207 @@ require half < 3 and 2.0 == int_two
 require cast[float](-3) == -3.0
 require cast[f32](cast[u8](200)) == cast[f32](200.0)
 require cast[float](cast[i128](9007199254740993)) == 9007199254740992.0
+
+# An element read from a `typecase` arm's `Array['T]` over `Any` has the
+# arm's type `'T`, whose runtime type is the one the boxed subject holds.
+# Each arm's `'T` is its own, and a generic function's own variables stay
+# apart from them.
+func element_kind(x: 'T) -> string {
+    typecase x {
+        case int { return "int" }
+        case string { return "string" }
+        else { return "other" }
+    }
+}
+func first_element_kind(b: Any) -> string {
+    typecase b {
+        case Dict['K, 'T] { return "dict" }
+        case List['T] {
+            let item = b[0]
+            return element_kind(item)
+        }
+        case Array['T] {
+            let item = b[0]
+            return element_kind(item) + "!"
+        }
+        else { return "none" }
+    }
+}
+func element_and_own(z: 'U, b: Any) -> string {
+    typecase b {
+        case Array['T] { return element_kind(b[0]) + element_kind(z) }
+        else { return "none" }
+    }
+}
+let element_ints: Array[int] = [1, 2]
+let element_words: List[string] = ["w"]
+let element_own: int = 3
+require first_element_kind(cast[Any] element_ints) == "int!"
+require first_element_kind(cast[Any] element_words) == "string"
+require element_and_own(element_own, cast[Any] element_ints) == "intint"
+require element_and_own("s", cast[Any] element_ints) == "intstring"
+
+# A `where` clause after a type in a function constrains the function's
+# variable of that name; clauses on one variable add up.
+func where_middle(a: int, b: 'U where 'U: Integer, c: int) -> int {
+    return a + c
+}
+func where_both(x: 'T where 'T: Integer) -> 'T where 'T: Hash {
+    return x
+}
+func where_in_body(x: 'T) -> 'T {
+    var y: 'T where 'T: Integer = x
+    return y
+}
+func where_local() -> int {
+    var x: 'T where 'T: Integer = 5
+    return x
+}
+trait Where_Grows {
+    func grow(self: 'T, by: 'N where 'N: Integer) -> 'T
+}
+record Where_Plant { height: int }
+func grow(self: Where_Plant, by: int) -> Where_Plant {
+    return (height = self.height + by)
+}
+func where_grown(x: 'T) -> 'T where 'T: Where_Grows { return x.grow(2) }
+let where_plant: Where_Plant = (height = 1)
+require where_middle(1, 2, 3) == 4 and where_both(2) == 2
+require where_in_body(3) == 3 and where_local() == 5
+require where_grown(where_plant).height == 3
+
+# One in a record, variant or alias constrains the type's parameter, which
+# each use gives a type that satisfies it.
+record Where_Box {
+    v: 'T where 'T: Integer
+}
+variant Where_Maybe {
+    some: 'T where 'T: != string
+    none: nil
+}
+alias Where_Bag = Dict['K, nil] where 'K: Integer
+func where_boxed(b: Where_Box[int]) -> int { return b.v }
+func where_bagged(b: Where_Bag['U]) -> uint { return b.len() }
+func where_maybe() -> int {
+    var m: Where_Maybe[int]
+    m.some = 7
+    switch m {
+        case some { return 7 }
+        case none { return 0 }
+    }
+}
+let where_box: Where_Box[int] = (v = 4)
+let where_bag: Where_Bag[u8] = {cast[u8](1): nil, cast[u8](2): nil}
+require where_boxed(where_box) == 4 and where_maybe() == 7
+require where_bagged(where_bag) == 2
+
+# A clause may follow a type argument, a parameter of a function type or a
+# parenthesized type.
+func where_ints(xs: List['T where 'T: Integer]) -> uint { return xs.len() }
+func where_optional(x: ('T where 'T: Integer)?) -> int { return 1 }
+func where_calls(r: Ref[('T where 'T: Integer) -> 'T]) -> int { return 1 }
+func where_twice(x: int) -> int { return x * 2 }
+alias Where_Keys = Dict['K where 'K: Integer, nil]
+func where_keyed(k: Where_Keys['U]) -> uint { return k.len() }
+let where_numbers: List[int] = [1, 2]
+let where_maybe_number: int? = 3
+let where_keys: Dict[int, nil] = {1: nil}
+require where_ints(where_numbers) == 2
+require where_optional(where_maybe_number) == 1
+require where_calls(ref where_twice) == 1 and where_keyed(where_keys) == 1
+
+# A `!=` clause rules out only the type it names.
+func where_not_string(x: 'T) -> 'T where 'T: != string { return x }
+func where_through(x: 'U) -> 'U { return where_not_string(x) }
+require where_not_string(3) == 3 and where_through(2.5) == 2.5
+
+# A generic alias of an array, an option or a tuple: its target owns its
+# type variables in the program's metadata.
+alias Alias_Ints = Array['T]
+alias Alias_Maybe = 'T?
+alias Alias_Pair = Tuple['A, 'B]
+func alias_count(x: Alias_Ints['U]) -> uint { return x.len() }
+func alias_values() -> int {
+    var numbers: Alias_Ints[int] = [1, 2]
+    let maybe: Alias_Maybe[int] = 3
+    let pair: Alias_Pair[int, string] = (4, "x")
+    require numbers[1] == 2 and alias_count(numbers) == 2
+    require maybe == 3 and pair[1] == "x"
+    return pair[0]
+}
+require alias_values() == 4
+
+# A variable given to a constrained type takes on the type's constraint.
+func where_make(x: 'T) -> Where_Box['T] { return (v = x) }
+require where_make(5).v == 5
+
+# A generic alias named bare gives each use its own variables.
+func where_sized(a: Where_Bag, b: Alias_Ints) -> uint {
+    return a.len() + b.len()
+}
+let where_strings: Alias_Ints[string] = ["x"]
+require where_sized(where_bag, where_strings) == 3
+
+# A trait named as a type in a record, variant or alias is a parameter of
+# its own, each place it is named, in the order the fields name them.
+record Shorthand_Two {
+    a: Integer
+    b: Integer
+}
+record Shorthand_Keyed {
+    k: 'K
+    v: Integer
+    w: 'K
+}
+variant Shorthand_Num {
+    small: Integer
+    none: nil
+}
+alias Shorthand_Ints = Array[Integer]
+func shorthand_sum(t: Shorthand_Two[int, u8]) -> int {
+    return t.a + cast[int](t.b)
+}
+func shorthand_values() -> int {
+    let two: Shorthand_Two[int, u8] = (a = -1, b = 200)
+    let keyed: Shorthand_Keyed[string, i64] = (k = "a", v = -3, w = "b")
+    let narrow: u8 = two.b
+    let key: string = keyed.k
+    let wide: i64 = keyed.v
+    var number: Shorthand_Num[u16]
+    number.small = 9
+    let ints: Shorthand_Ints[u8] = [1, 2]
+    require narrow == 200 and key == "a" and wide == -3 and ints.len() == 2
+    # `small` is also a module-level `let`; a case names the arm.
+    switch number {
+        case small { return shorthand_sum(two) + cast[int](number.small) }
+        case none { return 0 }
+    }
+}
+require shorthand_values() == 208
+
+# Assigning a variant's arm proves the variable holds it until something
+# could change the variable.
+variant Assigned_Shape {
+    circle: int
+    square: string
+}
+variant Assigned_Maybe {
+    some: 'T
+    none: nil
+}
+func assigned_arms(other: Assigned_Shape) -> int {
+    var s = other
+    s = (circle = 1)
+    let first = s.circle
+    var u: Assigned_Shape = (circle = 2)
+    var t: Assigned_Shape
+    t.square = "ab"
+    var m: Where_Maybe[int] = (none = nil)
+    m = (some = 4)
+    var w: Assigned_Maybe[string]
+    w.some = "x"
+    require w.some == "x"
+    return first + u.circle + cast[int](t.square.len()) + m.some
+}
+require assigned_arms((square = "x")) == 9
 __fd_write(2, "ok")

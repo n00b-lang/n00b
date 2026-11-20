@@ -32,6 +32,9 @@ typedef enum : uint8_t {
     // waiting on its failure type (`subject`): a call whose callee turns out
     // not to fail is its value.
     TY_PRED_OUTCOME_VALUE,
+    // `subject` may be any type but `other`, as a `where 'T: != other`
+    // asks; decided once `subject` is closed.
+    TY_PRED_EXCLUDES,
 } ty_pred_kind_t;
 
 typedef struct {
@@ -140,6 +143,11 @@ bool     ty_solve(ty_solver_t *s);
 th_type *ty_generalize(ty_solver_t *s, th_type *t);
 th_type *ty_instantiate(ty_solver_t *s, th_type *scheme, ty_why_t why);
 th_type *ty_instantiate_declared(ty_solver_t *s, th_type *t, ty_why_t why);
+// A fresh copy of every variable in `t`, requiring of each the bounds
+// declared on the variable it copies (ty_declare_bound): the instance of a
+// function that was not inferred here, such as one read from the object
+// cache, whose declared type is its scheme.
+th_type *ty_instantiate_bounded(ty_solver_t *s, th_type *t, ty_why_t why);
 th_type *ty_dispatch_instance(ty_solver_t *s, const ir_instr_t *at);
 size_t ty_dispatch_count(const ty_solver_t *s);
 const ir_instr_t *ty_dispatch_at(const ty_solver_t *s, size_t i);

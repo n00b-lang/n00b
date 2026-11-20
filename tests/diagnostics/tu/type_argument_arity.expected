@@ -1,0 +1,9 @@
+tests/diagnostics/tu/type_argument_arity.n:2:11: error N00B-T0515: `int` takes no type arguments, but 1 is given
+  help: remove the type argument
+tests/diagnostics/tu/type_argument_arity.n:3:14: error N00B-T0515: `string` takes no type arguments, but 2 are given
+  help: remove the type arguments
+tests/diagnostics/tu/type_argument_arity.n:4:11: error N00B-T0515: `Any` takes no type arguments, but 1 is given
+  help: remove the type argument
+tests/diagnostics/tu/type_argument_arity.n:8:13: error N00B-T0515: `Plain` takes no type arguments, but 1 is given
+  tests/diagnostics/tu/type_argument_arity.n:5:8: note: `Plain` is declared here
+  help: remove the type argument

@@ -64,11 +64,3 @@ func __add(view self: Money, view other: Money) -> Money {
     raw_debug("adding")
     return (cents = self.cents + other.cents)
 }
-
-func lookup(table: Dict[Key, int], k: Key) -> int? {
-    return table.get(k)
-}
-
-func total(a: Money, b: Money) -> Money {
-    return a + b
-}

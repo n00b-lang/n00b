@@ -2,11 +2,6 @@
 
 #define S(text) CORE_STRING_STATIC(text)
 
-static const core_string_t binary_nonterminals[] = {
-    S("equality-expr"), S("compare-expr"), S("bitor-expr"), S("bitxor-expr"),
-    S("bitand-expr"), S("shift-expr"), S("add-expr"), S("mul-expr"),
-};
-
 static void
 emit_set(n00bb_emit_t *emit, core_string_t action, size_t count,
          uint32_t first, uint32_t second)
@@ -71,7 +66,8 @@ emit_simple_literal(parse_grammar_t *grammar, parse_tree_t *node,
 static void
 emit_unary(parse_grammar_t *grammar, parse_tree_t *node, n00bb_emit_t *emit)
 {
-    if (child_named(grammar, node, 0, S("not-op")))
+    if (child_named(grammar, node, 0, S("not-op"))
+        || child_named(grammar, node, 0, S("not-word-op")))
         emit_set(emit, S("bool_not"), 1, 1, 0);
     else if (child_is(node, 0, S("~")))
         emit_set(emit, S("complement"), 1, 1, 0);
@@ -111,53 +107,51 @@ n00bb_node_emit(parse_grammar_t *grammar, parse_tree_t *node,
 {
     *emit = (n00bb_emit_t){0};
     if (!grammar || !node || core_tree_is_leaf(node)) return false;
-    core_string_t name = parse_tree_nt_name(grammar, node);
     size_t count = core_tree_num_children(node);
-    for (size_t i = 0;
-         i < sizeof(binary_nonterminals) / sizeof(*binary_nonterminals); i++)
-        if (core_string_eq(name, binary_nonterminals[i])) {
-            if (count == 3) emit_set(emit, S("binary"), 2, 0, 2);
-            else if (count == 1) emit_set(emit, S("identity"), 1, 0, 0);
-            return emit->action.data != nullptr;
-        }
-    if (core_string_eq(name, S("expression"))
-        || core_string_eq(name, S("or-rhs"))
-        || core_string_eq(name, S("and-rhs"))
-        || ((core_string_eq(name, S("or-expr"))
-             || core_string_eq(name, S("and-expr"))) && count == 1))
+    switch (n00bb_rule_of(grammar, node)) {
+    case RULE(EQUALITY_EXPR): case RULE(COMPARE_EXPR): case RULE(BITOR_EXPR):
+    case RULE(BITXOR_EXPR): case RULE(BITAND_EXPR): case RULE(SHIFT_EXPR):
+    case RULE(ADD_EXPR): case RULE(MUL_EXPR):
+        if (count == 3) emit_set(emit, S("binary"), 2, 0, 2);
+        else if (count == 1) emit_set(emit, S("identity"), 1, 0, 0);
+        break;
+    case RULE(OR_EXPR): case RULE(AND_EXPR):
+        if (count == 1) emit_set(emit, S("identity"), 1, 0, 0);
+        break;
+    case RULE(EXPRESSION): case RULE(OR_RHS): case RULE(AND_RHS):
         emit_set(emit, S("identity"), 1, 0, 0);
-    else if (core_string_eq(name, S("unary-expr")))
-        emit_unary(grammar, node, emit);
-    else if (core_string_eq(name, S("postfix-expr")))
-        emit_postfix(node, false, emit);
-    else if (core_string_eq(name, S("place")))
-        emit_postfix(node, true, emit);
-    else if (core_string_eq(name, S("primary"))) {
+        break;
+    case RULE(UNARY_EXPR): emit_unary(grammar, node, emit); break;
+    case RULE(POSTFIX_EXPR): emit_postfix(node, false, emit); break;
+    case RULE(PLACE): emit_postfix(node, true, emit); break;
+    case RULE(PRIMARY):
         if (count == 1 && core_tree_is_leaf(core_tree_child(node, 0)))
             emit_set(emit, S("reference"), 0, 0, 0);
         else if (count == 1) emit_set(emit, S("identity"), 1, 0, 0);
-    }
-    else if (core_string_eq(name, S("simple-lit")))
-        emit_simple_literal(grammar, node, emit);
-    else if (core_string_eq(name, S("bool-lit")))
-        emit_literal(emit, S("literal"), S("bool"));
-    else if (core_string_eq(name, S("list-lit")))
-        emit_set(emit, S("sequence_literal"), 0, 0, 0);
-    else if (core_string_eq(name, S("dict-or-set-lit")))
+        break;
+    case RULE(SIMPLE_LIT): emit_simple_literal(grammar, node, emit); break;
+    case RULE(BOOL_LIT): emit_literal(emit, S("literal"), S("bool")); break;
+    case RULE(LIST_LIT): emit_set(emit, S("sequence_literal"), 0, 0, 0); break;
+    case RULE(DICT_OR_SET_LIT):
         emit_set(emit, S("brace_literal"), 0, 0, 0);
-    else if (core_string_eq(name, S("typeof-expr")))
-        emit_set(emit, S("typeof"), 1, 2, 0);
-    else if (core_string_eq(name, S("typespec-expr")))
+        break;
+    case RULE(TYPEOF_EXPR): emit_set(emit, S("typeof"), 1, 2, 0); break;
+    case RULE(TYPESPEC_EXPR):
         emit_set(emit, S("typespec_literal"), 0, 0, 0);
-    else if (core_string_eq(name, S("effect-query")))
-        emit_set(emit, S("effect_query"), 0, 0, 0);
-    else if (core_string_eq(name, S("new-expr")))
-        emit_set(emit, S("array_new"), 0, 0, 0);
-    else if (core_string_eq(name, S("callback-expr")))
+        break;
+    case RULE(EFFECT_QUERY): emit_set(emit, S("effect_query"), 0, 0, 0); break;
+    case RULE(NEW_EXPR): emit_set(emit, S("array_new"), 0, 0, 0); break;
+    case RULE(CALLBACK_EXPR):
         emit_set(emit, S("callback_create"), 0, 0, 0);
-    else if (core_string_eq(name, S("return-stmt")))
+        break;
+    case RULE(RETURN_STMT):
         emit_set(emit, S("return"), count > 1 ? 1 : 0, 1, 0);
-    else if (core_string_eq(name, S("binop-assign-stmt")))
+        break;
+    case RULE(BINOP_ASSIGN_STMT):
         emit_set(emit, S("compound_assign"), 2, 0, 2);
+        break;
+    default:
+        break;
+    }
     return emit->action.data != nullptr;
 }

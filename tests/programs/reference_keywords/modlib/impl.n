@@ -1,0 +1,30 @@
+# A library whose function references its importers call, built into an
+# archived interface (reference_keywords.sh). The references are made here,
+# so a call through one in an importer doesn't know its function.
+record Tally {
+    count: int
+}
+
+func tally_add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+
+func module_add() -> Ref[(Tally, int) -> int] {
+    return ref tally_add
+}
+
+# Declared in an order other than the one its type lists them in.
+func ordered(a: int, zz: int = 1, b: int = 2) -> int {
+    return a * 100 + zz * 10 + b
+}
+
+func module_ordered() -> Ref[(int, b: int, zz: int) -> int] {
+    return ref ordered
+}
+
+func apply(f: Ref[(Tally, int) -> int], modify tally: Tally,
+           by: int) -> int {
+    var amount = by
+    return f.call(tally, amount)
+}

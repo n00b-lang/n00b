@@ -61,6 +61,16 @@ struct parse_tree_walk_t {
     chain_t                 any;
     chain_t                 leaf;
     chain_t                 by_annot[PARSE_ANNOT_KIND_COUNT];
+    // Bit p is set when by_annot[kind] has a visitor for phase p < 64;
+    // far_phases when any visitor's phase is beyond that.
+    uint64_t                annot_phases[PARSE_ANNOT_KIND_COUNT];
+    bool                    far_phases;
+    // Bit p is set when a boundary at position p < 64 has an entering
+    // (exiting) callback; far_boundaries when one sits further on.
+    uint64_t                boundaries_entering;
+    uint64_t                boundaries_exiting;
+    bool                    far_boundaries;
+    bool                    has_nt_visitors;
     parse_annot_kind_t     *annot_order;
     size_t                  annot_order_len;
     core_list_t(annotation_boundary_t) boundaries;
@@ -227,7 +237,22 @@ parse_walk_on_annotation_boundary(parse_tree_walk_t *w, size_t before_kind,
         .exiting = exiting,
         .thunk = thunk,
     }));
+    if (before_kind >= 64) w->far_boundaries = true;
+    else {
+        if (entering) w->boundaries_entering |= UINT64_C(1) << before_kind;
+        if (exiting) w->boundaries_exiting |= UINT64_C(1) << before_kind;
+    }
     return true;
+}
+
+// Whether a boundary at `position` has a callback for this direction; when
+// not, running the boundaries there would call nothing.
+static inline bool
+boundary_may_run(const parse_tree_walk_t *w, size_t position, bool entering)
+{
+    if (w->far_boundaries || position >= 64) return true;
+    uint64_t at = entering ? w->boundaries_entering : w->boundaries_exiting;
+    return (at >> position & 1) != 0;
 }
 
 void
@@ -240,6 +265,18 @@ parse_walk_on_annot_phase(parse_tree_walk_t *w, parse_annot_kind_t kind,
     }
 
     core_list_push(w->by_annot[kind], add_visitor(w, pre, post, thunk, phase));
+    if (phase < 64) w->annot_phases[kind] |= UINT64_C(1) << phase;
+    else w->far_phases = true;
+}
+
+// Whether visitors of `kind` may run in `phase`; when not, running them
+// would call nothing.
+static inline bool
+annot_kind_in_phase(const parse_tree_walk_t *w, parse_annot_kind_t kind,
+                    int32_t phase)
+{
+    return w->far_phases || phase >= 64
+        || (w->annot_phases[kind] >> phase & 1);
 }
 
 bool
@@ -267,6 +304,7 @@ parse_walk_on_nt(parse_tree_walk_t *w, core_string_t nt_name, parse_visit_fn pre
     }
 
     core_list_push(*c, add_visitor(w, pre, post, thunk, 0));
+    w->has_nt_visitors = true;
 
     return true;
 }
@@ -274,6 +312,7 @@ parse_walk_on_nt(parse_tree_walk_t *w, core_string_t nt_name, parse_visit_fn pre
 static chain_t *
 nt_chain(parse_tree_walk_t *w, int64_t nt_id)
 {
+    if (!w->has_nt_visitors) return nullptr;
     bool  found = false;
     void *c     = core_dict_get(w->by_nt, (uintptr_t)nt_id, &found);
 
@@ -375,9 +414,20 @@ static bool
 run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
 {
     bool   descend = true;
-    size_t n_nt    = parse_nt_annot_count(v->nt);
-    size_t n_rule  = parse_rule_annot_count(v->rule);
+    size_t n_nt    = v->nt ? v->nt->annotations.len : 0;
+    size_t n_rule  = v->rule ? v->rule->annotations.len : 0;
     size_t total   = n_nt + n_rule;
+
+    // The kinds this node carries: a pass over a kind it lacks, or a phase
+    // with no visitor for that kind, would call nothing, so it is skipped.
+    uint64_t present[(PARSE_ANNOT_KIND_COUNT + 63) / 64] = {0};
+    for (size_t i = 0; i < total; i++) {
+        parse_annotation_t *a = i < n_nt
+            ? v->nt->annotations.data[i]
+            : v->rule->annotations.data[i - n_nt];
+        if (a && a->kind >= 0 && a->kind < PARSE_ANNOT_KIND_COUNT)
+            present[a->kind / 64] |= UINT64_C(1) << (a->kind % 64);
+    }
 
     size_t kind_passes = w->annot_order ? w->annot_order_len : 1;
     for (size_t kp = 0; kp < kind_passes && !w->stopped; kp++) {
@@ -386,14 +436,21 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
         if (w->annot_order) {
             selected = w->annot_order[kind_index];
         }
-        for (int32_t p = 0; p <= w->max_phase && !w->stopped; p++) {
+        bool carried = w->annot_order
+            ? (present[selected / 64] >> (selected % 64) & 1) != 0
+            : total != 0;
+        for (int32_t p = 0; carried && p <= w->max_phase && !w->stopped;
+             p++) {
             int32_t phase = reverse ? w->max_phase - p : p;
+            if (w->annot_order && !annot_kind_in_phase(w, selected, phase))
+                continue;
             for (size_t k = 0; k < total; k++) {
                 size_t i = reverse ? total - 1 - k : k;
                 parse_annotation_t *a = i < n_nt
-                    ? parse_nt_annot_at(v->nt, i)
-                    : parse_rule_annot_at(v->rule, i - n_nt);
+                    ? v->nt->annotations.data[i]
+                    : v->rule->annotations.data[i - n_nt];
                 if (!a || (w->annot_order && a->kind != selected)
+                    || !annot_kind_in_phase(w, a->kind, phase)
                     || annotation_suppressed(w, a->kind)) continue;
                 v->annot = a;
                 if (!run_chain(w, &w->by_annot[a->kind], v, pre, reverse,
@@ -401,8 +458,9 @@ run_annots(parse_tree_walk_t *w, parse_visit_t *v, bool pre, bool reverse)
                 if (w->stopped) break;
             }
         }
-        if (w->annot_order && !w->stopped) {
-            size_t position = pre ? kind_index + 1 : kind_index;
+        size_t position = pre ? kind_index + 1 : kind_index;
+        if (w->annot_order && !w->stopped
+            && boundary_may_run(w, position, pre)) {
             if (run_annotation_boundaries(w, v, position, pre)
                 == PARSE_VISIT_PRUNE) descend = false;
         }
@@ -806,26 +864,33 @@ typedef struct {
     size_t            next;
     size_t            mark;
     bool              entered;
+    // The unit leaf reducer of the nearest ancestor that has one (the
+    // reducers are all registered before the walk runs).
+    reducer_t        *unit_leaf;
 } rframe_t;
 
 core_list_decl(rframe_t);
 
-static reducer_t *leaf_for(struct parse_reduce_state_t *st, parse_grammar_t *g,
-                           core_list_t(rframe_t) frames)
+// The unit leaf reducer `node` gives its descendants, if any.
+static reducer_t *unit_leaf_of(struct parse_reduce_state_t *st,
+                               parse_grammar_t *g, parse_tree_t *node)
 {
-    for (size_t i = frames.len - 1; i-- > 0;) {
-        parse_tree_t *p = frames.data[i].node;
+    if (!st->unit_leaf.len || !node || core_tree_is_leaf(node)) {
+        return nullptr;
+    }
 
-        if (!p || core_tree_is_leaf(p)) {
-            continue;
-        }
+    parse_nonterm_t *nt = parse_get_nonterm(g, core_tree_node_value(node).id);
 
-        parse_nonterm_t *nt = parse_get_nonterm(g, core_tree_node_value(p).id);
-        reducer_t     *hit = nt ? leaf_in_unit(st, nt->unit) : nullptr;
+    return nt ? leaf_in_unit(st, nt->unit) : nullptr;
+}
 
-        if (hit) {
-            return hit;
-        }
+// The reducer for a leaf whose frame is `leaf`: the nearest ancestor's unit
+// leaf reducer, or the default one.
+static reducer_t *leaf_for(struct parse_reduce_state_t *st,
+                           const rframe_t *leaf)
+{
+    if (leaf->unit_leaf) {
+        return leaf->unit_leaf;
     }
 
     return st->have_leaf ? &st->leaf : nullptr;
@@ -876,8 +941,13 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
         if (!core_tree_is_leaf(f->node)
             && f->next < core_tree_num_children(f->node)) {
             parse_tree_t *ch = core_tree_child(f->node, f->next++);
+            reducer_t *own = unit_leaf_of(st, w->g, f->node);
+            // Read before the push, which may move the frames (and `f`).
+            reducer_t *unit_leaf = own ? own : f->unit_leaf;
 
-            core_list_push(frames, ((rframe_t){.node = ch}));
+            core_list_push(frames, ((rframe_t){
+                .node = ch, .unit_leaf = unit_leaf,
+            }));
             continue;
         }
 
@@ -886,7 +956,7 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
         reducer_t *use = nullptr;
 
         if (core_tree_is_leaf(f->node)) {
-            use = leaf_for(st, w->g, frames);
+            use = leaf_for(st, f);
         }
         else {
             parse_nt_node_t *pn = &core_tree_node_value(f->node);

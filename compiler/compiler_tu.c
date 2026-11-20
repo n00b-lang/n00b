@@ -10,6 +10,7 @@
 #include "compiler_system.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
+#include "compiler_types.h"
 #include "driver.h"
 #include "signature_typevars.h"
 #include "storage_selection.h"
@@ -70,9 +71,6 @@ n00bb_object_type_declared(parse_grammar_t *grammar,
                            parse_sym_entry_t *value);
 static const ir_scalar_t *
 n00bb_scalar_of(th_type *type);
-
-#define NT_IS(g, n, lit) nt_is((g), (n), CORE_STRING_STATIC(lit))
-#define CHILD_NT(g, n, lit) child_nt((g), (n), CORE_STRING_STATIC(lit))
 
 core_list_decl(th_kwparam);
 core_list_decl(th_member);
@@ -237,8 +235,10 @@ variant_arms_in_source_order(parse_scope_t *scope)
 bool
 resolve_local_enum_constant(parse_grammar_t *grammar,
                             n00bb_tu_state_t *state,
-                            n00bb_link_use_site_t *site)
+                            n00bb_link_use_site_t *site,
+                            n00bb_missing_member_t *missing)
 {
+    if (missing) *missing = (n00bb_missing_member_t){0};
     if (!state || !state->annotations || !site || site->dotted_path
         || !site->node || !site->member_name.data) return false;
     parse_tree_t *receiver = site->node;
@@ -262,6 +262,9 @@ resolve_local_enum_constant(parse_grammar_t *grammar,
                                CORE_STRING_STATIC("flagset")))) return false;
     core_string_t name = first_token_text(core_tree_child(parent, 2));
     parse_sym_entry_t *item = parse_symtab_lookup_in(type->member_scope, name);
+    if (!item && missing)
+        *missing = (n00bb_missing_member_t){
+            .type = type, .path = parent, .name = name};
     if (!item || item->kind != PARSE_SYM_ENUM_CONST || !item->type
         || !parse_tree_set_resolution_symbol(site->node, type)
         || !parse_tree_set_resolution_symbol(parent, item)) return false;
@@ -335,12 +338,13 @@ collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
 parse_tree_t *
 n00bb_pattern_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "pattern-binding")) return nullptr;
+    if (n00bb_rule_of(grammar, node) != RULE(PATTERN_BINDING)) return nullptr;
     for (parse_tree_t *at = parse_tree_parent(node); at;
-         at = parse_tree_parent(at))
-        if (NT_IS(grammar, at, "for-stmt")
-            || NT_IS(grammar, at, "variable-decl")
-            || NT_IS(grammar, at, "assign-stmt")) return at;
+         at = parse_tree_parent(at)) {
+        n00bb_rule_t rule = n00bb_rule_of(grammar, at);
+        if (rule == RULE(FOR_STMT) || rule == RULE(VARIABLE_DECL)
+            || rule == RULE(ASSIGN_STMT)) return at;
+    }
     return nullptr;
 }
 
@@ -1223,6 +1227,20 @@ n00bb_field_declaration_types(parse_grammar_t *grammar,
     bool valid = true;
     for (size_t i = 0; i < fields.len; i++) {
         parse_sym_entry_t *field = fields.data[i];
+        // The grammar accepts a bare field name so the error can name it.
+        if (field->decl_node && !field->type
+            && !CHILD_NT(grammar, field->decl_node, "type-spec")) {
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            n00bb_report(diagnostics, unit, N00B_DIAG_FIELD_UNTYPED,
+                link_source_location(field->decl_node),
+                N00B_TEXT_FIELD_UNTYPED,
+                N00BB_ARGS(ARG_TEXT(field->name), ARG_TEXT(scope->name)));
+            n00bb_report_help(diagnostics, N00B_TEXT_FIELD_UNTYPED_HELP,
+                N00BB_ARGS(ARG_TEXT(field->name)));
+            valid = false;
+            continue;
+        }
         th_type *field_type = declared_type_from_node(grammar, unit,
                                                        field->decl_node);
         if (!field_type) { valid = false; break; }
@@ -1371,14 +1389,16 @@ remember_link_use_site(parse_grammar_t *grammar,
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     bool varref = rule
         && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_VARREF);
-    bool trait_reference = NT_IS(grammar, node, "trait-name");
+    n00bb_rule_t node_rule = n00bb_rule_of(grammar, node);
+    bool trait_reference = node_rule == RULE(TRAIT_NAME);
     bool dotted_path = dotted_symbol_path_node(grammar, node);
     bool variant_case_candidate = false;
     core_string_t variant_case_name = {0};
-    if (n00bb_primary_node(grammar, node)) {
+    if (node_rule == RULE(PRIMARY)
+        || (node_rule == RULE(PLACE) && core_tree_num_children(node) == 1)) {
         for (parse_tree_t *at = parse_tree_parent(node); at;
              at = parse_tree_parent(at)) {
-            if (!NT_IS(grammar, at, "case-expr-item")) continue;
+            if (n00bb_rule_of(grammar, at) != RULE(CASE_EXPR_ITEM)) continue;
             parse_tree_t *expression = CHILD_NT(grammar, at, "expression");
             variant_case_candidate = !CHILD_NT(grammar, at, "range-sep")
                 && expression && node_is_within(node, expression)
@@ -1392,7 +1412,7 @@ remember_link_use_site(parse_grammar_t *grammar,
     if (varref
         && !simple_identifier_expression(grammar, node, &simple_name))
         simple_member_chain_name(grammar, node, &simple_name);
-    th_type *new_result = NT_IS(grammar, node, "new-expr")
+    th_type *new_result = node_rule == RULE(NEW_EXPR)
         ? parse_tree_type(CHILD_NT(grammar, node, "type-spec")) : nullptr;
     th_type *resolved_new_result = new_result ? th_resolve(new_result) : nullptr;
     bool new_result_is_variant = false;
@@ -1596,6 +1616,202 @@ function_parameter_info(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     if (formal_out) *formal_out = nullptr;
     if (mode) *mode = (th_mode)archived_mode;
     return true;
+}
+
+th_type *
+n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
+                          parse_sym_entry_t *symbol, th_type *flat)
+{
+    th_type *called = flat ? th_resolve(flat) : nullptr;
+    th_type *declared = symbol
+        ? th_resolve(n00bb_symbol_signature(symbol)) : nullptr;
+    if (declared && th_kind_of(declared) == TH_BINDER)
+        declared = th_resolve(th_binder_body(declared));
+    // A generic function's type binds the same variables over its value
+    // type.
+    if (called && th_kind_of(called) == TH_BINDER) {
+        th_type *body = th_resolve(th_binder_body(called));
+        th_type *value = body ? n00bb_function_value_type(types, grammar,
+                                                          symbol, body)
+                              : nullptr;
+        return !value ? nullptr : value == body ? flat
+            : th_binder_with_body(types, called, value);
+    }
+    if (!called || th_kind_of(called) != TH_FUNCTION) return flat;
+    const th_param *declared_rest = declared
+            && th_kind_of(declared) == TH_FUNCTION
+        ? th_func_rest(declared) : nullptr;
+    size_t count = th_func_nparams(called);
+    if (declared_rest && !count) return nullptr;
+    // The varargs item type is `flat`'s (whose variables may be an
+    // instance's), the item of its last parameter's array.
+    th_type *items = declared_rest
+        ? th_resolve(th_func_param(called, count - 1)->type) : nullptr;
+    th_param rest_param = {
+        .mode = declared_rest ? declared_rest->mode : TH_IN,
+        .type = items && th_kind_of(items) == TH_SEQUENCE
+            ? th_seq_elem(items) : nullptr,
+    };
+    if (declared_rest && !rest_param.type) return nullptr;
+    const th_param *rest = declared_rest ? &rest_param : nullptr;
+    if (rest) count--;
+    parse_tree_t *formals = callable_formal_parameters(grammar, symbol);
+    core_list_t(th_param) positional = core_list_new(th_param);
+    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
+    bool valid = true;
+    for (size_t i = 0; valid && i < count; i++) {
+        const th_param *parameter = th_func_param(called, i);
+        core_string_t name = {0};
+        uint8_t flags = 0;
+        valid = parameter && function_parameter_info(grammar, symbol,
+            formals, i, nullptr, &name, &flags, nullptr);
+        if (!valid) break;
+        if (flags & 1u)
+            core_list_push(keywords, ((th_kwparam){
+                .name = name, .mode = parameter->mode,
+                .type = parameter->type}));
+        else core_list_push(positional, *parameter);
+    }
+    th_type *value = !valid ? nullptr
+        : !keywords.len && !rest ? flat
+        : th_func_with_error(types, th_func_ret(called),
+              th_func_error(called), positional.data, positional.len, rest,
+              keywords.data, keywords.len);
+    core_list_free(positional);
+    core_list_free(keywords);
+    return value;
+}
+
+th_type *
+n00bb_without_passing_modes(th_ctx *types, th_type *type)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    uint8_t attrs = 0;
+    if (resolved && th_kind_of(resolved) == TH_INDIRECTION
+        && th_ind_attrs(resolved, &attrs)) {
+        th_type *referent = th_ind_referent(resolved);
+        th_type *erased = n00bb_without_passing_modes(types, referent);
+        return erased == referent ? type
+            : erased ? th_ind(types, attrs, erased) : nullptr;
+    }
+    if (!resolved || th_kind_of(resolved) != TH_FUNCTION) return type;
+    size_t count = th_func_nparams(resolved);
+    size_t keywords = th_func_nkw(resolved);
+    const th_param *rest = th_func_rest(resolved);
+    bool moded = rest && rest->mode != TH_IN;
+    for (size_t i = 0; !moded && i < count; i++)
+        moded = th_func_param(resolved, i)->mode != TH_IN;
+    for (size_t k = 0; !moded && k < keywords; k++)
+        moded = th_func_kw(resolved, k)->mode != TH_IN;
+    if (!moded) return type;
+    th_param *params = core_alloc_array(th_param, count ? count : 1);
+    th_kwparam *named = core_alloc_array(th_kwparam,
+                                         keywords ? keywords : 1);
+    for (size_t i = 0; i < count; i++)
+        params[i] = (th_param){.mode = TH_IN,
+                               .type = th_func_param(resolved, i)->type};
+    for (size_t k = 0; k < keywords; k++)
+        named[k] = (th_kwparam){.name = th_func_kw(resolved, k)->name,
+                                .mode = TH_IN,
+                                .type = th_func_kw(resolved, k)->type};
+    th_param items = rest ? (th_param){.mode = TH_IN, .type = rest->type}
+                          : (th_param){0};
+    th_type *erased = th_func_with_error(types, th_func_ret(resolved),
+        th_func_error(resolved), params, count, rest ? &items : nullptr,
+        named, keywords);
+    core_free(params);
+    core_free(named);
+    return erased;
+}
+
+bool
+n00bb_reference_adapter_signature(th_ctx *types, th_type *called,
+                                  th_type *value,
+                                  n00bb_parameter_name_fn named,
+                                  void *context,
+                                  n00bb_reference_adapter_t *adapter,
+                                  th_type **signature)
+{
+    *signature = nullptr;
+    called = called ? th_resolve(called) : nullptr;
+    value = value ? th_resolve(value) : nullptr;
+    if (!called || th_kind_of(called) != TH_FUNCTION || !value
+        || th_kind_of(value) != TH_FUNCTION) return false;
+    bool listed = th_func_nkw(value) || th_func_rest(value);
+    adapter->count = th_func_nparams(called);
+    adapter->positional = listed ? th_func_nparams(value) : adapter->count;
+    adapter->keywords = listed ? th_func_nkw(value) : 0;
+    if (adapter->count < adapter->positional + adapter->keywords)
+        return false;
+    adapter->order = core_alloc_array(uint32_t, adapter->count + 1);
+    th_param *params = core_alloc_array(th_param, adapter->count + 1);
+    bool moded = false;
+    bool ok = adapter->order && params;
+    for (size_t i = 0; ok && i < adapter->count; i++) {
+        adapter->order[i] = (uint32_t)i;
+        moded = moded || th_func_param(called, i)->mode != TH_IN;
+        if (adapter->keywords < 2 || i < adapter->positional
+            || i >= adapter->positional + adapter->keywords) continue;
+        core_string_t name = {0};
+        ok = named(context, i, &name);
+        size_t k = 0;
+        while (ok && k < adapter->keywords
+               && !core_string_eq(th_func_kw(value, k)->name, name))
+            k++;
+        ok = ok && k < adapter->keywords;
+        adapter->order[i] = (uint32_t)(adapter->positional + k);
+        adapter->reordered = adapter->reordered || adapter->order[i] != i;
+    }
+    // Every positional parameter is taken by place. A keyword one, which
+    // is never `out` or `modify` and may be omitted, is taken as its value,
+    // in the optional record (n00b_abi_function_v1's omission bitmap), to
+    // be passed on as given.
+    for (size_t i = 0; ok && i < adapter->count; i++) {
+        uint32_t at = adapter->order[i];
+        th_type *type = th_func_param(called, i)->type;
+        bool keyword = at >= adapter->positional
+            && at < adapter->positional + adapter->keywords;
+        params[at] = (th_param){.mode = keyword ? TH_IN : TH_INOUT,
+                                .type = type};
+    }
+    bool adapts = moded || adapter->reordered;
+    *signature = ok && adapts
+        ? th_func_with_error(types, th_func_ret(called),
+                             th_func_error(called), params, adapter->count,
+                             nullptr, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    if (!*signature) {
+        core_free(adapter->order);
+        adapter->order = nullptr;
+    }
+    return ok && (!adapts || *signature);
+}
+
+static bool
+declared_parameter_name(void *context, size_t index, core_string_t *name)
+{
+    void **declared = context;
+    return function_parameter_info(declared[0], declared[1], declared[2],
+                                   index, nullptr, name, nullptr, nullptr);
+}
+
+th_type *
+n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
+                        parse_sym_entry_t *symbol, th_type *flat,
+                        n00bb_reference_adapter_t *adapter)
+{
+    *adapter = (n00bb_reference_adapter_t){.target = symbol};
+    th_type *called = flat ? th_resolve(flat) : nullptr;
+    th_type *value = called && th_kind_of(called) == TH_FUNCTION
+        ? n00bb_function_value_type(types, grammar, symbol, called)
+        : nullptr;
+    void *declared[] = {grammar, symbol,
+                        callable_formal_parameters(grammar, symbol)};
+    th_type *signature = nullptr;
+    return n00bb_reference_adapter_signature(types, called, value,
+               declared_parameter_name, declared, adapter, &signature)
+        ? signature : nullptr;
 }
 
 bool
@@ -1917,17 +2133,19 @@ dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node)
         || !core_tree_is_leaf(core_tree_child(node, 1))
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return false;
-    return NT_IS(grammar, node, "member-chain")
-        || n00bb_postfix_node(grammar, node);
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(MEMBER_CHAIN) || rule == RULE(POSTFIX_EXPR)
+        || rule == RULE(PLACE);
 }
 
 bool
 is_type_reference_node_at(parse_grammar_t *grammar, parse_tree_t *node,
                           parse_tree_t *parent)
 {
-    if (!NT_IS(grammar, node, "member-chain")) return false;
-    return NT_IS(grammar, parent, "base-tspec-core")
-        || NT_IS(grammar, parent, "base-tspec");
+    if (n00bb_rule_of(grammar, node) != RULE(MEMBER_CHAIN)) return false;
+    n00bb_rule_t parent_rule = n00bb_rule_of(grammar, parent);
+    return parent_rule == RULE(BASE_TSPEC_CORE)
+        || parent_rule == RULE(BASE_TSPEC);
 }
 
 static bool
@@ -2074,6 +2292,52 @@ is_trait_type_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
                 CORE_STRING_STATIC("trait"))));
 }
 
+// The index + 1 of the first export of `package` (a package of the unit
+// whose state is `owner`) named `name`, or 0; owner->export_index.next
+// continues the chain. The index is rebuilt when the package or its
+// export list is not the one indexed, so it always matches the list.
+static size_t
+first_export_named(n00bb_tu_state_t *owner,
+                   const n00bb_package_declaration_t *package,
+                   core_string_t name)
+{
+    if (!owner) return 0;
+    typeof(&owner->export_index) index = &owner->export_index;
+    if (!index->built || index->package != package
+        || index->data != package->exports.data
+        || index->len != package->exports.len) {
+        if (index->built) {
+            core_dict_free(&index->first);
+            core_free(index->next);
+        }
+        size_t len = package->exports.len;
+        core_dict_init_string(&index->first);
+        index->next = core_alloc_array(size_t, len);
+        size_t *last = core_alloc_array(size_t, len);
+        for (size_t i = 0; i < len; i++) {
+            core_string_t *key = &package->exports.data[i].export_name;
+            bool found = false;
+            size_t head = (size_t)(uintptr_t)core_dict_get(&index->first,
+                                                           key, &found);
+            if (!found) {
+                core_dict_put(&index->first, key, i + 1);
+                last[i] = i;
+            }
+            else {
+                index->next[last[head - 1]] = i + 1;
+                last[head - 1] = i;
+            }
+        }
+        core_free(last);
+        index->package = package;
+        index->data = package->exports.data;
+        index->len = len;
+        index->built = true;
+    }
+    bool found = false;
+    return (size_t)(uintptr_t)core_dict_get(&index->first, &name, &found);
+}
+
 static parse_sym_entry_t *
 builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                      core_string_t name)
@@ -2083,8 +2347,11 @@ builtin_package_type(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         ? find_direct_import(state->unit, package_name) : nullptr;
     n00bb_package_declaration_t *package = builtin
         ? find_package_declaration(builtin, package_name) : nullptr;
-    for (size_t i = 0; package && i < package->exports.len; i++) {
-        n00bb_package_export_t *export = &package->exports.data[i];
+    // Only exports named `name` can answer, in order: visit just those.
+    size_t at = package
+        ? first_export_named(tu_state(builtin), package, name) : 0;
+    for (; at; at = tu_state(builtin)->export_index.next[at - 1]) {
+        n00bb_package_export_t *export = &package->exports.data[at - 1];
         if (export->symbol && core_string_eq(export->export_name, name)) {
             parse_sym_entry_t *exported = canonical_symbol(export->symbol);
             if (is_named_type_symbol(grammar, exported)
@@ -2142,6 +2409,25 @@ static parse_sym_entry_t *typevar_owner(parse_grammar_t *grammar,
 static th_type *owner_typevar(n00bb_tu_state_t *state,
                               parse_sym_entry_t *owner, core_string_t name,
                               parse_tree_t *node);
+
+// The name of a variable a type reference at `reference` gives the
+// declaration that owns it: a trait named as a type stands for one of its
+// own (`index` SIZE_MAX), and a generic alias named bare for one for each
+// of its parameters (`index` the parameter's position).
+static core_string_t
+owned_variable_name(n00bb_tu_state_t *state, core_string_t named,
+                    parse_tree_t *reference, size_t index)
+{
+    core_diag_location_t at = n00bb_node_span(reference);
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "%.*s@%u:%u", (int)named.u8_bytes, named.data,
+                       at.line, at.column);
+    if (index != SIZE_MAX) core_buffer_printf(&name, ".%zu", index);
+    core_string_t stored = store_semantic_string(state,
+                                                 core_buffer_string(&name));
+    core_buffer_release(&name);
+    return stored;
+}
 
 static bool
 record_type_bound(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
@@ -2222,6 +2508,9 @@ n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
                             symbol->name.data);
 }
 
+static parse_tree_t *typecase_pattern_arm(parse_grammar_t *grammar,
+                                          parse_tree_t *node);
+
 th_type *
 trait_type_reference(parse_grammar_t *grammar,
                      core_translation_unit_t *use_unit,
@@ -2234,7 +2523,12 @@ trait_type_reference(parse_grammar_t *grammar,
     bool cast = reference && enclosing_cast_type(grammar, reference);
     parse_sym_entry_t *owner = reference && !cast
         ? typevar_owner(grammar, reference) : nullptr;
-    if (reference && !cast && !owner && state && !parse_tree_type(reference)
+    // A trait named from an import or the builtins is bound when names
+    // resolve; until then its reference holds a placeholder variable, which
+    // is no type yet.
+    th_type *previous = reference ? parse_tree_type(reference) : nullptr;
+    bool untyped = !previous || th_kind_of(th_resolve(previous)) == TH_VAR;
+    if (reference && !cast && !owner && state && untyped
         && is_trait_type_symbol(grammar, symbol)) {
         n00bb_report(core_translation_unit_diagnostics(use_unit), use_unit,
             N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION,
@@ -2249,12 +2543,9 @@ trait_type_reference(parse_grammar_t *grammar,
         || !is_trait_type_symbol(grammar, symbol)) return nullptr;
     core_buffer_t qualified = {0};
     n00bb_trait_qualified_name(declaration_unit, symbol, &qualified);
-    core_diag_location_t at = n00bb_node_span(reference);
-    core_buffer_t name = {0};
-    core_buffer_printf(&name, "%.*s@%u:%u", (int)symbol->name.u8_bytes,
-                       symbol->name.data, at.line, at.column);
-    th_type *type = owner_typevar(state, owner,
-        store_semantic_string(state, core_buffer_string(&name)), nullptr);
+    core_string_t stored = owned_variable_name(state, symbol->name, reference,
+                                               SIZE_MAX);
+    th_type *type = owner_typevar(state, owner, stored, nullptr);
     bool recorded = type && qualified.data
         && record_type_bound(state, owner, (th_trait_requirement){
             .subject = type,
@@ -2262,9 +2553,117 @@ trait_type_reference(parse_grammar_t *grammar,
             .iface = store_semantic_string(state,
                                            core_buffer_string(&qualified)),
         });
-    core_buffer_release(&name);
+    if (recorded && typecase_pattern_arm(grammar, reference))
+        core_dict_put(&state->arm_typevars, type, N00BB_ARM_TRAIT_VAR);
     core_buffer_release(&qualified);
     return recorded ? type : nullptr;
+}
+
+static parse_sym_entry_t *generic_alias_named(parse_grammar_t *grammar,
+                                              parse_tree_t *type_node);
+static bool constrain_type_arguments(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *site,
+    parse_sym_entry_t *declaration, th_type *const *arguments, size_t count,
+    bool alias);
+static size_t declaration_type_parameter_count(parse_grammar_t *grammar,
+                                               n00bb_tu_state_t *state,
+                                               parse_tree_t *declaration);
+
+// A generic alias named with no type arguments inside a declaration that
+// owns type variables: its target with a fresh variable of that owner
+// for each of the alias's parameters, which take on the alias's `where`
+// constraints (n00bb_imply_type_argument_constraints). Null when the name
+// is applied, is no generic alias, or has no owner.
+th_type *
+bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                   parse_sym_entry_t *symbol, parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    // A qualified name (`coll.Bag`) is nested in its member chain.
+    parse_tree_t *core = node ? parse_tree_parent(node) : nullptr;
+    while (core && !NT_IS(grammar, core, "base-tspec-core")
+           && (NT_IS(grammar, core, "member-chain")
+               || NT_IS(grammar, core, "dotted-name")
+               || NT_IS(grammar, core, "member-tail")))
+        core = parse_tree_parent(core);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    if (!state || !state->types || !symbol || !symbol->type
+        || !NT_IS(grammar, core, "base-tspec-core")
+        || CHILD_NT(grammar, core, "tspec-application")
+        || !(symbol->decl_node
+                ? NT_IS(grammar, symbol->decl_node, "alias-stmt")
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
+                : core_string_eq(symbol->adt_kind,
+                                 CORE_STRING_STATIC("alias")))
+        // An alias whose target is not typed yet holds an unnamed
+        // placeholder; only one that declares parameters is generic.
+        || (symbol->decl_node
+            && !declaration_type_parameter_count(grammar, state,
+                                                 symbol->decl_node))
+        || !generic_alias_named(grammar, node))
+        return nullptr;
+    parse_sym_entry_t *owner = typevar_owner(grammar, node);
+    // Outside every owner, the alias's constrained parameters are like a
+    // trait used as a type there: nothing to stand for a type in.
+    n00bb_declared_where_t *declared = owner ? nullptr
+        : parse_sym_binding(symbol, N00BB_DECLARED_WHERE_KEY);
+    if (declared && declared->len && !enclosing_cast_type(grammar, node)) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit,
+                N00B_DIAG_TRAIT_TYPE_OUTSIDE_FUNCTION, n00bb_node_span(node),
+                N00B_TEXT_CONSTRAINED_ALIAS_OUTSIDE_FUNCTION,
+                N00BB_ARGS(ARG_TEXT(symbol->name))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_GIVE_THE_ALIAS_ITS_ARGUMENTS,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+    }
+    th_type **variables = nullptr;
+    size_t count = owner
+        ? th_free_vars(state->types, th_resolve(symbol->type), &variables)
+        : 0;
+    for (size_t i = 0; i < count; i++)
+        if (!th_var_name(variables[i]).u8_bytes) return nullptr;
+    if (!count) return nullptr;
+    th_type **fresh = core_alloc_array(th_type *, count);
+    bool ok = fresh != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        fresh[i] = owner_typevar(state, owner,
+            owned_variable_name(state, symbol->name, node, i), nullptr);
+        ok = fresh[i] != nullptr;
+    }
+    th_type *instance = ok
+        ? th_type_clone_replacing(state->types, th_resolve(symbol->type),
+                                  (const th_type *const *)variables, fresh,
+                                  count)
+        : nullptr;
+    if (instance && !constrain_type_arguments(grammar, unit, node,
+            canonical_symbol(symbol), fresh, count, true))
+        instance = nullptr;
+    core_free(fresh);
+    if (!instance)
+        n00bb_tu_internal_error(unit, node, "resolving names",
+            "could not give a generic alias named without type arguments "
+            "its own type variables");
+    return instance;
+}
+
+th_type *
+n00bb_type_reference_type(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          core_translation_unit_t *declaration,
+                          parse_sym_entry_t *symbol, parse_tree_t *reference,
+                          th_type *type)
+{
+    if (!is_trait_type_symbol(grammar, symbol)) {
+        th_type *bare = bare_generic_alias(grammar, unit, symbol, reference);
+        return bare ? bare : type;
+    }
+    if (!declaration)
+        declaration = symbol->decl_node ? symbol->owner_unit : unit;
+    return trait_type_reference(grammar, unit, declaration, symbol,
+                                reference);
 }
 
 void
@@ -2312,24 +2711,24 @@ resolve_local_type_reference(parse_grammar_t *grammar,
         || !bind_array_shape_alias_source(grammar, node, symbol))
         n00bb_tu_internal_error(unit, node, "resolving names",
             "could not bind the type reference node");
-    if (is_trait_type_symbol(grammar, symbol)) {
-        th_type *type = trait_type_reference(grammar, unit, unit, symbol,
-                                             node);
-        if (type) parse_tree_set_type(node, type);
+    // A trait's variable is the reference's own; any other type fills what
+    // the reference held.
+    bool trait = is_trait_type_symbol(grammar, symbol);
+    th_type *named = trait || symbol->type
+        ? n00bb_type_reference_type(grammar, unit, unit, symbol, node,
+                                    symbol->type)
+        : nullptr;
+    th_type *previous_type = trait ? nullptr : parse_tree_type(node);
+    th_type *resolved_type = named && previous_type
+        ? th_fill(previous_type, named)
+        : named;
+    if (!trait && symbol->type && !resolved_type) {
+        n00bb_tu_internal_error_unless_reported(unit, node,
+            "resolving names",
+            "type reference conflicts with its declaration");
+        return;
     }
-    else if (symbol->type) {
-        th_type *previous_type = parse_tree_type(node);
-        th_type *resolved_type = previous_type
-            ? th_fill(previous_type, symbol->type)
-            : symbol->type;
-        if (!resolved_type) {
-            n00bb_tu_internal_error_unless_reported(unit, node,
-                "resolving names",
-                "type reference conflicts with its declaration");
-            return;
-        }
-        parse_tree_set_type(node, resolved_type);
-    }
+    if (resolved_type) parse_tree_set_type(node, resolved_type);
 }
 
 bool
@@ -3064,21 +3463,245 @@ source_typevar_name(parse_tree_t *leaf)
     return core_string_borrow(spelling.data + 1, spelling.u8_bytes - 1);
 }
 
+// Whether a declaration owns the type variables written inside it. An
+// alias's type variables are its parameters: `alias Set = Dict['T, nil]`
+// is used as `Set[int]`.
+static bool
+typevar_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(FUNC_DEF) || rule == RULE(TRAIT_DECL)
+        || rule == RULE(CALLBACK_DECL) || n00bb_field_record_rule(rule)
+        || rule == RULE(VARIANT_DECL)
+        || (rule == RULE(ALIAS_STMT)
+            && alias_declaration_is_transparent(grammar, node));
+}
+
+// The declaration that owns the type variables written at `node`.
+parse_tree_t *
+typevar_owner_declaration(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *owner_node = node;
+    while (owner_node && !typevar_owner_node(grammar, owner_node))
+        owner_node = parse_tree_parent(owner_node);
+    return owner_node;
+}
+
 static parse_sym_entry_t *
 typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    parse_tree_t *owner_node = node;
-    // An alias's type variables are its parameters: `alias Set = Dict['T,
-    // nil]` is used as `Set[int]`.
-    while (owner_node && !NT_IS(grammar, owner_node, "func-def")
-           && !NT_IS(grammar, owner_node, "trait-decl")
-           && !NT_IS(grammar, owner_node, "callback-decl")
-           && !field_record_declaration(grammar, owner_node)
-           && !NT_IS(grammar, owner_node, "variant-decl")
-           && !(NT_IS(grammar, owner_node, "alias-stmt")
-                && alias_declaration_is_transparent(grammar, owner_node)))
-        owner_node = parse_tree_parent(owner_node);
+    parse_tree_t *owner_node = typevar_owner_declaration(grammar, node);
     return owner_node ? parse_tree_sym(owner_node) : nullptr;
+}
+
+static bool declared_typevar(parse_sym_entry_t *owner, core_string_t name);
+static th_type *arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm,
+                            core_string_t name, parse_tree_t *node);
+
+// The symbol a type reference names: from its resolution, or, in a
+// declaration not walked yet, by looking its name up as resolving it will
+// (resolve_local_type_reference).
+static parse_sym_entry_t *
+type_reference_symbol(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(node);
+    if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
+        return resolution.target.symbol;
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_string_t name = bare_type_reference_name(grammar, node);
+    parse_sym_entry_t *symbol = symtab && name.data
+        ? lookup_named_type_reference(grammar, state, symtab,
+              parse_symtab_scope_for_node(symtab, node), name)
+        : nullptr;
+    return symbol || !name.data || !state->unit ? symbol
+        : n00bb_unqualified_import_type(state->unit, name);
+}
+
+typedef struct {
+    parse_grammar_t *grammar;
+    n00bb_tu_state_t *state;
+    // Set to give each trait the declaration names as a type its variable
+    // now (trait_type_reference), before the declaration's type is defined
+    // over its variables; resolving names later finds the same one.
+    core_translation_unit_t *binding;
+    bool bound;
+    core_list_t(core_string_t) names;
+    // The declarations being counted, so an alias that names itself bare
+    // adds nothing more.
+    core_list_t(parse_tree_ptr_t) counting;
+} type_parameter_walk_t;
+
+static void collect_type_parameters(type_parameter_walk_t *walk,
+                                    parse_tree_t *declaration);
+
+static void
+add_type_parameter_name(type_parameter_walk_t *walk, core_string_t name)
+{
+    for (size_t i = 0; name.data && i < walk->names.len; i++)
+        if (core_string_eq(walk->names.data[i], name)) return;
+    if (name.data) core_list_push(walk->names, name);
+}
+
+// The variables the type references under `node` give the declaration
+// that owns them, in the order they are written: each type variable once,
+// each trait named as a type one of its own (`x: Comparable` is
+// `x: 'T where 'T: Comparable`), and each generic alias named bare one for
+// each of its parameters (bare_generic_alias). `where` clauses are read
+// only when `where_clauses` is set.
+static void
+collect_owned_typevars(type_parameter_walk_t *walk, parse_tree_t *node,
+                       bool where_clauses)
+{
+    parse_grammar_t *grammar = walk->grammar;
+    if (!node || core_tree_is_leaf(node)) return;
+    if (!where_clauses && NT_IS(grammar, node, "where-clause")) return;
+    if (NT_IS(grammar, node, "tspec-tvar")) {
+        add_type_parameter_name(walk, core_tree_num_children(node) == 1
+            ? source_typevar_name(core_tree_child(node, 0))
+            : (core_string_t){0});
+        return;
+    }
+    if (is_type_reference_node(grammar, node)
+        && !enclosing_cast_type(grammar, node)) {
+        parse_sym_entry_t *symbol = type_reference_symbol(grammar,
+            walk->state, node);
+        symbol = symbol ? canonical_symbol(symbol) : nullptr;
+        if (is_trait_type_symbol(grammar, symbol)) {
+            add_type_parameter_name(walk, owned_variable_name(walk->state,
+                symbol->name, node, SIZE_MAX));
+            th_type *variable = walk->binding && walk->counting.len == 1
+                ? trait_type_reference(grammar, walk->binding,
+                      symbol->decl_node ? symbol->owner_unit : walk->binding,
+                      symbol, node)
+                : nullptr;
+            th_type *previous = variable ? parse_tree_type(node) : nullptr;
+            th_type *filled = previous ? th_fill(previous, variable)
+                                       : variable;
+            if (filled) parse_tree_set_type(node, filled);
+            if (walk->binding && walk->counting.len == 1 && !filled)
+                walk->bound = false;
+            return;
+        }
+        parse_tree_t *core = parse_tree_parent(node);
+        bool applied = NT_IS(grammar, core, "base-tspec-core")
+            && CHILD_NT(grammar, core, "tspec-application");
+        parse_tree_t *alias = symbol && !applied && symbol->decl_node
+            && NT_IS(grammar, symbol->decl_node, "alias-stmt")
+            && alias_declaration_is_transparent(grammar, symbol->decl_node)
+            ? symbol->decl_node : nullptr;
+        for (size_t i = 0; alias && i < walk->counting.len; i++)
+            if (walk->counting.data[i] == alias) alias = nullptr;
+        size_t count = 0;
+        if (alias) {
+            size_t before = walk->names.len;
+            collect_type_parameters(walk, alias);
+            count = walk->names.len - before;
+            walk->names.len = before;
+        }
+        else if (symbol && !applied && !symbol->decl_node && symbol->type
+                 && walk->state && walk->state->types
+                 && core_string_eq(symbol->adt_kind,
+                                   CORE_STRING_STATIC("alias"))) {
+            count = th_free_vars(walk->state->types,
+                                 th_resolve(symbol->type), nullptr);
+        }
+        for (size_t i = 0; i < count; i++)
+            add_type_parameter_name(walk, owned_variable_name(walk->state,
+                symbol->name, node, i));
+        if (count) return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (!typevar_owner_node(grammar, child))
+            collect_owned_typevars(walk, child, where_clauses);
+    }
+}
+
+static void
+collect_type_parameters(type_parameter_walk_t *walk,
+                        parse_tree_t *declaration)
+{
+    core_list_push(walk->counting, declaration);
+    collect_owned_typevars(walk, declaration, false);
+    collect_owned_typevars(walk, declaration, true);
+    walk->counting.len--;
+}
+
+// The names of a declaration's type parameters, in the order its type
+// arguments are given: by first appearance among its fields, arms or
+// target, then any named only in a `where` clause. Read from source, so
+// the answer does not depend on whether the declaration has been processed
+// yet.
+static core_list_t(core_string_t)
+declaration_type_parameter_names(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state,
+                                 parse_tree_t *declaration,
+                                 core_translation_unit_t *binding,
+                                 bool *bound)
+{
+    type_parameter_walk_t walk = {
+        .grammar = grammar, .state = state, .binding = binding,
+        .bound = true,
+        .names = core_list_new(core_string_t),
+        .counting = core_list_new(parse_tree_ptr_t),
+    };
+    collect_type_parameters(&walk, declaration);
+    core_list_free(walk.counting);
+    if (bound) *bound = walk.bound;
+    return walk.names;
+}
+
+// How many type parameters a declaration has.
+static size_t
+declaration_type_parameter_count(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state,
+                                 parse_tree_t *declaration)
+{
+    core_list_t(core_string_t) names = declaration_type_parameter_names(
+        grammar, state, declaration, nullptr, nullptr);
+    size_t count = names.len;
+    core_list_free(names);
+    return count;
+}
+
+// Gives a record, variant or alias declared in `unit` a variable for each
+// trait it names as a type, and puts its variables in the order its type
+// arguments are given (declaration_type_parameter_names), before its type
+// is defined over them. One the source does not name stays after those it
+// does, in the order it was made.
+static bool
+order_type_parameters(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                      parse_tree_t *declaration, parse_sym_entry_t *symbol)
+{
+    bool ok = true;
+    core_list_t(core_string_t) names = declaration_type_parameter_names(
+        grammar, tu_state(unit), declaration, unit, &ok);
+    n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (!ok || !variables || variables->len < 2) {
+        core_list_free(names);
+        return ok;
+    }
+    n00bb_typevar_binding_t *ordered = core_alloc_array(
+        n00bb_typevar_binding_t, variables->len);
+    bool *placed = core_alloc_array(bool, variables->len);
+    ok = ordered && placed;
+    size_t at = 0;
+    for (size_t n = 0; ok && n <= names.len; n++)
+        for (size_t i = 0; i < variables->len; i++) {
+            if (placed[i] || (n < names.len
+                    && !core_string_eq(variables->data[i].name,
+                                       names.data[n]))) continue;
+            ordered[at++] = variables->data[i];
+            placed[i] = true;
+        }
+    if (ok) memcpy(variables->data, ordered, at * sizeof(*ordered));
+    core_free(ordered);
+    core_free(placed);
+    core_list_free(names);
+    return ok && at == variables->len;
 }
 
 th_type *
@@ -3093,7 +3716,70 @@ signature_typevar_for_node(parse_grammar_t *grammar,
     core_string_t name = source_typevar_name(core_tree_child(node, 0));
     if (!name.data) return nullptr;
     parse_sym_entry_t *owner = typevar_owner(grammar, node);
+    parse_tree_t *arm = typecase_pattern_arm(grammar, node);
+    if (arm && !declared_typevar(owner, name))
+        return arm_typevar(state, arm, name, node);
     return owner ? owner_typevar(state, owner, name, node) : nullptr;
+}
+
+// The `typecase` arm whose pattern list holds `node`, if any.
+static parse_tree_t *
+typecase_pattern_arm(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *parent = parse_tree_parent(at);
+        if (NT_IS(grammar, at, "type-spec-list") && parent
+            && (NT_IS(grammar, parent, "typecase-case-block")
+                || NT_IS(grammar, parent, "typecase-value-case-block")))
+            return parent;
+        if (NT_IS(grammar, at, "body") || NT_IS(grammar, at, "value-body")
+            || NT_IS(grammar, at, "func-def")) return nullptr;
+    }
+    return nullptr;
+}
+
+// Whether `owner` already names the type variable `name` (in its signature,
+// or elsewhere in its body): a `typecase` pattern naming it means that one.
+static bool
+declared_typevar(parse_sym_entry_t *owner, core_string_t name)
+{
+    n00bb_signature_typevars_t *variables = owner
+        ? parse_sym_binding(owner, N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
+    for (size_t i = 0; variables && i < variables->len; i++)
+        if (core_string_eq(variables->data[i].name, name)) return true;
+    return false;
+}
+
+// A type variable a `typecase` arm's pattern introduces. It belongs to that
+// arm alone: another arm naming the same variable gets its own, and the
+// enclosing function's signature never gains it.
+static th_type *
+arm_typevar(n00bb_tu_state_t *state, parse_tree_t *arm, core_string_t name,
+            parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, arm);
+    if (!facts) return nullptr;
+    n00bb_signature_typevars_t *variables = facts->arm_typevars;
+    if (!variables) {
+        variables = core_arena_alloc(&state->semantic_values,
+                                     sizeof(*variables));
+        if (!variables) return nullptr;
+        memset(variables, 0, sizeof(*variables));
+        facts->arm_typevars = variables;
+    }
+    for (size_t i = 0; i < variables->len; i++) {
+        if (!core_string_eq(variables->data[i].name, name)) continue;
+        parse_tree_set_type(node, variables->data[i].type);
+        return variables->data[i].type;
+    }
+    th_type *type = var_named_text(state->types, name);
+    if (!type || !core_arena_try_reserve_raw(&state->semantic_values,
+            (void **)&variables->data, &variables->cap,
+            variables->len + 1, sizeof(*variables->data))) return nullptr;
+    variables->data[variables->len++] = (n00bb_typevar_binding_t){name, type};
+    core_dict_put(&state->arm_typevars, type, N00BB_ARM_PATTERN_VAR);
+    parse_tree_set_type(node, type);
+    return type;
 }
 
 static th_type *
@@ -3167,6 +3853,10 @@ note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
     }
 }
 
+static bool add_declared_where(n00bb_tu_state_t *state,
+    parse_sym_entry_t *symbol, core_string_t key,
+    const core_list_t(th_trait_requirement) *declared, bool bounds_only);
+
 void
 record_cached_declared_function_signature(parse_grammar_t *grammar,
                                           core_translation_unit_t *unit,
@@ -3217,9 +3907,10 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             .target = members,
         }));
     }
-    valid = valid && apply_signature_constraints(grammar, unit,
-        CHILD_NT(grammar, signature, "where-clause"), state->types,
-        &variables, &declared);
+    // The clause after the signature and any after a parameter's or the
+    // result's type each constrain the function's variable of that name.
+    valid = valid && apply_signature_constraints(grammar, unit, signature,
+        state->types, &variables, &declared);
     th_type *signature_type = valid
         ? th_func_with_error(state->types, success, failure, params.data,
             params.len, has_rest ? &rest : nullptr, nullptr, 0)
@@ -3259,38 +3950,94 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             "could not retain the function signature");
         return;
     }
-    if (declared.len) {
-        if (declared.len > SIZE_MAX / sizeof(th_trait_requirement)) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "too many declared where constraints");
-            return;
-        }
-        n00bb_declared_where_t *facts = core_arena_alloc(
-            &state->semantic_values, sizeof(*facts));
-        th_trait_requirement *items = core_arena_alloc(
-            &state->semantic_values, declared.len * sizeof(*items));
-        if (!facts || !items) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "could not retain declared where constraints");
-            return;
-        }
-        memcpy(items, declared.data, declared.len * sizeof(*items));
-        *facts = (n00bb_declared_where_t){.data = items,
-                                          .len = declared.len};
-        if (!parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY,
-                                   facts)) {
-            core_list_free(declared);
-            n00bb_tu_internal_error(unit, signature, "checking declarations",
-                "could not bind declared where constraints");
-            return;
-        }
+    if (!add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
+                            &declared, false)) {
+        core_list_free(declared);
+        n00bb_tu_internal_error(unit, signature, "checking declarations",
+            "could not retain declared where constraints");
+        return;
     }
     core_list_free(declared);
     if (unified) symbol->type = unified;
     symbol->error_type = failure;
     symbol->callable_contract = unified;
+}
+
+// Adds `declared` to the requirements `symbol` already has under `key`:
+// its `where` requirements (N00BB_DECLARED_WHERE_KEY) or, for a trait,
+// those its type carries (N00BB_TRAIT_REQUIREMENTS_KEY). With
+// `bounds_only`, just the implements and excludes ones. A symbol with none
+// yet holds an empty list.
+static bool
+add_declared_where(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                   core_string_t key,
+                   const core_list_t(th_trait_requirement) *declared,
+                   bool bounds_only)
+{
+    n00bb_declared_where_t *previous = parse_sym_binding(symbol, key);
+    size_t before = previous ? previous->len : 0;
+    if (previous && !declared->len) return true;
+    if (declared->len > SIZE_MAX / sizeof(th_trait_requirement) - before)
+        return false;
+    n00bb_declared_where_t *facts = core_arena_alloc(
+        &state->semantic_values, sizeof(*facts));
+    th_trait_requirement *items = before + declared->len
+        ? core_arena_alloc(&state->semantic_values,
+                           (before + declared->len) * sizeof(*items))
+        : nullptr;
+    if (!facts || (before + declared->len && !items)) return false;
+    if (before) memcpy(items, previous->data, before * sizeof(*items));
+    size_t len = before;
+    for (size_t i = 0; i < declared->len; i++)
+        if (!bounds_only || declared->data[i].kind == TH_CON_IMPLEMENTS
+            || declared->data[i].kind == TH_CON_EXCLUDES)
+            items[len++] = declared->data[i];
+    *facts = (n00bb_declared_where_t){.data = items, .len = len};
+    return parse_sym_set_binding(symbol, key, facts);
+}
+
+// A `where` clause after a type in a function's body constrains the
+// function's variable of that name, as one in its signature does. The
+// body's types are known only once it has been walked.
+void
+record_function_body_constraints(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *func, n00bb_tu_state_t *state)
+{
+    parse_sym_entry_t *symbol = parse_tree_sym(func);
+    parse_tree_t *body = CHILD_NT(grammar, func, "body");
+    if (!symbol || !body || !state || !state->types) return;
+    n00bb_record_where_clauses(grammar, unit, symbol, body, func,
+        N00BB_DECLARED_WHERE_KEY, nullptr,
+        "could not apply the where clauses in the function's body");
+}
+
+bool
+n00bb_record_where_clauses(parse_grammar_t *grammar,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *symbol, parse_tree_t *clauses,
+                           parse_tree_t *declaration, core_string_t key,
+                           const core_list_t(th_trait_requirement) *before,
+                           const char *failure)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_list_t(n00bb_typevar_binding_t) variables =
+        core_list_new(n00bb_typevar_binding_t);
+    core_list_t(th_trait_requirement) declared =
+        core_list_new(th_trait_requirement);
+    for (size_t i = 0; before && i < before->len; i++)
+        core_list_push(declared, before->data[i]);
+    signature_typevars_for_symbol(symbol, &variables);
+    bool valid = apply_signature_constraints(grammar, unit, clauses,
+        state->types, &variables, &declared)
+        && (!symbol
+            || add_declared_where(state, symbol, key, &declared, false));
+    core_list_free(variables);
+    core_list_free(declared);
+    if (!valid)
+        n00bb_tu_internal_error_unless_reported(unit, declaration,
+            "checking declarations", failure);
+    return valid;
 }
 
 static void
@@ -3510,7 +4257,19 @@ apply_one_signature_constraint(parse_grammar_t *grammar,
         core_buffer_release(&name);
         return true;
     }
-    if (trait_symbol && owner) {
+    // A trait a package exports, read from its interface (a cached or
+    // linked package), is required by the name it was declared under, as
+    // when the package is compiled from source.
+    n00bb_export_origin_t *origin = trait_symbol && !trait_symbol->decl_node
+        ? parse_sym_binding(trait_symbol,
+                            CORE_STRING_STATIC("n00bb.export-origin"))
+        : nullptr;
+    if (origin) {
+        core_buffer_release(&name);
+        core_buffer_printf(&name, "%.*s", (int)origin->declaration.u8_bytes,
+                           origin->declaration.data);
+    }
+    else if (trait_symbol && owner) {
         core_buffer_t qualified = {0};
         n00bb_qualify(&qualified, owner->module.identifier,
                       trait_symbol->name);
@@ -3556,7 +4315,7 @@ apply_signature_where_tree(parse_grammar_t *grammar,
                            core_list_t(th_trait_requirement) *declared)
 {
     if (!node || core_tree_is_leaf(node)) return true;
-    if (NT_IS(grammar, node, "type-constraint")) {
+    if (n00bb_rule_of(grammar, node) == RULE(TYPE_CONSTRAINT)) {
         if (core_tree_num_children(node) < 3) return false;
         core_string_t var_name = source_typevar_name(core_tree_child(node, 0));
         if (!var_name.data) return false;
@@ -3569,13 +4328,18 @@ apply_signature_where_tree(parse_grammar_t *grammar,
             && apply_signature_constraint_tree(grammar, unit, constraints,
                                                types, variable, declared);
     }
+    // A declaration nested inside owns its own type variables, and so the
+    // clauses written in it.
     for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!apply_signature_where_tree(grammar, unit,
+        if (!typevar_owner_node(grammar, core_tree_child(node, i))
+            && !apply_signature_where_tree(grammar, unit,
                 core_tree_child(node, i), types, variables, declared))
             return false;
     return true;
 }
 
+// Every `where` clause under `where`, outside any nested declaration, as
+// requirements on the variables of the declaration that owns them.
 bool
 apply_signature_constraints(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
@@ -4011,32 +4775,60 @@ n00bb_print_type(th_ctx *types, th_type *type)
         .option_suffix = CORE_STRING_STATIC("?"),
         .omit_nil_failure = true,
         .source_spelling = true,
+        // As a function type is written: passing modes are no part of it.
+        .omit_modes = true,
     };
     return th_print_with_options(types, type, &options);
 }
 
-// Builtin types are in scope everywhere under their short names, and their
-// qualified names (`builtin.containers.dict.Dict`) do not resolve.
-static core_string_t
-source_type_name(core_string_t name, void *context)
-{
-    name = object_of_shape(name, context);
-    return core_string_starts_with(name, CORE_STRING_STATIC("builtin."))
-        ? short_type_name(name, context) : name;
-}
-
-// Qualified, and spelled as source would write it (`Tuple[u8, u8]`), for
-// text the formatter puts back into a program.
 core_string_t
-n00bb_print_type_source(th_ctx *types, th_type *type)
+n00bb_print_signature(th_ctx *types, th_type *type)
 {
+    if (!types || !type) return CORE_STRING_STATIC("_");
     th_print_options_t options = {
-        .named = source_type_name,
+        .named = short_type_name,
         .sequence = CORE_STRING_STATIC("Array"),
         .reference = CORE_STRING_STATIC("Ref"),
         .option_suffix = CORE_STRING_STATIC("?"),
         .omit_nil_failure = true,
         .source_spelling = true,
+    };
+    return th_print_with_options(types, type, &options);
+}
+
+// Builtin types are in scope everywhere under their short names, and their
+// qualified names (`builtin.containers.dict.Dict`) do not resolve; nor does
+// a module's own name inside it, where its types go by their short names.
+static core_string_t
+source_type_name(core_string_t name, void *context)
+{
+    name = object_of_shape(name, nullptr);
+    if (core_string_starts_with(name, CORE_STRING_STATIC("builtin.")))
+        return short_type_name(name, nullptr);
+    const core_string_t *module = context;
+    if (module && module->u8_bytes && name.u8_bytes > module->u8_bytes
+        && core_string_starts_with(name, *module)
+        && name.data[module->u8_bytes] == '.')
+        return core_string_slice(name, module->u8_bytes + 1,
+                                 name.u8_bytes - module->u8_bytes - 1);
+    return name;
+}
+
+// Qualified, and spelled as source would write it (`Tuple[u8, u8]`) in
+// `module`, for text the formatter puts back into a program. A function
+// type has no passing modes.
+core_string_t
+n00bb_print_type_source(th_ctx *types, th_type *type, core_string_t module)
+{
+    th_print_options_t options = {
+        .named = source_type_name,
+        .context = &module,
+        .sequence = CORE_STRING_STATIC("Array"),
+        .reference = CORE_STRING_STATIC("Ref"),
+        .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_nil_failure = true,
+        .source_spelling = true,
+        .omit_modes = true,
     };
     return th_print_with_options(types, type, &options);
 }
@@ -4538,9 +5330,13 @@ finalize_callback_contract(parse_grammar_t *grammar,
             ? th_ind_referent(th_resolve(handler_ref->type)) : nullptr;
         th_type *state_referent = state_ref
             ? th_ind_referent(th_resolve(state_ref->type)) : nullptr;
+        // The handler's reference is to a function of the handler's type,
+        // which says nothing of its passing modes: the function the
+        // callback is made with must take the handler's
+        // (n00bb_callback_handler_modes).
         bool setup_valid = handler_ref && state_ref
             && callback_type_equal(state->types, handler_referent,
-                                   handler_type)
+                   n00bb_without_passing_modes(state->types, handler_type))
             && callback_type_equal(state->types, state_referent, state_type)
             && th_is_nil(th_func_ret(setup_type));
         if (valid && !setup_valid) reason = N00B_TEXT_ROLE_SETUP_SHAPE;
@@ -5553,18 +6349,19 @@ cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return;
     parse_tree_t *source = nullptr;
-    if (NT_IS(grammar, node, "type-spec"))
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    if (rule == RULE(TYPE_SPEC))
         source = CHILD_NT(grammar, node, "one-tspec");
-    else if (NT_IS(grammar, node, "one-tspec"))
+    else if (rule == RULE(ONE_TSPEC))
         source = CHILD_NT(grammar, node, "base-tspec");
-    else if (NT_IS(grammar, node, "base-tspec")) {
+    else if (rule == RULE(BASE_TSPEC)) {
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
             parse_tree_t *child = core_tree_child(node, i);
             if (NT_IS(grammar, child, "array-dimensions")) return;
             if (NT_IS(grammar, child, "base-tspec-core")) source = child;
         }
     }
-    else if (NT_IS(grammar, node, "base-tspec-core")) {
+    else if (rule == RULE(BASE_TSPEC_CORE)) {
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
             parse_tree_t *child = core_tree_child(node, i);
             if (NT_IS(grammar, child, "tspec-application")) return;
@@ -5645,24 +6442,21 @@ function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                 parse_tree_t *type_node = NT_IS(grammar, item,
                         "tspec-func-param")
                     ? CHILD_NT(grammar, item, "union-tspec") : item;
+                // A named positional entry is reported by the
+                // preprocessor; its type is still the entry's type.
+                parse_tree_t *named = !type_node
+                    ? CHILD_NT(grammar, item, "tspec-named-positional")
+                    : nullptr;
+                if (named)
+                    type_node = CHILD_NT(grammar, named, "union-tspec");
                 th_type *type = type_node
                     ? parse_tree_type(type_node) : nullptr;
+                // A passing mode written before the entry is reported by
+                // the preprocessor; modes are no part of a function type.
                 if (!type) valid = false;
-                else {
-                    core_string_t spelling = first_token_text(item);
-                    th_mode mode = core_string_eq(
-                            spelling, CORE_STRING_STATIC("out")) ? TH_OUT
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("modify")) ? TH_INOUT
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("consume")) ? TH_CONSUME
-                        : core_string_eq(
-                            spelling, CORE_STRING_STATIC("view")) ? TH_VIEW
-                        : TH_IN;
-                    core_list_push(positional, ((th_param){
-                        .mode = mode, .type = type,
-                    }));
-                }
+                else core_list_push(positional, ((th_param){
+                    .mode = TH_IN, .type = type,
+                }));
             }
             else if (NT_IS(grammar, item, "tspec-func-params")) {
                 th_type *tail = th_resolve(
@@ -5715,6 +6509,10 @@ function_parameter_pack(parse_grammar_t *grammar, th_ctx *types,
                             parse_tree_is_group(field_group)
                                 ? core_tree_child(field_group, m)
                                 : field_group;
+                        // A positional entry after the keyword
+                        // parameters is reported by the preprocessor.
+                        if (NT_IS(grammar, field, "tspec-karg-entry"))
+                            field = CHILD_NT(grammar, field, "tspec-field");
                         if (!NT_IS(grammar, field, "tspec-field")) continue;
                         parse_tree_t *type_node = CHILD_NT(grammar, field,
                                                             "union-tspec");
@@ -6789,6 +7587,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (entering) return;
     parse_annot_result_t *annotations = context;
     if (!visit->pn) return;
+    n00bb_rule_t rule = n00bb_rule_of(visit->grammar, visit->node);
     parse_sym_entry_t *declared = parse_tree_sym(visit->node);
     apply_declaration_defaults(visit);
     if (declared && declared->is_field
@@ -6806,8 +7605,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 N00B_TEXT_REMOVE_PRIVATE_HERE,
                 N00BB_NO_ARGS);
     }
-    if ((NT_IS(visit->grammar, visit->node, "sym-decl")
-         || NT_IS(visit->grammar, visit->node, "pattern-binding"))
+    if ((rule == RULE(SYM_DECL) || rule == RULE(PATTERN_BINDING))
         && declared && declared->decl_node == visit->node
         && declared->shadowed
         && declared->shadowed->kind != PARSE_SYM_MODULE
@@ -6840,7 +7638,7 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
             "resolving names", "could not record the binding definition site");
     parse_sym_mutability_t mutability = PARSE_SYM_MUTABLE;
     bool threaded = false;
-    if ((NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern)
+    if ((rule == RULE(SYM_DECL) || declared_pattern)
         && declared_binding_kind(visit->grammar, visit->node, &mutability,
                                  &threaded)) {
         {
@@ -7071,9 +7869,7 @@ is_named_type_declaration(parse_grammar_t *grammar,
 bool
 field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "type-decl")
-        || NT_IS(grammar, node, "record-decl")
-        || NT_IS(grammar, node, "object-decl");
+    return n00bb_field_record_rule(n00bb_rule_of(grammar, node));
 }
 
 bool
@@ -7113,6 +7909,11 @@ free_tu_state(void *data)
     for (size_t i = 0; i < state->link_use_sites.len; i++)
         core_free(state->link_use_sites.data[i].trait_path_parts);
     core_list_free(state->link_use_sites);
+    core_list_free(state->injected_members);
+    if (state->export_index.built) {
+        core_dict_free(&state->export_index.first);
+        core_free(state->export_index.next);
+    }
     core_list_free(state->import_sources);
     core_list_free(state->path_imports);
     core_list_free(state->restricted_imports);
@@ -7129,6 +7930,7 @@ free_tu_state(void *data)
     core_list_free(state->rewrite_sites);
     core_list_free(state->condition_sites);
     core_list_free(state->write_sites);
+    core_list_free(state->type_argument_checks);
     core_list_free(state->result_defaults);
     core_dict_free(&state->intrinsics);
     core_dict_free(&state->open_storage);
@@ -7154,6 +7956,7 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
+    core_dict_free(&state->arm_typevars);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_foreach(&state->dispatch_calls, item)
@@ -7169,6 +7972,7 @@ free_tu_state(void *data)
     free_type_symbol_index(state);
     core_buffer_release(&state->declaration_sites);
     core_buffer_release(&state->unused_facts);
+    core_buffer_release(&state->warning_inputs);
     core_arena_free(&state->semantic_values);
     parse_annot_result_free(state->annotations);
     if (state->lex) {
@@ -7187,6 +7991,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
+    core_dict_init(&state->arm_typevars, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->mark_annotations = core_list_new(n00bb_mark_annotation_t);
@@ -7198,6 +8003,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->condition_sites = core_list_new(n00bb_ir_instr_ptr_t);
     state->write_sites = core_list_new(n00bb_write_site_t);
+    state->type_argument_checks = core_list_new(n00bb_type_argument_check_t);
     state->result_defaults = core_list_new(n00bb_ir_instr_ptr_t);
     core_dict_init(&state->intrinsics, nullptr, nullptr);
     core_dict_init(&state->open_storage, nullptr, nullptr);
@@ -7235,13 +8041,40 @@ module_scope_in_namespace(n00bb_tu_state_t *state,
     parse_namespace_t *ns = symtab
         ? parse_symtab_ns(symtab, namespace_name) : nullptr;
     if (!ns || !ns->root) return nullptr;
-    for (parse_scope_t *scope = symtab->all_scopes; scope;
+    // The answer is the newest scope under the namespace's root tagged
+    // `module`. Scopes are only added (at the head of all_scopes), and a
+    // scope's parent and tag are settled as it is opened, so an answer stays
+    // right for the scopes it covered: only newer ones need a look.
+    static pthread_mutex_t memo_lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&memo_lock);
+    size_t slots = sizeof(state->module_scope_memo)
+        / sizeof(state->module_scope_memo[0]);
+    typeof(&state->module_scope_memo[0]) memo = nullptr;
+    for (size_t i = 0; !memo && i < slots; i++)
+        if (state->module_scope_memo[i].ns == ns
+            || !state->module_scope_memo[i].ns) {
+            memo = &state->module_scope_memo[i];
+            memo->ns = ns;
+        }
+    parse_scope_t *stop = memo ? memo->scanned : nullptr;
+    parse_scope_t *found = nullptr;
+    bool newer = false;
+    for (parse_scope_t *scope = symtab->all_scopes; scope && scope != stop;
          scope = scope->all_next)
         if (scope->parent == ns->root
             && core_string_eq(scope->scope_tag,
-                              CORE_STRING_STATIC("module")))
-            return scope;
-    return nullptr;
+                              CORE_STRING_STATIC("module"))) {
+            found = scope;
+            newer = true;
+            break;
+        }
+    if (memo) {
+        if (!newer) found = memo->found;
+        memo->scanned = symtab->all_scopes;
+        memo->found = found;
+    }
+    pthread_mutex_unlock(&memo_lock);
+    return found;
 }
 
 parse_scope_t *
@@ -8228,14 +9061,22 @@ report_generic_arity(core_translation_unit_t *unit, parse_tree_t *at,
     name = short_type_name(name, nullptr);
     core_string_t given = n00bb_text(N00B_TEXT_TYPE_ARGUMENTS_GIVEN,
                                      N00BB_ARGS(ARG_NUMBER(provided)));
-    bool reported = n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
-        link_source_location(at), N00B_TEXT_TAKES_TYPE_ARGUMENTS,
-        N00BB_ARGS(ARG_NUMBER(expected), ARG_TEXT(name), ARG_TEXT(given)));
+    bool reported = expected
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
+              link_source_location(at), N00B_TEXT_TAKES_TYPE_ARGUMENTS,
+              N00BB_ARGS(ARG_NUMBER(expected), ARG_TEXT(name),
+                         ARG_TEXT(given)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_ARITY,
+              link_source_location(at), N00B_TEXT_TAKES_NO_TYPE_ARGUMENTS,
+              N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(given)));
     core_free(given.data);
     if (!reported) return;
     n00bb_diag_declared_here(diagnostics, declaration,
         N00B_TEXT_IS_DECLARED_HERE);
-    if (provided > expected)
+    if (!expected)
+        n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_TYPE_ARGUMENTS,
+                          N00BB_ARGS(ARG_NUMBER(provided)));
+    else if (provided > expected)
         n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_EXTRA_TYPE_ARGUMENTS,
                           N00BB_ARGS(ARG_NUMBER(provided - expected)));
     else
@@ -8915,13 +9756,11 @@ cache_ordered_literal_children(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
     if (!grammar || !state || !node) return false;
-    bool list_node = NT_IS(grammar, node, "list-elems")
-        || NT_IS(grammar, node, "set-entries")
-        || NT_IS(grammar, node, "dict-entries")
-        || NT_IS(grammar, node, "dict-entry")
-        || NT_IS(grammar, node, "expr-comma-list")
-        || NT_IS(grammar, node, "named-field-list")
-        || NT_IS(grammar, node, "tuple-or-paren");
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    bool list_node = rule == RULE(LIST_ELEMS) || rule == RULE(SET_ENTRIES)
+        || rule == RULE(DICT_ENTRIES) || rule == RULE(DICT_ENTRY)
+        || rule == RULE(EXPR_COMMA_LIST) || rule == RULE(NAMED_FIELD_LIST)
+        || rule == RULE(TUPLE_OR_PAREN);
     if (!list_node) return true;
 
     core_list_t(parse_tree_ptr_t) children = core_list_new(parse_tree_ptr_t);
@@ -8964,8 +9803,9 @@ bool
 cache_ordered_array_dimensions(parse_grammar_t *grammar,
                               n00bb_tu_state_t *state, parse_tree_t *node)
 {
-    bool dimensions_node = NT_IS(grammar, node, "array-dimensions");
-    bool base_node = NT_IS(grammar, node, "base-tspec");
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    bool dimensions_node = rule == RULE(ARRAY_DIMENSIONS);
+    bool base_node = rule == RULE(BASE_TSPEC);
     if (!dimensions_node && !base_node) return true;
 
     core_list_t(parse_tree_ptr_t) items = core_list_new(parse_tree_ptr_t);
@@ -9054,7 +9894,7 @@ bool
 cache_typecase_arm_types(parse_grammar_t *grammar,
                          n00bb_tu_state_t *state, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "type-spec-list")) return true;
+    if (n00bb_rule_of(grammar, node) != RULE(TYPE_SPEC_LIST)) return true;
     parse_tree_t *arm = parse_tree_parent(node);
     if (!arm || (!NT_IS(grammar, arm, "typecase-case-block")
                  && !NT_IS(grammar, arm,
@@ -9352,6 +10192,269 @@ compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return result;
 }
 
+// The type parameters of a record, variant or alias, in the order its
+// type arguments are given: an alias's in the order its target first
+// names them, the others' in the order the declaration does.
+static size_t
+declared_type_parameters(th_ctx *types, parse_sym_entry_t *declaration,
+                         bool alias, th_type ***out)
+{
+    *out = nullptr;
+    if (alias)
+        return declaration->type
+            ? th_free_vars(types, th_resolve(declaration->type), out) : 0;
+    n00bb_signature_typevars_t *variables = parse_sym_binding(declaration,
+        N00BB_SIGNATURE_TYPEVARS_KEY);
+    if (!variables || !variables->len) return 0;
+    *out = core_alloc_array(th_type *, variables->len);
+    for (size_t i = 0; i < variables->len; i++)
+        (*out)[i] = variables->data[i].type;
+    return variables->len;
+}
+
+// Appends to `out` the requirements the `where` clauses of `declaration`
+// put on the arguments `check` gives it: each clause naming one of the
+// type's parameters, made about the argument given for it. False when one
+// can't be made.
+static bool
+argument_requirements(th_ctx *types, parse_sym_entry_t *declaration,
+                      const n00bb_type_argument_check_t *check,
+                      core_list_t(th_trait_requirement) *out)
+{
+    n00bb_declared_where_t *declared = parse_sym_binding(declaration,
+        N00BB_DECLARED_WHERE_KEY);
+    th_type **parameters = nullptr;
+    size_t count = check->count;
+    bool fits = declared && declared_type_parameters(types, declaration,
+        check->alias, &parameters) == count;
+    bool valid = true;
+    for (size_t r = 0; valid && fits && r < declared->len; r++) {
+        th_trait_requirement requirement = declared->data[r];
+        th_type *subject = th_resolve(requirement.subject);
+        size_t at = count;
+        for (size_t i = 0; i < count && at == count; i++)
+            if (parameters[i] && th_resolve(parameters[i]) == subject) at = i;
+        if (at == count || !check->arguments[at]) continue;
+        requirement.subject = check->arguments[at];
+        if (requirement.target) {
+            requirement.target = th_type_clone_replacing(types,
+                requirement.target, (const th_type *const *)parameters,
+                check->arguments, count);
+            valid = requirement.target != nullptr;
+        }
+        if (valid) core_list_push(*out, requirement);
+    }
+    if (!check->alias) core_free(parameters);
+    return valid;
+}
+
+// `arguments`, given at `site` to `declaration`, must satisfy the `where`
+// clauses of the declaration (record_type_constraints); they are checked
+// once every declaration is processed (n00bb_type_arguments_fit). An
+// alias stands for its target, clause and all, so a variable of the
+// declaration around the use, given to an alias, takes the alias's
+// constraint on, as a clause written there would give it.
+static bool
+constrain_type_arguments(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit, parse_tree_t *site,
+                         parse_sym_entry_t *declaration,
+                         th_type *const *arguments, size_t count, bool alias)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!declaration || !count) return true;
+    th_type **kept = core_arena_alloc(&state->semantic_values,
+                                      count * sizeof(*kept));
+    if (!kept) return false;
+    memcpy(kept, arguments, count * sizeof(*kept));
+    // A type composed again keeps one check, with what it has now; the
+    // constraints it gave the variables around it stay given.
+    for (size_t i = 0; i < state->type_argument_checks.len; i++) {
+        n00bb_type_argument_check_t *check =
+            &state->type_argument_checks.data[i];
+        if (check->site != site) continue;
+        check->declaration = declaration;
+        check->arguments = kept;
+        check->count = count;
+        return true;
+    }
+    core_list_push(state->type_argument_checks,
+        ((n00bb_type_argument_check_t){
+            .site = site, .declaration = declaration, .arguments = kept,
+            .count = count, .alias = alias,
+        }));
+    (void)grammar;
+    return true;
+}
+
+// Adds `taken` to what `owner` requires of its variables; a trait also
+// keeps the kinds its type carries with its own clauses.
+static bool
+add_owner_constraints(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_sym_entry_t *owner,
+                      const core_list_t(th_trait_requirement) *taken)
+{
+    return add_declared_where(state, owner, N00BB_DECLARED_WHERE_KEY, taken,
+                              false)
+        && (!owner->decl_node
+            || !NT_IS(grammar, owner->decl_node, "trait-decl")
+            || add_declared_where(state, owner, N00BB_TRAIT_REQUIREMENTS_KEY,
+                                  taken, true));
+}
+
+// A variable of the declaration around a use, given to a constrained
+// record, variant or alias, takes on the type's constraint, as a clause
+// written there would give it: `func mk(x: 'T) -> Box['T]` requires of
+// its `'T` what `Box` requires. Run once every module is walked, so every
+// declaration's clauses are known, and before the program's functions are
+// indexed by their contracts.
+bool
+n00bb_imply_type_argument_constraints(core_translation_unit_t *const *units,
+                                      size_t count)
+{
+    bool ok = true;
+    for (size_t u = 0; ok && u < count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        if (!state || !state->types || !state->grammar) continue;
+        for (size_t c = 0; ok && c < state->type_argument_checks.len; c++) {
+            n00bb_type_argument_check_t *check =
+                &state->type_argument_checks.data[c];
+            if (check->implied) continue;
+            check->implied = true;
+            core_list_t(th_trait_requirement) taken =
+                core_list_new(th_trait_requirement);
+            ok = argument_requirements(state->types,
+                canonical_symbol(check->declaration), check, &taken);
+            parse_sym_entry_t *owner = typevar_owner(state->grammar,
+                                                     check->site);
+            // A variable only a function's body names is given its type by
+            // the body; the check of this use (n00bb_type_arguments_fit)
+            // tests that type once it is known, so the function does not
+            // require it again.
+            bool function = owner && owner->decl_node
+                && NT_IS(state->grammar, owner->decl_node, "func-def");
+            size_t kept = 0;
+            for (size_t r = 0; r < taken.len; r++) {
+                th_type *subject = th_resolve(taken.data[r].subject);
+                if (th_kind_of(subject) == TH_VAR
+                    && (!function || !owner->type
+                        || th_occurs(state->types, subject, owner->type)))
+                    taken.data[kept++] = taken.data[r];
+            }
+            taken.len = kept;
+            owner = ok && taken.len ? owner : nullptr;
+            ok = ok && (!owner
+                || add_owner_constraints(state->grammar, state, owner,
+                                         &taken));
+            core_list_free(taken);
+            if (!ok)
+                n00bb_tu_internal_error(units[u], check->site,
+                    "checking declarations",
+                    "could not give a type's where clauses to the "
+                    "variables given to it");
+        }
+    }
+    return ok;
+}
+
+bool
+n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
+                         size_t count)
+{
+    bool ok = true;
+    for (size_t u = 0; u < count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        if (!state || !types) continue;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(units[u]);
+        for (size_t c = 0; c < state->type_argument_checks.len; c++) {
+            n00bb_type_argument_check_t *check =
+                &state->type_argument_checks.data[c];
+            core_list_t(th_trait_requirement) given =
+                core_list_new(th_trait_requirement);
+            bool valid = argument_requirements(types, check->declaration,
+                                               check, &given);
+            for (size_t r = 0; r < given.len; r++) {
+                th_trait_requirement requirement = given.data[r];
+                th_type *argument = th_resolve(requirement.subject);
+                // An argument that is still open is constrained, if at all,
+                // where it is declared.
+                if (!th_is_closed(types, argument)) continue;
+                core_string_t shown = n00bb_print_type(types, argument);
+                if (requirement.kind == TH_CON_IMPLEMENTS
+                    && !th_env_implements(types, argument,
+                                          requirement.iface)) {
+                    core_string_t trait = n00bb_name_leaf(requirement.iface);
+                    if (n00bb_report(diagnostics, units[u],
+                            N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION,
+                            n00bb_node_span(check->site),
+                            N00B_TEXT_REQUIRED_TRAIT_MISSING,
+                            N00BB_ARGS(ARG_TEXT(shown), ARG_TEXT(trait),
+                                       ARG_TEXT(check->declaration->name)))) {
+                        n00bb_note_unimplemented(diagnostics, types,
+                                                 argument, requirement.iface);
+                        n00bb_report_help(diagnostics,
+                            N00B_TEXT_GIVE_A_TYPE_THAT_IMPLEMENTS,
+                            N00BB_ARGS(ARG_TEXT(trait),
+                                       ARG_TEXT(check->declaration->name)));
+                    }
+                    ok = false;
+                }
+                else if (requirement.kind == TH_CON_EXCLUDES
+                         && requirement.target
+                         && th_same_type(argument,
+                                         th_resolve(requirement.target))) {
+                    n00bb_report(diagnostics, units[u],
+                        N00B_DIAG_TYPE_ARGUMENT_EXCLUDED,
+                        n00bb_node_span(check->site),
+                        N00B_TEXT_TYPE_ARGUMENT_EXCLUDED,
+                        N00BB_ARGS(ARG_TEXT(shown),
+                                   ARG_TEXT(check->declaration->name)));
+                    ok = false;
+                }
+            }
+            core_list_free(given);
+            if (!valid) {
+                n00bb_tu_internal_error(units[u], check->site,
+                    "checking types",
+                    "could not apply a type's where clauses to its "
+                    "arguments");
+                ok = false;
+            }
+        }
+        state->type_argument_checks.len = 0;
+    }
+    return ok;
+}
+
+// The `where` clauses written in a record, variant or alias declaration
+// constrain its type parameters, which every use must then satisfy
+// (constrain_type_arguments). A trait named as a type there is such a
+// parameter, constrained to implement it: `x: Comparable` is
+// `x: 'T where 'T: Comparable`. The parameters are put in the order the
+// type's arguments are given before its type is defined over them.
+void
+record_type_constraints(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        parse_tree_t *declaration, n00bb_tu_state_t *state)
+{
+    // typevar_owner_node, less the function-like owners.
+    n00bb_rule_t rule = n00bb_rule_of(grammar, declaration);
+    if (!(n00bb_field_record_rule(rule) || rule == RULE(VARIANT_DECL)
+          || (rule == RULE(ALIAS_STMT)
+              && alias_declaration_is_transparent(grammar, declaration))))
+        return;
+    parse_sym_entry_t *symbol = parse_tree_sym(declaration);
+    if (!symbol || !state || !state->types) return;
+    const char *failure = "could not apply the type's where clauses";
+    if (!order_type_parameters(grammar, unit, declaration, symbol))
+        n00bb_tu_internal_error_unless_reported(unit, declaration,
+            "checking declarations", failure);
+    else
+        n00bb_record_where_clauses(grammar, unit, symbol, declaration,
+            declaration, N00BB_DECLARED_WHERE_KEY,
+            parse_sym_binding(symbol, N00BB_TYPE_BOUNDS_KEY), failure);
+}
+
 // The alias a type name refers to, when the alias has type parameters.
 static parse_sym_entry_t *
 generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
@@ -9404,12 +10507,67 @@ generic_alias_application(parse_grammar_t *grammar,
                                   (const th_type *const *)variables, to,
                                   count)
         : nullptr;
+    if (expanded && !constrain_type_arguments(grammar, unit, application,
+            alias, to, count, true)) {
+        n00bb_tu_internal_error(unit, application, "checking declarations",
+            "could not apply the alias's where clauses to its arguments");
+        expanded = th_poison(state->types);
+    }
     core_free(to);
     core_list_free(arguments);
     // The alias's name, applied here, stands for the applied type; left
     // with the alias's own type, it would carry the alias's parameters.
     if (expanded) parse_tree_set_type(type_node, expanded);
     return expanded;
+}
+
+// How many type arguments the type a name refers to takes, or -1 when that
+// is not fixed (a variadic builtin, a trait) or not known. A declared type
+// is counted from its source declaration, which `declaration` receives,
+// so the count does not depend on the order declarations are processed
+// in; a builtin has its arity from the builtin tables.
+static ptrdiff_t
+named_type_arity(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                 parse_tree_t *type_node, th_type *base, core_string_t name,
+                 parse_sym_entry_t **declaration)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : parse_tree_sym(type_node);
+    symbol = symbol ? canonical_symbol(symbol) : nullptr;
+    if (symbol && symbol->decl_node) {
+        if (NT_IS(grammar, symbol->decl_node, "trait-decl")) return -1;
+        *declaration = symbol;
+        return (ptrdiff_t)declaration_type_parameter_count(grammar,
+            tu_state(unit), symbol->decl_node);
+    }
+    int builtin_generic = builtin_generic_type_arity(name);
+    if (builtin_generic != -1) return builtin_generic < 0 ? -1
+                                                          : builtin_generic;
+    // A type from a cached module's interface has no syntax to count. A
+    // record, object, variant or callback has its type variables restored
+    // from the interface's `n00b.type-typevars` metadata, which is written
+    // for every one of them and left out only when there are none, as it
+    // is for an enum or flagset, which takes no parameters.
+    bool defined_shape = symbol
+        && (core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("record"))
+            || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("object"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("variant"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("callback"))
+            || core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("enum"))
+            || core_string_eq(symbol->adt_kind,
+                              CORE_STRING_STATIC("flagset")));
+    if (defined_shape && symbol->kind == PARSE_SYM_TYPEDEF) {
+        n00bb_signature_typevars_t *variables =
+            parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
+        *declaration = symbol;
+        return variables ? (ptrdiff_t)variables->len : 0;
+    }
+    const th_builtin_type_t *builtin = base
+        ? th_builtin_type(tu_state(unit)->types, base) : nullptr;
+    return builtin && builtin->arity >= 0 ? builtin->arity : -1;
 }
 
 static th_type *
@@ -9485,6 +10643,16 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
             ? th_bits(state->types, (uint64_t)width.mag)
             : th_bitint(state->types, (uint64_t)width.mag, is_signed);
     }
+    if (!application && NT_IS(grammar, type_node, "member-chain")) {
+        // A generic alias named bare, qualified or not, has fresh variables
+        // of the declaration it is written in.
+        parse_node_resolution_t resolution = parse_tree_resolution(type_node);
+        th_type *bare = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+            ? bare_generic_alias(grammar, unit, resolution.target.symbol,
+                                 type_node)
+            : nullptr;
+        if (bare) return bare;
+    }
     if (!application || !NT_IS(grammar, type_node, "member-chain"))
         return base;
     bool tuple = member_chain_is_name(grammar, type_node,
@@ -9519,13 +10687,23 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
         core_list_free(arguments);
         return th_poison(state->types);
     }
-    if (!declared_arity && !is_variant)
-        declared_arity = th_generic_arity(state->types, name);
-    if (valid && declared_arity && declared_arity != arguments.len) {
-        parse_sym_entry_t *declaration = type_symbol_in_loaded_imports(unit,
-            state->types, base, nullptr);
-        report_generic_arity(unit, application, base, declared_arity,
-                             arguments.len, declaration);
+    // The arity comes from the declaration when there is one, so a type
+    // applied before its declaration is processed is checked the same way;
+    // a type that takes none rejects arguments rather than dropping them.
+    parse_sym_entry_t *declaration = nullptr;
+    ptrdiff_t expected = named_type_arity(grammar, unit, type_node, base,
+                                          name, &declaration);
+    if (expected < 0) {
+        if (!declared_arity && !is_variant)
+            declared_arity = th_generic_arity(state->types, name);
+        expected = declared_arity ? (ptrdiff_t)declared_arity : -1;
+        declaration = type_symbol_in_loaded_imports(unit, state->types, base,
+                                                    nullptr);
+    }
+    if (valid && expected >= 0 && (size_t)expected != arguments.len) {
+        report_generic_arity(unit, application,
+            declaration ? th_name(state->types, declaration->name) : base,
+            (size_t)expected, arguments.len, declaration);
         core_list_free(arguments);
         return th_poison(state->types);
     }
@@ -9535,6 +10713,20 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
             : apply_type_arguments(state->types, name, arguments.data,
                                    arguments.len)
         : nullptr;
+    // A declared record's or variant's `where` clauses, from its source or
+    // its interface, constrain these.
+    th_type **given = applied && declaration && arguments.len
+        ? core_alloc_array(th_type *, arguments.len) : nullptr;
+    for (size_t i = 0; given && i < arguments.len; i++)
+        given[i] = arguments.data[i].kind == TH_ARG_TYPE
+            ? arguments.data[i].type : nullptr;
+    if (given && !constrain_type_arguments(grammar, unit, application,
+            declaration, given, arguments.len, false)) {
+        n00bb_tu_internal_error(unit, application, "checking declarations",
+            "could not keep the type arguments for its where clauses");
+        applied = th_poison(state->types);
+    }
+    core_free(given);
     core_list_free(arguments);
     uint8_t attrs = 0;
     th_type *referent = applied && th_ind_attrs(applied, &attrs)
@@ -9560,6 +10752,15 @@ compose_type_syntax_node(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->types || !node || core_tree_is_leaf(node))
         return nullptr;
+    // Only these rules compose a type; every test below is of one of them.
+    switch (n00bb_rule_of(grammar, node)) {
+    case RULE(ONE_TSPEC): case RULE(TSPEC_LIST): case RULE(TSPEC_FUNC_PARAM):
+    case RULE(TSPEC_FUNC_PARAMS): case RULE(TSPEC_FUNC):
+    case RULE(BASE_TSPEC_CORE): case RULE(BASE_TSPEC): case RULE(UNION_TSPEC):
+        break;
+    default:
+        return nullptr;
+    }
     if (NT_IS(grammar, node, "one-tspec")) {
         parse_tree_t *base = CHILD_NT(grammar, node, "base-tspec");
         th_type *element = base ? parse_tree_type(base) : nullptr;
@@ -9579,6 +10780,11 @@ compose_type_syntax_node(parse_grammar_t *grammar,
         return type_argument_pack(grammar, state->types, node);
     if (NT_IS(grammar, node, "tspec-func-param")) {
         parse_tree_t *type = CHILD_NT(grammar, node, "union-tspec");
+        // A named positional entry (reported by the preprocessor).
+        if (!type)
+            type = CHILD_NT(grammar,
+                CHILD_NT(grammar, node, "tspec-named-positional"),
+                "union-tspec");
         return type ? parse_tree_type(type) : nullptr;
     }
     if (NT_IS(grammar, node, "tspec-func-params"))

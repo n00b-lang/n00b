@@ -154,8 +154,9 @@ register_nominal_types(parse_grammar_t *grammar,
                                       CORE_STRING_STATIC("flagset")));
             if (!nominal && !scalar) continue;
             th_type *representation = th_type_definition(state->types, symbol->type);
-            if (!representation || !ir_type_define(module, symbol->type,
-                                                    representation)) return false;
+            if (!representation
+                || !ir_type_define(module, symbol->type, representation))
+                return false;
         }
     }
     return true;
@@ -1186,6 +1187,15 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
                                      ir_func_t *function, bool named)
 {
     if (!symbol || !function) return false;
+    // A reference adapter takes its keyword parameters after its
+    // positional ones, as the function it adapts does.
+    n00bb_reference_adapter_t *order = parse_sym_binding(symbol,
+        N00BB_REFERENCE_ADAPTER_KEY);
+    for (size_t k = 0; order && k < order->keywords; k++)
+        if (!ir_func_set_parameter_optional(function,
+                (uint32_t)(order->positional + k), true))
+            return false;
+    if (order) return true;
     parse_tree_t *signature = child_nt(grammar, symbol->decl_node,
                                        CORE_STRING_STATIC("func-type-signature"));
     if (!signature)
@@ -1402,6 +1412,16 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         for (size_t j = 0; j < units->len; j++) {
             if (units->data[i] == units->data[j]
                 || !n00bb_unit_reaches_import(unit, units->data[j])) continue;
+            // A module loaded from the object cache stands in for its source,
+            // which registers nothing here (its records' symbols carry no
+            // `type` member scope), so it registers nothing either: what an
+            // importer interns mustn't depend on whether its imports were
+            // cached. A library's interface, which has no source, still
+            // registers its records.
+            if (tu_state(units->data[j])->interface_module
+                && n00bb_cache_has_module(analysis->cache,
+                                          units->data[j]->module.identifier))
+                continue;
             if (!register_imported_record_layouts(grammar, units->data[j],
                                                    tu_state(unit)->ir_module))
                 return ir_initialization_error(unit,

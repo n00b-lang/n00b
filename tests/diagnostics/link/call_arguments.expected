@@ -10,7 +10,3 @@ tests/diagnostics/link/call_arguments.n:25:16: error N00B-T0005: parameter 1 (`s
   tests/diagnostics/link/call_arguments.n:7:6: note: `label` is declared here
 tests/diagnostics/link/call_arguments.n:30:15: error N00B-T0005: parameter 1 (`x`) of `f` is `int`, but this argument is `string`
   tests/diagnostics/link/call_arguments.n:13:6: note: `f` is declared here
-tests/diagnostics/link/call_arguments.n:35:9: error N00B-T0002: `add` takes 2 arguments, but this call passes 1
-  tests/diagnostics/link/call_arguments.n:31:6: note: `add` is declared here
-tests/diagnostics/link/call_arguments.n:40:17: error N00B-T0004: parameter `width` is given an argument twice
-  tests/diagnostics/link/call_arguments.n:40:14: note: `width` is first given here

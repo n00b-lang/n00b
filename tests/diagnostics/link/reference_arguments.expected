@@ -1,0 +1,5 @@
+tests/diagnostics/link/reference_arguments.n:26:23: error N00B-S0016: only a variable, field or element can be passed to a call through a function reference whose function isn't known here, which may write it
+tests/diagnostics/link/reference_arguments.n:27:16: error N00B-S0016: `fixed` is a `let`, so it cannot be passed to a call through a function reference whose function isn't known here, which may write it
+tests/diagnostics/link/reference_arguments.n:28:23: error N00B-S0016: only a variable, field or element can be passed to a call through a function reference whose function isn't known here, which may write it
+tests/diagnostics/link/reference_arguments.n:29:9: error N00B-S0016: `by` is an `in` parameter, so it cannot be passed to a call through a function reference whose function isn't known here, which may write it
+tests/diagnostics/link/reference_arguments.n:41:19: error N00B-S0016: `fixed` is a `let`, so it cannot be passed to a `modify` parameter

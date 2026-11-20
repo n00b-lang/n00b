@@ -1,4 +1,5 @@
 import string.core
+import string.xid
 import containers.list
 import containers.buffer
 import io.format
@@ -9,6 +10,7 @@ const index_extends: u32 = 0xffffffff
 private const sub_arm_none: u64 = 0
 private const sub_arm_position: u64 = 1
 private const sub_arm_argname: u64 = 2
+private const sub_arm_auto: u64 = 3
 
 enum Text_Case {
     none = 0, upper, lower, title, caps
@@ -39,25 +41,43 @@ record Text_Style {
     font_size:        i16?
 }
 
+// What a substitution slot names: an explicit position (`[#N]`), a keyword
+// argument (`[#name]`), or the next argument in order (`[#]`), which
+// `format()` numbers by order of appearance in the final string. `none`
+// marks a record that is a style span, not a slot.
 variant Sub_Spec {
     argname:  string
     position: u64
     none:     nil
+    auto:     nil
 }
 
+// One markup event list entry. A style span has `style_tag` and both
+// offsets (`end_ix == index_extends` when it was never closed: it flows
+// right onto whatever is concatenated after it). A substitution slot has
+// a `substitution` other than `none` and no `end_ix`. A reset (`[/]`) has
+// `style_tag == "/"` and no `end_ix`.
+//
+// Several zero-width events can share an offset: a span closing, a slot,
+// a reset, a span opening. `start_order` (for a span, its open) and
+// `end_order` (its close) give each event's place among all the events at
+// its offset, numbered from 0, so `[b]a[/b][#]` (close, then slot) and
+// `[b]a[#][/b]` (slot, then close) stay different. The list is kept
+// canonical by settle_records: orders are dense per offset, and records
+// are sorted by where their first event falls.
 record Style_Record {
     start_ix:     u32?
     end_ix:       u32?
     style_tag:    string?
     format_spec:  string?
     substitution: Sub_Spec
+    start_order:  u32
+    end_order:    u32
 }
 
 record Rich_Body layout(ordered) {
     s:          string
     style_info: List[Style_Record]
-    base_style: Text_Style?
-    opaque:     bool
 }
 
 private record Intrinsic_Tag {
@@ -95,6 +115,9 @@ private func sub_arm(sub: Sub_Spec) -> u64 {
         }
         case none {
             return sub_arm_none
+        }
+        case auto {
+            return sub_arm_auto
         }
     }
     return sub_arm_none
@@ -204,6 +227,9 @@ private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
         case none {
             return 0
         }
+        case auto {
+            return 0
+        }
     }
 }
 
@@ -224,126 +250,15 @@ private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
     if result != 0 {
         return result
     }
+    result = cmp_words(cast[u64] left.start_order, cast[u64] right.start_order)
+    if result != 0 {
+        return result
+    }
+    result = cmp_words(cast[u64] left.end_order, cast[u64] right.end_order)
+    if result != 0 {
+        return result
+    }
     return cmp_sub_spec(left.substitution, right.substitution)
-}
-
-private func cmp_opt_i8(left: i8?, right: i8?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
-}
-
-private func cmp_opt_i16(left: i16?, right: i16?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(unsafe_cast[u64] left, unsafe_cast[u64] right)
-}
-
-private func cmp_opt_color(left: Color?, right: Color?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_words(cast[u64] unsafe_cast[u32] left,
-                     cast[u64] unsafe_cast[u32] right)
-}
-
-private func cmp_style(left: Text_Style, right: Text_Style) -> int {
-    result = cmp_words(tri_rank(left.bold), tri_rank(right.bold))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.italic), tri_rank(right.italic))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.underline), tri_rank(right.underline))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.double_underline),
-                       tri_rank(right.double_underline))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.strikethrough),
-                       tri_rank(right.strikethrough))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.reverse), tri_rank(right.reverse))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.dim), tri_rank(right.dim))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(tri_rank(left.blink), tri_rank(right.blink))
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(cast[u64] left.text_case, cast[u64] right.text_case)
-    if result != 0 {
-        return result
-    }
-    result = cmp_words(cast[u64] left.font_hint, cast[u64] right.font_hint)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.font_index, right.font_index)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.fg_palette_ix, right.fg_palette_ix)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_i8(left.bg_palette_ix, right.bg_palette_ix)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_color(left.fg_rgb, right.fg_rgb)
-    if result != 0 {
-        return result
-    }
-    result = cmp_opt_color(left.bg_rgb, right.bg_rgb)
-    if result != 0 {
-        return result
-    }
-    return cmp_opt_i16(left.font_size, right.font_size)
-}
-
-private func cmp_opt_style(left: Text_Style?, right: Text_Style?) -> int {
-    if (left != nil) != (right != nil) {
-        if left != nil {
-            return 1
-        }
-        return -1
-    }
-    if left == nil or right == nil {
-        return 0
-    }
-    return cmp_style(left, right)
 }
 
 private func is_rich(s: string) -> bool {
@@ -386,17 +301,288 @@ private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
         }
         i += 1
     }
-    result = cmp_opt_style(left.__value.base_style, right.__value.base_style)
-    if result != 0 {
-        return result
+    return 0
+}
+
+// A style span: a tag and both ends (an end of `index_extends` when it
+// flows right).
+func record_is_span(r: Style_Record) -> bool {
+    return r.start_ix != nil and r.end_ix != nil and r.style_tag != nil
+}
+
+private func record_is_reset(r: Style_Record) -> bool {
+    return r.end_ix == nil and r.style_tag != nil and
+        string.core.byte_len(r.style_tag) == 1 and
+        string.core.byte_at(r.style_tag, 0) == 0x2f
+}
+
+private func record_is_slot(r: Style_Record) -> bool {
+    return sub_arm(r.substitution) != sub_arm_none
+}
+
+// One zero-width markup event: a record's start (a span's open, a slot, a
+// reset) or a span's close.
+private record Markup_Event {
+    offset:  u32
+    order:   u32
+    rec:     int
+    closing: bool
+}
+
+private func event_before(a: Markup_Event, b: Markup_Event) -> bool {
+    if a.offset != b.offset {
+        return a.offset < b.offset
     }
-    if left.__value.opaque == right.__value.opaque {
-        return 0
+    if a.order != b.order {
+        return a.order < b.order
     }
-    if left.__value.opaque {
-        return 1
+    if a.rec != b.rec {
+        return a.rec < b.rec
     }
-    return -1
+    return !a.closing and b.closing
+}
+
+private func record_events(records: List[Style_Record]) -> List[Markup_Event] {
+    var events: List[Markup_Event] = new[List[Markup_Event]]()
+    var i: int = 0
+    while i < cast[int] records.len() {
+        let r: Style_Record = records[i]
+        if r.start_ix != nil {
+            let open: Markup_Event = (offset = r.start_ix, order = r.start_order,
+                                      rec = i, closing = false)
+            events.append(open)
+            let end: u32 = r.end_ix.get_or_else(index_extends)
+            if record_is_span(r) and end != index_extends {
+                let close: Markup_Event = (offset = end,
+                                           order = r.end_order, rec = i,
+                                           closing = true)
+                events.append(close)
+            }
+        }
+        i += 1
+    }
+    var k: int = 1
+    while k < cast[int] events.len() {
+        let key: Markup_Event = events[k]
+        var j: int = k - 1
+        while j >= 0 and event_before(key, events[j]) {
+            events[j + 1] = events[j]
+            j -= 1
+        }
+        events[j + 1] = key
+        k += 1
+    }
+    return events
+}
+
+private func record_before(a: Style_Record, b: Style_Record) -> bool {
+    if (a.start_ix == nil) != (b.start_ix == nil) {
+        return a.start_ix == nil
+    }
+    if a.start_ix == nil or b.start_ix == nil {
+        return false
+    }
+    let sa: u32 = a.start_ix
+    let sb: u32 = b.start_ix
+    if sa != sb {
+        return sa < sb
+    }
+    return a.start_order < b.start_order
+}
+
+// Puts a markup record list in canonical form: the events at each offset
+// keep their relative order but are numbered 0, 1, 2, ..., and the records
+// are sorted by offset and order of their first event. Equal markup then
+// has equal records, whatever built it.
+func settle_records(records: List[Style_Record]) -> List[Style_Record] {
+    var out: List[Style_Record] = new[List[Style_Record]]()
+    var i: int = 0
+    while i < cast[int] records.len() {
+        var r: Style_Record = records[i]
+        // Only a closed span has a close event to order.
+        if !record_is_span(r) or
+            r.end_ix.get_or_else(0) == index_extends {
+            r.end_order = 0
+        }
+        out.append(r)
+        i += 1
+    }
+    let events: List[Markup_Event] = record_events(out)
+    var at: u32 = 0
+    var next: u32 = 0
+    var e: int = 0
+    while e < cast[int] events.len() {
+        let ev: Markup_Event = events[e]
+        if e == 0 or ev.offset != at {
+            at = ev.offset
+            next = 0
+        }
+        var r: Style_Record = out[ev.rec]
+        if ev.closing {
+            r.end_order = next
+        }
+        else {
+            r.start_order = next
+        }
+        out[ev.rec] = r
+        next += 1
+        e += 1
+    }
+    var k: int = 1
+    while k < cast[int] out.len() {
+        let key: Style_Record = out[k]
+        var j: int = k - 1
+        while j >= 0 and record_before(key, out[j]) {
+            out[j + 1] = out[j]
+            j -= 1
+        }
+        out[j + 1] = key
+        k += 1
+    }
+    return out
+}
+
+// Orders used while joining two record lists, before settle_records
+// renumbers them: the left side's orders are dense from 0, so anything
+// from the right side at the join offset is placed after them all.
+private const right_first_order: u32 = 0x40000000
+
+private func shifted(at: u32?, by: u64) -> u32? {
+    if at == nil {
+        return nil
+    }
+    let v: u32 = at
+    if v == index_extends {
+        return v
+    }
+    let moved: u64 = cast[u64](v) + by
+    return cast[u32] moved
+}
+
+// A right-side event order: at the join offset, placed after every left
+// event there. An event of the left side given the same order still sorts
+// first, since the left side's records come first (event_before).
+private func right_order(order: u32, at_join: bool) -> u32 {
+    if at_join {
+        return order + right_first_order
+    }
+    return order
+}
+
+// The right side's first reset, which ends every span flowing in from the
+// left, in every layer: its offset in the right side, its order there,
+// and the layer (0 = outermost) it is in.
+private record Reset_Point {
+    found: bool
+    at:    u32
+    order: u32
+    layer: int
+}
+
+private func first_reset(s: string) -> Reset_Point {
+    var point: Reset_Point = (found = false, at = 0, order = 0, layer = 0)
+    var cur: string = s
+    var layer: int = 0
+    while is_rich(cur) {
+        let body: Ref[Rich_Body] = rich_body(cur)
+        var i: int = 0
+        // Records are in event order, so a layer's first reset is its
+        // earliest.
+        while i < cast[int] body.__value.style_info.len() {
+            let r: Style_Record = body.__value.style_info[i]
+            i += 1
+            if !record_is_reset(r) {
+                continue
+            }
+            let at: u32 = r.start_ix.get_or_else(0)
+            if !point.found or at < point.at {
+                point = (found = true, at = at, order = r.start_order,
+                         layer = layer)
+            }
+            break
+        }
+        cur = body.__value.s
+        layer += 1
+    }
+    return point
+}
+
+// Joins two strings, at least one of them rich, keeping every layer's
+// style spans and substitution slots. The right side's records move by the
+// left side's byte length, and its events at the join come after the left
+// side's. A left span that was never closed flows right over the right
+// side, until the right side's first reset (`[/]`, which may sit at its
+// very start, in any layer) ends it: a reset clears all styling before it,
+// in every layer. Layers pair up from the outside in.
+func concat_rich(left: string, right: string) -> string {
+    return concat_layers(left, right, first_reset(right), 0)
+}
+
+private func concat_layers(left: string, right: string, reset: Reset_Point,
+                           layer: int) -> string {
+    let left_rich: bool = is_rich(left)
+    let right_rich: bool = is_rich(right)
+    if !left_rich and !right_rich {
+        return left + right
+    }
+    let left_len: u64 = cast[u64] string.core.byte_len(left)
+    var inner_left: string = left
+    var inner_right: string = right
+    var body: Rich_Body = (s = "", style_info = new[List[Style_Record]]())
+    var right_records: List[Style_Record] = new[List[Style_Record]]()
+    var reset_at: u32? = nil
+    var reset_order: u32 = 0
+    if reset.found {
+        reset_at = cast[u32](cast[u64](reset.at) + left_len)
+        // Left spans close with the reset's order in its own layer, so
+        // just before it, and in the others with the first right order
+        // there, so after the left side's events at that offset and before
+        // the right side's.
+        var order: u32 = 0
+        if layer == reset.layer and right_rich {
+            order = reset.order
+        }
+        reset_order = right_order(order, reset.at == 0)
+    }
+    if right_rich {
+        let rb: Ref[Rich_Body] = rich_body(right)
+        inner_right = rb.__value.s
+        var i: int = 0
+        while i < cast[int] rb.__value.style_info.len() {
+            var rec: Style_Record = rb.__value.style_info[i]
+            rec.start_order = right_order(rec.start_order,
+                                          rec.start_ix.get_or_else(1) == 0)
+            rec.end_order = right_order(rec.end_order,
+                                        rec.end_ix.get_or_else(1) == 0)
+            rec.start_ix = shifted(rec.start_ix, left_len)
+            rec.end_ix = shifted(rec.end_ix, left_len)
+            right_records.append(rec)
+            i += 1
+        }
+    }
+    if left_rich {
+        let lb: Ref[Rich_Body] = rich_body(left)
+        inner_left = lb.__value.s
+        var i: int = 0
+        while i < cast[int] lb.__value.style_info.len() {
+            var rec: Style_Record = lb.__value.style_info[i]
+            if reset_at != nil and record_is_span(rec) and
+                rec.end_ix.get_or_else(0) == index_extends {
+                rec.end_ix = reset_at
+                rec.end_order = reset_order
+            }
+            body.style_info.append(rec)
+            i += 1
+        }
+    }
+    var r: int = 0
+    while r < cast[int] right_records.len() {
+        body.style_info.append(right_records[r])
+        r += 1
+    }
+    body.style_info = settle_records(body.style_info)
+    body.s = concat_layers(inner_left, inner_right, reset, layer + 1)
+    return string.core.__string_make_rich(ref body)
 }
 
 func cmp_string_value(left: string, right: string) -> int {
@@ -461,63 +647,10 @@ private func hash_sub_spec(sub: Sub_Spec) -> u128 {
         case none {
             return acc
         }
+        case auto {
+            return acc
+        }
     }
-}
-
-private func hash_opt_i8(o: i8?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u8] o) + 1
-    return word.hash()
-}
-
-private func hash_opt_i16(o: i16?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u16] o) + 1
-    return word.hash()
-}
-
-private func hash_opt_color(o: Color?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    let word: u64 = cast[u64](unsafe_cast[u32] o) + 1
-    return word.hash()
-}
-
-private func hash_style(s: Text_Style) -> u128 {
-    let packed: u64 = tri_rank(s.bold) |
-        (tri_rank(s.italic) << 2) |
-        (tri_rank(s.underline) << 4) |
-        (tri_rank(s.double_underline) << 6) |
-        (tri_rank(s.strikethrough) << 8) |
-        (tri_rank(s.reverse) << 10) |
-        (tri_rank(s.dim) << 12) |
-        (tri_rank(s.blink) << 14) |
-        (cast[u64](s.text_case) << 16) |
-        (cast[u64](s.font_hint) << 19)
-    var acc: u128 = packed.hash()
-    acc = hash_chain(acc, hash_opt_i8(s.font_index))
-    acc = hash_chain(acc, hash_opt_i8(s.fg_palette_ix))
-    acc = hash_chain(acc, hash_opt_i8(s.bg_palette_ix))
-    acc = hash_chain(acc, hash_opt_color(s.fg_rgb))
-    acc = hash_chain(acc, hash_opt_color(s.bg_rgb))
-    acc = hash_chain(acc, hash_opt_i16(s.font_size))
-    return acc
-}
-
-private func hash_opt_style(o: Text_Style?) -> u128 {
-    if o == nil {
-        let zero: u64 = 0
-        return zero.hash()
-    }
-    return hash_style(o)
 }
 
 private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
@@ -538,14 +671,11 @@ private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
         acc = hash_chain(acc, hash_opt_string(r.style_tag))
         acc = hash_chain(acc, hash_opt_string(r.format_spec))
         acc = hash_chain(acc, hash_sub_spec(r.substitution))
+        let orders: u64 = (cast[u64](r.start_order) << 32) |
+            cast[u64](r.end_order)
+        acc = hash_chain(acc, orders.hash())
         i += 1
     }
-    acc = hash_chain(acc, hash_opt_style(body.__value.base_style))
-    var opaque: u64 = 0
-    if body.__value.opaque {
-        opaque = 1
-    }
-    acc = hash_chain(acc, opaque.hash())
     return acc
 }
 
@@ -563,28 +693,18 @@ func string_hash(s: string) -> u128 {
 private func format_style_tag(fd: int, tag: string, closing: bool)
     -> uint fail: int {
     var out: uint = 0
-    out += io.format.format_string(fd, "«")!
+    out += io.format.format_byte(fd, 0x5b)!
     if closing {
         out += io.format.format_byte(fd, 0x2f)!
     }
     out += io.format.format_string(fd, tag)!
-    out += io.format.format_string(fd, "»")!
+    out += io.format.format_byte(fd, 0x5d)!
     return out
-}
-
-private func opens_here(r: Style_Record, pos: u64) -> bool {
-    return r.start_ix != nil and cast[u64](r.start_ix) == pos and
-        r.style_tag != nil
-}
-
-private func closes_here(r: Style_Record, pos: u64) -> bool {
-    return r.end_ix != nil and cast[u64](r.end_ix) == pos and
-        r.start_ix != nil and r.style_tag != nil
 }
 
 private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     var out: uint = 0
-    out += io.format.format_string(fd, "«#")!
+    out += io.format.format_string(fd, "[#")!
     let sub: Sub_Spec = r.substitution
     switch sub {
         case argname {
@@ -601,157 +721,118 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
         }
         case none {
         }
+        case auto {
+        }
     }
     if r.format_spec != nil {
         out += io.format.format_byte(fd, 0x3a)!
-        out += io.format.format_string(fd, r.format_spec)!
+        let spec: string = r.format_spec
+        var k: uint = 0
+        while k < string.core.byte_len(spec) {
+            let c: u8 = string.core.byte_at(spec, k)
+            if c == 0x5d {
+                out += io.format.format_byte(fd, 0x5c)!
+            }
+            out += io.format.format_byte(fd, c)!
+            k += 1
+        }
     }
-    out += io.format.format_string(fd, "»")!
+    out += io.format.format_byte(fd, 0x5d)!
     return out
 }
 
-private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
-    -> uint fail: int {
-    let nrec: int = cast[int] body.__value.style_info.len()
-    var out: uint = 0
-    let i: u64 = pos
-    var open_first: bool = true
-    var open_mark: u64 = 0
-    while true {
-        var found: bool = false
-        var best: u64 = 0
-        var j: int = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !opens_here(r, i) or r.end_ix == nil {
-                continue
-            }
-            let e: u64 = cast[u64] r.end_ix
-            if !open_first and e >= open_mark {
-                continue
-            }
-            if !found or e > best {
-                best = e
-                found = true
-            }
-        }
-        if !found {
-            break
-        }
-        j = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !opens_here(r, i) or r.end_ix == nil or
-                cast[u64](r.end_ix) != best {
-                continue
-            }
-            out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
-        }
-        open_mark = best
-        open_first = false
+// The layers of a rich string, outermost first.
+private func rich_layers(s: string) -> List[string] {
+    var layers: List[string] = new[List[string]]()
+    var cur: string = s
+    while is_rich(cur) {
+        layers.append(cur)
+        cur = rich_body(cur).__value.s
     }
-    var k: int = 0
-    while k < nrec {
-        let r: Style_Record = body.__value.style_info[k]
+    return layers
+}
+
+private func print_event(fd: int, body: Ref[Rich_Body],
+                         events: List[Markup_Event], at: int)
+    -> uint fail: int {
+    let ev: Markup_Event = events[at]
+    let r: Style_Record = body.__value.style_info[ev.rec]
+    if ev.closing {
+        return format_style_tag(fd, r.style_tag.get_or_else(""), true)!
+    }
+    if record_is_reset(r) {
+        return io.format.format_string(fd, "[/]")!
+    }
+    if record_is_slot(r) {
+        return format_substitution(fd, r)!
+    }
+    return format_style_tag(fd, r.style_tag.get_or_else(""), false)!
+}
+
+// Prints every layer's markup events at offset `pos`, each layer's in its
+// own order. Across layers, the closes that come first in a layer print
+// inner layer first, then the rest of each layer's events print outer
+// layer first, so an outer span wraps an inner one that starts or ends with
+// it.
+private func print_events_at(fd: int, layers: List[string],
+                             events: List[List[Markup_Event]],
+                             modify cursors: Array[int], pos: u64)
+    -> uint fail: int {
+    var out: uint = 0
+    let count: int = cast[int] layers.len()
+    var k: int = count - 1
+    while k >= 0 {
+        let body: Ref[Rich_Body] = rich_body(layers[k])
+        let evs: List[Markup_Event] = events[k]
+        while cursors[k] < cast[int](evs.len()) and
+            cast[u64](evs[cursors[k]].offset) == pos and
+            evs[cursors[k]].closing {
+            out += print_event(fd, body, evs, cursors[k])!
+            cursors[k] += 1
+        }
+        k -= 1
+    }
+    k = 0
+    while k < count {
+        let body: Ref[Rich_Body] = rich_body(layers[k])
+        let evs: List[Markup_Event] = events[k]
+        while cursors[k] < cast[int](evs.len()) and
+            cast[u64](evs[cursors[k]].offset) == pos {
+            out += print_event(fd, body, evs, cursors[k])!
+            cursors[k] += 1
+        }
         k += 1
-        if r.start_ix != nil and cast[u64](r.start_ix) == i and
-            sub_arm(r.substitution) != sub_arm_none {
-            out += format_substitution(fd, r)!
-        }
     }
     return out
 }
 
-private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
-    -> uint fail: int {
-    let nrec: int = cast[int] body.__value.style_info.len()
-    var out: uint = 0
-    let i: u64 = pos
-    var close_first: bool = true
-    var close_mark: u64 = 0
-    while true {
-        var found: bool = false
-        var best: u64 = 0
-        var j: int = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !closes_here(r, i) {
-                continue
-            }
-            let s: u64 = cast[u64] r.start_ix.get_or_else(0)
-            if !close_first and s >= close_mark {
-                continue
-            }
-            if !found or s > best {
-                best = s
-                found = true
-            }
-        }
-        if !found {
-            break
-        }
-        j = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if closes_here(r, i) and
-                cast[u64](r.start_ix.get_or_else(0)) == best {
-                out += format_style_tag(fd, r.style_tag.get_or_else(""),
-                                        true)!
-            }
-        }
-        close_mark = best
-        close_first = false
-    }
-    return out
-}
-
-private func opens_outward_in(fd: int, cur: string, pos: u64)
-    -> uint fail: int {
-    var out: uint = 0
-    if !is_rich(cur) {
-        return out
-    }
-    let body: Ref[Rich_Body] = rich_body(cur)
-    out += level_opens(fd, body, pos)!
-    out += opens_outward_in(fd, body.__value.s, pos)!
-    return out
-}
-
-private func closes_inward_out(fd: int, cur: string, pos: u64)
-    -> uint fail: int {
-    var out: uint = 0
-    if !is_rich(cur) {
-        return out
-    }
-    let body: Ref[Rich_Body] = rich_body(cur)
-    out += closes_inward_out(fd, body.__value.s, pos)!
-    out += level_closes(fd, body, pos)!
-    return out
-}
-
+// Prints the markup events exactly as recorded, so `[b]a[/b][#]` and
+// `[b]a[#][/b]` stay apart. A span that flows right (never closed) shows
+// no close.
 private func repr_rich_string(s: string, fd: int) -> uint fail: int {
     let base: string = string.core.text(s)
     let n: u64 = cast[u64] string.core.byte_len(base)
+    let layers: List[string] = rich_layers(s)
+    var events: List[List[Markup_Event]] = new[List[List[Markup_Event]]]()
+    var cursors: Array[int] = new[Array[int]](cast[int] layers.len())
+    var k: int = 0
+    while k < cast[int] layers.len() {
+        events.append(record_events(rich_body(layers[k]).__value.style_info))
+        cursors[k] = 0
+        k += 1
+    }
     var out: uint = 0
     out += io.format.format_string(fd, "r\"")!
     var i: u64 = 0
     while i <= n {
-        out += opens_outward_in(fd, s, i)!
-        out += closes_inward_out(fd, s, i)!
+        out += print_events_at(fd, layers, events, cursors, i)!
         if i >= n {
             i += 1
             continue
         }
         let c: u8 = string.core.byte_at(base, i)
-        if i + 1 < n and c == 0xc2 {
-            let next: u8 = string.core.byte_at(base, i + 1)
-            if next == 0xab or next == 0xbb {
-                out += io.format.format_byte(fd, 0x5c)!
-            }
+        if c == 0x5b {
+            out += io.format.format_byte(fd, 0x5c)!
         }
         out += io.format.format_byte(fd, c)!
         i += 1
@@ -1071,8 +1152,8 @@ func intrinsic_tag_style(tag: string) -> Text_Style {
 }
 
 private enum Markup_Kind {
-    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, role_on,
-    role_off, reset, subst
+    prop_on = 0, prop_off, case_on, case_off, style_on, style_off, reset,
+    subst
 }
 
 private record Markup_Segment {
@@ -1086,17 +1167,28 @@ private record Markup_Segment {
 }
 
 private record Pending_Style {
-    kind:       Markup_Kind
-    name:       string
-    prop:       Text_Style
-    raw_tag:    string
-    start_byte: u32
+    kind:        Markup_Kind
+    name:        string
+    prop:        Text_Style
+    raw_tag:     string
+    start_byte:  u32
+    start_order: u32
 }
 
-private record Slot_Numbering {
-    next_auto:    u64
-    saw_auto:     bool
-    saw_explicit: bool
+// Numbers the markup events at each offset in source order.
+private record Event_Clock {
+    at:   u32
+    next: u32
+}
+
+private func tick(modify clock: Event_Clock, at: u32) -> u32 {
+    if at != clock.at {
+        clock.at = at
+        clock.next = 0
+    }
+    let order: u32 = clock.next
+    clock.next += 1
+    return order
 }
 
 private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
@@ -1108,114 +1200,36 @@ private func segment(kind: Markup_Kind, at: u32, raw_tag: string,
             format_spec = format_spec)
 }
 
-private func classify_tag(modify segments: List[Markup_Segment],
-                          modify numbering: Slot_Numbering, tag: string,
-                          at: u32) fail: string {
-    let len: uint = string.core.byte_len(tag)
-    if len == 0 {
-        return
-    }
-    let first: u8 = string.core.byte_at(tag, 0)
-    if len == 1 and first == 0x2f {
-        segments.append(segment(Markup_Kind.reset, at, tag))
-        return
-    }
-    if first == 0x23 {
-        var spec_len: uint = len - 1
-        var format_spec: string? = nil
-        var k: uint = 1
-        while k < len {
-            if string.core.byte_at(tag, k) == 0x3a {
-                format_spec = string.core.byte_slice(tag, cast[int](k) + 1,
-                                                     cast[int] len)
-                spec_len = k - 1
-                break
-            }
-            k += 1
-        }
-        if spec_len == 0 {
-            if numbering.saw_explicit {
-                fail "rich string cannot mix automatic and explicit positional substitutions"
-            }
-            numbering.saw_auto = true
-            segments.append(segment(Markup_Kind.subst, at, tag,
-                                    sub_index = numbering.next_auto,
-                                    format_spec = format_spec))
-            numbering.next_auto += 1
-            return
-        }
-        var all_digits: bool = true
-        var d: uint = 1
-        while d <= spec_len {
-            let c: u8 = string.core.byte_at(tag, d)
-            if c < 0x30 or c > 0x39 {
-                all_digits = false
-                break
-            }
-            d += 1
-        }
-        if all_digits {
-            if numbering.saw_auto {
-                fail "rich string cannot mix automatic and explicit positional substitutions"
-            }
-            numbering.saw_explicit = true
-            var ix: u64 = 0
-            d = 1
-            while d <= spec_len {
-                ix = ix * 10 + cast[u64] (string.core.byte_at(tag, d) - 0x30)
-                if ix > 0xffffffff {
-                    fail "rich string substitution index is too large"
-                }
-                d += 1
-            }
-            segments.append(segment(Markup_Kind.subst, at, tag,
-                                    sub_index = ix,
-                                    format_spec = format_spec))
-            return
-        }
-        segments.append(segment(Markup_Kind.subst, at, tag,
-            name = string.core.byte_slice(tag, 1, cast[int](spec_len) + 1),
-            format_spec = format_spec))
-        return
-    }
-    let is_close: bool = first == 0x2f
-    var name: string = tag
-    if is_close {
-        name = string.core.byte_slice(tag, 1, cast[int] len)
-    }
-    if string.core.byte_len(name) == 0 {
-        return
-    }
-    if string.core.byte_at(name, 0) == 0x40 {
-        var kind: Markup_Kind = Markup_Kind.role_on
-        if is_close {
-            kind = Markup_Kind.role_off
-        }
-        segments.append(segment(kind, at, tag, name = name))
-        return
+// Adds an on (`[name]`) or off (`[/name]`) segment for a style tag whose
+// name has already been checked to be an identifier.
+private func add_style_tag(modify segments: List[Markup_Segment],
+                           name: string, closing: bool, at: u32) {
+    var raw_tag: string = name
+    if closing {
+        raw_tag = "/" + name
     }
     let prop: Text_Style = intrinsic_tag_style(name)
     if prop.text_case != Text_Case.none {
         var kind: Markup_Kind = Markup_Kind.case_on
-        if is_close {
+        if closing {
             kind = Markup_Kind.case_off
         }
-        segments.append(segment(kind, at, tag, prop = prop))
+        segments.append(segment(kind, at, raw_tag, prop = prop))
         return
     }
     if !is_empty(prop) {
         var kind: Markup_Kind = Markup_Kind.prop_on
-        if is_close {
+        if closing {
             kind = Markup_Kind.prop_off
         }
-        segments.append(segment(kind, at, tag, prop = prop))
+        segments.append(segment(kind, at, raw_tag, prop = prop))
         return
     }
     var kind: Markup_Kind = Markup_Kind.style_on
-    if is_close {
+    if closing {
         kind = Markup_Kind.style_off
     }
-    segments.append(segment(kind, at, tag, name = name))
+    segments.append(segment(kind, at, raw_tag, name = name))
 }
 
 private func escape_length(raw: string, at: uint) -> uint {
@@ -1245,72 +1259,212 @@ private func escape_length(raw: string, at: uint) -> uint {
     return len
 }
 
+// Decodes the escape sequence at `at` into `out`, returning its raw length.
+// `\[` and `\]` decode to the bracket itself, like every other escape.
+private func put_escape(out: containers.buffer.Buffer, raw: string, at: uint)
+    -> uint fail: string {
+    let len: uint = escape_length(raw, at)
+    containers.buffer.put_string(out, string.core.decode_escapes(
+        string.core.byte_slice(raw, cast[int] at, cast[int] (at + len)))!)
+    return len
+}
+
+private func is_digit_byte(b: u8) -> bool {
+    return b >= 0x30 and b <= 0x39
+}
+
+// The byte length of the identifier character at `at`, or 0 when there is
+// none. Tag and slot names follow n00b's identifier rule exactly:
+// `(_|XID_Start)(_|XID_Continue)*`.
+private func id_char_len(raw: string, at: uint, first: bool) -> uint {
+    let b: u8 = string.core.byte_at(raw, at)
+    if b < 0x80 {
+        let ok: bool = b == 0x5f or (b >= 0x41 and b <= 0x5a) or
+            (b >= 0x61 and b <= 0x7a) or (!first and is_digit_byte(b))
+        if ok {
+            return 1
+        }
+        return 0
+    }
+    let step: string.core.Utf8_Step =
+        string.core.utf8_decode_step(raw, cast[u32] at)
+    if step.adv <= 0 {
+        return 0
+    }
+    let cp: u32 = cast[u32] step.cp
+    var ok: bool = string.xid.is_xid_continue(cp)
+    if first {
+        ok = string.xid.is_xid_start(cp)
+    }
+    if ok {
+        return cast[uint] step.adv
+    }
+    return 0
+}
+
+// Returns the index just past the identifier starting at `at`, or `at`
+// itself when no identifier starts there.
+private func scan_id(raw: string, at: uint) -> uint {
+    let n: uint = string.core.byte_len(raw)
+    if at >= n {
+        return at
+    }
+    var j: uint = at + id_char_len(raw, at, true)
+    if j == at {
+        return at
+    }
+    while j < n {
+        let step: uint = id_char_len(raw, j, false)
+        if step == 0 {
+            break
+        }
+        j += step
+    }
+    return j
+}
+
+// Reads a substitution's format spec starting at `k` (just past its `:`),
+// decoding escapes, up to the first unescaped `]`. On success `k` is left on
+// that `]`; nil means the spec is unterminated.
+private func scan_spec(raw: string, modify k: uint) -> string? fail: string {
+    let n: uint = string.core.byte_len(raw)
+    var spec: containers.buffer.Buffer = new[containers.buffer.Buffer](length = 0)
+    while k < n {
+        let c: u8 = string.core.byte_at(raw, k)
+        if c == 0x5d {
+            return containers.buffer.to_string(spec)
+        }
+        if c == 0x5c {
+            k += put_escape(spec, raw, k)!
+            continue
+        }
+        containers.buffer.put_u8(spec, c)
+        k += 1
+    }
+    return nil
+}
+
+// Tries to read a markup tag at the `[` at index `at`. On success the tag's
+// segment is appended and the index just past its closing `]` is returned;
+// when the text is not a tag, nothing is appended and 0 is returned, so the
+// `[` is literal text. The tag forms are:
+//   [ID]  [/ID]  [/]  [#]  [#N]  [#ID]
+// where each `#` form may carry `:spec`, which runs to the first unescaped
+// `]` and has its escapes decoded.
+private func scan_tag(modify segments: List[Markup_Segment],
+                      raw: string,
+                      at: uint, text_at: u32) -> uint fail: string {
+    let n: uint = string.core.byte_len(raw)
+    let j: uint = at + 1
+    if j >= n {
+        return 0
+    }
+    let first: u8 = string.core.byte_at(raw, j)
+    if first == 0x2f {
+        if j + 1 < n and string.core.byte_at(raw, j + 1) == 0x5d {
+            segments.append(segment(Markup_Kind.reset, text_at, "/"))
+            return j + 2
+        }
+        let e: uint = scan_id(raw, j + 1)
+        if e == j + 1 or e >= n or string.core.byte_at(raw, e) != 0x5d {
+            return 0
+        }
+        add_style_tag(segments,
+            string.core.byte_slice(raw, cast[int](j) + 1, cast[int] e),
+            true, text_at)
+        return e + 1
+    }
+    if first != 0x23 {
+        let e: uint = scan_id(raw, j)
+        if e == j or e >= n or string.core.byte_at(raw, e) != 0x5d {
+            return 0
+        }
+        add_style_tag(segments,
+            string.core.byte_slice(raw, cast[int] j, cast[int] e), false,
+            text_at)
+        return e + 1
+    }
+    let name_at: uint = j + 1
+    var k: uint = name_at
+    var explicit: bool = false
+    if k < n and is_digit_byte(string.core.byte_at(raw, k)) {
+        explicit = true
+        while k < n and is_digit_byte(string.core.byte_at(raw, k)) {
+            k += 1
+        }
+    }
+    else {
+        k = scan_id(raw, k)
+    }
+    let name_end: uint = k
+    if k >= n {
+        return 0
+    }
+    var format_spec: string? = nil
+    let after: u8 = string.core.byte_at(raw, k)
+    if after == 0x3a {
+        k += 1
+        format_spec = scan_spec(raw, k)!
+        if format_spec == nil {
+            return 0
+        }
+    }
+    elif after != 0x5d {
+        return 0
+    }
+    let raw_tag: string = string.core.byte_slice(raw, cast[int] j,
+                                                 cast[int] k)
+    if name_end == name_at {
+        // An auto slot is not numbered here: `format()` numbers auto slots
+        // in order of appearance in the final string, so numbering keeps
+        // working after concatenation. It may sit alongside explicit ones.
+        segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+                                format_spec = format_spec))
+        return k + 1
+    }
+    if explicit {
+        var ix: u64 = 0
+        var d: uint = name_at
+        while d < name_end {
+            ix = ix * 10 + cast[u64] (string.core.byte_at(raw, d) - 0x30)
+            if ix > 0xffffffff {
+                fail "rich string substitution index is too large"
+            }
+            d += 1
+        }
+        segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+                                sub_index = ix, format_spec = format_spec))
+        return k + 1
+    }
+    segments.append(segment(Markup_Kind.subst, text_at, raw_tag,
+        name = string.core.byte_slice(raw, cast[int] name_at,
+                                      cast[int] name_end),
+        format_spec = format_spec))
+    return k + 1
+}
+
+// Splits a rich literal's raw (still escaped) body into its text and markup
+// segments. A `[` that does not begin a well-formed tag is literal text, and
+// `\[` / `\]` always produce literal brackets.
 private func parse_rich_markup(raw: string,
                                modify segments: List[Markup_Segment])
     -> string fail: string {
     var text: containers.buffer.Buffer = new[containers.buffer.Buffer](length = 0)
-    var numbering: Slot_Numbering = (next_auto = 0, saw_auto = false,
-                                     saw_explicit = false)
     let n: uint = string.core.byte_len(raw)
     var i: uint = 0
     while i < n {
         let c: u8 = string.core.byte_at(raw, i)
         if c == 0x5c {
-            if i + 2 < n and string.core.byte_at(raw, i + 1) == 0xc2 {
-                let after: u8 = string.core.byte_at(raw, i + 2)
-                if after == 0xab or after == 0xbb {
-                    containers.buffer.put_u8(text, 0xc2)
-                    containers.buffer.put_u8(text, after)
-                    i += 3
-                    continue
-                }
-            }
-            if i + 1 < n and string.core.byte_at(raw, i + 1) == 0x5b {
-                containers.buffer.put_u8(text, 0x5b)
-                i += 2
+            i += put_escape(text, raw, i)!
+            continue
+        }
+        if c == 0x5b {
+            let end: uint = scan_tag(segments, raw, i,
+                cast[u32] string.core.byte_len(text))!
+            if end != 0 {
+                i = end
                 continue
             }
-            let len: uint = escape_length(raw, i)
-            containers.buffer.put_string(text, string.core.decode_escapes(
-                string.core.byte_slice(raw, cast[int] i,
-                                       cast[int] (i + len)))!)
-            i += len
-            continue
-        }
-        if c == 0xc2 and i + 1 < n and string.core.byte_at(raw, i + 1) == 0xab {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0xc2 and
-                                  string.core.byte_at(raw, j + 1) == 0xbb) {
-                j += 1
-            }
-            if j + 1 < n {
-                classify_tag(segments, numbering,
-                    string.core.byte_slice(raw, cast[int] (i + 2),
-                                           cast[int] j),
-                    cast[u32] string.core.byte_len(text))!
-                i = j + 2
-            }
-            else {
-                containers.buffer.put_u8(text, 0xc2)
-                containers.buffer.put_u8(text, 0xab)
-                i += 2
-            }
-            continue
-        }
-        if c == 0x5b and i + 1 < n and string.core.byte_at(raw, i + 1) == 0x3a {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0x3a and
-                                  string.core.byte_at(raw, j + 1) == 0x5d) {
-                j += 1
-            }
-            if j + 1 >= n {
-                fail "rich string contains an unclosed ASCII tag"
-            }
-            classify_tag(segments, numbering,
-                string.core.byte_slice(raw, cast[int] (i + 2), cast[int] j),
-                cast[u32] string.core.byte_len(text))!
-            i = j + 2
-            continue
         }
         containers.buffer.put_u8(text, c)
         i += 1
@@ -1318,10 +1472,12 @@ private func parse_rich_markup(raw: string,
     return containers.buffer.to_string(text)
 }
 
-private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {
+private func span_record(pending: Pending_Style, end: u32?, end_order: u32)
+    -> Style_Record {
     return (start_ix = pending.start_byte, end_ix = end,
             style_tag = pending.raw_tag, format_spec = nil,
-            substitution = (none = nil))
+            substitution = (none = nil), start_order = pending.start_order,
+            end_order = end_order)
 }
 
 private func without(pending: List[Pending_Style], index: int)
@@ -1350,10 +1506,6 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
             return open.kind == Markup_Kind.style_on and
                 cmp_text(open.name, close.name) == 0
         }
-        case Markup_Kind.role_off {
-            return open.kind == Markup_Kind.role_on and
-                cmp_text(open.name, close.name) == 0
-        }
         else {
             return false
         }
@@ -1361,66 +1513,88 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
 }
 
 private func build_style_records(segments: List[Markup_Segment])
-    -> List[Style_Record] {
+    -> List[Style_Record] fail: string {
     var records: List[Style_Record] = new[List[Style_Record]]()
     var pending: List[Pending_Style] = new[List[Pending_Style]]()
+    var clock: Event_Clock = (at = 0, next = 0)
     var s: int = 0
     while s < cast[int] segments.len() {
         let seg: Markup_Segment = segments[s]
         s += 1
         switch seg.kind {
-            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on, Markup_Kind.role_on {
+            case Markup_Kind.prop_on, Markup_Kind.case_on, Markup_Kind.style_on {
                 let opened: Pending_Style = (kind = seg.kind, name = seg.name,
                                              prop = seg.prop,
                                              raw_tag = seg.raw_tag,
-                                             start_byte = seg.at)
+                                             start_byte = seg.at,
+                                             start_order = tick(clock, seg.at))
                 pending.append(opened)
             }
-            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off, Markup_Kind.role_off {
+            case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off {
+                // A close must match an open earlier in the same literal;
+                // only `[/]` clears styling that came from elsewhere.
                 var j: int = cast[int](pending.len()) - 1
-                while j >= 0 {
-                    if closes_pending(pending[j], seg) {
-                        records.append(span_record(pending[j], seg.at))
-                        pending = without(pending, j)
-                        break
-                    }
+                while j >= 0 and !closes_pending(pending[j], seg) {
                     j -= 1
                 }
+                if j < 0 {
+                    fail "rich string has `[" + seg.raw_tag +
+                        "]` with no matching open tag before it; use `[/]` to clear styling from elsewhere"
+                }
+                records.append(span_record(pending[j], seg.at,
+                                           tick(clock, seg.at)))
+                pending = without(pending, j)
             }
             case Markup_Kind.reset {
-                var j: int = 0
-                while j < cast[int] pending.len() {
-                    records.append(span_record(pending[j], seg.at))
-                    j += 1
+                // The reset closes this literal's open spans (innermost
+                // first) and is itself recorded, even at offset 0: on
+                // concatenation it also ends spans flowing in from the
+                // left.
+                var j: int = cast[int](pending.len()) - 1
+                while j >= 0 {
+                    records.append(span_record(pending[j], seg.at,
+                                               tick(clock, seg.at)))
+                    j -= 1
                 }
                 containers.list.clear(pending)
+                let reset: Style_Record = (start_ix = seg.at, end_ix = nil,
+                                           style_tag = "/",
+                                           format_spec = nil,
+                                           substitution = (none = nil),
+                                           start_order = tick(clock, seg.at),
+                                           end_order = 0)
+                records.append(reset)
             }
             case Markup_Kind.subst {
                 var substitution: Sub_Spec = (argname = seg.name)
                 if seg.sub_index != nil {
                     substitution = (position = seg.sub_index)
                 }
+                elif string.core.byte_len(seg.name) == 0 {
+                    substitution = (auto = nil)
+                }
                 let slot: Style_Record = (start_ix = seg.at, end_ix = nil,
                                           style_tag = nil,
                                           format_spec = seg.format_spec,
-                                          substitution = substitution)
+                                          substitution = substitution,
+                                          start_order = tick(clock, seg.at),
+                                          end_order = 0)
                 records.append(slot)
             }
         }
     }
     var j: int = 0
     while j < cast[int] pending.len() {
-        records.append(span_record(pending[j], index_extends))
+        records.append(span_record(pending[j], index_extends, 0))
         j += 1
     }
-    return records
+    return settle_records(records)
 }
 
 alias litmod r = rich
 quotes litmod rich(raw: string) -> string fail: string {
     var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!
-    var body: Rich_Body = (s = text, style_info = build_style_records(segments),
-                           base_style = nil, opaque = false)
+    var body: Rich_Body = (s = text, style_info = build_style_records(segments)!)
     return string.core.__string_make_rich(ref body)
 }

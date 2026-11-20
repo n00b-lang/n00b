@@ -34,10 +34,13 @@ struct node_t {
 typedef node_t *node_ptr_t;
 core_list_decl(node_ptr_t);
 
+// A local, and the value its storage is: its own, or the allocation
+// storage placement moved it to.
 typedef struct {
-    ir_local_t *local;
-    node_t     *root;
-    uint32_t    offset;
+    ir_local_t       *local;
+    const ir_value_t *storage;
+    node_t           *root;
+    uint32_t          offset;
 } tracked_t;
 
 core_list_decl(tracked_t);
@@ -139,7 +142,7 @@ place_node(U *u, uint32_t id, uint32_t *tracked, node_t **node,
     if (root->kind != IR_PLACE_LOCAL && root->kind != IR_PLACE_HEAP)
         return false;
     for (uint32_t t = 0; t < u->tracked.len; t++) {
-        if (u->tracked.data[t].local->value != root->root) continue;
+        if (u->tracked.data[t].storage != root->root) continue;
         node_t *at = u->tracked.data[t].root;
         for (uint32_t i = depth - 1; i-- > 0;) {
             if (chain[i]->element) {
@@ -298,6 +301,29 @@ call_events(U *u, ir_instr_t *in)
             core_list_free(c.reads);
             core_list_free(c.sets);
         }
+    }
+}
+
+// A retained reference outlives the instruction that takes it: the value
+// that keeps it (a callback's state) reads and writes through it later,
+// out of sight of this function. What it points at must be set in full
+// when it is retained.
+static void
+retain_events(U *u, ir_instr_t *in)
+{
+    ir_value_t *reference = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    const uint32_t *ids = nullptr;
+    uint32_t count = 0;
+    if (!reference || !reference_type(reference->type)
+        || !ir_places_of(u->places, reference, &ids, &count))
+        return;
+    for (uint32_t p = 0; p < count; p++) {
+        uint32_t tracked;
+        node_t  *node;
+        bool     element;
+        if (place_node(u, ids[p], &tracked, &node, &element))
+            event(u, in, EVENT_READ, tracked, node);
     }
 }
 
@@ -476,9 +502,35 @@ transfer(U *u, uint32_t b, uint64_t *state, bool *reported,
 static bool
 candidate(U *u, ir_local_t *local)
 {
-    return local->address_taken && !local->synthetic && !local->has_init
+    return !local->synthetic && !local->has_init
         && local->value && local->type
         && !th_zero_size(u->types, local->type);
+}
+
+static void
+track(U *u, ir_local_t *local, const ir_value_t *storage)
+{
+    uint32_t next = 0;
+    node_t *root = leaves(u, local->type, (core_string_t){0}, nullptr, 0,
+                          &next);
+    core_list_push(u->tracked, ((tracked_t){.local = local,
+                                            .storage = storage,
+                                            .root = root,
+                                            .offset = u->bits}));
+    u->bits += root->count;
+}
+
+// The local storage placement moved to the heap, which `allocation` now
+// holds: it is set and read there.
+static ir_local_t *
+placed_local(ir_func_t *f, ir_instr_t *allocation)
+{
+    ir_annot_t *placed = allocation->op == IR_OP_ALLOC && allocation->dest
+        ? ir_annot_get(&allocation->annots,
+                       CORE_STRING_STATIC("ir.placed_local"))
+        : nullptr;
+    return placed && placed->kind == IR_ANNOT_STR && placed->s.data
+        ? ir_local_find(f, placed->s) : nullptr;
 }
 
 void
@@ -490,16 +542,15 @@ ir_unset_locals(ir_summaries_t *summaries, ir_func_t *f,
            .types = ir_module_types(f->owner),
            .tracked = core_list_new(tracked_t),
            .events = core_list_new(event_t)};
-    for (uint32_t l = 0; l < f->n_locals; l++) {
-        if (!candidate(&u, f->locals[l])) continue;
-        uint32_t next = 0;
-        node_t *root = leaves(&u, f->locals[l]->type, (core_string_t){0},
-                              nullptr, 0, &next);
-        core_list_push(u.tracked, ((tracked_t){.local = f->locals[l],
-                                               .root = root,
-                                               .offset = u.bits}));
-        u.bits += root->count;
-    }
+    for (uint32_t l = 0; l < f->n_locals; l++)
+        if (f->locals[l]->address_taken && candidate(&u, f->locals[l]))
+            track(&u, f->locals[l], f->locals[l]->value);
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = f->blocks[b]->instrs[i];
+            ir_local_t *local = placed_local(f, in);
+            if (local && candidate(&u, local)) track(&u, local, in->dest);
+        }
     if (!u.tracked.len) {
         core_list_free(u.tracked);
         core_list_free(u.events);
@@ -517,6 +568,8 @@ ir_unset_locals(ir_summaries_t *summaries, ir_func_t *f,
             access_events(&u, in);
             if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
                 call_events(&u, in);
+            else if (in->op == IR_OP_RETAIN_REF)
+                retain_events(&u, in);
         }
     }
     u.block_events[f->n_blocks] = u.events.len;

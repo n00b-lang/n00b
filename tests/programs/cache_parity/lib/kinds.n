@@ -1,0 +1,24 @@
+// On the package path, so another module than the test.
+record Box {
+    v: 'T where 'T: Integer
+}
+
+variant Maybe {
+    some: 'T where 'T: != string
+    none: nil
+}
+
+alias Bag = Dict['K, nil] where 'K: Integer
+
+// A trait named as a type is a parameter of its own.
+record Pair {
+    k: 'K
+    v: Integer
+}
+
+variant Num {
+    small: Integer
+    none: nil
+}
+
+alias Ints = Array[Integer]

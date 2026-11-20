@@ -10,6 +10,10 @@
 #define N00BB_CONST_INIT_NAME "__n00bb_const_init"
 #define N00BB_COMPTIME_START_NAME "comptime_main"
 #define N00BB_COMPTIME_FREEZE_NATIVE "n00b_comptime_freeze"
+// Records a literal handler's failure during a comptime run, and stops the
+// run once a module's literals are evaluated if any failed.
+#define N00BB_COMPTIME_LITERAL_FAILED_NATIVE "n00b_comptime_literal_failed"
+#define N00BB_COMPTIME_LITERALS_CHECKED_NATIVE "n00b_comptime_literals_checked"
 #define N00BB_COMPTIME_TRANSITION_KEY "n00bb.comptime.transition"
 
 static inline uint64_t

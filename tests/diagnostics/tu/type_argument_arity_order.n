@@ -1,0 +1,10 @@
+// Type arguments are counted against the declaration even when the type is
+// applied before its declaration is processed: only the arity error is
+// reported, not a follow-on poison type for the alias.
+alias Pairs = Later['T, int]
+record Later {
+    v: 'T
+}
+func use(b: Pairs[int]) -> int {
+    return 1
+}

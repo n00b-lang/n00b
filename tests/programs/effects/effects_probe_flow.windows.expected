@@ -90,7 +90,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   output (new in builtin.containers.dict.ensure_entries:51:9)[]... data[self.__value.entries] control[]
   output (new in builtin.containers.hash_index.reserve:181:35)[] data[key key.__value... self.__value.index.hashes.__value[]] control[]
   output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.__value.index.dead.__value[]] control[]
-  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23) self.__value.entries.__value.leases] control[]
+  output self.__value.entries.__value.leases data[(new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
   output self.__value.entries.__value.storage data[(new in builtin.containers.array.__copy:7:27) (new in builtin.containers.dict.ensure_entries:51:9)] control[]
   output self.__value.entries.__value.storage... data[self.__value.entries] control[]
   output self.__value.entries.__value.storage.__value[] data[self.__value.entries.__value.storage.__value[]] control[]
@@ -144,9 +144,10 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   output result data[(new in text.internal.rich.rich_string:9:9)] control[]
   output (new in builtin.containers.list.__init:16:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
   output (new in builtin.containers.list.__init:16:18).storage... data[spans.__value.items.__value.storage.__value[].end... spans.__value.items.__value.storage.__value[].start... spans.__value.items.__value.storage.__value[].tag...] control[]
+  output (new in builtin.string.style.settle_records:530:35).items data[(new in builtin.containers.list.__init:16:18)] control[]
   output (new in text.internal.rich.rich_string:9:51).items data[(new in builtin.containers.list.__init:16:18)] control[]
   output (new in text.internal.rich.rich_string:9:9).s data[text] control[]
-  output (new in text.internal.rich.rich_string:9:9).style_info data[(new in text.internal.rich.rich_string:9:51)] control[]
+  output (new in text.internal.rich.rich_string:9:9).style_info data[(new in builtin.string.style.settle_records:530:35) (new in text.internal.rich.rich_string:9:51)] control[]
 unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values.__value[]

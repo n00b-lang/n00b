@@ -86,11 +86,26 @@ cycle_fact(const core_object_section_t *metadata,
         N00B_ABI_TABLE_U32_STREAM);
     assert(modules && modules->record_count == 2
         && sccs && sccs->record_count == 2
-        && requirements && requirements->record_count == 2 && stream);
+        && requirements && stream);
     const n00b_abi_module_v1 *module = row_at(metadata, modules, 1);
     const n00b_abi_scc_v1 *group = row_at(metadata, sccs, 1);
-    const n00b_abi_requirement_v1 *import = row_at(metadata,
-        requirements, 1);
+    // A member requires two modules: the library's `builtin`, as every
+    // user module does, and the next member of its cycle.
+    const n00b_abi_requirement_v1 *import = nullptr;
+    bool builtin = false;
+    for (uint32_t i = 1; i < requirements->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = row_at(metadata,
+            requirements, i);
+        if (SHORT_NAME_IS(&row->full_path, "builtin.__init")) {
+            assert(!builtin && row->symbol_kind == N00B_ABI_SYMBOL_MODULE);
+            builtin = true;
+            continue;
+        }
+        if (row->symbol_kind != N00B_ABI_SYMBOL_MODULE) continue;
+        assert(!import);
+        import = row;
+    }
+    assert(builtin && import);
     assert(module->scc_index == 1 && !module->imports.count
         && group->interface_identity && group->freshness_identity
         && group->members.count == 1 && group->lexical_order.count == 1
@@ -364,8 +379,10 @@ check_imported_record(const core_object_section_t *metadata,
         }
         else if (type->typehash == imported_hash) {
             assert(type->kind == N00B_ABI_TYPE_RECORD);
-            assert(!type->owner_module_index && !type->layout_index
-                && !type->fields_or_arms.count);
+            // A using module lays the record out as its declaring module
+            // does.
+            assert(!type->owner_module_index && type->layout_index
+                && type->fields_or_arms.count == 1);
             imported_records++;
             imported_index = i;
         }
@@ -443,10 +460,13 @@ check_imported_enum(const core_object_section_t *metadata,
         }
         if (type->typehash != choice_hash) continue;
         assert(type->kind == N00B_ABI_TYPE_ENUM);
-        assert(!type->owner_module_index && !type->layout_index
+        // A using module lays the enum out as its declaring module does,
+        // but its items are the declaration's: the row says it omits them.
+        assert(!type->owner_module_index && type->layout_index
             && !type->fields_or_arms.count
             && type->semantic_width_bits == 3
-            && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED));
+            && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED)
+            && (type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
         imported_enums++;
         imported_index = i;
     }
@@ -489,9 +509,10 @@ check_imported_flagset(const core_object_section_t *metadata,
         if (type->typehash != hash) continue;
         assert(!type_index);
         assert(type->kind == N00B_ABI_TYPE_FLAGSET
-            && !type->owner_module_index && !type->layout_index
+            && !type->owner_module_index && type->layout_index
             && !type->fields_or_arms.count
-            && type->semantic_width_bits == 2);
+            && type->semantic_width_bits == 2
+            && (type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
         type_index = i;
     }
     assert(type_index);
@@ -789,31 +810,34 @@ check_partial_call_shape(const core_object_section_t *metadata,
                          const n00bb_abi_directory_entry_t *entries,
                          size_t count)
 {
-    const n00bb_abi_directory_entry_t *types = entry_for(entries, count,
-        N00B_ABI_TABLE_TYPE);
+    // A generic bound by a trait (`'T: partial_method_package.Render`) that
+    // calls some of the trait's methods records the bound itself: the
+    // trait's own method rows give the calls' signatures, so no call shapes
+    // are needed for them (a cross-module program linking such a generic
+    // with an implementing type in a third module builds and runs).
+    const n00bb_abi_directory_entry_t *functions = entry_for(entries, count,
+        N00B_ABI_TABLE_FUNCTION);
     const n00bb_abi_directory_entry_t *constraints = entry_for(entries,
         count, N00B_ABI_TABLE_CONSTRAINT);
-    const n00bb_abi_directory_entry_t *shapes = entry_for(entries, count,
-        N00B_ABI_TABLE_CALL_SHAPE);
-    assert(types && constraints && shapes && shapes->record_count > 1);
-    const n00b_abi_type_v1 *nil_type = row_at(metadata, types, 0);
-    assert(nil_type && nil_type->kind == N00B_ABI_TYPE_NIL);
-    bool found = false;
-    for (uint32_t i = 1; i < constraints->record_count; i++) {
-        const n00b_abi_constraint_v1 *constraint = row_at(metadata,
-            constraints, i);
-        if (constraint->kind != N00B_ABI_CONSTRAINT_METHOD
-            || !constraint->call_shape_index) continue;
-        assert(constraint->call_shape_index < shapes->record_count);
-        const n00b_abi_call_shape_v1 *shape = row_at(metadata, shapes,
-            constraint->call_shape_index);
-        if (shape->failure_type_index != 0)
-            continue;
-        assert(shape->success_type_index < types->record_count
-            && !shape->reserved_zero);
-        found = true;
+    const n00bb_abi_directory_entry_t *stream = entry_for(entries, count,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(functions && constraints && stream);
+    const n00b_abi_function_v1 *generic = nullptr;
+    for (uint32_t i = 1; i < functions->record_count; i++) {
+        const n00b_abi_function_v1 *function = row_at(metadata, functions,
+                                                       i);
+        if (SHORT_NAME_IS(&function->name, "generic_render"))
+            generic = function;
     }
-    assert(found);
+    assert(generic && generic->constraints.count == 1
+        && generic->constraints.first < stream->record_count);
+    uint32_t index = *(const uint32_t *)row_at(metadata, stream,
+                                               generic->constraints.first);
+    assert(index && index < constraints->record_count);
+    const n00b_abi_constraint_v1 *bound = row_at(metadata, constraints,
+                                                 index);
+    assert(bound->kind == N00B_ABI_CONSTRAINT_IMPLEMENTS
+        && bound->variable_ordinal == 0 && !bound->call_shape_index);
 }
 
 static void

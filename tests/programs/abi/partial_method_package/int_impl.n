@@ -1,4 +1,4 @@
-import partial_method_package.contract
+import contract
 
 func render(self: int) -> int {
     return self

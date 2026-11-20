@@ -21,14 +21,14 @@ builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
 builtin.containers.list.append: (List['T], 'T, bool) -> nil
   allocates       builtin.containers.list.ensure_capacity (133:5) -> here (121:28)
   panics          here (133:27)
-  param self      writer, lends
+  param self      writer
   param value     untouched, lends
   param front     untouched
   detail          may_collect allocates_direct
 builtin.containers.list.pop: (List['T], bool) -> 'T?
   allocates       builtin.containers.lease.__write (173:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
   panics          here (170:32)
-  param self      writer, lends
+  param self      writer
   param front     untouched
   detail          may_collect allocates_direct
 builtin.containers.list.len: (List['T]) -> uint

@@ -599,6 +599,15 @@ ir_func_t *ir_func_at(ir_module_t *m, size_t i)
     return m && i < m->n_funcs ? m->funcs[i] : nullptr;
 }
 
+bool ir_func_swap(ir_module_t *m, size_t i, size_t j)
+{
+    if (!m || i >= m->n_funcs || j >= m->n_funcs) return false;
+    ir_func_t *held = m->funcs[i];
+    m->funcs[i] = m->funcs[j];
+    m->funcs[j] = held;
+    return true;
+}
+
 bool ir_func_erase(ir_func_t *f)
 {
     ir_module_t *m  = f ? f->owner : nullptr;
@@ -1367,6 +1376,45 @@ bool ir_value_set_binding_reentry(ir_value_t *value,
         .kind = IR_ANNOT_STR,
         .s = name,
     });
+}
+
+static void forget_reentry(ir_value_t *value, core_string_t loop_header)
+{
+    ir_annots_t *annots = value ? ir_value_annots(value) : nullptr;
+    uint32_t     kept   = 0;
+
+    for (uint32_t i = 0; annots && i < annots->n; i++) {
+        ir_annot_t *annot = &annots->a[i];
+
+        if (core_string_eq(annot->key,
+                           CORE_STRING_STATIC("ir.binding_reentry_header"))
+            && annot->kind == IR_ANNOT_STR
+            && core_string_eq(annot->s, loop_header)) {
+            continue;
+        }
+        if (kept != i) {
+            annots->a[kept] = *annot;
+        }
+        kept++;
+    }
+    if (annots && kept != annots->n) {
+        annots->n     = kept;
+        annots->index = nullptr;
+    }
+}
+
+void ir_func_forget_binding_reentry(ir_func_t *function,
+                                    core_string_t loop_header)
+{
+    if (!function || !loop_header.data) {
+        return;
+    }
+    for (uint32_t i = 0; i < function->n_locals; i++) {
+        forget_reentry(function->locals[i]->value, loop_header);
+    }
+    for (uint32_t i = 0; i < function->n_params; i++) {
+        forget_reentry(ir_func_param_value(function, i), loop_header);
+    }
 }
 
 bool ir_instr_set_dest(ir_instr_t *in, core_string_t name, th_type *type)

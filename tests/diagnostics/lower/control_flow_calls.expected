@@ -1,0 +1,8 @@
+tests/diagnostics/lower/control_flow_calls.n:3:6: error N00B-T0546: the body of `risky` fails with an integer, but `risky` is declared to fail with `string`
+tests/diagnostics/lower/control_flow_calls.n:9:20: error N00B-T0530: `"three"` is `string`, but the other items of this literal are integers
+  tests/diagnostics/lower/control_flow_calls.n:9:14: note: the first item is here
+tests/diagnostics/lower/control_flow_calls.n:14:21: error N00B-S0020: nothing in this `try` can fail, so its `fail` handler can never run
+  help: remove the `try` and its handler
+tests/diagnostics/lower/control_flow_calls.n:29:13: error N00B-S0017: `x` is passed to more than one `out` or `modify` parameter of `fill`
+  tests/diagnostics/lower/control_flow_calls.n:29:10: note: first passed here
+  help: pass a separate variable to each output parameter

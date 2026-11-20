@@ -358,6 +358,12 @@ name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
             path_push(&heap, loc->path.steps[s]);
         add_path_to(into, &heap);
         core_list_push(*pending, loc->site);
+        // The heap name is the storage itself, and describe_heap gives
+        // callers everything it holds. Naming it by where it was published
+        // as well (its aliases) told callers the value is whatever they keep
+        // at those places, old values included: a string made here and put
+        // in a parameter's list came out as every string in that list.
+        return;
     }
     const alias_list_t *aliases = &pt->sites.data[loc->site].aliases;
     for (size_t a = 0; a < aliases->len; a++) {
@@ -725,11 +731,24 @@ record_stores(pt_t *pt, ir_summary_t *summary, const pt_set_t *addresses,
 {
     if (!values->len) return;
     path_list_t to = core_list_new(ir_spath_t);
-    for (size_t i = 0; i < addresses->len; i++)
-        if (is_address(&addresses->data[i])) {
-            pt_loc_t at = location_of(pt, &addresses->data[i]);
-            name_loc(pt, &at, &to, nullptr);
+    for (size_t i = 0; i < addresses->len; i++) {
+        if (!is_address(&addresses->data[i])) continue;
+        pt_loc_t at = location_of(pt, &addresses->data[i]);
+        // A store into this function's own storage (a local, or what it or
+        // its callees allocated) reaches callers through that storage's
+        // heap description, which describe_heap writes from everything the
+        // site holds. Naming the store by where the storage was published
+        // too (its aliases) claimed a store into whatever callers keep
+        // there: into existing strings, say, when a fresh rich string's
+        // body was filled in after the string was put in a parameter's
+        // list.
+        if (at.site != PT_EXTERNAL) {
+            if (pt->sites.data[at.site].aliases.len)
+                core_list_push(pt->described, at.site);
+            continue;
         }
+        name_loc(pt, &at, &to, nullptr);
+    }
     describe_values(pt, values, to.data, to.len,
                     &summary->flows[IR_SFLOW_STORES], &pt->described);
     core_list_free(to);

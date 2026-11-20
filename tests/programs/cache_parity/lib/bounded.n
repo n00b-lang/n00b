@@ -1,0 +1,22 @@
+trait Render {
+    func render(self: 'T) -> int
+    func measure(self: 'T) -> int
+}
+
+// Bounds no method call in the body needs: only the call site checks them.
+func needs_render(item: 'T) -> int where 'T: Render {
+    return 1
+}
+
+func not_string(item: 'T) -> int where 'T: != string {
+    return 2
+}
+
+func needs_integer(item: 'T) -> int where 'T: Integer {
+    return 3
+}
+
+// A bound the body's calls need too.
+func rendered(item: 'T) -> int where 'T: Render {
+    return item.render() + item.measure()
+}

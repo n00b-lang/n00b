@@ -336,8 +336,16 @@ static void test_types(void)
     th_type *outcome_definition = ir_type_definition(m, outcome1);
     check("outcome definitions survive failure-channel refinement",
           outcome_definition && th_fill(error1, a)
-              && ir_type_definition(m, outcome1) == outcome_definition
-              && ir_type_definition_owner(m, outcome1) == m);
+              && ir_type_definition(m, outcome1) == outcome_definition);
+    ir_module_t *other = ir_module_new(ctx, S("other"), &ir_profile_bce,
+                                       S("test"));
+    th_type *other_outcome = other ? ir_call_outcome_type(other, call1)
+                                   : nullptr;
+    check("another module's call outcome is the same type, defined alike",
+          other_outcome && ir_type_eq(m, other_outcome, outcome1)
+              && ir_type_definition(other, other_outcome)
+              && ir_type_eq(m, ir_type_definition(other, other_outcome),
+                            outcome_definition));
 
     bool found_a = false;
     bool found_c = false;

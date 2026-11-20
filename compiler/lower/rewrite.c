@@ -150,11 +150,26 @@ n00bb_value_origin(const ir_pdg_t *pdg, ir_value_t *value)
     return nullptr;
 }
 
+static th_type *
+n00bb_written_type(const ir_instr_t *in)
+{
+    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local)
+        return in->dest_local->type;
+    return in->dest ? in->dest->type : nullptr;
+}
+
+/* Gives `aggregate`'s result its settled type `target`, along with every
+ * copy that still carries the result's old, provisional type. A copy whose
+ * destination has a type of its own, such as an option local the result is
+ * assigned into, keeps that type: retyping it would make the local lose its
+ * declared type while its other writes (an `option.none`, say) still assume
+ * it. */
 static void
 n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
                      th_type *target)
 {
     th_ctx *types = ir_module_types(rewrite->context.module);
+    th_type *provisional = n00bb_written_type(aggregate);
     core_list_t(n00bb_ir_instr_ptr_t) work = core_list_new(n00bb_ir_instr_ptr_t);
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
@@ -165,6 +180,10 @@ n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
         core_dict_get(&seen, at, &visited);
         if (visited) continue;
         core_dict_put(&seen, at, at);
+        th_type *written = n00bb_written_type(at);
+        if (at != aggregate && at->op == IR_OP_COPY && provisional && written
+            && !th_same_type(written, provisional))
+            continue;
         if (at->dest_kind == IR_DEST_LOCAL && at->dest_local)
             at->dest_local->type = target;
         else if (at->dest && at->op == IR_OP_ADDRESS_OF) {
@@ -189,6 +208,8 @@ n00bb_retype_closure(n00bb_rewrite_t *rewrite, ir_instr_t *aggregate,
 
 static bool n00bb_plan_operand(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                uint32_t o, th_type *target);
+static ir_value_t *n00bb_reference_function(ir_value_t *reference);
+static th_type *n00bb_reference_modes(ir_value_t *function);
 static th_type *n00bb_literal_element(n00bb_rewrite_t *rewrite,
                                       th_type *container);
 static void n00bb_report_unknown_method(n00bb_rewrite_t *rewrite,
@@ -355,6 +376,24 @@ n00bb_rewrite_arm_store(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         || !ir_instr_operand_value(make, payload)
         || !n00bb_rewrite_splice(rewrite, in))
         return false;
+    // A variable given an arm is assigned the variant whole, as
+    // n00bb_store_to assigns one, rather than stored to through its address:
+    // what it was assigned then shows which arm it holds
+    // (n00bb_check_variant_arms).
+    ir_instr_t *taken = base->kind == IR_VAL_INSTR ? base->def : nullptr;
+    ir_local_t *local = taken && taken->op == IR_OP_ADDRESS_OF
+            && taken->n_operands == 1
+        ? ir_operand_local(&taken->operands[0]) : nullptr;
+    if (local) {
+        in->op = IR_OP_COPY;
+        in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                         .value = make->dest};
+        in->n_operands = 1;
+        if (!ir_instr_set_dest_local(in, local)) return false;
+        ir_instr_uses_changed(in);
+        core_list_push(rewrite->abandoned, address);
+        return true;
+    }
     in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = base};
     in->operands[1] = (ir_operand_t){.kind = IR_OPD_VALUE,
                                      .value = make->dest};
@@ -1151,6 +1190,7 @@ n00bb_rewrite_option_builtin_name(const n00bb_dispatch_target_t *target,
     core_string_t prefix = CORE_STRING_STATIC("builtins.");
     core_string_t name = symbol ? symbol->name
         : target->kind == N00BB_TARGET_METHOD
+            && n00bb_compiler_package(target->method.package)
             && core_string_starts_with(target->method.qualified_name, prefix)
         ? core_string_slice(target->method.qualified_name, prefix.u8_bytes,
                             target->method.qualified_name.u8_bytes)
@@ -1277,6 +1317,53 @@ n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
     return ok;
 }
 
+// The arguments of call `in` passed by name, after those passed by
+// position, go to the parameters of `signature` before `end` that they
+// name (`names`, one for each parameter), in order: one omitted is passed
+// missing when `optional` (if given) says the parameter may be. With a
+// `rewrite`, each is converted to what its parameter takes. Any other
+// stays passed by name.
+static bool
+n00bb_place_by_name(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                    th_type *signature, size_t end,
+                    const core_string_t *names, ir_func_t *optional)
+{
+    uint32_t count = in->n_operands;
+    uint32_t positional = 1;
+    while (positional < count
+           && in->operands[positional].kind != IR_OPD_NAMED_ARG)
+        positional++;
+    ir_operand_t *named = core_alloc_array(ir_operand_t,
+                                           count - positional + 1);
+    for (uint32_t o = positional; named && o < count; o++)
+        named[o - positional] = in->operands[o];
+    bool *used = core_alloc_array(bool, count - positional + 1);
+    bool ok = named && used;
+    in->n_operands = positional;
+    for (uint32_t p = positional - 1; ok && p < end; p++) {
+        ir_value_t *value = nullptr;
+        for (uint32_t k = 0; !value && names[p].data && k < count - positional;
+             k++)
+            if (!used[k] && core_string_eq(named[k].named.name, names[p])) {
+                used[k] = true;
+                value = named[k].named.value;
+            }
+        const th_param *formal = th_func_param(signature, p);
+        ok = value ? ir_instr_operand_value(in, value)
+                && (!rewrite || n00bb_rewrite_operand(rewrite, in, p + 1,
+                                                      formal->type))
+            : optional && ir_func_parameter_is_optional(optional, p)
+                && th_mode_is_input_only(formal->mode)
+                && ir_instr_operand_missing(in);
+    }
+    for (uint32_t k = 0; ok && k < count - positional; k++)
+        ok = used[k] || ir_instr_operand_named(in, named[k].named.name,
+                                               named[k].named.value);
+    core_free(named);
+    core_free(used);
+    return ok;
+}
+
 bool
 n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
 {
@@ -1285,40 +1372,18 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
     while (positional < count
            && in->operands[positional].kind != IR_OPD_NAMED_ARG)
         positional++;
-    if (positional == count
-        && count - 1 >= th_func_nparams(th_resolve(function->type)))
-        return true;
-    ir_operand_t *named = core_alloc_array(ir_operand_t,
-                                           count - positional + 1);
-    for (uint32_t o = positional; named && o < count; o++)
-        named[o - positional] = in->operands[o];
-    bool *used = core_alloc_array(bool, count - positional + 1);
-    bool ok = named && used;
-    in->n_operands = positional;
     th_type *signature = th_resolve(function->type);
+    size_t parameters = th_func_nparams(signature);
+    if (positional == count && count - 1 >= parameters) return true;
     ir_func_t *declared = function->n_params ? function
                                              : n00bb_cached_body(function);
-    for (uint32_t p = positional - 1; ok && p < th_func_nparams(signature);
-         p++) {
-        ir_value_t *value = nullptr;
-        core_string_t name = declared && p < declared->n_params
-            ? declared->params[p]->name : (core_string_t){0};
-        for (uint32_t k = 0; !value && name.data && k < count - positional;
-             k++)
-            if (!used[k] && core_string_eq(named[k].named.name, name)) {
-                used[k] = true;
-                value = named[k].named.value;
-            }
-        th_mode mode = th_func_param(signature, p)->mode;
-        ok = value ? ir_instr_operand_value(in, value)
-            : ir_func_parameter_is_optional(function, p)
-                && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
-    }
-    for (uint32_t k = 0; ok && k < count - positional; k++)
-        ok = used[k] || ir_instr_operand_named(in, named[k].named.name,
-                                               named[k].named.value);
-    core_free(named);
-    core_free(used);
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t p = 0; declared && p < parameters && p < declared->n_params;
+         p++)
+        names[p] = declared->params[p]->name;
+    bool ok = n00bb_place_by_name(nullptr, in, signature, parameters, names,
+                                  function);
+    core_free(names);
     return ok;
 }
 
@@ -1442,6 +1507,24 @@ n00bb_rewrite_byte_literal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && n00bb_rewrite_replace(rewrite, in, call->dest);
 }
 
+// An array of `collected` holding the arguments of call `in` from operand
+// `from` up to `end`: varargs.
+static ir_value_t *
+n00bb_pack_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in, uint32_t from,
+                     uint32_t end, th_type *collected)
+{
+    ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
+                                                 IR_OP_AGGREGATE, in->span);
+    bool ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
+            CORE_STRING_STATIC("__n00bb_rest_"), collected)
+        && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
+    for (uint32_t o = from; ok && o < end; o++) {
+        ir_value_t *value = ir_operand_value(&in->operands[o]);
+        ok = value && ir_instr_operand_value(pack, value);
+    }
+    return ok ? pack->dest : nullptr;
+}
+
 static bool
 n00bb_rewrite_pack_operands(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                             uint32_t fixed, th_type *collected)
@@ -1450,23 +1533,15 @@ n00bb_rewrite_pack_operands(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     while (end < in->n_operands && in->operands[end].kind != IR_OPD_NAMED_ARG)
         end++;
     if (end < fixed + 1) return true;
-    ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
-                                                 IR_OP_AGGREGATE, in->span);
-    bool ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
-            CORE_STRING_STATIC("__n00bb_rest_"), collected)
-        && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
-    for (uint32_t o = fixed + 1; ok && o < end; o++) {
-        ir_value_t *value = ir_operand_value(&in->operands[o]);
-        ok = value && ir_instr_operand_value(pack, value);
-    }
-    ir_value_t *array = ok ? pack->dest : nullptr;
+    ir_value_t *array = n00bb_pack_arguments(rewrite, in, fixed + 1, end,
+                                             collected);
     uint32_t count = in->n_operands;
     ir_operand_t *named = array
         ? core_alloc_array(ir_operand_t, count - end + 1) : nullptr;
     for (uint32_t o = end; named && o < count; o++)
         named[o - end] = in->operands[o];
     in->n_operands = named ? fixed + 1 : in->n_operands;
-    ok = named && ir_instr_operand_value(in, array);
+    bool ok = named && ir_instr_operand_value(in, array);
     for (uint32_t o = 0; ok && o < count - end; o++)
         ok = ir_instr_operand_named(in, named[o].named.name,
                                     named[o].named.value);
@@ -1496,9 +1571,73 @@ n00bb_rewrite_pack_rest(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         || n00bb_rewrite_pack_operands(rewrite, in, fixed, collected);
 }
 
+// Whether callback construction `in` is given a handler reference whose
+// function takes its arguments by the passing modes its `handler` role
+// declares, as a call through the callback passes them: a parameter passed
+// by reference (the state, when there is a `setup`) must be one the
+// handler takes so. A function that isn't known takes each as `in`
+// (n00bb_reference_modes). A handler that doesn't is reported.
+static bool
+n00bb_callback_handler_modes(n00bb_rewrite_t *rewrite, ir_instr_t *in)
+{
+    th_type *call = nullptr, *role = nullptr, *setup = nullptr;
+    ir_value_t *handler = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    if (!handler || !ir_instr_callback_contract(in, &call, &role, &setup)
+        || !role)
+        return true;
+    th_type *modes = n00bb_reference_modes(n00bb_reference_function(handler));
+    role = th_resolve(role);
+    if (th_kind_of(role) == TH_BINDER) role = th_resolve(th_binder_body(role));
+    if (th_kind_of(role) != TH_FUNCTION) return true;
+    for (size_t p = 0; p < th_func_nparams(role)
+         && (!modes || p < th_func_nparams(modes)); p++) {
+        th_mode declared = th_func_param(role, p)->mode;
+        th_mode taken = modes ? th_func_param(modes, p)->mode : TH_IN;
+        if (th_mode_by_reference(declared) == th_mode_by_reference(taken))
+            continue;
+        n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
+            rewrite->unit, N00B_DIAG_CALLBACK_HANDLER_MODES,
+            n00bb_span_location(handler->def ? handler->def->span
+                                             : in->span),
+            N00B_TEXT_CALLBACK_HANDLER_MODES,
+            N00BB_ARGS(ARG_NUMBER((long long)p + 1),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(taken)),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(declared))));
+        return false;
+    }
+    return true;
+}
+
+// A callback made with a handler reference to a reference adapter (as
+// `ref f` of a function with a parameter other than `in` is) holds the
+// function the adapter adapts, which takes its arguments as the `handler`
+// role does (n00bb_callback_handler_modes); its `setup` is given the
+// reference itself.
+static bool
+n00bb_note_callback_handler(n00bb_rewrite_t *rewrite, ir_instr_t *in)
+{
+    ir_value_t *handler = in->n_operands
+        ? ir_operand_value(&in->operands[0]) : nullptr;
+    ir_value_t *function = handler ? n00bb_reference_function(handler)
+                                   : nullptr;
+    ir_func_t *target = function
+        ? n00bb_reference_adapter_target(function->owner, nullptr, nullptr)
+        : nullptr;
+    ir_value_t *address = target ? ir_func_address(target->owner, target)
+                                 : nullptr;
+    return !target || (address
+        && ir_annot_set(ir_module_ctx(rewrite->context.module), &in->annots,
+               (ir_annot_t){.key = N00BB_CALLBACK_HANDLER_KEY,
+                            .kind = IR_ANNOT_VALUE, .v = address}));
+}
+
 static bool
 n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
+    if (!n00bb_callback_handler_modes(rewrite, in)
+        || !n00bb_note_callback_handler(rewrite, in))
+        return false;
     ir_annot_t *pending = ir_annot_get(&in->annots, N00BB_CALLBACK_SETUP_KEY);
     if (!pending || !pending->b) return true;
     ir_value_t *handler = in->n_operands
@@ -1533,6 +1672,282 @@ n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             return false;
     }
     return true;
+}
+
+// Each `out` or `modify` operand of call `in` (its arguments from operand
+// 1, by `signature`) passes the address of the place its value was read
+// from. With `receiver`, the first passes `place`, or a temporary holding
+// it when there is none. `symbol` and `function` name the callee, when it
+// is known, for the report of an argument that is no place. Returns false
+// when one was reported.
+// Reports argument `value` of call `in`, which can't be given to `target`
+// (a parameter, described) for the reason `why` (n00bb_argument_place),
+// part of variable `local` or `storage` when it is one.
+static void
+n00bb_report_argument_place(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                            ir_value_t *value, n00bb_argument_place_t why,
+                            ir_local_t *local, ir_value_t *storage,
+                            core_string_t target)
+{
+    core_string_t name = {0};
+    bool constant = false;
+    ir_instr_t *alloc = storage && storage->kind == IR_VAL_INSTR
+        ? storage->def : nullptr;
+    ir_annot_t *stored = alloc && alloc->op == IR_OP_ALLOC
+        ? ir_annot_get(&alloc->annots, N00BB_STORAGE_NAME_KEY) : nullptr;
+    if (local) {
+        name = local->source_name;
+        constant = local->mutability == IR_MUT_CONST;
+    }
+    else if (stored && stored->kind == IR_ANNOT_STR) {
+        name = stored->s;
+        constant = ir_annot_get(&alloc->annots, N00BB_STORAGE_CONST_KEY);
+    }
+    else if (storage && storage->kind == IR_VAL_GLOBAL && storage->global) {
+        name = n00bb_name_leaf(storage->global->name);
+        constant = storage->global->mutability == IR_MUT_CONST;
+    }
+    else if (storage && storage->kind == IR_VAL_PARAM)
+        name = storage->name;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(rewrite->unit);
+    core_diag_location_t at = n00bb_span_location(
+        value && value->def ? value->def->span : in->span);
+    if (why == N00BB_ARGUMENT_VALUE_PARAMETER && name.u8_bytes) {
+        th_type *own = th_resolve(rewrite->context.function->type);
+        th_mode mode = th_kind_of(own) == TH_FUNCTION
+                && storage->index < th_func_nparams(own)
+            ? th_func_param(own, storage->index)->mode : TH_IN;
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_PARAMETER_CANNOT_BE_PASSED,
+            N00BB_ARGS(ARG_TEXT(name),
+                       ARG_PHRASE_ID(n00bb_mode_parameter(mode)),
+                       ARG_TEXT(target)));
+    }
+    else if (why == N00BB_ARGUMENT_IMMUTABLE && name.u8_bytes)
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_IS_A_SO_IT_CANNOT,
+            N00BB_ARGS(ARG_TEXT(name),
+                ARG_TEXT(constant ? CORE_STRING_STATIC("const")
+                                  : CORE_STRING_STATIC("let")),
+                ARG_TEXT(target)));
+    else
+        n00bb_report(diagnostics, rewrite->unit,
+            N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, at,
+            N00B_TEXT_ONLY_A_VARIABLE_FIELD_OR, N00BB_ARGS(ARG_TEXT(target)));
+}
+
+static bool
+n00bb_rewrite_by_reference_arguments(n00bb_rewrite_t *rewrite,
+                                     ir_instr_t *in, th_type *signature,
+                                     bool receiver, ir_value_t *place,
+                                     parse_sym_entry_t *symbol,
+                                     ir_func_t *function)
+{
+    signature = signature ? th_resolve(signature) : nullptr;
+    bool written = true;
+    for (uint32_t p = 0; written && th_kind_of(signature) == TH_FUNCTION
+         && p < th_func_nparams(signature) && p + 1 < in->n_operands; p++) {
+        th_mode mode = th_func_param(signature, p)->mode;
+        ir_operand_t *operand = &in->operands[p + 1];
+        if (!th_mode_by_reference(mode) || operand->kind != IR_OPD_VALUE)
+            continue;
+        ir_value_t *value = operand->value;
+        ir_value_t *target = p == 0 && receiver
+            ? place ? place
+                    : n00bb_rewrite_temporary_place(rewrite, value, in->span)
+            : n00bb_rewrite_place(rewrite, value, in->span);
+        // A call through a function reference learns which arguments are
+        // passed by reference only now; one that can't be is reported as a
+        // direct call's is when it is lowered (n00bb_argument_place).
+        ir_local_t *local = nullptr;
+        ir_value_t *storage = nullptr;
+        n00bb_argument_place_t why = !symbol && !receiver
+            ? n00bb_argument_place(target, false, &local, &storage)
+            : target ? N00BB_ARGUMENT_WRITABLE : N00BB_ARGUMENT_NO_PLACE;
+        if (value && why != N00BB_ARGUMENT_WRITABLE) {
+            core_string_t name = describe_parameter_target(mode,
+                why == N00BB_ARGUMENT_NO_PLACE ? symbol : nullptr,
+                why == N00BB_ARGUMENT_NO_PLACE && function
+                        && p < function->n_params
+                    ? function->params[p]->name : (core_string_t){0});
+            n00bb_report_argument_place(rewrite, in, value, why, local,
+                                        storage, name);
+            core_free(name.data);
+            written = false;
+            continue;
+        }
+        if (!target) continue;
+        operand->value = target;
+        ir_instr_use_added(in, p + 1);
+    }
+    return written;
+}
+
+// Folds `given`, one more value a `var` is assigned, into `*held`, the one
+// it holds: a `var` assigned more than once holds one value only when each
+// is a `ref` of the same function.
+static bool
+n00bb_assigned(ir_value_t **held, ir_value_t *given)
+{
+    bool same = *held && given && (*held)->kind == IR_VAL_FUNC
+        && given->kind == IR_VAL_FUNC && (*held)->owner == given->owner;
+    if (!*held) *held = given;
+    return *held == given || same;
+}
+
+// The value a `let` read as `value` (a local's, or a module's) is bound to,
+// when it is one whose binding can be found: the one copy into the local,
+// or store into the module's variable. A `var` kept as a local holds what
+// every assignment gives it (n00bb_assigned), unless its place is taken.
+static ir_value_t *
+n00bb_let_initializer(ir_value_t *value)
+{
+    ir_local_t *local = value->local;
+    ir_global_t *global = value->global
+        ? value->global->identity ? value->global->identity : value->global
+        : nullptr;
+    bool is_var = local && local->mutability == IR_MUT_MUTABLE;
+    if ((global && global->mutability == IR_MUT_MUTABLE)
+        || (!local && !global))
+        return nullptr;
+    ir_func_t *only = local ? value->owner : nullptr;
+    ir_module_t *module = global ? global->owner : nullptr;
+    if (local && !only) return nullptr;
+    size_t count = only ? 1 : module ? ir_func_count(module) : 0;
+    ir_value_t *bound = nullptr;
+    for (size_t f = 0; f < count; f++) {
+        ir_func_t *function = only ? only : ir_func_at(module, f);
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                ir_value_t *stored = in->op == IR_OP_GLOBAL_STORE
+                        && in->n_operands == 2
+                    ? ir_operand_value(&in->operands[0]) : nullptr;
+                ir_global_t *target = stored && stored->global
+                    ? stored->global->identity ? stored->global->identity
+                                               : stored->global
+                    : nullptr;
+                bool sets = local && in->dest_kind == IR_DEST_LOCAL
+                    && in->dest_local == local;
+                bool binds = local
+                    ? sets && in->op == IR_OP_COPY && in->n_operands == 1
+                    : target == global;
+                ir_value_t *taken = in->op == IR_OP_ADDRESS_OF
+                        && in->n_operands
+                    ? ir_operand_value(&in->operands[0]) : nullptr;
+                if (is_var && ((sets && !binds)
+                               || (taken && taken->local == local)))
+                    return nullptr;
+                if (!binds) continue;
+                ir_value_t *given = ir_operand_value(
+                    &in->operands[local ? 0 : 1]);
+                // A `let` bound more than once: no one value.
+                if ((!is_var && bound) || !n00bb_assigned(&bound, given))
+                    return nullptr;
+            }
+        }
+    }
+    return bound;
+}
+
+// The value storage `address` (a variable kept in storage) holds, when it
+// is known: the one a `let` is stored once, or the one every assignment
+// to a `var` gives it (n00bb_assigned). A `var` whose place is used other
+// than to read or assign it holds nothing known.
+static ir_value_t *
+n00bb_storage_value(ir_value_t *address)
+{
+    ir_instr_t *alloc = address && address->kind == IR_VAL_INSTR
+        ? address->def : nullptr;
+    ir_func_t *function = alloc && alloc->op == IR_OP_ALLOC && alloc->block
+        ? alloc->block->owner : nullptr;
+    bool immutable = function
+        && ir_annot_get(&alloc->annots, N00BB_IMMUTABLE_STORAGE_KEY);
+    ir_value_t *bound = nullptr;
+    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *in = block->instrs[i];
+            for (uint32_t o = 0; o < in->n_operands; o++) {
+                if (in->operands[o].kind != IR_OPD_VALUE
+                    || in->operands[o].value != address
+                    || in->op == IR_OP_LOAD)
+                    continue;
+                bool stores = in->op == IR_OP_STORE && !o
+                    && in->n_operands == 2;
+                if (!stores && immutable) continue;
+                ir_value_t *given = stores
+                    ? ir_operand_value(&in->operands[1]) : nullptr;
+                if (!given || (immutable && bound)
+                    || !n00bb_assigned(&bound, given))
+                    return nullptr;
+            }
+        }
+    }
+    return bound;
+}
+
+// The function value function reference `reference` is known to hold: the
+// one `ref` made, read through copies, through `let`s bound to it, and
+// through `var`s only ever given it (n00bb_let_initializer,
+// n00bb_storage_value). nullptr when it isn't known, as for one passed
+// in, or held in a field.
+static ir_value_t *
+n00bb_reference_function(ir_value_t *reference)
+{
+    ir_value_t *value = reference;
+    while (value) {
+        if (value->kind == IR_VAL_FUNC) return value;
+        if (value->local || value->global || value->kind == IR_VAL_PARAM) {
+            value = value->kind == IR_VAL_PARAM ? nullptr
+                                                : n00bb_let_initializer(value);
+            continue;
+        }
+        ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+        if (def && def->op == IR_OP_LOAD && def->n_operands == 1) {
+            value = n00bb_storage_value(ir_operand_value(&def->operands[0]));
+            continue;
+        }
+        if (!def || (def->op != IR_OP_COPY && def->op != IR_OP_RETAIN_REF)
+            || def->n_operands != 1 || def->operands[0].kind != IR_OPD_VALUE)
+            return nullptr;
+        value = def->operands[0].value;
+    }
+    return nullptr;
+}
+
+// The function type whose passing modes a call through a reference known
+// to hold `function` (n00bb_reference_function) passes its positional
+// arguments by, as a function type doesn't say them: the function's own,
+// or a reference adapter's function's. nullptr when the function isn't
+// known; each is then `in`.
+static th_type *
+n00bb_reference_modes(ir_value_t *function)
+{
+    ir_func_t *target = function
+        ? n00bb_reference_adapter_target(function->owner, nullptr, nullptr)
+        : nullptr;
+    th_type *type = function
+        ? th_resolve((target ? target : function->owner)->type) : nullptr;
+    if (type && th_kind_of(type) == TH_BINDER)
+        type = th_resolve(th_binder_body(type));
+    return type && th_kind_of(type) == TH_FUNCTION ? type : nullptr;
+}
+
+// Parameter `i` of a call through a function reference, whose signature
+// as typed is `instance` (the reference first), passed by the mode
+// `modes` gives it (n00bb_reference_modes).
+static th_param
+n00bb_reference_parameter(th_type *instance, th_type *modes, size_t i)
+{
+    th_param parameter = *th_func_param(instance, i + 1);
+    if (modes && i < th_func_nparams(modes))
+        parameter.mode = th_func_param(modes, i)->mode;
+    return parameter;
 }
 
 // A variant from `new` with no `__init` holds no arm yet.
@@ -1645,37 +2060,11 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
         if (!padded) return false;
     }
-    // Each `out` or `modify` operand passes the address of the place its
-    // value was read from. The receiver of a call whose result is not
-    // written back may be no place at all; it is passed through a
-    // temporary.
-    bool written = true;
-    for (uint32_t p = 0; written && th_kind_of(signature) == TH_FUNCTION
-         && p < th_func_nparams(signature) && p + 1 < in->n_operands; p++) {
-        th_mode mode = th_func_param(signature, p)->mode;
-        ir_operand_t *operand = &in->operands[p + 1];
-        if (!th_mode_by_reference(mode) || operand->kind != IR_OPD_VALUE)
-            continue;
-        ir_value_t *value = operand->value;
-        ir_value_t *target = p == 0
-            ? place ? place
-                    : n00bb_rewrite_temporary_place(rewrite, value, in->span)
-            : n00bb_rewrite_place(rewrite, value, in->span);
-        if (value && !target) {
-            core_string_t name = describe_parameter_target(mode, symbol,
-                function->params[p]->name);
-            n00bb_report(core_translation_unit_diagnostics(rewrite->unit),
-                rewrite->unit, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE,
-                n00bb_span_location(value->def ? value->def->span : in->span),
-                N00B_TEXT_ONLY_A_VARIABLE_FIELD_OR, N00BB_ARGS(ARG_TEXT(name)));
-            core_free(name.data);
-            written = false;
-        }
-        if (!target) continue;
-        operand->value = target;
-        ir_instr_use_added(in, p + 1);
-    }
-    if (!written) return true;
+    // The receiver of a call whose result is not written back may be no
+    // place at all; it is passed through a temporary.
+    if (!n00bb_rewrite_by_reference_arguments(rewrite, in, signature, true,
+                                              place, symbol, function))
+        return true;
     return n00bb_rewrite_splice(rewrite, in)
         && n00bb_rewrite_arguments(rewrite, in, n00bb_rewrite_operand);
 }
@@ -1904,6 +2293,482 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     return n00bb_rewrite_splice(rewrite, in);
 }
 
+// A callback's arguments passed by name go where the names its `call`
+// role declares put them, as what that parameter takes; the handler is
+// invoked with them all by position. A name the role doesn't declare is
+// reported by typing (callback_call_reports), so it is left as written.
+static bool
+n00bb_place_callback_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                               th_type *signature, parse_sym_entry_t *role)
+{
+    uint32_t count = in->n_operands;
+    uint32_t positional = 1;
+    while (positional < count
+           && in->operands[positional].kind != IR_OPD_NAMED_ARG)
+        positional++;
+    if (positional == count) return true;
+    parse_grammar_t *grammar =
+        tu_state(rewrite->unit)->link_analysis->grammar;
+    parse_tree_t *formals = role
+        ? callable_formal_parameters(grammar, role) : nullptr;
+    size_t parameters = th_func_nparams(signature);
+    if (!formals || count - 1 != parameters) return true;
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t p = 0; p < parameters; p++)
+        (void)function_parameter_info(grammar, role, formals, p, nullptr,
+                                      &names[p], nullptr, nullptr);
+    bool ok = n00bb_place_by_name(rewrite, in, signature, parameters, names,
+                                  nullptr);
+    core_free(names);
+    if (ok) ir_instr_uses_changed(in);
+    return ok;
+}
+
+// The declaration that says which parameters of a call through a function
+// reference may be passed missing: one with the call's signature, whose
+// keyword parameters (the `keywords` after the `positional` ones) are
+// optional. It is only a shape; nothing defines it.
+static ir_func_t *
+n00bb_reference_call_shape(ir_module_t *module, th_type *signature,
+                           size_t positional, size_t keywords)
+{
+    th_ctx *types = ir_module_types(module);
+    char buffer[128];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_call_shape_%zu_%zu_%016llx", positional, keywords,
+        (unsigned long long)th_hash(types, signature));
+    ir_func_t *shape = ir_func_find(module, name);
+    if (shape) return shape;
+    shape = ir_func_add(module, name, th_type_clone(types, signature),
+                        IR_LINK_EXTERN);
+    if (shape && !th_is_closed(types, signature)
+        && !ir_func_set_callable_contract(shape, signature))
+        return nullptr;
+    for (size_t k = 0; shape && k < keywords; k++)
+        if (!ir_func_set_parameter_optional(shape,
+                (uint32_t)(positional + k), true))
+            return nullptr;
+    return shape;
+}
+
+// A call through a function reference whose type has keyword parameters
+// or varargs (`instance` is `call`'s signature, the reference first). The
+// function is called with the signature it is called with directly: its
+// positional parameters, then its keyword parameters, then its varargs as
+// an array (n00bb_function_value_type). A keyword argument passed by name
+// goes to its parameter, converted to what that parameter takes; one the
+// call omits is passed missing, so the function evaluates its default
+// itself, in its own scope, as when a trait method's call omits it
+// (n00bb_rewrite_trait_call). The keyword parameters come in the order the
+// type lists them, which doesn't depend on how it was written.
+static bool
+n00bb_rewrite_reference_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             th_type *instance, th_type *modes)
+{
+    ir_module_t *module = rewrite->context.module;
+    th_ctx *types = ir_module_types(module);
+    size_t positional = th_func_nparams(instance) - 1;
+    size_t keywords = th_func_nkw(instance);
+    const th_param *rest = th_func_rest(instance);
+    size_t parameters = positional + keywords + (rest ? 1 : 0);
+    th_param *params = core_alloc_array(th_param, parameters + 1);
+    for (size_t i = 0; i < positional; i++)
+        params[i] = n00bb_reference_parameter(instance, modes, i);
+    for (size_t k = 0; k < keywords; k++)
+        params[positional + k] = (th_param){
+            .mode = th_func_kw(instance, k)->mode,
+            .type = th_func_kw(instance, k)->type,
+        };
+    if (rest)
+        params[parameters - 1] = (th_param){
+            .mode = TH_IN, .type = th_array(types, rest->type)};
+    th_type *signature = th_func_with_error(types, th_func_ret(instance),
+        th_func_error(instance), params, parameters, nullptr, nullptr, 0);
+    core_free(params);
+    ir_func_t *shape = signature ? n00bb_reference_call_shape(module,
+        signature, positional, keywords) : nullptr;
+    if (!shape) return false;
+    // The operands as written: the reference, then the arguments, those
+    // passed by name in a block before or after the others, which go last.
+    uint32_t count = in->n_operands;
+    ir_operand_t *written = core_alloc_array(ir_operand_t, count);
+    for (uint32_t o = 0; o < count; o++) written[o] = in->operands[o];
+    uint32_t end = 1;
+    for (uint32_t pass = 0, at = 1; pass < 2; pass++)
+        for (uint32_t o = 1; o < count; o++)
+            if ((written[o].kind == IR_OPD_NAMED_ARG) == (pass == 1)) {
+                in->operands[at++] = written[o];
+                if (!pass) end = at;
+            }
+    core_free(written);
+    in->op = IR_OP_CALL;
+    // Those past the positional parameters are the varargs, an array that
+    // goes after the keyword arguments.
+    uint32_t items = end > positional + 1 ? end - (uint32_t)positional - 1
+                                          : 0;
+    ir_value_t *array = rest ? n00bb_pack_arguments(rewrite, in,
+        (uint32_t)positional + 1, end, th_func_param(signature,
+                                                     parameters - 1)->type)
+        : nullptr;
+    for (uint32_t o = end; o < count; o++)
+        in->operands[o - items] = in->operands[o];
+    in->n_operands = count - items;
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t k = 0; k < keywords; k++)
+        names[positional + k] = th_func_kw(instance, k)->name;
+    bool ok = (rest ? array != nullptr : !items)
+        && n00bb_place_by_name(rewrite, in, signature, positional + keywords,
+                               names, shape)
+        && (!array || (n00bb_rewrite_splice(rewrite, in)
+                       && ir_instr_operand_value(in, array)));
+    core_free(names);
+    if (!ok) return false;
+    ir_instr_uses_changed(in);
+    if (!n00bb_rewrite_by_reference_arguments(rewrite, in, signature, false,
+                                              nullptr, nullptr, nullptr))
+        return true;
+    return n00bb_rewrite_splice(rewrite, in)
+        && ir_instr_set_call_signature(in, signature)
+        && ir_annot_set(ir_module_ctx(module), &in->annots,
+               (ir_annot_t){.key = N00BB_CALL_SHAPE_KEY,
+                            .kind = IR_ANNOT_VALUE,
+                            .v = ir_func_address(module, shape)});
+}
+
+// Call `in` through a reference known to hold reference adapter `adapter`
+// calls the function the adapter adapts directly, with its own passing
+// modes (n00bb_reference_modes): the arguments, which `in` passes
+// in the order the reference's type lists them, go where it takes them.
+static bool
+n00bb_retarget_adapted_call(ir_instr_t *in, ir_func_t *adapter)
+{
+    uint32_t *order = nullptr;
+    size_t count = 0;
+    ir_func_t *target = n00bb_reference_adapter_target(adapter, &order,
+                                                       &count);
+    if (!target) return true;
+    ir_value_t *callee = ir_func_address(target->owner, target);
+    ir_operand_t *given = callee && in->op == IR_OP_CALL
+            && in->n_operands == count + 1
+        ? core_alloc_array(ir_operand_t, count + 1) : nullptr;
+    for (size_t i = 0; given && i < count; i++)
+        given[i] = in->operands[i + 1];
+    for (size_t i = 0; given && i < count; i++)
+        in->operands[i + 1] = given[order[i]];
+    if (given) {
+        in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE,
+                                         .value = callee};
+        ir_instr_uses_changed(in);
+    }
+    bool ok = given && ir_instr_set_call_signature(in, target->type);
+    core_free(given);
+    core_free(order);
+    return ok;
+}
+
+// Whether the function reference `callee` holds is a reference adapter,
+// which takes every argument by place: the runtime function table knows
+// the function it adapts (n00b_abi_v1_runtime_adapted_function_index).
+static ir_value_t *
+n00bb_emit_by_place_test(n00bb_rewrite_t *rewrite, ir_value_t *callee,
+                         ir_span_t span)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    ir_module_t *module = context->module;
+    th_ctx *types = ir_module_types(module);
+    core_string_t name =
+        CORE_STRING_STATIC("n00b_abi_v1_runtime_adapted_function_index");
+    th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
+    th_type *address = th_ind(types, 0,
+                              th_name(types, CORE_STRING_STATIC("byte")));
+    th_type *truth = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("bool"));
+    ir_func_t *query = ir_func_find(module, name);
+    if (!query && u32 && address) {
+        th_param parameter = {.mode = TH_IN, .type = address};
+        th_type *signature = th_func_with_error(types, u32,
+            th_name(types, CORE_STRING_STATIC("nil")), &parameter, 1,
+            nullptr, nullptr, 0);
+        query = signature ? ir_func_add(module, name, signature,
+                                        IR_LINK_EXTERN)
+                          : nullptr;
+        if (query && !ir_annot_set(ir_module_ctx(module), &query->annots,
+                (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.abi.native"),
+                             .kind = IR_ANNOT_STR, .s = name}))
+            query = nullptr;
+    }
+    ir_value_t *function = query ? ir_func_address(module, query) : nullptr;
+    ir_instr_t *cast = function && truth
+        ? ir_lower_emit_instruction(context, IR_OP_BITCAST, span) : nullptr;
+    ir_instr_t *call = cast && ir_lower_set_temp_dest(context, cast,
+            CORE_STRING_STATIC("__n00bb_reference_address_"), address)
+            && ir_instr_operand_value(cast, callee)
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    ir_instr_t *zero = call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_adapted_"), u32)
+            && ir_instr_operand_value(call, function)
+            && ir_instr_operand_value(call, cast->dest)
+            && ir_instr_set_call_signature(call, query->type)
+        ? n00bb_emit_uint_constant(context, u32, 0, span,
+                                   CORE_STRING_STATIC("__n00bb_unadapted"))
+        : nullptr;
+    return zero ? n00bb_emit_binary_ir(context, IR_OP_NE, truth, call->dest,
+                                       zero->dest, span)
+                : nullptr;
+}
+
+// Copies `value` into `local` (when there is one), and goes on to `next`.
+static bool
+n00bb_emit_result_to(ir_lower_context_t *context, ir_local_t *local,
+                     ir_value_t *value, ir_block_t *next, ir_span_t span)
+{
+    ir_instr_t *copy = local
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    return (!local || (copy && ir_instr_set_dest_local(copy, local)
+                       && ir_instr_operand_value(copy, value)))
+        && n00bb_emit_jump(context, next, span);
+}
+
+// Call `in`, by now one through function reference `in->operands[0]` that
+// passes its arguments by value (whose first `positional` parameters are
+// positional, and next `keywords` keyword ones), when the reference's
+// function isn't known: the reference may be a reference adapter, which
+// takes every positional argument by place (n00bb_reference_adapter_t).
+// The call asks the runtime function table, and passes each positional
+// argument's place to an adapter: the place it was read from when it is one
+// the call can write, or else a temporary holding it; keyword arguments
+// are passed as they are. Anything else it calls with `in`.
+static bool
+n00bb_rewrite_place_or_value(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                             size_t positional, size_t keywords)
+{
+    ir_lower_context_t *context = &rewrite->context;
+    ir_module_t *module = context->module;
+    th_ctx *types = ir_module_types(module);
+    th_type *signature = th_resolve(ir_instr_call_signature(in));
+    size_t count = th_func_nparams(signature);
+    // A function that takes no parameters has no adapter.
+    if (!count) return true;
+    // The arguments are what the parameters take before their places are.
+    bool ok = true;
+    for (uint32_t o = 1; ok && o < in->n_operands; o++)
+        ok = in->operands[o].kind != IR_OPD_VALUE
+            || n00bb_rewrite_operand(rewrite, in, o,
+                                     th_func_param(signature, o - 1)->type);
+    ir_value_t **places = ok ? core_alloc_array(ir_value_t *, count + 1)
+                             : nullptr;
+    th_param *params = places ? core_alloc_array(th_param, count + 1)
+                              : nullptr;
+    ok = params != nullptr;
+    bool failed = false;
+    for (size_t p = 0; ok && p < count; p++) {
+        // An adapter takes a keyword parameter, which is never `out` or
+        // `modify` and may be omitted, as its value
+        // (n00bb_reference_adapter_t).
+        bool keyword = p >= positional && p < positional + keywords;
+        params[p] = (th_param){.mode = keyword ? TH_IN : TH_INOUT,
+                               .type = th_func_param(signature, p)->type};
+        ir_operand_t *operand = &in->operands[p + 1];
+        if (operand->kind == IR_OPD_MISSING) continue;
+        ir_value_t *value = ir_operand_value(operand);
+        // Every argument must be a writable place, a varargs
+        // array's every item: passed by place to an adapter, it may be
+        // written, as an `out` or `modify` argument may be. The varargs
+        // array itself is a temporary holding them.
+        bool rest = p >= positional + keywords;
+        ir_instr_t *pack = rest && value->def
+                && value->def->op == IR_OP_AGGREGATE
+            ? value->def : nullptr;
+        for (uint32_t item = 0; ok && item < (pack ? pack->n_operands : 1);
+             item++) {
+            ir_value_t *given = pack ? ir_operand_value(&pack->operands[item])
+                                     : value;
+            ir_instr_t *def = given ? given->def : nullptr;
+            ir_value_t *place = given
+                    && !(def && def->op == IR_OP_OPTION_GET)
+                ? n00bb_rewrite_place(rewrite, given, in->span) : nullptr;
+            if (place && !ir_type_eq(module, th_ind_referent(
+                    th_resolve(place->type)), given->type))
+                place = nullptr;
+            ir_local_t *local = nullptr;
+            ir_value_t *storage = nullptr;
+            n00bb_argument_place_t why = n00bb_argument_place(place, false,
+                &local, &storage);
+            if (why != N00BB_ARGUMENT_WRITABLE) {
+                core_string_t target = n00bb_text(
+                    N00B_TEXT_UNKNOWN_REFERENCE_TARGET, N00BB_NO_ARGS);
+                n00bb_report_argument_place(rewrite, in, given, why, local,
+                                            storage, target);
+                core_free(target.data);
+                failed = true;
+                continue;
+            }
+            if (!rest && !keyword) places[p] = place;
+        }
+        if (keyword) places[p] = value;
+        else if (rest)
+            places[p] = n00bb_rewrite_temporary_place(rewrite, value,
+                                                      in->span);
+        ok = ok && (failed || places[p] != nullptr);
+    }
+    if (failed) {
+        core_free(places);
+        core_free(params);
+        return true;
+    }
+    th_type *by_place = ok
+        ? th_func_with_error(types, th_func_ret(signature),
+                             th_func_error(signature), params, count,
+                             nullptr, nullptr, 0)
+        : nullptr;
+    ir_func_t *shape = by_place && keywords
+        ? n00bb_reference_call_shape(module, by_place, positional, keywords)
+        : nullptr;
+    ir_value_t *callee = in->operands[0].value;
+    ir_value_t *adapted = by_place && (!keywords || shape)
+        ? n00bb_emit_by_place_test(rewrite, callee, in->span) : nullptr;
+    ir_block_t *place_block = adapted ? n00bb_branch_block_named(context,
+        context->user, CORE_STRING_STATIC("reference_by_place")) : nullptr;
+    ir_block_t *value_block = place_block ? n00bb_branch_block_named(context,
+        context->user, CORE_STRING_STATIC("reference_by_value")) : nullptr;
+    ir_block_t *joined = value_block ? n00bb_branch_block_named(context,
+        context->user, CORE_STRING_STATIC("reference_called")) : nullptr;
+    ir_instr_t *branch = joined
+        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+    ok = branch && ir_instr_operand_value(branch, adapted)
+        && ir_instr_operand_block(branch, place_block)
+        && ir_instr_operand_block(branch, value_block);
+    char buffer[48];
+    ir_local_t *result = ok && in->dest ? ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_called_%llu",
+                          (unsigned long long)context->next_value_id++),
+        in->dest->type) : nullptr;
+    if (result) result->synthetic = true;
+    ok = ok && (!in->dest || result);
+    // An adapter is given the places.
+    context->block = place_block;
+    ir_instr_t *call = ok ? ir_lower_emit_instruction(context, IR_OP_CALL,
+                                                      in->span)
+                          : nullptr;
+    ok = call && (!in->dest || ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_called_by_place_"), in->dest->type))
+        && ir_instr_operand_value(call, callee);
+    for (size_t p = 0; ok && p < count; p++)
+        ok = places[p] ? ir_instr_operand_value(call, places[p])
+                       : ir_instr_operand_missing(call);
+    ok = ok && ir_instr_set_call_signature(call, by_place)
+        && (!shape || ir_annot_set(ir_module_ctx(module), &call->annots,
+               (ir_annot_t){.key = N00BB_CALL_SHAPE_KEY,
+                            .kind = IR_ANNOT_VALUE,
+                            .v = ir_func_address(module, shape)}))
+        && n00bb_emit_result_to(context, result, call->dest, joined,
+                                in->span);
+    core_free(places);
+    core_free(params);
+    // Then the call's result is read where `in`'s was.
+    context->block = joined;
+    ir_value_t *read = ok && result
+        ? n00bb_emit_local_read(context, result, in->span) : nullptr;
+    ok = ok && (!result || read);
+    ir_block_t *tail = ok ? n00bb_rewrite_split(rewrite, in) : nullptr;
+    ok = tail && n00bb_emit_jump(context, tail, in->span)
+        && n00bb_rewrite_splice(rewrite, in);
+    // Anything else is called as `in` calls it.
+    if (ok && read)
+        ir_value_replace_uses(context->function, in->dest, read, nullptr,
+                              nullptr);
+    ok = ok && ir_instr_move(in, value_block, 0);
+    context->block = value_block;
+    ok = ok && n00bb_emit_result_to(context, result, in->dest, joined,
+                                    in->span);
+    context->block = rewrite->scratch;
+    context->reachable = true;
+    return ok;
+}
+
+// Call `in` through a reference known to hold `target`, which is no
+// reference adapter (a generic function's reference refers to the
+// function until specialization gives it its instance's adapter), calls
+// `target` directly: the keyword arguments, which `in` passes in the order
+// the reference's type (`instance`, the reference first) lists them, go
+// where `target` declares them.
+static bool
+n00bb_call_known_function(ir_module_t *module, ir_instr_t *in,
+                          ir_func_t *target, th_type *instance,
+                          size_t positional, size_t keywords)
+{
+    ir_func_t *body = n00bb_cached_body(target);
+    if (!body || !body->n_params) body = target;
+    th_type *signature = ir_instr_call_signature(in);
+    signature = signature ? th_resolve(signature) : nullptr;
+    size_t count = in->n_operands ? in->n_operands - 1 : 0;
+    ir_value_t *callee = ir_func_address(target->owner, target);
+    if (in->op != IR_OP_CALL || !callee || !signature
+        || th_kind_of(signature) != TH_FUNCTION
+        || th_func_nparams(signature) != count)
+        return false;
+    uint32_t *order = core_alloc_array(uint32_t, count + 1);
+    bool reordered = false;
+    bool ok = order != nullptr;
+    for (size_t i = 0; ok && i < count; i++) {
+        order[i] = (uint32_t)i;
+        if (keywords < 2 || i < positional || i >= positional + keywords)
+            continue;
+        size_t k = 0;
+        ok = i < body->n_params && body->params[i];
+        while (ok && k < keywords
+               && !core_string_eq(th_func_kw(instance, k)->name,
+                                  body->params[i]->name))
+            k++;
+        ok = ok && k < keywords;
+        order[i] = (uint32_t)(positional + k);
+        reordered = reordered || order[i] != i;
+    }
+    th_param *params = ok && reordered
+        ? core_alloc_array(th_param, count + 1) : nullptr;
+    ir_operand_t *given = params
+        ? core_alloc_array(ir_operand_t, count + 1) : nullptr;
+    for (size_t i = 0; given && i < count; i++)
+        given[i] = in->operands[i + 1];
+    for (size_t i = 0; given && i < count; i++) {
+        in->operands[i + 1] = given[order[i]];
+        params[i] = *th_func_param(signature, order[i]);
+    }
+    th_type *declared = given
+        ? th_func_with_error(ir_module_types(module), th_func_ret(signature),
+                             th_func_error(signature), params, count,
+                             nullptr, nullptr, 0)
+        : signature;
+    ok = ok && (!reordered || given) && declared;
+    core_free(order);
+    core_free(params);
+    core_free(given);
+    if (!ok) return false;
+    in->operands[0] = (ir_operand_t){.kind = IR_OPD_VALUE, .value = callee};
+    ir_instr_uses_changed(in);
+    return ir_instr_set_call_signature(in, declared);
+}
+
+// Call `in` through a function reference, rewritten to an IR call that
+// passes its arguments by value, given `function`, the function value the
+// reference is known to hold (n00bb_reference_function), if any, and
+// `instance`, its signature (the reference first): a known function, or
+// the one a reference adapter adapts, is called directly, and an unknown
+// one is asked whether it is an adapter (n00bb_rewrite_place_or_value).
+static bool
+n00bb_finish_reference_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                            ir_value_t *function, th_type *instance,
+                            size_t positional, size_t keywords)
+{
+    if (!function)
+        return n00bb_rewrite_place_or_value(rewrite, in, positional,
+                                            keywords);
+    if (n00bb_reference_adapter_target(function->owner, nullptr, nullptr))
+        return n00bb_retarget_adapted_call(in, function->owner);
+    return n00bb_call_known_function(rewrite->context.module, in,
+                                     function->owner, instance, positional,
+                                     keywords);
+}
+
 static bool
 n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                        th_type *receiver_type)
@@ -1914,10 +2779,27 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     if (!instance || th_kind_of(instance) != TH_FUNCTION
         || !th_func_nparams(instance))
         return false;
+    // A call through a function reference passes its arguments as the
+    // function it refers to takes them, by its passing modes: a known
+    // function is called directly, and one that isn't known is passed them
+    // by place when it is a reference adapter (n00bb_finish_reference_call).
+    bool reference = th_kind_of(receiver_type) == TH_INDIRECTION;
+    ir_value_t *function = reference && in->n_operands > 1
+        ? n00bb_reference_function(ir_operand_value(&in->operands[1]))
+        : nullptr;
+    th_type *modes = n00bb_reference_modes(function);
+    if (reference && (th_func_nkw(instance) || th_func_rest(instance))) {
+        for (uint32_t o = 1; o < in->n_operands; o++)
+            in->operands[o - 1] = in->operands[o];
+        in->n_operands--;
+        return n00bb_rewrite_reference_call(rewrite, in, instance, modes)
+            && n00bb_finish_reference_call(rewrite, in, function, instance,
+                   th_func_nparams(instance) - 1, th_func_nkw(instance));
+    }
     size_t count = th_func_nparams(instance) - 1;
     th_param *params = core_alloc_array(th_param, count ? count : 1);
     for (size_t i = 0; i < count; i++)
-        params[i] = *th_func_param(instance, i + 1);
+        params[i] = n00bb_reference_parameter(instance, modes, i);
     th_type *signature = th_func_with_error(types, th_func_ret(instance),
         th_func_error(instance), params, count, nullptr, nullptr, 0);
     core_free(params);
@@ -1929,12 +2811,21 @@ n00bb_rewrite_callback(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ? IR_OP_CALL : IR_OP_CALLBACK_INVOKE;
     if (!signature || !ir_instr_set_call_signature(in, signature))
         return false;
-    if (in->op != IR_OP_CALLBACK_INVOKE) return true;
     n00bb_link_analysis_t *analysis = tu_state(rewrite->unit)->link_analysis;
     n00bb_callback_contract_t *contract = nullptr;
     for (size_t u = 0; !contract && u < analysis->units.len; u++)
         contract = n00bb_callback_contract_for_type(
             tu_state(analysis->units.data[u]), receiver_type);
+    if (!n00bb_place_callback_arguments(rewrite, in, signature,
+            contract ? contract->call : nullptr))
+        return false;
+    if (in->op != IR_OP_CALLBACK_INVOKE)
+        return !n00bb_rewrite_by_reference_arguments(rewrite, in, signature,
+                                                     false, nullptr, nullptr,
+                                                     nullptr)
+            || (n00bb_rewrite_splice(rewrite, in)
+                && n00bb_finish_reference_call(rewrite, in, function,
+                                               instance, count, 0));
     return !contract || !contract->stateful
         || ir_instr_set_callback_invoke_handler(in,
                n00bb_specialize_callback_role(types, contract, receiver_type,
@@ -3212,7 +4103,7 @@ static bool
 n00bb_placement_automatic(n00bb_rewrite_t *rewrite, th_type *type)
 {
     ir_module_t *module = rewrite->context.module;
-    const ir_final_layout_t *published = ir_layout_final_visible(module,
+    const ir_final_layout_t *published = ir_layout_final(module,
         type, ir_module_target(module));
     uint64_t size = 0;
     bool known = published && ir_layout_final_byte_extent(published, &size);
@@ -3313,6 +4204,20 @@ n00bb_apply_demotions(n00bb_rewriter_t *rewriter)
     return ok;
 }
 
+// Whether anything in `function` takes `local`'s address.
+static bool
+address_taken(const ir_func_t *function, const ir_local_t *local)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            if (in->op == IR_OP_ADDRESS_OF && in->n_operands == 1
+                && ir_operand_local(&in->operands[0]) == local)
+                return true;
+        }
+    return false;
+}
+
 static bool
 n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
 {
@@ -3331,10 +4236,14 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
             ir_instr_t *def = value ? value->def : nullptr;
             bool pure_copy = def && def->op == IR_OP_COPY
                 && def->dest_kind != IR_DEST_LOCAL;
+            // A variable's address taken only for what was abandoned.
+            ir_local_t *taken = def && def->op == IR_OP_ADDRESS_OF
+                    && def->n_operands == 1
+                ? ir_operand_local(&def->operands[0]) : nullptr;
             if (!def || !def->n_operands || core_dict_contains(&gone, def)
                 || core_dict_contains(&used, value)
                 || (def->op != IR_OP_LOAD && def->op != IR_OP_EXTRACT
-                    && def->op != IR_OP_FIELD && !pure_copy))
+                    && def->op != IR_OP_FIELD && !pure_copy && !taken))
                 continue;
             ir_value_t *source = ir_operand_value(&def->operands[0]);
             core_dict_put(&gone, def, def);
@@ -3343,6 +4252,9 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
                 core_dict_free(&gone);
                 return false;
             }
+            if (taken)
+                taken->address_taken = address_taken(
+                    rewrite->context.function, taken);
             rewrite->abandoned.data[i] = source;
             erased = true;
         }

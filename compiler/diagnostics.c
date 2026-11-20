@@ -99,6 +99,9 @@ n00bb_closest_names(core_string_t name, const core_string_t *candidates,
         distances[slot] = distance;
         if (found < best_capacity) found++;
     }
+    // A closer name makes the farther ones noise: `gren` means `green`,
+    // not `red`. Only names tied for the closest are kept.
+    while (found > 1 && distances[found - 1] > distances[0]) found--;
     core_free(distances);
     core_free(wanted);
     return found;

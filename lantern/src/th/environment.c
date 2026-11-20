@@ -419,19 +419,18 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
         !pattern_subsumes(general->fn.error, specific->fn.error, bindings,
                           seen))
       return false;
+    // A value of function type is accepted whatever its parameters'
+    // passing modes: they are no part of the type.
     for (size_t i = 0; i < general->fn.np; i++)
-      if (general->fn.params[i].mode != specific->fn.params[i].mode ||
-          !pattern_subsumes(general->fn.params[i].type,
+      if (!pattern_subsumes(general->fn.params[i].type,
                             specific->fn.params[i].type, bindings, seen))
         return false;
     if (general->fn.rest &&
-        (general->fn.rest->mode != specific->fn.rest->mode ||
-         !pattern_subsumes(general->fn.rest->type, specific->fn.rest->type,
-                           bindings, seen)))
+        !pattern_subsumes(general->fn.rest->type, specific->fn.rest->type,
+                          bindings, seen))
       return false;
     for (size_t i = 0; i < general->fn.nkw; i++)
       if (!core_string_eq(general->fn.kw[i].name, specific->fn.kw[i].name) ||
-          general->fn.kw[i].mode != specific->fn.kw[i].mode ||
           !pattern_subsumes(general->fn.kw[i].type, specific->fn.kw[i].type,
                             bindings, seen))
         return false;
@@ -747,6 +746,7 @@ void th_env_release_contents(th_env *env) {
   core_list_free(env->intrinsic_types);
   core_list_free(env->type_origins);
   core_list_free(env->method_symbols);
+  core_list_free(env->candidate_functions);
   core_list_free(env->metadata);
   th_env_reset_indexes(env);
   core_datalog_engine_free(env->logic);
@@ -1567,6 +1567,97 @@ bool th_env_declaration_at(const th_env *env, size_t index,
   return false;
 }
 
+// A method symbol's place in the candidate index: the trait and method
+// symbols a trait_method_candidate fact carries, and the entry's index.
+typedef struct {
+  core_datalog_symbol_t trait;
+  core_datalog_symbol_t method;
+  size_t entry;
+} candidate_key_t;
+
+static int compare_candidate_keys(const void *left, const void *right) {
+  const candidate_key_t *a = left, *b = right;
+  if (a->trait != b->trait) return a->trait < b->trait ? -1 : 1;
+  if (a->method != b->method) return a->method < b->method ? -1 : 1;
+  return (a->entry > b->entry) - (a->entry < b->entry);
+}
+
+typedef struct {
+  const th_env *environment;
+  const candidate_key_t *keys;
+  size_t key_count;
+  // Each key's group: the first key with its trait and method.
+  core_list_t(uint32_t) *groups;
+} candidate_index_t;
+
+static bool index_candidate(const core_datalog_symbol_t *tuple,
+                            int32_t arity, void *raw) {
+  candidate_index_t *index = raw;
+  if (arity != 3)
+    return true;
+  candidate_key_t wanted = {tuple[0], tuple[1], 0};
+  size_t low = 0, high = index->key_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (compare_candidate_keys(&index->keys[middle], &wanted) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  if (low == index->key_count || index->keys[low].trait != tuple[0] ||
+      index->keys[low].method != tuple[1])
+    return true;
+  core_datalog_int_result_t function =
+      core_datalog_symbol_integer(index->environment->logic, tuple[2]);
+  if (!function.is_ok || function.result.value < 0 ||
+      (uint64_t)function.result.value >= index->environment->functions.len)
+    return true;
+  core_list_push(index->groups[low], (uint32_t)function.result.value);
+  return true;
+}
+
+// Groups trait_method_candidate's functions by method symbol, each group in
+// the relation's order, so trait_candidates reads a method's candidates
+// instead of scanning every fact of every trait for them. A trait and
+// method two entries share (a trait naming a method twice) share a group,
+// as they share facts.
+static void index_candidates(th_env *env) {
+  size_t count = env->method_symbols.len;
+  candidate_key_t *keys = core_alloc_array(candidate_key_t, count ? count : 1);
+  for (size_t i = 0; i < count; i++) {
+    const th_env_method_symbol_t *entry = &env->method_symbols.data[i];
+    keys[i] = (candidate_key_t){
+        env->traits.data[entry->trait_index].logic_symbol,
+        entry->logic_symbol, i};
+  }
+  if (count)
+    qsort(keys, count, sizeof(*keys), compare_candidate_keys);
+  core_list_t(uint32_t) *groups =
+      core_alloc_array(core_list_t(uint32_t), count ? count : 1);
+  candidate_index_t index = {env, keys, count, groups};
+  core_datalog_query(env->logic, env->candidate_relation, index_candidate,
+                     &index);
+  core_list_free(env->candidate_functions);
+  env->candidate_functions = core_list_new(uint32_t);
+  size_t group = 0, first = 0;
+  for (size_t i = 0; i < count; i++) {
+    if (!i || keys[i].trait != keys[group].trait ||
+        keys[i].method != keys[group].method) {
+      group = i;
+      first = env->candidate_functions.len;
+      for (size_t f = 0; f < groups[group].len; f++)
+        core_list_push(env->candidate_functions, groups[group].data[f]);
+    }
+    th_env_method_symbol_t *entry = &env->method_symbols.data[keys[i].entry];
+    entry->candidates_first = first;
+    entry->candidates_count = groups[group].len;
+  }
+  for (size_t i = 0; i < count; i++)
+    core_list_free(groups[i]);
+  core_free(groups);
+  core_free(keys);
+}
+
 bool th_env_freeze(th_env *env) {
   if (!env || !env->logic || env->candidate_relation < 0 ||
       env->intrinsic_type_relation < 0)
@@ -1586,6 +1677,7 @@ bool th_env_freeze(th_env *env) {
   for (size_t ti = 0; ti < env->traits.len; ti++) {
     th_env_trait_t *trait = &env->traits.data[ti];
     trait->logic_symbol = core_datalog_constant(env->logic, trait->name);
+    trait->method_symbols_first = env->method_symbols.len;
     th_type *methods = fresh_pattern(probe, trait->contracts);
     for (size_t mi = 0; mi < contract_len(methods); mi++) {
       const th_member *method = contract_method(methods, mi);
@@ -1594,7 +1686,9 @@ bool th_env_freeze(th_env *env) {
           core_datalog_constant(env->logic, method->name);
       core_list_push(
           env->method_symbols,
-          ((th_env_method_symbol_t){ti, stable_method->name, method_symbol}));
+          ((th_env_method_symbol_t){.trait_index = ti,
+                                    .method_name = stable_method->name,
+                                    .logic_symbol = method_symbol}));
       for (size_t fi = 0; fi < env->functions.len; fi++) {
         th_env_function_t *function = &env->functions.data[fi];
         if (!core_string_eq(function->root_name, method->name) ||
@@ -1609,6 +1703,8 @@ bool th_env_freeze(th_env *env) {
         }
       }
     }
+    trait->method_symbols_count =
+        env->method_symbols.len - trait->method_symbols_first;
   }
   for (size_t i = 0; i < env->intrinsic_types.len; i++) {
     th_env_intrinsic_type_t *fact = &env->intrinsic_types.data[i];
@@ -1628,6 +1724,7 @@ bool th_env_freeze(th_env *env) {
   th_ctx_free(probe);
   if (!core_datalog_run(env->logic))
     return false;
+  index_candidates(env);
   env->frozen = true;
   return true;
 }
@@ -1822,33 +1919,8 @@ static const th_env_trait_t *visible_trait(const th_ctx *ctx,
              : nullptr;
 }
 
-typedef struct {
-  const th_env *environment;
-  core_datalog_symbol_t trait;
-  core_datalog_symbol_t method;
-  th_ctx *context;
-  core_list_t(th_env_function_ptr_t) * functions;
-  bool every;
-} candidate_query_t;
-
-static bool collect_candidate(const core_datalog_symbol_t *tuple, int32_t arity,
-                              void *raw) {
-  candidate_query_t *query = raw;
-  if (arity != 3 || tuple[0] != query->trait || tuple[1] != query->method)
-    return true;
-  core_datalog_int_result_t index =
-      core_datalog_symbol_integer(query->environment->logic, tuple[2]);
-  if (!index.is_ok || index.result.value < 0 ||
-      (uint64_t)index.result.value >= query->environment->functions.len)
-    return true;
-  const th_env_function_t *function =
-      &query->environment->functions.data[index.result.value];
-  if (query->every || visible_to(query->context, function->visibility,
-                                 function->module, function->package))
-    core_list_push(*query->functions, function);
-  return true;
-}
-
+// The trait's candidates for the method, as trait_method_candidate lists
+// them (index_candidates), that `ctx` can see or, with `every`, all of them.
 static core_list_t(th_env_function_ptr_t)
     trait_candidates(th_ctx *ctx, const th_env_trait_t *trait,
                      core_string_t method_name, bool every) {
@@ -1857,30 +1929,24 @@ static core_list_t(th_env_function_ptr_t)
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !trait ||
       !method_name.data)
     return functions;
-  size_t trait_index = (size_t)(trait - ctx->environment->traits.data);
-  core_datalog_symbol_t method_symbol = CORE_DATALOG_SYMBOL_INVALID;
-  for (size_t i = 0; i < ctx->environment->method_symbols.len; i++) {
-    const th_env_method_symbol_t *entry =
-        &ctx->environment->method_symbols.data[i];
-    if (entry->trait_index == trait_index &&
-        core_string_eq(entry->method_name, method_name)) {
-      method_symbol = entry->logic_symbol;
+  const th_env *env = ctx->environment;
+  const th_env_method_symbol_t *method = nullptr;
+  for (size_t i = trait->method_symbols_first;
+       i < trait->method_symbols_first + trait->method_symbols_count; i++)
+    if (core_string_eq(env->method_symbols.data[i].method_name,
+                       method_name)) {
+      method = &env->method_symbols.data[i];
       break;
     }
-  }
-  if (method_symbol == CORE_DATALOG_SYMBOL_INVALID)
+  if (!method || method->logic_symbol == CORE_DATALOG_SYMBOL_INVALID)
     return functions;
-  candidate_query_t query = {
-      .environment = ctx->environment,
-      .trait = trait->logic_symbol,
-      .method = method_symbol,
-      .context = ctx,
-      .functions = &functions,
-      .every = every,
-  };
-  core_datalog_query(ctx->environment->logic,
-                     ctx->environment->candidate_relation, collect_candidate,
-                     &query);
+  for (size_t i = 0; i < method->candidates_count; i++) {
+    const th_env_function_t *function = &env->functions.data[
+        env->candidate_functions.data[method->candidates_first + i]];
+    if (every || visible_to(ctx, function->visibility, function->module,
+                            function->package))
+      core_list_push(functions, function);
+  }
   return functions;
 }
 
@@ -1999,9 +2065,11 @@ static bool trait_requirements_hold(th_ctx *ctx, th_type *methods) {
   return true;
 }
 
+// Whether functions implement the trait's methods from `ordinal` on for the
+// receiver, together; with `only`, whether one implements that method alone.
 static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                                 const th_env_trait_t *trait,
-                                th_type *methods, size_t ordinal) {
+                                th_type *methods, size_t ordinal, bool only) {
   if (ordinal == contract_len(methods))
     return trait_requirements_hold(ctx, methods);
   const th_member *method = contract_method(methods, ordinal);
@@ -2058,8 +2126,8 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                             th_tuple(ctx, have, 3))
           || !requirements_hold(ctx, function, branch_requirements))
         continue;
-      matched = trait_methods_match(ctx, receiver, trait, branch,
-                                    ordinal + 1);
+      matched = only || trait_methods_match(ctx, receiver, trait, branch,
+                                            ordinal + 1, false);
     }
   }
   core_list_free(candidates);
@@ -2088,9 +2156,37 @@ static bool implements_uncached(th_ctx *ctx, th_type *receiver,
     return false;
   th_type *methods = fresh_pattern(ctx, trait->contracts);
   bool implemented = contract_len(methods)
-      ? trait_methods_match(ctx, receiver, trait, methods, 0)
+      ? trait_methods_match(ctx, receiver, trait, methods, 0, false)
       : intrinsic_type_matches(ctx, trait, receiver);
   return implemented;
+}
+
+size_t th_env_unimplemented_methods(th_ctx *ctx, th_type *receiver,
+                                    core_string_t trait_name,
+                                    core_string_t *names, size_t max_names,
+                                    size_t *method_count) {
+  if (method_count)
+    *method_count = 0;
+  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
+      !trait_name.data || th_kind_of(th_resolve(receiver)) == TH_VAR)
+    return 0;
+  const th_env_trait_t *trait = visible_trait(ctx, trait_name);
+  if (!trait)
+    return 0;
+  th_type *methods = fresh_pattern(ctx, trait->contracts);
+  if (method_count)
+    *method_count = contract_len(methods);
+  size_t count = 0;
+  for (size_t i = 0; i < contract_len(methods); i++) {
+    const th_member *method = contract_method(methods, i);
+    if (!method || trait_methods_match(ctx, receiver, trait,
+                                       fresh_pattern(ctx, methods), i, true))
+      continue;
+    if (names && count < max_names)
+      names[count] = method->name;
+    count++;
+  }
+  return count;
 }
 
 bool th_env_implements(th_ctx *ctx, th_type *receiver,

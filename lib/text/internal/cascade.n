@@ -20,10 +20,6 @@ func __init(modify self: Cascade, s: string) {
     self.len = unsafe_cast[u32] byte_len(s)
 }
 
-private func record_is_span(r: Style_Record) -> bool {
-    return r.start_ix != nil and r.end_ix != nil
-}
-
 private func record_end(r: Style_Record, len: u32) -> u32 {
     let e: u32 = r.end_ix.get_or_else(index_extends)
     if e == index_extends or e > len {
@@ -145,19 +141,6 @@ func __next(modify self: Cascade) -> Style_Run? {
     var cur: string = self.s
     while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
-        if body.__value.opaque {
-            acc = (
-                bold = nil, italic = nil, underline = nil,
-                double_underline = nil, strikethrough = nil, reverse = nil,
-                dim = nil, blink = nil, text_case = Text_Case.none,
-                font_hint = Font_Hint.default, font_index = nil,
-                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-                bg_rgb = nil, font_size = nil)
-        }
-        let base: Text_Style? = body.__value.base_style
-        if base != nil {
-            acc = merge(acc, base)
-        }
         acc = level_style_index(body, self.pos, self.len, acc, false)
         next = level_next_boundary(body, self.pos, self.len, next)
         cur = body.__value.s
@@ -179,19 +162,6 @@ func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
     var cur: string = s
     while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
-        if body.__value.opaque {
-            acc = (
-                bold = nil, italic = nil, underline = nil,
-                double_underline = nil, strikethrough = nil, reverse = nil,
-                dim = nil, blink = nil, text_case = Text_Case.none,
-                font_hint = Font_Hint.default, font_index = nil,
-                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-                bg_rgb = nil, font_size = nil)
-        }
-        let base: Text_Style? = body.__value.base_style
-        if base != nil {
-            acc = merge(acc, base)
-        }
         acc = level_style_index(body, pos, len, acc, inclusive)
         cur = body.__value.s
     }

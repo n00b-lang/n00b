@@ -1,5 +1,8 @@
 #include "lower/lower_internal.h"
 
+typedef const ir_global_t *read_global_t;
+core_list_decl(read_global_t);
+
 static bool
 instruction_loads_global(ir_places_t *places, const ir_instr_t *instruction,
                          const ir_global_t *global);
@@ -10,7 +13,8 @@ add_rule_member(core_list_t(n00bb_ir_func_ptr_t) *members, core_dict_t *seen,
                 ir_func_t *function);
 static bool
 global_read_site(ir_summary_facts_t *facts, ir_places_t *places,
-                 const ir_splace_t *place, ir_instr_t *instruction);
+                 const ir_splace_t *place, ir_instr_t *instruction,
+                 bool named_only);
 static core_translation_unit_t *
 global_owner_unit(n00bb_link_analysis_t *analysis, const ir_global_t *global);
 static bool
@@ -229,20 +233,55 @@ group_facts(n00bb_link_analysis_t *analysis, const ir_func_t *function,
     return *slot;
 }
 
+// The module variable whose storage (or a part of it) a retained reference
+// is the address of.
+static const ir_global_t *
+retained_global(const ir_instr_t *retain)
+{
+    const ir_value_t *address = retain->op == IR_OP_RETAIN_REF
+            && retain->n_operands
+        ? ir_operand_value(&retain->operands[0]) : nullptr;
+    for (uint32_t depth = 0; address && depth < 16; depth++) {
+        const ir_instr_t *step = address->kind == IR_VAL_INSTR
+            ? address->def : nullptr;
+        if (!step || !step->n_operands
+            || (step->op != IR_OP_ADDRESS_OF && step->op != IR_OP_FIELD
+                && step->op != IR_OP_COPY))
+            return nullptr;
+        address = ir_operand_value(&step->operands[0]);
+        if (step->op == IR_OP_ADDRESS_OF)
+            return address && address->kind == IR_VAL_GLOBAL
+                    && address->global
+                ? ir_global_identity(address->global) : nullptr;
+    }
+    return nullptr;
+}
+
+// A retained reference to a module variable is read through later, by the
+// value that keeps it (a callback's state), out of sight here: retaining it
+// reads it. Outside code a call reaches can read whatever it can reach, but
+// only `named_only` reads that a call's summary names count.
 static bool
 global_read_site(ir_summary_facts_t *facts, ir_places_t *places,
-                 const ir_splace_t *place, ir_instr_t *instruction)
+                 const ir_splace_t *place, ir_instr_t *instruction,
+                 bool named_only)
 {
     if (uses_global_value(instruction, place->global)) return true;
+    if (instruction->op == IR_OP_RETAIN_REF)
+        return retained_global(instruction) == place->global;
     if (instruction->op == IR_OP_CALL
         || instruction->op == IR_OP_CALLBACK_INVOKE)
-        return ir_summary_facts_call_reads_entry(facts, instruction, place);
+        return named_only
+            ? ir_summary_facts_call_reads_entry_named(facts, instruction,
+                                                      place)
+            : ir_summary_facts_call_reads_entry(facts, instruction, place);
     return instruction_loads_global(places, instruction, place->global);
 }
 
 ir_instr_t *
 first_uninitialized_read(n00bb_link_analysis_t *analysis, ir_func_t *function,
-                         const ir_splace_t *place, uint8_t entry_state)
+                         const ir_splace_t *place, uint8_t entry_state,
+                         bool named_only)
 {
     ir_summary_facts_t *facts = group_facts(analysis, function, false);
     size_t scope = ir_analysis_scope_begin();
@@ -253,7 +292,8 @@ first_uninitialized_read(n00bb_link_analysis_t *analysis, ir_func_t *function,
         ir_block_t *block = function->blocks[b];
         for (uint32_t n = 0; !found && n < block->n_instrs; n++) {
             ir_instr_t *instruction = block->instrs[n];
-            if (!global_read_site(facts, places, place, instruction))
+            if (!global_read_site(facts, places, place, instruction,
+                                  named_only))
                 continue;
             if (!query)
                 query = ir_summary_state_query(analysis->summaries, function,
@@ -360,10 +400,28 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
             module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))) : nullptr;
         ir_summary_t *summary = initializer
             ? ir_summary_of(analysis->summaries, initializer) : nullptr;
+        // The globals the initializer reads on entry, and those it retains
+        // a reference to.
+        core_list_t(read_global_t) candidates = core_list_new(read_global_t);
+        core_dict_t seen;
+        core_dict_init(&seen, nullptr, nullptr);
         for (uint32_t i = 0; summary
              && i < ir_summary_path_count(summary); i++) {
             const ir_global_t *identity = entry_read_global(summary, i);
-            if (!identity || identity->has_static_initializer) continue;
+            if (identity && core_dict_add(&seen, (void *)identity, 1))
+                core_list_push(candidates, (ir_global_t *)identity);
+        }
+        for (uint32_t b = 0; summary && b < initializer->n_blocks; b++)
+            for (uint32_t i = 0; i < initializer->blocks[b]->n_instrs; i++) {
+                const ir_global_t *identity = retained_global(
+                    initializer->blocks[b]->instrs[i]);
+                if (identity && core_dict_add(&seen, (void *)identity, 1))
+                    core_list_push(candidates, (ir_global_t *)identity);
+            }
+        core_dict_free(&seen);
+        for (size_t c = 0; c < candidates.len; c++) {
+            const ir_global_t *identity = candidates.data[c];
+            if (identity->has_static_initializer) continue;
             bool found = false;
             parse_sym_entry_t *symbol = core_dict_get(&symbols,
                 (void *)identity, &found);
@@ -373,7 +431,7 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
             ir_global_t *global = (ir_global_t *)identity;
             ir_splace_t  place  = ir_splace_global(global);
             ir_instr_t  *read   = first_uninitialized_read(
-                analysis, initializer, &place, IR_PATH_UNPASSED);
+                analysis, initializer, &place, IR_PATH_UNPASSED, false);
             if (read)
                 core_list_push(*reads, ((n00bb_initializer_read_t){
                     .source = unit, .target = target, .symbol = symbol,
@@ -381,6 +439,7 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
                     .read = read,
                 }));
         }
+        core_list_free(candidates);
     }
     core_dict_free(&symbols);
     return true;

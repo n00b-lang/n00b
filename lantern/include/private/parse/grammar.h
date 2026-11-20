@@ -57,7 +57,25 @@ struct parse_rule_t {
     bool                                  first_has_any;
     bool                                  nullable;
     void                                 *thunk;
+    // first_set as bits, for the terminals a bit can stand for: ids below
+    // PARSE_FIRST_BITS_LOW, then named terminals from PARSE_TOK_START_ID
+    // (see parse_rule_first_bit). Built with the first sets.
+    uint64_t                             *first_bits;
 };
+
+#define PARSE_FIRST_BITS_LOW 128
+
+// The bit standing for terminal `tid` in a first_bits of a grammar with
+// `named` named terminals, or SIZE_MAX when no bit stands for it.
+static inline size_t
+parse_rule_first_bit(int64_t tid, size_t named)
+{
+    if (tid >= 0 && tid < PARSE_FIRST_BITS_LOW) return (size_t)tid;
+    if (tid >= PARSE_TOK_START_ID
+        && (uint64_t)(tid - PARSE_TOK_START_ID) <= named)
+        return PARSE_FIRST_BITS_LOW + (size_t)(tid - PARSE_TOK_START_ID);
+    return SIZE_MAX;
+}
 
 struct parse_rule_group_t {
     int64_t contents_id;
@@ -67,6 +85,7 @@ struct parse_rule_group_t {
 };
 
 struct parse_grammar_t {
+    parse_grammar_head_t            head;   // first: parse_grammar_version
     core_list_t(parse_terminal_t)   named_terms;
     core_list_t(parse_rule_t) rules;
     core_list_t(parse_nonterm_ptr_t) nt_list;
@@ -92,10 +111,13 @@ struct parse_grammar_t {
     core_list_t(int32_t)      contextual_sources;
 
     core_list_t(parse_annotation_ptr_t) annotations;
-
-    core_cache_t annot_cache;
-    pthread_mutex_t annot_cache_lock;
+    // The named terminals the rules' first_bits cover (as of when the first
+    // sets were computed).
+    size_t first_bits_named;
 };
+
+static_assert(offsetof(parse_grammar_t, head) == 0,
+              "parse_grammar_version reads the head at the grammar's start");
 
 static inline int32_t
 parse_contextual_source_tid(const parse_grammar_t *g, int64_t terminal_id)

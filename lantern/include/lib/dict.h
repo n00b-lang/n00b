@@ -326,6 +326,15 @@ core_dict_free(core_dict_t *d)
     d->count    = 0;
 }
 
+// Empties `d`, keeping its capacity.
+static inline void
+core_dict_clear(core_dict_t *d)
+{
+    memset(d->buckets, 0, d->capacity * sizeof(*d->buckets));
+    d->count      = 0;
+    d->tombstones = 0;
+}
+
 static inline size_t
 core_dict_len(core_dict_t *d)
 {

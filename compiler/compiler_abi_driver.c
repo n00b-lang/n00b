@@ -27,6 +27,7 @@
 #include "cached_body.h"
 #include "qualified_names.h"
 #include "compiler_object_io.h"
+#include "compiler_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
@@ -237,10 +238,14 @@ linked_instance(const core_list_t(n00bb_specialization_t) *specializations,
     if (!n00bb_specialization_module(module_name)) return nullptr;
     for (size_t s = 0; s < specializations->len; s++) {
         ir_func_t *instance = specializations->data[s].instance;
-        if (instance && instance->n_blocks
-            && core_string_eq(ir_module_name(instance->owner), module_name)
-            && core_string_eq(instance->name, function_name))
-            return instance;
+        if (!instance
+            || !core_string_eq(ir_module_name(instance->owner), module_name))
+            continue;
+        // The instance, or another function of its module: its reference
+        // adapter (n00bb_instance_reference_adapter).
+        ir_func_t *function = core_string_eq(instance->name, function_name)
+            ? instance : ir_func_find(instance->owner, function_name);
+        if (function && function->n_blocks) return function;
     }
     return nullptr;
 }
@@ -355,6 +360,15 @@ n00bb_finalizer_instance(const core_list_t(n00bb_specialization_t)
     return nullptr;
 }
 
+static int
+binding_order(const void *left, const void *right)
+{
+    const n00bb_llvm_finalizer_binding_t *a = left, *b = right;
+    if (a->type_index != b->type_index)
+        return a->type_index < b->type_index ? -1 : 1;
+    return core_string_cmp(a->function->name, b->function->name);
+}
+
 static bool
 n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
                        const n00bb_llvm_type_index_t *type_indices,
@@ -374,6 +388,11 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
                 };
                 break;
             }
+    // In the linked type table's order: the hooks are listed as the
+    // program's modules were analyzed, which differs with what was cached,
+    // and the dispatch made from them follows this order.
+    if (*out_count > 1)
+        qsort(*out, *out_count, sizeof(**out), binding_order);
     return true;
 }
 
@@ -641,6 +660,9 @@ typedef struct {
     core_list_t(n00bb_cache_module_object_t) *kept;
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
     const core_dict_t *mutator_decisions;
+    // Cached modules' variables whose values code may fold in
+    // (foldable_cached_globals).
+    const core_dict_t *cached_globals;
 } module_emission_t;
 
 typedef struct {
@@ -676,6 +698,105 @@ typedef struct {
 
 core_list_decl(module_object_t);
 
+// A module's index table, as the cache keeps it: its symbol, its types'
+// hashes and its functions' IR names, in slot order.
+static void
+put_index_word(core_buffer_t *out, uint64_t value)
+{
+    uint8_t bytes[8];
+    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
+    core_buffer_append(out, (const char *)bytes, 8);
+}
+
+static void
+put_index_text(core_buffer_t *out, core_string_t text)
+{
+    put_index_word(out, text.data ? text.u8_bytes : 0);
+    if (text.data && text.u8_bytes)
+        core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static uint8_t *
+save_index_table(const n00bb_abi_index_table_t *table, size_t *bytes)
+{
+    *bytes = 0;
+    if (!table || !table->symbol.data) return nullptr;
+    core_buffer_t out = {0};
+    put_index_text(&out, table->symbol);
+    put_index_word(&out, table->type_count);
+    for (size_t i = 0; i < table->type_count; i++)
+        put_index_word(&out, table->type_hashes[i]);
+    put_index_word(&out, table->function_count);
+    for (size_t i = 0; i < table->function_count; i++)
+        put_index_text(&out, table->functions[i]
+            ? table->functions[i]->name : (core_string_t){0});
+    uint8_t *saved = malloc(out.byte_len ? out.byte_len : 1);
+    if (saved && out.byte_len) memcpy(saved, out.data, out.byte_len);
+    *bytes = saved ? out.byte_len : 0;
+    core_buffer_release(&out);
+    return saved;
+}
+
+static bool
+take_index_word(const uint8_t *data, size_t size, size_t *at, uint64_t *out)
+{
+    if (size - *at < 8) return false;
+    *out = 0;
+    for (int i = 0; i < 8; i++)
+        *out |= (uint64_t)data[*at + i] << (8 * i);
+    *at += 8;
+    return true;
+}
+
+static bool
+take_index_text(const uint8_t *data, size_t size, size_t *at,
+                core_string_t *out)
+{
+    uint64_t length = 0;
+    if (!take_index_word(data, size, at, &length) || length > size - *at)
+        return false;
+    *out = core_string_borrow((const char *)data + *at, (size_t)length);
+    *at += (size_t)length;
+    return true;
+}
+
+// The index table of a module's code compiled from source, rebuilt over
+// the module's cached IR, whose functions have the same names.
+static bool
+load_index_table(const uint8_t *data, size_t size, ir_module_t *module,
+                 n00bb_abi_index_table_t *out)
+{
+    *out = (n00bb_abi_index_table_t){0};
+    size_t at = 0;
+    core_string_t symbol = {0};
+    uint64_t types = 0, functions = 0;
+    bool ok = data && module && take_index_text(data, size, &at, &symbol)
+        && take_index_word(data, size, &at, &types)
+        && types <= (size - at) / 8;
+    if (ok) {
+        out->symbol = core_string_dup(symbol);
+        out->type_hashes = core_alloc_array(uint64_t, types + 1);
+        out->type_count = (size_t)types;
+        for (size_t i = 0; ok && i < types; i++)
+            ok = take_index_word(data, size, &at, &out->type_hashes[i]);
+    }
+    ok = ok && take_index_word(data, size, &at, &functions)
+        && functions <= (size - at) / 8;
+    if (ok) {
+        out->functions = core_alloc_array(ir_func_t *, functions + 1);
+        out->function_count = (size_t)functions;
+        for (size_t i = 0; ok && i < functions; i++) {
+            core_string_t name = {0};
+            ok = take_index_text(data, size, &at, &name);
+            out->functions[i] = ok && name.u8_bytes
+                ? ir_func_find(module, name) : nullptr;
+            ok = ok && (!name.u8_bytes || out->functions[i]);
+        }
+    }
+    if (!ok) n00bb_abi_index_table_release(out);
+    return ok;
+}
+
 static double
 monotonic_seconds(void)
 {
@@ -697,9 +818,19 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
         analysis->target.enabled_features, module_diagnostics);
     item->backend = backend;
     if (!backend) return item->ok = false;
+    core_string_t module_name = ir_module_name(item->module);
+    for (size_t u = 0; module_name.data && u < analysis->units.len; u++)
+        if (core_string_eq(analysis->units.data[u]->module.identifier,
+                           module_name)) {
+            n00bb_llvm_backend_set_system(backend,
+                n00bb_system_unit(analysis->units.data[u]));
+            break;
+        }
     n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
+    n00bb_llvm_backend_bind_cached_globals(backend,
+                                           emission->cached_globals);
     core_string_t table_symbol = artifact
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
@@ -870,9 +1001,12 @@ complete_module_object(const module_emission_t *emission,
                            item->cached_bytes);
         return true;
     }
+    // Without a frame table (n00bb_build_executable), the frames are read
+    // again when the objects are made for the runtime program.
     if (item->cached) {
-        bool ok = n00bb_native_frames_add(emission->native_frames,
-                                          item->cached, item->cached_bytes);
+        bool ok = !emission->native_frames
+            || n00bb_native_frames_add(emission->native_frames,
+                                       item->cached, item->cached_bytes);
         if (ok) *item->object_path = temporary_object_argument(item->cached,
                                                                item->cached_bytes);
         return ok && *item->object_path;
@@ -900,6 +1034,9 @@ complete_module_object(const module_emission_t *emission,
     item->object = (core_buffer_t){0};
     if (ok && emission->kept && item->artifact && mutators) {
         uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
+        size_t index_bytes = 0;
+        uint8_t *index = save_index_table(&item->artifact->index_table,
+                                          &index_bytes);
         if (copy) {
             if (object.byte_len) memcpy(copy, object.data, object.byte_len);
             core_list_push(*emission->kept, ((n00bb_cache_module_object_t){
@@ -908,17 +1045,21 @@ complete_module_object(const module_emission_t *emission,
                 .abi = item->artifact->object,
                 .abi_bytes = item->artifact->object_bytes,
                 .mutators = mutators, .mutators_bytes = mutators_bytes,
+                .index = index, .index_bytes = index_bytes,
             }));
             mutators = nullptr;
+            index = nullptr;
         }
+        free(index);
     }
     free(mutators);
     if (ok && emission->lto) {
         *item->bitcode = object;
         return true;
     }
-    if (ok) ok = n00bb_native_frames_add(emission->native_frames,
-        object.data, object.byte_len);
+    if (ok && emission->native_frames)
+        ok = n00bb_native_frames_add(emission->native_frames,
+                                     object.data, object.byte_len);
     if (ok) *item->object_path = temporary_object_argument(object.data,
         object.byte_len);
     core_buffer_release(&object);
@@ -1884,6 +2025,7 @@ keep_runtime_objects(core_list_t(n00bb_cache_module_object_t) *kept,
         }
         free((void *)object->object);
         free((void *)object->mutators);
+        free((void *)object->index);
     }
     core_list_free(*runtime);
 }
@@ -1957,10 +2099,14 @@ emit_runtime_objects(core_link_unit_t *link,
     module_emission_t runtime = *emission;
     runtime.kept = &runtime_kept;
     runtime.runtime_functions = &runtime_functions;
-    runtime.native_frames = n00bb_native_frames_new(
+    // The frame table takes every object's frames in slot order, once the
+    // objects are made, not the re-emitted ones first: which modules are
+    // re-emitted depends on what the cache held.
+    n00bb_native_frames_t *frame_table = n00bb_native_frames_new(
         emission->analysis->target.object_format);
+    runtime.native_frames = nullptr;
     size_t modules = program->object_slots - 4;
-    bool ok = runtime.native_frames != nullptr;
+    bool ok = frame_table != nullptr;
     // The compile-time program links every shim its code may call; the
     // runtime program only those its runtime code calls, and only their
     // libraries.
@@ -1985,7 +2131,6 @@ emit_runtime_objects(core_link_unit_t *link,
                 emission->debug_enabled, emission->native_cpu,
                 &program->objects[modules + 3], diagnostics);
     }
-    bool *fresh = core_alloc_array(bool, program->object_slots);
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t u = 0; ok && u < units->len; u++) {
         size_t slot = 0;
@@ -2019,6 +2164,23 @@ emit_runtime_objects(core_link_unit_t *link,
                     core_list_push(item.reachable,
                                    analysis->cached_functions.data[f]);
         }
+        // The cached ABI object carries the index table its code was first
+        // compiled against; this code reads its types' and functions'
+        // runtime indices from that table too, as it does compiled from
+        // source, instead of taking the linked indices directly.
+        n00bb_abi_artifact_t indexed = {0};
+        n00bb_cache_module_object_t cached_object = {0};
+        if (cached && item.artifact && !item.artifact->index_table.symbol.data
+            && n00bb_cache_module_object(emission->analysis->cache,
+                   ir_module_name(tu_state(order[slot])->ir_module),
+                   &cached_object)
+            && cached_object.index) {
+            indexed = *item.artifact;
+            if (load_index_table(cached_object.index,
+                    cached_object.index_bytes, cached, &indexed.index_table))
+                item.artifact = &indexed;
+            else indexed = (n00bb_abi_artifact_t){0};
+        }
         // A generated module's runtime object is this program's alone, so
         // it isn't kept in the cache.
         module_emission_t unkept = runtime;
@@ -2032,24 +2194,25 @@ emit_runtime_objects(core_link_unit_t *link,
         finish_if_needed(&item);
         ok = complete_module_object(use, &item);
         release_module_object(&item);
+        if (indexed.index_table.symbol.data)
+            n00bb_abi_index_table_release(&indexed.index_table);
         if (ok && emission->lto) {
             core_buffer_release(&program->lto_modules[slot]);
             program->lto_modules[slot] = bitcode;
         }
         else if (ok) {
-            unlink(program->objects[slot]);
+            if (program->objects[slot]) unlink(program->objects[slot]);
             core_free(program->objects[slot]);
             program->objects[slot] = path;
-            fresh[slot] = true;
         }
     }
     for (size_t i = 0; ok && !emission->lto && i < modules; i++) {
-        if (!program->objects[i] || fresh[i]) continue;
+        if (!program->objects[i]) continue;
         core_string_t name = core_string_from_cstr(program->objects[i]);
         char *contents = nullptr;
         size_t size = 0;
         ok = core_os_read_file(name, &contents, &size)
-            && n00bb_native_frames_add(runtime.native_frames,
+            && n00bb_native_frames_add(frame_table,
                                        (const uint8_t *)contents, size);
         core_free(contents);
         core_free(name.data);
@@ -2057,7 +2220,7 @@ emit_runtime_objects(core_link_unit_t *link,
     if (ok && !emission->lto) {
         uint8_t *frame_object = nullptr;
         size_t frame_object_bytes = 0;
-        char *frames = n00bb_native_frames_emit(runtime.native_frames,
+        char *frames = n00bb_native_frames_emit(frame_table,
                 &emission->analysis->target, &frame_object,
                 &frame_object_bytes)
             ? temporary_object_argument(frame_object, frame_object_bytes)
@@ -2070,11 +2233,10 @@ emit_runtime_objects(core_link_unit_t *link,
             program->objects[modules + 1] = frames;
         }
     }
-    if (runtime.native_frames) n00bb_native_frames_free(runtime.native_frames);
+    if (frame_table) n00bb_native_frames_free(frame_table);
     keep_runtime_objects(emission->kept, &runtime_kept);
     core_list_free(runtime_functions);
     core_list_free(reemitted);
-    core_free(fresh);
     if (!ok && !core_diagnostics_failed(diagnostics))
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
             "emitting runtime code", "could not re-emit baked modules");
@@ -2117,6 +2279,28 @@ n00bb_check_start_signature(core_link_unit_t *link,
         return false;
     }
     return true;
+}
+
+// The cached modules' variables, by identity, whose cached definitions
+// code may read values from as the module compiled from source has them.
+// A module whose compile-time run baked it (one with a cached runtime
+// object) has its variables' initializers replaced by the run when it is
+// compiled from source, so code reads them from storage then: its cached
+// definitions, from before the run, are left out to read them the same way.
+static void
+foldable_cached_globals(n00bb_link_analysis_t *analysis, core_dict_t *out)
+{
+    core_dict_init(out, nullptr, nullptr);
+    if (!analysis->cached_globals_ready) return;
+    core_dict_foreach(&analysis->cached_globals, entry) {
+        const ir_global_t *global = entry->value;
+        n00bb_cache_module_object_t cached = {0};
+        if (global && global->owner
+            && n00bb_cache_module_object(analysis->cache,
+                   ir_module_name(global->owner), &cached)
+            && cached.runtime_object) continue;
+        core_dict_put(out, entry->key, entry->value);
+    }
 }
 
 bool
@@ -2314,9 +2498,28 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_dict_t mutator_decisions;
     cached_mutator_decisions(link, analysis, order.data, count,
                              &mutator_decisions);
+    core_dict_t cached_globals;
+    foldable_cached_globals(analysis, &cached_globals);
+    // This pass makes the compile-time program's objects, and the runtime
+    // program's where they are the same. With nothing to run at compile
+    // time that program is never linked, and when the runtime objects are
+    // made again (emit_runtime_objects) its C shims and frame table are
+    // replaced, as is its root when a literal generated a module. Those
+    // aren't made here, only to be thrown away.
+    bool comptime = false;
+    for (size_t i = 0; ok && !comptime && i < count; i++)
+        comptime = !tu_state(order.data[i])->interface_module
+            && n00bb_comptime_needed(order.data[i]);
+    bool generated = any_generated_unit(order.data, count);
+    bool runtime_pass = !comptime && (generated
+        || any_cached_runtime_object(analysis, order.data, count));
+    core_translation_unit_t *reemitted_root = runtime_pass && generated
+        && !tu_state(core_link_unit_root(link, 0))->interface_module
+        ? core_link_unit_root(link, 0) : nullptr;
     module_emission_t emission = {
         .kept = &kept,
         .mutator_decisions = &mutator_decisions,
+        .cached_globals = &cached_globals,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto,
@@ -2327,7 +2530,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .function_index_count = function_index_count,
         .global_bindings = global_bindings,
         .global_binding_count = global_binding_count,
-        .native_frames = native_frames, .diagnostics = diagnostics,
+        .native_frames = runtime_pass ? nullptr : native_frames,
+        .diagnostics = diagnostics,
     };
     int64_t requested_workers = n00bb_setting_int(
         N00BB_KEY_BUILD_JOBS);
@@ -2348,6 +2552,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                          count + analysis->specializations.len,
                          native_workers);
     for (size_t i = 0; ok && emitter.ok && i < count; i++) {
+        if (order.data[i] == reemitted_root) continue;
         core_link_artifact_view_t artifact_view = {0};
         const n00bb_abi_artifact_t *artifact =
             core_link_unit_require_artifact(link,
@@ -2412,12 +2617,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     }
     bool emitted = module_emitter_finish(&emitter);
     ok = ok && emitted;
-    if (ok && !lto && native->bitcode_count) {
+    if (ok && !lto && native->bitcode_count
+        && !(runtime_pass && native->select_runtime)) {
         build_stage = "compiling C shims";
         ok = shim_object(native, analysis, debug_enabled, native_cpu,
                          &objects[modules + 3], diagnostics);
     }
-    if (ok && !lto) {
+    if (ok && !lto && !runtime_pass) {
         uint8_t *frame_object = nullptr;
         size_t frame_object_bytes = 0;
         ok = n00bb_native_frames_emit(native_frames, &analysis->target,
@@ -2480,8 +2686,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         };
         core_list_t(core_translation_unit_ptr_t) runtime_units =
             core_list_new(core_translation_unit_ptr_t);
-        ok = run_comptime(link, &program, order.data, count, lto,
-                          debug_enabled, &kept, &runtime_units, diagnostics)
+        ok = (!comptime || run_comptime(link, &program, order.data, count,
+                  lto, debug_enabled, &kept, &runtime_units, diagnostics))
             && ((!runtime_units.len
                  && !any_cached_runtime_object(analysis, order.data, count)
                  && !any_generated_unit(order.data, count))
@@ -2523,9 +2729,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free((void *)kept.data[i].object);
         free((void *)kept.data[i].runtime_object);
         free((void *)kept.data[i].mutators);
+        free((void *)kept.data[i].index);
     }
     core_list_free(kept);
     core_dict_free(&mutator_decisions);
+    core_dict_free(&cached_globals);
     release_output(&plan);
     core_free(archive);
     core_free(target_flag);
@@ -2641,10 +2849,19 @@ abi_collect_type_owners(core_link_unit_t *link,
                         (uintptr_t)th_hash(sources->types,
                             th_resolve(th_ind_referent(reference))),
                         symbol);
+                // An instance of a generic record or variant takes its
+                // fields' visibility from the generic's declaration.
                 if (core_string_eq(symbol->adt_kind,
                         CORE_STRING_STATIC("callback"))
                     || core_string_eq(symbol->adt_kind,
-                        CORE_STRING_STATIC("object")))
+                        CORE_STRING_STATIC("object"))
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("record"))
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("variant"))
+                    || (symbol->member_scope
+                        && core_string_eq(symbol->member_scope->scope_tag,
+                                          CORE_STRING_STATIC("variant"))))
                     core_dict_add(&sources->generic_type_owners,
                         typehash, symbol);
             }
@@ -2702,6 +2919,12 @@ free_abi_artifact(void *payload)
 }
 
 static bool
+abi_layout_module(void *context, ir_module_t *module)
+{
+    return n00bb_layout_module_types(context, module);
+}
+
+static bool
 emit_specialization_abi(core_link_unit_t *link,
                         n00bb_link_analysis_t *analysis,
                         const n00bb_specialization_t *specialization,
@@ -2740,7 +2963,7 @@ emit_specialization_abi(core_link_unit_t *link,
             symbols, generic_state->lex->tokens, module, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis, nullptr, nullptr,
-            abi_type_owner, sources, nullptr,
+            abi_type_owner, sources, nullptr, abi_layout_module, analysis,
             &artifact->packed, &artifact->index_table,
             &artifact->object, &artifact->object_bytes);
     if (!valid && unit.diagnostics)
@@ -2807,7 +3030,7 @@ abi_emit_source_unit(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         &analysis->target, debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
         abi_declaration_for_symbol, analysis,
         abi_source_of_node, sources, abi_type_owner, sources,
-        n00bb_comptime_graph(unit),
+        n00bb_comptime_graph(unit), abi_layout_module, analysis,
         &artifact->packed, &artifact->index_table,
         &artifact->object, &artifact->object_bytes);
 }
@@ -2911,12 +3134,21 @@ n00bb_reemit_abi_artifact(core_link_unit_t *link,
             1, &view)
         ? (n00bb_abi_artifact_t *)view.payload : nullptr;
     n00bb_abi_source_context_t sources = {0};
-    n00bb_abi_artifact_t fresh = {0};
+    // The module's code, compiled against the existing index table, stays:
+    // the new table keeps its types where they were.
+    n00bb_abi_artifact_t fresh = {
+        .index_table = existing ? (n00bb_abi_index_table_t){
+            .types = existing->index_table.types,
+            .type_count = existing->index_table.type_count,
+        } : (n00bb_abi_index_table_t){0},
+    };
     bool valid = existing && abi_sources_open(link, &sources)
         && abi_emit_source_unit(link, analysis, unit, debug_enabled,
                                 &sources, &fresh);
     abi_sources_close(&sources);
     if (!valid) {
+        if (existing && fresh.index_table.types == existing->index_table.types)
+            fresh.index_table = (n00bb_abi_index_table_t){0};
         n00bb_abi_packed_tables_release(&fresh.packed);
         n00bb_abi_index_table_release(&fresh.index_table);
         core_free(fresh.object);
@@ -3048,10 +3280,26 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         modules[i] = state->ir_module;
     }
     if (!analysis->link_types) analysis->link_types = th_ctx_new();
+    // A module loaded from the cache has, in its cached IR, the types it
+    // had compiled from source (an anonymous record's, which a row's name
+    // can't give back, among them).
+    const ir_module_t **cached_modules = core_alloc_array(const ir_module_t *,
+                                                          count + 1);
+    size_t cached_module_count = 0;
+    for (size_t i = 0; valid && i < unit_count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        ir_module_t *body = unit && tu_state(unit)->interface_module
+            ? interface_body_module(analysis, unit->module.identifier)
+            : nullptr;
+        if (body) cached_modules[cached_module_count++] = body;
+    }
     n00bb_abi_semantics_t semantics = {
         .environment = analysis->environment,
         .modules = modules,
         .module_count = count,
+        .cached_modules = cached_modules,
+        .cached_module_count = cached_module_count,
         .types = analysis->link_types,
     };
     core_string_t failure_stage = {};
@@ -3066,6 +3314,7 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         &object, &object_bytes, &failure_stage, &plan_failure,
         &rebase_failure);
     core_free(modules);
+    core_free(cached_modules);
     core_free(inputs);
     if (!valid) {
         core_buffer_t message = {0};
@@ -3172,4 +3421,33 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
         nullptr, diagnostics);
     core_free(object);
     return saved;
+}
+
+bool
+n00bb_store_library_modules(core_link_unit_t *link,
+                            n00bb_link_analysis_t *analysis)
+{
+    if (!link || !analysis || !analysis->cache) return false;
+    core_list_t(n00bb_cache_module_object_t) objects =
+        core_list_new(n00bb_cache_module_object_t);
+    size_t count = core_link_unit_translation_unit_count(link);
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+            i);
+        if (!unit || tu_state(unit)->interface_module) continue;
+        core_link_artifact_view_t view = {0};
+        const n00bb_abi_artifact_t *artifact =
+            core_link_unit_require_artifact(link, unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view)
+            ? view.payload : nullptr;
+        if (artifact && artifact->object && artifact->object_bytes)
+            core_list_push(objects, ((n00bb_cache_module_object_t){
+                .module = unit->module.identifier,
+                .abi = artifact->object, .abi_bytes = artifact->object_bytes,
+            }));
+    }
+    bool ok = n00bb_cache_store(analysis->cache, link, analysis, objects.data,
+                                objects.len);
+    core_list_free(objects);
+    return ok;
 }

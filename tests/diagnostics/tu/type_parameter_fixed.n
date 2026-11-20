@@ -10,11 +10,16 @@ func size(self: Handle) -> int {
     return self.fd
 }
 
+func descriptor(self: Handle) -> int {
+    return self.fd
+}
+
+# `size(value)` would go through the bound; `descriptor` isn't the trait's.
 func measure(value: 'T) -> int where 'T: Measured {
-    return size(value)
+    return size(value) + descriptor(value)
 }
 
 func main() -> nil {
     let handle: Handle = (fd = 3)
-    require measure(handle) == 3
+    require measure(handle) == 6
 }

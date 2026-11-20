@@ -1,5 +1,0 @@
-record Generic_Link {
-    first: 'K
-    second: 'V
-    address: Ref['K]
-}

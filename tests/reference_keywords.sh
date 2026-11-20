@@ -1,0 +1,94 @@
+#!/bin/sh
+# Calls through function references with keyword arguments, run, and typed
+# against an imported module's archived interface; and function references
+# a library makes, called by an importer built and run against only the
+# library's archived interface; and a library's module variables, read by
+# an importer checked against only its archived interface.
+set -eu
+
+compiler=$1
+programs=$2
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+fail() {
+    cat "$@" >&2
+    exit 1
+}
+
+# The archived interface `$tmp/$1.n00bi` of the modules named after it.
+interface() {
+    name=$1
+    shift
+    N00B_PATH="$programs" "$compiler" library \
+        --emit-interface "$tmp/$name.n00bi" "$@" \
+        >"$tmp/interface.out" 2>"$tmp/interface.err" \
+        || fail "$tmp/interface.out" "$tmp/interface.err"
+}
+
+# Runs program $1, which writes nothing but `ok`, to stderr.
+run() {
+    "$1" >"$tmp/stdout" 2>"$tmp/stderr" || fail "$tmp/stdout" "$tmp/stderr"
+    if test -s "$tmp/stdout" || test "$(cat "$tmp/stderr")" != ok; then
+        fail "$tmp/stdout" "$tmp/stderr"
+    fi
+}
+
+N00B_PATH="$programs" "$compiler" build --output "$tmp/keywords" \
+    "$programs/reference_keywords.n" >"$tmp/build.out" 2>"$tmp/build.err" \
+    || fail "$tmp/build.out" "$tmp/build.err"
+run "$tmp/keywords"
+
+# The keyword parameters' names, and the reference adapters, come from the
+# interface when the imported modules are only an archived interface.
+interface keyword_lib keyword_lib keyword_refs
+"$compiler" lower --link-interface "$tmp/keyword_lib.n00bi" \
+    "$programs/reference_keywords.n" >"$tmp/lower.out" 2>"$tmp/lower.err" \
+    || fail "$tmp/lower.err"
+
+# `ref` of a function whose parameters are all `in`, with no keyword
+# parameters to reorder, is the function itself; of any other, it is the
+# function's reference adapter, the one the interface declares for an
+# imported function. A call through a reference known to hold an adapter
+# calls the function it adapts, and `native_entry` is the function itself.
+for expected in \
+    'global.store @reference_keywords.plain_reference, @plain_add ' \
+    'global.store @reference_keywords.adapted_reference, @__n00bb_reference_adapter_' \
+    'global.store @reference_keywords.imported_check, @__n00bb_reference_adapter_' \
+    '= call @tally_add, ' \
+    '= bitcast @tally_add '
+do
+    if ! grep -qF "$expected" "$tmp/lower.out"; then
+        echo "the lowered program has no \`$expected\`" >&2
+        exit 1
+    fi
+done
+
+# Function references `modlib` makes, called by an importer built with no
+# N00B_PATH: the library is only its archive.
+interface modlib modlib.facade
+"$compiler" build --link-interface "$tmp/modlib.n00bi" \
+    --output "$tmp/modlib_user" "$programs/modlib_user.n" \
+    >"$tmp/build.out" 2>"$tmp/build.err" \
+    || fail "$tmp/build.out" "$tmp/build.err"
+run "$tmp/modlib_user"
+
+# Module variables letlib's initializer sets, read by an importer checked
+# with no N00B_PATH. A variable nothing may have set is still an error
+# there.
+interface letlib letlib.facade
+"$compiler" check --link-interface "$tmp/letlib.n00bi" \
+    "$programs/letlib_user.n" >"$tmp/check.out" 2>&1 || {
+    echo "an importer of letlib's archive didn't check" >&2
+    fail "$tmp/check.out"
+}
+if "$compiler" check --link-interface "$tmp/letlib.n00bi" \
+        "$programs/letlib_unset.n" >"$tmp/check.out" 2>&1; then
+    echo 'reading a variable nothing may have set checked against the archive' >&2
+    fail "$tmp/check.out"
+fi
+grep -q 'letlib_unset.n:6:12: error.*may read global `unset`' \
+    "$tmp/check.out" || {
+    echo "the archive check didn't report the unset read" >&2
+    fail "$tmp/check.out"
+}

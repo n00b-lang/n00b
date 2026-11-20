@@ -350,15 +350,15 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     close_env(e);
 }
 
-static void test_imported_final_layout_uses_definition_owner(void)
+static void test_final_layouts_are_per_module(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ctx);
-    ir_module_t *owner = ir_module_new(ctx, S("owner"), &ir_profile_bce,
-                                       S("x86_64"));
+    ir_module_t *declarer = ir_module_new(ctx, S("declarer"),
+                                          &ir_profile_bce, S("x86_64"));
     ir_module_t *consumer = ir_module_new(ctx, S("consumer"), &ir_profile_bce,
                                           S("x86_64"));
-    th_type *named = th_name(types, S("owner.Record"));
+    th_type *named = th_name(types, S("declarer.Record"));
     th_type *field = th_name(types, S("u64"));
     th_member member = {.name = S("value"), .type = field};
     th_type *record = th_record(types, &member, 1);
@@ -369,17 +369,29 @@ static void test_imported_final_layout_uses_definition_owner(void)
         .intrinsic_bits = 64, .alignment_bytes = 8,
         .members = &layout_member, .n_members = 1,
     };
-    bool defined = owner && consumer && named && record
-        && ir_type_define(owner, named, record);
-    check("an owner publishes an imported record layout", defined
-        && ir_layout_publish_final(owner, named, S("x86_64"), &layout));
-    check("an importer retains no locally published final layout",
+    bool defined = declarer && consumer && named && record
+        && ir_type_define(declarer, named, record);
+    check("a module publishes the final layout of a type it defines", defined
+        && ir_layout_publish_final(declarer, named, S("x86_64"), &layout));
+    size_t consumer_types = consumer ? ir_type_count(consumer) : 0;
+    check("looking a definition up doesn't add the type to a module",
+          ir_type_definition(consumer, named) == record
+              && ir_type_count(consumer) == consumer_types);
+    check("another module's final layout isn't this module's",
           ir_layout_final(consumer, named, S("x86_64")) == nullptr);
-    check("an importer reads the defining module's visible final layout",
-          ir_layout_final_visible(consumer, named, S("x86_64"))
-              == ir_layout_final(owner, named, S("x86_64")));
-    check("an importer does not inherit a layout for another target",
-          ir_layout_final_visible(consumer, named, S("wasm32")) == nullptr);
+    check("a module that uses the type defines it the same way",
+          ir_type_define(consumer, named, record)
+              && ir_type_definition(consumer, named)
+                  == ir_type_definition(declarer, named));
+    check("each module publishes the same layout from the definition",
+          ir_layout_publish_final(consumer, named, S("x86_64"), &layout)
+              && ir_layout_final(consumer, named, S("x86_64"))
+              && ir_layout_final(consumer, named, S("x86_64"))
+                     ->intrinsic_bits
+                  == ir_layout_final(declarer, named, S("x86_64"))
+                     ->intrinsic_bits);
+    check("a layout for one target isn't a layout for another",
+          ir_layout_final(consumer, named, S("wasm32")) == nullptr);
     ir_ctx_free(ctx);
 }
 
@@ -1178,7 +1190,7 @@ int main(void)
     test_record_initializers_and_rest_bindings();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
-    test_imported_final_layout_uses_definition_owner();
+    test_final_layouts_are_per_module();
     test_inline_member_layout();
     test_final_layout_copy_preserves_representation();
     test_zero_sized_member_keeps_logical_offset();

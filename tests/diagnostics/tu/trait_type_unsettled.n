@@ -1,0 +1,39 @@
+# Inside a function, a trait used as a type stands for one type that
+# implements it, settled by what is stored there. Here nothing is.
+trait Shape {
+    func area(self: 'T) -> f64
+}
+
+record Square {
+    side: f64
+}
+
+func area(self: Square) -> f64 {
+    return self.side * self.side
+}
+
+func empty_array() -> uint {
+    let shapes: Array[Shape] = new[Array[Shape]](2)
+    return shapes.len()
+}
+
+func empty_list() -> uint {
+    let shapes = new[List[Shape]]()
+    return shapes.len()
+}
+
+func count(view items: Array['X]) -> uint {
+    return items.len()
+}
+
+# A value no variable holds is reported where it is made.
+func temporary() -> uint {
+    return count(new[Array[Shape]](2))
+}
+
+func main() {
+    require empty_array() == 2
+    require empty_list() == 0
+    require temporary() == 2
+    require area((side = 2.0)) == 4.0
+}

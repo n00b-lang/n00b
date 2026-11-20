@@ -35,6 +35,7 @@
 #define ENVIRONMENT_MATCH(variable, word) \
     ENVIRONMENT(variable), .environment_match = CORE_STRING_STATIC(word)
 #define RANGE(low, high) .minimum = (low), .maximum = (high)
+#define ACCUMULATE .accumulate = true
 #define N00BB_SETTING(id, section_name, key, kind, fallback, ...) \
     [N00BB_KEY_##id] = { \
         .section = CORE_STRING_STATIC(section_name), \
@@ -51,10 +52,19 @@ const n00bb_setting_spec_t n00bb_setting_specs[N00BB_KEY_COUNT] = {
 #undef N00BB_SETTING
 
 typedef struct {
+    n00bb_setting_source_t source;
+    core_string_t          origin;
+} item_layer_t;
+
+core_list_decl(item_layer_t);
+
+typedef struct {
     bool                       boolean;
     int64_t                    integer;
     core_string_t              text;
     core_list_t(core_string_t) items;
+    // Parallel to items, for an accumulating list only.
+    core_list_t(item_layer_t)  layers;
 } setting_value_t;
 
 typedef struct {
@@ -87,13 +97,36 @@ release_value(setting_value_t *value)
     for (size_t i = 0; i < value->items.len; i++)
         core_free(value->items.data[i].data);
     core_list_free(value->items);
+    for (size_t i = 0; i < value->layers.len; i++)
+        core_free(value->layers.data[i].origin.data);
+    core_list_free(value->layers);
     *value = (setting_value_t){0};
+}
+
+// A later, higher-precedence layer's entries go in front of those already
+// gathered, and every entry remembers the layer that gave it.
+static void
+accumulate(setting_t *setting, setting_value_t *value,
+           n00bb_setting_source_t source, core_string_t origin)
+{
+    for (size_t i = 0; i < value->items.len; i++)
+        core_list_push(value->layers, ((item_layer_t){
+            .source = source, .origin = core_string_dup(origin)}));
+    setting_value_t *old = &setting->value;
+    for (size_t i = 0; i < old->items.len; i++) {
+        core_list_push(value->items, old->items.data[i]);
+        core_list_push(value->layers, old->layers.data[i]);
+    }
+    old->items.len = 0;
+    old->layers.len = 0;
 }
 
 static void
 assign(setting_t *setting, setting_value_t value,
        n00bb_setting_source_t source, core_string_t origin)
 {
+    if (setting->spec->accumulate)
+        accumulate(setting, &value, source, origin);
     release_value(&setting->value);
     setting->value = value;
     setting->source = source;
@@ -120,6 +153,24 @@ is_text(n00bb_setting_type_t type)
         || type == N00BB_SETTING_PROGRAM;
 }
 
+// A limit's text: `all` (stored as 0) or a whole number in its range.
+static bool
+parse_limit(const n00bb_setting_spec_t *spec, core_string_t text,
+            int64_t *out)
+{
+    if (core_string_eq(text, CORE_STRING_STATIC("all"))) {
+        *out = 0;
+        return true;
+    }
+    int64_t number = 0;
+    if (!text.u8_bytes || text.data[0] < '0' || text.data[0] > '9'
+        || !core_string_parse_i64(text, 10, &number, nullptr)
+        || number < spec->minimum || number > spec->maximum)
+        return false;
+    *out = number;
+    return true;
+}
+
 static setting_value_t
 default_value(const n00bb_setting_spec_t *spec)
 {
@@ -131,6 +182,9 @@ default_value(const n00bb_setting_spec_t *spec)
         break;
     case N00BB_SETTING_INT:
         core_string_parse_i64(text, 10, &value.integer, nullptr);
+        break;
+    case N00BB_SETTING_LIMIT:
+        (void)parse_limit(spec, text, &value.integer);
         break;
     default:
         if (is_text(spec->type)) value.text = core_string_dup(text);
@@ -198,6 +252,7 @@ type_description(n00bb_setting_type_t type)
     switch (type) {
     case N00BB_SETTING_BOOL: return N00B_TEXT_TRUE_OR_FALSE;
     case N00BB_SETTING_INT: return N00B_TEXT_A_WHOLE_NUMBER;
+    case N00BB_SETTING_LIMIT: return N00B_TEXT_A_WHOLE_NUMBER_OR_ALL;
     case N00BB_SETTING_CHOICE: return N00B_TEXT_A_QUOTED_WORD;
     case N00BB_SETTING_STRINGS: return N00B_TEXT_A_LIST_OF_STRINGS;
     case N00BB_SETTING_PATHS: return N00B_TEXT_A_LIST_OF_PATHS;
@@ -379,6 +434,12 @@ example_help(const setting_t *setting)
         n00bb_report_help(config.diagnostics,
                           N00B_TEXT_WRITE_A_NUMBER_WITHOUT_QUOTES,
             N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(spec->default_value)));
+        break;
+    case N00BB_SETTING_LIMIT:
+        n00bb_report_help(config.diagnostics,
+                          N00B_TEXT_WRITE_A_NUMBER_OR_ALL,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(spec->default_value),
+                       ARG_TEXT(name)));
         break;
     case N00BB_SETTING_CHOICE:
         n00bb_report_help(config.diagnostics,
@@ -564,6 +625,23 @@ read_value(const reader_t *reader, const setting_t *setting,
         }
         out->integer = number;
         return true;
+    }
+    case N00BB_SETTING_LIMIT: {
+        core_string_t text = {0};
+        if (kind == VALUE_STRING) {
+            if (!string_value(reader, value, &text)) return false;
+        }
+        else if (kind == VALUE_INTEGER)
+            text = core_string_dup(token_text(reader, leaf(value, 0)));
+        else return wrong_type(reader, setting, value, expected);
+        bool parsed = parse_limit(spec, text, &out->integer);
+        if (!parsed)
+            report(N00B_DIAG_CONFIG_INVALID_VALUE, reader->path, location,
+                N00B_TEXT_MUST_BE_OR_MORE_OR_ALL_NOT,
+                N00BB_ARGS(ARG_TEXT(setting->key),
+                    ARG_NUMBER((long long)spec->minimum), ARG_TEXT(text)));
+        core_free(text.data);
+        return parsed;
     }
     case N00BB_SETTING_CHOICE: {
         if (kind != VALUE_STRING)
@@ -968,6 +1046,9 @@ apply_environment(setting_t *setting)
             && value.integer >= spec->minimum
             && value.integer <= spec->maximum;
         break;
+    case N00BB_SETTING_LIMIT:
+        usable = parse_limit(spec, text, &value.integer);
+        break;
     case N00BB_SETTING_CHOICE:
         value.text = core_string_dup(spec->environment_match.u8_bytes
                                          ? spec->environment_match : text);
@@ -1020,6 +1101,23 @@ apply_flag(parse_cmdr_result_t *parsed, const parse_cmdr_flag_t *flag)
         value.integer = parse_cmdr_flag_int(parsed, flag->name,
                                             setting->value.integer);
         break;
+    case N00BB_SETTING_LIMIT: {
+        core_string_t word = parse_cmdr_flag_str(parsed, flag->name);
+        if (!parse_limit(spec, word, &value.integer)) {
+            config.flag_failed = true;
+            core_buffer_t form = {0};
+            core_buffer_printf(&form, "a whole number from %lld, or `all`",
+                               (long long)spec->minimum);
+            report(N00B_DIAG_INVALID_OPTION_VALUE, (core_string_t){0},
+                (core_diag_location_t){}, N00B_TEXT_TAKES_NOT,
+                N00BB_ARGS(ARG_TEXT(flag->name),
+                           ARG_TEXT(core_buffer_string(&form)),
+                           ARG_TEXT(word)));
+            core_buffer_release(&form);
+            return;
+        }
+        break;
+    }
     case N00BB_SETTING_CHOICE:
         value.text = core_string_dup(parse_cmdr_flag_str(parsed, flag->name));
         if (!valid_choice(spec, value.text)) {
@@ -1156,6 +1254,70 @@ n00bb_setting_origin(n00bb_setting_id_t id)
         ? n00bb_text_form(N00B_TEXT_THE_DEFAULT) : setting->origin;
 }
 
+n00bb_setting_source_t
+n00bb_setting_source_at(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    return index < setting->value.layers.len
+        ? setting->value.layers.data[index].source : setting->source;
+}
+
+core_string_t
+n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    return index < setting->value.layers.len
+        ? setting->value.layers.data[index].origin
+        : n00bb_setting_origin(id);
+}
+
+// The canonical form of a path entry. A missing directory has no real path,
+// so its parent is resolved instead (relative entries against the current
+// directory), letting `x` and `/here/x` match even when `x` does not exist.
+static core_string_t
+canonical_entry(core_string_t entry)
+{
+    core_string_t canonical = core_os_real_path(entry);
+    if (canonical.data) return canonical;
+    core_string_t absolute = {0};
+    if (core_os_is_absolute(entry)) absolute = core_string_dup(entry);
+    else {
+        core_string_t cwd = core_os_current_directory();
+        absolute = core_os_path_join(cwd, entry);
+        core_free(cwd.data);
+    }
+    core_string_t parent = core_os_path_parent(absolute);
+    core_string_t real_parent = core_os_real_path(parent);
+    core_string_t result = absolute;
+    if (real_parent.data && parent.u8_bytes < absolute.u8_bytes) {
+        size_t start = parent.u8_bytes;
+        while (start < absolute.u8_bytes
+               && core_os_is_separator(absolute.data[start])) start++;
+        result = core_os_path_join(real_parent, core_string_slice(absolute,
+            start, absolute.u8_bytes - start));
+        core_free(absolute.data);
+    }
+    core_free(real_parent.data);
+    core_free(parent.data);
+    return result;
+}
+
+bool
+n00bb_setting_path_is_first(n00bb_setting_id_t id, size_t index)
+{
+    const setting_t *setting = lookup(id);
+    if (index >= setting->value.items.len) return false;
+    core_string_t wanted = canonical_entry(setting->value.items.data[index]);
+    bool first = true;
+    for (size_t i = 0; first && i < index; i++) {
+        core_string_t earlier = canonical_entry(setting->value.items.data[i]);
+        first = !core_string_eq(earlier, wanted);
+        core_free(earlier.data);
+    }
+    core_free(wanted.data);
+    return first;
+}
+
 core_string_t
 n00bb_setting_key(n00bb_setting_id_t id)
 {
@@ -1185,6 +1347,11 @@ print_value(core_buffer_t *out, const setting_t *setting)
     case N00BB_SETTING_INT:
         core_buffer_printf(out, "%lld", (long long)value->integer);
         break;
+    case N00BB_SETTING_LIMIT:
+        if (value->integer)
+            core_buffer_printf(out, "%lld", (long long)value->integer);
+        else print_quoted(out, CORE_STRING_STATIC("all"));
+        break;
     case N00BB_SETTING_STRINGS:
     case N00BB_SETTING_PATHS:
         core_buffer_putc(out, '[');
@@ -1201,8 +1368,39 @@ print_value(core_buffer_t *out, const setting_t *setting)
 }
 
 static void
+print_layer(core_buffer_t *out, n00bb_setting_source_t source,
+            core_string_t origin)
+{
+    switch (source) {
+    case N00BB_SETTING_FROM_ENVIRONMENT:
+        core_buffer_puts(out, "environment ");
+        break;
+    case N00BB_SETTING_FROM_FLAG:
+        core_buffer_puts(out, "flag ");
+        break;
+    default:
+        break;
+    }
+    core_buffer_append_string(out, origin);
+}
+
+static void
 print_source(core_buffer_t *out, const setting_t *setting)
 {
+    const setting_value_t *value = &setting->value;
+    if (setting->spec->accumulate && value->layers.len) {
+        // One entry per contributing layer, highest precedence first.
+        for (size_t i = 0; i < value->layers.len; i++) {
+            const item_layer_t *layer = &value->layers.data[i];
+            if (i && layer->source == value->layers.data[i - 1].source
+                && core_string_eq(layer->origin,
+                                  value->layers.data[i - 1].origin))
+                continue;
+            if (i) core_buffer_puts(out, ", ");
+            print_layer(out, layer->source, layer->origin);
+        }
+        return;
+    }
     switch (setting->source) {
     case N00BB_SETTING_FROM_DEFAULT:
         core_buffer_puts(out, "default");

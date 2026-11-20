@@ -951,6 +951,15 @@ func repeat(self: string, count: u64) -> string {
     if len == 0 or count == 0 {
         return empty_string()
     }
+    // A rich string repeats by concatenation, which keeps each copy's
+    // style spans and substitution slots.
+    if cast[u64](tag(self)) == str_tag_rich {
+        var built: string = self
+        for i from 1 until count {
+            built = built + self
+        }
+        return built
+    }
     let total: u64 = len * count
     var out: Array[u8] = new[Array[u8]](cast[int] total)
     for i from 0 until count {

@@ -13,7 +13,7 @@
 #define SUMMARY_KEY   "n00b.module-summaries"
 #define SUMMARY_OWNER "summaries:"
 
-enum { SUMMARY_METADATA_VERSION = 2 };
+enum { SUMMARY_METADATA_VERSION = 3 };
 
 // A module's summaries name their texts by number in a table the module
 // writes once, ahead of them: the same global and field names recur in

@@ -1,0 +1,11 @@
+tests/diagnostics/link/function_references.n:13:5: error N00B-T0046: expected `(function_references.Tally) -> int fail: nil`, found `(function_references.Tally, int) -> int fail: nil`
+tests/diagnostics/link/function_references.n:17:13: note N00B-S0064: parameter `a` could be `view`: `either` never writes anything reachable from it
+tests/diagnostics/link/function_references.n:17:20: note N00B-S0064: parameter `other` could be `view`: `either` never writes anything reachable from it
+tests/diagnostics/link/function_references.n:21:9: error N00B-T0046: expected `(int) -> int fail: nil`, found `(`a, other: `a) -> `a fail: nil`
+tests/diagnostics/link/function_references.n:29:26: error N00B-S0105: `unsafe_cast` can't make an address of a function reference, which may be to an adapter rather than the function's native code
+  help: for a function's native code, use `native_entry` with the function's name
+tests/diagnostics/link/function_references.n:41:35: note N00B-S0064: parameter `other` could be `view`: `spend_any` never writes anything reachable from it
+tests/diagnostics/link/function_references.n:53:9: error N00B-S0107: `spend` takes its parameter `token` as a `consume` parameter, so it can't be referred to with `ref`
+  help: `spend` can still be called directly
+tests/diagnostics/link/function_references.n:54:9: error N00B-S0107: `spend_any` takes its parameter `value` as a `consume` parameter, so it can't be referred to with `ref`
+  help: `spend_any` can still be called directly

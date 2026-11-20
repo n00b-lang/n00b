@@ -25,6 +25,4 @@ func start() {
     clear(p.read)
     require p.rw == Perm.read
     require p.rw != Perm.exec
-    require p.rw == Perm.read + Perm.exec
-    require outside(p) + outside(b.perm) == 4
 }

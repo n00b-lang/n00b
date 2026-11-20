@@ -17,11 +17,3 @@ func modify_keyword(modify k: int = 1) -> int {
 func out_varargs(a: int, out *rest: int) -> int {
     return a
 }
-
-func two_varargs(*first: int, *second: int) -> int {
-    return 0
-}
-
-func ordered(a: int, view *rest: int, k: int = 1, consume j: int = 2) -> int {
-    return a + k + j
-}

@@ -33,6 +33,8 @@ typedef ir_summary_t *summary_ptr_t;
 core_list_decl(summary_ptr_t);
 core_list_decl(uint64_t);
 typedef core_list_t(uint64_t) flow_bits_t;
+typedef th_type *summary_type_ptr_t;
+core_list_decl(summary_type_ptr_t);
 typedef ir_spath_t *spath_ptr_t;
 core_list_decl(spath_ptr_t);
 
@@ -71,6 +73,8 @@ typedef enum : uint8_t {
     SUMMARY_INPUT_OVERLAP,
     SUMMARY_INPUT_REINTERPRETED,
     SUMMARY_INPUT_ENTRY_ACCESS,
+    // Whether a global is hidden from a caller's module (global_hidden).
+    SUMMARY_INPUT_HIDDEN,
 } summary_input_kind_t;
 
 typedef struct {
@@ -86,6 +90,12 @@ typedef struct {
     uint64_t             answer;
 } summary_input_t;
 core_list_decl(summary_input_t);
+
+typedef struct {
+    const ir_global_t *global;
+    uint8_t            hidden;
+} summary_hidden_t;
+core_list_decl(summary_hidden_t);
 
 struct ir_summary_t {
     const ir_func_t           *function;
@@ -137,6 +147,10 @@ struct ir_summaries_t {
     bool                      escapes_only;
     bool                      reusable;
     bool                      proofs_changed;
+    bool                      defer_changed;
+    // The summaries bound for analyses (ABCD's above all) while these were
+    // computed: trap proofs see callees through them.
+    const ir_summaries_t     *proof_context;
     ir_summaries_t           *previous;
     ir_summary_t             *recording;
     core_dict_t               adopted;
@@ -148,6 +162,10 @@ struct ir_summaries_t {
     // Callee summaries as callers behind a barrier see them, by callee and
     // the caller's module.
     core_dict_t               views;
+    // While a view is made, the hidden questions it asks (pairs of a
+    // global and its answer), kept with the view to note again whenever
+    // a caller is handed it.
+    core_list_t(summary_hidden_t) *view_hidden;
 };
 
 typedef ir_spath_list_t path_list_t;
@@ -194,6 +212,17 @@ typedef struct {
     uint32_t   site;
 } pt_loc_t;
 
+// A set of locations (or of other fixed-size entries, such as the pt_alias
+// calls made so far), exactly: an open-addressed table of `cap` slots,
+// `len` of them in use, each with its hash.
+typedef struct {
+    void     *slots;
+    uint64_t *hashes;
+    bool     *used;
+    size_t    cap;
+    size_t    len;
+} loc_table_t;
+
 typedef struct stored_t stored_t;
 
 typedef struct {
@@ -224,6 +253,13 @@ typedef struct {
     const ir_instr_t    *origin;
 } pt_item_t;
 core_list_decl(pt_item_t);
+
+// A pt_alias call, as pt_t.alias_calls notes it.
+typedef struct {
+    uint32_t          site;
+    pt_item_t         item;
+    const ir_instr_t *origin;
+} pt_alias_call_t;
 typedef core_list_t(pt_item_t) pt_set_t;
 core_list_decl(pt_set_t);
 typedef const pt_set_t *pt_set_ptr_t;
@@ -242,11 +278,21 @@ typedef struct {
     bool              elements;
     pt_set_t          contents;
     alias_list_t      aliases;
+    // The generation spread_escapes last went through this site in.
+    uint64_t          spread;
     const ir_local_t *local;
     const ir_value_t *value;
     const ir_instr_t *call;
     bool              node;
     uint32_t          origin;
+    // For storage a callee allocated: its origin in the callee's summary,
+    // which `origin` refines when the call fixes the storage's type (see
+    // heap_site).
+    uint32_t          base;
+    // Every item added to `contents`, in the order it was added (see
+    // pt_resolve_places). An item later folded into one that covers it
+    // stays here.
+    pt_set_t          added;
 } pt_site_t;
 core_list_decl(pt_site_t);
 
@@ -354,6 +400,8 @@ struct pt_t {
     core_dict_t            stored;
     core_dict_t            contents_memo;
     core_dict_t            aliased_memo;
+    core_dict_t            visible_memo;
+    core_dict_t            places_memo;
     core_dict_t            widened_sets;
     uint64_t               cuts;
     uint64_t               delta_since;
@@ -373,6 +421,9 @@ struct pt_t {
     core_dict_t            flow_groups;
     // Per callee, whether each of its store destinations is surely written.
     core_dict_t            must_dests;
+    // What each call's store destinations stored last, by call, callee and
+    // destination (see store_pair).
+    core_dict_t            stored_pairs;
     core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;
@@ -381,11 +432,20 @@ struct pt_t {
     pt_set_t               scratch[3];
     flow_bits_t            crossed;
     uint32_t               crossed_known;
-    pt_set_t               seen;
+    // The pt_resolve walk under way (see pt_resolve_places).
+    struct resolved_t     *walk;
+    // Whether that walk finds places to write (see resolve_into), and the
+    // walks done for that, by location.
+    bool                   writing;
+    core_dict_t            resolved_writes;
+    loc_table_t            alias_calls;
     core_list_t(pt_frame_t) reading;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
     uint64_t               generation;
+    // The generation the solve's incremental state was let go at (see
+    // pt_release_solve), or 0.
+    uint64_t               released_at;
     ir_places_t           *places;
     core_list_t(pt_access_t) context;
     bool                   contextual;
@@ -424,11 +484,43 @@ typedef struct {
     bool                  positional;
 } pt_memo_t;
 
+// A site location a resolve walk went into, and how many of the items
+// added to the site's contents it has gone through.
 typedef struct {
+    pt_loc_t loc;
+    size_t   through;
+} resolve_node_t;
+core_list_decl(resolve_node_t);
+
+typedef struct resolved_t {
     pt_loc_t  loc;
     pt_set_t  items;
     pt_memo_t memo;
+    // The walk that found `items`, kept to carry on from when sites it went
+    // into gain contents: the locations it met, the held items it went
+    // through by location (for addresses and for contents), the places it
+    // took as covered, and the site locations it went into.
+    loc_table_t                  visited;
+    loc_table_t                  through[2];
+    pt_set_t                     seen;
+    core_list_t(resolve_node_t)  nodes;
+    // The walk was let go (see pt_release_solve): `items` still holds what
+    // it found, but finding more means walking from the start again.
+    bool                         released;
 } resolved_t;
+
+typedef struct {
+    const ir_instr_t   *call;
+    const ir_summary_t *callee;
+    size_t              dest;
+} stored_pair_key_t;
+
+typedef struct {
+    stored_pair_key_t key;
+    pt_set_t          to;
+    pt_set_t          from;
+    bool              weak;
+} stored_pair_t;
 
 typedef struct {
     pt_loc_t          loc;
@@ -460,6 +552,28 @@ typedef struct {
     pt_set_t              items;
     pt_memo_t             memo;
 } aliased_memo_t;
+
+// The aliases a read at `key.loc` sees from `key.at` (see visible_aliases),
+// and their signature. They stay exact until an alias under the read's root
+// changes, which notifies that root's alias_root_key: `generation` is when
+// they were found.
+typedef struct {
+    content_key_t         key;
+    core_list_t(uint64_t) visible;
+    uint64_t              signature;
+    uint64_t              generation;
+    bool                  positional;
+} visible_memo_t;
+
+// What a set of places holds, by places and value mode (see
+// places_value): many callee paths resolve to the same places.
+typedef struct {
+    pt_set_t  places;
+    uint8_t   mode;
+    uint64_t  hash;
+    pt_set_t  items;
+    pt_memo_t memo;
+} places_memo_t;
 
 typedef struct {
     pt_loc_t  loc;
@@ -553,6 +667,8 @@ static void note_entries(ir_summaries_t *summaries, uint32_t flag,
                          const ir_summary_t *entry);
 static void note_global(ir_summaries_t *summaries, const ir_global_t *global,
                         bool reachable);
+static void note_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
+                        const ir_global_t *global, uint8_t hidden);
 static bool inherits_answer(ir_summaries_t *summaries,
                             const ir_func_t *caller, const ir_func_t *callee,
                             core_string_t effect);
@@ -566,6 +682,8 @@ static void observe_view(void *context, const ir_module_t *viewer,
 static void record_inputs(ir_summaries_t *summaries,
                           const core_list_t(summary_input_t) *from);
 static bool inputs_hold(ir_summaries_t *summaries,
+                        const core_list_t(summary_input_t) *inputs);
+static bool inputs_grew(ir_summaries_t *summaries,
                         const core_list_t(summary_input_t) *inputs);
 static ir_summary_t *summary_shell(ir_summaries_t *summaries,
                                    const ir_func_t *function);

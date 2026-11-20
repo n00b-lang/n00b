@@ -184,7 +184,9 @@ variable_site(pt_t *pt, const ir_value_t *value)
     pt_item_t item = own || !pointer || whole ? contents_item(loc)
                                               : item_at(loc);
     if (!pointer) item.flow = PT_COPY;
+    contents_added = &pt->sites.data[site].added;
     set_add(pt, &pt->sites.data[site].contents, item);
+    contents_added = nullptr;
     return site;
 }
 

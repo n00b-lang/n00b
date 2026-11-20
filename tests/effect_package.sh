@@ -1,13 +1,17 @@
 #!/bin/sh
 set -eu
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
-sources=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-shared_cache=${N00B_CACHE-}
-N00B_CACHE="$tmp/cache"
-export N00B_CACHE
+# The packages are copied to a directory no cache has seen, so each module's
+# first check reads it from source (the fresh round below relies on it),
+# while the standard library comes from the caller's cache rather than
+# being compiled again into an empty one.
+cp -R "$2" "$tmp/sources"
+sources="$tmp/sources"
 export N00B_DIAGNOSTICS=terse
 
 fail() {
@@ -45,12 +49,7 @@ grep -q 'calls `alpha.impl.note`' "$tmp/out" \
     || fail "the interface note doesn't name alpha.impl.note once"
 N00B_PATH="$sources" "$compiler" library --emit-interface "$tmp/sorter.n00bi" \
     sorter.facade >"$tmp/out" 2>&1 || fail "emitting sorter's interface failed"
-if [ -n "$shared_cache" ]; then
-    set -- env N00B_CACHE="$shared_cache"
-else
-    set -- env -u N00B_CACHE
-fi
-"$@" "$compiler" build \
+"$compiler" build \
     --link-interface "$tmp/alpha.n00bi" --link-interface "$tmp/sorter.n00bi" \
     --output "$tmp/runs" "$sources/runs.n" >"$tmp/out" 2>&1 \
     || fail "a program didn't build from library interfaces"

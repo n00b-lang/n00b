@@ -1,4 +1,5 @@
 #include "abi_type_index.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -152,13 +153,25 @@ add_children(n00bb_abi_type_index_t *index, th_type *type)
     return false;
 }
 
+// A type's key in the index. An open type's id tells its variables apart
+// by identity (ir_type_id), as two functions' variables must be; a trait's
+// variables are its own parameters, so every copy of a trait is the same
+// trait, whichever module or cached interface it was read from.
+static uint64_t
+index_key(n00bb_abi_type_index_t *index, th_type *type)
+{
+    return th_kind_of(type) == TH_TRAIT
+        ? th_hash(ir_module_types(index->module), type)
+        : ir_type_id(index->module, type);
+}
+
 static bool
 add_type_with_children(n00bb_abi_type_index_t *index, th_type *type,
                        uint32_t *out_index, bool collect_children)
 {
     if (!index || index->failed || !type) return false;
     type = th_resolve(type);
-    type_key_t probe = {.id = ir_type_id(index->module, type)};
+    type_key_t probe = {.id = index_key(index, type)};
     const core_indexed_entry_t *entry = core_indexed_table_find(
         index->table, &probe);
     if (entry) {
@@ -263,6 +276,13 @@ n00bb_abi_type_index_add(n00bb_abi_type_index_t *index,
 }
 
 bool
+n00bb_abi_type_index_add_alone(n00bb_abi_type_index_t *index,
+                               th_type *type, uint32_t *out_index)
+{
+    return add_type_with_children(index, type, out_index, false);
+}
+
+bool
 n00bb_abi_type_index_add_imported_trait(n00bb_abi_type_index_t *index,
                                          th_type *type)
 {
@@ -289,7 +309,7 @@ n00bb_abi_type_index_find(n00bb_abi_type_index_t *index,
                            th_type *type, uint32_t *out_index)
 {
     if (!index || !type || !out_index) return false;
-    type_key_t probe = {.id = ir_type_id(index->module, th_resolve(type))};
+    type_key_t probe = {.id = index_key(index, th_resolve(type))};
     const core_indexed_entry_t *entry = core_indexed_table_find(
         index->table, &probe);
     if (!entry) return false;
@@ -322,8 +342,7 @@ dispatched_trait(th_ctx *types, core_string_t name, bool *builtin)
             || !declaration.qualified_name.data || !declaration.contract
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
-        bool from_builtins = core_string_eq(declaration.module,
-                                            CORE_STRING_STATIC("builtins"));
+        bool from_builtins = n00bb_compiler_package(declaration.package);
         if (core_string_eq(declaration.qualified_name, name)) {
             *builtin = from_builtins;
             return declaration.contract;
@@ -370,6 +389,19 @@ add_dispatched_traits(n00bb_abi_type_index_t *index, ir_module_t *module)
     return valid;
 }
 
+typedef struct {
+    uint64_t hash;
+    size_t index;
+} module_type_order_t;
+
+static int
+compare_module_types(const void *left, const void *right)
+{
+    const module_type_order_t *a = left, *b = right;
+    if (a->hash != b->hash) return a->hash < b->hash ? -1 : 1;
+    return (a->index > b->index) - (a->index < b->index);
+}
+
 bool
 n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
                                           ir_module_t *module)
@@ -378,19 +410,39 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
         || ir_module_types(module) != ir_module_types(index->module))
         return false;
     th_ctx *types = ir_module_types(module);
-    for (size_t i = 0; i < ir_type_count(module); i++) {
+    // The order the module interned its types in follows how the program
+    // reached them, which differs between a module compiled with its
+    // imports from source and one compiled against cached interfaces. The
+    // rows follow the types' hashes instead, so the object depends only on
+    // which types the module has.
+    size_t count = ir_type_count(module);
+    module_type_order_t *order = core_alloc_array(module_type_order_t,
+                                                  count ? count : 1);
+    for (size_t i = 0; i < count; i++) {
         th_type *type = ir_type_at(module, i);
-        if (!type) return false;
+        if (!type) {
+            core_free(order);
+            return false;
+        }
+        order[i] = (module_type_order_t){th_hash(types, type), i};
+    }
+    if (count) qsort(order, count, sizeof(*order), compare_module_types);
+    for (size_t o = 0; o < count; o++) {
+        th_type *type = ir_type_at(module, order[o].index);
         th_type *resolved = th_resolve(type);
         /* Inference-only call shapes remain interned; symbol closure still
          * collects and rejects any incomplete shape that is reachable. */
         if (th_kind_of(resolved) == TH_FUNCTION
             && !th_func_error(resolved)) continue;
-        if (th_is_closed(types, type)
-            && !add_type(index, type, nullptr)) return false;
-        if (!th_is_closed(types, type)
-            && !add_open_type_parts(index, resolved, 0)) return false;
+        bool added = th_is_closed(types, type)
+            ? add_type(index, type, nullptr)
+            : add_open_type_parts(index, resolved, 0);
+        if (!added) {
+            core_free(order);
+            return false;
+        }
     }
+    core_free(order);
     for (size_t i = 0; i < ir_global_count(module); i++) {
         ir_global_t *global = ir_global_at(module, i);
         if (!global || !add_initializer_types(index,

@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(5)
+#define IR_ARCHIVE_VERSION UINT32_C(6)
 
 enum {
     REF_NONE,
@@ -593,7 +593,10 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
         ir_module_t *module = modules[m];
         for (size_t i = 0; i < module->n_types; i++) {
             ir_typeslot_t *slot = &module->types[i];
-            w_type(&w, slot->def);
+            // A slot holds the type's definition whether this module
+            // defined the type or only used it.
+            w_type(&w, slot->def ? slot->def
+                                 : ir_type_definition(module, slot->type));
             w_u64(&w, slot->n_descs);
             for (size_t d = 0; d < slot->n_descs; d++)
                 w_descriptor(&w, slot->descs[d]);

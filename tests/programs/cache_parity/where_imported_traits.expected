@@ -1,0 +1,13 @@
+where_imported_traits.n:7:26: error N00B-T0021: `string` does not implement `Integer`, which `Pair` requires
+  help: give `Pair` a type that implements `Integer`, or implement `Integer` for this one
+where_imported_traits.n:10:27: error N00B-T0021: `string` does not implement `Integer`, which `Num` requires
+  help: give `Num` a type that implements `Integer`, or implement `Integer` for this one
+where_imported_traits.n:13:26: error N00B-T0021: `string` does not implement `Integer`, which `Ints` requires
+  help: give `Ints` a type that implements `Integer`, or implement `Integer` for this one
+where_imported_traits.n:16:25: error N00B-T0515: `Pair` takes 2 type arguments, but 1 is given
+  lib/kinds.n:14:8: note: `Pair` is declared here
+  help: add the missing type argument
+where_imported_traits.n:19:6: warning N00B-N0019: function `shaped` is never called
+  help: call it or delete it
+where_imported_traits.n:20:13: note N00B-S0064: parameter `l` could be `view`: `shaped` never writes anything reachable from it
+status 1

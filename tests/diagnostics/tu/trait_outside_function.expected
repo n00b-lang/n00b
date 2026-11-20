@@ -1,0 +1,10 @@
+tests/diagnostics/tu/trait_outside_function.n:7:16: error N00B-T0600: `Scales` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Scales` here instead
+tests/diagnostics/tu/trait_outside_function.n:8:14: error N00B-T0600: `Scales` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Scales` here instead
+tests/diagnostics/tu/trait_outside_function.n:9:20: error N00B-T0600: `Integer` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Integer` here instead
+tests/diagnostics/tu/trait_outside_function.n:10:18: error N00B-T0600: `Integer` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Integer` here instead
+tests/diagnostics/tu/trait_outside_function.n:11:18: error N00B-T0600: `Integer` is a trait, which can only stand for a type inside a function
+  help: name the type that implements `Integer` here instead

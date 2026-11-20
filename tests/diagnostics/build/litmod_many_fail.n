@@ -1,0 +1,14 @@
+alias litmod reject = reject_text
+quotes litmod reject_text(raw: string) -> string fail: string {
+    fail "bad literal"
+}
+let too_large: string = "[#] and [#4294967296]"'r
+let fine: string = "[b]ok[/b] [#] [#0] [#name] [/]"'r
+let rejected: string = "anything"'reject
+let unmatched: string = "[b]x[/i] y"'r
+let after_reset: string = "[b]x[/] y[/b]"'r
+
+func value() -> string {
+    return "[#99999999999:x]"'r + too_large + fine + rejected + unmatched +
+        after_reset
+}

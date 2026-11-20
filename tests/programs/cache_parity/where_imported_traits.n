@@ -1,0 +1,22 @@
+// A trait named as a type in an imported record's `where` clause is a
+// constrained parameter of its own, whether the module comes from source
+// or from its cached interface (split from where_imported.n, which reaches
+// the error limit first).
+import kinds
+
+func paired(p: kinds.Pair[string, string]) -> int {
+    return 1
+}
+func numbered(n: kinds.Num[string]) -> int {
+    return 1
+}
+func listed(l: kinds.Ints[string]) -> int {
+    return 1
+}
+func short(p: kinds.Pair[int]) -> int {
+    return 1
+}
+func shaped(p: kinds.Pair[string, u8], n: kinds.Num[int],
+            l: kinds.Ints[u8]) -> int {
+    return 1
+}

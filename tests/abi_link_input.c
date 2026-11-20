@@ -349,6 +349,10 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
             assert(row);
             for (uint32_t local = 0; local < entry->record_count; local++) {
                 uint32_t final_index;
+                // The linked image copies one input's row for an identity;
+                // only that row's ranges are placed.
+                if (!n00bb_abi_index_plan_copies(plan, input, entry->kind,
+                                                 local)) continue;
                 assert(n00bb_abi_remap_row(selected, plan, input,
                     entry->kind, local, row, entry->record_bytes,
                     &stream)
@@ -407,82 +411,148 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
     free(values);
 }
 
-static void
-test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
+// Where a fixture object landed among the selected objects.
+static size_t
+fixture_input(const abi_fixture_graph_t *graph, size_t object_index)
 {
-    const core_string_t names[] = {S("builtin.cycle_long_a"),
-                                   S("builtin.cycle_long_b"),
-                                   S("builtin.cycle_long_c")};
-    core_translation_unit_t units[3] = {0};
-    n00bb_abi_object_input_t inputs[4] = {0};
-    uint8_t *objects[3];
-    size_t object_sizes[3];
+    return (size_t)(fixture_view(graph, object_index)
+                    - graph->selected.views);
+}
+
+static size_t
+fixture_named(const abi_fixture_graph_t *graph, core_string_t name)
+{
+    for (size_t i = 0; i < graph->count; i++)
+        if (core_string_eq(graph->objects[i].name, name)) return i;
+    assert(false);
+    return SIZE_MAX;
+}
+
+// How many modules the merged module row imports, and whether one of them
+// is the module at final index `target`.
+static bool
+merged_module_imports(const n00bb_abi_merged_rows_t *merged, uint32_t module,
+                      uint32_t target, uint32_t *count)
+{
+    const n00b_abi_module_v1 *row = n00bb_abi_merged_row(merged,
+        N00B_ABI_TABLE_MODULE, module);
+    const n00bb_abi_merged_table_t *stream = n00bb_abi_merged_table(merged,
+        N00B_ABI_TABLE_U32_STREAM);
+    assert(row && stream
+        && row->imports.first + row->imports.count <= stream->record_count);
+    *count = row->imports.count;
+    bool found = false;
+    for (uint32_t i = 0; i < row->imports.count; i++)
+        found = found || core_le_load_u32(stream->records
+            + (size_t)(row->imports.first + i) * stream->record_bytes)
+            == target;
+    return found;
+}
+
+// The merged module requirements one module makes.
+static uint32_t
+merged_module_requirements(const n00bb_abi_merged_rows_t *merged,
+                           uint32_t module)
+{
+    const n00bb_abi_merged_table_t *table = n00bb_abi_merged_table(merged,
+        N00B_ABI_TABLE_REQUIREMENT);
+    assert(table);
+    uint32_t count = 0;
+    for (uint32_t i = 1; i < table->record_count; i++) {
+        const n00b_abi_requirement_v1 *row = n00bb_abi_merged_row(merged,
+            N00B_ABI_TABLE_REQUIREMENT, i);
+        assert(row);
+        if (row->requesting_module_index == module
+            && row->symbol_kind == N00B_ABI_SYMBOL_MODULE) count++;
+    }
+    return count;
+}
+
+// The three-module cycle cycles.cycle_long_a -> b -> c -> a, linked with
+// the library modules it requires (each member imports `builtin`, as every
+// user module does). The checks are about the cycle, whatever the library
+// adds: its members are selected, form one SCC and one package of their
+// own, import each other and `builtin`, and link with every requirement
+// resolved.
+static void
+test_cycle_selection(const core_string_t *paths, size_t count,
+                     core_string_t linked_path)
+{
+    const core_string_t names[] = {S("cycles.cycle_long_a"),
+                                   S("cycles.cycle_long_b"),
+                                   S("cycles.cycle_long_c")};
+    assert(count > 3);
+    abi_fixture_graph_t graph = {0};
+    select_fixture_graph(&graph, paths, count);
+    n00bb_abi_selected_objects_t *selected = &graph.selected;
+    core_target_desc_t target = graph.target;
+    size_t inputs[3];
     for (size_t i = 0; i < 3; i++) {
-        assert(init_unit(&units[i], names[i]));
-        objects[i] = read_object(paths[i], &object_sizes[i]);
-        inputs[2 - i] = (n00bb_abi_object_input_t){
-            .module = i == 2 ? (core_string_t){0} : names[i],
-            .object = objects[i], .object_bytes = object_sizes[i],
-        };
+        assert(core_string_eq(graph.objects[i].name, names[i]));
+        inputs[i] = fixture_input(&graph, i);
+        const n00bb_abi_object_view_t *view = &selected->views[inputs[i]];
+        assert(fixture_requirement(view, N00B_ABI_SYMBOL_MODULE,
+                                   names[(i + 1) % 3])
+            && fixture_requirement(view, N00B_ABI_SYMBOL_MODULE,
+                                   S("builtin.__init")));
     }
-    size_t archive_bytes = 0;
-    uint8_t *archive = archive_object(objects[2], object_sizes[2],
-                                      &archive_bytes);
-    n00bb_abi_archive_inputs_t archive_inputs = {0};
-    core_target_desc_t target;
-    assert(host_target(&target));
-    assert(!n00bb_abi_archive_inputs_open(&target, archive,
-        archive_bytes - 1, &archive_inputs) && !archive_inputs.objects);
-    assert(n00bb_abi_archive_inputs_open(&target, archive,
-        archive_bytes, &archive_inputs) && archive_inputs.count == 1
-        && core_string_eq(archive_inputs.objects[0].module,
-            CORE_STRING_STATIC("builtin.cycle_long_c")));
-    inputs[0] = archive_inputs.objects[0];
-    inputs[3].module = CORE_STRING_STATIC("unrelated");
-    assert(core_translation_unit_add_import(&units[0], &units[1])
-        && core_translation_unit_add_import(&units[1], &units[2])
-        && core_translation_unit_add_import(&units[2], &units[0]));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &units[0])
-        && core_link_unit_finalize_graph(link));
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
-        && selected.count == 3);
-    for (size_t i = 0; i < selected.count; i++)
-        assert(selected.views[i].object);
-    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    size_t builtin_input = fixture_input(&graph,
+        fixture_named(&graph, S("builtin.__init")));
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(selected);
     assert(plan);
-    uint32_t packages, modules, sccs, types;
-    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_PACKAGE,
-        &packages) && packages == 2);
+    uint32_t module_count, builtin_module;
     assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_MODULE,
-        &modules) && modules == 4);
-    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_SCC,
-        &sccs) && sccs == 2);
-    assert(n00bb_abi_index_plan_count(plan, N00B_ABI_TABLE_TYPE,
-        &types) && types > 1);
-    uint32_t stream_base = 0;
-    for (size_t i = 0; i < selected.count; i++) {
-        uint32_t mapped = UINT32_MAX;
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_TYPE,
-            0, &mapped) && mapped == 0);
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_PACKAGE,
-            1, &mapped) && mapped == 1);
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_MODULE,
-            1, &mapped) && mapped == i + 1);
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_SCC,
-            1, &mapped) && mapped == 1);
-        const n00bb_abi_directory_entry_t *stream =
-            n00bb_abi_object_table(&selected.views[i],
-                N00B_ABI_TABLE_U32_STREAM);
-        assert(stream && n00bb_abi_index_plan_map(plan, i,
-            N00B_ABI_TABLE_U32_STREAM, 0, &mapped)
-            && mapped == stream_base);
-        stream_base += stream->record_count;
+            &module_count) && module_count == selected->count + 1
+        && n00bb_abi_index_plan_map(plan, builtin_input,
+            N00B_ABI_TABLE_MODULE, 1, &builtin_module));
+    uint32_t modules[3], package = 0, scc = 0;
+    for (size_t i = 0; i < 3; i++) {
+        uint32_t member_package, member_scc;
+        assert(n00bb_abi_index_plan_map(plan, inputs[i],
+                N00B_ABI_TABLE_MODULE, 1, &modules[i])
+            && n00bb_abi_index_plan_map(plan, inputs[i],
+                N00B_ABI_TABLE_PACKAGE, 1, &member_package)
+            && n00bb_abi_index_plan_map(plan, inputs[i],
+                N00B_ABI_TABLE_SCC, 1, &member_scc));
+        if (!i) {
+            package = member_package;
+            scc = member_scc;
+        }
+        assert(member_package == package && member_scc == scc
+            && modules[i] != builtin_module);
+        for (size_t j = 0; j < i; j++) assert(modules[j] != modules[i]);
     }
+    // The cycle's SCC and package hold nothing else.
+    uint32_t stream_base = 0;
+    for (size_t v = 0; v < selected->count; v++) {
+        uint32_t mapped = UINT32_MAX;
+        const n00bb_abi_directory_entry_t *stream = n00bb_abi_object_table(
+            &selected->views[v], N00B_ABI_TABLE_U32_STREAM);
+        assert(n00bb_abi_index_plan_map(plan, v, N00B_ABI_TABLE_TYPE, 0,
+                &mapped) && mapped == 0
+            && stream && n00bb_abi_index_plan_map(plan, v,
+                N00B_ABI_TABLE_U32_STREAM, 0, &mapped)
+            && mapped == stream_base);
+        // An input's stream entries that no linked row refers to are
+        // dropped; the next input's follow the ones that are kept.
+        for (uint32_t local = 0; local < stream->record_count; local++)
+            if (n00bb_abi_index_plan_map(plan, v,
+                    N00B_ABI_TABLE_U32_STREAM, local, &mapped))
+                stream_base++;
+        if (v == inputs[0] || v == inputs[1] || v == inputs[2]) continue;
+        assert(n00bb_abi_index_plan_map(plan, v, N00B_ABI_TABLE_PACKAGE, 1,
+            &mapped) && mapped != package);
+        const n00bb_abi_directory_entry_t *sccs = n00bb_abi_object_table(
+            &selected->views[v], N00B_ABI_TABLE_SCC);
+        if (sccs && sccs->record_count > 1)
+            assert(n00bb_abi_index_plan_map(plan, v, N00B_ABI_TABLE_SCC, 1,
+                &mapped) && mapped != scc);
+    }
+    // Rows that must agree across the members, and remapping that must
+    // refuse bad ones.
     bool shared_primitive = false;
-    const n00bb_abi_object_view_t *first = &selected.views[0];
-    const n00bb_abi_object_view_t *second = &selected.views[1];
+    const n00bb_abi_object_view_t *first = &selected->views[inputs[0]];
+    const n00bb_abi_object_view_t *second = &selected->views[inputs[1]];
     const n00bb_abi_directory_entry_t *first_types =
         n00bb_abi_object_table(first, N00B_ABI_TABLE_TYPE);
     const n00bb_abi_directory_entry_t *second_types =
@@ -499,9 +569,10 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
             if (b->kind != N00B_ABI_TYPE_PRIMITIVE
                 || b->typehash != a->typehash) continue;
             uint32_t left, right;
-            assert(n00bb_abi_index_plan_map(plan, 0, N00B_ABI_TABLE_TYPE,
-                i, &left) && n00bb_abi_index_plan_map(plan, 1,
-                N00B_ABI_TABLE_TYPE, j, &right) && left == right);
+            assert(n00bb_abi_index_plan_map(plan, inputs[0],
+                    N00B_ABI_TABLE_TYPE, i, &left)
+                && n00bb_abi_index_plan_map(plan, inputs[1],
+                    N00B_ABI_TABLE_TYPE, j, &right) && left == right);
             shared_primitive = true;
             const n00b_abi_layout_v1 *layout = n00bb_abi_object_row(second,
                 N00B_ABI_TABLE_LAYOUT, b->layout_index);
@@ -517,30 +588,31 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
     assert(shared_primitive && layout_probe);
     n00b_abi_type_v1 *type_probe = nullptr;
     uint32_t type_probe_index = 0;
-    for (uint32_t i = 1; i < first_types->record_count; i++) {
+    for (uint32_t i = 1; !type_probe && i < first_types->record_count; i++) {
         n00b_abi_type_v1 *candidate = (void *)n00bb_abi_object_row(first,
             N00B_ABI_TABLE_TYPE, i);
         if (candidate && candidate->kind == N00B_ABI_TYPE_PRIMITIVE) {
             type_probe = candidate;
             type_probe_index = i;
-            break;
         }
     }
     assert(type_probe);
     n00b_abi_type_v1 remapped_type;
     type_probe->kind = N00B_ABI_TYPE_OBJECT + 1;
-    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
-        type_probe_index, &remapped_type, sizeof(remapped_type), nullptr));
+    assert(!n00bb_abi_remap_row(selected, plan, inputs[0],
+        N00B_ABI_TABLE_TYPE, type_probe_index, &remapped_type,
+        sizeof(remapped_type), nullptr));
     type_probe->kind = N00B_ABI_TYPE_PRIMITIVE;
     uint32_t saved_type_flags = type_probe->flags;
     type_probe->flags = UINT32_MAX;
-    assert(!n00bb_abi_remap_row(&selected, plan, 0, N00B_ABI_TABLE_TYPE,
-        type_probe_index, &remapped_type, sizeof(remapped_type), nullptr));
+    assert(!n00bb_abi_remap_row(selected, plan, inputs[0],
+        N00B_ABI_TABLE_TYPE, type_probe_index, &remapped_type,
+        sizeof(remapped_type), nullptr));
     type_probe->flags = saved_type_flags;
     layout_probe->width_bits ^= 1;
-    assert(!n00bb_abi_index_plan_build(&selected));
+    assert(!n00bb_abi_index_plan_build(selected));
     layout_probe->width_bits ^= 1;
-    check_remapped_rows(&selected, plan);
+    check_remapped_rows(selected, plan);
     n00b_abi_module_v1 *module = (void *)n00bb_abi_object_row(first,
         N00B_ABI_TABLE_MODULE, 1);
     n00b_abi_module_v1 remapped_module;
@@ -551,47 +623,50 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
     for (size_t i = 0; i < sizeof(required) / sizeof(*required); i++) {
         uint32_t saved = *required[i];
         *required[i] = 0;
-        assert(!n00bb_abi_remap_row(&selected, plan, 0,
+        assert(!n00bb_abi_remap_row(selected, plan, inputs[0],
             N00B_ABI_TABLE_MODULE, 1, &remapped_module,
             sizeof(remapped_module), nullptr));
         *required[i] = saved;
     }
     uint32_t saved_scc = module->scc_index;
     module->scc_index = 0;
-    assert(n00bb_abi_remap_row(&selected, plan, 0,
+    assert(n00bb_abi_remap_row(selected, plan, inputs[0],
         N00B_ABI_TABLE_MODULE, 1, &remapped_module,
         sizeof(remapped_module), nullptr));
     module->scc_index = saved_scc;
+    // The manifests: one package and one SCC of exactly the three, in
+    // their lexical order.
     n00bb_abi_manifest_rows_t manifests = {0};
-    assert(n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
-        && manifests.package_count == 2 && manifests.scc_count == 2
-        && manifests.packages[1].modules.count == 3
-        && manifests.sccs[1].members.count == 3
-        && manifests.sccs[1].lexical_order.count == 3);
-    for (size_t i = 0; i < selected.count; i++) {
-        uint32_t module_index;
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_MODULE,
-            1, &module_index));
-        assert(manifests.u32_stream[manifests.packages[1].modules.first + i]
-            == module_index);
-        assert(manifests.u32_stream[manifests.sccs[1].members.first + i]
-            == module_index);
+    assert(n00bb_abi_rebuild_manifests(selected, plan, &manifests)
+        && package < manifests.package_count && scc < manifests.scc_count
+        && manifests.packages[package].modules.count == 3
+        && manifests.sccs[scc].members.count == 3
+        && manifests.sccs[scc].lexical_order.count == 3);
+    for (size_t i = 0; i < 3; i++) {
+        bool in_package = false, in_scc = false;
+        for (uint32_t k = 0; k < 3; k++) {
+            in_package = in_package || manifests.u32_stream[
+                manifests.packages[package].modules.first + k] == modules[i];
+            in_scc = in_scc || manifests.u32_stream[
+                manifests.sccs[scc].members.first + k] == modules[i];
+        }
         const n00b_abi_scc_v1 *fragment = n00bb_abi_object_row(
-            &selected.views[i], N00B_ABI_TABLE_SCC, 1);
-        const uint8_t *ordinal_slot = n00bb_abi_object_row(
-            &selected.views[i], N00B_ABI_TABLE_U32_STREAM,
-            fragment->lexical_order.first);
-        uint32_t ordinal = core_le_load_u32(ordinal_slot);
-        assert(ordinal < 3
+            &selected->views[inputs[i]], N00B_ABI_TABLE_SCC, 1);
+        uint32_t ordinal = core_le_load_u32(n00bb_abi_object_row(
+            &selected->views[inputs[i]], N00B_ABI_TABLE_U32_STREAM,
+            fragment->lexical_order.first));
+        assert(in_package && in_scc && ordinal < 3
             && manifests.u32_stream[
-                manifests.sccs[1].lexical_order.first + ordinal]
-                == module_index);
+                manifests.sccs[scc].lexical_order.first + ordinal]
+                == modules[i]);
     }
     n00bb_abi_manifest_rows_release(&manifests);
+    // The merged rows: each member imports the next and `builtin`, and
+    // its two module requirements are kept.
     n00bb_abi_merged_rows_t merged = {0};
-    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
+    assert(n00bb_abi_merge_rows(selected, plan, &merged));
     n00bb_abi_native_sections_t native_sections = {0};
-    assert(n00bb_abi_collect_native_sections(&selected, &target,
+    assert(n00bb_abi_collect_native_sections(selected, &target,
         &native_sections));
     assert(n00bb_abi_rebase_native_references(&merged, native_sections.maps,
         native_sections.map_count, nullptr, nullptr));
@@ -601,12 +676,12 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
         core_object_section_t source;
         core_string_t name = map->section < native_sections.count
             ? native_sections.sections[map->section].name : NONE;
-        assert(name.data && map->input < selected.count
+        assert(name.data && map->input < selected->count
             && map->local_section_index !=
-                selected.views[map->input].metadata.native_index
-            && core_object_section_at(selected.views[map->input].object,
-                selected.views[map->input].object_bytes, target.object_format,
-                map->local_section_index, &source)
+                selected->views[map->input].metadata.native_index
+            && core_object_section_at(selected->views[map->input].object,
+                selected->views[map->input].object_bytes,
+                target.object_format, map->local_section_index, &source)
             && core_string_eq(bytes_text(source.name, source.name_length),
                               name)
             && map->base_offset + map->size
@@ -615,41 +690,35 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
     n00bb_abi_native_sections_release(&native_sections);
     const n00bb_abi_merged_table_t *merged_modules =
         n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_MODULE);
-    const n00bb_abi_merged_table_t *merged_u32 =
-        n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_U32_STREAM);
     const n00b_abi_package_v1 *merged_package =
-        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_PACKAGE, 1);
+        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_PACKAGE, package);
     const n00b_abi_scc_v1 *merged_scc =
-        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_SCC, 1);
-    const n00bb_abi_merged_table_t *merged_requirements =
-        n00bb_abi_merged_table(&merged, N00B_ABI_TABLE_REQUIREMENT);
-    assert(merged_modules && merged_modules->record_count == 4
-        && merged_u32 && merged_u32->record_count > stream_base
+        n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_SCC, scc);
+    assert(merged_modules && merged_modules->record_count == module_count
         && merged_package && merged_package->modules.count == 3
         && merged_scc && merged_scc->members.count == 3
-        && merged_scc->lexical_order.count == 3
-        && merged_requirements && merged_requirements->record_count == 4
-        && n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_TYPE, 0));
-    for (size_t i = 0; i < selected.count; i++) {
+        && merged_scc->lexical_order.count == 3);
+    for (size_t i = 0; i < 3; i++) {
         const n00b_abi_module_v1 *row = n00bb_abi_merged_row(&merged,
-            N00B_ABI_TABLE_MODULE, (uint32_t)i + 1);
-        const n00b_abi_requirement_v1 *requirement =
-            n00bb_abi_merged_row(&merged, N00B_ABI_TABLE_REQUIREMENT,
-                                  (uint32_t)i + 1);
-        assert(row && row->package_index == 1 && row->scc_index == 1
-            && row->imports.count == 1 && requirement
-            && requirement->requesting_module_index == i + 1);
-        const uint32_t *values = (const void *)merged_u32->records;
-        assert(values[merged_package->modules.first + i] == i + 1
-            && values[merged_scc->members.first + i] == i + 1
-            && values[row->imports.first] == (i + 1) % 3 + 1);
+            N00B_ABI_TABLE_MODULE, modules[i]);
+        uint32_t imports = 0;
+        assert(row && row->package_index == package
+            && row->scc_index == scc
+            && merged_module_imports(&merged, modules[i],
+                modules[(i + 1) % 3], &imports)
+            && merged_module_imports(&merged, modules[i], builtin_module,
+                &imports)
+            && imports == 2
+            && merged_module_requirements(&merged, modules[i]) == 2);
     }
     assert(n00bb_abi_name_pool_size(merged.strings) > 0);
     n00bb_abi_merged_rows_release(&merged);
     assert(!merged.tables && !merged.strings);
+    // Linked, every requirement is resolved, and the members keep their
+    // names.
     uint8_t *linked = nullptr;
     size_t linked_bytes = 0;
-    assert(n00bb_abi_link_selected_objects(&selected, &target,
+    assert(n00bb_abi_link_selected_objects(selected, &target,
         &linked, &linked_bytes)
         && count_string_pool_sections(linked, linked_bytes, &target) == 1);
     n00bb_abi_object_view_t final_view = {0};
@@ -657,36 +726,48 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
         &final_view));
     const n00bb_abi_directory_entry_t *final_modules =
         n00bb_abi_object_table(&final_view, N00B_ABI_TABLE_MODULE);
-    const n00bb_abi_directory_entry_t *final_sccs =
-        n00bb_abi_object_table(&final_view, N00B_ABI_TABLE_SCC);
-    const n00b_abi_module_v1 *first_module = n00bb_abi_object_row(
-        &final_view, N00B_ABI_TABLE_MODULE, 1);
-    n00bb_abi_string_view_t first_name;
-    core_translation_unit_t *first_unit =
-        core_link_unit_translation_unit(link, 0);
-    assert(final_modules && final_modules->record_count == 4
-        && final_sccs && final_sccs->record_count == 2
+    assert(final_modules && final_modules->record_count == module_count
         && !n00bb_abi_object_table(&final_view,
             N00B_ABI_TABLE_REQUIREMENT)
         && !n00bb_abi_object_table(&final_view,
-            N00B_ABI_TABLE_INDEX_PATCH)
-        && first_module && first_unit
-        && n00bb_abi_object_string(&final_view,
-            &first_module->full_path, &first_name)
-        && first_name.length == first_unit->module.identifier.u8_bytes
-        && !memcmp(first_name.bytes, first_unit->module.identifier.data,
-            first_name.length));
+            N00B_ABI_TABLE_INDEX_PATCH));
+    for (size_t i = 0; i < 3; i++) {
+        const n00b_abi_module_v1 *row = n00bb_abi_object_row(&final_view,
+            N00B_ABI_TABLE_MODULE, modules[i]);
+        n00bb_abi_string_view_t name;
+        assert(row && n00bb_abi_object_string(&final_view, &row->full_path,
+                                              &name)
+            && core_string_eq(view_text(name), names[i]));
+    }
     n00bb_abi_object_close(&final_view);
+    core_free(linked);
+    // The last member may come from an archive, and an input no module
+    // asks for is passed over.
+    size_t archive_bytes = 0;
+    uint8_t *archive = archive_object(graph.objects[2].object,
+        graph.objects[2].object_bytes, &archive_bytes);
+    n00bb_abi_archive_inputs_t archive_inputs = {0};
+    assert(!n00bb_abi_archive_inputs_open(&target, archive,
+        archive_bytes - 1, &archive_inputs) && !archive_inputs.objects);
+    assert(n00bb_abi_archive_inputs_open(&target, archive,
+        archive_bytes, &archive_inputs) && archive_inputs.count == 1
+        && core_string_eq(archive_inputs.objects[0].module, names[2]));
+    n00bb_abi_object_input_t *candidates = calloc(count + 1,
+                                                  sizeof(*candidates));
+    assert(candidates);
+    memcpy(candidates, graph.inputs, count * sizeof(*candidates));
+    candidates[count - 3] = archive_inputs.objects[0];
+    candidates[count].module = CORE_STRING_STATIC("unrelated");
     uint8_t *wrapped = nullptr;
     size_t wrapped_bytes = 0;
-    assert(n00bb_abi_link_objects(link, &target, inputs, 4,
-        &wrapped, &wrapped_bytes));
+    assert(n00bb_abi_link_objects(graph.link, &target, candidates,
+        count + 1, &wrapped, &wrapped_bytes));
     n00bb_abi_object_view_t wrapped_view = {0};
     assert(n00bb_abi_object_open(&target, wrapped, wrapped_bytes,
         &wrapped_view));
     const n00bb_abi_directory_entry_t *wrapped_modules =
         n00bb_abi_object_table(&wrapped_view, N00B_ABI_TABLE_MODULE);
-    assert(wrapped_modules && wrapped_modules->record_count == 4);
+    assert(wrapped_modules && wrapped_modules->record_count == module_count);
     n00bb_abi_object_close(&wrapped_view);
     if (linked_path.data) {
         char *c_linked_path = core_string_to_cstr(linked_path);
@@ -696,108 +777,108 @@ test_cycle_selection(const core_string_t *paths, core_string_t linked_path)
             && !fclose(file));
     }
     core_free(wrapped);
-    core_free(linked);
-    n00b_abi_requirement_v1 *bad_import = (void *)n00bb_abi_object_row(
-        &selected.views[0], N00B_ABI_TABLE_REQUIREMENT, 1);
+    // A broken requirement to the next member, or a package the members
+    // disagree on, fails the link.
+    n00b_abi_requirement_v1 *bad_import = (void *)fixture_requirement(first,
+        N00B_ABI_SYMBOL_MODULE, names[1]);
     n00b_abi_string_v1 saved_import = bad_import->full_path;
     bad_import->full_path = (n00b_abi_string_v1){0};
-    assert(!n00bb_abi_merge_rows(&selected, plan, &merged)
+    assert(!n00bb_abi_merge_rows(selected, plan, &merged)
         && !merged.tables && !merged.strings);
     bad_import->full_path = saved_import;
     uint32_t saved_kind = bad_import->symbol_kind;
     bad_import->symbol_kind = N00B_ABI_SYMBOL_FUNCTION;
     linked = nullptr;
     linked_bytes = 0;
-    assert(!n00bb_abi_link_selected_objects(&selected, &target,
+    assert(!n00bb_abi_link_selected_objects(selected, &target,
         &linked, &linked_bytes) && !linked && !linked_bytes);
     bad_import->symbol_kind = saved_kind;
     n00b_abi_package_v1 *conflicting_package = (void *)
-        n00bb_abi_object_row(&selected.views[1], N00B_ABI_TABLE_PACKAGE, 1);
+        n00bb_abi_object_row(second, N00B_ABI_TABLE_PACKAGE, 1);
     uint32_t saved_visibility = conflicting_package->visibility;
     conflicting_package->visibility = UINT32_MAX;
-    assert(!n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+    assert(!n00bb_abi_rebuild_manifests(selected, plan, &manifests)
         && !manifests.packages && !manifests.u32_stream);
     conflicting_package->visibility = saved_visibility;
-    for (size_t i = 0; i < selected.count; i++) {
-        n00b_abi_package_v1 *package = (void *)n00bb_abi_object_row(
-            &selected.views[i], N00B_ABI_TABLE_PACKAGE, 1);
-        assert(package && !package->parent_package_index);
-        package->parent_package_index = 1;
+    for (size_t i = 0; i < 3; i++) {
+        n00b_abi_package_v1 *member_package = (void *)n00bb_abi_object_row(
+            &selected->views[inputs[i]], N00B_ABI_TABLE_PACKAGE, 1);
+        assert(member_package && !member_package->parent_package_index);
+        member_package->parent_package_index = 1;
     }
-    assert(!n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
+    assert(!n00bb_abi_rebuild_manifests(selected, plan, &manifests)
         && !manifests.packages && !manifests.u32_stream);
-    for (size_t i = 0; i < selected.count; i++) {
-        n00b_abi_package_v1 *package = (void *)n00bb_abi_object_row(
-            &selected.views[i], N00B_ABI_TABLE_PACKAGE, 1);
-        package->parent_package_index = 0;
+    for (size_t i = 0; i < 3; i++) {
+        n00b_abi_package_v1 *member_package = (void *)n00bb_abi_object_row(
+            &selected->views[inputs[i]], N00B_ABI_TABLE_PACKAGE, 1);
+        member_package->parent_package_index = 0;
     }
     n00bb_abi_index_plan_free(plan);
-    n00bb_abi_selected_objects_release(&selected);
-    assert(!selected.views && !selected.count);
-    assert(!n00bb_abi_select_objects(link, &target, inputs, 2, &selected)
-        && !selected.views);
+    // Selection needs every member, once.
+    n00bb_abi_selected_objects_t partial = {0};
+    memcpy(candidates, graph.inputs, count * sizeof(*candidates));
+    candidates[count] = graph.inputs[count - 1];
+    assert(!n00bb_abi_select_objects(graph.link, &target, candidates,
+        count + 1, &partial) && !partial.views);
+    candidates[count - 2] = (n00bb_abi_object_input_t){
+        .module = CORE_STRING_STATIC("unrelated"),
+    };
+    assert(!n00bb_abi_select_objects(graph.link, &target, candidates,
+        count, &partial) && !partial.views);
     wrapped = nullptr;
     wrapped_bytes = 0;
-    assert(!n00bb_abi_link_objects(link, &target, inputs, 2,
+    assert(!n00bb_abi_link_objects(graph.link, &target, candidates, count,
         &wrapped, &wrapped_bytes) && !wrapped && !wrapped_bytes);
-    inputs[3] = inputs[0];
-    assert(!n00bb_abi_select_objects(link, &target, inputs, 4, &selected)
-        && !selected.views);
-    core_link_unit_free(link);
+    free(candidates);
     n00bb_abi_archive_inputs_release(&archive_inputs);
     free(archive);
-    for (size_t i = 0; i < 3; i++) {
-        core_translation_unit_release(&units[i]);
-        free(objects[i]);
-    }
+    release_fixture_graph(&graph);
 }
 
+// A module importing itself, linked with the library modules it requires:
+// it is its own one-member SCC, and imports itself and `builtin`.
 static void
-test_self_import_selection(core_string_t path)
+test_self_import_selection(const core_string_t *paths, size_t count)
 {
-    core_translation_unit_t unit = {0};
-    assert(init_unit(&unit, S("builtin.cycle_self"))
-        && core_translation_unit_add_import(&unit, &unit));
-    core_link_unit_t *link = core_link_unit_new();
-    assert(link && core_link_unit_add_root(link, &unit)
-        && core_link_unit_finalize_graph(link));
-    size_t object_bytes;
-    uint8_t *object = read_object(path, &object_bytes);
-    n00bb_abi_object_input_t input = {
-        .module = unit.module.identifier,
-        .object = object, .object_bytes = object_bytes,
-    };
-    core_target_desc_t target;
-    assert(host_target(&target));
-    n00bb_abi_selected_objects_t selected = {0};
-    assert(n00bb_abi_select_objects(link, &target, &input, 1, &selected)
-        && selected.count == 1);
-    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
+    assert(count > 1);
+    abi_fixture_graph_t graph = {0};
+    select_fixture_graph(&graph, paths, count);
+    assert(IS(graph.objects[0].name, "cycles.cycle_self"));
+    n00bb_abi_selected_objects_t *selected = &graph.selected;
+    size_t input = fixture_input(&graph, 0);
+    const n00bb_abi_object_view_t *view = &selected->views[input];
+    assert(fixture_requirement(view, N00B_ABI_SYMBOL_MODULE,
+                               S("cycles.cycle_self"))
+        && fixture_requirement(view, N00B_ABI_SYMBOL_MODULE,
+                               S("builtin.__init")));
+    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(selected);
+    uint32_t module, scc, builtin_module;
+    assert(plan && n00bb_abi_index_plan_map(plan, input,
+            N00B_ABI_TABLE_MODULE, 1, &module)
+        && n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_SCC, 1,
+            &scc)
+        && n00bb_abi_index_plan_map(plan, fixture_input(&graph,
+                fixture_named(&graph, S("builtin.__init"))),
+            N00B_ABI_TABLE_MODULE, 1, &builtin_module));
     n00bb_abi_manifest_rows_t manifests = {0};
-    assert(plan && n00bb_abi_rebuild_manifests(&selected, plan, &manifests)
-        && manifests.package_count == 2 && manifests.scc_count == 2
-        && manifests.sccs[1].members.count == 1
-        && manifests.sccs[1].lexical_order.count == 1
-        && manifests.u32_stream[manifests.sccs[1].members.first] == 1
-        && manifests.u32_stream[manifests.sccs[1].lexical_order.first] == 1);
+    assert(n00bb_abi_rebuild_manifests(selected, plan, &manifests)
+        && scc < manifests.scc_count
+        && manifests.sccs[scc].members.count == 1
+        && manifests.sccs[scc].lexical_order.count == 1
+        && manifests.u32_stream[manifests.sccs[scc].members.first] == module
+        && manifests.u32_stream[manifests.sccs[scc].lexical_order.first]
+            == module);
     n00bb_abi_manifest_rows_release(&manifests);
     n00bb_abi_merged_rows_t merged = {0};
-    assert(n00bb_abi_merge_rows(&selected, plan, &merged));
-    const n00b_abi_module_v1 *merged_module = n00bb_abi_merged_row(
-        &merged, N00B_ABI_TABLE_MODULE, 1);
-    const n00bb_abi_merged_table_t *stream = n00bb_abi_merged_table(
-        &merged, N00B_ABI_TABLE_U32_STREAM);
-    assert(merged_module && merged_module->imports.count == 1
-        && stream && merged_module->imports.first < stream->record_count
-        && core_le_load_u32(stream->records
-            + (size_t)merged_module->imports.first * stream->record_bytes)
-               == 1);
+    assert(n00bb_abi_merge_rows(selected, plan, &merged));
+    uint32_t imports = 0;
+    assert(merged_module_imports(&merged, module, module, &imports)
+        && merged_module_imports(&merged, module, builtin_module, &imports)
+        && imports == 2
+        && merged_module_requirements(&merged, module) == 2);
     n00bb_abi_merged_rows_release(&merged);
     n00bb_abi_index_plan_free(plan);
-    n00bb_abi_selected_objects_release(&selected);
-    core_link_unit_free(link);
-    core_translation_unit_release(&unit);
-    free(object);
+    release_fixture_graph(&graph);
 }
 
 static uint32_t
@@ -886,8 +967,9 @@ test_imported_record_selection(const core_string_t *paths, size_t object_count)
         N00B_ABI_TABLE_TYPE, root_type);
     const n00b_abi_type_v1 *definition = n00bb_abi_object_row(dep_view,
         N00B_ABI_TABLE_TYPE, dep_type);
+    // The using module lays the record out as the declaring module does.
     assert(root_type && dep_type && reference && definition
-        && !reference->owner_module_index && !reference->layout_index
+        && !reference->owner_module_index && reference->layout_index
         && definition->owner_module_index == 1
         && definition->layout_index);
     const n00b_abi_requirement_v1 *type_requirement =
@@ -2516,8 +2598,12 @@ test_type_backlinks_remap(void)
         .directory_count = sizeof(directory) / sizeof(*directory),
     };
     n00bb_abi_selected_objects_t selected = {.views = &view, .count = 1};
+    // The plan places the stream entries the rows refer to when it is
+    // built, so it sees the longest member range the checks below use.
+    metadata.types[1].fields_or_arms.count = 2;
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
+    metadata.types[1].fields_or_arms.count = 1;
     uint32_t values[2] = {0}, kinds[2] = {0};
     n00bb_abi_u32_stream_build_t stream = {
         .values = values, .kinds = kinds, .count = 2,
@@ -3632,7 +3718,8 @@ main(int argc, char **argv)
     assert(argc == 2 || argc == 3 || argc == 4 || argc == 5
         || (argc > 5 && (IS(args[1], "--records")
             || IS(args[1], "--function-import")
-            || IS(args[1], "--value-import"))));
+            || IS(args[1], "--value-import")
+            || IS(args[1], "--cycle") || IS(args[1], "--self"))));
     test_native_string_pool_consolidation();
     test_link_index_patch();
     test_type_variable_shape();
@@ -3663,8 +3750,15 @@ main(int argc, char **argv)
         test_imported_generic_owner(args[2], args[3], args[4]);
         return 0;
     }
-    if (argc == 5) {
-        test_cycle_selection(args + 1, args[4]);
+    // --cycle LINKED A B C LIBRARY...: the cycle's three members, then the
+    // library modules they require.
+    if (argc > 6 && IS(args[1], "--cycle")) {
+        test_cycle_selection(args + 3, (size_t)argc - 3, args[2]);
+        return 0;
+    }
+    // --self MODULE LIBRARY...
+    if (argc > 3 && IS(args[1], "--self")) {
+        test_self_import_selection(args + 2, (size_t)argc - 2);
         return 0;
     }
     if (argc >= 4 && IS(args[1], "--value-import")) {
@@ -3686,13 +3780,10 @@ main(int argc, char **argv)
             test_generic_type_identity(args[2], args[3]);
             return 0;
         }
-        test_cycle_selection(args + 1, NONE);
-        return 0;
+        assert(false);
     }
     if (argc == 3) {
-        if (IS(args[1], "--self"))
-            test_self_import_selection(args[2]);
-        else if (IS(args[1], "--linked-library"))
+        if (IS(args[1], "--linked-library"))
             test_linked_library_object(args[2]);
         else if (IS(args[1], "--trait-type-import"))
             test_trait_type_import(args[2]);

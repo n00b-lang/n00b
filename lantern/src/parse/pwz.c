@@ -12,9 +12,144 @@
 #include "scanner/lex.h"
 
 #include <assert.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+// A parser's expression graph, which depends only on the grammar (version),
+// kept between parsers on one thread: a module's parser builds it from the
+// grammar, and the next parser on that thread takes it over once the first
+// has finished parsing, instead of building its own. Its memos are clear when
+// it is pooled, and its filter caches hold for the same grammar version.
+typedef struct pwz_graph_t {
+    parse_grammar_t            *grammar;
+    uint64_t                    version;
+    core_list_t(pwz_exp_ptr_t)  all_exps;
+    pwz_exp_ptr_t              *nt_exps;
+} pwz_graph_t;
+
+static void
+free_exps(core_list_t(pwz_exp_ptr_t) *all_exps, pwz_exp_ptr_t *nt_exps)
+{
+    for (size_t i = 0; i < all_exps->len; i++) {
+        pwz_exp_t *e = all_exps->data[i];
+
+        if (e->kind == PWZ_SEQ && e->seq.children) {
+            core_free(e->seq.children);
+        }
+        else if (e->kind == PWZ_ALT) {
+            core_list_free(e->alt.alts);
+        }
+
+        core_free(e);
+    }
+    core_list_free(*all_exps);
+    core_free(nt_exps);
+}
+
+static void
+free_graph(void *opaque)
+{
+    pwz_graph_t *graph = opaque;
+    if (!graph) return;
+    free_exps(&graph->all_exps, graph->nt_exps);
+    core_free(graph);
+}
+
+// A thread's pooled graphs, one per grammar version in use (a thread may
+// alternate grammars: annotation arguments are parsed while a grammar file
+// is), the most recently pooled first.
+#define GRAPH_POOL_SLOTS 4
+
+typedef struct {
+    pwz_graph_t *slots[GRAPH_POOL_SLOTS];
+} graph_pool_t;
+
+static pthread_key_t graph_pool_key;
+static pthread_once_t graph_pool_once = PTHREAD_ONCE_INIT;
+
+static void
+free_graph_pool(void *opaque)
+{
+    graph_pool_t *pool = opaque;
+    if (!pool) return;
+    for (size_t i = 0; i < GRAPH_POOL_SLOTS; i++) free_graph(pool->slots[i]);
+    core_free(pool);
+}
+
+// Threads that exit free their pool through the key's destructor; the
+// thread that ends the process, through this.
+static void
+free_exiting_thread_graphs(void)
+{
+    graph_pool_t *pool = pthread_getspecific(graph_pool_key);
+    (void)pthread_setspecific(graph_pool_key, nullptr);
+    free_graph_pool(pool);
+}
+
+static void
+graph_pool_init(void)
+{
+    if (!pthread_key_create(&graph_pool_key, free_graph_pool))
+        atexit(free_exiting_thread_graphs);
+}
+
+static graph_pool_t *
+thread_graph_pool(bool create)
+{
+    pthread_once(&graph_pool_once, graph_pool_init);
+    graph_pool_t *pool = pthread_getspecific(graph_pool_key);
+    if (!pool && create) {
+        pool = core_alloc(graph_pool_t);
+        if (pthread_setspecific(graph_pool_key, pool)) {
+            core_free(pool);
+            pool = nullptr;
+        }
+    }
+    return pool;
+}
+
+static pwz_graph_t *
+take_pooled_graph(parse_grammar_t *g, uint64_t version)
+{
+    graph_pool_t *pool = thread_graph_pool(false);
+    for (size_t i = 0; pool && i < GRAPH_POOL_SLOTS; i++) {
+        pwz_graph_t *graph = pool->slots[i];
+        if (!graph || graph->grammar != g || graph->version != version)
+            continue;
+        pool->slots[i] = nullptr;
+        return graph;
+    }
+    return nullptr;
+}
+
+static void
+pool_graph(parse_grammar_t *g, uint64_t version,
+           core_list_t(pwz_exp_ptr_t) all_exps, pwz_exp_ptr_t *nt_exps)
+{
+    pwz_graph_t *graph = core_alloc(pwz_graph_t);
+    *graph = (pwz_graph_t){
+        .grammar = g, .version = version,
+        .all_exps = all_exps, .nt_exps = nt_exps,
+    };
+    graph_pool_t *pool = thread_graph_pool(true);
+    if (!pool) {
+        free_graph(graph);
+        return;
+    }
+    // Replace a graph for the same grammar, or else the oldest.
+    size_t at = GRAPH_POOL_SLOTS - 1;
+    for (size_t i = 0; i < GRAPH_POOL_SLOTS; i++)
+        if (!pool->slots[i] || pool->slots[i]->grammar == g) {
+            at = i;
+            break;
+        }
+    free_graph(pool->slots[at]);
+    for (size_t i = at; i > 0; i--) pool->slots[i] = pool->slots[i - 1];
+    pool->slots[0] = graph;
+}
 
 static inline parse_token_info_t *
 get_token(parse_pwz_parser_t *p, int32_t pos)
@@ -611,7 +746,8 @@ reset_memos(parse_pwz_parser_t *p)
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
 
 static inline bool
-rule_first_matches(parse_rule_t *rule, int64_t token_id)
+rule_first_matches(parse_grammar_t *g, const parse_rule_t *rule,
+                   int64_t token_id)
 {
     if (rule->nullable || rule->first_has_any) {
         return true;
@@ -621,6 +757,11 @@ rule_first_matches(parse_rule_t *rule, int64_t token_id)
         return true;
     }
 
+    // The bits hold exactly the first set's terminals they can stand for.
+    size_t bit = rule->first_bits
+        ? parse_rule_first_bit(token_id, g->first_bits_named) : SIZE_MAX;
+    if (bit != SIZE_MAX)
+        return (rule->first_bits[bit / 64] >> (bit % 64) & 1) != 0;
     return core_dict_contains(rule->first_set, TERM_TO_PTR(token_id));
 }
 
@@ -826,6 +967,26 @@ record_expected(parse_pwz_parser_t *p, pwz_mem_t *mem, pwz_exp_t *exp)
     core_list_push(p->expected, entry);
 }
 
+// The rule whose first set may filter `alt` out of an alternation: a plain
+// (non-list) sequence of a grammar rule. Worked out once per expression;
+// the grammar is fixed while the parser exists.
+static const parse_rule_t *
+filter_rule(parse_pwz_parser_t *p, pwz_exp_t *alt)
+{
+    if (alt->filter_known) return alt->filter;
+    const parse_rule_t *rule = nullptr;
+    if (alt->kind == PWZ_SEQ && alt->list_role == PWZ_LIST_NONE
+        && alt->nt_id >= 0 && alt->rule_ix >= 0) {
+        parse_nonterm_t *nt = parse_get_nonterm(p->grammar, alt->nt_id);
+        if (nt && alt->rule_ix < (int32_t)core_list_len(nt->rule_ids))
+            rule = parse_get_rule(p->grammar,
+                                  nt->rule_ids.data[alt->rule_ix]);
+    }
+    alt->filter = rule;
+    alt->filter_known = true;
+    return rule;
+}
+
 static void
 run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
         pwz_mem_t *mem, pwz_exp_t *exp)
@@ -900,20 +1061,12 @@ run_ddp(parse_pwz_parser_t *p, int32_t pos, parse_token_info_t *tok,
         for (size_t i = 0; i < nalts; i++) {
             pwz_exp_t *alt_child = exp->alt.alts.data[i];
 
-            if (can_filter_alts && alt_child->kind == PWZ_SEQ
-                && alt_child->list_role == PWZ_LIST_NONE
-                && alt_child->nt_id >= 0 && alt_child->rule_ix >= 0) {
-                parse_nonterm_t *nt = parse_get_nonterm(p->grammar,
-                                                      alt_child->nt_id);
+            if (can_filter_alts) {
+                const parse_rule_t *rule = filter_rule(p, alt_child);
 
-                if (nt && alt_child->rule_ix < (int32_t)core_list_len(nt->rule_ids)) {
-                    int32_t            rix  = nt->rule_ids.data[alt_child->rule_ix];
-                    parse_rule_t *rule = parse_get_rule(p->grammar, rix);
-
-                    if (rule && !rule_first_matches(rule,
-                                                    parse_token_tid(tok))) {
-                        continue;
-                    }
+                if (rule && !rule_first_matches(p->grammar, rule,
+                                                parse_token_tid(tok))) {
+                    continue;
                 }
             }
 
@@ -2347,7 +2500,16 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     p->mem_bottom->start_pos = PWZ_POS_BOTTOM;
     p->mem_bottom->end_pos   = PWZ_POS_BOTTOM;
 
-    build_exp_graph(p, g, start);
+    p->graph_version = parse_grammar_version(g);
+    pwz_graph_t *pooled = take_pooled_graph(g, p->graph_version);
+    if (pooled) {
+        core_list_free(p->all_exps);
+        p->all_exps  = pooled->all_exps;
+        p->nt_exps   = pooled->nt_exps;
+        p->start_exp = p->nt_exps[start];
+        core_free(pooled);
+    }
+    else build_exp_graph(p, g, start);
     load_statement_ends(p, g);
 
     return p;
@@ -2365,28 +2527,16 @@ parse_pwz_free(parse_pwz_parser_t *p)
     core_list_free(p->ambiguities);
     core_arena_free(&p->parse_arena);
 
-    size_t num_exps = core_list_len(p->all_exps);
-
-    for (size_t i = 0; i < num_exps; i++) {
-        pwz_exp_t *e = p->all_exps.data[i];
-
-        if (e->kind == PWZ_SEQ && e->seq.children) {
-            core_free(e->seq.children);
-        }
-        else if (e->kind == PWZ_ALT) {
-            core_list_free(e->alt.alts);
-        }
-
-        core_free(e);
-    }
-
-    core_list_free(p->all_exps);
+    // reset_memos cleared the graph's memos: the thread's next parser of
+    // this grammar may use it.
+    if (p->all_exps.len) pool_graph(p->grammar, p->graph_version, p->all_exps,
+                                    p->nt_exps);
+    else free_exps(&p->all_exps, p->nt_exps);
     core_list_free(p->expected);
     core_list_free(p->statement_ends);
     core_list_free(p->continue_after);
     core_list_free(p->skipped);
     core_list_free(p->held);
-    core_free(p->nt_exps);
     core_free(p->res_bottom);
     core_free(p->mem_bottom);
     core_list_free(p->worklist);
@@ -2424,6 +2574,12 @@ parse_pwz_release_parse_state(parse_pwz_parser_t *p)
     free_ambiguities(p);
     core_list_free(p->ambiguities);
     core_arena_free(&p->parse_arena);
+    // The expression graph is all the parse needed of the grammar, and its
+    // memos are now clear: let this thread's next parser use it.
+    pool_graph(p->grammar, p->graph_version, p->all_exps, p->nt_exps);
+    p->all_exps  = (core_list_t(pwz_exp_ptr_t)){0};
+    p->nt_exps   = nullptr;
+    p->start_exp = nullptr;
     p->free_mems = nullptr;
     drop_released_cxts(p);
     core_list_free(p->free_cxts);

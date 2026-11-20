@@ -532,6 +532,107 @@ retarget_reference(specialize_state_t *state, ir_func_t *caller,
     return true;
 }
 
+// The signature generic function `target` is called with for a reference
+// whose type is `value` (an instance of the function's type): its
+// positional parameters, by the function's passing modes (which the
+// reference's type doesn't say), its keyword parameters where it declares
+// them, then its varargs as an array. nullptr when they don't line up.
+static th_type *
+reference_signature(th_ctx *types, ir_func_t *target, th_type *value)
+{
+    value = value ? th_resolve(value) : nullptr;
+    th_type *flat = th_resolve(target->type);
+    if (!value || th_kind_of(value) != TH_FUNCTION
+        || th_kind_of(flat) != TH_FUNCTION) return nullptr;
+    size_t positional = th_func_nparams(value);
+    size_t keywords = th_func_nkw(value);
+    size_t count = positional + keywords + (th_func_rest(value) ? 1 : 0);
+    if (count != th_func_nparams(flat) || target->n_params < count)
+        return nullptr;
+    th_param *params = core_alloc_array(th_param, count);
+    bool ok = params != nullptr;
+    for (size_t i = 0; ok && i < positional; i++)
+        params[i] = (th_param){.mode = th_func_param(flat, i)->mode,
+                               .type = th_func_param(value, i)->type};
+    for (size_t i = positional; ok && i < positional + keywords; i++) {
+        const th_kwparam *keyword = th_func_kw_lookup(value,
+            target->params[i]->name);
+        ok = keyword != nullptr;
+        if (ok) params[i] = (th_param){.mode = keyword->mode,
+                                       .type = keyword->type};
+    }
+    if (ok && th_func_rest(value))
+        params[count - 1] = (th_param){.mode = TH_IN,
+            .type = th_array(types, th_func_rest(value)->type)};
+    th_type *signature = ok
+        ? th_func_with_error(types, th_func_ret(value), th_func_error(value),
+                             params, count, nullptr, nullptr, 0)
+        : nullptr;
+    core_free(params);
+    return signature;
+}
+
+// `*slot`, a reference to a generic function's instance whose reference
+// type's referent is `value`, refers to the instance's reference adapter
+// instead when it has one, made in the instance's module.
+static bool
+adapt_instance_reference(specialize_state_t *state, ir_value_t **slot,
+                         th_type *value)
+{
+    ir_func_t *instance = (*slot)->owner;
+    bool made = false;
+    ir_func_t *adapter = n00bb_instance_reference_adapter(state->context,
+        instance, value, &made);
+    ir_value_t *bound = adapter && adapter != instance
+        ? ir_func_address(adapter->owner, adapter) : nullptr;
+    if (!adapter || (adapter != instance && !bound)) {
+        if (state->failure) {
+            core_string_t module = ir_module_name(instance->owner);
+            core_buffer_printf(state->failure,
+                "could not make the reference adapter of %.*s.%.*s",
+                (int)module.u8_bytes, module.data,
+                (int)instance->name.u8_bytes, instance->name.data);
+        }
+        return false;
+    }
+    if (made) core_list_push(*state->functions, adapter);
+    if (bound) *slot = bound;
+    return true;
+}
+
+// A reference to a generic function, as `operand` of `in`, is to the
+// function's instance for the reference's type.
+static bool
+specialize_reference(specialize_state_t *state, ir_func_t *caller,
+                     size_t parent, ir_operand_t *operand)
+{
+    ir_value_t *reference = operand->kind == IR_OPD_VALUE ? operand->value
+                                                          : nullptr;
+    th_type *type = reference && reference->kind == IR_VAL_FUNC
+        ? th_resolve(reference->type) : nullptr;
+    ir_func_t *target = type && th_kind_of(type) == TH_INDIRECTION
+        ? n00bb_cached_body(reference->owner) : nullptr;
+    if (!target || !target->n_blocks) return true;
+    th_ctx *types = ir_module_types(target->owner);
+    if (th_is_closed(types, target->type)) return true;
+    th_type *signature = reference_signature(types, target,
+                                             th_ind_referent(type));
+    if (!signature) return true;
+    if (!retarget_reference(state, caller, parent, &operand->value,
+                            signature))
+        return false;
+    // The instance is referred to as the function was, through its
+    // reference adapter when it has one (n00bb_reference_adapter_t). A call
+    // through a reference known to hold the function calls it directly,
+    // and so the instance itself.
+    if (operand->value == reference) return true;
+    if (!adapt_instance_reference(state, &operand->value,
+                                  th_ind_referent(type)))
+        return false;
+    operand->value->type = reference->type;
+    return true;
+}
+
 static bool
 specialize_callback(specialize_state_t *state, ir_func_t *caller,
                     size_t parent, ir_instr_t *creation)
@@ -553,8 +654,24 @@ specialize_callback(specialize_state_t *state, ir_func_t *caller,
     if (!retained || retained->op != IR_OP_RETAIN_REF
         || retained->n_operands != 1
         || retained->operands[0].kind != IR_OPD_VALUE) return true;
-    return retarget_reference(state, caller, parent,
-        &retained->operands[0].value, handler_signature);
+    ir_value_t *handler = retained->operands[0].value;
+    if (!retarget_reference(state, caller, parent,
+            &retained->operands[0].value, handler_signature))
+        return false;
+    ir_value_t *instance = retained->operands[0].value;
+    th_type *type = th_resolve(handler->type);
+    if (instance == handler || th_kind_of(type) != TH_INDIRECTION)
+        return true;
+    // The callback holds the instance; its `setup` is given the reference
+    // to it, which is to its reference adapter when it has one.
+    if (!adapt_instance_reference(state, &retained->operands[0].value,
+                                  th_ind_referent(type)))
+        return false;
+    retained->operands[0].value->type = handler->type;
+    return retained->operands[0].value == instance
+        || ir_annot_set(state->context, &creation->annots,
+               (ir_annot_t){.key = N00BB_CALLBACK_HANDLER_KEY,
+                            .kind = IR_ANNOT_VALUE, .v = instance});
 }
 
 enum { FINALIZE_DEPTH = 16 };
@@ -563,8 +680,12 @@ typedef struct {
     specialize_state_t *state;
     const n00bb_trait_binder_t *binder;
     size_t              scanned;
+    // Each module's own sets: the heap types it has made finalizers for,
+    // and the instances it has asked for.
     core_dict_t         heap_types;
+    core_dict_t         requested;
     core_dict_t         modules;
+    core_list_t(n00bb_ir_func_ptr_t) module_order;
     core_dict_t         finalizers;
     n00bb_specialization_failure_t *report;
 } finalize_state_t;
@@ -575,9 +696,49 @@ collect_modules(finalize_state_t *finalize)
     const function_list_t *functions = finalize->state->functions;
     for (; finalize->scanned < functions->len; finalize->scanned++) {
         ir_func_t *function = functions->data[finalize->scanned];
-        if (function && function->owner)
-            core_dict_add(&finalize->modules, function->owner, 1);
+        if (function && function->owner
+            && core_dict_add(&finalize->modules, function->owner, 1))
+            core_list_push(finalize->module_order,
+                           (ir_func_t *)function->owner);
     }
+}
+
+// Adds `key` to `module`'s set in `sets`; true when it was not there yet.
+static bool
+module_set_add(core_dict_t *sets, ir_module_t *module, uintptr_t key)
+{
+    core_dict_t *set = core_dict_get(sets, module, nullptr);
+    if (!set) {
+        set = core_alloc(core_dict_t);
+        if (!set) return true;
+        core_dict_init(set, nullptr, nullptr);
+        core_dict_put(sets, module, set);
+    }
+    return core_dict_add(set, key, 1);
+}
+
+static void
+module_sets_free(core_dict_t *sets)
+{
+    core_dict_foreach(sets, item) {
+        core_dict_free((core_dict_t *)item->value);
+        core_free(item->value);
+    }
+    core_dict_free(sets);
+}
+
+// Records that `requester` uses `copy`, once for each module however many
+// times it asks. Every module that needs an instance records it, not only
+// the first to ask, so a cached module's requests are the same in any
+// program and in any order its modules are specialized in.
+static void
+request_instance(finalize_state_t *finalize, ir_module_t *requester,
+                 ir_func_t *copy)
+{
+    if (requester && copy
+        && module_set_add(&finalize->requested, requester, (uintptr_t)copy))
+        core_list_push(*finalize->state->requests,
+            ((n00bb_specialization_request_t){requester, copy}));
 }
 
 static ir_func_t *
@@ -630,6 +791,7 @@ concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
     target = n00bb_cached_body(target);
     ir_func_t *copy = actual ? find_instance(specializations, target,
         th_hash(types, actual), types) : nullptr;
+    if (copy) request_instance(finalize, requester, copy);
     if (copy || !actual) return copy;
     core_list_t(type_binding_t) bindings = {0};
     bool matched = match_type(types, target->type, actual, &bindings)
@@ -644,8 +806,7 @@ concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
     core_list_push(*finalize->state->instances,
         ((n00bb_specialization_t){target, copy, actual}));
     core_list_push(*finalize->state->functions, copy);
-    core_list_push(*finalize->state->requests,
-        ((n00bb_specialization_request_t){requester, copy}));
+    request_instance(finalize, requester, copy);
     return copy;
 }
 
@@ -698,7 +859,8 @@ heap_finalizer_instance(finalize_state_t *finalize, ir_func_t *caller,
                                        th_ind_referent(type), depth + 1);
     if (th_kind_of(type) != TH_NAMED || !th_named_nargs(type)
         || !th_is_closed(types, type)
-        || !core_dict_add(&finalize->heap_types, th_hash(types, type) | 1, 1))
+        || !module_set_add(&finalize->heap_types, caller->owner,
+                           (uintptr_t)(th_hash(types, type) | 1)))
         return true;
     for (size_t i = 0; i < th_named_nargs(type); i++) {
         const th_arg *argument = th_named_arg(type, i);
@@ -796,14 +958,21 @@ record_boxed_hook(finalize_state_t *finalize, ir_module_t *module,
 {
     th_ctx *types = ir_module_types(module);
     uint64_t hash = th_hash(types, type);
-    if (core_dict_contains(seen, (void *)(uintptr_t)(hash | 1))) return true;
+    bool known = false;
+    ir_func_t *function = core_dict_get(seen, (void *)(uintptr_t)(hash | 1),
+                                        &known);
+    if (known) {
+        if (instance_slot(finalize->state->specializations, function))
+            request_instance(finalize, module, function);
+        return true;
+    }
     ir_func_t *target = hook_implementation(finalize, types, type,
                                             hook_method(mutable));
-    ir_func_t *function = target
-        ? concrete_hook(finalize, module, target, type) : nullptr;
+    function = target ? concrete_hook(finalize, module, target, type)
+                      : nullptr;
     if (function) {
         core_list_push(*boxed, ((n00bb_boxed_finalizer_t){hash, function}));
-        core_dict_add(seen, hash | 1, 1);
+        core_dict_put(seen, (void *)(uintptr_t)(hash | 1), function);
     }
     return true;
 }
@@ -814,23 +983,22 @@ seen_hooks(core_dict_t *seen,
 {
     core_dict_init(seen, nullptr, nullptr);
     for (size_t i = 0; i < boxed->len; i++)
-        core_dict_add(seen, boxed->data[i].typehash | 1, 1);
+        core_dict_put(seen, (void *)(uintptr_t)(boxed->data[i].typehash | 1),
+                      boxed->data[i].function);
 }
 
+// Visits modules in the order their functions were reached, so which
+// module first makes a hook does not depend on where modules sit in memory.
 static bool
 record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
 {
     collect_modules(finalize);
-    core_list_t(n00bb_ir_func_ptr_t) modules =
-        core_list_new(n00bb_ir_func_ptr_t);
-    core_dict_foreach(&finalize->modules, item)
-        core_list_push(modules, (ir_func_t *)item->key);
     core_dict_t seen, seen_mutable;
     seen_hooks(&seen, &boxed->addresses);
     seen_hooks(&seen_mutable, &boxed->mutable_addresses);
     bool valid = true;
-    for (size_t m = 0; valid && m < modules.len; m++) {
-        ir_module_t *module = (ir_module_t *)modules.data[m];
+    for (size_t m = 0; valid && m < finalize->module_order.len; m++) {
+        ir_module_t *module = (ir_module_t *)finalize->module_order.data[m];
         th_ctx *types = ir_module_types(module);
         for (size_t t = 0; valid && t < ir_type_count(module); t++) {
             th_type *type = ir_type_at(module, t);
@@ -846,7 +1014,6 @@ record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
     }
     core_dict_free(&seen);
     core_dict_free(&seen_mutable);
-    core_list_free(modules);
     return valid;
 }
 
@@ -1016,6 +1183,8 @@ missing_implementation(const n00bb_trait_binder_t *binder,
     report->before = n00bb_print_type(types, receiver->type);
     report->after = core_string_dup(core_buffer_string(&used));
     report->trait = core_string_dup(trait);
+    report->receiver = th_resolve(receiver->type);
+    report->trait_name = selection->operands[0].name;
     report->missing_implementation = true;
     core_buffer_release(&used);
     return true;
@@ -1222,8 +1391,10 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     };
     finalize_state_t finalize = {
         .state = &state, .binder = binder, .report = report,
+        .module_order = core_list_new(n00bb_ir_func_ptr_t),
     };
     core_dict_init(&finalize.heap_types, nullptr, nullptr);
+    core_dict_init(&finalize.requested, nullptr, nullptr);
     core_dict_init(&finalize.modules, nullptr, nullptr);
     core_dict_init(&finalize.finalizers, nullptr, nullptr);
     bool valid = true;
@@ -1304,6 +1475,14 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                     valid = false;
                     break;
                 }
+                for (uint32_t o = call->op == IR_OP_CALL ? 1 : 0;
+                     valid && !open_caller && o < call->n_operands; o++)
+                    valid = specialize_reference(&state, caller, parent,
+                                                 &call->operands[o])
+                        || failed_step(failure,
+                               "could not specialize a function reference",
+                               caller);
+                if (!valid) break;
                 if (call->op != IR_OP_CALL || !call->n_operands) continue;
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
@@ -1408,7 +1587,9 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     specializations_free(&specializations);
     core_dict_free(&inline_bodies);
     core_dict_free(&finalize.finalizers);
-    core_dict_free(&finalize.heap_types);
+    module_sets_free(&finalize.heap_types);
+    module_sets_free(&finalize.requested);
     core_dict_free(&finalize.modules);
+    core_list_free(finalize.module_order);
     return valid;
 }

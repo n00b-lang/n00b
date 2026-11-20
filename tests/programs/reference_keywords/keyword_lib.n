@@ -1,0 +1,17 @@
+# Functions another module calls through references, with keyword
+# parameters declared out of the order a function type lists them.
+func joined(head: string, *rest: string, zsep: string = ",",
+            aend: string = zsep + ".") -> string {
+    var out = head
+    for item in rest {
+        out = out + zsep + item
+    }
+    return out + aend
+}
+
+func checked(a: int, zz: int = 1, b: int = 2) -> int fail: string {
+    if a < 0 {
+        fail "negative"
+    }
+    return a * 100 + zz * 10 + b
+}

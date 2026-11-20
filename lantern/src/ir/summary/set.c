@@ -2,6 +2,10 @@
 
 enum { SET_SCAN = 16 };
 
+// While items are added to a site's contents, the site's `added` log: each
+// item insert_item puts in the set is appended to it.
+static _Thread_local pt_set_t *contents_added;
+
 static int object_order(const pt_loc_t *a, const pt_loc_t *b);
 
 static void trim_repeats(pt_item_t *item);
@@ -185,14 +189,31 @@ object_order(const pt_loc_t *a, const pt_loc_t *b)
     return (uintptr_t)x->global < (uintptr_t)y->global ? -1 : 1;
 }
 
+// The first item of `set` on `loc`'s object or past it. Sets are mostly
+// built in order, so the object is usually past the last item's, or is the
+// last item's: look there first, then gallop back, before searching all of
+// the set.
 static size_t
-object_bound(const pt_set_t *set, const pt_loc_t *loc, bool upper)
+object_start(const pt_set_t *set, const pt_loc_t *loc)
 {
-    size_t low = 0, high = set->len;
+    size_t len = set->len;
+    if (!len) return 0;
+    int last = object_order(&set->data[len - 1].loc, loc);
+    if (last < 0) return len;
+    size_t low = 0, high = len - 1;
+    if (!last) {
+        // data[high] is on the object: gallop down to an item before it.
+        size_t span = 1;
+        while (span <= high
+               && !(object_order(&set->data[high - span].loc, loc) < 0)) {
+            high -= span;
+            span *= 2;
+        }
+        low = span <= high ? high - span + 1 : 0;
+    }
     while (low < high) {
         size_t middle = low + (high - low) / 2;
-        int    order  = object_order(&set->data[middle].loc, loc);
-        if (order < 0 || (upper && !order)) low = middle + 1;
+        if (object_order(&set->data[middle].loc, loc) < 0) low = middle + 1;
         else high = middle;
     }
     return low;
@@ -350,7 +371,7 @@ static bool
 set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
               size_t *high, size_t *first, size_t *last)
 {
-    size_t start = object_bound(set, &item->loc, false);
+    size_t start = object_start(set, &item->loc);
     size_t end   = object_end(set, &item->loc, start);
     *first = start;
     *last  = end;
@@ -384,12 +405,16 @@ set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
         // are near the range's.
         from = step_bound_near_low(set, exact, to, k, path->steps[k], false);
         to   = step_bound_near_high(set, from, to, k, path->steps[k], true);    }
-    bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);
+    // A deep place covers places below it: through pointers too unless it
+    // is inline. Either way the items under it may be covered, not only
+    // those at its own depth.
+    bool deep = loc_deep(&item->loc);
+    bool wide = deep && !(path->flags & SPATH_INLINE);
     bool full = from < to && set->data[from].loc.path.depth >= path->depth;
     bool pointee = wide && k == path->depth && k
         && step_eq(path->steps[k - 1], value_step);
     *low  = pointee ? below : from;
-    *high = pointee ? outer : !full ? from : wide ? to : exact;
+    *high = pointee ? outer : !full ? from : deep ? to : exact;
     return false;
 }
 
@@ -464,6 +489,8 @@ insert_item(pt_set_t *set, const pt_item_t *item)
     size_t before = set->len;
     drop_covered(set, item, low, high);
     size_t at = first, top = last - (before - set->len);
+    // Mostly the item goes after all of its object's (see object_start).
+    if (at < top && item_order(&set->data[top - 1], item) < 0) at = top;
     while (at < top) {
         size_t middle = at + (top - at) / 2;
         if (item_order(&set->data[middle], item) < 0) at = middle + 1;
@@ -473,6 +500,7 @@ insert_item(pt_set_t *set, const pt_item_t *item)
     memmove(&set->data[at + 1], &set->data[at],
             (set->len - 1 - at) * sizeof(pt_item_t));
     set->data[at] = *item;
+    if (contents_added) core_list_push(*contents_added, *item);
     return true;
 }
 
@@ -531,8 +559,14 @@ trim_repeats(pt_item_t *item)
 static void
 pt_add(pt_t *pt, pt_set_t *set, uintptr_t key, pt_item_t item)
 {
-    if ((key & 3) == 1) typed_placement(pt, (uint32_t)(key >> 2), &item);
-    if (set_add(pt, set, item)) pt_notify(pt, key);
+    bool site = (key & 3) == 1;
+    if (site) {
+        typed_placement(pt, (uint32_t)(key >> 2), &item);
+        contents_added = &pt->sites.data[key >> 2].added;
+    }
+    bool added = set_add(pt, set, item);
+    contents_added = nullptr;
+    if (added) pt_notify(pt, key);
 }
 
 static pt_item_t
@@ -594,6 +628,23 @@ static void
 loc_push(const pt_t *pt, pt_loc_t *loc, core_string_t step)
 {
     if (loc_deep(loc)) return;
+    // A string's one pointer is its data: what a string value points to is
+    // what its data does. Saying so keeps the bytes or rich body apart from
+    // the string itself, rather than widening to all of the string.
+    if (step_eq(step, value_step)) {
+        th_ctx  *types = pt->f->owner ? ir_module_types(pt->f->owner)
+                                      : nullptr;
+        th_type *raw   = slot_info(pt, loc, loc->path.depth)->raw;
+        if (raw && types
+            && th_builtin_kind(types, raw) == TH_BUILTIN_STRING) {
+            th_type *string = loc_type(pt, loc, loc->path.depth);
+            if (string && step_fits(pt, string, data_step)) {
+                path_push(&loc->path, data_step);
+                loc_push(pt, loc, value_step);
+                return;
+            }
+        }
+    }
     th_type *type = loc_type(pt, loc, loc->path.depth);
     if (type && !step_fits(pt, type, step)) {
         loc->path.flags |= IR_SPATH_DEEP;
@@ -649,11 +700,23 @@ static void
 extend_tail(const pt_t *pt, pt_loc_t *loc, const core_string_t *steps,
             uint32_t depth, bool deep, bool inline_tail)
 {
-    loc_extend(pt, loc, steps, depth, false);
-    if (!deep) return;
-    bool exact = !loc_deep(loc);
+    // loc_push widens a step it can't follow (one the type doesn't have, or
+    // a repeat in a recursive object) to everything below where it got to.
+    // When no step from there on dereferences, the place is still in that
+    // spot's own storage, so the widened place stays inline; leaving it
+    // plainly deep let it run on through every pointer below.
+    bool     before  = loc_deep(loc);
+    uint32_t widened = depth;
+    for (uint32_t s = 0; s < depth; s++) {
+        loc_push(pt, loc, steps[s]);
+        if (widened == depth && !before && loc_deep(loc)) widened = s;
+    }
+    if (!deep && widened == depth) return;
     loc->path.flags |= IR_SPATH_DEEP;
-    if (inline_tail && exact) loc->path.flags |= SPATH_INLINE;
+    if (before || (deep && !inline_tail)) return;
+    if (widened == depth
+        || first_deref(steps + widened, depth - widened) == depth - widened)
+        loc->path.flags |= SPATH_INLINE;
 }
 
 static pt_item_t

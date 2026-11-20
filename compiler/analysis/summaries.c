@@ -1,4 +1,5 @@
 #include "lower/lower_internal.h"
+#include "compiler_system.h"
 
 static bool
 thread_runtime_entry_function(parse_grammar_t *grammar,
@@ -122,6 +123,10 @@ runtime_init_analysis_build(
         ir_func_t *initializer = state && state->ir_module
             ? ir_func_find(state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)) : nullptr;
         if (!initializer) return false;
+        // An archived or cached module's initializer is a declaration
+        // whose body is attached apart: what it sets is in that body.
+        ir_func_t *body = n00bb_cached_body(initializer);
+        if (body && body->n_blocks) initializer = body;
         runtime_function_add(&runtime->initializer_roots, initializer);
     }
     return true;
@@ -496,6 +501,41 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
         || core_dict_contains(import_closure(analysis, from), to);
 }
 
+// Adds the bodies of the functions of the units reused from the cache: of
+// all of them, or only of those in the root's package that are analyzed.
+void
+n00bb_cached_unit_bodies(n00bb_link_analysis_t *analysis, bool root_package,
+                         core_list_t(n00bb_ir_func_ptr_t) *out)
+{
+    core_translation_unit_t *root = analysis->units.len
+        ? analysis->units.data[0] : nullptr;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state || !state->ir_module || !state->interface_module
+            || (root_package
+                && (!n00bb_same_package(unit, root)
+                    || n00bb_module_unanalyzed(analysis, state->ir_module))))
+            continue;
+        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(
+                ir_func_at(state->ir_module, f));
+            if (body && body->n_blocks) core_list_push(*out, body);
+        }
+    }
+}
+
+// The bodies of the modules reused from the cache: their reinterpretations
+// are the program's as much as those of the modules compiled from source,
+// which are summarized whether anything reaches them or not.
+static void
+reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
+{
+    n00bb_link_analysis_t *analysis = context;
+    for (size_t i = 0; i < analysis->cached_unit_bodies.len; i++)
+        add(sink, analysis->cached_unit_bodies.data[i]);
+}
+
 void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
@@ -506,6 +546,8 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     }
     ir_reinterpretations_set_visibility(analysis->ir_context,
                                         n00bb_module_sees, analysis);
+    analysis->cached_unit_bodies.len = 0;
+    n00bb_cached_unit_bodies(analysis, false, &analysis->cached_unit_bodies);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
@@ -521,6 +563,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,
+        .reinterpretation_sources = reinterpretation_sources,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);
@@ -534,6 +577,87 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     analysis->entry_owner = nullptr;
 }
 
+typedef struct {
+    n00bb_link_analysis_t            *analysis;
+    core_dict_t                       source;
+    core_dict_t                       seen;
+    core_list_t(n00bb_ir_func_ptr_t)  work;
+    core_list_t(n00bb_ir_func_ptr_t) *roots;
+} cached_reach_t;
+
+static void
+reach_target(void *sink, ir_func_t *target)
+{
+    cached_reach_t *reach = sink;
+    ir_func_t      *body  = n00bb_cached_body(ir_func_definition(target));
+    if (!body || !body->n_blocks || !core_dict_add(&reach->seen, body, body))
+        return;
+    if (core_dict_contains(&reach->source, body->owner)) {
+        if (!n00bb_module_unanalyzed(reach->analysis, body->owner))
+            core_list_push(*reach->roots, body);
+        return;
+    }
+    core_list_push(reach->work, body);
+}
+
+// Adds as roots the functions of the units compiled from source that the
+// cached units' functions reach. Compiled cold, every function of those
+// units is emitted, and so a root, and the summaries take in whatever they
+// reach, the program's own generic implementations among them: a
+// dictionary hashing its keys reaches every `__n00bb_object_hash` it may
+// dispatch to. Loaded from the cache, those units are not emitted, and
+// without this which of the program's functions get summaries (and so
+// what its ABI object says) would depend on what was cached. The cached
+// functions are only walked here; their summaries come from the cache
+// when something summarized calls them.
+static void
+push_cached_reach(n00bb_link_analysis_t *analysis,
+                  core_list_t(n00bb_ir_func_ptr_t) *roots)
+{
+    cached_reach_t reach = {.analysis = analysis, .roots = roots,
+                            .work = core_list_new(n00bb_ir_func_ptr_t)};
+    core_dict_init(&reach.source, nullptr, nullptr);
+    core_dict_init(&reach.seen, nullptr, nullptr);
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (state && state->ir_module && !state->interface_module)
+            core_dict_put(&reach.source, state->ir_module, state->ir_module);
+    }
+    for (size_t i = 0; i < analysis->cached_unit_bodies.len; i++) {
+        ir_func_t *body = analysis->cached_unit_bodies.data[i];
+        if (core_dict_add(&reach.seen, body, body))
+            core_list_push(reach.work, body);
+    }
+    while (reach.work.len) {
+        ir_func_t *f = reach.work.data[--reach.work.len];
+        for (uint32_t b = 0; b < f->n_blocks; b++)
+            for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+                ir_instr_t *in = f->blocks[b]->instrs[i];
+                if (in->op == IR_OP_CALLBACK_CREATE && in->n_operands
+                    && in->operands[0].kind == IR_OPD_VALUE) {
+                    const ir_value_t *handler = in->operands[0].value;
+                    if (handler && handler->kind == IR_VAL_FUNC
+                        && handler->owner)
+                        reach_target(&reach, handler->owner);
+                }
+                if (in->op != IR_OP_CALL && in->op != IR_OP_CALLBACK_INVOKE)
+                    continue;
+                if (!n00bb_summary_call_targets(analysis, in, reach_target,
+                                                &reach)) {
+                    ir_value_t *callee = in->op == IR_OP_CALL
+                        && in->n_operands
+                        ? ir_operand_value(&in->operands[0]) : nullptr;
+                    if (callee && callee->kind == IR_VAL_FUNC
+                        && callee->owner)
+                        reach_target(&reach, callee->owner);
+                }
+            }
+    }
+    core_list_free(reach.work);
+    core_dict_free(&reach.source);
+    core_dict_free(&reach.seen);
+}
+
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
@@ -541,16 +665,36 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
+    // A unit left out of the analysis of a program with errors (see
+    // unanalyzed_modules) adds none of its functions; its initializer and
+    // entries stay roots, for the whole-program checks.
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots,
-                       n00bb_cached_body(analysis->emitted_functions.data[i]));
+        if (!n00bb_module_unanalyzed(analysis,
+                analysis->emitted_functions.data[i]->owner))
+            core_list_push(roots, n00bb_cached_body(
+                analysis->emitted_functions.data[i]));
+    // Compiled from source, the functions of the root's package are
+    // emitted, and so summarized, and the unused-item checks read what they
+    // write from their summaries (see n00bb_report_unused_items); loaded
+    // from the cache, they would otherwise have none, and a global or field
+    // only they set would read as never used.
+    n00bb_cached_unit_bodies(analysis, true, &roots);
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)
         core_list_push(roots, n00bb_cached_body(entries->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
+        // A cached module a module literal generated is emitted again for
+        // each program (see cached_generated_unit), so its functions need
+        // the summaries the backend reads, as when it was compiled.
+        core_translation_unit_t *unit = analysis->units.data[u];
+        bool generated = state && state->interface_module
+            && n00bb_generated_source(core_source_file_path(&unit->source));
+        if (!state || !state->ir_module
+            || (state->interface_module && !generated)
+            || n00bb_module_unanalyzed(analysis, state->ir_module))
+            continue;
         th_ctx *types = ir_module_types(state->ir_module);
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
             ir_func_t *body = n00bb_cached_body(
@@ -564,6 +708,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     push_effects_of_roots(analysis, &roots);
     bind_summary_hooks(analysis, false);
     n00bb_push_summary_roots(analysis, &roots);
+    push_cached_reach(analysis, &roots);
     ir_summaries_t *previous = analysis->summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);

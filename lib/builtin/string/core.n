@@ -357,6 +357,10 @@ func len(self: string) -> uint {
 }
 
 func __add(view self: string, view other: string) -> string {
+    // A rich side keeps its style spans and substitution slots.
+    if either_rich(self, other) {
+        return string.style.concat_rich(self, other)
+    }
     let left: string = text(self)
     let right: string = text(other)
     let left_length: uint = __string_byte_len(left)
@@ -833,7 +837,7 @@ private func simple_escape(b: u8) -> u8? {
         case 0x74 { return 0x09 }
         case 0x76 { return 0x0b }
         case 0x30 { return 0x00 }
-        case 0x5c, 0x22, 0x27 { return b }
+        case 0x5c, 0x22, 0x27, 0x5b, 0x5d { return b }
         else { return nil }
     }
 }
@@ -915,6 +919,23 @@ func join(items: List[string], joiner: string) -> string {
     var enc: Str_Encoding = Str_Encoding.ascii
     if count == 0 {
         return empty_string()
+    }
+    // With a rich item or joiner, join by concatenation so every style
+    // span and substitution slot is kept at its new offset.
+    var rich: bool = __string_tag(joiner) == cast[u8] str_tag_rich
+    var r: int = 0
+    while !rich and cast[uint](r) < count {
+        rich = __string_tag(items[r]) == cast[u8] str_tag_rich
+        r += 1
+    }
+    if rich {
+        var built: string = items[0]
+        var at: int = 1
+        while cast[uint](at) < count {
+            built = built + joiner + items[at]
+            at += 1
+        }
+        return built
     }
     var i: int = 0
     while cast[uint](i) < count {

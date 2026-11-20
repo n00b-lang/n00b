@@ -415,6 +415,10 @@ bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
 ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value);
 bool ir_value_set_binding_reentry(ir_value_t *value,
                                   ir_block_t *loop_header);
+// Drops the re-entry marks naming `loop_header` from `function`'s locals and
+// parameters: erasing the header (ir_block_erase) takes their loop away.
+void ir_func_forget_binding_reentry(ir_func_t *function,
+                                    core_string_t loop_header);
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
                                  core_string_t requested, bool required,
                                  core_string_t selected);
@@ -535,9 +539,10 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
 th_type *ir_type_at(ir_module_t *m, size_t i);
+// Records `def` as the definition of `named` and adds both to `m`'s types.
+// Every module that uses a type defines it the same way; none owns it.
 bool     ir_type_define(ir_module_t *m, th_type *named, th_type *def);
 th_type *ir_type_definition(ir_module_t *m, th_type *named);
-ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named);
 
 int32_t     ir_file_add(ir_module_t *m, core_string_t path);
 core_string_t ir_file_path(const ir_module_t *m, int32_t id);
@@ -589,6 +594,9 @@ ir_func_t   *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
                                 th_type *const *to, size_t count,
                                 core_string_t *failure);
 ir_func_t   *ir_func_find(ir_module_t *m, core_string_t name);
+// Exchanges the module's functions at positions `i` and `j` (the order
+// ir_func_at walks them in).
+bool         ir_func_swap(ir_module_t *m, size_t i, size_t j);
 bool         ir_func_discard_body(ir_func_t *function);
 bool         ir_func_set_callable_contract(ir_func_t *function,
                                            th_type *contract);

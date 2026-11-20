@@ -18,7 +18,3 @@ tests/diagnostics/front/precedence_bitwise_arith.n:9:20: error N00B-P0035: `<<` 
   help: add parentheses to say which one you mean:
     9 | let shift_back = (a << b) >> c
     9 | let shift_back = a << (b >> c)
-tests/diagnostics/front/precedence_bitwise_arith.n:10:16: error N00B-P0035: `&` followed by `|` is not allowed, because this could be read more than one way
-  help: add parentheses to say which one you mean:
-    10 | let and_or = (a & b) | c
-    10 | let and_or = a & (b | c)

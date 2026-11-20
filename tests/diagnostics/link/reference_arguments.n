@@ -1,0 +1,47 @@
+# A call through a function reference whose function isn't known passes
+# each argument by place, so each must be a writable place: a variable, or
+# a field or element of one, or a `modify` or `out` parameter, but not a
+# literal, a temporary, a `let`, or a parameter that isn't itself passed
+# by reference. The call may write what it is given. A call through a
+# reference known to hold its function follows that function's modes, as
+# a direct call does.
+record Tally {
+    count: int
+}
+record Box {
+    held: int
+}
+func bump(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+func unknown(f: Ref[(Tally, int) -> int], g: Ref[(Box, int) -> int],
+             by: int, modify given: Tally) -> int {
+    var tally: Tally
+    tally.count = 0
+    let fixed = tally
+    var items: Array[int] = [1, 2]
+    var n = 1
+    var box: Box
+    _ = f.call(tally, 1)
+    _ = f.call(fixed, n)
+    _ = f.call(tally, n + 1)
+    _ = f.call(tally, by)
+    _ = f.call(given, items[0])
+    _ = f.call(tally, tally.count)
+    _ = g.call(box, n)
+    return box.held
+}
+func known() -> int {
+    var tally: Tally
+    tally.count = 0
+    let fixed = tally
+    let r = ref bump
+    _ = r.call(tally, 1)
+    return r.call(fixed, 2)
+}
+func plain_box(box: Box, by: int) -> int {
+    return box.held + by
+}
+var outer: Tally
+require unknown(ref bump, ref plain_box, 1, outer) + known() > 0

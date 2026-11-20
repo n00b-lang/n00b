@@ -1,0 +1,57 @@
+# What a function reference can't be made from or into, and how its type
+# is printed.
+record Tally {
+    count: int
+}
+func add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+
+# A function type is printed as it is written: without the passing modes
+# a reference to the function remembers.
+let wrong: Ref[(Tally) -> int] = ref add
+
+# A generic function's type names its keyword parameters, as any
+# function's does.
+func either(a: 'T, other: 'T = a) -> 'T {
+    return other
+}
+func use_either() -> int {
+    let positional_only: Ref[(int) -> int] = ref either
+    return positional_only.call(1)
+}
+require use_either() == 1
+
+# A function reference may be to a reference adapter rather than its
+# function's native code, so it can't be cast to an address.
+let held = ref add
+let address: Ref[byte] = unsafe_cast[Ref[byte]] held
+
+# A call through a function reference may not know that its function takes
+# an argument away from its caller, so `ref` of a function with a `consume`
+# parameter is reported, a generic function's too. Such a function can
+# still be called directly.
+record Token {
+    id: int
+}
+func spend(consume token: Token) -> int {
+    return token.id
+}
+func spend_any(consume value: 'T, other: 'T) -> 'T {
+    _ = other
+    return value
+}
+func use() -> int {
+    var token: Token
+    token.id = 1
+    let direct = spend(token)
+    var again: Token
+    again.id = 3
+    var first = 1
+    var second = 2
+    let spent = ref spend
+    let generic: Ref[(int, int) -> int] = ref spend_any
+    return direct + generic.call(first, second) + spent.call(again)
+}
+require use() > 0

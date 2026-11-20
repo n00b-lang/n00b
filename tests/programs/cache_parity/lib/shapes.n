@@ -1,0 +1,44 @@
+import bounded
+
+record Box {
+    side: int
+}
+
+func render(self: Box) -> int {
+    return self.side * 10
+}
+
+func measure(self: Box) -> int {
+    return self.side
+}
+
+// Implements only part of `Render`.
+record Dot {
+    x: int
+}
+
+func render(self: Dot) -> int {
+    return self.x
+}
+
+// Counted the same from source or from the cached interface
+// (type_argument_arity_imported.n).
+record Plain {
+    x: int
+}
+
+record Holder {
+    v: 'T
+}
+
+enum Level { low, high }
+
+callback Pick {
+    call (left: 'T, right: 'T) -> 'T
+    handler (left: 'T, right: 'T) -> 'T
+}
+
+callback Count {
+    call (n: int) -> int
+    handler (n: int) -> int
+}

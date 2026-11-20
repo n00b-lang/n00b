@@ -94,11 +94,16 @@ mix_annots(uint64_t h, const ir_annots_t *annots, bool with)
     return h;
 }
 
+// The types a fingerprint has walked into. Every analysis lookup outside a
+// read-only stretch fingerprints its function, so the set is kept per
+// thread and cleared, not allocated and freed, for each fingerprint.
+static _Thread_local core_dict_t type_seen;
+
 static uint64_t
 mix_type(uint64_t h, th_type *type, core_dict_t *seen, uint32_t depth)
 {
     h = mix(h, (uint64_t)(uintptr_t)type);
-    if (!type || depth > 64 || !core_dict_add(seen, type, type)) return h;
+    if (!type || depth > 64 || !core_dict_add(seen, type, 0)) return h;
     if (th_kind_of(type) == TH_VAR) {
         th_type *resolved = th_resolve(type);
         return resolved == type ? h
@@ -134,19 +139,20 @@ mix_outside_types(uint64_t h, const ir_instr_t *in, core_dict_t *seen)
 static uint64_t
 fingerprint(const ir_func_t *f, bool annots)
 {
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
+    core_dict_t *seen = &type_seen;
+    if (seen->buckets) core_dict_clear(seen);
+    else core_dict_init(seen, nullptr, nullptr);
     uint64_t h = mix(0, f->n_blocks);
-    h = mix_type(h, f->type, &seen, 0);
+    h = mix_type(h, f->type, seen, 0);
     h = mix_annots(h, &f->annots, annots);
     h = mix(h, f->n_params);
     for (uint32_t p = 0; p < f->n_params; p++)
-        h = mix_value(h, f->params[p], annots, &seen);
+        h = mix_value(h, f->params[p], annots, seen);
     h = mix(h, f->n_locals);
     for (uint32_t l = 0; l < f->n_locals; l++) {
         const ir_local_t *local = f->locals[l];
         h = mix(h, (uint64_t)(uintptr_t)local);
-        h = mix_type(h, local->type, &seen, 0);
+        h = mix_type(h, local->type, seen, 0);
         h = mix(h, local->address_taken);
         if (local->value) h = mix_annots(h, &local->value->annots, annots);
     }
@@ -159,13 +165,13 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix(h, (uint64_t)(uintptr_t)in);
             h = mix(h, in->op);
             h = mix(h, in->dest_kind);
-            h = mix_value(h, in->dest, annots, &seen);
+            h = mix_value(h, in->dest, annots, seen);
             h = mix(h, (uint64_t)(uintptr_t)in->dest_local);
             h = mix(h, in->n_operands);
             if (in->n_operands)
                 h = mix(h, core_xxh3_64bits_raw(in->operands,
                     in->n_operands * sizeof(ir_operand_t)));
-            h = mix_outside_types(h, in, &seen);
+            h = mix_outside_types(h, in, seen);
             h = mix(h, in->n_mods);
             if (in->n_mods)
                 h = mix(h, core_xxh3_64bits_raw(in->mods,
@@ -175,7 +181,6 @@ fingerprint(const ir_func_t *f, bool annots)
             h = mix_annots(h, &in->annots, annots);
         }
     }
-    core_dict_free(&seen);
     return h;
 }
 

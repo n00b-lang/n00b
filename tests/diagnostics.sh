@@ -1,5 +1,8 @@
 #!/bin/sh
 set -u
+# The goldens carry diagnostic codes, whatever the caller's environment (the
+# layout cases below turn them off for themselves).
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 src=$2
@@ -116,4 +119,10 @@ for expected in tests/diagnostics/*/*.expected; do
     fi
 done
 echo "$count diagnostic goldens checked, $failed failed"
+# The per-file error limit: its default, an explicit one, `all`, and the
+# note on what was left out.
+if ! sh "$src/tests/stop_on_error.sh" "$compiler" "$src"; then
+    echo "stop_on_error.sh failed" >&2
+    failed=$((failed + 1))
+fi
 [ "$failed" -eq 0 ]

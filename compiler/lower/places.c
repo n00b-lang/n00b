@@ -422,6 +422,31 @@ n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage)
     return true;
 }
 
+n00bb_argument_place_t
+n00bb_argument_place(ir_value_t *place, bool accessed, ir_local_t **local,
+                     ir_value_t **storage)
+{
+    *local = nullptr;
+    *storage = nullptr;
+    if (!place)
+        return accessed ? N00BB_ARGUMENT_WRITABLE : N00BB_ARGUMENT_NO_PLACE;
+    // The variable the place is part of: a field or element of it, or all.
+    ir_value_t *root = place;
+    for (size_t depth = 0; root && depth < 64; depth++) {
+        const ir_instr_t *at = root->kind == IR_VAL_INSTR ? root->def
+                                                          : nullptr;
+        if (!at || (at->op != IR_OP_FIELD && at->op != IR_OP_INDEX)
+            || !at->n_operands) break;
+        root = ir_operand_value(&at->operands[0]);
+    }
+    if (root) (void)n00bb_place_root(root, local, storage);
+    if (n00bb_place_writable(place)) return N00BB_ARGUMENT_WRITABLE;
+    if (*storage && (*storage)->kind == IR_VAL_PARAM)
+        return N00BB_ARGUMENT_VALUE_PARAMETER;
+    return *local || *storage ? N00BB_ARGUMENT_IMMUTABLE
+                              : N00BB_ARGUMENT_NO_PLACE;
+}
+
 // The declared shape of the array a place holds: the variable's own, for a
 // whole variable, or the one recorded on the place.
 ir_shape_t *

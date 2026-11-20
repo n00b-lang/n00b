@@ -1,0 +1,19 @@
+tests/diagnostics/build/litmod_many_fail.n:2:27: warning N00B-S0063: parameter `raw` is never used
+  help: if a signature requires it, name it `_raw`
+tests/diagnostics/build/litmod_many_fail.n:5:5: warning N00B-N0024: `too_large` is never used
+  help: remove it
+tests/diagnostics/build/litmod_many_fail.n:5:25: error N00B-B0116: literal modifier `'r` failed: rich string substitution index is too large
+tests/diagnostics/build/litmod_many_fail.n:6:5: warning N00B-N0024: `fine` is never used
+  help: remove it
+tests/diagnostics/build/litmod_many_fail.n:7:5: warning N00B-N0024: `rejected` is never used
+  help: remove it
+tests/diagnostics/build/litmod_many_fail.n:7:24: error N00B-B0116: literal modifier `'reject` failed: bad literal
+tests/diagnostics/build/litmod_many_fail.n:8:5: warning N00B-N0024: `unmatched` is never used
+  help: remove it
+tests/diagnostics/build/litmod_many_fail.n:8:25: error N00B-B0116: literal modifier `'r` failed: rich string has `[/i]` with no matching open tag before it; use `[/]` to clear styling from elsewhere
+tests/diagnostics/build/litmod_many_fail.n:9:5: warning N00B-N0024: `after_reset` is never used
+  help: remove it
+tests/diagnostics/build/litmod_many_fail.n:9:27: error N00B-B0116: literal modifier `'r` failed: rich string has `[/b]` with no matching open tag before it; use `[/]` to clear styling from elsewhere
+tests/diagnostics/build/litmod_many_fail.n:11:6: warning N00B-N0019: function `value` is never called
+  help: call it or delete it
+tests/diagnostics/build/litmod_many_fail.n:12:12: error N00B-B0116: literal modifier `'r` failed: rich string substitution index is too large

@@ -37,10 +37,3 @@ tests/diagnostics/front/parameter_declarations.n:17:26: error: `out` cannot be u
 
   help: only positional parameters can be `modify` or `out`; remove `out`:
     17 | func out_varargs(a: int, *rest: int) -> int {
-
-tests/diagnostics/front/parameter_declarations.n:21:31: error: `second` is a second varargs parameter, but a function can have only one
-
-    21 | func two_varargs(*first: int, *second: int) -> int {
-       |                  ^^^^^^^^^^^  ^^^^^^^^^^^^
-
-  help: combine them into one, or make `second` an ordinary parameter

@@ -1,0 +1,4 @@
+// Written at comptime after its declaration initializer; the importer
+// reads it, this module's initializer never does.
+var g: int = 0
+if comptime() { g = 42 }

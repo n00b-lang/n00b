@@ -1,0 +1,4 @@
+trait Render {
+    func render(self: 'T) -> int
+    func measure(self: 'T) -> int
+}

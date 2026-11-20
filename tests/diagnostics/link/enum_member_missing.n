@@ -1,0 +1,28 @@
+import text
+
+enum Color { red, green }
+flagset Perm { read, write }
+
+func pick(c: Color) -> int {
+    switch c {
+        case Color.blue { return 1 }
+        else { return 0 }
+    }
+}
+
+func start() {
+    let shade = Color.gren
+    let mode = Perm.exec
+    require pick(Color.red) == 0 and Perm.read != Perm.write
+}
+
+func near() {
+    let tone = Color.rde
+}
+
+// An imported enum's members.
+func imported() {
+    let s = "héllo"
+    let unit = text.Index_Unit.byte
+    __fd_write(2, s.index(5, text.Index_Unit.grapheme)!)
+}

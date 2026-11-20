@@ -143,7 +143,7 @@ check_type_descriptor_storage(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t types_rows = {0};
     assert(names && n00bb_abi_type_identity_rows_build(index,
-        runtime, false, symbols, nullptr, nullptr, names, &types_rows));
+        runtime, symbols, nullptr, nullptr, names, &types_rows));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     assert(declarations && n00bb_abi_decl_symbol_count(declarations) == 2);
     assert(n00bb_abi_decl_symbol_at(declarations, 1) == symbol);
@@ -181,7 +181,7 @@ check_type_descriptor_storage(void)
         symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         selected_type_declaration, declaration,
         descriptor_node_source, &source_owner, nullptr, nullptr, nullptr,
-        &packed, nullptr, &object, &object_bytes));
+        nullptr, nullptr, &packed, nullptr, &object, &object_bytes));
     core_object_section_t metadata;
     assert(core_object_section_find(object, object_bytes,
         target.object_format, (core_string_t){}, S(".data.rel.ro.n00b_meta"),
@@ -240,7 +240,7 @@ check_type_descriptor_storage(void)
             CORE_STRING_STATIC("default"), prior_symbols, prior_tokens,
             prior_runtime, &target, N00B_ABI_CAP_DEBUG,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            &prior_packed, nullptr, &prior_object, &prior_object_bytes));
+            nullptr, nullptr, &prior_packed, nullptr, &prior_object, &prior_object_bytes));
     core_link_unit_t *combined = core_link_unit_new();
     assert(combined && core_link_unit_add_root(combined, &prior_unit)
         && core_link_unit_add_root(combined, &unit)
@@ -338,7 +338,7 @@ check_empty_unit(core_string_t triple, uint32_t target_id,
         CORE_STRING_STATIC("default"),
         symbols, tokens, runtime,
         &target, N00B_ABI_CAP_DEBUG, nullptr, nullptr, nullptr, nullptr,
-        nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr,
         &packed, nullptr, &object, &object_bytes));
     assert(!core_translation_unit_has_fatal_diagnostics(&unit));
 
@@ -481,7 +481,7 @@ check_empty_unit(core_string_t triple, uint32_t target_id,
         CORE_STRING_STATIC("default"),
         symbols, tokens, runtime, &target, N00B_ABI_CAP_DEBUG,
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-        &rejected, nullptr, &rejected_object, &rejected_bytes));
+        nullptr, nullptr, &rejected, nullptr, &rejected_object, &rejected_bytes));
     assert(!rejected.bytes && !rejected_object && !rejected_bytes);
     assert(core_translation_unit_has_fatal_diagnostics(&unit));
 

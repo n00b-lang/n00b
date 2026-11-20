@@ -23,8 +23,6 @@ static bool
 merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
             const ir_func_t *function, bool callback);
 static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis);
-static void
 dump_text(core_buffer_t *out);
 static void
 dump_param(const ir_func_t *function, uint32_t p);
@@ -369,8 +367,9 @@ implementations(n00bb_link_analysis_t *analysis, core_string_t trait,
     for (size_t i = 0; known && i < count; i++) {
         // A bit integer's `Integer.from_bits` is a cast with no body and no
         // effects (see register_bit_integer_from_bits).
-        if (core_string_starts_with(methods[i].qualified_name,
-                                    CORE_STRING_STATIC("builtins.Integer.")))
+        if (n00bb_compiler_package(methods[i].package)
+            && core_string_starts_with(methods[i].qualified_name,
+                                       CORE_STRING_STATIC("builtins.Integer.")))
             continue;
         parse_sym_entry_t *symbol = initializer_declaration_symbol(
             linked_method_declaration(link, &methods[i]));
@@ -783,8 +782,15 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
     return analysis->entry_summaries[slot];
 }
 
-static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis)
+// The globals whose address leaves the function that takes it, by the
+// escape facts. They are collected as soon as the facts are built
+// (build_escape_facts), from the bodies the facts are about: once
+// specializing binds calls to instances the facts don't cover, an address
+// passed to one counts as escaping. Collected at the first question
+// instead, the answer depended on whether the program asked one before
+// specializing, and so did the summaries kept for its cached modules.
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis)
 {
     if (analysis->escaped_owner == analysis->escapes) return;
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
@@ -832,7 +838,7 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
             || parse_sym_binding(symbol,
                    CORE_STRING_STATIC("n00bb.external-export"))))
         return true;
-    collect_escaped_globals(analysis);
+    n00bb_collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 
@@ -1042,8 +1048,13 @@ dump_flows(const ir_func_t *function, const ir_summary_t *summary)
     static const ir_sflow_kind_t kinds[] = {IR_SFLOW_ALIAS, IR_SFLOW_COPY,
                                             IR_SFLOW_DATA, IR_SFLOW_CONTROL};
     static const char *const labels[] = {"", "copy ", "data ", "control "};
+    // Each table's lines in sorted order: a summary's flows are in the
+    // order they were met in, which differs between a summary computed
+    // and the same summary decoded from the cache (the codec's order), so
+    // the dump would depend on what was cached and by which program.
     for (int t = 0; t < 2; t++) {
         ir_sflow_table_t table = t ? IR_SFLOW_STORES : IR_SFLOW_RESULTS;
+        text_list_t lines = core_list_new(core_string_t);
         for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
             const ir_spath_t *to = ir_summary_flow_to(summary, table, f);
             for (int k = 0; k < 4; k++)
@@ -1053,19 +1064,30 @@ dump_flows(const ir_func_t *function, const ir_summary_t *summary)
                         continue;
                     const ir_spath_t *from =
                         ir_summary_flow_source(summary, table, s);
+                    core_buffer_t *line = core_buffer_empty();
                     if (table == IR_SFLOW_RESULTS)
-                        fprintf(stdout, "  result %u ", to->output);
+                        core_buffer_printf(line, "  result %u ", to->output);
                     else {
-                        fputs("  store ", stdout);
-                        dump_spath(function, summary, to);
-                        fputs(" <- ", stdout);
+                        core_buffer_puts(line, "  store ");
+                        spath_text(line, function, summary, to);
+                        core_buffer_puts(line, " <- ");
                     }
-                    fputs(labels[k], stdout);
-                    dump_spath(function, summary, from);
-                    if (from->flags & IR_SPATH_ROOT) fputs(" root", stdout);
-                    fputc('\n', stdout);
+                    core_buffer_append(line, labels[k], strlen(labels[k]));
+                    spath_text(line, function, summary, from);
+                    if (from->flags & IR_SPATH_ROOT)
+                        core_buffer_puts(line, " root");
+                    core_list_push(lines, core_buffer_take_string(line));
                 }
         }
+        if (lines.len > 1)
+            qsort(lines.data, lines.len, sizeof(core_string_t),
+                  compare_texts);
+        for (size_t i = 0; i < lines.len; i++) {
+            fprintf(stdout, "%.*s\n", (int)lines.data[i].u8_bytes,
+                    lines.data[i].data);
+            core_free((void *)lines.data[i].data);
+        }
+        core_list_free(lines);
     }
 }
 
@@ -1240,7 +1262,7 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
     th_ctx *types = ir_module_types(function->owner);
     if (for_reader) {
         core_string_t name = n00bb_function_root(function->name);
-        core_string_t type = n00bb_print_type(types, function->type);
+        core_string_t type = n00bb_print_signature(types, function->type);
         fprintf(stdout, "%.*s.%.*s: %.*s\n  effects",
                 (int)owner.u8_bytes, owner.data,
                 (int)name.u8_bytes, name.data,
@@ -1795,7 +1817,7 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
     core_buffer_append_quoted(out, core_buffer_string(&name));
     core_buffer_release(&name);
     core_buffer_puts(out, ",\"type\":");
-    core_buffer_append_quoted(out, n00bb_print_type(
+    core_buffer_append_quoted(out, n00bb_print_signature(
         ir_module_types(function->owner), function->type));
     core_buffer_puts(out, ",\"effects\":[");
     for (uint32_t b = 0, n = 0; b < IR_SEFFECT_FLAG_BITS; b++)
@@ -1910,7 +1932,7 @@ explain_function(n00bb_link_analysis_t *analysis, ir_func_t *function)
     core_buffer_t out = {0};
     function_name_text(&out, function);
     core_buffer_puts(&out, ": ");
-    core_buffer_append_string(&out, n00bb_print_type(
+    core_buffer_append_string(&out, n00bb_print_signature(
         ir_module_types(function->owner), function->type));
     core_buffer_putc(&out, '\n');
     uint64_t bits = ir_summary_effect_bits(summary);

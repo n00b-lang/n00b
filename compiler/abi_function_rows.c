@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include "compiler_lower_emit.h"
 #include "specialize.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
@@ -194,6 +195,29 @@ append_instances(row_builder_t *builder, ir_module_t *module,
     return true;
 }
 
+// A reference adapter's row names the function it adapts
+// (n00bb_reference_adapter_target).
+static bool
+name_adapted_functions(row_builder_t *builder)
+{
+    for (size_t r = 1; r < builder->rows->len; r++) {
+        ir_func_t *function = builder->bindings->data[r];
+        ir_annot_t *adapted = function ? ir_annot_get(&function->annots,
+            N00BB_REFERENCE_ADAPTER_TARGET_KEY) : nullptr;
+        ir_func_t *target = adapted && adapted->kind == IR_ANNOT_VALUE
+                && adapted->v && adapted->v->kind == IR_VAL_FUNC
+            ? adapted->v->owner : nullptr;
+        if (!target) continue;
+        size_t row = 1;
+        while (row < builder->bindings->len
+               && builder->bindings->data[row] != target)
+            row++;
+        if (row == builder->bindings->len) return false;
+        builder->rows->data[r].adapted_function_index = (uint32_t)row;
+    }
+    return true;
+}
+
 bool
 n00bb_abi_function_rows_build(
     n00bb_abi_type_index_t *index,
@@ -279,6 +303,7 @@ n00bb_abi_function_rows_build(
     if (valid && n00bb_specialization_module(ir_module_name(module)))
         valid = append_instances(&builder, module,
             n00bb_abi_decl_module_scope_index(declarations));
+    if (valid) valid = name_adapted_functions(&builder);
     if (valid) valid = append_module_initializer(index, types, declarations,
         module, names, &rows, &bindings, &initializer_index);
     if (valid) *out = (n00bb_abi_function_rows_t){

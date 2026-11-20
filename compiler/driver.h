@@ -15,6 +15,17 @@ bool n00bb_resolver_prepare_packages(n00bb_resolver_t *resolver);
 core_module_resolver_t n00bb_resolver_interface(n00bb_resolver_t *resolver);
 bool n00bb_operand_module_spec(core_string_t operand,
                                core_module_spec_t *out);
+// The current directory with symlinks resolved, as package roots are; the
+// raw directory if it cannot be resolved. Relative paths.path entries are
+// resolved against it everywhere they are read.
+core_string_t n00bb_canonical_cwd(void);
+// True for a module of the `__default` package (a top-level module of the
+// current directory, or a file named on the command line), which holds no
+// system package.
+bool n00bb_default_package(const core_translation_unit_t *unit);
+// True for a module of a system package, judged by where it came from (see
+// n00bb_system_package), for source and cached modules alike.
+bool n00bb_system_unit(const core_translation_unit_t *unit);
 bool n00bb_resolver_add_generated(n00bb_resolver_t *resolver,
                                   core_string_t identifier,
                                   core_string_t text,
@@ -54,6 +65,11 @@ core_string_t n00bb_package_id(const core_translation_unit_t *unit);
 core_string_t n00bb_package_namespace(const core_translation_unit_t *unit);
 void n00bb_source_file_set_package(core_source_file_t *source,
                                   core_string_t package_id);
+// The package roots, in search order: root `index`'s directory (owned by
+// the resolver) and, in `display`, how it is shown (owned by the caller).
+size_t n00bb_resolver_root_count(const n00bb_resolver_t *resolver);
+core_string_t n00bb_resolver_root(const n00bb_resolver_t *resolver,
+                                  size_t index, core_string_t *display);
 void n00bb_resolver_note_roots(n00bb_resolver_t *resolver,
                                core_diagnostics_t *diagnostics);
 void n00bb_resolver_note_search(n00bb_resolver_t *resolver,
@@ -83,6 +99,43 @@ bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
                                      core_string_t name,
                                      core_string_t *module_path,
                                      core_string_t *directory_path);
+// A standard library module that failed because a file elsewhere has its
+// module path. A user's import reports it where it finds it; otherwise it
+// is reported once loading is over.
+typedef struct n00bb_stdlib_shadow_t {
+    core_string_t name;
+    core_string_t shadow;
+    core_string_t stdlib;
+    bool          reported;
+    // Not a clash: `shadow` is a top-level module of the current directory
+    // (the default package), which the library's name wins over, with a
+    // warning rather than an error.
+    bool          warning;
+} n00bb_stdlib_shadow_t;
+
+// Notes a clash (or, with `warning`, a passed-over default-package module)
+// once, however often it is found; `reported` says the caller reports it
+// where it found it. The resolver owns the record for its lifetime.
+n00bb_stdlib_shadow_t *n00bb_resolver_note_shadow(
+    n00bb_resolver_t *resolver, core_string_t name, core_string_t shadow,
+    core_string_t stdlib, bool warning, bool reported);
+// The records noted and not reported yet, by name, now marked reported:
+// `*count` of them, in an array freed with `core_free`.
+n00bb_stdlib_shadow_t **n00bb_resolver_drain_shadows(
+    n00bb_resolver_t *resolver, size_t *count);
+// The standard library cannot be shadowed. These find the pieces of a clash:
+// whether a unit came from the toolchain library, the module file a root
+// other than the library holds for `identifier` (`path` is owned by the
+// caller), and the library's manifests that may declare `declared_name`.
+bool n00bb_resolver_unit_in_stdlib(const n00bb_resolver_t *resolver,
+                                   const core_translation_unit_t *unit);
+bool n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,
+                                     core_string_t identifier,
+                                     core_string_t *path);
+bool n00bb_resolver_stdlib_manifests(n00bb_resolver_t *resolver,
+                                     core_string_t declared_name,
+                                     core_module_discovery_emit_fn emit,
+                                     void *emit_context);
 void n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
                                          core_string_t source_path,
                                          const void *names, size_t size);

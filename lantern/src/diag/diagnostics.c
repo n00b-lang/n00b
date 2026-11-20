@@ -14,8 +14,13 @@
 
 core_list_decl(core_diagnostic_t);
 
+#define SEVERITY_COUNT ((size_t)CORE_DIAG_INTERNAL + 1)
+
 struct core_diagnostics_t {
     core_list_t(core_diagnostic_t) items;
+    // How many items have each severity: items are only ever appended, and
+    // their severities never change, so the counts stay exact.
+    size_t severity_counts[SEVERITY_COUNT];
     core_diag_policy_fn policy;
     void *policy_context;
     core_diag_filter_fn filter;
@@ -85,6 +90,8 @@ core_diagnostics_set_filter(core_diagnostics_t *d, core_diag_filter_fn filter,
 static void
 push_item(core_diagnostics_t *d, core_diagnostic_t item)
 {
+    if ((size_t)item.severity < SEVERITY_COUNT)
+        d->severity_counts[item.severity]++;
     core_list_push(d->items, item);
     d->open = d->items.len - 1;
     d->has_open = true;
@@ -489,8 +496,11 @@ size_t
 core_diagnostics_count_severity(const core_diagnostics_t *d,
                                 core_diag_severity_t severity)
 {
+    if (!d) return 0;
+    if ((size_t)severity < SEVERITY_COUNT)
+        return d->severity_counts[severity];
     size_t count = 0;
-    if (d) for (size_t i = 0; i < d->items.len; i++)
+    for (size_t i = 0; i < d->items.len; i++)
         count += d->items.data[i].severity == severity;
     return count;
 }
@@ -1168,6 +1178,12 @@ render_order(const core_diagnostics_t *d, bool sorted)
     }
     core_free(anchor);
     return order;
+}
+
+size_t *
+core_diagnostics_render_order(const core_diagnostics_t *d, bool sorted)
+{
+    return d ? render_order(d, sorted) : nullptr;
 }
 
 core_string_t

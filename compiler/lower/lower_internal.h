@@ -1448,14 +1448,8 @@ bool
 n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                ir_value_t *value, bool checked, ir_span_t span);
 
-bool
-n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage);
-
 ir_shape_t *
 n00bb_place_shape(ir_value_t *place);
-
-bool
-n00bb_place_writable(const ir_value_t *place);
 
 bool
 n00bb_accessed_element(const ir_value_t *value, ir_value_t **container,
@@ -1886,7 +1880,8 @@ group_facts(n00bb_link_analysis_t *analysis, const ir_func_t *function,
 
 ir_instr_t *
 first_uninitialized_read(n00bb_link_analysis_t *analysis, ir_func_t *function,
-                         const ir_splace_t *place, uint8_t entry_state);
+                         const ir_splace_t *place, uint8_t entry_state,
+                         bool named_only);
 
 bool
 initializer_units_share_cycle(core_link_unit_t *link,
@@ -1961,8 +1956,15 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
     const core_list_t(n00bb_ir_func_ptr_t) *entries);
 
+void
+n00bb_cached_unit_bodies(n00bb_link_analysis_t *analysis, bool root_package,
+                         core_list_t(n00bb_ir_func_ptr_t) *out);
+
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);
+
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis);
 
 bool
 mark_diverging_calls(n00bb_link_analysis_t *analysis);
@@ -2135,6 +2137,14 @@ validate_frozen_writes(n00bb_link_analysis_t *analysis);
 
 bool
 check_field_array_lengths(n00bb_link_analysis_t *analysis);
+
+// Reports `ref f` of a function that keeps a reference to a `modify` or
+// `out` parameter past the call (N00B-S0106), by its escape summary: a
+// call through a function reference only lends the function its
+// arguments' places for the call. And of one with a `consume` parameter
+// (N00B-S0107): such a call doesn't give its arguments up.
+bool
+check_reference_kept_places(n00bb_link_analysis_t *analysis);
 
 bool
 place_unit_allocations(n00bb_link_analysis_t *analysis);

@@ -11,6 +11,9 @@ typedef core_list_t(pt_region_t) region_list_t;
 typedef struct {
     pt_t     *pt;
     uint64_t  fingerprint;
+    // Kept from summarizing the function (see keep_engine), and not yet
+    // checked against what its calls resolve to now.
+    bool      kept;
 } engine_t;
 
 static void escape_item(pt_t *pt, const pt_item_t *item,
@@ -36,6 +39,8 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->contents_memo, content_hash, content_eq);
     core_dict_init(&pt->aliased_memo, aliased_hash, aliased_eq);
+    core_dict_init(&pt->visible_memo, content_hash, content_eq);
+    core_dict_init(&pt->places_memo, places_memo_hash, places_memo_eq);
     core_dict_init(&pt->widened_sets, widened_hash, widened_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
@@ -45,14 +50,15 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
     core_dict_init(&pt->escaped, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
+    core_dict_init(&pt->resolved_writes, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
     core_dict_init(&pt->must_dests, nullptr, nullptr);
+    core_dict_init(&pt->stored_pairs, stored_pair_hash, stored_pair_eq);
     core_dict_init(&pt->value_groups, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
     pt->reach     = ir_reach_new(f);
     pt->aliased   = core_list_new(uint32_t);
     pt->described = core_list_new(uint32_t);
-    pt->seen      = (pt_set_t){0};
     for (size_t s = 0; s < 3; s++) pt->scratch[s] = (pt_set_t){0};
     pt->calls     = core_list_new(pt_callees_t);
     pt->context   = core_list_new(pt_access_t);
@@ -116,6 +122,7 @@ pt_free(pt_t *pt)
         core_list_free(pt->values.data[i]);
     for (size_t i = 0; i < pt->sites.len; i++) {
         core_list_free(pt->sites.data[i].contents);
+        core_list_free(pt->sites.data[i].added);
         for (size_t a = 0; a < pt->sites.data[i].aliases.len; a++)
             core_list_free(pt->sites.data[i].aliases.data[a].origins);
         core_list_free(pt->sites.data[i].aliases);
@@ -206,12 +213,15 @@ pt_free(pt_t *pt)
         core_free(pt->entry.state);
     }
     core_dict_foreach(&pt->resolved, entry) {
-        resolved_t *resolved = entry->value;
-        core_list_free(resolved->items);
-        memo_free(&resolved->memo);
-        core_free(resolved);
+        resolved_release(entry->value);
+        core_free(entry->value);
     }
     core_dict_free(&pt->resolved);
+    core_dict_foreach(&pt->resolved_writes, entry) {
+        resolved_release(entry->value);
+        core_free(entry->value);
+    }
+    core_dict_free(&pt->resolved_writes);
     core_dict_foreach(&pt->contents_memo, entry) {
         content_memo_t *content = entry->value;
         core_list_free(content->items);
@@ -228,6 +238,20 @@ pt_free(pt_t *pt)
         core_free(aliased);
     }
     core_dict_free(&pt->aliased_memo);
+    core_dict_foreach(&pt->visible_memo, entry) {
+        visible_memo_t *visible = entry->value;
+        core_list_free(visible->visible);
+        core_free(visible);
+    }
+    core_dict_free(&pt->visible_memo);
+    core_dict_foreach(&pt->places_memo, entry) {
+        places_memo_t *places = entry->value;
+        core_list_free(places->places);
+        core_list_free(places->items);
+        memo_free(&places->memo);
+        core_free(places);
+    }
+    core_dict_free(&pt->places_memo);
     core_dict_foreach(&pt->widened_sets, entry) {
         pt_set_t *set = entry->value;
         core_list_free(*set);
@@ -238,10 +262,17 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_groups);
     core_dict_foreach(&pt->must_dests, entry) core_free(entry->value);
     core_dict_free(&pt->must_dests);
+    core_dict_foreach(&pt->stored_pairs, entry) {
+        stored_pair_t *pair = entry->value;
+        core_list_free(pair->to);
+        core_list_free(pair->from);
+        core_free(pair);
+    }
+    core_dict_free(&pt->stored_pairs);
     core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);
-    core_list_free(pt->seen);
+    loc_table_free(&pt->alias_calls);
     core_list_free(pt->reading);
     core_list_free(pt->crossed);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
@@ -313,12 +344,50 @@ engine_release(engine_t *engine)
     engine->pt = nullptr;
 }
 
+// Whether `pt`'s calls resolve now to the targets, and through the views
+// of their summaries, that they did when it was made: if they do, solving
+// again would start from the same callees. Resolves every call as pt_init
+// would.
+static bool
+same_callees(pt_t *pt)
+{
+    const ir_func_t *f    = pt->f;
+    size_t           call = 0;
+    bool             same = true;
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (!is_call(in)) continue;
+            const pt_callees_t *was = call < pt->calls.len
+                ? &pt->calls.data[call] : nullptr;
+            call++;
+            call_targets_t targets;
+            resolve_targets(pt->summaries, in, &targets);
+            same = same && was && targets.unknown == was->targets.unknown
+                && targets.targets.len == was->targets.targets.len
+                && targets.targets.len == was->callees.len;
+            for (size_t t = 0; t < targets.targets.len; t++) {
+                ir_summary_t *callee = call_summary(
+                    pt->summaries, f, targets.targets.data[t]);
+                same = same
+                    && targets.targets.data[t] == was->targets.targets.data[t]
+                    && callee == was->callees.data[t];
+            }
+            core_list_free(targets.targets);
+        }
+    return same && call == pt->calls.len;
+}
+
 static pt_t *
 function_engine(ir_summaries_t *summaries, ir_func_t *f)
 {
     bool      found  = false;
     uint64_t  now    = ir_func_shape(f);
     engine_t *engine = core_dict_get(&summaries->engines, f, &found);
+    if (found && engine->fingerprint == now && engine->kept) {
+        engine->kept = false;
+        if (!same_callees(engine->pt)) engine->fingerprint = ~now;
+    }
     if (found && engine->fingerprint == now) return engine->pt;
     if (!found) {
         engine = core_alloc(engine_t);
@@ -329,7 +398,20 @@ function_engine(ir_summaries_t *summaries, ir_func_t *f)
     engine->pt          = core_alloc(pt_t);
     pt_init(engine->pt, summaries, f, false);
     pt_solve(engine->pt);
+    pt_release_solve(engine->pt);
     return engine->pt;
+}
+
+void
+ir_summaries_release_engines(ir_summaries_t *summaries)
+{
+    if (!summaries) return;
+    core_dict_foreach(&summaries->engines, entry) {
+        engine_release(entry->value);
+        core_free(entry->value);
+    }
+    core_dict_free(&summaries->engines);
+    core_dict_init(&summaries->engines, nullptr, nullptr);
 }
 
 static const core_string_t cross_mark    = CORE_STRING_STATIC("*");
@@ -363,7 +445,6 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     uint32_t i           = start;
     for (; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
-        th_type      *named   = type;
         th_type      *current = defined_type(pt->f, type);
         pt->crossed_known     = i;
         if (!current) return mask;
@@ -386,7 +467,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
             bool known = false;
             type = field_type(pt, current, step);
             bool inside = type
-                && member_inline(pt->f, pt, named, current, step, &known);
+                && member_inline(pt->f, pt, current, step, &known);
             out_of_line = type && known && !inside;
             break;
         }
@@ -632,6 +713,26 @@ heap_from_callees(const pt_t *pt, ir_sheap_t *heap)
             return true;
         }
     }
+    // Storage a callee allocated, under the origin its type here refines
+    // the callee's to (see heap_site): named as the callee names it, with
+    // the type it has here.
+    for (size_t s = 0; s < pt->sites.len; s++) {
+        const pt_site_t *site = &pt->sites.data[s];
+        if (!site->call || site->origin != heap->origin
+            || site->base == site->origin)
+            continue;
+        const pt_callees_t *callees = callees_of((pt_t *)pt, site->call);
+        for (size_t t = 0; callees && t < callees->callees.len; t++) {
+            const ir_sheap_t *named = ir_summary_heap_for(
+                callees->callees.data[t], site->base);
+            if (!named || !named->name.u8_bytes) continue;
+            uint32_t origin = heap->origin;
+            *heap        = *named;
+            heap->origin = origin;
+            heap->type   = site->type;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -682,6 +783,25 @@ name_heaps(pt_t *pt, ir_summary_t *summary)
         heap->type     = site->type;
         heap->elements = site->elements;
     }
+    // Storage callees allocated keeps the type its calls here give it, in
+    // this function's own type variables, so that a caller's calls can
+    // instantiate it further; unless calls here give one origin different
+    // types, when the callee's stays.
+    for (size_t s = 0; s < pt->sites.len; s++) {
+        const pt_site_t *site = &pt->sites.data[s];
+        if (!site->call || !site->type || site->base != site->origin)
+            continue;
+        ir_sheap_t *heap = (ir_sheap_t *)ir_summary_heap_for(summary,
+                                                            site->origin);
+        if (!heap || heap->type == site->type) continue;
+        bool agree = true;
+        for (size_t o = 0; agree && o < pt->sites.len; o++) {
+            const pt_site_t *other = &pt->sites.data[o];
+            if (other->origin != site->origin || other == site) continue;
+            agree = other->type && th_same_type(other->type, site->type);
+        }
+        if (agree) heap->type = site->type;
+    }
 }
 
 static bool
@@ -718,20 +838,53 @@ explain_unknown(ir_summary_t *summary, const ir_switness_t *witness)
     summary->explained = true;
 }
 
+// Keeps the solve that summarized `f`'s escapes as its engine (see
+// function_engine), which is the solve an engine would make: the same
+// function, the same summaries with value flow off, and callees whose
+// summaries are final, since `f` is not in a cycle. Recording the summary
+// only read the solution. Analyses the solve pointed into belong to the
+// scope summarizing `f`, which releases them, so the engine fetches them
+// again if it needs them.
+static void
+keep_engine(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt)
+{
+    pt->places       = nullptr;
+    pt->pdg          = nullptr;
+    pt->flow.sourced = false;
+    pt->flow.memory  = nullptr;
+    pt->flow.rd      = nullptr;
+    pt_release_solve(pt);
+    engine_t *engine = core_alloc(engine_t);
+    *engine = (engine_t){.pt = pt, .fingerprint = ir_func_shape(f),
+                         .kept = true};
+    bool      found = false;
+    engine_t *old   = core_dict_get(&summaries->engines, f, &found);
+    if (found) {
+        engine_release(old);
+        core_free(old);
+    }
+    core_dict_put(&summaries->engines, f, engine);
+}
+
 static void
 summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
-                ir_func_t *f)
+                ir_func_t *f, bool final_callees)
 {
-    pt_t pt;
-    pt_init(&pt, summaries, f, !summaries->escapes_only);
-    pt_solve(&pt);
-    pt.places = ir_func_places(f);
-    pt_record(&pt, summary);
-    summarize_results(&pt, summary);
-    describe_heap(&pt, summary, &pt.described);
-    name_heaps(&pt, summary);
-    if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
+    pt_t *pt = core_alloc(pt_t);
+    pt_init(pt, summaries, f, !summaries->escapes_only);
+    pt_solve(pt);
+    pt->places = ir_func_places(f);
+    pt_record(pt, summary);
+    summarize_results(pt, summary);
+    describe_heap(pt, summary, &pt->described);
+    name_heaps(pt, summary);
+    if (pt->unknown_at) explain_unknown(summary, &pt->unknown);
     if (!summaries->escapes_only)
-        summarize_writes(summaries, f, &pt, summary);
-    pt_free(&pt);
+        summarize_writes(summaries, f, pt, summary);
+    if (summaries->escapes_only && final_callees) {
+        keep_engine(summaries, f, pt);
+        return;
+    }
+    pt_free(pt);
+    core_free(pt);
 }

@@ -22,8 +22,4 @@ tests/diagnostics/lower/flagset_switch.n:35:6: warning N00B-N0019: function `com
 tests/diagnostics/lower/flagset_switch.n:44:6: error N00B-S0012: `incomplete` can reach the end of its body without returning a value
   tests/diagnostics/lower/flagset_switch.n:49:1: note: a path through the body reaches its end here
   help: add a `return` on every path through the body
-tests/diagnostics/lower/flagset_switch.n:44:6: warning N00B-N0019: function `incomplete` is never called
-  help: call it or delete it
-tests/diagnostics/lower/flagset_switch.n:53:14: error N00B-S0090: `case is` only matches flagsets, but this `switch` matches `int`
-tests/diagnostics/lower/flagset_switch.n:58:6: warning N00B-N0019: function `start` is never called
-  help: call it or delete it
+tests/diagnostics/lower/flagset_switch.n: note N00B-C0106: this file reached the error limit of 5; its later warnings are not shown (`--stop-on-error=all` shows every one)

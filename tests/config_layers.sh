@@ -1,5 +1,7 @@
 #!/bin/sh
 set -u
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 tmp=$(cd "$(mktemp -d)" && pwd -P)
@@ -106,6 +108,82 @@ n00b --terse-diagnostics config >"$tmp/out" 2>&1
 expect_line "redefinition" \
     "$native_project:3:1: error N00B-C0101: \`jobs\` is already defined"
 expect_line "redefinition" "  $native_project:2:1: note: first defined here"
+
+# A dev build keeps its caches under its own build identity, so a rebuilt
+# compiler never reads another build's entries: cleaning removes only this
+# build's directory, leaving another build's and the shared `dev` one.
+caches="$tmp/caches"
+mkdir -p "$caches/dev" "$caches/dev-0000000000000000"
+isolated N00B_CACHE="$(native "$caches")" "$compiler" cache clean \
+    >"$tmp/out" 2>&1
+expect_match "cache key" \
+    "^Nothing to clean: .*caches[/\\\\]dev-[0-9a-f]{16} does not exist\\.$"
+grep -q 'dev-0000000000000000 does not' "$tmp/out" \
+    && fail "cache key: the build used another build's cache directory"
+[ -d "$caches/dev" ] && [ -d "$caches/dev-0000000000000000" ] \
+    || fail "cache key: cleaning removed another build's cache"
+
+# paths.path layers add up instead of replacing one another: flag entries
+# first, then N00B_PATH, the project file and the user file. Relative entries
+# in a file resolve against that file's directory.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) sep=';' ;;
+    *) sep=':' ;;
+esac
+printf '[paths]\npath = ["user-lib"]\n' >"$user"
+printf '[paths]\npath = ["project-lib"]\n' >"$project"
+isolated N00B_PATH="env-a${sep}env-b" "$compiler" config --path flag-a \
+    --path flag-b >"$tmp/out" 2>&1
+expect_line "path layers accumulate" \
+    "path = [\"flag-a\", \"flag-b\", \"env-a\", \"env-b\", \"$native_tmp/project/project-lib\", \"$native_tmp/home/.config/n00b/user-lib\"] # flag --path, environment N00B_PATH, $native_project:2, $native_user:2"
+isolated N00B_PATH="env-a" "$compiler" config >"$tmp/out" 2>&1
+expect_line "environment keeps file paths" \
+    "path = [\"env-a\", \"$native_tmp/project/project-lib\", \"$native_tmp/home/.config/n00b/user-lib\"] # environment N00B_PATH, $native_project:2, $native_user:2"
+printf '[paths]\npath = []\n' >"$project"
+setting
+expect_line "an empty project list keeps the user paths" \
+    "path = [\"$native_tmp/home/.config/n00b/user-lib\"] # $native_user:2"
+
+# paths.contract_dirs accumulates the same way. A missing directory is
+# reported once, from the highest-precedence layer naming it, and each
+# report names its own layer.
+printf '[paths]\ncontract_dirs = ["user-contracts"]\n' >"$user"
+printf '[paths]\ncontract_dirs = ["shared", "shared"]\n' >"$project"
+n00b config --contract-dir flag-contracts \
+    --contract-dir "$tmp/project/shared" >"$tmp/out" 2>&1
+expect_line "contract dirs accumulate" \
+    "contract_dirs = [\"flag-contracts\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/project/shared\", \"$native_tmp/home/.config/n00b/user-contracts\"] # flag --contract-dir, $native_project:2, $native_user:2"
+printf 'fn main() {\n}\n' >"$tmp/project/src/main.n"
+# The two checks of main.n below would compile the standard library into
+# the isolated home's empty cache. Where the cache is isn't what they test,
+# so they use the caller's cache when it has one.
+set --
+[ -n "${N00B_CACHE:-}" ] && set -- N00B_CACHE="$N00B_CACHE"
+isolated "$@" "$compiler" check --contract-dir flag-contracts \
+    --contract-dir "$tmp/project/shared" main.n >"$tmp/out" 2>&1
+expect_line "contract dir from a flag" \
+    "warning N00B-C0034: \`--contract-dir flag-contracts\` does not exist, so it is skipped"
+expect_line "contract dir named by a flag and the project file" \
+    "warning N00B-C0034: \`--contract-dir $native_tmp/project/shared\` does not exist, so it is skipped"
+expect_line "contract dir from the user file" \
+    "warning N00B-C0034: contract directory \`$native_tmp/home/.config/n00b/user-contracts\` from \`paths.contract_dirs\` ($native_user:2) does not exist, so it is skipped"
+[ "$(grep -c 'N00B-C0034' "$tmp/out")" -eq 3 ] \
+    || fail "contract dirs: a directory named twice was reported twice"
+
+# A missing paths.path entry named by several layers is warned about once,
+# naming the highest-precedence layer. (The file holds the native spelling:
+# on Windows the compiler reads `/tmp/...` as relative to the file.)
+printf '[paths]\npath = ["%s"]\n' "$native_tmp/project/src/missing-lib" \
+    >"$project"
+# (The path settings are resolved, and their warnings given, before any
+# command reads its input, so `parse` reports exactly what `check` does
+# here, without loading the library.)
+isolated N00B_PATH="missing-lib${sep}missing-lib" "$compiler" parse \
+    --path missing-lib main.n >"$tmp/out" 2>&1
+expect_line "missing path entry" \
+    "warning N00B-C0033: \`--path\` entry \`missing-lib\` does not exist, so it is skipped"
+[ "$(grep -c 'N00B-C0033' "$tmp/out")" -eq 1 ] \
+    || fail "paths.path: a missing entry named twice was reported twice"
 
 [ "$failed" -eq 0 ] && echo "config layering: all checks passed"
 [ "$failed" -eq 0 ]

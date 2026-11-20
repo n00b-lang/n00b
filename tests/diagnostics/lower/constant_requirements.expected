@@ -1,0 +1,12 @@
+tests/diagnostics/lower/constant_requirements.n:1:6: warning N00B-N0019: function `literals` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constant_requirements.n:2:8: warning N00B-S0059: this condition is always false, so the other branch never runs
+tests/diagnostics/lower/constant_requirements.n:5:8: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/lower/constant_requirements.n:8:11: warning N00B-S0059: this condition is always false, so the other branch never runs
+tests/diagnostics/lower/constant_requirements.n:13:6: warning N00B-N0019: function `requirements` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constant_requirements.n:15:13: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/lower/constant_requirements.n:17:12: warning N00B-S0059: this assertion is always false, so it always fails
+tests/diagnostics/lower/constant_requirements.n:20:6: warning N00B-N0019: function `failing` is never called
+  help: call it or delete it
+tests/diagnostics/lower/constant_requirements.n:21:13: warning N00B-S0059: this requirement is always false, so it always fails

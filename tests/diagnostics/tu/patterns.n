@@ -8,5 +8,3 @@ for (loop_a, loop_b, loop_c) in [(1, 2)] {
 let loop_count: int = 3
 for loop_d in loop_count {
 }
-for loop_e in (1, "two") {
-}

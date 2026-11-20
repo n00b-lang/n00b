@@ -654,6 +654,16 @@ spread_escapes(pt_t *pt)
 {
     for (size_t e = 0; e < pt->aliased.len; e++) {
         size_t s = pt->aliased.data[e];
+        // What a site spreads depends only on its contents and aliases: a
+        // site whose neither changed since it last spread has nothing new
+        // to spread (pt_alias keeps what it was given then).
+        uintptr_t contents = (uintptr_t)core_dict_get(
+            &pt->changed, (void *)contents_key((uint32_t)s), nullptr);
+        uintptr_t aliases  = (uintptr_t)core_dict_get(
+            &pt->changed, (void *)aliases_key((uint32_t)s), nullptr);
+        uint64_t  spread   = pt->sites.data[s].spread;
+        if (spread && contents <= spread && aliases <= spread) continue;
+        pt->sites.data[s].spread = pt->generation;
         for (size_t c = 0; c < pt->sites.data[s].contents.len; c++) {
             pt_item_t held = pt->sites.data[s].contents.data[c];
             if (held.loc.site == PT_EXTERNAL || held.flow != PT_SAME)

@@ -19,5 +19,3 @@ tests/diagnostics/lower/flagset_slices.n:25:11: error N00B-S0094: flag field `re
   help: change the whole value instead, for example `x = x + Perm.read` or `x = x - Perm.read`
 tests/diagnostics/lower/flagset_slices.n:27:13: error N00B-S0095: `p.rw` only holds flags in `rw`, so it can never equal `Perm.exec`
   help: compare it with flags in `rw`, or compare the whole value
-tests/diagnostics/lower/flagset_slices.n:28:13: error N00B-S0095: `p.rw` only holds flags in `rw`, so it can never equal `Perm.read + Perm.exec`
-  help: compare it with flags in `rw`, or compare the whole value

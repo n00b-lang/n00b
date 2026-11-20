@@ -1,0 +1,10 @@
+tests/diagnostics/front/function_type_entries.n:3:20: error N00B-T0611: a function type's parameters have no passing modes, so `modify` can't be written here
+  help: write only the parameter's type; a reference to a function remembers the function's passing modes:
+    3 | alias Named = Ref[(state: int, value: int) -> int]
+tests/diagnostics/front/function_type_entries.n:3:27: error N00B-T0609: `state` names a positional parameter, but a function type's positional parameters have no names
+  help: write only its type; `name: T` in a function type is a keyword parameter:
+    3 | alias Named = Ref[(modify int, value: int) -> int]
+tests/diagnostics/front/function_type_entries.n:4:31: error N00B-T0609: this positional parameter comes after the keyword parameter `scale`
+  help: in a function type, `name: T` is a keyword parameter, and keyword parameters come last; positional parameters are written as their types alone, then the varargs as `*T`
+tests/diagnostics/front/function_type_entries.n:5:44: error N00B-T0609: this varargs parameter comes after the keyword parameter `scale`
+  help: in a function type, `name: T` is a keyword parameter, and keyword parameters come last; positional parameters are written as their types alone, then the varargs as `*T`

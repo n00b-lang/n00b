@@ -1,0 +1,9 @@
+# The manifest of `letlib`.
+import impl
+
+package letlib {
+    export impl
+    export impl.doubler
+    export impl.three
+    export impl.unset
+}

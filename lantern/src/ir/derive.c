@@ -431,6 +431,7 @@ bool ir_block_erase(ir_block_t *b)
     if (f->block_index) {
         core_dict_remove((core_dict_t *)f->block_index, &b->name);
     }
+    ir_func_forget_binding_reentry(f, b->name);
     b->owner = nullptr;
 
     return true;

@@ -1399,6 +1399,20 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
     }
     th_type *from_definition = th_type_definition(types, from);
     th_type *to_definition = th_type_definition(types, target);
+    // A function reference may be to its function's reference adapter
+    // (n00bb_reference_adapter_t), so it is no function's native code.
+    th_type *reference = th_resolve(from);
+    th_type *referent = th_kind_of(reference) == TH_INDIRECTION
+        ? th_resolve(th_ind_referent(reference)) : nullptr;
+    if (unsafe_cast && referent && (th_kind_of(referent) == TH_FUNCTION
+                                    || th_kind_of(referent) == TH_BINDER)
+        && !ir_type_eq(context->module, reference, th_resolve(target))) {
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_FUNCTION_REFERENCE_CAST, span,
+            N00B_TEXT_FUNCTION_REFERENCE_CAST, N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_USE_NATIVE_ENTRY, N00BB_NO_ARGS);
+        return result;
+    }
     if (unsafe_cast) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_BITCAST,
                                                      span);
@@ -1697,6 +1711,58 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             }
             storage = module && function
                 ? ir_func_reference(module, function) : nullptr;
+            // The referent is the function's type, which names its keyword
+            // parameters, rather than the signature it is called with.
+            th_type *flat = storage
+                ? th_ind_referent(th_resolve(storage->type)) : nullptr;
+            // A generic function's reference is an instance of it, with
+            // variables of its own, as a call is: binding them must not
+            // bind the function's.
+            th_ctx *types = ir_module_types(module);
+            bool generic = flat && ir_func_callable_contract(function)
+                && !th_is_closed(types, flat);
+            if (generic) {
+                th_type *scheme = th_kind_of(th_resolve(flat)) == TH_BINDER
+                    ? flat : th_generalize(types, flat);
+                flat = scheme ? th_instantiate(types, scheme) : nullptr;
+                if (!flat)
+                    return n00bb_operator_error(context, IR_DIAG_INTERNAL,
+                        span, "could not instantiate a generic function's "
+                              "reference");
+                storage->type = th_ind(types, 0, flat);
+            }
+            th_type *value_type = flat
+                ? n00bb_function_value_type(ir_module_types(module),
+                      visit->grammar, function_target, flat)
+                : nullptr;
+            if (storage && !value_type)
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not find the type of a function reference");
+            // A call through the reference passes the keyword parameters
+            // in the order the type lists them, and doesn't know the
+            // function's passing modes; a function that declares them in
+            // another order, or takes a parameter other than `in`, is
+            // referred to through its module's reference adapter
+            // (n00bb_reference_adapter_t). A generic function's reference
+            // is to its instance for the reference's type, and to that
+            // instance's adapter (n00bb_instance_reference_adapter).
+            parse_sym_entry_t *adapter = parse_sym_binding(function_target,
+                N00BB_FUNCTION_ADAPTER_KEY);
+            ir_func_t *referent = adapter && analysis
+                ? n00bb_note_reference_adapter(analysis, adapter) : nullptr;
+            if (storage && adapter && !referent)
+                return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+                    "could not find the reference adapter of a function "
+                    "reference");
+            if (storage && referent)
+                storage = ir_func_reference(module, referent);
+            // The reference's type is the function's as a function type is
+            // written, without passing modes: a call through it learns
+            // them from the function it holds (n00bb_reference_function).
+            th_type *written = storage
+                ? n00bb_without_passing_modes(types, value_type) : nullptr;
+            if (storage && (referent || written != flat))
+                storage->type = th_ind(types, 0, written);
         }
         else if (operand && lower)
             storage = n00bb_place_of(context,

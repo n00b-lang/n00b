@@ -41,6 +41,9 @@ struct doc_t {
     bool     empty;
     bool     rigid;
     bool     standalone;
+    // Printed with no gap on either side, whatever the enclosing rule
+    // says: the node's own rule is @tight.
+    bool     tight;
 };
 
 typedef doc_t *doc_ptr_t;
@@ -87,6 +90,7 @@ typedef struct {
     bool    trivia_indent_all;
     bool    align_all;
     bool    group_all;
+    bool    tight;
 } layout_t;
 
 static doc_t *doc_new(pr_t *p, dkind_t kind)
@@ -277,6 +281,9 @@ static void layout_of(pr_t *p, parse_tree_t *node, parse_nonterm_t *nt,
                 out->slot[ix].group = true;
             }
             break;
+        case PARSE_ANNOT_TIGHT:
+            out->tight = true;
+            break;
         default:
             break;
         }
@@ -426,7 +433,12 @@ static doc_t *assemble(pr_t *p, core_list_t(item_t) *items)
         held    = false;
     }
 
-    if (any && held && pending >= GAP_SOFT) {
+    // A required break before trailing empty items still ends the line,
+    // but an optional one has nothing left to break before. Passing it
+    // on would break before whatever follows this sequence: in
+    // `func idle():`, the empty result's @newline put the block's `:` on
+    // a line of its own.
+    if (any && held && pending >= GAP_HARD) {
         core_list_push(parts, doc_gap(p, pending));
     }
 
@@ -467,12 +479,22 @@ trivia_gap(core_string_t text)
     return newlines > 1 ? GAP_BLANK : newlines ? GAP_HARD : GAP_SPACE;
 }
 
+// Trivia printed as written: comments, and the comment-like anchors that
+// open and close a region (`#[name#` ... `#]name#`).
+static bool
+printed_trivia(const parse_trivia_t *item)
+{
+    return (item->kind == PARSE_TRIVIA_COMMENT
+            || item->kind == PARSE_TRIVIA_REGION_OPEN
+            || item->kind == PARSE_TRIVIA_REGION_CLOSE)
+        && item->text.data && item->text.u8_bytes;
+}
+
 static bool
 has_comment(parse_trivia_t *trivia)
 {
     for (parse_trivia_t *item = trivia; item; item = item->next) {
-        if (item->kind == PARSE_TRIVIA_COMMENT && item->text.data
-            && item->text.u8_bytes) {
+        if (printed_trivia(item)) {
             return true;
         }
     }
@@ -527,8 +549,7 @@ put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
-            || !item->text.u8_bytes) {
+        if (!printed_trivia(item)) {
             continue;
         }
 
@@ -557,8 +578,7 @@ put_trailing_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
             continue;
         }
 
-        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
-            || !item->text.u8_bytes) {
+        if (!printed_trivia(item)) {
             continue;
         }
 
@@ -682,6 +702,19 @@ static void *reduce_node(parse_reduce_t *r)
                group_arity(p->g, rule, i));
     }
 
+    // A @tight child takes no gap before it or after it.
+    for (size_t i = 0; i < items.len; i++) {
+        if (!items.data[i].doc->tight) {
+            continue;
+        }
+
+        items.data[i].gap = GAP_NONE;
+
+        if (i + 1 < items.len) {
+            items.data[i + 1].gap = GAP_NONE;
+        }
+    }
+
     size_t from = 0;
 
     for (size_t i = 0; i < lay.n; i++) {
@@ -719,6 +752,8 @@ static void *reduce_node(parse_reduce_t *r)
     }
 
     doc_t *d = assemble(p, &items);
+
+    d->tight = lay.tight;
 
     core_list_free(items);
 
@@ -788,6 +823,14 @@ static bool fits(pr_t *p, doc_t *d, int32_t avail)
     return ok;
 }
 
+// A byte that can continue a word: ASCII letters, digits and `_`, and any
+// byte of a multi-byte UTF-8 character.
+static bool word_byte(uint8_t c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_' || c >= 0x80;
+}
+
 static core_string_t render(pr_t *p, doc_t *root)
 {
     core_buffer_t *out = core_buffer_empty();
@@ -828,6 +871,14 @@ static core_string_t render(pr_t *p, doc_t *root)
                 nl  = 0;
             }
             else {
+                // A gap with no space must not run two words into one
+                // token: `not` before `p` would print as `notp`.
+                if (!spaces && out->byte_len && started
+                    && word_byte((uint8_t)out->data[out->byte_len - 1])
+                    && word_byte((uint8_t)f.doc->text.data[0])) {
+                    spaces = 1;
+                }
+
                 for (int32_t i = 0; i < spaces; i++) {
                     core_buffer_putc(out, ' ');
                 }

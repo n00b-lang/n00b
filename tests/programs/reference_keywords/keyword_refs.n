@@ -1,0 +1,7 @@
+# Another module's references to a function whose keyword parameters are
+# declared out of the order its type lists them in.
+import keyword_lib
+
+func checked_ref() -> Ref[(int, b: int, zz: int) -> int fail: string] {
+    return ref keyword_lib.checked
+}

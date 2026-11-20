@@ -23,8 +23,3 @@ tests/diagnostics/lower/effect_bounds.n:54:1: error N00B-S0078: `hash` implement
   lib/builtin/hashing.n:8:5: note: `Hash.hash` forbids `impure` here
 tests/diagnostics/lower/effect_bounds.n:63:1: error N00B-S0078: `__add` implements `Add.__add`, which must never have effect `impure`, but:
   tests/diagnostics/lower/effect_bounds.n:64:5: note: `__add` calls `builtin.io.debug.raw_debug`, which may have effect `impure`
-tests/diagnostics/lower/effect_bounds.n:68:6: warning N00B-N0019: function `lookup` is never called
-  help: call it or delete it
-tests/diagnostics/lower/effect_bounds.n:68:13: note N00B-S0064: parameter `table` could be `view`: `lookup` never writes anything reachable from it
-tests/diagnostics/lower/effect_bounds.n:72:6: warning N00B-N0019: function `total` is never called
-  help: call it or delete it

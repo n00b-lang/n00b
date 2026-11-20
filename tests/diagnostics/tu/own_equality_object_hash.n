@@ -1,0 +1,15 @@
+# An object with its own `==` and no user `hash` gets no derived hash:
+# its identity hash would disagree with its `==`. Hashing it, directly or
+# as a dict key, is diagnosed at the use.
+object Point {
+    x: int
+}
+func __init(self: Point, x: int) {
+    self.x = x
+}
+func __equal(view self: Point, view other: Point) -> bool {
+    return self.x == other.x
+}
+let point = new[Point](1)
+let point_hash = point.hash()
+var point_keyed: Dict[Point, int] = new[Dict[Point, int]]()

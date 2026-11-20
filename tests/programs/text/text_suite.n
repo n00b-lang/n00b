@@ -41,7 +41,10 @@ func rich_over(body: Ref[text.Rich_Body]) -> string {
     return s
 }
 
+// The rich body behind `s`. Only a rich string has one: any other string's
+// words are its bytes, so reading them as a body would read garbage.
 func body_of(s: string) -> Ref[text.Rich_Body] {
+    require is_rich(s)
     var copy: string = s
     let words: Ref[String_Words] = unsafe_cast[Ref[String_Words]] ref copy
     return unsafe_cast[Ref[text.Rich_Body]] words.__value.data
@@ -55,7 +58,8 @@ func one_record() -> List[text.Style_Record] {
     var records: List[text.Style_Record] = new[List[text.Style_Record]]()
     let blank: text.Style_Record = (start_ix = nil, end_ix = nil,
                                     style_tag = nil, format_spec = nil,
-                                    substitution = (none = nil))
+                                    substitution = (none = nil),
+                                    start_order = 0, end_order = 0)
     records.append(blank)
     return records
 }
@@ -512,7 +516,7 @@ func raw_offset_probe_main() {
     require byte_len(from_raw(ref offset_pool, 0, at = 64)) == 0
 }
 
-let fancy: string = "«b»Hello«/b» «i»world«/i»"'r
+let fancy: string = "[b]Hello[/b] [i]world[/i]"'r
 
 func check_rich(s: string, plain: string, markup: string) {
     require tag(s) == 3
@@ -525,18 +529,251 @@ func check_rich(s: string, plain: string, markup: string) {
 }
 
 func local_literals() {
-    check_rich("«b»Hi«/b»"'r, "Hi", "r\"«b»Hi«/b»\"")
-    check_rich("«u»a rich literal well past the inline capacity«/u»"'r,
+    check_rich("[b]Hi[/b]"'r, "Hi", "r\"[b]Hi[/b]\"")
+    check_rich("[u]a rich literal well past the inline capacity[/u]"'r,
                "a rich literal well past the inline capacity",
-               "r\"«u»a rich literal well past the inline capacity«/u»\"")
-    check_rich("x «#» y «#:04d» «#a_rather_long_argument_name»"'r, "x  y  ",
-               "r\"x «#0» y «#1:04d» «#a_rather_long_argument_name»\"")
+               "r\"[u]a rich literal well past the inline capacity[/u]\"")
+    check_rich("x [#] y [#:04d] [#a_rather_long_argument_name]"'r, "x  y  ",
+               "r\"x [#] y [#:04d] [#a_rather_long_argument_name]\"")
+}
+
+// The substitution slots of a rich string's outer layer, in record order:
+// `auto`, `pos N` or `name X`, then `@offset` and `:spec` when there is
+// one, separated by `;`.
+func slots_of(s: string) -> string {
+    var out: string = ""
+    if !is_rich(s) {
+        return out
+    }
+    let recs: List[text.Style_Record] = body_of(s).__value.style_info
+    for i from 0 until cast[int] recs.len() {
+        let r: text.Style_Record = recs[i]
+        let sub = r.substitution
+        var kind: string = ""
+        switch sub {
+            case auto {
+                kind = "auto"
+            }
+            case position {
+                kind = "pos " + decimal(sub.position)
+            }
+            case argname {
+                kind = "name " + sub.argname
+            }
+            case none {
+                continue
+            }
+        }
+        if byte_len(out) != 0 {
+            out = out + ";"
+        }
+        out = out + kind + "@" + decimal(cast[u64] r.start_ix.get_or_else(0))
+        if r.format_spec != nil {
+            out = out + ":" + r.format_spec
+        }
+    }
+    return out
+}
+
+func plain_of(s: string) -> string {
+    var walked: Array[u8] = __text_byte_array(s)
+    return from_raw(ref walked, cast[int] byte_len(s))
+}
+
+func rich_concatenation() {
+    // rich + rich keeps both sides' records, the right side's moved by the
+    // left side's byte length.
+    let both: string = "x [b]bold[/b] [#] y"'r + " z [#:04] w"'r
+    check(is_rich(both) and plain_of(both) == "x bold  y z  w",
+          "rich_concatenation", "1")
+    check(slots_of(both) == "auto@7;auto@12:04", "rich_concatenation", "2")
+    check(repr_of(both) == "r\"x [b]bold[/b] [#] y z [#:04] w\"",
+          "rich_concatenation", "3")
+    // rich + plain and plain + rich.
+    check(repr_of("[b]a[/b]"'r + "c") == "r\"[b]a[/b]c\"",
+          "rich_concatenation", "4")
+    let after_plain: string = "cd" + "[b]a[/b][#n]"'r
+    check(repr_of(after_plain) == "r\"cd[b]a[/b][#n]\"",
+          "rich_concatenation", "5")
+    check(slots_of(after_plain) == "name n@3", "rich_concatenation", "6")
+    // A span that was never closed flows right over what follows...
+    let open_left: string = "[b]abc"'r + "def"
+    check(repr_of(open_left) == "r\"[b]abcdef\"", "rich_concatenation", "7")
+    check(body_of(open_left).__value.style_info[0].end_ix.get_or_else(0) ==
+          text.index_extends, "rich_concatenation", "7b")
+    check(repr_of("[b]open"'r + "[i]x[/i]"'r) == "r\"[b]open[i]x[/i]\"",
+          "rich_concatenation", "13")
+    check(("[b]a"'r + "[#]"'r) == "[b]a[#]"'r, "rich_concatenation", "13b")
+    // ...until a reset on the right ends it, at the right side's very start
+    // or later on.
+    let reset_first: string = "[b]abc"'r + "[/]def"'r
+    check(repr_of(reset_first) == "r\"[b]abc[/b][/]def\"", "rich_concatenation",
+          "13c")
+    check(body_of(reset_first).__value.style_info[0].end_ix.get_or_else(0) ==
+          3, "rich_concatenation", "13d")
+    check(reset_first == "[b]abc[/]def"'r, "rich_concatenation", "13e")
+    let reset_later: string = "[b]abc"'r + "d[#][/]ef"'r
+    check(repr_of(reset_later) == "r\"[b]abcd[#][/b][/]ef\"",
+          "rich_concatenation", "13f")
+    check(body_of(reset_later).__value.style_info[0].end_ix.get_or_else(0) ==
+          4, "rich_concatenation", "13g")
+    // A reset clears flowing styling in every layer, whichever layer of
+    // either side it or the flowing span is in.
+    var u_spans: List[text.Style_Span] = [(start = 0, end = 3, tag = "u")]
+    let inner_flow: string = text.rich_string("[b]abc"'r, u_spans) +
+        "[/]def"'r
+    check(repr_of(inner_flow) == "r\"[u][b]abc[/b][/u][/]def\"",
+          "rich_concatenation", "13j")
+    let inner_reset: string = "[b]abc"'r +
+        text.rich_string("de[/]f"'r, u_spans)
+    check(repr_of(inner_reset) == "r\"[b]abc[u]de[/b][/]f[/u]\"",
+          "rich_concatenation", "13k")
+    check(body_of(inner_reset).__value.style_info[0].end_ix.get_or_else(0) ==
+          5, "rich_concatenation", "13l")
+    // ...including a reset at the very start of the right side, in a layer
+    // other than the flowing span's.
+    let inner_reset_first: string = "[b]abc"'r +
+        text.rich_string("[/]def"'r, u_spans)
+    let first_b: text.Style_Record =body_of(inner_reset_first).__value.style_info[0]
+    check(first_b.end_ix.get_or_else(0) == 3, "rich_concatenation", "13m")
+    check(yes(text.cascade_style_index(inner_reset_first, 2).bold) and
+          !yes(text.cascade_style_index(inner_reset_first, 3).bold) and
+          yes(text.cascade_style_index(inner_reset_first, 3).underline),
+          "rich_concatenation", "13n")
+    let inner_both: string = text.rich_string("[b]abc"'r, u_spans) +
+        text.rich_string("[/]def"'r, u_spans)
+    check(yes(text.cascade_style_index(inner_both, 2).bold) and
+          !yes(text.cascade_style_index(inner_both, 3).bold) and
+          !yes(text.cascade_style_index(inner_both, 5).bold),
+          "rich_concatenation", "13o")
+    // A closed span stays closed, and the join is associative.
+    check(repr_of("[b]abc[/b]"'r + "def") == "r\"[b]abc[/b]def\"",
+          "rich_concatenation", "13h")
+    check((("[b]a"'r + "b") + "[/]c"'r) == ("[b]a"'r + ("b" + "[/]c"'r)),
+          "rich_concatenation", "13i")
+    check(repr_of("[b]a[/b][b]c[/b]"'r) == "r\"[b]a[/b][b]c[/b]\"",
+          "rich_concatenation", "14")
+    // The result is the string the whole literal would have made.
+    check(("[b]a[/b]"'r + "[#]"'r) == "[b]a[/b][#]"'r, "rich_concatenation",
+          "8")
+    // join and repeat keep records too.
+    var parts: List[string] = ["[b]a[/b]"'r, "b", "[#:x]"'r]
+    let joined: string = join(parts, "[#]"'r)
+    check(plain_of(joined) == "ab" and slots_of(joined) == "auto@1;auto@2;auto@2:x",
+          "rich_concatenation", "9")
+    let twice: string = text.repeat("[#]x"'r, 2)
+    check(slots_of(twice) == "auto@0;auto@1", "rich_concatenation", "10")
+    // Each layer of a layered string is kept.
+    var spans: List[text.Style_Span] = [(start = 0, end = 5, tag = "u")]
+    let layered: string = text.rich_string("[b]alpha[/b]"'r, spans) +
+        "[i]z[/i]"'r
+    check(is_rich(body_of(layered).__value.s), "rich_concatenation", "11")
+    check(body_of(body_of(layered).__value.s).__value.style_info.len() == 1,
+          "rich_concatenation", "12")
+}
+
+func substitution_slots() {
+    // Auto slots are recorded as auto, not numbered; `format()` numbers
+    // them later, in order of appearance in the final string.
+    let autos: string = "a[#]b[#:>4]c"'r
+    check(slots_of(autos) == "auto@1;auto@2:>4", "substitution_slots", "1")
+    // Auto, explicit and named slots mix freely, each keeping its kind,
+    // offset, spec, and source order.
+    let mixed: string = "[#] and [#1]"'r
+    check(slots_of(mixed) == "auto@0;pos 1@5", "substitution_slots", "2")
+    check(repr_of(mixed) == "r\"[#] and [#1]\"", "substitution_slots", "3")
+    let other_way: string = "[#0:x] and [#:y]"'r
+    check(slots_of(other_way) == "pos 0@0:x;auto@5:y", "substitution_slots",
+          "4")
+    let all_kinds: string = "x[#2:04d]y[#]z[#who:^8]w[#]"'r
+    check(slots_of(all_kinds) == "pos 2@1:04d;auto@2;name who@3:^8;auto@4",
+          "substitution_slots", "5")
+    check(repr_of(all_kinds) == "r\"x[#2:04d]y[#]z[#who:^8]w[#]\"",
+          "substitution_slots", "6")
+    // A slot's place among the span boundaries at its offset is kept:
+    // after `[/b]` the value isn't bold, before it, it is.
+    let outside: string = "[b]a[/b][#]"'r
+    let inside: string = "[b]a[#][/b]"'r
+    check(repr_of(outside) == "r\"[b]a[/b][#]\"", "substitution_slots", "o1")
+    check(repr_of(inside) == "r\"[b]a[#][/b]\"", "substitution_slots", "o2")
+    check(outside != inside and outside.hash() != inside.hash(),
+          "substitution_slots", "o3")
+    check(repr_of("[i][#][b]x[/b][/i]"'r) == "r\"[i][#][b]x[/b][/i]\"",
+          "substitution_slots", "o4")
+    check(repr_of("[i][b][#]x[/b][/i]"'r) == "r\"[i][b][#]x[/b][/i]\"",
+          "substitution_slots", "o5")
+    check(repr_of("[b][/b][#]"'r) == "r\"[b][/b][#]\"", "substitution_slots",
+          "o6")
+    // ...through concatenation, where the right side's events at the join
+    // come after the left side's.
+    check(("[b]a[/b]"'r + "[#]"'r) == outside, "substitution_slots", "o7")
+    check(("[b]a[#][/b]"'r + "x") == "[b]a[#][/b]x"'r, "substitution_slots",
+          "o8")
+    // Equality and hashing see the slot kind.
+    check("[#]"'r != "[#0]"'r, "substitution_slots", "7")
+    check("[#]"'r == "[#]"'r, "substitution_slots", "8")
+    check(("[#]"'r).hash() != ("[#0]"'r).hash(), "substitution_slots", "9")
+    check(("[#:x]"'r).hash() == ("[#:x]"'r).hash(), "substitution_slots",
+          "10")
+}
+
+func bracket_markup() {
+    // Style on / off for intrinsic, case, and user-named styles.
+    check_rich("[b]on[/b] [title]t[/title] [mine]m[/mine] [_x9]u[/_x9]"'r,
+               "on t m u",
+               "r\"[b]on[/b] [title]t[/title] [mine]m[/mine] [_x9]u[/_x9]\"")
+    check_rich("[warning]w[/warning]"'rich, "w", "r\"[warning]w[/warning]\"")
+    // Names follow the identifier rule `(_|XID_Start)(_|XID_Continue)*`,
+    // non-ASCII included; anything else is literal text.
+    check_rich("[é]x[/é] [日本]y[/日本] [_9]z[/_9] [a1]w[/a1]"'r,
+               "x y z w",
+               "r\"[é]x[/é] [日本]y[/日本] [_9]z[/_9] [a1]w[/a1]\"")
+    check_rich("[—]x[/—] [→]y [9a] [é—] [ö·]"'r,
+               "[—]x[/—] [→]y [9a] [é—] ",
+               "r\"\\[—]x\\[/—] \\[→]y \\[9a] \\[é—] [ö·]\"")
+    check(slots_of("[#é][#日本:x][#→]"'r) == "name é@0;name 日本@0:x",
+          "bracket_markup", "xid")
+    // `[/]` ends every open style.
+    // The reset is recorded (even at offset 0, where it ends nothing in
+    // this literal but does on concatenation).
+    check_rich("[b]a[i]b[/]c"'r, "abc", "r\"[b]a[i]b[/i][/b][/]c\"")
+    check_rich("[/]x"'r, "x", "r\"[/]x\"")
+    check("[b]a[/b][/]c"'r == "[b]a[/]c"'r, "bracket_markup", "reset")
+    // Substitutions: auto, explicit, and named, each with and without a spec.
+    check_rich("a[#]b[#:>4]c"'r, "abc", "r\"a[#]b[#:>4]c\"")
+    check_rich("[#0][#1:x][#12]"'r, "", "r\"[#0][#1:x][#12]\"")
+    check_rich("[#who] [#who:^8] [#]"'r, "  ",
+               "r\"[#who] [#who:^8] [#]\"")
+    // A spec runs to the first unescaped `]`; `\]` and `\[` are literal.
+    check_rich("[#0:a\]b\[c]"'r, "", "r\"[#0:a\\]b[c]\"")
+    check_rich("[#n:{x\]}] tail"'r, " tail", "r\"[#n:{x\\]}] tail\"")
+    // Anything else starting with `[` is literal text, never an error.
+    check_rich("[1, 2] [] a[i + 1] [ bold] [10] [@x] [foo, bar]"'r,
+               "[1, 2] [] a[i + 1] [ bold] [10] [@x] [foo, bar]",
+               "r\"\\[1, 2] \\[] a\\[i + 1] \\[ bold] \\[10] \\[@x] \\[foo, bar]\"")
+    check_rich("unclosed [bold"'r, "unclosed [bold",
+               "r\"unclosed \\[bold\"")
+    check_rich("[bold"'r, "[bold", "r\"\\[bold\"")
+    check_rich("[b ] [/ b] [/b c] [#1a] [# x] [#x y]"'r,
+               "[b ] [/ b] [/b c] [#1a] [# x] [#x y]",
+               "r\"\\[b ] \\[/ b] \\[/b c] \\[#1a] \\[# x] \\[#x y]\"")
+    check_rich("[#:abc"'r, "[#:abc", "r\"\\[#:abc\"")
+    check_rich("[#name"'r, "[#name", "r\"\\[#name\"")
+    check_rich("[#0:a\]"'r, "[#0:a]", "r\"\\[#0:a]\"")
+    check_rich("["'r, "[", "r\"\\[\"")
+    // Escapes: `\[` and `\]` are always literal brackets.
+    check_rich("\[bold] \[\] [\] \]"'r, "[bold] [] [] ]",
+               "r\"\\[bold] \\[] \\[] ]\"")
+    check_rich("\[b]x[b]y\[/b]"'r, "[b]xy[/b]", "r\"\\[b]x[b]y\\[/b]\"")
+    check_rich("tab\tA\x42"'r, "tab\tAB", "r\"tab\tAB\"")
+    // A literal `[` right before a real tag still leaves the tag intact.
+    check_rich("[[b]x[/b]]"'r, "[x]", "r\"\\[[b]x[/b]]\"")
 }
 
 func dispatch() {
-    let bold: string = "«b»Hi«/b»"'r
-    let same: string = "«b»Hi«/b»"'r
-    let italic: string = "«i»Hi«/i»"'r
+    let bold: string = "[b]Hi[/b]"'r
+    let same: string = "[b]Hi[/b]"'r
+    let italic: string = "[i]Hi[/i]"'r
     require bold == same
     require bold != italic
     require bold != "Hi"
@@ -580,8 +817,12 @@ let text_offset: u64? = rich_body_text_offset()
 func string_rich_literal_main() {
     require text_offset != nil
     require text_offset == 0
-    check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
+    check_rich(fancy, "Hello world", "r\"[b]Hello[/b] [i]world[/i]\"")
     local_literals()
+    bracket_markup()
+    substitution_slots()
+    rich_concatenation()
+    slot_slicing()
     dispatch()
 }
 
@@ -1402,11 +1643,9 @@ func border_probe_main() {
           and cast[u64](text.Border_Set.all) == 0x3f, "border_probe", "7")
 }
 
-var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record(),
-                               base_style = nil, opaque = false)
+var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record())
 let rs: string = rich_over(ref rs_body)
-var rs_outer_body: text.Rich_Body = (s = rs, style_info = one_record(),
-                                     base_style = nil, opaque = false)
+var rs_outer_body: text.Rich_Body = (s = rs, style_info = one_record())
 let rs_outer: string = rich_over(ref rs_outer_body)
 
 func rich_static_checks() {
@@ -1450,6 +1689,67 @@ func byte_slice_of(s: string, start: i64, end: i64) -> string {
     return got
 }
 
+// Slots go to exactly one piece when a string is cut: half-open, like
+// spans, so a slot at the cut belongs to the piece that starts there, and
+// one at the very end stays with the piece that reaches the end.
+func slot_slicing() {
+    let s: string = "ab[#]cd[#n:x]"'r
+    let left: string = byte_slice_of(s, 0, 2)
+    let right: string = byte_slice_of(s, 2, 4)
+    check(slots_of(left) == "", "slot_slicing", "1")
+    check(slots_of(right) == "auto@0;name n@2:x", "slot_slicing", "2")
+    check(slots_of(byte_slice_of(s, 0, 4)) == "auto@2;name n@4:x",
+          "slot_slicing", "3")
+    check(slots_of(byte_slice_of(s, 1, 3)) == "auto@1", "slot_slicing", "4")
+    check(slots_of(byte_slice_of(s, 3, 4)) == "name n@1:x", "slot_slicing",
+          "5")
+    // At a cut, the closes written first stay left; the rest go right, and
+    // a span still open across the cut opens again at the right piece's
+    // start, so a slot keeps its place inside or outside the span.
+    let inside: string = "[b]a[#][/b]x"'r
+    check(repr_of(byte_slice_of(inside, 0, 1)) == "r\"[b]a[/b]\"",
+          "slot_slicing", "7")
+    check(repr_of(byte_slice_of(inside, 1, 2)) == "r\"[b][#][/b]x\"",
+          "slot_slicing", "8")
+    let outside: string = "[b]a[/b][#]x"'r
+    check(repr_of(byte_slice_of(outside, 0, 1)) == "r\"[b]a[/b]\"",
+          "slot_slicing", "9")
+    check(repr_of(byte_slice_of(outside, 1, 2)) == "r\"[#]x\"",
+          "slot_slicing", "10")
+    // A closed span cut inside closes at the piece's end; an unclosed one
+    // keeps flowing; a reset at the cut goes with the right piece.
+    check(repr_of(byte_slice_of("[b]abcd[/b]"'r, 1, 3)) == "r\"[b]bc[/b]\"",
+          "slot_slicing", "11")
+    check(repr_of(byte_slice_of("[b]abcd"'r, 1, 3)) == "r\"[b]bc\"",
+          "slot_slicing", "12")
+    check(repr_of(byte_slice_of("ab[/]cd"'r, 2, 4)) == "r\"[/]cd\"",
+          "slot_slicing", "13")
+    // Every layer of a layered string is cut, not just the outer one.
+    var spans: List[text.Style_Span] = [(start = 0, end = 5, tag = "u")]
+    let layered: string = text.rich_string("[b]alpha[/b]"'r, spans)
+    check(repr_of(byte_slice_of(layered, 1, 3)) == "r\"[u][b]lp[/b][/u]\"",
+          "slot_slicing", "14")
+    // Every slot lands in exactly one piece of a split.
+    for cut from 0 until 5 {
+        let a: string = slots_of(byte_slice_of(s, 0, cut))
+        let b: string = slots_of(byte_slice_of(s, cut, 4))
+        var n: uint = 0
+        if byte_len(a) != 0 {
+            n += 1
+            if find_bytes(a, ";") != nil {
+                n += 1
+            }
+        }
+        if byte_len(b) != 0 {
+            n += 1
+            if find_bytes(b, ";") != nil {
+                n += 1
+            }
+        }
+        check(n == 2, "slot_slicing", "6")
+    }
+}
+
 func rich_build_checks() {
     var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
     push_span(spans, 0, 4, "b")
@@ -1458,14 +1758,14 @@ func rich_build_checks() {
     check(byte_len(built) == 4 and byte_at(built, 0) == cast[u8] 't', "rich_build_probe", "2")
     check(record_count(built) == 1, "rich_build_probe", "3")
 
-    let literal: string = "«b»text«/b»"'r
+    let literal: string = "[b]text[/b]"'r
     check(built == literal, "rich_build_probe", "4")
     check(built.hash() == literal.hash(), "rich_build_probe", "5")
 
     var ext: List[text.Style_Span] = new[List[text.Style_Span]]()
     push_span(ext, 0, text.index_extends, "b")
     let open_ended: string = text.rich_string("text", ext)
-    let unclosed: string = "«b»text"'r
+    let unclosed: string = "[b]text"'r
     check(open_ended == unclosed, "rich_build_probe", "6")
     check(built != open_ended, "rich_build_probe", "7")
 
@@ -1480,7 +1780,7 @@ func rich_build_checks() {
         check(second.style_tag != nil, "rich_build_probe", "10")
     }
 
-    let nested: string = "«b»alpha «i»beta«/i»«/b»"'r
+    let nested: string = "[b]alpha [i]beta[/i][/b]"'r
     let tail: string = byte_slice_of(nested, 6, 10)
     check(text.eq(tail, "beta"), "rich_build_probe", "11")
     check(record_count(tail) == 2, "rich_build_probe", "12")
@@ -1497,7 +1797,7 @@ func rich_build_checks() {
     let head: string = byte_slice_of(nested, 0, 5)
     check(record_count(head) == 1, "rich_build_probe", "14")
 
-    let carry: string = byte_slice_of("«b»head tail"'r, 5, 9)
+    let carry: string = byte_slice_of("[b]head tail"'r, 5, 9)
     check(record_count(carry) == 1, "rich_build_probe", "15")
     if record_count(carry) == 1 {
         let er: text.Style_Record = body_of(carry).__value.style_info[0]
@@ -1513,15 +1813,6 @@ func yes(v: bool?) -> bool {
         return false
     }
     return v
-}
-
-func styled(bold: bool?, italic: bool?) -> text.Text_Style {
-    return (bold = bold, italic = italic, underline = nil,
-            double_underline = nil, strikethrough = nil, reverse = nil,
-            dim = nil, blink = nil, text_case = text.Text_Case.none,
-            font_hint = text.Font_Hint.default, font_index = nil,
-            fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-            bg_rgb = nil, font_size = nil)
 }
 
 func run_list(s: string) -> List[text.Style_Run] {
@@ -1553,15 +1844,6 @@ func tiles(runs: List[text.Style_Run], len: u32) -> bool {
     return true
 }
 
-var outer_body: text.Rich_Body = (s = "",
-                                  style_info = new[List[text.Style_Record]](),
-                                  base_style = nil, opaque = false)
-let outer: string = rich_over(ref outer_body)
-var mid_body: text.Rich_Body = (s = "hi",
-                                style_info = new[List[text.Style_Record]](),
-                                base_style = nil, opaque = false)
-let mid: string = rich_over(ref mid_body)
-
 func nested_spans() -> string {
     var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
     for k from 0 until 40 {
@@ -1581,11 +1863,11 @@ func cascade_checks() {
     check(runs.len() == 1 and runs[0].start == 0 and runs[0].end == 5 and
           text.is_empty(runs[0].style), "cascade_probe", "1")
 
-    runs = run_list("«b»hi«/b»"'r)
+    runs = run_list("[b]hi[/b]"'r)
     check(runs.len() == 1 and runs[0].end == 2 and yes(runs[0].style.bold),
           "cascade_probe", "2")
 
-    runs = run_list("«b»a«i»b«/i»c«/b»"'r)
+    runs = run_list("[b]a[i]b[/i]c[/b]"'r)
     check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "3")
     if runs.len() == 3 {
         check(yes(runs[0].style.bold) and !yes(runs[0].style.italic) and
@@ -1593,7 +1875,7 @@ func cascade_checks() {
               yes(runs[2].style.bold) and !yes(runs[2].style.italic), "cascade_probe", "4")
     }
 
-    runs = run_list("«u»a«b»b«/u»c«/b»"'r)
+    runs = run_list("[u]a[b]b[/u]c[/b]"'r)
     check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "5")
     if runs.len() == 3 {
         check(yes(runs[0].style.underline) and !yes(runs[0].style.bold) and
@@ -1602,31 +1884,18 @@ func cascade_checks() {
               "cascade_probe", "6")
     }
 
-    runs = run_list("«b»text"'r)
+    runs = run_list("[b]text"'r)
     check(runs.len() == 1 and runs[0].end == 4 and yes(runs[0].style.bold),
           "cascade_probe", "7")
 
-    mid_body.base_style = styled(nil, true)
-    mid_body.opaque = false
-    outer_body.s = mid
-    outer_body.base_style = styled(true, nil)
-    runs = run_list(outer)
-    check(runs.len() == 1 and yes(runs[0].style.bold) and
-          yes(runs[0].style.italic), "cascade_probe", "8")
-
-    mid_body.opaque = true
-    runs = run_list(outer)
-    check(runs.len() == 1 and yes(runs[0].style.italic), "cascade_probe", "9")
-    check(runs.len() == 1 and !yes(runs[0].style.bold), "cascade_probe", "10")
-
-    let slotted: string = "«b»«#0»«/b»x"'r
+    let slotted: string = "[b][#0][/b]x"'r
     check(byte_len(slotted) == 1, "cascade_probe", "11")
     check(!yes(text.cascade_style_index(slotted, 0, inclusive = false).bold),
           "cascade_probe", "12")
     check(yes(text.cascade_style_index(slotted, 0, inclusive = true).bold),
           "cascade_probe", "13")
-    check(yes(text.cascade_style_index("«b»hi«/b»"'r, 0).bold) and
-          !yes(text.cascade_style_index("«b»hi«/b»"'r, 2).bold), "cascade_probe", "14")
+    check(yes(text.cascade_style_index("[b]hi[/b]"'r, 0).bold) and
+          !yes(text.cascade_style_index("[b]hi[/b]"'r, 2).bold), "cascade_probe", "14")
 
     let deep: text.Text_Style = text.cascade_style_index(nested_spans(), 0)
     check(yes(deep.bold) and yes(deep.italic), "cascade_probe", "900")
@@ -2164,43 +2433,19 @@ func no_records() -> List[text.Style_Record] {
     return new[List[text.Style_Record]]()
 }
 
-var plain_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                  base_style = nil, opaque = false)
-var based_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                  base_style = nil, opaque = false)
-var opaque_body: text.Rich_Body = (s = "hello", style_info = no_records(),
-                                   base_style = nil, opaque = true)
+var plain_body: text.Rich_Body = (s = "hello", style_info = no_records())
 
 let plain_s: string = rich_over(ref plain_body)
-let based_s: string = rich_over(ref based_body)
-let opaque_s: string = rich_over(ref opaque_body)
 
-var bold_outer_body: text.Rich_Body = (s = "«b»hello"'r,
-                                       style_info = no_records(),
-                                       base_style = nil, opaque = false)
-var italic_outer_body: text.Rich_Body = (s = "«i»hello"'r,
-                                         style_info = no_records(),
-                                         base_style = nil, opaque = false)
+var bold_outer_body: text.Rich_Body = (s = "[b]hello"'r,
+                                       style_info = no_records())
+var italic_outer_body: text.Rich_Body = (s = "[i]hello"'r,
+                                         style_info = no_records())
 
 let bold_outer: string = rich_over(ref bold_outer_body)
 let italic_outer: string = rich_over(ref italic_outer_body)
 
 func style_fields_probe_main() {
-    check(plain_body.base_style == nil, "style_fields_probe", "1")
-    check(!plain_body.opaque, "style_fields_probe", "2")
-
-    let bold: text.Text_Style = (
-        bold = true, italic = nil, underline = nil, double_underline = nil,
-        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
-        text_case = text.Text_Case.none, font_hint = text.Font_Hint.default,
-        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
-        fg_rgb = nil, bg_rgb = nil, font_size = nil)
-    based_body.base_style = bold
-
-    check(plain_s != based_s, "style_fields_probe", "3")
-    check(plain_s.hash() != based_s.hash(), "style_fields_probe", "4")
-    check(plain_s != opaque_s, "style_fields_probe", "5")
-    check(plain_s.hash() != opaque_s.hash(), "style_fields_probe", "6")
     check(plain_s == plain_s and plain_s.hash() == plain_s.hash(), "style_fields_probe", "7")
 
     check(cast[u64](tag(bold_outer_body.s)) == str_tag_rich and
@@ -2209,8 +2454,7 @@ func style_fields_probe_main() {
           bold_outer.hash() != italic_outer.hash(), "style_fields_probe", "900")
 }
 
-var wrap_body: text.Rich_Body = (s = "", style_info = one_record(),
-                                 base_style = nil, opaque = false)
+var wrap_body: text.Rich_Body = (s = "", style_info = one_record())
 let wrapped: string = rich_over(ref wrap_body)
 
 func tag_is_b(r: text.Style_Record) -> bool {
@@ -2228,8 +2472,8 @@ func collect() {
 }
 
 func rich_literal_probe_main() {
-    let closed: string = "«b»text«/b»"'r
-    let unclosed: string = "«b»text"'r
+    let closed: string = "[b]text[/b]"'r
+    let unclosed: string = "[b]text"'r
     check(is_rich(closed) and is_rich(unclosed), "rich_literal_probe", "1")
     check(byte_len(closed) == 4 and byte_len(unclosed) == 4, "rich_literal_probe", "2")
 
@@ -2268,29 +2512,29 @@ func rich_repr_probe_main() {
     let slice: string = byte_slice(lng, 3, 8)
     check(repr_of(slice) == "defgh", "rich_repr_probe", "4")
 
-    let rich: string = "«b»example «#arg:>10»«/b» "'r
-    check(repr_of(rich) == "r\"«b»example «#arg:>10»«/b» \"", "rich_repr_probe", "5")
+    let rich: string = "[b]example [#arg:>10][/b] "'r
+    check(repr_of(rich) == "r\"[b]example [#arg:>10][/b] \"", "rich_repr_probe", "5")
 
-    let indexed: string = "«i»«#»-«#»«/i»"'r
-    check(repr_of(indexed) == "r\"«i»«#0»-«#1»«/i»\"", "rich_repr_probe", "6")
+    let indexed: string = "[i][#]-[#][/i]"'r
+    check(repr_of(indexed) == "r\"[i][#]-[#][/i]\"", "rich_repr_probe", "6")
 
-    let nested: string = "«b»a«i»b«/i»c«/b»"'r
-    check(repr_of(nested) == "r\"«b»a«i»b«/i»c«/b»\"", "rich_repr_probe", "10")
+    let nested: string = "[b]a[i]b[/i]c[/b]"'r
+    check(repr_of(nested) == "r\"[b]a[i]b[/i]c[/b]\"", "rich_repr_probe", "10")
 
-    let crossing: string = "«u»a«b»b«/u»c«/b»"'r
-    check(repr_of(crossing) == "r\"«u»a«b»b«/u»c«/b»\"", "rich_repr_probe", "11")
+    let crossing: string = "[u]a[b]b[/u]c[/b]"'r
+    check(repr_of(crossing) == "r\"[u]a[b]b[/u]c[/b]\"", "rich_repr_probe", "11")
 
-    let open_ended: string = "«b»tail"'r
-    check(repr_of(open_ended) == "r\"«b»tail\"", "rich_repr_probe", "12")
+    let open_ended: string = "[b]tail"'r
+    check(repr_of(open_ended) == "r\"[b]tail\"", "rich_repr_probe", "12")
 
-    let slotted: string = "x«#0»y«#name:>4»"'r
-    check(repr_of(slotted) == "r\"x«#0»y«#name:>4»\"", "rich_repr_probe", "13")
+    let slotted: string = "x[#0]y[#name:>4]"'r
+    check(repr_of(slotted) == "r\"x[#0]y[#name:>4]\"", "rich_repr_probe", "13")
 
     var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
     let under: text.Style_Span = (start = 0, end = 5, tag = "u")
     spans.append(under)
-    let layered: string = text.rich_string("«b»alpha«/b»"'r, spans)
-    check(repr_of(layered) == "r\"«u»«b»alpha«/b»«/u»\"", "rich_repr_probe", "14")
+    let layered: string = text.rich_string("[b]alpha[/b]"'r, spans)
+    check(repr_of(layered) == "r\"[u][b]alpha[/b][/u]\"", "rich_repr_probe", "14")
 }
 
 func cell_is(t: text.Table, row: uint, col: uint, want: string) -> bool {

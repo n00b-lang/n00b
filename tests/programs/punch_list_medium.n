@@ -189,6 +189,47 @@ let tag_two: By_Tag = (v = 1, tag = 2)
 let tag_three: By_Tag = (v = 5, tag = 1)
 require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
 
+# A record's derived `==` compares each field with the field type's own
+# `==`: a user `__equal`, or the `__cmp` that `==` follows when there is no
+# `__equal`. (A record holding such a field once failed to build at all;
+# it gets no derived hash, which tests/diagnostics/tu/own_equality_hash.n
+# checks.)
+record Eq_Field {
+    v: int
+    tag: int
+}
+func __equal(view a: Eq_Field, view b: Eq_Field) -> bool {
+    return a.v == b.v
+}
+record Eq_Holder {
+    inner: Eq_Field
+    n: int
+}
+let eq_one: Eq_Holder = (inner = (v = 1, tag = 2), n = 3)
+let eq_two: Eq_Holder = (inner = (v = 1, tag = 5), n = 3)
+let eq_three: Eq_Holder = (inner = (v = 2, tag = 2), n = 3)
+require eq_one == eq_two and eq_one != eq_three
+record Cmp_Holder {
+    inner: By_Value
+    n: int
+}
+let cmp_one: Cmp_Holder = (inner = (v = 1, tag = 1), n = 3)
+let cmp_two: Cmp_Holder = (inner = (v = 1, tag = 2), n = 3)
+let cmp_three: Cmp_Holder = (inner = (v = 2, tag = 1), n = 3)
+require cmp_one == cmp_two and cmp_one != cmp_three
+# An object with its own `__equal` is declared and compared as well; it,
+# too, gets no derived hash (tests/diagnostics/tu/own_equality_*hash.n).
+object Point {
+    x: int
+}
+func __init(self: Point, x: int) {
+    self.x = x
+}
+func __equal(view self: Point, view other: Point) -> bool {
+    return self.x == other.x
+}
+require new[Point](1) == new[Point](1) and new[Point](1) != new[Point](2)
+
 # With no `fail:` clause, a function's failure type is inferred from its
 # body, mutual recursion included (#9).
 func parsed(x: int) -> int {
@@ -314,9 +355,150 @@ func union_kind(flag: bool) -> string {
 }
 require union_kind(true) == "int" and union_kind(false) == "three"
 
-# A module variable comptime sets starts with that value at run time, its
-# declaration's initializer included, unless the runtime initializer
-# writes it again (#13).
+# A `case` naming several types matches a value of any of them, whether
+# the subject is `Any`, a generic, or a union, and whether the named types
+# are closed or generic.
+func several_any(b: Any) -> string {
+    typecase b {
+        case string, int { return "several" }
+        case float { return "float" }
+        else { return "other" }
+    }
+}
+func several_sequences(b: Any) -> int {
+    return typecase b {
+        case bool { -> 1 }
+        case Array['T], List['T] { -> 2 }
+        else { -> 0 }
+    }
+}
+func several_generic(x: 'T) -> string {
+    typecase x {
+        case int, string { return "several" }
+        else { return "other" }
+    }
+}
+func three_way(n: int) -> int | string | float {
+    if n == 0 { return 1 }
+    if n == 1 { return "s" }
+    return 1.5
+}
+func several_union(n: int) -> string {
+    let x = three_way(n)
+    typecase x {
+        case int, string { return "several" }
+        case float { return "float" }
+    }
+}
+let several_float: float = 1.5
+let several_array: Array[int] = [1, 2]
+let several_list: List[int] = [1, 2]
+require several_any(cast[Any] declared_int) == "several"
+require several_any(cast[Any] "s") == "several"
+require several_any(cast[Any] several_float) == "float"
+require several_any(cast[Any] true) == "other"
+require several_sequences(cast[Any] several_array) == 2
+require several_sequences(cast[Any] several_list) == 2
+require several_sequences(cast[Any] true) == 1
+require several_sequences(cast[Any] declared_int) == 0
+require several_generic(declared_int) == "several"
+require several_generic("s") == "several"
+require several_generic(several_float) == "other"
+require several_union(0) == "several" and several_union(1) == "several"
+require several_union(2) == "float"
+
+# An `Any` holding an option matches a generic option arm, which narrows
+# it to an option.
+func option_arm(b: Any) -> string {
+    typecase b {
+        case Array['T] { return "array" }
+        case List['T]? { return "list option" }
+        case 'T? {
+            if b == nil {
+                return "nil"
+            }
+            return "some"
+        }
+        else { return "other" }
+    }
+}
+let held_option: int? = 4
+let empty_option: string? = nil
+let listed_option: List[int]? = [1]
+let small_option: bool? = true
+let small_nil: u8? = nil
+require option_arm(cast[Any] held_option) == "some"
+require option_arm(cast[Any] small_option) == "some"
+require option_arm(cast[Any] small_nil) == "nil"
+require option_arm(cast[Any] empty_option) == "nil"
+require option_arm(cast[Any] listed_option) == "list option"
+require option_arm(cast[Any] several_array) == "array"
+require option_arm(cast[Any] several_list) == "other"
+
+# The arm's `'T` is one fixed type inside the arm: inference does not bind
+# it to a call's type parameter, so the narrowed option, once a `nil` test
+# makes it its item, is made an option again to pass where `'T?` is wanted.
+func holds_value(x: 'T?) -> bool {
+    return x != nil
+}
+func option_passed(b: Any) -> string {
+    typecase b {
+        case 'T? {
+            if b == nil {
+                return "nil"
+            }
+            if !holds_value(b) {
+                return "lost"
+            }
+            return "some"
+        }
+        else { return "other" }
+    }
+}
+let passed_bool: bool? = true
+let passed_byte: u8? = 0
+let passed_float: float? = 0.5
+require option_passed(cast[Any] passed_bool) == "some"
+require option_passed(cast[Any] passed_byte) == "some"
+require option_passed(cast[Any] passed_float) == "some"
+require option_passed(cast[Any] held_option) == "some"
+require option_passed(cast[Any] listed_option) == "some"
+require option_passed(cast[Any] small_nil) == "nil"
+
+# A module-scope `typecase` narrows a module variable in its arms, as one
+# in a function does; an assignment in an arm writes the variable itself.
+var module_held: Any = cast[Any] "hi"
+var module_seen: string = ""
+typecase module_held {
+    case int { module_seen = "int" }
+    case string { module_seen = module_held + "!" }
+    else { module_seen = "other" }
+}
+require module_seen == "hi!"
+module_held = cast[Any] declared_int
+typecase module_held {
+    case int {
+        require module_held * 2 == 6
+        module_held = cast[Any] "back"
+    }
+    else { require false }
+}
+func read_module_held() -> Any {
+    return module_held
+}
+typecase module_held {
+    case string {
+        let again = read_module_held()
+        typecase again {
+            case string { require again == module_held }
+            else { require false }
+        }
+    }
+    else { require false }
+}
+
+# A module variable's declaration initializer reruns at run time, so a
+# value comptime writes after it doesn't carry over (#13).
 var comptime_counter: int = 0
 if comptime() {
     comptime_counter = 42
@@ -333,7 +515,7 @@ func comptime_values() -> int {
     return comptime_counter * 100 + tens
 }
 if !comptime() {
-    require comptime_values() == 4200 + 10 + 1
+    require comptime_values() == 0 + 10 + 1
 }
 
 # A trait method declared `fail: 'F` may be implemented by a method that

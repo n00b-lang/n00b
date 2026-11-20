@@ -46,6 +46,10 @@ typedef struct {
 n00bb_llvm_backend_t *n00bb_llvm_backend_prepare(const ir_module_t *ir,
     bool debug_enabled, bool native_cpu, uint64_t target_features,
     core_diagnostics_t *diagnostics);
+// Marks the module emitted as one of a system package, which keeps the
+// normal optimization level whatever override the program's code gets.
+void n00bb_llvm_backend_set_system(n00bb_llvm_backend_t *backend,
+                                   bool system);
 void n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend);
 bool n00bb_llvm_backend_bind_type_indices(
     n00bb_llvm_backend_t *backend, const n00bb_llvm_type_index_t *types,
@@ -95,6 +99,11 @@ void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     ir_summaries_t *summaries);
 void n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
     const core_dict_t *decisions);
+// The module variables of cached modules, by their identity: a cached
+// body's own copy of each, which carries its initializer when the identity
+// (a cached interface's declaration) does not.
+void n00bb_llvm_backend_bind_cached_globals(n00bb_llvm_backend_t *backend,
+    const core_dict_t *globals);
 core_string_t n00bb_llvm_backend_mutator_entries(
     const n00bb_llvm_backend_t *backend);
 void n00bb_llvm_mutator_decisions_add(core_dict_t *decisions,
@@ -130,3 +139,8 @@ bool n00bb_llvm_backend_link_bitcode(
     bool debug_enabled, bool native_cpu, uint64_t target_features,
     bool emit_frame_maps, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
+// Names `bitcode`'s source file `name` (its source_filename), as clang
+// would have called it compiled in place, instead of the path it was
+// compiled from.
+bool n00bb_llvm_rename_bitcode_source(core_buffer_t *bitcode,
+                                      core_string_t name);

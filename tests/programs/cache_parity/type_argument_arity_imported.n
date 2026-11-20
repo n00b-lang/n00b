@@ -1,0 +1,18 @@
+// A qualified type from another module is checked against its declaration,
+// whether the module comes from source or from its cached interface.
+import shapes
+
+var p: shapes.Plain[int] = (x = 1)
+var h: shapes.Holder[int, int] = (v = 1)
+var g: shapes.Holder[int] = (v = 2)
+var l: shapes.Level[int] = shapes.Level.low
+func pick(f: shapes.Pick[int, int]) -> int {
+    return 1
+}
+func count(c: shapes.Count[int]) -> int {
+    return 1
+}
+func fine(f: shapes.Pick[int]) -> int {
+    return 2
+}
+require p.x == 1 and g.v == 2

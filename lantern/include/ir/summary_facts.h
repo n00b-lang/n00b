@@ -47,6 +47,11 @@ bool ir_summary_facts_call_diverges(ir_summary_facts_t *facts,
 bool ir_summary_facts_call_reads_entry(ir_summary_facts_t *facts,
                                        const ir_instr_t *call,
                                        const ir_splace_t *place);
+// The same, leaving out what the call may read through code the analysis
+// can't see.
+bool ir_summary_facts_call_reads_entry_named(ir_summary_facts_t *facts,
+                                             const ir_instr_t *call,
+                                             const ir_splace_t *place);
 uint8_t ir_summary_facts_field_use(ir_summary_facts_t *facts,
                                    core_string_t record, core_string_t field);
 bool ir_summary_facts_explain_side_effect(ir_summary_facts_t *facts,

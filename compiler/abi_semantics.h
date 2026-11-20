@@ -8,6 +8,10 @@ typedef struct {
     const th_env *environment;
     const ir_module_t *const *modules;
     size_t module_count;
+    // The cached IR of modules loaded from the cache, whose types stand in
+    // (with `modules`') for parsing type rows' names.
+    const ir_module_t *const *cached_modules;
+    size_t cached_module_count;
     th_ctx *types;
 } n00bb_abi_semantics_t;
 

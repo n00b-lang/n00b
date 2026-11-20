@@ -391,6 +391,7 @@ static th_type *dup_shallow(th_ctx *ctx, const th_type *t)
     *o = *t;
     o->ground = 0;
     o->hashed = false;
+    o->closed_hashed = false;
 
     return o;
 }
@@ -591,6 +592,49 @@ static bool subst_subst(th_ctx *ctx, th_type *t, uint64_t depth,
     *out = t;
 
     return true;
+}
+
+typedef struct {
+    th_type *const *vars;
+    th_type *const *values;
+    size_t          count;
+} subst_map;
+
+static bool map_subst(th_ctx *ctx, th_type *t, uint64_t depth,
+                      core_dict_t *memo, void *st, th_type **out)
+{
+    (void)ctx;
+    (void)depth;
+    (void)memo;
+
+    if (t->kind != TH_VAR) {
+        return false;
+    }
+    const subst_map *map = st;
+    *out = t;
+    for (size_t i = 0; i < map->count; i++) {
+        if (map->vars[i] == t) {
+            *out = map->values[i];
+            break;
+        }
+    }
+
+    return true;
+}
+
+th_type *th_substitute(th_ctx *ctx, th_type *t, th_type *const *vars,
+                       th_type *const *values, size_t count)
+{
+    core_dict_t memo;
+    subst_map   map = {vars, values, count};
+
+    core_dict_init(&memo, nullptr, nullptr);
+
+    th_type *r = rebuild(ctx, t, &memo, true, map_subst, &map);
+
+    core_dict_free(&memo);
+
+    return r;
 }
 
 th_type *th_apply_subst(th_ctx *ctx, th_type *t)

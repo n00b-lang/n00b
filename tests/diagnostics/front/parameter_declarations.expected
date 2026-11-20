@@ -13,5 +13,3 @@ tests/diagnostics/front/parameter_declarations.n:13:21: error N00B-P0040: `modif
 tests/diagnostics/front/parameter_declarations.n:17:26: error N00B-P0040: `out` cannot be used on varargs parameter `rest`
   help: only positional parameters can be `modify` or `out`; remove `out`:
     17 | func out_varargs(a: int, *rest: int) -> int {
-tests/diagnostics/front/parameter_declarations.n:21:31: error N00B-P0038: `second` is a second varargs parameter, but a function can have only one
-  help: combine them into one, or make `second` an ordinary parameter

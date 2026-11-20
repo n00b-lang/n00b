@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# The checks below grep for diagnostic codes, so force them on regardless of
+# the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
+
 compiler=$1
 program_dir=$2
 part=$3
@@ -21,6 +25,10 @@ build_time_failure() {
     test ! -e "$tmp/$name"
 }
 
+# A literal handler that fails at build time is a source diagnostic at the
+# literal, not a panic of the comptime run: tests/diagnostics/build/litmod_*
+# hold those builds' goldens.
+
 case $part in
 runtime)
     if "$compiler" build --native --generic --output "$tmp/conflict" \
@@ -39,6 +47,29 @@ runtime)
     "$compiler" build --output "$tmp/generic_finalizer_probe" \
         "$program_dir/bitcode_generic_finalizer_probe.n"
     "$tmp/generic_finalizer_probe"
+    # Two programs built, run and dumped as one (their functions don't
+    # touch, and the build dumps the program's own symbols and IR, after
+    # storage placement, without lowering the library again as `lower`
+    # does): bitcode_shared_ranges.n and bitcode_typeof_storage.n, whose
+    # `ok` ends the run.
+    cat "$program_dir/bitcode_shared_ranges.n" \
+        "$program_dir/bitcode_typeof_storage.n" >"$tmp/storage_facts.n"
+    # Ranges the analyses share are checked as they are computed.
+    "$compiler" build --verify-analyses --dump-symbols --dump-ir \
+        --output "$tmp/storage_facts" "$tmp/storage_facts.n" \
+        >"$tmp/storage_facts.dump"
+    test "$("$tmp/storage_facts" 2>&1)" = ok
+    # A local only `typeof` reads keeps automatic storage: nothing moves
+    # it to the heap.
+    grep -q 'probe: variable.*storage-duration=automatic' \
+        "$tmp/storage_facts.dump"
+    if awk '/^  func @check_type_only_probe/ { inside = 1 }
+            inside && /^  }/ { inside = 0 }
+            inside && / = alloc / { found = 1 }
+            END { exit !found }' "$tmp/storage_facts.dump"; then
+        echo 'type-only probe was moved to heap storage' >&2
+        exit 1
+    fi
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
@@ -62,17 +93,6 @@ build-time)
     "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
-    build_time_failure bitcode_litmod_comptime_fail \
-        'uncaught failure "prelude failed"' \
-        'bitcode_litmod_comptime_fail.n:7:5'
-    grep -q 'the comptime run of `bitcode_litmod_comptime_fail` exited' \
-        "$tmp/bitcode_litmod_comptime_fail.out"
-    build_time_failure bitcode_litmod_fence_nil_fail \
-        'uncaught failure "fence failed"' \
-        'bitcode_litmod_fence_nil_fail.n:6:1'
-    build_time_failure bitcode_litmod_string_fail \
-        'uncaught failure "bad literal"' \
-        'bitcode_litmod_string_fail.n:7:12'
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
         '^  --> .*bitcode_comptime_fail.n:2:13$'

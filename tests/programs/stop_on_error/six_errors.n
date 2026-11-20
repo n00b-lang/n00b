@@ -1,0 +1,6 @@
+let w1: bool = 1
+let w2: bool = 2
+let w3: bool = 3
+let w4: bool = 4
+let w5: bool = 5
+let w6: bool = 6

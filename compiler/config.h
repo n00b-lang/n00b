@@ -12,6 +12,9 @@ typedef enum {
     N00BB_SETTING_PATH,
     N00BB_SETTING_PATHS,
     N00BB_SETTING_PROGRAM,
+    // A whole number in the setting's range, or `all` for no limit, which
+    // `n00bb_setting_int` reports as 0.
+    N00BB_SETTING_LIMIT,
 } n00bb_setting_type_t;
 
 typedef struct {
@@ -24,6 +27,10 @@ typedef struct {
     core_string_t        choices;
     int64_t              minimum;
     int64_t              maximum;
+    // A list whose layers add to one another rather than each replacing the
+    // last: flag entries first, then the environment's, the project file's
+    // and the user file's.
+    bool                 accumulate;
 } n00bb_setting_spec_t;
 
 typedef enum {
@@ -61,4 +68,13 @@ size_t n00bb_setting_count(n00bb_setting_id_t id);
 core_string_t n00bb_setting_at(n00bb_setting_id_t id, size_t index);
 n00bb_setting_source_t n00bb_setting_source(n00bb_setting_id_t id);
 core_string_t n00bb_setting_origin(n00bb_setting_id_t id);
+// The layer one list entry came from. Entries of an accumulating list keep
+// their own layer; other lists report the setting's single layer.
+n00bb_setting_source_t n00bb_setting_source_at(n00bb_setting_id_t id,
+                                               size_t index);
+core_string_t n00bb_setting_origin_at(n00bb_setting_id_t id, size_t index);
+// False when entry `index` of a path list names the same directory as an
+// earlier entry, comparing canonical paths; the first occurrence, from the
+// highest-precedence layer, is the one to use.
+bool n00bb_setting_path_is_first(n00bb_setting_id_t id, size_t index);
 core_string_t n00bb_setting_key(n00bb_setting_id_t id);

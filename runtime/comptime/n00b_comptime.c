@@ -1065,6 +1065,56 @@ n00b_comptime_freeze(uint64_t module)
     _exit(ok ? 0 : COMPTIME_OUTPUT_FAILED);
 }
 
+typedef struct {
+    uint64_t module;
+    uint64_t site;
+    uint8_t *message;
+    uint64_t length;
+} literal_failure_t;
+
+static list_t literal_failures;
+
+// A literal handler failed while a module's constants were evaluated; the
+// module and the literal's byte offset let the compiler report it at the
+// literal. Evaluation goes on so that every failure is reported.
+void
+n00b_comptime_literal_failed(uint64_t module, uint64_t site,
+                             n00b_abi_string_v1 message)
+{
+    const uint8_t *bytes = NULL;
+    uint64_t count = 0;
+    if (n00b_abi_v1_string_bytes(n00b_abi_v1_current_snapshot(), &message,
+                                 &bytes, &count) != 1) count = 0;
+    uint8_t *copy = count ? calloc(1, count) : NULL;
+    if (count && !copy) _exit(COMPTIME_OUTPUT_FAILED);
+    if (copy) __builtin_memcpy(copy, bytes, count);
+    *(literal_failure_t *)push(&literal_failures, sizeof(literal_failure_t))
+        = (literal_failure_t){.module = module, .site = site,
+                              .message = copy, .length = count};
+}
+
+// Runs after a module's literals are evaluated. If any handler failed, the
+// run ends here with the failures as its output, in place of state.
+void
+n00b_comptime_literals_checked(uint64_t module)
+{
+    (void)module;
+    if (!literal_failures.count) return;
+    n00b_comptime_exit = nullptr;
+    output = output_path
+        ? open(output_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600)
+        : -1;
+    bool ok = output >= 0 && put("N00BCTLF", 8)
+        && put_word(literal_failures.count, 8);
+    for (size_t i = 0; ok && i < literal_failures.count; i++) {
+        literal_failure_t *at = &AT(literal_failures, literal_failure_t, i);
+        ok = put_word(at->module, 8) && put_word(at->site, 8)
+            && put_word(at->length, 8) && put(at->message, at->length);
+    }
+    if (output >= 0) close(output);
+    _exit(ok ? 0 : COMPTIME_OUTPUT_FAILED);
+}
+
 static list_t frozen_keys;
 
 bool

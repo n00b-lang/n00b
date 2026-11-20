@@ -12,6 +12,9 @@
 #define N00BB_DECLARED_WHERE_KEY \
     CORE_STRING_STATIC("n00bb.declared-where")
 #define N00BB_TYPE_BOUNDS_KEY CORE_STRING_STATIC("n00bb.type-bounds")
+// A trait's requirements its type carries.
+#define N00BB_TRAIT_REQUIREMENTS_KEY \
+    CORE_STRING_STATIC("n00bb.trait.requirements")
 
 core_list_decl(th_trait_requirement);
 

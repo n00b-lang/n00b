@@ -406,6 +406,36 @@ N00B_DIAG(FUNCTION_NAME_AS_VALUE, "N00B-S0086", ERROR,
     "a function around, take its reference and invoke it through `call`:\n"
     "    let step = ref twice\n"
     "    step.call(3)")
+N00B_DIAG(NATIVE_ENTRY_NOT_FUNCTION, "N00B-S0104", ERROR,
+    "`native_entry` is given something other than a function's name",
+    "`native_entry(f)` is the address of function `f`'s native code, for\n"
+    "native code to call. It takes the name of a function, which can't be\n"
+    "generic, since a generic function has no one native code; a value,\n"
+    "even a function reference, has no native code of its own:\n"
+    "    thread_start_raw(native_entry(worker), argument)")
+N00B_DIAG(FUNCTION_REFERENCE_CAST, "N00B-S0105", ERROR,
+    "a function reference is cast with `unsafe_cast`",
+    "A function reference may be to an adapter that takes its arguments\n"
+    "by place, not to the function's own native code, so casting it to an\n"
+    "address hands native code something it can't call. For the native\n"
+    "code of a function, use `native_entry`:\n"
+    "    let entry: Ref[byte] = native_entry(worker)")
+N00B_DIAG(REFERENCE_KEEPS_PLACE, "N00B-S0106", ERROR,
+    "`ref` of a function that keeps a reference to a `modify` or `out` parameter",
+    "A call through a function reference may not know the function it\n"
+    "calls, so it lends the function its arguments' places only for the\n"
+    "call. A function that keeps a reference to a `modify` or `out`\n"
+    "parameter past the call (storing `ref` of it, say) would keep the\n"
+    "caller's place beyond that, so it can't be referred to with `ref`. It\n"
+    "can still be called directly, where the caller's place is kept alive\n"
+    "as long as the function needs it.")
+N00B_DIAG(REFERENCE_CONSUMES, "N00B-S0107", ERROR,
+    "`ref` of a function with a `consume` parameter",
+    "A call through a function reference may not know the function it\n"
+    "calls, so it can't know that the function takes an argument away from\n"
+    "the caller. A function with a `consume` parameter can't be referred to\n"
+    "with `ref`; it can still be called directly, where the caller gives the\n"
+    "argument up.")
 N00B_DIAG(INLINE_FUNCTION_REFERENCE, "N00B-S0087", ERROR,
     "a reference to an `inline func` is taken",
     "An `inline func` is inlined at every direct call, so it has no\n"

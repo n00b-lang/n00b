@@ -6,8 +6,8 @@
 #include "lib/alloc.h"
 #include "th/environment.h"
 
-static th_type *
-test_source_type(th_ctx *types, ir_value_t *value)
+th_type *
+n00bb_type_test_source(th_ctx *types, ir_value_t *value)
 {
     for (size_t depth = 0; value && depth < 8; depth++) {
         if (th_is_closed(types, value->type)) return value->type;
@@ -28,6 +28,40 @@ test_source_type(th_ctx *types, ir_value_t *value)
     return value ? value->type : nullptr;
 }
 
+// Whether a value of the closed type `type` is a box whose runtime type
+// varies (an `Any`, a trait, a union): narrowing one to an open pattern
+// reads that type, so the narrowing is no copy of its source.
+static bool
+boxed_source(th_type *type)
+{
+    th_type *resolved = th_resolve(type);
+    return th_kind_of(resolved) == TH_SUM || th_kind_of(resolved) == TH_TRAIT
+        || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY;
+}
+
+int
+n00bb_static_pattern_accepts(th_ctx *types, th_type *resolved,
+                             th_type *pattern)
+{
+    th_type *wanted = th_resolve(pattern);
+    th_comb comb;
+    if (th_sum_comb(wanted, &comb) && comb == TH_UNION) {
+        int result = 0;
+        for (size_t i = 0; result < 1 && i < th_sum_len(wanted); i++) {
+            int member = n00bb_static_pattern_accepts(types, resolved,
+                th_sum_arm(wanted, i));
+            result = member > 0 ? 1 : member < 0 ? -1 : result;
+        }
+        return result;
+    }
+    core_string_t trait = {0};
+    if (th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait))
+        return th_env_implements(types, resolved, trait);
+    if (!th_is_closed(types, pattern))
+        return th_env_type_pattern_accepts(types, pattern, resolved);
+    return th_hash(types, resolved) == th_hash(types, wanted);
+}
+
 int
 n00bb_static_type_test(const ir_instr_t *test)
 {
@@ -36,19 +70,13 @@ n00bb_static_type_test(const ir_instr_t *test)
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value || !test->block) return -1;
     th_ctx *types = ir_module_types(test->block->owner->owner);
-    th_type *source = test_source_type(types, test->operands[0].value);
+    th_type *source = n00bb_type_test_source(types, test->operands[0].value);
     th_type *pattern = test->operands[1].type;
     th_type *resolved = source ? th_resolve(source) : nullptr;
     if (!resolved || !pattern || !th_is_closed(types, resolved)
         || th_kind_of(resolved) == TH_SUM || th_kind_of(resolved) == TH_TRAIT
         || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY) return -1;
-    core_string_t trait = {0};
-    if (th_kind_of(th_resolve(pattern)) == TH_TRAIT
-        && th_trait_name(th_resolve(pattern), &trait))
-        return th_env_implements(types, resolved, trait);
-    if (!th_is_closed(types, pattern))
-        return th_env_type_pattern_accepts(types, pattern, resolved);
-    return th_hash(types, resolved) == th_hash(types, th_resolve(pattern));
+    return n00bb_static_pattern_accepts(types, resolved, pattern);
 }
 
 static bool *
@@ -221,6 +249,7 @@ n00bb_fold_static_branches(ir_func_t *function, ir_func_t *origin,
                                        narrow->operands[0].value)
                 : nullptr;
             if (!source || !th_is_closed(types, source->type)
+                || boxed_source(source->type)
                 || th_is_closed(types, narrow->dest->type)) continue;
             core_dict_put(&replacements, narrow->dest, source);
             replaced = true;

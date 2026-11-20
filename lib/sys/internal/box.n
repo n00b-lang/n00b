@@ -319,7 +319,8 @@ func type_component(type_field: u32, ordinal: u32) -> u32 {
     let row: Ref[internal.abi.Type_Record] = type_row(type_field
                                                       & 0x7fffffff)
     if row.__value.kind == cast[u32](internal.abi.Type_Kind.array_type)
-        or row.__value.kind == cast[u32](internal.abi.Type_Kind.reference_type) {
+        or row.__value.kind == cast[u32](internal.abi.Type_Kind.reference_type)
+        or row.__value.kind == cast[u32](internal.abi.Type_Kind.option_type) {
         let index: i64 = internal.abi.range_index(row.__value.components, ordinal)
         require index >= 0
         return cast[u32] index
@@ -769,6 +770,25 @@ func option_present(reference: Ref[Any]) -> bool {
     let address: Ref[byte]? = location.address
     require address != nil
     return builtin.__tag_at(location.type_index, address) != 0
+}
+
+# Opens the option `source` boxes into `item`, a box already typed as the
+# option's item: copies the item in when the option holds one, and returns
+# whether it does (1) or is `nil` (0).
+func option_unbox(source: Ref[Any], item: Ref[Any]) -> u8 {
+    let view: Ref[internal.abi.Box_Value] = box_view(source)
+    let option: u32 = view.__value.type_field & 0x7fffffff
+    var address: Ref[byte] = __gc_byte_offset(unsafe_cast[Ref[byte]] source, 8)
+    if payload_bytes(option) != 0 {
+        let storage: Ref[byte]? = view.__value.payload
+        require storage != nil
+        address = storage
+    }
+    if builtin.__tag_at(option, address) == 0 {
+        return 0
+    }
+    load(address, item)
+    return 1
 }
 
 func option_payload(target: Ref['T?]) -> Ref['T] {

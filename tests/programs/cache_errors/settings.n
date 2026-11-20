@@ -1,0 +1,16 @@
+# Its global and its field are set only by its own functions. Loaded from
+# the cache, it still tells the unused-item checks that they are set, as
+# checking it from source does.
+var level = 0
+
+record Tuning {
+    x: int
+}
+
+func __init(modify self: Tuning, x: int) {
+    self.x = x
+}
+
+func reset() {
+    level = 1
+}

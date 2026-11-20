@@ -6,87 +6,135 @@ record Style_Span {
 
 func rich_string(text: string, spans: List[Style_Span]) -> string {
     let n: int = cast[int] spans.len()
-    var body: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
-                           base_style = nil, opaque = false)
+    var body: Rich_Body = (s = text, style_info = new[List[Style_Record]]())
     for i from 0 until n {
         let span: Style_Span = spans[i]
         let rec: Style_Record = (start_ix = span.start, end_ix = span.end,
                                  style_tag = span.tag, format_spec = nil,
-                                 substitution = (none = nil))
+                                 substitution = (none = nil), start_order = 0,
+                                 end_order = 0)
         body.style_info.append(rec)
     }
+    body.style_info = settle_records(body.style_info)
     return __string_make_rich(ref body)
 }
 
-private func rebase(v: u64, lo: u64, hi: u64, shift: u64) -> u32 {
-    var clamped: u64 = v
-    if v < lo {
-        clamped = lo
-    }
-    elif v > hi {
-        clamped = hi
-    }
-    return unsafe_cast[u32](clamped - lo + shift)
+// A markup event's place in a string: its offset, then its order among the
+// events at that offset.
+private record Event_Key {
+    at:    u64
+    order: u64
 }
 
+private const no_order: u64 = 0xffffffffffffffff
+private const past_end: Event_Key = (at = 0xffffffffffffffff,
+                                     order = 0xffffffffffffffff)
+
+private func key_before(a: Event_Key, b: Event_Key) -> bool {
+    return a.at < b.at or (a.at == b.at and a.order < b.order)
+}
+
+// Where a cut at offset `at` falls among the markup events there: the
+// closes that come first (before any open, slot or reset at `at`) end what
+// precedes the cut, and everything from the first other event on belongs
+// after it. A slot written after `[/b]` thus goes with the right piece and a
+// slot written before it stays inside the span.
+private func cut_key(recs: List[Style_Record], at: u64) -> Event_Key {
+    var first: u64 = no_order
+    for i from 0 until cast[int] recs.len() {
+        let r: Style_Record = recs[i]
+        if r.start_ix != nil and cast[u64](r.start_ix) == at and
+            cast[u64](r.start_order) < first {
+            first = cast[u64] r.start_order
+        }
+    }
+    return (at = at, order = first)
+}
+
+// One layer's records for the piece of `s` from `since` to `upto`, moved to
+// start at `shift`. The piece holds the events between the cut at `since`
+// and the cut at `upto` (or the string's end). A span open across the start
+// cut is reopened at the piece's start, before everything else there; a
+// closed span still open at the end cut closes at the piece's end, after
+// everything else there; a span that was never closed keeps flowing right.
+private func reslice_layer(recs: List[Style_Record], since: u64, upto: u64,
+                           len: u64, shift: u64) -> List[Style_Record] {
+    var out: List[Style_Record] = new[List[Style_Record]]()
+    let first: Event_Key = cut_key(recs, since)
+    var last: Event_Key = past_end
+    if upto < len {
+        last = cut_key(recs, upto)
+    }
+    for i from 0 until cast[int] recs.len() {
+        let r: Style_Record = recs[i]
+        if r.start_ix == nil {
+            continue
+        }
+        let opened: Event_Key = (at = cast[u64] r.start_ix,
+                                 order = cast[u64] r.start_order)
+        var rec: Style_Record = r
+        if !record_is_span(r) {
+            if key_before(opened, first) or !key_before(opened, last) {
+                continue
+            }
+            rec.start_ix = unsafe_cast[u32](opened.at - since + shift)
+            if opened.at == since {
+                rec.start_order += 1
+            }
+            out.append(rec)
+            continue
+        }
+        let end: u64 = cast[u64] r.end_ix.get_or_else(index_extends)
+        let extends: bool = end == cast[u64] index_extends
+        var closed: Event_Key = past_end
+        if !extends {
+            closed = (at = end, order = cast[u64] r.end_order)
+        }
+        if !key_before(opened, last) or key_before(closed, first) {
+            continue
+        }
+        if key_before(opened, first) {
+            rec.start_ix = unsafe_cast[u32] shift
+            rec.start_order = 0
+        }
+        else {
+            rec.start_ix = unsafe_cast[u32](opened.at - since + shift)
+            if opened.at == since {
+                rec.start_order += 1
+            }
+        }
+        if !extends {
+            if key_before(closed, last) {
+                rec.end_ix = unsafe_cast[u32](closed.at - since + shift)
+                if closed.at == since {
+                    rec.end_order += 1
+                }
+            }
+            else {
+                rec.end_ix = unsafe_cast[u32](upto - since + shift)
+                rec.end_order = 0x7fffffff
+            }
+        }
+        out.append(rec)
+    }
+    return settle_records(out)
+}
+
+// The piece of rich string `s` from byte `since` to `upto`, as `text` (that
+// piece's bytes, with `shift` bytes in front of it): every layer keeps the
+// markup that falls in the piece.
 func rich_reslice(s: string, since: u64, upto: u64, text: string,
                   shift: u64) -> string {
     if cast[u64](tag(s)) != str_tag_rich or upto <= since {
         return text
     }
     let src: Ref[Rich_Body] = __string_rich_body(s)
-    var out: Rich_Body = (s = text, style_info = new[List[Style_Record]](),
-                          base_style = src.__value.base_style, opaque = src.__value.opaque)
-    for i from 0 until cast[int] src.__value.style_info.len() {
-        let r: Style_Record = src.__value.style_info[i]
-        if r.start_ix == nil {
-            continue
-        }
-        let rs: u64 = r.start_ix
-        var is_sub: bool = r.end_ix == nil
-        let substitution = r.substitution
-        switch substitution {
-            case position {
-                is_sub = true
-            }
-            case argname {
-                is_sub = true
-            }
-            case none {
-            }
-        }
-        if is_sub {
-            if rs < since or rs > upto {
-                continue
-            }
-            var rec: Style_Record = r
-            let at: u32 = unsafe_cast[u32](rs - since + shift)
-            rec.start_ix = at
-            if r.end_ix != nil {
-                rec.end_ix = at
-            }
-            out.style_info.append(rec)
-            continue
-        }
-        let re: u64 = r.end_ix.get_or_else(index_extends)
-        if re == cast[u64] index_extends {
-            if rs > upto {
-                continue
-            }
-            var rec: Style_Record = r
-            rec.start_ix = rebase(rs, since, upto, shift)
-            out.style_info.append(rec)
-            continue
-        }
-        if re <= since or rs >= upto {
-            if !(rs == re and rs >= since and rs <= upto) {
-                continue
-            }
-        }
-        var rec: Style_Record = r
-        rec.start_ix = rebase(rs, since, upto, shift)
-        rec.end_ix = rebase(re, since, upto, shift)
-        out.style_info.append(rec)
+    var inner: string = text
+    if cast[u64](tag(src.__value.s)) == str_tag_rich {
+        inner = rich_reslice(src.__value.s, since, upto, text, shift)
     }
+    var out: Rich_Body = (s = inner,
+                          style_info = reslice_layer(src.__value.style_info,
+                              since, upto, cast[u64] byte_len(s), shift))
     return __string_make_rich(ref out)
 }

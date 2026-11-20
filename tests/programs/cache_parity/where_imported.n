@@ -1,0 +1,16 @@
+// A record's, variant's or alias's `where` clauses constrain a use of the
+// type from another module, whether that module comes from source or from
+// its cached interface.
+import kinds
+
+func boxed(b: kinds.Box[string]) -> int { return 1 }
+func maybe(m: kinds.Maybe[string]) -> int { return 1 }
+func bagged(b: kinds.Bag[string]) -> int { return 1 }
+func fine(b: kinds.Box[int], m: kinds.Maybe[int], g: kinds.Bag[u8]) -> int {
+    return 1
+}
+func counted(b: kinds.Bag['U]) -> int { return 1 }
+let words: Dict[string, nil] = {"x": nil}
+require counted(words) == 1
+func bare(b: kinds.Bag) -> uint { return b.len() }
+require bare(words) == 1

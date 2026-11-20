@@ -617,6 +617,7 @@ typedef struct {
     bool     erase;
     th_ctx  *ctx;
     bool     ok;
+    bool     saw_var;   // an unbound variable was encoded
 } th_enc;
 
 static void enc_node(th_enc *e, core_buffer_t *b, const th_type *t);
@@ -834,6 +835,7 @@ static bool enc_plan(th_enc *e, eframe *f)
         break;
 
     case TH_VAR:
+        e->saw_var = true;
         if (e->erase) {
             u64(&s->pre, 0);
         }
@@ -1285,8 +1287,20 @@ void th_normalize(th_type *t)
     pm_free(&s.path);
 }
 
+static bool encode_type(th_ctx *ctx, th_type *t, const uint8_t **out,
+                        size_t *len, bool *saw_var);
+
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
 {
+    bool saw_var = false;
+    return encode_type(ctx, t, out, len, &saw_var);
+}
+
+// th_encode, also telling whether the encoding reached an unbound variable.
+static bool encode_type(th_ctx *ctx, th_type *t, const uint8_t **out,
+                        size_t *len, bool *saw_var)
+{
+    *saw_var = false;
     th_normalize(t);
     ctx->scratch.byte_len = 0;
 
@@ -1325,6 +1339,7 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
     enc_node(&e, &ctx->scratch, t);
     pm_free(&e.path);
 
+    *saw_var = e.saw_var;
     if (!e.ok) {
         return false;
     }
@@ -1425,7 +1440,20 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
 
     bool ground = t && th_ground(t);
     if (ground && t->hashed && t->hash_norm == ctx->norm) return t->hash;
-    if (!th_encode(ctx, t, &p, &n)) {
+    // A type that isn't ground only because it reaches bound variables
+    // encodes its resolution: with no unbound variable in it, normalizing
+    // changes nothing, and the encoding stays the same until a variable it
+    // reaches is rebound or a record stub in it is filled, each of which
+    // moves th_shape_generation on. Variables are otherwise unbound only by
+    // a match undoing its trial bindings, and no hash is kept while one is
+    // open (th_trial_bindings).
+    uint64_t generation = atomic_load_explicit(&th_shape_generation,
+                                               memory_order_relaxed);
+    if (!ground && t && t->closed_hashed && t->hash_norm == ctx->norm
+        && t->closed_generation == generation)
+        return t->hash;
+    bool saw_var = false;
+    if (!encode_type(ctx, t, &p, &n, &saw_var)) {
         return 0;
     }
 
@@ -1442,6 +1470,14 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
         t->hash = hash;
         t->hash_norm = ctx->norm;
         t->hashed = true;
+    }
+    else if (t && !saw_var
+             && !atomic_load_explicit(&th_trial_bindings,
+                                      memory_order_acquire)) {
+        t->hash = hash;
+        t->hash_norm = ctx->norm;
+        t->closed_generation = generation;
+        t->closed_hashed = true;
     }
     return hash;
 }
@@ -1740,6 +1776,7 @@ th_type *th_record_stub(th_ctx *ctx)
 
 void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
 {
+    th_note_shape_change();
     stub->ground = 0;
     stub->hashed = false;
     stub->record.n       = n;
@@ -1786,6 +1823,9 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
             t->fn.kw[i].mode = kw[i].mode;
             t->fn.kw[i].type = kw[i].type;
         }
+        // Keyword parameters are unordered; they are kept in the order the
+        // hash uses, so that equal function types list them alike.
+        qsort(t->fn.kw, nkw, sizeof(th_kwparam), th_cmp_kw);
     }
 
     return t;
@@ -1828,6 +1868,20 @@ th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body)
     t->binder.arity = arity;
     t->binder.body  = body;
     t->binder.qvars = nullptr;
+
+    return t;
+}
+
+th_type *th_binder_with_body(th_ctx *ctx, th_type *binder, th_type *body)
+{
+    binder = binder ? th_resolve(binder) : nullptr;
+    if (!binder || binder->kind != TH_BINDER || !body) {
+        return nullptr;
+    }
+
+    th_type *t = th_binder(ctx, binder->binder.arity, body);
+
+    t->binder.qvars = binder->binder.qvars;
 
     return t;
 }

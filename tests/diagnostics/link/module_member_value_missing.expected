@@ -1,0 +1,2 @@
+tests/diagnostics/link/module_member_value_missing.n:4:21: error N00B-N0003: module `text` has no member `nosuch`
+tests/diagnostics/link/module_member_value_missing.n:6:35: error N00B-N0003: module `text` has no member `missing_unit`

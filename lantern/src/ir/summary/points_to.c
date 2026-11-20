@@ -38,7 +38,7 @@ site_object(const pt_t *pt, uint32_t site)
         .value = entry->local ? nullptr : entry->value,
         .instr = entry->local || entry->value || entry->node ? nullptr
                : entry->call ? entry->call : entry->key,
-        .origin = entry->call ? entry->origin : 0,
+        .origin = entry->call ? entry->base : 0,
     };
 }
 

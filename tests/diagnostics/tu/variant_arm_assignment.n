@@ -1,0 +1,58 @@
+// Assigning a variant's arm proves the variable holds it: the arm may be
+// read until something could change the variable. Another assignment,
+// passing it to a `modify` parameter or taking a `ref` to it ends the
+// proof.
+variant Shape {
+    circle: int
+    square: string
+}
+variant Maybe {
+    some: 'T
+    none: nil
+}
+func grow(modify s: Shape) {
+    s = (square = "grown")
+}
+func assigned(other: Shape) -> int {
+    var s = other
+    s = (circle = 1)
+    return s.circle
+}
+func arm_set() -> int {
+    var s: Shape
+    s.circle = 3
+    return s.circle
+}
+func generic() -> int {
+    var m: Maybe[int] = (none = nil)
+    m = (some = 4)
+    return m.some
+}
+func other_arm() -> int {
+    var s: Shape = (square = "x")
+    return s.circle
+}
+func written_after() -> int {
+    var s: Shape = (circle = 1)
+    s = (square = "x")
+    return s.circle
+}
+func written_on_one_path(flip: bool) -> int {
+    var s: Shape = (circle = 1)
+    if flip {
+        s = (square = "x")
+    }
+    return s.circle
+}
+func modified() -> int {
+    var s: Shape = (circle = 1)
+    grow(s)
+    return s.circle
+}
+func referenced() -> int {
+    var s: Shape = (circle = 1)
+    let r = ref s
+    return s.circle
+}
+require assigned((square = "x")) == 1
+require arm_set() == 3 and generic() == 4

@@ -23,6 +23,7 @@
 #include "compiler_system.h"
 #include "signature_typevars.h"
 #include "preprocessor.h"
+#include "n00bb_rules.h"
 #include "diagnostics.h"
 
 #define N00BB_PARAMETER_FACTS_KEY \
@@ -49,6 +50,9 @@ core_diag_location_t n00bb_name_location(core_translation_unit_t *unit,
 #define N00BB_FAILED_KEY CORE_STRING_STATIC("n00bb.failed")
 #define N00BB_UNTYPED_CONST_KEY CORE_STRING_STATIC("n00bb.untyped-const")
 #define N00BB_PATTERN_ARITY_KEY CORE_STRING_STATIC("n00bb.pattern-arity")
+// The kinds of n00bb_tu_state_t.arm_typevars entries.
+#define N00BB_ARM_PATTERN_VAR ((void *)1)
+#define N00BB_ARM_TRAIT_VAR ((void *)2)
 #define N00BB_LOOP_OUTER_NAME_KEY CORE_STRING_STATIC("n00bb.loop-outer-name")
 #define N00BB_FIELD_LITERAL_SET_KEY CORE_STRING_STATIC("n00bb.field-literal-set")
 #define N00BB_STATEMENT_KEY CORE_STRING_STATIC("n00bb.statement")
@@ -65,10 +69,7 @@ typedef struct {
     uint32_t parameter_count;
     ir_shape_t **parameters;
 } n00bb_callable_shapes_t;
-typedef struct {
-    th_trait_requirement *data;
-    size_t len;
-} n00bb_declared_trait_requirements_t;
+typedef n00bb_declared_where_t n00bb_declared_trait_requirements_t;
 typedef parse_tree_t *n00bb_tree_ptr_t;
 typedef ir_instr_t *n00bb_ir_instr_ptr_t;
 core_list_decl(n00bb_ir_instr_ptr_t);
@@ -139,6 +140,78 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               size_t *index);
 parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
                                          parse_sym_entry_t *symbol);
+// The type function `symbol` has as a value, such as `ref f`'s referent:
+// its positional parameters, its varargs item type, and its keyword
+// parameters by name. `flat` is its signature as called, which passes the
+// keyword parameters by position after the positional ones (in
+// declaration order) and the varargs last, as an array. Returns `flat`
+// when the function has neither, and nullptr when its parameters can't be
+// read.
+th_type *n00bb_function_value_type(th_ctx *types, parse_grammar_t *grammar,
+                                   parse_sym_entry_t *symbol, th_type *flat);
+
+// Function type `type` (or a reference to one) as a type: passing modes
+// are not part of a function's type, so each of its parameters is `in`.
+// Returns `type` when it has no other mode or is no function type, and
+// nullptr when it can't be built.
+th_type *n00bb_without_passing_modes(th_ctx *types, th_type *type);
+
+// A function reference's type says nothing of its function's passing
+// modes, and lists its keyword parameters in an order of its own. A
+// function that takes a parameter other than `in`, or declares its keyword
+// parameters in another order, is referred to through its reference
+// adapter: a function of the same module that takes its positional
+// parameters and its varargs array (last) by place (`modify`), and its
+// keyword ones, which are never `out` or `modify`, in the type's order, as
+// optional values it passes on as given or omitted. It calls the function
+// with its own modes, reading the parameters it takes as values from their
+// places. A call through a
+// reference whose function isn't known passes its arguments by place when
+// the runtime function table says the reference is an adapter
+// (n00b_abi_v1_runtime_adapted_function_index), and by value otherwise. The
+// adapter's symbol is bound under N00BB_REFERENCE_ADAPTER_KEY to this; the
+// function's, under N00BB_FUNCTION_ADAPTER_KEY, to the adapter's.
+typedef struct {
+    parse_sym_entry_t *target;
+    // The function's parameters as it is called: its positional ones, its
+    // keyword ones, then its varargs array, if any.
+    size_t count;
+    size_t positional;
+    size_t keywords;
+    // Whether the type lists the keyword parameters in another order than
+    // the function declares them in.
+    bool reordered;
+    // The function's parameter `i` is passed the adapter's `order[i]`.
+    uint32_t *order;
+} n00bb_reference_adapter_t;
+#define N00BB_REFERENCE_ADAPTER_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter")
+#define N00BB_FUNCTION_ADAPTER_KEY \
+    CORE_STRING_STATIC("n00bb.function-reference-adapter")
+
+// When function `symbol` (whose signature as called is `flat`) takes a
+// parameter other than `in`, or declares its keyword parameters in an
+// order its type doesn't list them in: the signature its reference adapter
+// is called with, with `*adapter` filled in (its `order` allocated).
+// Otherwise nullptr, with `*adapter` still saying whether the keyword
+// parameters are reordered.
+th_type *n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
+                                 parse_sym_entry_t *symbol, th_type *flat,
+                                 n00bb_reference_adapter_t *adapter);
+// The name of parameter `index` of the function `context` says.
+typedef bool (*n00bb_parameter_name_fn)(void *context, size_t index,
+                                        core_string_t *name);
+// The reference adapter of a function whose signature as called is
+// `called`, and whose reference's type is `value`: `*adapter` filled in
+// but its target, and `*signature` as n00bb_reference_adapter gives it.
+// `named` gives the parameters' names, to reorder the keyword ones. False
+// when it can't be made.
+bool n00bb_reference_adapter_signature(th_ctx *types, th_type *called,
+                                       th_type *value,
+                                       n00bb_parameter_name_fn named,
+                                       void *context,
+                                       n00bb_reference_adapter_t *adapter,
+                                       th_type **signature);
 // Each of a trait's methods for a bound on `variable`, as a method
 // constraint whose target is the whole method: its receiver is `variable`,
 // and the trait's parameters (the other variables its methods name) are
@@ -360,6 +433,9 @@ typedef struct n00bb_iteration_plan_t n00bb_iteration_plan_t;
 typedef struct n00bb_litmod_site_t n00bb_litmod_site_t;
 typedef struct {
     n00bb_typecase_arm_types_t *typecase_arm_types;
+    // The type variables a `typecase` arm's patterns introduce: each stands
+    // for one unknown type inside that arm only.
+    n00bb_signature_typevars_t *arm_typevars;
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
@@ -446,6 +522,9 @@ typedef struct {
     bool variant_case_candidate;
     bool constructor_call;
     bool unresolved;
+    // The unresolved reference is a value that code generation cannot
+    // stand in for, so the program stops before lowering.
+    bool blocks_lowering;
     bool init_call;
     bool callback_call;
     bool callback_setup;
@@ -532,6 +611,22 @@ typedef struct {
 } n00bb_write_site_t;
 core_list_decl(n00bb_write_site_t);
 
+// Type arguments given at `site` to a record, variant or alias, checked
+// against the `where` clauses of its declaration once every declaration is
+// processed and the program's implementations are known
+// (n00bb_type_arguments_fit).
+typedef struct {
+    parse_tree_t *site;
+    parse_sym_entry_t *declaration;
+    th_type **arguments;
+    size_t count;
+    bool alias;
+    // Whether the variables among the arguments have taken on the type's
+    // constraints (n00bb_imply_type_argument_constraints).
+    bool implied;
+} n00bb_type_argument_check_t;
+core_list_decl(n00bb_type_argument_check_t);
+
 typedef enum : uint8_t {
     N00BB_MARKS_PARAMETER,
     N00BB_MARKS_FIELD,
@@ -595,6 +690,12 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
     core_dict_t shared_state_types;
+    // The type variables `typecase` arms introduce: N00BB_ARM_PATTERN_VAR
+    // for one a pattern names (`case Array['T]`; see
+    // n00bb_node_facts_t.arm_typevars), which inference holds rigid, and
+    // N00BB_ARM_TRAIT_VAR for a trait arm's (`case Shape`), which stands
+    // for the subject's type at run time, so nothing in the body settles it.
+    core_dict_t arm_typevars;
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     n00bb_link_analysis_t *link_analysis;
@@ -605,8 +706,15 @@ typedef struct {
     bool inference_finalized;
     core_buffer_t declaration_sites;
     core_buffer_t unused_facts;
+    // What its warnings depend on beyond its cache key, as the records
+    // n00bb_cache_warning_inputs describes.
+    core_buffer_t warning_inputs;
     bool interface_module;
     bool import_failure_reported;
+    // Set when this module failed, directly or through its imports, because
+    // a standard library module is shadowed (owned by the resolver), so a
+    // missing parent manifest is not reported as well.
+    struct n00bb_stdlib_shadow_t *stdlib_shadow;
     bool package_interface;
     bool package_manifest_restored;
     bool semantic_annotation_started;
@@ -619,9 +727,33 @@ typedef struct {
     core_list_t(n00bb_ir_instr_ptr_t) rewrite_sites;
     core_list_t(n00bb_ir_instr_ptr_t) condition_sites;
     core_list_t(n00bb_write_site_t) write_sites;
+    core_list_t(n00bb_type_argument_check_t) type_argument_checks;
     core_list_t(n00bb_ir_instr_ptr_t) result_defaults;
     core_dict_t intrinsics;
     core_dict_t open_storage;
+    // builtin_package_type's index of one of this unit's packages: the
+    // exports with each name, in order. Rebuilt whenever the package or
+    // its export list (storage or length) is not the one indexed; an
+    // export's name is fixed once it is in the list.
+    struct {
+        const n00bb_package_declaration_t *package;
+        const n00bb_package_export_t *data;
+        size_t len;
+        bool built;
+        core_dict_t first;   // export name -> index + 1 of the first
+        size_t *next;        // index -> index + 1 of the next, or 0
+    } export_index;
+    // The members module literals injected into this module (the only
+    // symbols n00bb_injected_member is true of), in the order injected.
+    core_list_t(parse_sym_entry_ptr_t) injected_members;
+    // module_scope_in_namespace's answers, per namespace: the module scope
+    // found and how far into the symbol table's scope list (newest first)
+    // that answer covers, so a later call looks only at newer scopes.
+    struct {
+        parse_namespace_t *ns;
+        parse_scope_t *scanned;
+        parse_scope_t *found;
+    } module_scope_memo[4];
 } n00bb_tu_state_t;
 bool n00bb_untyped_integer_const(parse_grammar_t *grammar,
                                  const parse_sym_entry_t *symbol,
@@ -640,9 +772,17 @@ bool reference_is_simple_assignment_target(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node,
                                            parse_sym_entry_t *symbol);
+// `Type.name` where the enum or flagset `Type` declares no `name`.
+typedef struct {
+    parse_sym_entry_t *type;
+    parse_tree_t      *path;
+    core_string_t      name;
+} n00bb_missing_member_t;
+
 bool resolve_local_enum_constant(parse_grammar_t *grammar,
                                  n00bb_tu_state_t *state,
-                                 n00bb_link_use_site_t *site);
+                                 n00bb_link_use_site_t *site,
+                                 n00bb_missing_member_t *missing);
 bool identifier_is_variant_case_expression(parse_grammar_t *grammar,
                                            core_translation_unit_t *unit,
                                            parse_tree_t *node);
@@ -867,6 +1007,10 @@ bool n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_signal_fence_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_machine_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_comptime_function(parse_sym_entry_t *symbol);
+// `native_entry(f)`: the native code address of function `f`, named, as a
+// `Ref[byte]` for native code to call. It is the function itself, never
+// its reference adapter (n00bb_reference_adapter_t), which `ref f` may be.
+bool n00bb_builtin_native_entry_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_prefetch_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_rmw_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_cas_function(parse_sym_entry_t *symbol);
@@ -947,6 +1091,15 @@ bool scope_in_value_namespace(parse_scope_t *scope);
 bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
+
+// Whether a node of `rule` declares a type with fields: what
+// field_record_declaration asks.
+static inline bool
+n00bb_field_record_rule(n00bb_rule_t rule)
+{
+    return rule == RULE(TYPE_DECL) || rule == RULE(RECORD_DECL)
+        || rule == RULE(OBJECT_DECL);
+}
 bool n00bb_field_scope_tag(core_string_t tag);
 typedef struct {
     th_type *base;
@@ -971,8 +1124,12 @@ parse_tree_t *simple_identifier_primary(parse_grammar_t *grammar,
 bool simple_identifier_expression(parse_grammar_t *grammar,
                                   parse_tree_t *node, core_string_t *name);
 core_string_t n00bb_print_type(th_ctx *types, th_type *type);
+// A function's signature, as n00bb_print_type prints its type but with its
+// parameters' passing modes, which are no part of the type.
+core_string_t n00bb_print_signature(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_qualified(th_ctx *types, th_type *type);
-core_string_t n00bb_print_type_source(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_source(th_ctx *types, th_type *type,
+                                      core_string_t module);
 core_string_t n00bb_print_type_for_user(th_ctx *types, th_type *type);
 core_string_t n00bb_hide_reserved_segments(core_string_t printed);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
@@ -1003,6 +1160,8 @@ void signature_typevars_for_symbol(parse_sym_entry_t *symbol,
     core_list_t(n00bb_typevar_binding_t) *out);
 th_type *signature_typevar_for_node(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
+parse_tree_t *typevar_owner_declaration(parse_grammar_t *grammar,
+    parse_tree_t *node);
 bool apply_signature_constraints(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *where, th_ctx *types,
     core_list_t(n00bb_typevar_binding_t) *variables,
@@ -1010,6 +1169,38 @@ bool apply_signature_constraints(parse_grammar_t *grammar,
 void record_cached_declared_function_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *signature,
     n00bb_tu_state_t *state);
+void record_function_body_constraints(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *func,
+    n00bb_tu_state_t *state);
+void record_type_constraints(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *declaration,
+    n00bb_tu_state_t *state);
+// Applies the `where` clauses under `clauses` to the variables `symbol`
+// owns, adding what they require, after `before`, to what `symbol` holds
+// under `key`. Reports `failure` at `declaration` when it can't.
+bool n00bb_record_where_clauses(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *symbol,
+    parse_tree_t *clauses, parse_tree_t *declaration, core_string_t key,
+    const core_list_t(th_trait_requirement) *before, const char *failure);
+bool n00bb_type_arguments_fit(th_ctx *types,
+    core_translation_unit_t *const *units, size_t count);
+th_type *bare_generic_alias(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_sym_entry_t *symbol,
+    parse_tree_t *node);
+// The type `reference`, written in `unit`, names by naming the type
+// `symbol`: a trait's variable there (trait_type_reference, with the trait
+// declared in `declaration`, or by default where `symbol` is), a bare
+// generic alias's own instance (bare_generic_alias), or else `type`.
+th_type *n00bb_type_reference_type(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, core_translation_unit_t *declaration,
+    parse_sym_entry_t *symbol, parse_tree_t *reference, th_type *type);
+// The user's own equality on `type`: its `__equal` or else, with `*by_cmp`
+// set, its `__cmp`, which `==` follows when the type has no `__equal`. A
+// type with its own gets no derived `__equal`.
+th_env_method_status_t n00bb_user_equality(th_ctx *types, th_type *type,
+    th_env_method_t *selected, bool *by_cmp);
+bool n00bb_imply_type_argument_constraints(
+    core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *method, th_ctx *types,
     th_type **failure);
@@ -1079,9 +1270,20 @@ tu_state(core_translation_unit_t *unit)
 static inline bool
 nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {
-    return node && !core_tree_is_leaf(node)
-        && core_string_eq(parse_tree_nt_name(grammar, node), name);
+    if (!node || core_tree_is_leaf(node)) return false;
+    // The comparison core_string_eq makes, inline: most calls differ in
+    // length, and the walks ask this of every node many times over.
+    core_string_t actual = parse_tree_nt_name(grammar, node);
+    return actual.u8_bytes == name.u8_bytes
+        && (!name.u8_bytes || !memcmp(actual.data, name.data, name.u8_bytes));
 }
+
+// nt_is and child_nt for a nonterminal named by a string literal. The name
+// resolves to the grammar's nonterminal id once per expansion site, after
+// which each check compares ids rather than names.
+#define NT_IS(g, n, lit) PARSE_TREE_IS_NT((g), (n), lit)
+#define CHILD_NT(g, n, lit)                                                    \
+    parse_tree_find_flat_child_by_nt_id((n), PARSE_NT_ID((g), lit))
 
 typedef struct {
     core_string_t action;
@@ -1096,22 +1298,23 @@ bool n00bb_node_emit(parse_grammar_t *grammar, parse_tree_t *node,
 static inline bool
 n00bb_name_place(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, node, CORE_STRING_STATIC("place"))
+    return n00bb_rule_of(grammar, node) == RULE(PLACE)
         && core_tree_num_children(node) == 1;
 }
 
 static inline bool
 n00bb_postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, node, CORE_STRING_STATIC("postfix-expr"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("place"));
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(POSTFIX_EXPR) || rule == RULE(PLACE);
 }
 
 static inline bool
 n00bb_primary_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, node, CORE_STRING_STATIC("primary"))
-        || n00bb_name_place(grammar, node);
+    n00bb_rule_t rule = n00bb_rule_of(grammar, node);
+    return rule == RULE(PRIMARY)
+        || (rule == RULE(PLACE) && core_tree_num_children(node) == 1);
 }
 
 static inline parse_tree_t *

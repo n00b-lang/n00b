@@ -1,0 +1,6 @@
+# Fills a shared cache for shared_cache_summaries.sh: a program whose
+# library modules were summarized with what langtools.lex brings in,
+# which starts no threads, before a program that does reuses them.
+import langtools.lex
+
+require byte_len("lex") == 3

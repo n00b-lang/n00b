@@ -1,0 +1,63 @@
+# A test of a global or of a local whose address is taken proves nothing
+# past what may change it: a call (it may write the global, directly or
+# through its own calls) or a write through a reference.
+var current: int? = 3
+
+func clear() {
+    current = nil
+}
+
+func clear_twice() {
+    clear()
+}
+
+func called() -> int {
+    if current != nil {
+        clear()
+        return current
+    }
+    return 0
+}
+
+func called_in_loop() -> int {
+    var total: int = 0
+    while current != nil {
+        clear_twice()
+        let value: int = current
+        total += value
+    }
+    return total
+}
+
+func through_global_reference() -> int {
+    if current != nil {
+        let slot: Ref[int?] = ref current
+        slot.__value = nil
+        return current
+    }
+    return 0
+}
+
+func through_local_reference() -> int {
+    var held: int? = 3
+    if held != nil {
+        let slot: Ref[int?] = ref held
+        slot.__value = nil
+        let value: int = held
+        return value
+    }
+    return 0
+}
+
+func reset(modify slot: int?) {
+    slot = nil
+}
+
+func modified_global() -> int {
+    while current != nil {
+        reset(current)
+        let value: int = current
+        return value
+    }
+    return 0
+}

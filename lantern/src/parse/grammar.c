@@ -12,6 +12,15 @@
 #include <string.h>
 
 static pthread_mutex_t grammar_finalize_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t grammar_versions;
+
+// Gives `g` a version no grammar has had: see parse_grammar_head_t.
+static void
+new_grammar_version(parse_grammar_t *g)
+{
+    g->head.version = atomic_fetch_add_explicit(&grammar_versions, 1,
+                                                memory_order_relaxed) + 1;
+}
 
 static bool
 check_stack_for_nt(core_list_t(int) *stack, int64_t ruleset)
@@ -225,6 +234,8 @@ add_rule_internal(parse_grammar_t *g,
     rule.link_ix      = penalty_link_ix;
 
     core_list_push(g->rules, rule);
+    // Anything built from the rules (a parser's expression graph) is stale.
+    new_grammar_version(g);
 
     int32_t ix = (int32_t)(g->rules.len - 1);
     core_list_push(nt->rule_ids, ix);
@@ -301,6 +312,7 @@ parse_grammar_new(void)
 {
     parse_grammar_t *g = core_alloc(parse_grammar_t);
 
+    new_grammar_version(g);
     g->error_rules           = true;
     g->max_penalty           = PARSE_DEFAULT_MAX_PENALTY;
     g->hide_penalty_rewrites = true;
@@ -311,10 +323,6 @@ parse_grammar_new(void)
 
     g->terminal_map = core_alloc(core_dict_t);
     core_dict_init_string(g->terminal_map);
-
-    core_cache_init(&g->annot_cache);
-    core_cache_set_enabled(&g->annot_cache, false);
-    pthread_mutex_init(&g->annot_cache_lock, nullptr);
 
     static const core_string_t BUILTIN[] = {
         CORE_STRING_STATIC("IDENTIFIER"),
@@ -349,9 +357,6 @@ parse_grammar_free(parse_grammar_t *g)
         return;
     }
 
-    core_cache_free(&g->annot_cache);
-    pthread_mutex_destroy(&g->annot_cache_lock);
-
     for (size_t i = 0; i < g->rules.len; i++) {
         parse_rule_t *rule = &g->rules.data[i];
 
@@ -362,6 +367,7 @@ parse_grammar_free(parse_grammar_t *g)
             core_dict_free(rule->first_set);
             core_free(rule->first_set);
         }
+        core_free(rule->first_bits);
     }
 
     core_list_free(g->rules);
@@ -462,6 +468,7 @@ parse_nonterm(parse_grammar_t *g, core_string_t name)
     nt->id = (int64_t)g->nt_list.len;
 
     core_list_push(g->nt_list, nt);
+    new_grammar_version(g);
 
     if (name.data) {
         core_string_t *key = core_dict_string_key_copy(name);
@@ -1179,6 +1186,22 @@ compute_all_first_sets(parse_grammar_t *g)
     }
 
     core_free(first_nullable);
+
+    // Each rule's first set as bits too, for the parser's alternative
+    // filter; terminals no bit stands for stay in first_set only.
+    g->first_bits_named = g->named_terms.len;
+    size_t bits = PARSE_FIRST_BITS_LOW + g->first_bits_named + 1;
+    for (size_t i = 0; i < n_rules; i++) {
+        parse_rule_t *rule = parse_get_rule(g, (int32_t)i);
+        core_free(rule->first_bits);
+        rule->first_bits = core_alloc_array(uint64_t, (bits + 63) / 64);
+        core_dict_foreach (rule->first_set, e) {
+            int64_t tid = (int64_t)((uint64_t)(uintptr_t)e->key - 0x100);
+            size_t bit = parse_rule_first_bit(tid, g->first_bits_named);
+            if (bit != SIZE_MAX)
+                rule->first_bits[bit / 64] |= UINT64_C(1) << (bit % 64);
+        }
+    }
 }
 
 int64_t
@@ -1504,9 +1527,5 @@ parse_grammar_finalize(parse_grammar_t *g)
 
     g->finalized = true;
 
-    pthread_mutex_lock(&g->annot_cache_lock);
-    core_cache_invalidate(&g->annot_cache);
-    core_cache_set_enabled(&g->annot_cache, true);
-    pthread_mutex_unlock(&g->annot_cache_lock);
     pthread_mutex_unlock(&grammar_finalize_lock);
 }

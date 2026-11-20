@@ -172,9 +172,13 @@ static core_string_t quoted_type(th_ctx *types, th_type *type)
                       N00BB_ARGS(ARG_TEXT(n00bb_print_type(types, type))));
 }
 
+// A function type is shown as it is written: without passing modes, which
+// are no part of it.
 static core_string_t shown(th_ctx *types, th_type *type)
 {
-    return n00bb_hide_reserved_segments(th_print(types, type));
+    th_print_options_t options = {.omit_modes = true};
+    return n00bb_hide_reserved_segments(
+        th_print_with_options(types, type, &options));
 }
 
 static core_string_t span_text(core_translation_unit_t *unit, ir_span_t span)
@@ -417,6 +421,33 @@ static bool report_bound_method(th_ctx *types,
     return true;
 }
 
+void n00bb_note_unimplemented(core_diagnostics_t *diagnostics, th_ctx *types,
+                              th_type *receiver, core_string_t trait)
+{
+    enum { shown_most = 8 };
+    core_string_t names[shown_most];
+    size_t        methods = 0;
+    th_type      *subject = receiver ? th_resolve(receiver) : nullptr;
+    size_t        count   = subject
+        ? th_env_unimplemented_methods(types, subject, trait, names,
+                                       shown_most, &methods)
+        : 0;
+
+    // Only a type that implements some of the trait's functions needs
+    // telling which it lacks: "does not implement" says the rest.
+    if (!count || count >= methods) {
+        return;
+    }
+
+    core_string_t shown = n00bb_print_type(types, subject);
+
+    for (size_t i = 0; i < count && i < shown_most; i++) {
+        n00bb_report_note(diagnostics, N00B_TEXT_TRAIT_FUNCTION_UNIMPLEMENTED,
+                          N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(trait)),
+                                     ARG_TEXT(names[i]), ARG_TEXT(shown)));
+    }
+}
+
 static bool report_required_trait(th_ctx *types,
                                   core_translation_unit_t *const *units,
                                   size_t count, core_translation_unit_t *unit,
@@ -458,7 +489,78 @@ static bool report_required_trait(th_ctx *types,
     if (callee) {
         note_declared(units, count, unit, callee);
     }
+    n00bb_note_unimplemented(diagnostics, types, failure->pred.subject,
+                             failure->pred.name);
     n00bb_report_help(diagnostics, N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
+                      N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
+
+    return true;
+}
+
+// A type a `where 'T: != type` clause rules out, given to the variable at
+// a call or by the function's body.
+static bool report_excluded(th_ctx *types,
+                            core_translation_unit_t *const *units,
+                            size_t count, core_translation_unit_t *unit,
+                            const ty_failure_t *failure)
+{
+    const ir_instr_t *site   = failure->why.at;
+    const ir_func_t  *callee = site ? n00bb_direct_call_target(site)
+                                    : nullptr;
+    const ir_func_t  *owner  = callee ? callee
+                             : site && site->block ? site->block->owner
+                                                   : nullptr;
+
+    if (failure->kind != TY_FAIL_PREDICATE
+        || failure->pred.kind != TY_PRED_EXCLUDES || !failure->pred.subject
+        || !owner) {
+        return false;
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       subject     = n00bb_print_type(types,
+        th_resolve(failure->pred.subject));
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_ARGUMENT_EXCLUDED,
+                 n00bb_span_location(site->span),
+                 N00B_TEXT_FUNCTION_EXCLUDES_TYPE,
+                 N00BB_ARGS(ARG_TEXT(function_name(owner)),
+                            ARG_TEXT(subject)));
+    if (callee) {
+        note_declared(units, count, unit, callee);
+    }
+
+    return true;
+}
+
+// A `where` bound on a variable that only a function's body names, broken
+// by the type the body gives it (body_bound_site).
+static bool report_body_bound(th_ctx *types, core_translation_unit_t *unit,
+                              const ty_failure_t *failure)
+{
+    const ir_instr_t *site = failure->why.at;
+    const ir_func_t  *owner = site && site->block ? site->block->owner
+                                                   : nullptr;
+
+    if (failure->kind != TY_FAIL_PREDICATE || !failure->pred.bound
+        || failure->pred.kind != TY_PRED_IMPLEMENTS || !failure->pred.subject
+        || !failure->pred.name.u8_bytes || !owner
+        || n00bb_direct_call_target(site)
+        || site->op == IR_OP_DISPATCH) {
+        return false;
+    }
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       subject     = n00bb_print_type(types,
+        th_resolve(failure->pred.subject));
+    core_string_t       trait       = n00bb_name_leaf(failure->pred.name);
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION,
+                 n00bb_span_location(site->span),
+                 N00B_TEXT_REQUIRED_TRAIT_MISSING,
+                 N00BB_ARGS(ARG_TEXT(subject), ARG_TEXT(trait),
+                            ARG_TEXT(function_name(owner))));
+    n00bb_note_unimplemented(diagnostics, types, failure->pred.subject,
+                             failure->pred.name);
+    n00bb_report_help(diagnostics, N00B_TEXT_GIVE_A_VALUE_THAT_IMPLEMENTS,
                       N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
 
     return true;
@@ -950,6 +1052,12 @@ static bool report_fixed_parameter(th_ctx *types, core_translation_unit_t *unit,
 static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
                             core_translation_unit_t *unit,
                             const ty_failure_t      *failure);
+static bool callback_call_reports(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ir_instr_t *at,
+                                  const n00bb_written_call_t *call,
+                                  th_type *receiver);
 static bool report_literal_argument(th_ctx *types,
                                     const n00bb_dispatch_index_t *index,
                                     core_translation_unit_t *const *units,
@@ -1082,7 +1190,9 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         report_case_mismatch(types, unit, test);
         return;
     }
-    if (report_unchecked_call(types, units, count, unit, failure)
+    if (report_excluded(types, units, count, unit, failure)
+        || report_body_bound(types, unit, failure)
+        || report_unchecked_call(types, units, count, unit, failure)
         || report_fixed_parameter(types, unit, failure)
         || report_condition(types, unit, failure)
         || report_nil(types, unit, failure)
@@ -1315,10 +1425,20 @@ static bool report_trait_parameter(th_ctx *types,
     if (!variable.u8_bytes) {
         variable = shown(types, receiver);
     }
+
+    // The call as written: `c.stop`, or the whole of `stop(c, s)`.
+    bool          method_style = ir_annot_get(
+        (ir_annots_t *)&failure->why.at->annots,
+        N00BB_DISPATCH_IMPLICIT_SELF_KEY) != nullptr;
+    core_string_t call         = method_style
+        ? (core_string_t){0} : span_text(unit, failure->why.at->span);
+
     n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
                  n00bb_span_location(failure->why.at->span),
-                 N00B_TEXT_TRAIT_PARAMETER_FIXED,
-                 N00BB_ARGS(ARG_TEXT(failure->why.at->operands[0].name),
+                 call.u8_bytes ? N00B_TEXT_TRAIT_PARAMETER_FIXED_CALL
+                               : N00B_TEXT_TRAIT_PARAMETER_FIXED,
+                 N00BB_ARGS(ARG_TEXT(call.u8_bytes
+                                ? call : failure->why.at->operands[0].name),
                             ARG_TEXT(variable),
                             ARG_TEXT(shown(types, failure->actual)),
                             ARG_TEXT(shown(types, failure->expected))));
@@ -1760,6 +1880,28 @@ static th_type *function_var(th_ctx *types, ir_func_t *function,
     return found;
 }
 
+// Where a bound on a variable that only the body of `function` names is
+// broken: the first instruction that makes a value of the variable's type.
+// A bound on a variable of the signature is checked at each call instead.
+static const ir_instr_t *body_bound_site(th_ctx *types, ir_func_t *function,
+                                         core_string_t name)
+{
+    if (var_named_in(types, function->type, name)) {
+        return nullptr;
+    }
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        for (uint32_t k = 0; k < function->blocks[b]->n_instrs; k++) {
+            ir_instr_t *in = function->blocks[b]->instrs[k];
+
+            if (in->dest && var_named_in(types, in->dest->type, name)) {
+                return in;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 static th_type *in_function(th_ctx *types, ir_func_t *function, th_type *type)
 {
     th_type **vars  = nullptr;
@@ -1834,6 +1976,22 @@ static th_mode bound_receiver_mode(n00bb_link_analysis_t *analysis,
         : TH_IN;
 }
 
+// A type variable a `typecase` arm names (`case 'T?`, `case Array['T]`)
+// stands for one fixed, unknown type inside the arm: inference may not
+// bind it, as it may not bind a function's own type parameters.
+static void declare_narrowed_rigid(ty_solver_t *solver,
+                                   core_translation_unit_t *const *units,
+                                   size_t count)
+{
+    for (size_t u = 0; u < count; u++) {
+        core_dict_foreach(&tu_state(units[u])->arm_typevars, item) {
+            if (item->value == N00BB_ARM_PATTERN_VAR) {
+                ty_declare_rigid(solver, item->key);
+            }
+        }
+    }
+}
+
 static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
 {
     n00bb_link_analysis_t *analysis = index->analysis;
@@ -1881,6 +2039,18 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                                                  .other = bound.target},
                                      (ty_why_t){0});
                 }
+                if (var && bound.kind == TH_CON_EXCLUDES && bound.target) {
+                    ty_declare_bound(solver, var,
+                                     (ty_pred_t){.kind  = TY_PRED_EXCLUDES,
+                                                 .other = in_function(
+                                                     types, function,
+                                                     bound.target)},
+                                     (ty_why_t){
+                                         .at = body_bound_site(
+                                             types, function,
+                                             th_var_name(bound.subject)),
+                                     });
+                }
                 if (!var || bound.kind != TH_CON_IMPLEMENTS) {
                     continue;
                 }
@@ -1889,7 +2059,11 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                 ty_declare_bound(solver, var,
                                  (ty_pred_t){.kind = TY_PRED_IMPLEMENTS,
                                              .name = bound.iface},
-                                 (ty_why_t){0});
+                                 (ty_why_t){
+                                     .at = body_bound_site(
+                                         types, function,
+                                         th_var_name(bound.subject)),
+                                 });
                 // A bound that names no trait arguments still fixes the
                 // trait's parameters for every call through it.
                 bool given = r + 1 < declared.len
@@ -3191,6 +3365,29 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
     return *out ? PROMOTION_CHOSEN : PROMOTION_NONE;
 }
 
+// An overloaded call `f(x, ...)` whose first argument is a type variable
+// bound by a trait that declares `f` goes to that trait's method, as
+// `x.f(...)` does: the functions named `f` that take concrete types can't
+// take the variable.
+static bool trait_bound_call(const n00bb_dispatch_index_t *index,
+                             const ir_instr_t *at, th_type *shape)
+{
+    th_type *receiver = shape && th_kind_of(shape) == TH_FUNCTION
+            && th_func_nparams(shape)
+        ? th_resolve(th_func_param(shape, 0)->type)
+        : nullptr;
+    n00bb_dispatch_target_t target = {0};
+
+    return receiver && th_kind_of(receiver) == TH_VAR && at
+        && at->op == IR_OP_DISPATCH && at->n_operands
+        && at->operands[0].kind == IR_OPD_NAME
+        && n00bb_dispatch_target_for(index, receiver, at->operands[0].name,
+                                     th_func_nparams(shape)
+                                         + th_func_nkw(shape),
+                                     &target)
+        && target.kind == N00BB_TARGET_TRAIT;
+}
+
 static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
                                      th_type *call, th_type **signature)
 {
@@ -3215,7 +3412,7 @@ static ty_overload_t overload_choice(void *context, const ir_instr_t *at,
     if (!site) {
         site = method_site(index, at, shape);
     }
-    if (!site) {
+    if (!site || (!site->chosen && trait_bound_call(index, at, shape))) {
         return TY_OVERLOAD_NONE;
     }
     if (!site->chosen && shape && th_kind_of(shape) == TH_FUNCTION) {
@@ -3909,7 +4106,8 @@ static bool report_overload_site(th_ctx *types,
 {
     n00bb_overload_site_t *site = overload_site(index, at);
 
-    if (!site || site->chosen) {
+    if (!site || site->chosen
+        || trait_bound_call(index, at, dispatch_shape(types, at))) {
         return false;
     }
 
@@ -4259,6 +4457,14 @@ static bool dispatch_plan_reports(parse_grammar_t         *grammar,
                                core_translation_unit_diagnostics(unit),
                                site->span);
     }
+    // Only a function reference's `call` has no declaration to name its
+    // parameters.
+    if (!bound && !target->function
+        && plan.status == N00BB_CALL_PLAN_UNKNOWN_NAME) {
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+                          N00B_TEXT_FUNCTION_TYPE_POSITIONAL_UNNAMED,
+                          N00BB_NO_ARGS);
+    }
     n00bb_call_plan_free(&plan);
 
     return !bound;
@@ -4438,6 +4644,12 @@ static bool report_dispatch(th_ctx *types, const n00bb_dispatch_index_t *index,
                               N00BB_ARGS(ARG_TEXT(type)));
         return true;
     }
+    // A function reference's or a callback's `call` that its signature
+    // can't take: the arguments are planned against that signature.
+    if (!found
+        && callback_call_reports(types, index, unit, at, call, receiver)) {
+        return true;
+    }
     if (!found) {
         core_string_t type = n00bb_print_type(types, receiver);
 
@@ -4465,6 +4677,133 @@ static core_string_t literal_kind(core_string_t trait)
     }
 
     return (core_string_t){0};
+}
+
+static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index,
+                                             th_type *receiver);
+
+// The signature of `at`, a `call` on a function reference or a callback
+// (`receiver`), without the receiver; nullptr when it is no such call.
+static th_type *callback_call_signature(th_ctx *types,
+                                        const n00bb_dispatch_index_t *index,
+                                        const ir_instr_t *at,
+                                        th_type *receiver)
+{
+    n00bb_dispatch_target_t target    = {0};
+    th_type                *signature = receiver
+            && n00bb_dispatch_target(index, th_resolve(receiver),
+                                     at->operands[0].name, &target)
+            && target.kind == N00BB_TARGET_CALLBACK
+        ? th_resolve(target.signature) : nullptr;
+
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || !th_func_nparams(signature)) {
+        return nullptr;
+    }
+
+    size_t      count    = th_func_nparams(signature) - 1;
+    size_t      keywords = th_func_nkw(signature);
+    th_param   *params   = core_alloc_array(th_param, count + 1);
+    th_kwparam *named    = core_alloc_array(th_kwparam, keywords + 1);
+
+    for (size_t i = 0; i < count; i++) {
+        params[i] = *th_func_param(signature, i + 1);
+    }
+    for (size_t k = 0; k < keywords; k++) {
+        named[k] = *th_func_kw(signature, k);
+    }
+
+    th_type *called = th_func_with_error(types, th_func_ret(signature),
+                                         th_func_error(signature), params,
+                                         count, th_func_rest(signature),
+                                         named, keywords);
+
+    core_free(params);
+    core_free(named);
+
+    return called;
+}
+
+// Argument `operand` of `at`, a `call` on a function reference or a
+// callback (`receiver`, whose signature is `called`), that its parameter
+// can't take: said as report_literal_argument says it of a direct call,
+// with `argument` saying what it is, at `where`, naming the parameter by
+// the name the callback's `call` role declares, or the reference's type
+// gives a keyword parameter. Given the argument's type, `actual`, only one
+// that differs from the parameter's is. Returns whether it reported one.
+static bool report_call_argument(th_ctx *types,
+                                 const n00bb_dispatch_index_t *index,
+                                 core_translation_unit_t *unit,
+                                 const ir_instr_t *at, uint32_t operand,
+                                 th_type *receiver, th_type *called,
+                                 th_type *actual, core_diag_location_t where,
+                                 core_string_t argument)
+{
+    parse_grammar_t    *grammar = index->analysis->grammar;
+    parse_sym_entry_t  *role    = callback_call_role(index,
+                                                     th_resolve(receiver));
+    parse_tree_t       *formals = role
+        ? callable_formal_parameters(grammar, role) : nullptr;
+    const ir_operand_t *slot    = &at->operands[operand];
+    size_t              count   = th_func_nparams(called);
+    // The first argument written is the call's second operand.
+    size_t              p       = operand - 2;
+    th_type            *formal  = nullptr;
+    core_string_t       name    = {0};
+
+    if (slot->kind == IR_OPD_NAMED_ARG) {
+        const th_kwparam *keyword = th_func_kw_lookup(called,
+                                                      slot->named.name);
+
+        if (keyword) {
+            p = count + (size_t)(keyword - th_func_kw(called, 0));
+            formal = keyword->type;
+        }
+        else if (!role
+                 || !function_parameter_named(grammar, role, formals,
+                                              slot->named.name, &p)
+                 || p >= count) {
+            return false;
+        }
+        name = slot->named.name;
+    }
+    else if (operand < 2 || p >= count) {
+        return false;
+    }
+    else if (role) {
+        (void)function_parameter_info(grammar, role, formals, p, nullptr,
+                                      &name, nullptr, nullptr);
+    }
+    formal = th_resolve(formal ? formal : th_func_param(called, p)->type);
+    if (actual
+        && (th_same_type(actual, formal) || !th_is_closed(types, formal)
+            || !th_is_closed(types, actual)
+            || is_integer_type(actual) == is_integer_type(formal))) {
+        return false;
+    }
+
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       callee      = role ? role->name
+                                           : at->operands[0].name;
+    core_string_t       subject     = name.u8_bytes
+        ? n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
+                     N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(name),
+                                ARG_TEXT(callee)))
+        : n00bb_text(N00B_TEXT_PARAMETER_NUMBER_OF,
+                     N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(callee)));
+
+    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE, where,
+                 N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
+                 N00BB_ARGS(ARG_TEXT(subject),
+                            ARG_TEXT(n00bb_print_type(types, formal)),
+                            ARG_TEXT(argument)));
+    core_free(subject.data);
+    if (role) {
+        n00bb_diag_declared_here(diagnostics, role,
+                                 N00B_TEXT_IS_DECLARED_HERE);
+    }
+
+    return true;
 }
 
 static core_string_t literal_phrase(core_string_t kind)
@@ -4602,6 +4941,22 @@ static bool report_literal_argument(th_ctx *types,
     if (!callee && (!self
                     || !dispatch_callee(index, unit, user, self->type, method,
                                         user->n_operands - 1, &target))) {
+        th_type      *called = self ? callback_call_signature(types, index,
+                                                              user, self->type)
+                                    : nullptr;
+        core_string_t phrase = called ? literal_phrase(kind)
+                                      : (core_string_t){0};
+        bool          said   = called
+            && report_call_argument(types, index, unit, user, operand,
+                                    self->type, called, nullptr,
+                                    n00bb_span_location(literal->span),
+                                    phrase);
+
+        core_free(phrase.data);
+        if (said) {
+            return true;
+        }
+
         core_string_t trait = self ? index_trait(method)
                                    : (core_string_t){0};
 
@@ -5319,22 +5674,6 @@ static bool reaches_root(th_ctx *types, const ir_value_t *address)
     return address != nullptr;
 }
 
-static n00bb_text_t mode_parameter(th_mode mode)
-{
-    switch (mode) {
-    case TH_OUT:
-        return N00B_TEXT_OUT_PARAMETER;
-    case TH_INOUT:
-        return N00B_TEXT_MODIFY_PARAMETER;
-    case TH_CONSUME:
-        return N00B_TEXT_CONSUME_PARAMETER;
-    case TH_VIEW:
-        return N00B_TEXT_VIEW_PARAMETER;
-    default:
-        return N00B_TEXT_IN_PARAMETER;
-    }
-}
-
 static bool writes_tuple_element(const ir_instr_t *store)
 {
     const ir_value_t *address = store->n_operands == 2
@@ -5393,7 +5732,7 @@ static bool check_write_site(core_translation_unit_t  *unit,
         n00bb_report(diagnostics, unit, N00B_DIAG_NOT_WRITABLE, at,
                      N00B_TEXT_PARAMETER_CANNOT_BE_ASSIGNED,
                      N00BB_ARGS(ARG_TEXT(root->name),
-                                ARG_PHRASE_ID(mode_parameter(
+                                ARG_PHRASE_ID(n00bb_mode_parameter(
                                     root->has_mode ? root->mode : TH_IN)),
                                 ARG_TEXT(subject)));
         n00bb_diag_declared_here(diagnostics, root, N00B_TEXT_IS_DECLARED_HERE);
@@ -5510,19 +5849,149 @@ static bool report_untyped(core_translation_unit_t *unit, core_string_t name,
     return false;
 }
 
-static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
-                          size_t count)
+// Whether `variable` is one a `typecase` arm narrows to (see
+// n00bb_tu_state_t.arm_typevars): a local of that type has a type, the
+// arm's.
+static bool narrowed_variable(th_ctx *types, n00bb_tu_state_t *state,
+                              th_type *variable)
+{
+    core_dict_foreach(&state->arm_typevars, item) {
+        if (th_occurs(types, variable, item->key)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// A trait used as a type inside a function (`Array[Shape]`) stands for one
+// type that implements it, which the function's body settles. `bound` is
+// such a trait's when its variable is named after where the trait is used
+// and the signature of `function` doesn't hold it: that variable, resolved.
+// A `typecase` arm's stands for the subject's type at run time, so it stays
+// open, and so does anything it reached.
+static th_type *trait_type_var(th_ctx *types, n00bb_tu_state_t *state,
+                               ir_func_t *function, th_trait_requirement bound)
+{
+    th_type *var = bound.subject ? th_resolve(bound.subject) : nullptr;
+
+    if (bound.kind != TH_CON_IMPLEMENTS || !var || th_kind_of(var) != TH_VAR
+        || core_string_find_byte(th_var_name(bound.subject), '@') < 0
+        || th_occurs(types, var, function->type)) {
+        return nullptr;
+    }
+    core_dict_foreach(&state->arm_typevars, item) {
+        if (item->value == N00BB_ARM_TRAIT_VAR
+            && th_resolve(item->key) == var) {
+            return nullptr;
+        }
+    }
+
+    return var;
+}
+
+// A trait-as-type variable of one function, and the variables that hold
+// it: one of just that type, or else one whose type mentions it.
+typedef struct {
+    th_type       *var;
+    core_string_t  trait;
+    ir_local_t    *bare;
+    ir_local_t    *holder;
+} unsettled_trait_t;
+core_list_decl(unsettled_trait_t);
+
+static unsettled_trait_t *unsettled_entry(
+    core_list_t(unsettled_trait_t) *traits, th_type *var, core_string_t trait)
+{
+    for (size_t i = 0; i < traits->len; i++) {
+        if (traits->data[i].var == var) {
+            return &traits->data[i];
+        }
+    }
+    core_list_push(*traits, ((unsettled_trait_t){.var = var, .trait = trait}));
+
+    return &traits->data[traits->len - 1];
+}
+
+// Reports a trait-as-type variable nothing in `function` settled, at the
+// variable holding it, or else at the first value that has it. A variable
+// declared with just the trait (`var s: Shape`) is T0586, as any variable
+// nothing settles the type of.
+static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
+                                   ir_func_t *function,
+                                   const unsettled_trait_t *entry)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       trait       = n00bb_name_leaf(entry->trait);
+    core_string_t       owner       = function_name(function);
+
+    if (entry->bare) {
+        core_string_t name = n00bb_name_leaf(entry->bare->source_name);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
+                     n00bb_name_location(unit, entry->bare->span, name),
+                     N00B_TEXT_VARIABLE_TRAIT_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        n00bb_report_help(diagnostics,
+                          N00B_TEXT_ASSIGN_OR_NAME_THE_IMPLEMENTING_TYPE,
+                          N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        return false;
+    }
+    if (entry->holder) {
+        core_string_t name = n00bb_name_leaf(entry->holder->source_name);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_name_location(unit, entry->holder->span, name),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(owner),
+                                ARG_TEXT(name)));
+    }
+    else {
+        const ir_instr_t *at = nullptr;
+
+        for (uint32_t b = 0; !at && b < function->n_blocks; b++) {
+            for (uint32_t i = 0; !at && i < function->blocks[b]->n_instrs;
+                 i++) {
+                const ir_instr_t *in = function->blocks[b]->instrs[i];
+
+                at = in->dest && ir_span_known(in->span) && !in->span.implied
+                        && th_occurs(types, entry->var, in->dest->type)
+                       ? in
+                       : nullptr;
+            }
+        }
+        if (!at) {
+            return true;
+        }
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED_HERE,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(owner)));
+    }
+    n00bb_report_help(diagnostics,
+                      N00B_TEXT_STORE_OR_NAME_THE_IMPLEMENTING_TYPE,
+                      N00BB_ARGS(ARG_TEXT(trait)));
+
+    return false;
+}
+
+// Reports what nothing gave a type: a variable (T0586), or a trait used as
+// a type in a function's body (T0605, or T0586 for a variable of just the
+// trait). A unit with errors already may have left types open on their
+// account, so it is not checked.
+static bool check_untyped(th_ctx *types, const n00bb_dispatch_index_t *index,
+                          core_translation_unit_t *const *units, size_t count)
 {
     bool ok = true;
 
     for (size_t u = 0; u < count; u++) {
         n00bb_tu_state_t *state  = tu_state(units[u]);
-        ir_module_t      *module = state->interface_module
-                                       || core_diagnostics_failed(
-                                           core_translation_unit_diagnostics(
-                                               units[u]))
-                                     ? nullptr
-                                     : state->ir_module;
+        ir_module_t      *module =
+            state->interface_module
+                || core_diagnostics_failed(
+                    core_translation_unit_diagnostics(units[u]))
+            ? nullptr
+            : state->ir_module;
 
         for (size_t g = 0; module && g < ir_global_count(module); g++) {
             ir_global_t *global = ir_global_at(module, g);
@@ -5539,24 +6008,64 @@ static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
         }
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
+            bool       closed   = th_is_closed(types, function->type);
+            core_list_t(unsettled_trait_t) traits =
+                core_list_new(unsettled_trait_t);
 
-            if (!th_is_closed(types, function->type)) {
-                continue;
-            }
             for (uint32_t l = 0; l < function->n_locals; l++) {
                 ir_local_t *local = function->locals[l];
                 th_type    *type  = local->type ? th_resolve(local->type)
                                                 : nullptr;
+                bool        bare  = false;
 
-                if (type && th_kind_of(type) == TH_VAR && !th_var_ref(type)
-                    && !local->synthetic && local->source_name.u8_bytes
-                    && ir_span_known(local->span) && !local->span.implied) {
+                if (!type || local->synthetic || !local->source_name.u8_bytes
+                    || !ir_span_known(local->span) || local->span.implied) {
+                    continue;
+                }
+                for (size_t b = 0; b < index->bounds.len; b++) {
+                    th_type *var = trait_type_var(types, state, function,
+                                                  index->bounds.data[b]);
+
+                    if (!var || !th_occurs(types, var, type)) {
+                        continue;
+                    }
+
+                    unsettled_trait_t *entry = unsettled_entry(
+                        &traits, var, index->bounds.data[b].iface);
+
+                    if (type == var && !entry->bare) {
+                        entry->bare = local;
+                        bare        = true;
+                    }
+                    if (type != var && !entry->holder) {
+                        entry->holder = local;
+                    }
+                }
+                if (closed && !bare && th_kind_of(type) == TH_VAR
+                    && !th_var_ref(type)
+                    && !narrowed_variable(types, state, type)) {
                     ok = report_untyped(units[u], local->source_name,
                                         local->mutability == IR_MUT_MUTABLE,
                                         local->span)
                       && ok;
                 }
             }
+            // A trait no variable holds is reported where a value has it.
+            for (size_t b = 0; b < index->bounds.len; b++) {
+                th_type *var = trait_type_var(types, state, function,
+                                              index->bounds.data[b]);
+
+                if (var) {
+                    unsettled_entry(&traits, var,
+                                    index->bounds.data[b].iface);
+                }
+            }
+            for (size_t t = 0; t < traits.len; t++) {
+                ok = report_unsettled_trait(types, units[u], function,
+                                            &traits.data[t])
+                  && ok;
+            }
+            core_list_free(traits);
         }
     }
 
@@ -5590,6 +6099,104 @@ static bool check_field_privacy(th_ctx *types, n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+// The `call` role of a nominal callback type, whose declaration names the
+// parameters; a function reference's type has no names for them.
+static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index,
+                                             th_type *receiver)
+{
+    n00bb_link_analysis_t *analysis = index->analysis;
+
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_callback_contract_t *contract = n00bb_callback_contract_for_type(
+            tu_state(analysis->units.data[u]), receiver);
+
+        if (contract) {
+            return contract->call;
+        }
+    }
+
+    return nullptr;
+}
+
+// `f.call(...)` on a function reference or a callback: the written
+// arguments are planned against the called signature, without the
+// receiver. Named arguments bind by the names the callback's `call` role
+// declares. A function reference's type names only its keyword parameters
+// (its positional parameters' names are not part of the type), so those
+// are the names a call through it can use.
+// Returns whether it reported a problem.
+static bool callback_call_reports(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ir_instr_t *at,
+                                  const n00bb_written_call_t *call,
+                                  th_type *receiver)
+{
+    th_type *called = callback_call_signature(types, index, at, receiver);
+
+    if (!called) {
+        return false;
+    }
+
+    n00bb_dispatch_target_t target = {
+        .function  = callback_call_role(index, th_resolve(receiver)),
+        .signature = called,
+    };
+
+    if (dispatch_plan_reports(index->analysis->grammar, unit, call, &target,
+                              false)) {
+        return true;
+    }
+
+    // Typing matched the arguments passed by position; one passed by name
+    // must fit the parameter it names: a parameter the callback's role
+    // declares, or a keyword parameter of the reference's type.
+    bool reported = false;
+
+    for (uint32_t o = 1; !reported && o < at->n_operands; o++) {
+        const ir_operand_t *operand = &at->operands[o];
+        th_type            *actual  = operand->kind == IR_OPD_NAMED_ARG
+                && operand->named.value
+            ? th_resolve(operand->named.value->type) : nullptr;
+
+        if (!actual) {
+            continue;
+        }
+
+        core_string_t argument = quoted_type(types, actual);
+
+        reported = report_call_argument(types, index, unit, at, o, receiver,
+            called, actual,
+            value_source(unit, operand->named.value, at->span).at, argument);
+        core_free(argument.data);
+    }
+
+    return reported;
+}
+
+// A failure at a function reference's or a callback's `call`: its arguments
+// are planned and typed against the called signature, and what that finds
+// is the error about the call. Returns whether it reported one.
+static bool callback_call_failure(th_ctx *types,
+                                  const n00bb_dispatch_index_t *index,
+                                  core_translation_unit_t *unit,
+                                  const ty_failure_t *failure)
+{
+    const ir_instr_t *at = failure->why.at;
+
+    if (!at || at->op != IR_OP_DISPATCH || at->n_operands < 2
+        || at->operands[0].kind != IR_OPD_NAME) {
+        return false;
+    }
+
+    const n00bb_written_call_t *call = core_dict_get(
+        &tu_state(unit)->dispatch_calls, (void *)at, nullptr);
+    const ir_value_t *self = dispatch_operand(at, 1);
+
+    return call && self
+        && callback_call_reports(types, index, unit, at, call, self->type);
+}
+
 static bool check_dispatch_call(th_ctx *types,
                                 const n00bb_dispatch_index_t *index,
                                 core_translation_unit_t *unit,
@@ -5611,7 +6218,8 @@ static bool check_dispatch_call(th_ctx *types,
     if (!dispatch_callee(index, unit, at, self ? self->type : nullptr,
                          at->operands[0].name, at->n_operands - 1,
                          &target)) {
-        return true;
+        return !callback_call_reports(types, index, unit, at, call,
+                                      self ? self->type : nullptr);
     }
 
     return !dispatch_plan_reports(grammar, unit, call, &target, method_style)
@@ -7265,11 +7873,76 @@ static const ir_value_t *arm_test(const ir_block_t *block, uint64_t *tag,
 
 static uint64_t other_arm(th_ctx *types, th_type *variant, uint64_t tag);
 
+// The arm an assignment shows `subject` holds, or 0. Assigning a variant
+// made with one arm, as in `v = (circle = 2.0)`, proves the variable holds
+// that arm wherever that assignment is the only one that reaches a read of
+// it. A variable whose address is taken, by `ref` or by passing it to a
+// `modify` parameter, may change through it, so nothing proves its arm.
+static uint64_t assigned_arm(const ir_pdg_t *pdg, const ir_value_t *subject)
+{
+    for (uint32_t depth = 0; pdg && subject && depth < 64; depth++) {
+        ir_instr_t *def = subject->kind == IR_VAL_INSTR ? subject->def
+                                                        : nullptr;
+
+        if (!def) {
+            return 0;
+        }
+        if (def->op == IR_OP_VARIANT_MAKE && def->n_operands == 2
+            && def->operands[0].kind == IR_OPD_NAME) {
+            return th_arm_tag(def->operands[0].name);
+        }
+        if (def->op != IR_OP_COPY || def->n_operands != 1) {
+            return 0;
+        }
+
+        ir_local_t *local = ir_operand_local(&def->operands[0]);
+
+        if (!local) {
+            subject = ir_operand_value(&def->operands[0]);
+            continue;
+        }
+        if (local->address_taken) {
+            return 0;
+        }
+
+        const ir_instr_t *assignment = nullptr;
+
+        for (uint32_t i = 0; i < ir_pdg_in_count(pdg, def); i++) {
+            const ir_dep_edge_t *edge = ir_pdg_in_at(pdg, def, i);
+
+            if (edge->kind != IR_DEP_DATA || edge->via != local) {
+                continue;
+            }
+            if (edge->certainty != IR_DEP_EXACT || assignment) {
+                return 0;
+            }
+            assignment = edge->from;
+        }
+        if (!assignment || assignment->dest_local != local
+            || assignment->op != IR_OP_COPY || assignment->n_operands != 1) {
+            return 0;
+        }
+        subject = ir_operand_value(&assignment->operands[0]);
+    }
+
+    return 0;
+}
+
 static bool arm_guarded(ir_func_t *function, ir_doms_t *doms,
                         ir_value_numbers_t *numbers, const ir_instr_t *read,
                         const ir_value_t *subject, uint64_t tag,
-                        uint64_t *other)
+                        uint64_t *other, bool *assigned_other)
 {
+    uint64_t assigned = assigned_arm(ir_func_pdg(function), subject);
+
+    if (assigned == tag) {
+        return true;
+    }
+    if (assigned) {
+        *other          = assigned;
+        *assigned_other = true;
+        return false;
+    }
     for (ir_block_t *at = read->block; at;) {
         ir_block_t *parent = ir_idom_of(doms, at);
 
@@ -7405,10 +8078,11 @@ static bool variant_arms_checked(core_translation_unit_t *const *units,
                 const ir_value_t *subject = ir_operand_value(&in->operands[0]);
                 core_string_t     arm     = in->operands[1].name;
                 uint64_t          other   = 0;
+                bool              assigned = false;
                 bool              guarded = !doms || !numbers || !subject
                     || !ir_block_reachable(doms, in->block)
                     || arm_guarded(function, doms, numbers, in, subject,
-                                   th_arm_tag(arm), &other);
+                                   th_arm_tag(arm), &other, &assigned);
 
                 if (guarded) {
                     continue;
@@ -7437,7 +8111,8 @@ static bool variant_arms_checked(core_translation_unit_t *const *units,
                     ? n00bb_report(diagnostics, unit,
                           N00B_DIAG_VARIANT_ARM_UNCHECKED,
                           n00bb_span_location(in->span),
-                          N00B_TEXT_VARIANT_ARM_OTHER,
+                          assigned ? N00B_TEXT_VARIANT_ARM_ASSIGNED
+                                   : N00B_TEXT_VARIANT_ARM_OTHER,
                           N00BB_ARGS(ARG_TEXT(value), ARG_TEXT(arm),
                                      ARG_TEXT(held)))
                     : n00bb_report(diagnostics, unit,
@@ -8002,6 +8677,13 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
 {
     th_ctx *types = ir_ctx_types(analysis->ir_context);
 
+    // A type named after the symbols stage, such as a qualified generic
+    // alias named bare, gives its constraints to its variables here, before
+    // the bounds are declared.
+    if (!n00bb_imply_type_argument_constraints(units, count)) {
+        return false;
+    }
+
     core_list_t(n00bb_ir_func_ptr_t) functions =
         core_list_new(n00bb_ir_func_ptr_t);
     core_dict_t defaults;
@@ -8104,6 +8786,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     // Until literals are sized, an operator meeting an unbound operand
     // waits (integer_promotion). Constraining already judges some calls.
     typing->dispatch->sizing_pending = true;
+    declare_narrowed_rigid(solver, units, count);
     ty_constrain_group(solver, group, &coverage);
     ty_solve(solver);
     bool bitwise_negative = false;
@@ -8124,6 +8807,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                                    solver)
            && arities;
     bool writable = check_write_sites(units, count);
+    bool arguments_fit = n00bb_type_arguments_fit(types, units, count);
     bool visible  = check_field_privacy(types, typing->dispatch->analysis,
                                         units, count);
 
@@ -8131,7 +8815,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     bool finalize = finalizers_fit(types, units, count, &functions);
     bool patterns = patterns_fit(types, units, count, &functions);
     bool ok       = ty_failure_count(solver) == 0 && arities && writable
-           && visible && fits && finalize && switched && !bitwise_negative
+           && arguments_fit && visible && fits && finalize && switched && !bitwise_negative
            && patterns;
 
     for (size_t i = 0; i < ty_dispatch_count(solver); i++) {
@@ -8143,9 +8827,11 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         }
     }
     core_dict_t reported;
+    core_dict_t reported_calls;
     core_dict_t tainted;
 
     core_dict_init(&reported, nullptr, nullptr);
+    core_dict_init(&reported_calls, nullptr, nullptr);
     core_dict_init(&tainted, nullptr, nullptr);
     taint_failures(solver, &functions, &tainted);
     ok = check_unpropagated_outcomes(types, units, count,
@@ -8201,6 +8887,17 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         if (test) {
             core_dict_put(&reported, (void *)test, (void *)1);
         }
+        // One error about a function reference's or callback's `call`,
+        // however many of its failures there are.
+        if (failure->why.at
+            && core_dict_contains(&reported_calls, (void *)failure->why.at)) {
+            continue;
+        }
+        if (callback_call_failure(types, typing->dispatch, unit, failure)) {
+            core_dict_put(&reported_calls, (void *)failure->why.at,
+                          (void *)1);
+            continue;
+        }
         report_failure(types, typing->dispatch, units, count, unit, failure);
 
         const ir_instr_t *site = merge_site(failure);
@@ -8210,9 +8907,10 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
         }
     }
     core_dict_free(&tainted);
+    core_dict_free(&reported_calls);
     core_dict_free(&reported);
     ok = check_empty_lists(types, units, count, &functions) && ok;
-    ok = check_untyped(types, units, count) && ok;
+    ok = check_untyped(types, typing->dispatch, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
             n00bb_written_call_free(item->value);

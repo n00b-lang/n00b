@@ -131,7 +131,7 @@
 <for-var-list> ::= <binding-pattern>
 <for-var-list> ::= <binding-pattern> %"," <for-var-list>
 
-<binding-pattern> @nospace($1) ::= %"(" <pattern-items> %")"
+<binding-pattern> @nospace($1) @nospace($2) ::= %"(" <pattern-items> %")"
 <pattern-items> ::= <pattern-item> %"," <pattern-items>
                   | <pattern-item>
                   | <pattern-item> %","
@@ -143,7 +143,7 @@
 <pattern-skip> ::= %_
 
 <for-binding> @declares($0) ::= %IDENTIFIER
-<for-binding> @declares($0) ::=
+<for-binding> @declares($0) @nospace($1) ::=
        %IDENTIFIER %":" <type-spec>
 
 <for-in-target-list> ::= <expression>
@@ -193,20 +193,21 @@
 <type-spec-list> ::= <type-spec> (%"," <type-spec>)* %","?
 
 <try-stmt> @scope("try") ::= %"try" <try-body> <try-error-clause>
-<try-body> @scope("block") ::= <block-start> <try-body-stmts>? <block-end>
+<try-body> @scope("block") @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <try-body-stmts>? <block-end>
 <try-body-stmts> ::= <value-stmt>
                     | <body-stmt-list>
                     | <body-stmt-list> <eos>+ <value-stmt>
-<try-error-clause> @scope("try-error") ::=
+<try-error-clause> @scope("try-error") @nospace($1) ::=
        %"fail" <try-handler-params> <body>
-<try-handler-params> ::= %"(" <try-error-binding> %")" | %"(" %")"
+<try-handler-params> @nospace ::= %"(" <try-error-binding> %")" | %"(" %")"
 <try-error-binding> @declares($0, "error") ::= %IDENTIFIER
-<try-error-binding> @declares($0, "error") ::=
+<try-error-binding> @declares($0, "error") @nospace($1) ::=
        %IDENTIFIER %":" <type-spec>
 
 <try-value-expr> @scope("try") @disambig(n00bb_prefer_statement_form, 100) ::=
        %"try" <value-body> <try-value-error-clause>
-<try-value-error-clause> @scope("try-error") ::=
+<try-value-error-clause> @scope("try-error") @nospace($1) ::=
        %"fail" <try-handler-params> <value-body>
 
 # Using the `type` keyword creates a 'brand new' type, meaning that
@@ -307,7 +308,9 @@
 <range-step> ::= %"step" <expression>
 <range-sep> ::= %"to"
               | %"until"
-              | %":"
+# `a[i:j]`: the `:` spelling is written with no space around it, the
+# words with one.
+<range-sep> @tight ::= %":"
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
@@ -331,13 +334,14 @@
 <brought-symbol> ::= %IDENTIFIER (%"as" %IDENTIFIER)?
 
 <package-decl> ::= %"package" <dotted-name> <package-body>
-<package-body> ::= <block-start> <package-items>? <block-end>
-<package-items> ::= <package-item> (<eos>+ <package-item>)*
+<package-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <package-items>? <block-end>
+<package-items> @hardline ::= <package-item> (<eos>+ <package-item>)*
 <package-item> ::= <export-stmt> | <when-stmt> | <pass-stmt>
 <export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
 <export-alias> ::= %"as" %IDENTIFIER
 <export-grantee> ::= %"to" <dotted-name>
-<dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
+<dotted-name> @nospace ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <binding-pattern> <assign-op> <expression>
@@ -412,56 +416,56 @@
 
 <default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
                 %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") ::=
+<default-param> @declares($0, "param") @direction($0, "in") @pass_by("in") @nospace($1) ::=
                 %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
                 %"in" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<default-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($2) ::=
                 %"in" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") ::=
                 %"view" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") ::=
+<default-param> @declares($1, "param") @direction($1, "view") @pass_by("view") @nospace($2) ::=
                 %"view" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
                 %"consume" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::=
+<default-param> @declares($1, "param") @direction($1, "consume") @pass_by("consume") @nospace($2) ::=
                 %"consume" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
                 %"modify" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::=
+<default-param> @declares($1, "param") @direction($1, "modify") @pass_by("inout") @nospace($2) ::=
                 %"modify" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
                 %"out" %IDENTIFIER <assign-op> <expression>
-<default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") ::=
+<default-param> @declares($1, "param") @direction($1, "out") @pass_by("out") @nospace($2) ::=
                 %"out" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 
-<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($1) @nospace($2) ::=
     %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($1) ::=
     %"*" %IDENTIFIER
-<vargs-param> @declares($2, "param") @direction($2, "in") @pass_by("in") ::=
+<vargs-param> @declares($2, "param") @direction($2, "in") @pass_by("in") @nospace($2) @nospace($3) ::=
     %"in" %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($2, "param") @direction($2, "in") @pass_by("in") ::=
+<vargs-param> @declares($2, "param") @direction($2, "in") @pass_by("in") @nospace($2) ::=
     %"in" %"*" %IDENTIFIER
-<vargs-param> @declares($2, "param") @direction($2, "view") @pass_by("view") ::=
+<vargs-param> @declares($2, "param") @direction($2, "view") @pass_by("view") @nospace($2) @nospace($3) ::=
     %"view" %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($2, "param") @direction($2, "view") @pass_by("view") ::=
+<vargs-param> @declares($2, "param") @direction($2, "view") @pass_by("view") @nospace($2) ::=
     %"view" %"*" %IDENTIFIER
-<vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") ::=
+<vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") @nospace($2) @nospace($3) ::=
     %"modify" %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") ::=
+<vargs-param> @declares($2, "param") @direction($2, "modify") @pass_by("inout") @nospace($2) ::=
     %"modify" %"*" %IDENTIFIER
-<vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") ::=
+<vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") @nospace($2) @nospace($3) ::=
     %"consume" %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") ::=
+<vargs-param> @declares($2, "param") @direction($2, "consume") @pass_by("consume") @nospace($2) ::=
     %"consume" %"*" %IDENTIFIER
-<vargs-param> @declares($2, "param") @direction($2, "out") @pass_by("out") ::=
+<vargs-param> @declares($2, "param") @direction($2, "out") @pass_by("out") @nospace($2) @nospace($3) ::=
     %"out" %"*" %IDENTIFIER %":" <type-spec>
-<vargs-param> @declares($2, "param") @direction($2, "out") @pass_by("out") ::=
+<vargs-param> @declares($2, "param") @direction($2, "out") @pass_by("out") @nospace($2) ::=
     %"out" %"*" %IDENTIFIER
-<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($1) @nospace($2) ::=
     %"*" %IDENTIFIER %":" <type-spec> <assign-op> <expression>
-<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") ::=
+<vargs-param> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($1) ::=
     %"*" %IDENTIFIER <assign-op> <expression>
 
 <function-result> ::= <return-type>? <error-type>?
@@ -469,7 +473,7 @@
 <return-type> ::= <return-sigil> <union-tspec>
 
 <return-sigil> ::= %"->"
-                 | %"return" %":"
+<return-sigil> @nospace($1) ::= %"return" %":"
 
 <error-type> @nospace($1) ::= %"fail" %":" <one-tspec>
 
@@ -481,7 +485,11 @@
 
 <enum-storage> ::= %":" <type-spec>
 
-<enum-items> @nospace($1) @nospace($2) ::= <enum-item> (<eos>* %"," <eos>* <enum-item>)* (<eos>* %",")?
+# The separator is a rule of its own so that each repetition is two
+# items, whatever line breaks it holds: the printer counts a repetition's
+# items to find where each starts.
+<enum-items> @nospace($1) @nospace($2) ::= <enum-item> (<item-separator> <enum-item>)* (<eos>* %",")?
+<item-separator> @nospace ::= <eos>* %"," <eos>*
 
 <enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
 <enum-item> @declares($0) ::= %IDENTIFIER
@@ -494,7 +502,7 @@
 
 <flagset-prefix> ::= <member-visibility>? %"flagset"
 
-<flagset-items> @nospace($1) @nospace($2) ::= <flagset-item> (<eos>* %"," <eos>* <flagset-item>)* (<eos>* %",")?
+<flagset-items> @nospace($1) @nospace($2) ::= <flagset-item> (<item-separator> <flagset-item>)* (<eos>* %",")?
 
 <flagset-item> @declares($0) ::= %IDENTIFIER
 <flagset-item> @declares($0) ::= %IDENTIFIER <assign-op> <flagset-value>
@@ -521,7 +529,7 @@
 # declares `x` as an implicit declaration does. The preprocessor rewrites it
 # as `x = (value): T`.
 <assign-stmt> @nospace($1) ::= <place> %":" <type-spec> <assign-op> <expression>
-<assign-pattern> @nospace($1) ::= %"(" <assign-pattern-items> %")"
+<assign-pattern> @nospace($1) @nospace($2) ::= %"(" <assign-pattern-items> %")"
 <assign-pattern-items> ::= <assign-pattern-item> %"," <assign-pattern-items>
                         | <assign-pattern-item> %"," <assign-pattern-item>
 <assign-pattern-item> ::= <assign-pattern-target>
@@ -619,13 +627,17 @@
 <left-shift-assign-op> ::= %"<<="
 <right-shift-assign-op> ::= %">>="
 
+# `!` binds to its operand (`!p`); the keyword spelling is spaced like
+# any word (`not p`), so each has its own operator rule.
 <unary-expr> @nospace ::= <not-op> <unary-expr>
-<not-op> ::= %"!" | %"not"
+<unary-expr> ::= <not-word-op> <unary-expr>
+<not-op> ::= %"!"
+<not-word-op> ::= %"not"
 <unary-expr> @nospace ::= %"~" <unary-expr>
 <unary-expr> @nospace ::= %"-" <unary-expr>
 <unary-expr> @nospace ::= %"+" <unary-expr>
 <unary-expr> @operator("ref") ::= %"ref" <unary-expr>
-<unary-expr> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
+<unary-expr> @nospace($1) @nospace($2) @nospace($3) ::= %"cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @nospace($1) @nospace($2) @nospace($3) ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> ::= <postfix-expr>
 # A type annotation on any expression: `5: u8`, `items: List[int]`. It
@@ -646,9 +658,9 @@
 <index-contents> ::= <expression>
 
 <slice-contents> ::= <expression> <range-sep> <expression>
-                   | <expression> %":"
-                   | %":" <expression>
-                   | %":"
+<slice-contents> @nospace($1) ::= <expression> %":"
+<slice-contents> @nospace($1) ::= %":" <expression>
+<slice-contents> ::= %":"
 
 <call-args> ::= <positional-args> (%"," <keyword-args>)? %","?
               | <keyword-args> (%"," <positional-args>)? %","?
@@ -681,7 +693,11 @@
 
 <typespec-expr> @nospace ::= %"typespec" %"[" <type-spec> %"]"
 
-<effect-query> @nospace ::= <effect-query-word> %"(" (<expression> %",")? <effect-query-name> %")"
+# Two rules rather than an optional `(<expression> %",")?`, so that a
+# space follows the comma but none follows the `(` when there is no comma.
+<effect-query> @nospace ::= <effect-query-word> %"(" <effect-query-name> %")"
+<effect-query> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::=
+       <effect-query-word> %"(" <expression> %"," <effect-query-name> %")"
 <effect-query-word> ::= %"may_effect" | %"forbids_effect" | %"has_effect"
                       | %"may_read" | %"may_write" | %"may_lend"
                       | %"may_carry"
@@ -691,7 +707,7 @@
 
 <callback-expr> @nospace ::= %"callback" %"[" <type-spec> %"]" %"(" <call-args>? %")"
 
-<block-value-expr> @scope("block") ::= <block-start> <value-body-stmts> <block-end>
+<block-value-expr> @scope("block") @hardline($1) @indent($1) @hardline($2) ::= <block-start> <value-body-stmts> <block-end>
 
 # EMBED is a free-form fence literal. The lexer expresses the proposed syntax
 # with fill("-") and pad("required"): [- ws... ws -]. The opening and closing
@@ -735,7 +751,7 @@
        %"{" <dict-entries> %"}"
 <dict-or-set-lit> @disambig(n00bb_prefer_dict_entries, 100) ::=
        %"{" <set-entries> %"}"
-<dict-or-set-lit> ::= %"{" %"}"
+<dict-or-set-lit> @nospace($1) ::= %"{" %"}"
 
 <dict-entries> ::= <dict-entry> %"," <dict-entries>
 <dict-entries> ::= <dict-entry>
@@ -757,7 +773,7 @@
                      | <named-field>
                      | <named-field> %","
 
-<named-field> ::=
+<named-field> @nospace($1) ::=
        %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <named-field> ::=
        %IDENTIFIER <assign-op> <expression>
@@ -781,7 +797,7 @@
                     | <sized-int-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
-                    | %"(" <union-tspec> %")"
+<base-tspec-core> @nospace($1) @nospace($3) ::= %"(" <union-tspec> <where-clause>? %")"
 
 <tspec-application> @nospace ::=
     %"[" <tspec-list> %"]"
@@ -791,24 +807,27 @@
 <tspec-field-list> ::= <tspec-field> %"," <tspec-field-list>
                     | <tspec-field>
                     | <tspec-field> %","
-<array-dimensions> ::= <array-dimension>+
+<array-dimensions> @nospace ::= <array-dimension>+
 <array-dimension> @nospace @disambig(n00bb_prefer_type_application, 100) ::=
     %"[" <expression>? %"]"
 
 <tspec-tvar> @nospace ::= %TYPE_VAR
 
-<sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
+<sized-int-tspec> @adjacent("prefix") @nospace ::= %i %":" <integer-size>
                                           | %u %":" <integer-size>
                                           | %bits %":" <integer-size>
 <integer-size> ::= %INT_LIT | %HEX_LIT
 
-<tspec-list> ::= <union-tspec> %"," <tspec-list>
-              | <union-tspec>
-              | <union-tspec> %","
+# A `where` clause may follow a type wherever one is written, as in
+# `Array['T where 'T: Shape]`; it constrains the variable of the
+# declaration the type is written in.
+<tspec-list> ::= <union-tspec> <where-clause>? %"," <tspec-list>
+              | <union-tspec> <where-clause>?
+              | <union-tspec> <where-clause>? %","
 
 <tspec-func> @nospace($1) @nospace($2) ::= %"(" <tspec-func-params> %")" <tspec-function-result>
 <tspec-func> @nospace($1) @nospace($2) @nospace($3) ::= %"(" <tspec-func-params> %"," %")" <tspec-function-result>
-               | %"(" %")" <tspec-function-result>
+<tspec-func> @nospace($1) ::= %"(" %")" <tspec-function-result>
 
 <tspec-function-result> ::= <return-type> <error-type>?
                           | <error-type>
@@ -817,30 +836,40 @@
                        | <tspec-vargs> (%"," <tspec-kargs>)?
                        | <tspec-kargs>
 
-<tspec-func-param> ::= <union-tspec>
-<tspec-func-param> ::=
-       <tspec-param-mode> %IDENTIFIER %":" <union-tspec>
-<tspec-func-param> ::= <tspec-param-mode> <union-tspec>
-<tspec-func-param> ::= %IDENTIFIER %":" <union-tspec>
+# A positional parameter's name is not part of a function type, so a
+# positional entry is only a type; an entry written `name: T` is a keyword
+# parameter (<tspec-kargs>). Nor are passing modes.
+<tspec-func-param> ::= <union-tspec> <where-clause>?
+# Accepted only to be reported (N00B-T0611): a passing mode before a
+# positional entry.
+<tspec-func-param> ::= <tspec-param-mode> <union-tspec> <where-clause>?
+# Accepted only to be reported (N00B-T0609): a named positional entry, and a
+# positional entry after the keyword parameters.
+<tspec-func-param> ::= <tspec-param-mode> <tspec-named-positional>
+<tspec-named-positional> @nospace($1) ::= %IDENTIFIER %":" <union-tspec>
+<tspec-late-param> ::= <tspec-func-param> | <tspec-vargs>
 
 <tspec-param-mode> ::= %"in" | %"view" | %"out" | %"modify" | %"consume"
 
-<tspec-field> ::= %IDENTIFIER %":" <union-tspec>
+<tspec-field> @nospace($1) ::= %IDENTIFIER %":" <union-tspec> <where-clause>?
 
-<tspec-vargs> ::= %"*" <union-tspec>
-<tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
+<tspec-vargs> @nospace($1) ::= %"*" <union-tspec> <where-clause>?
+# Writing `**` before the keyword parameters is an alternate spelling; the
+# preferred one leaves it out.
+<tspec-kargs> @nospace($1) ::= %"**"? <tspec-field> (%"," <tspec-karg-entry>)*
+<tspec-karg-entry> ::= <tspec-field> | <tspec-late-param>
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
 
-<type-constraint> ::= %TYPE_VAR %":" <constraint-list>
+<type-constraint> @nospace($1) ::= %TYPE_VAR %":" <constraint-list>
 
 <constraint-list> ::= <one-constraint> (<plus-op> <one-constraint>)*
 
 <one-constraint> ::= %"!=" <one-tspec>
                    | <trait-name>
-                   | <trait-name> %"[" <tspec-list> %"]"
+<one-constraint> @nospace ::= <trait-name> %"[" <tspec-list> %"]"
 
-<trait-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+<trait-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <type-decl> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
        <member-visibility>? %"type" %IDENTIFIER <type-layout-modifier>* <type-body>
@@ -873,14 +902,17 @@
 <variant-decl> @namespace("type") @scope("variant", $2) @type($2) @exposes ::=
        <member-visibility>? %"variant" %IDENTIFIER <variant-body>
 
-<variant-body> ::= <block-start> <variant-decl-spec-list> <block-end>
-<variant-decl-spec-list> ::= (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
-<variant-decl-one> @declares($1) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
+<variant-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <variant-decl-spec-list> <block-end>
+<variant-decl-spec-list> @hardline ::=
+       (<variant-decl-one> (<eos>+ <variant-decl-one>)*)?
+<variant-decl-one> @declares($1) @nospace($2) ::= <member-visibility>? %IDENTIFIER %":" <type-spec>
 
 <trait-decl> @namespace("type") @scope("trait", $2) @type($2) @exposes ::= <member-visibility>? %"trait" %IDENTIFIER <where-clause>? <trait-body>
 
-<trait-body> ::= <block-start> <trait-spec-list> <block-end>
-<trait-spec-list> ::= (<trait-spec> (<eos>+ <trait-spec>)*)?
+<trait-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <trait-spec-list> <block-end>
+<trait-spec-list> @hardline ::= (<trait-spec> (<eos>+ <trait-spec>)*)?
 
 <trait-spec> @declares($1, "function") @scope("trait") @nospace($2) ::=
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
@@ -889,27 +921,28 @@
 <trait-check> ::= <trait-check-and> (<or-op> <trait-check-and>)*
 <trait-check-and> ::= <trait-check-unary> (<and-op> <trait-check-unary>)*
 <trait-check-unary> ::= <trait-check-term>
-<trait-check-unary> ::= <not-op> <trait-check-unary>
-<trait-check-unary> ::= %"(" <trait-check> %")"
-<trait-check-term> @nospace ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
+<trait-check-unary> @nospace ::= <not-op> <trait-check-unary>
+<trait-check-unary> ::= <not-word-op> <trait-check-unary>
+<trait-check-unary> @nospace($1) @nospace($2) ::= %"(" <trait-check> %")"
+<trait-check-term> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::= <effect-query-word> %"(" %IDENTIFIER %"," <effect-query-name> %")"
 
-<effect-decl> ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
+<effect-decl> @hardline($3) @indent($3) @hardline($4) ::= %"effect" <effect-query-name> <block-start> <effect-clause-list> <block-end>
 <effect-clause-list> @hardline ::= <effect-clause> (<eos>+ <effect-clause>)*
 <effect-clause> ::= <effect-source> | <effect-handler> | <effect-scope>
-<effect-source> ::= %"from" %":" <effect-source-item> (%"," <effect-source-item>)*
+<effect-source> @nospace($1) ::= %"from" %":" <effect-source-item> (%"," <effect-source-item>)*
 <effect-source-item> ::= <expression>
-<effect-handler> ::= %"handled_by" %":" <effect-handler-item> (%"," <effect-handler-item>)*
+<effect-handler> @nospace($1) ::= %"handled_by" %":" <effect-handler-item> (%"," <effect-handler-item>)*
 <effect-handler-item> ::= <expression>
-<effect-scope> ::= %"scope" %":" <effect-scope-value>
+<effect-scope> @nospace($1) ::= %"scope" %":" <effect-scope-value>
 <effect-scope-value> ::= %IDENTIFIER | %"package"
 
-<mark-decl> ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
+<mark-decl> @hardline($3) @indent($3) @hardline($4) ::= %"mark" <effect-query-name> <block-start> <mark-clause-list> <block-end>
 <mark-clause-list> @hardline ::= <mark-clause> (<eos>+ <mark-clause>)*
 <mark-clause> ::= <effect-source> | <mark-clearer> | <mark-rejecter>
-<mark-clearer> ::= %"cleared_by" %":" <mark-clearer-item> (%"," <mark-clearer-item>)*
-<mark-clearer-item> ::= <effect-query-name> %"(" %IDENTIFIER %")"
-<mark-rejecter> ::= %"rejected_by" %":" <mark-rejecter-item> (%"," <mark-rejecter-item>)*
-<mark-rejecter-item> ::= <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-clearer> @nospace($1) ::= %"cleared_by" %":" <mark-clearer-item> (%"," <mark-clearer-item>)*
+<mark-clearer-item> @nospace ::= <effect-query-name> %"(" %IDENTIFIER %")"
+<mark-rejecter> @nospace($1) ::= %"rejected_by" %":" <mark-rejecter-item> (%"," <mark-rejecter-item>)*
+<mark-rejecter-item> @nospace ::= <effect-query-name> %"(" %IDENTIFIER %")"
 <mark-annotation> ::= <mark-carries> | <mark-rejects>
 <mark-carries> ::= %"carries" <effect-query-name>
 <mark-rejects> ::= %"rejects" <effect-query-name>
@@ -924,22 +957,23 @@
 <trait-param-decl> @group @nospace($0) @nospace($1) @nospace($2) ::=
     %"(" <trait-obj-tref> %")"
 
-<trait-obj-tref> @declares($1, "param") @direction($1, "in") @pass_by("in") ::= %"in" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "view") @pass_by("view") ::= %"view" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "out") @pass_by("out") ::= %"out" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "modify") @pass_by("inout") ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
-<trait-obj-tref> @declares($1, "param") @direction($1, "consume") @pass_by("consume") ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "in") @pass_by("in") @nospace($2) ::= %"in" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "view") @pass_by("view") @nospace($2) ::= %"view" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "out") @pass_by("out") @nospace($2) ::= %"out" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "modify") @pass_by("inout") @nospace($2) ::= %"modify" %IDENTIFIER %":" <tspec-tvar>
+<trait-obj-tref> @declares($1, "param") @direction($1, "consume") @pass_by("consume") @nospace($2) ::= %"consume" %IDENTIFIER %":" <tspec-tvar>
 <trait-obj-tref> @declares($0, "param") @direction($0, "in") @pass_by("in") @nospace($1) ::= %IDENTIFIER %":" <tspec-tvar>
 
 <callback-decl> @namespace("type") @scope("callback", $2) @type($2) @exposes ::=
        <member-visibility>? %"callback" %IDENTIFIER <callback-body>
 
-<callback-body> ::= <block-start> <callback-role-list> <block-end>
-<callback-role-list> ::= <callback-role> (<eos>+ <callback-role>)*
+<callback-body> @hardline($1) @indent($1) @hardline($2) ::=
+       <block-start> <callback-role-list> <block-end>
+<callback-role-list> @hardline ::= <callback-role> (<eos>+ <callback-role>)*
 
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"call" <func-type-signature>
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"handler" <func-type-signature>
-<callback-role> @declares($0, "function") @scope("callback-role") ::=
+<callback-role> @declares($0, "function") @scope("callback-role") @nospace($1) ::=
        %"setup" <func-type-signature>

@@ -1,0 +1,17 @@
+// Type arguments on a type that takes none are an error, not dropped.
+var a: int[string] = 5
+var s: string[int, bool] = "x"
+var y: Any[string] = 1
+record Plain {
+    x: int
+}
+var p: Plain[int] = (x = 1)
+// A generic type applied before its declaration still takes its arguments.
+func open(b: Late[int]) -> int {
+    return b.v
+}
+record Late {
+    v: 'T
+}
+require open((v = 2)) == 2
+require a == 5 and s == "x" and p.x == 1 and y != nil

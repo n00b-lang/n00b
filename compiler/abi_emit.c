@@ -1,4 +1,5 @@
 #include "abi_emit.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -61,51 +62,6 @@ typedef struct {
 } abi_frame_info_t;
 
 static bool
-adopt_owned_layout(ir_module_t *runtime, th_type *type, core_string_t triple)
-{
-    if (ir_layout_final(runtime, type, triple)) return true;
-    ir_module_t *owner = ir_type_definition_owner(runtime, type);
-    const ir_final_layout_t *layout = owner && owner != runtime
-        ? ir_layout_final(owner, type, triple) : nullptr;
-    return !layout || ir_layout_publish_final(runtime, type, triple, layout);
-}
-
-static bool
-adopt_component_layouts(ir_module_t *runtime, th_type *type,
-                        core_string_t triple)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type) return false;
-    switch (th_kind_of(type)) {
-    case TH_NAMED:
-        for (size_t i = 0; i < th_named_nargs(type); i++) {
-            const th_arg *argument = th_named_arg(type, i);
-            if (argument && argument->kind == TH_ARG_TYPE
-                && !adopt_component_layouts(runtime, argument->type, triple))
-                return false;
-        }
-        return adopt_owned_layout(runtime, type, triple);
-    case TH_SEQUENCE:
-        return adopt_component_layouts(runtime, th_seq_elem(type), triple);
-    case TH_RECORD:
-        for (size_t i = 0; i < th_record_len(type); i++) {
-            const th_member *member = th_record_member(type, i);
-            if (!member
-                || !adopt_component_layouts(runtime, member->type, triple))
-                return false;
-        }
-        return true;
-    case TH_SUM:
-        for (size_t i = 0; i < th_sum_len(type); i++)
-            if (!adopt_component_layouts(runtime, th_sum_arm(type, i),
-                                         triple)) return false;
-        return true;
-    default:
-        return true;
-    }
-}
-
-static bool
 collect_frame_payload_types(core_translation_unit_t *unit,
                             n00bb_abi_type_index_t *index,
                             ir_module_t *runtime,
@@ -133,8 +89,6 @@ collect_frame_payload_types(core_translation_unit_t *unit,
             const th_member *member = th_record_member(payload, j);
             bool handled = false;
             valid = member
-                && adopt_component_layouts(runtime, member->type,
-                                           target->triple)
                 && n00bb_abi_publish_direct_layout(runtime, member->type,
                                                    target, &handled);
             valid = valid && ir_layout_final(runtime, member->type,
@@ -428,11 +382,20 @@ intern_summary_name(void *context, core_string_t text)
     return (uint32_t)names->names.len;
 }
 
+static bool abi_function_summaries = true;
+
+void
+n00bb_abi_emit_function_summaries(bool keep)
+{
+    abi_function_summaries = keep;
+}
+
 static bool
 append_function_summaries(n00bb_abi_function_rows_t *functions,
                           ir_module_t *runtime, abi_summary_rows_t *rows)
 {
-    ir_summaries_t *summaries = ir_analysis_summaries();
+    ir_summaries_t *summaries = abi_function_summaries
+        ? ir_analysis_summaries() : nullptr;
     core_dict_init_string(&rows->string_rows);
     rows->keys = core_list_new(summary_key_t);
     rows->strings = core_alloc_array(n00b_abi_static_string_v1, 1);
@@ -950,6 +913,7 @@ n00bb_abi_index_table_release(n00bb_abi_index_table_t *table)
     if (!table) return;
     core_free(table->symbol.data);
     core_free(table->type_hashes);
+    core_free(table->types);
     core_free(table->functions);
     *table = (n00bb_abi_index_table_t){0};
 }
@@ -977,6 +941,7 @@ append_index_entry(n00bb_abi_storage_rows_t *storage, uint32_t table,
 
 static bool
 append_index_table(n00bb_abi_storage_rows_t *storage,
+                   const n00bb_abi_type_index_t *type_index,
                    const n00bb_abi_type_identity_rows_t *types,
                    const n00bb_abi_function_rows_t *functions,
                    uint64_t *offset, n00bb_abi_index_table_t *out)
@@ -989,12 +954,14 @@ append_index_table(n00bb_abi_storage_rows_t *storage,
     size_t function_count = functions->function_count
         ? functions->function_count - 1 : 0;
     out->type_hashes = core_alloc_array(uint64_t, type_count + 1);
+    out->types = core_alloc_array(th_type *, type_count + 1);
     out->functions = core_alloc_array(ir_func_t *, function_count + 1);
     out->type_count = type_count;
     out->function_count = function_count;
-    bool valid = out->type_hashes && out->functions;
+    bool valid = out->type_hashes && out->types && out->functions;
     for (size_t i = 1; valid && i <= type_count; i++) {
         out->type_hashes[i - 1] = types->rows[i].typehash;
+        out->types[i - 1] = n00bb_abi_type_index_at(type_index, (uint32_t)i);
         valid = append_index_entry(storage, N00B_ABI_TABLE_TYPE, (uint32_t)i);
     }
     for (size_t i = 1; valid && i <= function_count; i++) {
@@ -1158,29 +1125,92 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
 }
 
 static bool
+publish_direct_layout_or_report(core_translation_unit_t *unit,
+                                ir_module_t *module, th_type *type,
+                                const core_target_desc_t *target)
+{
+    bool handled = false;
+    if (type && n00bb_abi_publish_direct_layout(module, type, target,
+                                                &handled)) return true;
+    core_string_t printed = type
+        ? th_print(ir_module_types(module), type)
+        : CORE_STRING_STATIC("<missing type>");
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "could not publish ABI layout for %.*s",
+                       (int)printed.u8_bytes, printed.data);
+    bool result = abi_unit_error(unit, core_buffer_string(&message));
+    core_buffer_release(&message);
+    return result;
+}
+
+static bool
 publish_catalog_direct_layouts(core_translation_unit_t *unit,
                                n00bb_abi_type_index_t *index,
                                ir_module_t *module,
                                const core_target_desc_t *target)
 {
-    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
-        th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        bool handled = false;
-        if (!type || !n00bb_abi_publish_direct_layout(module, type,
-                target, &handled)) {
-            core_string_t printed = type
-                ? th_print(ir_module_types(module), type)
-                : CORE_STRING_STATIC("<missing type>");
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "could not publish ABI layout for %.*s",
-                (int)printed.u8_bytes, printed.data);
-            bool result = abi_unit_error(unit, core_buffer_string(&message));
-            core_buffer_release(&message);
-            return result;
-        }
-    }
+    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++)
+        if (!publish_direct_layout_or_report(unit, module,
+                n00bb_abi_type_index_at(index, (uint32_t)i), target))
+            return false;
     return true;
+}
+
+// Every closed type a row describes is laid out the way any module that
+// has a row for it lays it out.
+static bool
+layout_index_types(core_translation_unit_t *unit,
+                   n00bb_abi_type_index_t *index, ir_module_t *module,
+                   const core_target_desc_t *target,
+                   n00bb_abi_layout_fn layout, void *layout_context)
+{
+    th_ctx *types = ir_module_types(module);
+    size_t missing = SIZE_MAX, before;
+    // The types the direct layouts are published for once the module has
+    // laid out what it can: every one still missing a layout. (A type that
+    // has one was published already, and publishing it again would only
+    // check it.)
+    core_list_t(uint32_t) unpublished = core_list_new(uint32_t);
+    bool valid = true;
+    // A type's layout can wait on its components', in either direction
+    // (a record on its fields, a reference's on what it refers to).
+    do {
+        before = missing;
+        missing = 0;
+        unpublished.len = 0;
+        for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
+            th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+            if (!type) {
+                core_list_push(unpublished, (uint32_t)i);
+                continue;
+            }
+            // An open record can have a layout too, when every field's
+            // representation is the same whatever its variables are.
+            bool open = !th_is_closed(types, type)
+                && th_kind_of(th_resolve(type)) != TH_NAMED;
+            if (!open && ir_layout_final(module, type, target->triple))
+                continue;
+            core_list_push(unpublished, (uint32_t)i);
+            // The reserved type is published, not laid out.
+            if (open || !i) continue;
+            ir_type_intern(module, type);
+            missing++;
+        }
+        if (!missing) break;
+        valid = layout(layout_context, module);
+        for (size_t u = 0; valid && u < unpublished.len; u++) {
+            th_type *type = n00bb_abi_type_index_at(index,
+                                                    unpublished.data[u]);
+            bool open = type && !th_is_closed(types, type)
+                && th_kind_of(th_resolve(type)) != TH_NAMED;
+            if (type && !open
+                && ir_layout_final(module, type, target->triple)) continue;
+            valid = publish_direct_layout_or_report(unit, module, type,
+                                                    target);
+        }
+    } while (valid && missing < before);
+    core_list_free(unpublished);
+    return valid;
 }
 
 static bool
@@ -1238,17 +1268,6 @@ publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
                 }
                 const ir_final_layout_t *layout = ir_layout_final(module,
                     child, target->triple);
-                if (!layout) {
-                    ir_module_t *child_owner = ir_type_definition_owner(
-                        module, child);
-                    const ir_final_layout_t *shared = child_owner
-                        ? ir_layout_final(child_owner, child,
-                            target->triple) : nullptr;
-                    if (shared && ir_layout_publish_final(module, child,
-                            target->triple, shared))
-                        layout = ir_layout_final(module, child,
-                            target->triple);
-                }
                 if (!layout) { ready = false; break; }
                 if (variant)
                     arms[j] = (n00bb_abi_variant_arm_t){
@@ -1420,8 +1439,7 @@ imported_module_symbol(const core_link_reference_t *reference,
     if (!reference || core_link_reference_referrer(reference) != unit
         || !target || core_link_declaration_owner(target) == unit)
         return true;
-    if (core_string_eq(core_link_declaration_module(target),
-            CORE_STRING_STATIC("builtins")))
+    if (n00bb_compiler_package(core_link_declaration_module(target)))
         return true;
     uint32_t kind = core_link_declaration_kind(target);
     if (kind != PARSE_SYM_FUNCTION && kind != PARSE_SYM_VARIABLE
@@ -1502,9 +1520,7 @@ collect_environment_traits(ir_module_t *module,
         if (declaration.kind == TH_ENV_DECLARATION_TRAIT
             && declaration.contract
             && th_kind_of(th_resolve(declaration.contract)) == TH_TRAIT
-            && declaration.module.data
-            && core_string_eq(declaration.module,
-                              CORE_STRING_STATIC("builtins"))
+            && n00bb_compiler_package(declaration.package)
             && !n00bb_abi_type_index_add(index, declaration.contract,
                                          nullptr))
             return false;
@@ -1819,6 +1835,22 @@ abi_stream_advance(size_t *offset, size_t count)
     return true;
 }
 
+// A TU emitted again (its baked values written in after its compile-time
+// run) keeps its earlier index table's types at their places: the code
+// already compiled for it reads each type's runtime index from its slot.
+static bool
+keep_earlier_type_order(n00bb_abi_type_index_t *index,
+                        const n00bb_abi_index_table_t *earlier)
+{
+    for (size_t i = 0; earlier && earlier->types && i < earlier->type_count;
+         i++) {
+        uint32_t at = 0;
+        if (!n00bb_abi_type_index_add_alone(index, earlier->types[i], &at)
+            || at != i + 1) return false;
+    }
+    return true;
+}
+
 bool
 n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
@@ -1830,6 +1862,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     const n00bb_abi_graph_source_t *graphs,
+    n00bb_abi_layout_fn layout, void *layout_context,
     n00bb_abi_packed_tables_t *out_tables,
     n00bb_abi_index_table_t *out_index_table,
     uint8_t **out_object, size_t *out_object_bytes)
@@ -2035,6 +2068,8 @@ n00bb_abi_emit_unit(
 #define ABI_STAGE_TEXT(name, call) ((call) || ((failed_stage = (name)), false))
 #define ABI_STAGE(lit, call) ABI_STAGE_TEXT(CORE_STRING_STATIC(lit), call)
     bool valid = pool && type_index && requirement_capacity_valid
+        && ABI_STAGE("earlier index table",
+            keep_earlier_type_order(type_index, out_index_table))
         && ABI_STAGE("module type collection",
             n00bb_abi_type_index_collect_module_types(type_index,
                 (ir_module_t *)runtime_ir))
@@ -2056,10 +2091,15 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("direct type layouts",
             publish_catalog_direct_layouts(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
-        && ABI_STAGE("imported record specialization layouts",
-            publish_catalog_record_specializations(type_index,
-                (ir_module_t *)runtime_ir, target, type_owner,
-                type_owner_context))
+        && (layout
+            ? ABI_STAGE("type layouts",
+                layout_index_types(unit, type_index,
+                    (ir_module_t *)runtime_ir, target, layout,
+                    layout_context))
+            : ABI_STAGE("imported record specialization layouts",
+                publish_catalog_record_specializations(type_index,
+                    (ir_module_t *)runtime_ir, target, type_owner,
+                    type_owner_context)))
         && ABI_STAGE("frame payload type collection",
             collect_frame_payload_types(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
@@ -2067,9 +2107,14 @@ n00bb_abi_emit_unit(
             !graphs || n00bb_abi_graph_types_collect(type_index,
                 declarations, (ir_module_t *)runtime_ir, lookup,
                 lookup_context, graphs))
+        && (!layout || ABI_STAGE("collected type layouts",
+            layout_index_types(unit, type_index,
+                (ir_module_t *)runtime_ir, target, layout,
+                layout_context)))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
-                (ir_module_t *)runtime_ir, false, symbols, type_owner, type_owner_context, pool,
+                (ir_module_t *)runtime_ir, symbols, type_owner,
+                type_owner_context, pool,
                 &type_rows))
         && ABI_STAGE("imported function requirements",
             append_imported_symbol_requirements(link, unit, type_index,
@@ -2093,7 +2138,7 @@ n00bb_abi_emit_unit(
             abi_stream_advance(&stream_base, components.count))
         && ABI_STAGE("type layouts",
             n00bb_abi_type_layout_rows_build(type_index,
-                (ir_module_t *)runtime_ir, false, (uint32_t)stream_base,
+                (ir_module_t *)runtime_ir, (uint32_t)stream_base,
                 declarations, pool, &type_rows, &layout_rows,
                 &failed_layout_type))
         && ABI_STAGE("layout stream indexes",
@@ -2184,7 +2229,8 @@ n00bb_abi_emit_unit(
         index_table.symbol = index_table_symbol(unit->module.identifier,
                                                 target->object_format);
         valid = index_table.symbol.data && append_index_table(&storage_rows,
-            &type_rows, &function_rows, &index_table_offset, &index_table);
+            type_index, &type_rows, &function_rows, &index_table_offset,
+            &index_table);
     }
     if (valid) {
         failed_stage = CORE_STRING_STATIC("trait method membership");

@@ -1,0 +1,18 @@
+tests/diagnostics/tu/where_trait_shorthand.n:7:5: warning N00B-N0021: field `v` of `Box` is set but never read
+tests/diagnostics/tu/where_trait_shorthand.n:9:8: warning N00B-N0023: type `Two` is never used
+  help: remove it
+tests/diagnostics/tu/where_trait_shorthand.n:13:8: warning N00B-N0023: type `Keyed` is never used
+  help: remove it
+tests/diagnostics/tu/where_trait_shorthand.n:18:9: warning N00B-N0023: type `Num` is never used
+  help: remove it
+tests/diagnostics/tu/where_trait_shorthand.n:23:18: error N00B-T0021: `string` does not implement `Integer`, which `Box` requires
+  help: give `Box` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_trait_shorthand.n:24:19: error N00B-T0021: `string` does not implement `Integer`, which `Two` requires
+  help: give `Two` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_trait_shorthand.n:25:20: error N00B-T0021: `string` does not implement `Integer`, which `Keyed` requires
+  help: give `Keyed` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_trait_shorthand.n:26:21: error N00B-T0021: `string` does not implement `Integer`, which `Num` requires
+  help: give `Num` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_trait_shorthand.n:27:20: error N00B-T0021: `string` does not implement `Integer`, which `Ints` requires
+  help: give `Ints` a type that implements `Integer`, or implement `Integer` for this one
+tests/diagnostics/tu/where_trait_shorthand.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 2 (`--stop-on-error=all` shows every one)

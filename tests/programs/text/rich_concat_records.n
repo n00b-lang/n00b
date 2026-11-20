@@ -1,0 +1,415 @@
+// A compile-time regression. Each add function builds strings with `+`
+// and stores records holding them in lists of one shared parameter, and
+// `block` calls all of them. Since `+` keeps rich strings' spans, a string
+// it makes points into the strings it was made from. Summaries once named
+// such a fresh string, and what it was filled in with, by the parameter
+// place it was put in, so callers took every string already there to be
+// written to, and the points-to solve of `block` grew far faster than the
+// number of add functions.
+
+record Entry {
+    open:  string
+    close: string
+    note:  string?
+}
+
+record Book {
+    list0:  List[Entry]
+    list1:  List[Entry]
+    list2:  List[Entry]
+    list3:  List[Entry]
+    list4:  List[Entry]
+    list5:  List[Entry]
+    list6:  List[Entry]
+    list7:  List[Entry]
+    list8:  List[Entry]
+    list9:  List[Entry]
+    list10: List[Entry]
+    list11: List[Entry]
+    list12: List[Entry]
+    list13: List[Entry]
+    list14: List[Entry]
+    list15: List[Entry]
+    list16: List[Entry]
+    list17: List[Entry]
+    list18: List[Entry]
+    list19: List[Entry]
+    list20: List[Entry]
+    list21: List[Entry]
+    list22: List[Entry]
+    list23: List[Entry]
+    diags:  List[string]
+    names:  List[string]
+}
+
+func report(b: Book, code: string, message: string) {
+    b.diags.append("lex/" + code + ": " + message)
+}
+
+func add0(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad0", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list0.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add1(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad1", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list1.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add2(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad2", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list2.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add3(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad3", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list3.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add4(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad4", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list4.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add5(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad5", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list5.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add6(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad6", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list6.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add7(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad7", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list7.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add8(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad8", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list8.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add9(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad9", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list9.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add10(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad10", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list10.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add11(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad11", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list11.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add12(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad12", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list12.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add13(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad13", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list13.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add14(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad14", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list14.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add15(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad15", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list15.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add16(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad16", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list16.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add17(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad17", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list17.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add18(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad18", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list18.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add19(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad19", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list19.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add20(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad20", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list20.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add21(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad21", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list21.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add22(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad22", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list22.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func add23(b: Book, words: List[string], note: string?) {
+    if words.len() < 2 {
+        report(b, "bad23", "needs two words, got " + note.get_or_else("none"))
+        return
+    }
+    b.list23.append((open = words[0] + "<", close = ">" + words[1],
+                     note = note))
+    b.names.append(words[0] + words[1])
+}
+
+func block(b: Book, kind: string, forms: List[List[string]]) {
+    for words in forms {
+        var note: string? = nil
+        if words.len() > 2 {
+            note = words[2] + "!"
+        }
+        if kind == "none" {
+            report(b, "none", "no kind")
+        }
+        elif kind == "k0" {
+            add0(b, words, note)
+        }
+        elif kind == "k1" {
+            add1(b, words, note)
+        }
+        elif kind == "k2" {
+            add2(b, words, note)
+        }
+        elif kind == "k3" {
+            add3(b, words, note)
+        }
+        elif kind == "k4" {
+            add4(b, words, note)
+        }
+        elif kind == "k5" {
+            add5(b, words, note)
+        }
+        elif kind == "k6" {
+            add6(b, words, note)
+        }
+        elif kind == "k7" {
+            add7(b, words, note)
+        }
+        elif kind == "k8" {
+            add8(b, words, note)
+        }
+        elif kind == "k9" {
+            add9(b, words, note)
+        }
+        elif kind == "k10" {
+            add10(b, words, note)
+        }
+        elif kind == "k11" {
+            add11(b, words, note)
+        }
+        elif kind == "k12" {
+            add12(b, words, note)
+        }
+        elif kind == "k13" {
+            add13(b, words, note)
+        }
+        elif kind == "k14" {
+            add14(b, words, note)
+        }
+        elif kind == "k15" {
+            add15(b, words, note)
+        }
+        elif kind == "k16" {
+            add16(b, words, note)
+        }
+        elif kind == "k17" {
+            add17(b, words, note)
+        }
+        elif kind == "k18" {
+            add18(b, words, note)
+        }
+        elif kind == "k19" {
+            add19(b, words, note)
+        }
+        elif kind == "k20" {
+            add20(b, words, note)
+        }
+        elif kind == "k21" {
+            add21(b, words, note)
+        }
+        elif kind == "k22" {
+            add22(b, words, note)
+        }
+        elif kind == "k23" {
+            add23(b, words, note)
+        }
+    }
+    report(b, "done", kind + " finished")
+}
+
+func new_book() -> Book {
+    return (
+        list0 = new[List[Entry]](),
+        list1 = new[List[Entry]](),
+        list2 = new[List[Entry]](),
+        list3 = new[List[Entry]](),
+        list4 = new[List[Entry]](),
+        list5 = new[List[Entry]](),
+        list6 = new[List[Entry]](),
+        list7 = new[List[Entry]](),
+        list8 = new[List[Entry]](),
+        list9 = new[List[Entry]](),
+        list10 = new[List[Entry]](),
+        list11 = new[List[Entry]](),
+        list12 = new[List[Entry]](),
+        list13 = new[List[Entry]](),
+        list14 = new[List[Entry]](),
+        list15 = new[List[Entry]](),
+        list16 = new[List[Entry]](),
+        list17 = new[List[Entry]](),
+        list18 = new[List[Entry]](),
+        list19 = new[List[Entry]](),
+        list20 = new[List[Entry]](),
+        list21 = new[List[Entry]](),
+        list22 = new[List[Entry]](),
+        list23 = new[List[Entry]](),
+        diags = new[List[string]](), names = new[List[string]]())
+}
+
+var b:     Book               = new_book()
+var forms: List[List[string]] = [["a", "b"], ["c", "d", "e"]]
+block(b, "k1", forms)
+block(b, "k7", forms)
+if b.names.len() == 4 and b.list1.len() == 2 and b.list7.len() == 2
+    and b.diags.len() == 2 and b.list1[0].open == "a<"
+    and b.list7[1].close == ">d" and b.list7[1].note.get_or_else("") == "e!"
+    and b.diags[1] == "lex/done: k7 finished" {
+    __fd_write(2, "ok")
+}
+else {
+    __fd_write(2, "wrong result")
+}

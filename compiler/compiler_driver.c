@@ -202,6 +202,10 @@ typedef struct {
     n00bb_preprocessor_t *preprocessor;
     th_ctx *types;
     const n00bb_module_generators_t *generators;
+    // The modules from the cache, whose kept warnings' inputs are checked
+    // once loading is over.
+    core_list_t(core_translation_unit_ptr_t) cached_units;
+    pthread_mutex_t cached_units_lock;
 } import_driver_t;
 
 typedef core_module_spec_t n00bb_module_candidate_t;
@@ -311,10 +315,131 @@ add_locate_request(core_work_queue_t *queue,
 static size_t printed_errors;
 static size_t printed_warnings;
 
+typedef struct {
+    core_string_t path;
+    int64_t       errors;
+    size_t        omitted_errors;
+    size_t        omitted_other;
+} file_error_count_t;
+core_list_decl(file_error_count_t);
+
+static bool
+renders(const core_diagnostic_t *item, n00bb_diagnostic_filter_t *filter,
+        core_diag_render_t options)
+{
+    if (filter && !n00bb_diagnostic_visible(filter, item)) return false;
+    if (item->severity == CORE_DIAG_INFO && !options.hints) return false;
+    return !options.errors_only || item->severity == CORE_DIAG_ERROR
+        || item->severity == CORE_DIAG_INTERNAL;
+}
+
+// Each file's diagnostics, in the order they print, up to its error limit
+// (`--stop-on-error`): once a file has shown that many errors its later
+// diagnostics are dropped. Returns the diagnostics kept, or null when the
+// limit drops nothing; `summary` then gets, for each file that lost any,
+// a note saying how many errors it lost. An internal error is never
+// dropped, and a diagnostic of no file has no limit.
+static core_diagnostics_t *
+limit_file_errors(const core_diagnostics_t *diagnostics,
+                  n00bb_diagnostic_filter_t *filter,
+                  core_diagnostics_t *summary)
+{
+    int64_t limit = n00bb_setting_int(N00BB_KEY_DIAGNOSTICS_STOP_ON_ERROR);
+    size_t count = core_diagnostics_count(diagnostics);
+    if (limit <= 0 || !count) return nullptr;
+    size_t *order = core_diagnostics_render_order(diagnostics, true);
+    bool *kept = core_alloc_array(bool, count);
+    size_t *anchor = core_alloc_array(size_t, count);
+    if (!order || !kept || !anchor) {
+        core_free(order);
+        core_free(kept);
+        core_free(anchor);
+        return nullptr;
+    }
+    for (size_t i = 0; i < count; i++) {
+        core_diag_severity_t severity =
+            core_diagnostics_at(diagnostics, i)->severity;
+        anchor[i] = i && (severity == CORE_DIAG_NOTE
+                          || severity == CORE_DIAG_HELP)
+            ? anchor[i - 1] : i;
+    }
+    core_diag_render_t options = n00bb_diag_render_options();
+    core_list_t(file_error_count_t) files =
+        core_list_new(file_error_count_t);
+    bool dropped = false;
+    for (size_t k = 0; k < count; k++) {
+        size_t i = order[k];
+        const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
+        kept[i] = true;
+        // A note or help prints after the diagnostic it belongs to, and
+        // goes with it.
+        if (anchor[i] != i) {
+            kept[i] = kept[anchor[i]];
+            continue;
+        }
+        if (!item->path.u8_bytes || item->severity == CORE_DIAG_INTERNAL
+            || !renders(item, filter, options))
+            continue;
+        file_error_count_t *file = nullptr;
+        for (size_t f = 0; !file && f < files.len; f++)
+            if (core_string_eq(files.data[f].path, item->path))
+                file = &files.data[f];
+        if (!file) {
+            core_list_push(files, ((file_error_count_t){.path = item->path}));
+            file = &files.data[files.len - 1];
+        }
+        bool error = item->severity == CORE_DIAG_ERROR
+            || item->severity == CORE_DIAG_FATAL;
+        if (file->errors < limit) {
+            if (error) file->errors++;
+            continue;
+        }
+        kept[i] = false;
+        dropped = true;
+        if (error) file->omitted_errors++;
+        else file->omitted_other++;
+    }
+    core_diagnostics_t *limited = nullptr;
+    if (dropped) {
+        limited = core_diagnostics_new();
+        for (size_t i = 0; i < count; i++)
+            if (kept[i])
+                core_diagnostics_append(limited,
+                                        core_diagnostics_at(diagnostics, i));
+        if (filter)
+            core_diagnostics_set_filter(limited, n00bb_diagnostic_visible,
+                                        filter);
+    }
+    for (size_t f = 0; f < files.len; f++) {
+        const file_error_count_t *file = &files.data[f];
+        if (!file->omitted_errors && !file->omitted_other) continue;
+        if (file->omitted_errors)
+            n00bb_report(summary, nullptr, N00B_DIAG_ERROR_LIMIT_REACHED,
+                (core_diag_location_t){}, N00B_TEXT_ERRORS_NOT_SHOWN_AFTER_LIMIT,
+                N00BB_ARGS(ARG_NUMBER((long long)file->omitted_errors),
+                           ARG_NUMBER((long long)limit)));
+        else
+            n00bb_report(summary, nullptr, N00B_DIAG_ERROR_LIMIT_REACHED,
+                (core_diag_location_t){},
+                N00B_TEXT_DIAGNOSTICS_NOT_SHOWN_AFTER_LIMIT,
+                N00BB_ARGS(ARG_NUMBER((long long)limit)));
+        core_diagnostic_set_path(summary, core_diagnostics_count(summary) - 1,
+                                 file->path);
+    }
+    core_list_free(files);
+    core_free(order);
+    core_free(kept);
+    core_free(anchor);
+    return limited;
+}
+
 static void
-print_counted_diagnostics(const core_diagnostics_t *diagnostics,
+print_counted_diagnostics(const core_diagnostics_t *all,
                           n00bb_diagnostic_filter_t *filter)
 {
+    core_diagnostics_t *summary = core_diagnostics_new();
+    core_diagnostics_t *limited = limit_file_errors(all, filter, summary);
+    const core_diagnostics_t *diagnostics = limited ? limited : all;
     for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         if (filter && !n00bb_diagnostic_visible(filter, item)) continue;
@@ -324,7 +449,23 @@ print_counted_diagnostics(const core_diagnostics_t *diagnostics,
                  || item->severity == CORE_DIAG_INTERNAL)
             printed_errors++;
     }
-    n00bb_print_diagnostics(diagnostics);
+    core_diag_render_t options = n00bb_diag_render_options();
+    core_string_t printed = core_diagnostics_render(diagnostics, options);
+    if (printed.data) fwrite(printed.data, 1, printed.u8_bytes, stderr);
+    // The notes on files that reached the limit print last, and print even
+    // where hints are off: nothing is dropped without a word.
+    if (core_diagnostics_count(summary)) {
+        bool separate = !options.terse && printed.u8_bytes;
+        options.hints = true;
+        options.errors_only = false;
+        core_string_t text = core_diagnostics_render(summary, options);
+        if (separate) fputc('\n', stderr);
+        if (text.data) fwrite(text.data, 1, text.u8_bytes, stderr);
+        core_free(text.data);
+    }
+    core_free(printed.data);
+    core_diagnostics_free(summary);
+    core_diagnostics_free(limited);
 }
 
 static void
@@ -1070,6 +1211,58 @@ make_interface_module_source(locate_worker_context_t *context,
     return true;
 }
 
+// The standard library cannot be shadowed: a module path it provides, as a
+// module file or a declared package, must come from nowhere else. A clash
+// is reported at the user's import that finds it (`at` in `unit`), or, when
+// only the library reaches it, once loading is over, with no location.
+static void
+report_shadow(core_diagnostics_t *diagnostics, core_translation_unit_t *unit,
+              core_diag_location_t at, const n00bb_stdlib_shadow_t *cause)
+{
+    if (cause->warning)
+        n00bb_report(diagnostics, unit, N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB,
+            at, N00B_TEXT_NAME_LOADS_THE_STANDARD_LIBRARY,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_MODULE_SHADOWS_STDLIB, at,
+            N00B_TEXT_STANDARD_LIBRARY_MODULE_IS_SHADOWED,
+            N00BB_ARGS(ARG_TEXT(cause->name)));
+    n00bb_report_note(diagnostics, N00B_TEXT_SHADOWED_STANDARD_LIBRARY_FILES,
+        N00BB_ARGS(ARG_TEXT(cause->name), ARG_TEXT(cause->stdlib),
+                   ARG_TEXT(cause->shadow)));
+    n00bb_report_help(diagnostics, cause->warning
+            ? N00B_TEXT_RENAME_TO_IMPORT_IT
+            : N00B_TEXT_THE_STANDARD_LIBRARY_CANNOT_BE,
+        N00BB_ARGS(ARG_TEXT(cause->shadow)));
+}
+
+// A library module file fails to load while another root holds a file with
+// its module path, however it was reached: by an import, as a package's
+// manifest, as a runtime module, or named on the command line.
+static bool
+stdlib_file_shadowed(n00bb_resolver_t *resolver,
+                     core_translation_unit_t *unit)
+{
+    core_string_t shadow = {0};
+    if (!n00bb_resolver_unit_in_stdlib(resolver, unit)
+        || !n00bb_resolver_shadowing_source(resolver,
+               unit->module.identifier, &shadow))
+        return false;
+    // It fails quietly; the clash is reported once loading is over.
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_stdlib_shadow_t *cause = n00bb_resolver_note_shadow(resolver,
+        unit->module.identifier, shadow,
+        core_source_file_path(&unit->source), false, !state);
+    if (state) {
+        state->stdlib_shadow = cause;
+        state->import_failure_reported = true;
+    }
+    else report_shadow(core_translation_unit_diagnostics(unit), unit,
+                       (core_diag_location_t){}, cause);
+    core_free(shadow.data);
+    return true;
+}
+
 static bool
 process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
 {
@@ -1213,6 +1406,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
         }
     }
     (void)root_input;
+    if (ok && stdlib_file_shadowed(context->resolver, unit)) ok = false;
     if (!core_work_complete_tu(context->queue, job, unit, ok)) return false;
     return core_work_job_state(context->queue, job) == CORE_WORK_SUCCEEDED;
 }
@@ -1423,6 +1617,20 @@ claim_manifest(import_driver_t *driver, core_work_job_t *job)
     pthread_mutex_unlock(driver->requests_lock);
 }
 
+// `importer` fails because `failed` did, which was reported already. A
+// shadowed library module behind it is carried along, so that a missing
+// parent manifest is not reported as well (parent_manifest_declared).
+static void
+carry_import_failure(core_translation_unit_t *importer,
+                     core_translation_unit_t *failed)
+{
+    n00bb_tu_state_t *from = failed ? tu_state(failed) : nullptr;
+    n00bb_tu_state_t *to = importer ? tu_state(importer) : nullptr;
+    if (from && to && !to->stdlib_shadow)
+        to->stdlib_shadow = from->stdlib_shadow;
+    mark_import_failure_reported(importer);
+}
+
 static void
 claim_manifest_failure(import_driver_t *driver, core_work_job_t *job,
                        core_translation_unit_t *manifest,
@@ -1430,7 +1638,7 @@ claim_manifest_failure(import_driver_t *driver, core_work_job_t *job,
 {
     if (!failure_already_reported(manifest)) return;
     claim_manifest(driver, job);
-    mark_import_failure_reported(importer);
+    carry_import_failure(importer, manifest);
 }
 
 static bool
@@ -1764,6 +1972,89 @@ direct_subpackage_count(const core_buffer_t *names, core_string_t parent)
 static bool collect_package_declarations(import_driver_t *driver,
     core_string_t package_id, core_buffer_t *names, bool first_only);
 
+// How many direct subpackages package `name` has, 2 standing for more than
+// one, among the packages its package declares.
+static size_t
+package_subpackages(import_driver_t *driver, core_string_t package_id,
+                    core_string_t name)
+{
+    core_buffer_t names = {0};
+    size_t subpackages = collect_package_declarations(driver, package_id,
+                                                      &names, false)
+        ? direct_subpackage_count(&names, name) : 2;
+    core_buffer_release(&names);
+    return subpackages;
+}
+
+static void
+put_input_text(core_buffer_t *out, core_string_t text)
+{
+    uint8_t length[4];
+    for (int i = 0; i < 4; i++)
+        length[i] = (uint8_t)(text.u8_bytes >> (8 * i));
+    core_buffer_append(out, (const char *)length, 4);
+    if (text.u8_bytes) core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static void
+record_subpackages_input(core_buffer_t *inputs, core_string_t package_id,
+                         core_string_t name, size_t subpackages)
+{
+    put_input_text(inputs, package_id);
+    put_input_text(inputs, name);
+    core_buffer_putc(inputs, (char)(subpackages > 2 ? 2 : subpackages));
+}
+
+static bool
+read_input_text(const uint8_t *data, size_t size, size_t *at,
+                core_string_t *text)
+{
+    if (size - *at < 4) return false;
+    uint32_t length = read_u32_le(data + *at);
+    *at += 4;
+    if (length > size - *at) return false;
+    *text = core_string_borrow((const char *)data + *at, length);
+    *at += length;
+    return true;
+}
+
+// Whether what a cached module's kept warnings depend on beyond its key
+// still holds (see n00bb_cache_warning_inputs).
+static bool
+cached_warning_inputs_hold(import_driver_t *driver,
+                           core_translation_unit_t *unit)
+{
+    const uint8_t *data = nullptr;
+    size_t size = 0;
+    if (!n00bb_cache_warning_inputs(driver->loader->cache,
+                                    unit->module.identifier, &data, &size))
+        return true;
+    size_t at = 0;
+    while (at < size) {
+        core_string_t package_id = {0}, name = {0};
+        if (!read_input_text(data, size, &at, &package_id)
+            || !read_input_text(data, size, &at, &name) || at >= size)
+            return false;
+        size_t subpackages = data[at++];
+        size_t now = package_subpackages(driver, package_id, name);
+        if ((now > 2 ? 2 : now) != subpackages) return false;
+    }
+    return true;
+}
+
+// Each module from the cache whose kept warnings depend on something that
+// has changed is compiled again (the compile restarts excluding it).
+static void
+check_cached_warning_inputs(import_driver_t *driver)
+{
+    for (size_t i = 0; i < driver->cached_units.len; i++) {
+        core_translation_unit_t *unit = driver->cached_units.data[i];
+        if (!cached_warning_inputs_hold(driver, unit))
+            n00bb_cache_mark_stale((n00bb_cache_t *)driver->loader->cache,
+                                   unit->module.identifier);
+    }
+}
+
 static bool
 accept_package_exports(import_driver_t *driver,
                        core_translation_unit_t *importer,
@@ -1772,13 +2063,14 @@ accept_package_exports(import_driver_t *driver,
     n00bb_package_declaration_t *package = find_package_declaration(manifest,
                                                                     name);
     if (!package || package->exports.len) return true;
-    core_buffer_t names = {0};
-    size_t subpackages = collect_package_declarations(driver,
-            n00bb_package_id(manifest), &names, false)
-        ? direct_subpackage_count(&names, name) : 2;
-    core_buffer_release(&names);
+    size_t subpackages = package_subpackages(driver,
+                                             n00bb_package_id(manifest), name);
+    n00bb_tu_state_t *importer_state = tu_state(importer);
+    if (importer_state && !importer_state->interface_module)
+        record_subpackages_input(&importer_state->warning_inputs,
+            n00bb_package_id(manifest), name, subpackages);
     if (subpackages > 1
-        || (subpackages && n00bb_system_module(manifest->module.identifier)))
+        || (subpackages && n00bb_system_unit(manifest)))
         return true;
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(importer);
@@ -1793,6 +2085,98 @@ accept_package_exports(import_driver_t *driver,
         ? N00B_TEXT_IMPORT_SUBPACKAGE_DIRECTLY
         : N00B_TEXT_ADD_EXPORT_STATEMENTS, N00BB_ARGS(ARG_TEXT(name)));
     return subpackages != 0;
+}
+
+static void
+report_stdlib_shadow(import_driver_t *driver,
+                     core_translation_unit_t *importer,
+                     parse_tree_t *statement, core_string_t name,
+                     core_string_t shadow, core_string_t stdlib)
+{
+    // A user's import statement is reported here. An import inside the
+    // library, or an implicit one, is no place the user can fix: the
+    // importer fails quietly, and the clash is reported once loading is
+    // over.
+    bool here = statement && importer
+        && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer);
+    n00bb_stdlib_shadow_t *cause = n00bb_resolver_note_shadow(
+        driver->resolver, name, shadow, stdlib, false, here);
+    n00bb_tu_state_t *state = importer ? tu_state(importer) : nullptr;
+    if (state && !state->stdlib_shadow) state->stdlib_shadow = cause;
+    if (here)
+        report_shadow(core_translation_unit_diagnostics(importer), importer,
+                      import_location(statement), cause);
+    mark_import_failure_reported(importer);
+}
+
+// The standard library manifest that declares package `name`, if any.
+static bool
+stdlib_package_manifest(import_driver_t *driver, core_string_t name,
+                        core_string_t *path)
+{
+    n00bb_discovery_candidates_t candidates = {
+        .modules = core_list_new(n00bb_module_candidate_t),
+    };
+    bool found = false;
+    bool listed = n00bb_resolver_stdlib_manifests(driver->resolver, name,
+        collect_discovery_candidate, &candidates);
+    for (size_t i = 0; listed && !found && i < candidates.modules.len; i++) {
+        core_work_job_t *job = nullptr;
+        parse_tree_t *tree = nullptr;
+        core_translation_unit_t *unit = locate_manifest_candidate(driver,
+            &candidates.modules.data[i], &job, &tree, nullptr);
+        if (!job || !unit || !tree
+            || !n00bb_resolver_unit_in_stdlib(driver->resolver, unit))
+            continue;
+        found = tu_state(unit)->interface_module
+            ? interface_may_declare_package(&driver->loader->interfaces,
+                  unit->module.identifier, name)
+            : package_tree_may_declare(driver->grammar, tree, name);
+        if (found)
+            *path = core_string_dup(core_source_file_path(&unit->source));
+    }
+    for (size_t i = 0; i < candidates.modules.len; i++)
+        core_module_spec_release(&candidates.modules.data[i]);
+    core_list_free(candidates.modules);
+    return found;
+}
+
+// `direct` is the module file found for `name`. A file outside the library
+// must not take the name of a library package. (A library file with a
+// namesake elsewhere already failed when it was located.)
+//
+// Clashes are between packages: no system package is in the default
+// package, so a default-package module named like a library package is a
+// different module, never a clash. `library_name` is set when the library
+// declares `name`, which then names the library's package, not `direct`.
+static bool
+reject_stdlib_shadow(import_driver_t *driver,
+                     core_translation_unit_t *importer,
+                     parse_tree_t *statement, core_string_t name,
+                     core_translation_unit_t *direct, bool direct_named,
+                     bool *library_name)
+{
+    *library_name = false;
+    if (n00bb_resolver_unit_in_stdlib(driver->resolver, direct)) return false;
+    core_string_t stdlib = {0};
+    if (!stdlib_package_manifest(driver, name, &stdlib)) return false;
+    *library_name = true;
+    if (n00bb_default_package(direct)) {
+        // Not a clash, but the user's module is passed over: warn, once
+        // loading is over, when a user module imports the name, explicitly
+        // or implicitly. A file named on the command line is the program
+        // itself, built as asked.
+        if (!direct_named
+            && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer))
+            (void)n00bb_resolver_note_shadow(driver->resolver, name,
+                core_source_file_path(&direct->source), stdlib, true, false);
+        core_free(stdlib.data);
+        return false;
+    }
+    report_stdlib_shadow(driver, importer, statement, name,
+                         core_source_file_path(&direct->source), stdlib);
+    core_free(stdlib.data);
+    return true;
 }
 
 static core_work_job_t *
@@ -1811,11 +2195,21 @@ parent_manifest_declared(import_driver_t *driver,
     if (dot < 0) return true;
     core_string_t parent = core_string_borrow(name.data, (size_t)dot);
     core_module_spec_t spec = {0};
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(importer);
+    size_t before = core_diagnostics_count(diagnostics);
+    n00bb_tu_state_t *state = tu_state(importer);
+    bool shadowed_before = state && state->stdlib_shadow;
     bool declared = core_module_spec_init(&spec, parent)
         && discover_package_import(driver, importer, statement, &spec,
                                    false) != nullptr;
     core_module_spec_release(&spec);
     if (declared) return true;
+    // Looking for the parent already reported why it is unusable, here or
+    // (for a shadowed library module) once loading is over.
+    if (core_diagnostics_count(diagnostics) != before
+        || (state && state->stdlib_shadow && !shadowed_before))
+        return false;
     import_report(importer, statement,
         N00B_DIAG_PACKAGE_PARENT_MANIFEST_MISSING,
         N00B_TEXT_PACKAGE_IS_DECLARED_BUT_NO,
@@ -1848,7 +2242,14 @@ discover_package_import(import_driver_t *driver,
         if (!job) continue;
         n00bb_tu_state_t *state = tu_state(unit);
         if (!unit || !tree) {
-            if (manifest_mentions(unit, logical->identifier))
+            // A failed manifest (a shadowed library one, say) is this
+            // import's failure only if it may declare the package; a cached
+            // interface has no text to search, but knows its packages.
+            bool relevant = state && state->interface_module
+                ? interface_may_declare_package(&driver->loader->interfaces,
+                      unit->module.identifier, logical->identifier)
+                : manifest_mentions(unit, logical->identifier);
+            if (relevant)
                 claim_manifest_failure(driver, job, unit, importer);
             continue;
         }
@@ -1867,6 +2268,23 @@ discover_package_import(import_driver_t *driver,
         if (!in_progress
             && !find_package_declaration(unit, logical->identifier))
             continue;
+        bool selected_stdlib = selected
+            && n00bb_resolver_unit_in_stdlib(driver->resolver, selected);
+        if (selected && selected != unit
+            && selected_stdlib
+                != n00bb_resolver_unit_in_stdlib(driver->resolver, unit)) {
+            core_translation_unit_t *library = selected_stdlib ? selected
+                                                               : unit;
+            core_translation_unit_t *other = selected_stdlib ? unit
+                                                             : selected;
+            report_stdlib_shadow(driver, importer, statement,
+                logical->identifier, core_source_file_path(&other->source),
+                core_source_file_path(&library->source));
+            selected_job = nullptr;
+            selected = nullptr;
+            status = CORE_MODULE_RESOLVE_ERROR;
+            break;
+        }
         if (selected && selected != unit) {
             import_report(importer, statement,
                 N00B_DIAG_PACKAGE_MULTIPLE_MANIFESTS,
@@ -1888,6 +2306,19 @@ discover_package_import(import_driver_t *driver,
         selected = unit;
         selected_job = job;
         claim_manifest(driver, job);
+    }
+    core_string_t shadow = {0};
+    if (selected && n00bb_resolver_unit_in_stdlib(driver->resolver, selected)
+        && n00bb_resolver_shadowing_source(driver->resolver,
+               logical->identifier, &shadow)) {
+        // A library package, reached by an import or as the parent of one,
+        // and a module file elsewhere with the package's name.
+        report_stdlib_shadow(driver, importer, statement,
+            logical->identifier, shadow,
+            core_source_file_path(&selected->source));
+        core_free(shadow.data);
+        selected_job = nullptr;
+        selected = nullptr;
     }
     if (selected && (!parent_manifest_declared(driver, importer, statement,
                                                logical->identifier)
@@ -1996,16 +2427,30 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                                                               locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
-    if (!direct || (statement && !n00bb_same_package(importer, direct))) {
+    bool library_name = false;
+    bool direct_named = false;
+    if (direct) {
+        pthread_mutex_lock(driver->requests_lock);
+        locate_request_t *request = request_for_job(driver->requests,
+                                                    locate_job);
+        direct_named = request && request->root_input;
+        pthread_mutex_unlock(driver->requests_lock);
+    }
+    if (direct && reject_stdlib_shadow(driver, importer, statement,
+                                       module->identifier, direct,
+                                       direct_named, &library_name))
+        return false;
+    if (!direct || library_name
+        || (statement && !n00bb_same_package(importer, direct))) {
         core_work_job_t *package_job = discover_package_import(
             driver, importer, statement, module, true);
         if (package_job) locate_job = package_job;
-        else if (!located) locate_job = nullptr;
+        else if (!located || library_name) locate_job = nullptr;
     }
     n00bb_tu_state_t *importer_state = tu_state(importer);
     if (!locate_job && ((resolved && failure_already_reported(attempted))
             || (importer_state && importer_state->import_failure_reported))) {
-        mark_import_failure_reported(importer);
+        carry_import_failure(importer, resolved ? attempted : nullptr);
         return false;
     }
     if (!locate_job) {
@@ -2057,7 +2502,7 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     if (!ensure_preprocessed_import(driver, grammar, locate_job,
                                     imported, tree, &in_progress)) {
         if (failure_already_reported(imported))
-            mark_import_failure_reported(importer);
+            carry_import_failure(importer, imported);
         else import_internal(importer, statement,
                              "an imported module failed without a diagnostic");
         return false;
@@ -2106,9 +2551,9 @@ collect_postprune_package_syntax(parse_grammar_t *grammar,
     core_list_t(parse_tree_ptr_t) *exports)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    bool package = nt_is(grammar, node, CORE_STRING_STATIC("package-decl"));
+    bool package = NT_IS(grammar, node, "package-decl");
     if (package && !inside_package) core_list_push(*declarations, node);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("export-stmt")))
+    if (NT_IS(grammar, node, "export-stmt"))
         core_list_push(*exports, node);
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         collect_postprune_package_syntax(grammar, core_tree_child(node, i),
@@ -2455,6 +2900,11 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
     }
     n00bb_cache_declaration_sites(driver->loader->cache, module,
                                   &tu_state(unit)->declaration_sites);
+    // Checked once loading is over (check_cached_warning_inputs), when the
+    // package manifests it may count are all loaded.
+    pthread_mutex_lock(&driver->cached_units_lock);
+    core_list_push(driver->cached_units, unit);
+    pthread_mutex_unlock(&driver->cached_units_lock);
     n00bb_cache_unused_facts(driver->loader->cache, module,
                              &tu_state(unit)->unused_facts);
     core_string_t module_name = module;
@@ -2679,7 +3129,10 @@ load_runtime_module(import_driver_t *driver, parse_grammar_t *grammar,
                     core_translation_unit_t *importer,
                     core_string_t module_name)
 {
-    if (core_string_eq(importer->module.identifier, module_name)) return true;
+    // A module need not load itself; but a default-package module is never
+    // the library's module of its name (builtin.n still loads `builtin`).
+    if (core_string_eq(importer->module.identifier, module_name)
+        && !n00bb_default_package(importer)) return true;
     core_module_spec_t module = {0};
     if (!core_module_spec_init(&module, module_name)) return false;
     core_translation_unit_t *imported = nullptr;
@@ -2695,11 +3148,13 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
                       core_translation_unit_t *importer,
                       core_string_t module_name)
 {
-    core_string_t name = importer->module.identifier;
     n00bb_tu_state_t *importer_state = tu_state(importer);
     if (importer_state && importer_state->interface_module) return true;
-    if (name.u8_bytes >= sizeof("builtin.") - 1
-        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
+    // The library's own package does not import itself. Which modules are
+    // its is by origin: a `builtin.x` of any other package is the user's,
+    // and imports the library's like every other module.
+    if (n00bb_system_unit(importer)
+        && core_string_eq(n00bb_package_namespace(importer), module_name))
         return true;
     return load_runtime_module(opaque, grammar, importer, module_name);
 }
@@ -2880,7 +3335,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         .worker_count = worker_count,
         .grammar = grammar,
         .types = types,
+        .cached_units = core_list_new(core_translation_unit_ptr_t),
     };
+    pthread_mutex_init(&import_driver.cached_units_lock, nullptr);
     n00bb_preprocessor_options_t active_options = *preprocessor_options;
     active_options.load_import = load_import;
     active_options.load_implicit_import = load_implicit_builtin;
@@ -2898,6 +3355,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     n00bb_preprocessor_t *preprocessor =
         n00bb_preprocessor_new(&active_options);
     import_driver.preprocessor = preprocessor;
+    bool shadowed_root = false;
     for (size_t request_ix = 0; request_ix < root_request_count; request_ix++) {
         locate_request_t *request = &requests->ordered.data[request_ix];
         core_work_job_t *job = request->job;
@@ -2919,6 +3377,25 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 ? request->resolve_status : CORE_MODULE_RESOLVE_ERROR;
             report_unreadable_input(diags, resolver, operand,
                                     status == CORE_MODULE_NOT_FOUND);
+            continue;
+        }
+        // A module or file named on the command line follows the import
+        // rule: a module of a package outside the library may not take a
+        // library package's name; a default-package module is no clash. (A
+        // library file with a namesake failed as it was located.)
+        core_string_t library = {0};
+        if (job_ok && request->root_input
+            && !n00bb_default_package(unit)
+            && !n00bb_resolver_unit_in_stdlib(resolver, unit)
+            && stdlib_package_manifest(&import_driver,
+                   unit->module.identifier, &library)) {
+            report_shadow(diags, nullptr, (core_diag_location_t){},
+                n00bb_resolver_note_shadow(resolver, unit->module.identifier,
+                    core_source_file_path(&unit->source), library, false,
+                    true));
+            core_free(library.data);
+            shadowed_root = true;
+            success = false;
             continue;
         }
         n00bb_tu_state_t *state = tu_state(unit);
@@ -2949,7 +3426,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         profile_tick = now;
     }
 
-    if (preprocess && parse) {
+    if (preprocess && parse && !shadowed_root) {
         bool runtime_support_loaded = false;
         for (size_t i = 0; i < root_request_count; i++) {
             if (!requests->ordered.data[i].root_input) continue;
@@ -3006,6 +3483,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             else if (core_work_job_state(queue, preprocess_job)
                      == CORE_WORK_FAILED) success = false;
         }
+        check_cached_warning_inputs(&import_driver);
         n00bb_preprocessor_free(preprocessor);
         preprocessor = nullptr;
         if (profile_compile) {
@@ -3059,6 +3537,32 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     core_free(worker_threads);
     pthread_mutex_destroy(&requests_lock);
     n00bb_interface_metadata_index_free(&loader.interfaces);
+
+    core_list_free(import_driver.cached_units);
+    pthread_mutex_destroy(&import_driver.cached_units_lock);
+
+    // Loading is over. A clash only the library or an implicit import
+    // reached, and a passed-over module of the current directory, are each
+    // reported now, once, in name order, without a location: an error
+    // apart from any module, a warning with the program's first module.
+    core_translation_unit_t *first_root = nullptr;
+    for (size_t i = 0; !first_root && i < root_request_count; i++)
+        if (requests->ordered.data[i].root_input)
+            first_root = core_work_job_result(queue,
+                                              requests->ordered.data[i].job);
+    size_t shadow_count = 0;
+    n00bb_stdlib_shadow_t **shadows = n00bb_resolver_drain_shadows(resolver,
+                                                                   &shadow_count);
+    for (size_t i = 0; i < shadow_count; i++) {
+        bool warning = shadows[i]->warning;
+        if (!warning && success) continue;
+        if (warning && first_root)
+            report_shadow(core_translation_unit_diagnostics(first_root),
+                          first_root, (core_diag_location_t){}, shadows[i]);
+        else report_shadow(diags, nullptr, (core_diag_location_t){},
+                           shadows[i]);
+    }
+    core_free(shadows);
 
     for (size_t i = 0; i < requests->ordered.len; i++) {
         core_translation_unit_t *unit = core_work_job_result(
@@ -3180,6 +3684,143 @@ n00bb_format_newline_count(const char *text, size_t length)
     return count;
 }
 
+static bool
+n00bb_format_comment_start(const char *text, size_t length)
+{
+    return length && (text[0] == '#'
+        || (length > 1 && text[0] == '/'
+            && (text[1] == '/' || text[1] == '*')));
+}
+
+// When a printed gap opens with a comment that ends the previous line,
+// writes that comment (indented as in the source, which may align it in
+// a column) and returns how much of the gap it used. Otherwise writes
+// nothing and returns 0.
+static size_t
+n00bb_format_line_comment(core_buffer_t *out, const char *gap,
+                          size_t length, const char *source,
+                          size_t source_length)
+{
+    size_t at = 0;
+    while (at < length && gap[at] == ' ') at++;
+    if (!at || !n00bb_format_comment_start(gap + at, length - at)) return 0;
+    size_t end = at;
+    while (end < length && gap[end] != '\n') end++;
+    size_t spaces = 0;
+    while (spaces < source_length && source[spaces] == ' ') spaces++;
+    bool aligned = spaces > at && spaces < source_length
+        && source[spaces] == gap[at];
+    for (size_t i = 0; i < (aligned ? spaces : at); i++)
+        core_buffer_putc(out, ' ');
+    core_buffer_append(out, gap + at, end - at);
+    return end;
+}
+
+enum { N00BB_GAP_COMMENTS = 64 };
+
+typedef struct {
+    size_t count;                              // comments
+    size_t gaps[N00BB_GAP_COMMENTS + 1][2];    // whitespace runs
+    size_t comments[N00BB_GAP_COMMENTS][2];
+} n00bb_gap_layout_t;
+
+// Splits the text between two tokens into whitespace runs and the
+// comments between them. Fails on anything else, or on too many comments.
+static bool
+n00bb_format_gap_layout(const char *gap, size_t length,
+                        n00bb_gap_layout_t *out)
+{
+    out->count = 0;
+    size_t at = 0;
+    for (;;) {
+        size_t start = at;
+        while (at < length && (gap[at] == ' ' || gap[at] == '\t'
+                               || gap[at] == '\n' || gap[at] == '\r'))
+            at++;
+        out->gaps[out->count][0] = start;
+        out->gaps[out->count][1] = at;
+        if (at == length) return true;
+        if (out->count == N00BB_GAP_COMMENTS
+            || !n00bb_format_comment_start(gap + at, length - at))
+            return false;
+        start = at;
+        if (gap[at] == '/' && gap[at + 1] == '*') {
+            at += 2;
+            while (at + 1 < length && !(gap[at] == '*' && gap[at + 1] == '/'))
+                at++;
+            if (at + 1 >= length) return false;
+            at += 2;
+        }
+        else while (at < length && gap[at] != '\n') at++;
+        out->comments[out->count][0] = start;
+        out->comments[out->count][1] = at;
+        out->count++;
+    }
+}
+
+static size_t
+n00bb_format_run_newlines(const char *text, const size_t run[2])
+{
+    return n00bb_format_newline_count(text + run[0], run[1] - run[0]);
+}
+
+// Writes a gap that holds comments: the printer's comments and
+// indentation, with the source's line breaks around each comment, so a
+// blank line stays where it was written and a comment that ends a line
+// keeps its column. Returns false, writing nothing, when the printed gap
+// does not hold the same comments as the source.
+static bool
+n00bb_format_comment_gap(core_buffer_t *out, const char *printed,
+                         size_t printed_length, const char *source,
+                         size_t source_length)
+{
+    n00bb_gap_layout_t shown, written;
+    if (!n00bb_format_gap_layout(printed, printed_length, &shown)
+        || !n00bb_format_gap_layout(source, source_length, &written)
+        || shown.count != written.count || !shown.count)
+        return false;
+    for (size_t i = 0; i < shown.count; i++) {
+        size_t a = shown.comments[i][1] - shown.comments[i][0];
+        size_t b = written.comments[i][1] - written.comments[i][0];
+        if (a != b || memcmp(printed + shown.comments[i][0],
+                             source + written.comments[i][0], a))
+            return false;
+    }
+    for (size_t i = 0; i <= shown.count; i++) {
+        const size_t *run = shown.gaps[i];
+        size_t breaks = n00bb_format_run_newlines(source, written.gaps[i]);
+        size_t printed_breaks = n00bb_format_run_newlines(printed, run);
+        if (!breaks || !printed_breaks) {
+            // On one line: a comment that ends a line keeps the source's
+            // spacing, so it can stay aligned in a column.
+            bool keep = !breaks && !printed_breaks && i == 0
+                && written.gaps[i][1] > written.gaps[i][0];
+            const char *from = keep ? source : printed;
+            const size_t *span = keep ? written.gaps[i] : run;
+            core_buffer_append(out, from + span[0], span[1] - span[0]);
+        }
+        else {
+            for (size_t j = 0; j < breaks; j++) core_buffer_putc(out, '\n');
+            size_t indent = run[1];
+            while (indent > run[0] && printed[indent - 1] == ' ') indent--;
+            core_buffer_append(out, printed + indent, run[1] - indent);
+        }
+        if (i < shown.count)
+            core_buffer_append(out, printed + shown.comments[i][0],
+                shown.comments[i][1] - shown.comments[i][0]);
+    }
+    return true;
+}
+
+// The last source line whose first token also starts a line of the
+// output, with its indentation in each.
+typedef struct {
+    bool set;
+    size_t source_line;
+    size_t source_indent;
+    size_t result_indent;
+} n00bb_format_anchor_t;
+
 static core_string_t
 n00bb_format_restore_breaks(parse_grammar_t *grammar,
                             core_string_t source, core_string_t printed_text)
@@ -3207,6 +3848,7 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
     parse_token_info_t *prior_original = nullptr;
     parse_token_info_t *prior_rendered = nullptr;
     bool prior_value_sigil = false;
+    n00bb_format_anchor_t line_anchor = {0};
     bool valid = true;
     for (;;) {
         parse_token_info_t *from = n00bb_format_next_token(original,
@@ -3251,8 +3893,12 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             if (printed[gap_start + j] == '/' || printed[gap_start + j] == '#')
                 has_comment = true;
         bool comma = to_len == 1 && printed[to_start] == ',';
+        // `return:` is a result sigil, not a field colon to keep aligned.
+        bool sigil_colon = prior_original
+            && prior_original_end - prior_original_start == 6
+            && !memcmp(source.data + prior_original_start, "return", 6);
         bool aligned_colon = prior_original && to_len == 1
-            && printed[to_start] == ':'
+            && printed[to_start] == ':' && !sigil_colon
             && source_lines == 0 && printed_lines == 0;
         bool channel_break = (to_len == 2
                               && !memcmp(printed + to_start, "->", 2))
@@ -3283,14 +3929,28 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 && source.data[prior_original_end - 1] == ')';
             value_sigil = leading && !follows_params;
         }
-        if (value_sigil) {
+        size_t source_gap_start = prior_original ? prior_original_end : 0;
+        if (has_comment && !value_sigil && from_start >= source_gap_start
+            && n00bb_format_comment_gap(&result, printed + gap_start,
+                   gap_len, source.data + source_gap_start,
+                   from_start - source_gap_start)) {
+            /* Comments keep the source's line structure. */
+        }
+        else if (value_sigil) {
             size_t line_start = prior_rendered
                 ? parse_token_start_byte(prior_rendered) : 0;
             while (line_start && printed[line_start - 1] != '\n')
                 line_start--;
-            size_t spaces = 4;
-            while (line_start + spaces - 4 < printed_len
-                   && printed[line_start + spaces - 4] == ' ')
+            // Inside the block when `->` follows its `{`; level with the
+            // statement before it otherwise.
+            bool opens_block = prior_rendered
+                && parse_token_end_byte(prior_rendered)
+                    == parse_token_start_byte(prior_rendered) + 1
+                && printed[parse_token_start_byte(prior_rendered)] == '{';
+            size_t spaces = opens_block ? 4 : 0;
+            while (line_start + spaces - (opens_block ? 4 : 0) < printed_len
+                   && printed[line_start + spaces - (opens_block ? 4 : 0)]
+                       == ' ')
                 spaces++;
             core_buffer_putc(&result, '\n');
             for (size_t j = 0; j < spaces; j++)
@@ -3301,10 +3961,23 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
         }
         else if (aligned_colon && from_start >= prior_original_end) {
             size_t original_gap = from_start - prior_original_end;
+            // A `:` that ends its line opens an indented block and is
+            // written tight, as in `if x:`.
+            size_t after = from_end;
+            while (after < source.u8_bytes
+                   && (source.data[after] == ' ' || source.data[after] == '\t'))
+                after++;
+            bool opens_block = after >= source.u8_bytes
+                || source.data[after] == '\n' || source.data[after] == '\r'
+                || n00bb_format_comment_start(source.data + after,
+                                              source.u8_bytes - after);
             bool spaces_only = original_gap > gap_len;
             for (size_t j = 0; j < original_gap && spaces_only; j++)
                 spaces_only = source.data[prior_original_end + j] == ' ';
-            if (spaces_only)
+            if (opens_block) {
+                /* Nothing between the condition and its block's `:`. */
+            }
+            else if (spaces_only)
                 core_buffer_append(&result,
                     source.data + prior_original_end, original_gap);
             else core_buffer_append(&result, printed + gap_start, gap_len);
@@ -3316,12 +3989,23 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             core_buffer_append(&result, printed + gap_start, gap_len);
         else if (prior_original && source_lines > printed_lines
                  && has_comment) {
+            size_t head = n00bb_format_line_comment(&result,
+                printed + gap_start, gap_len,
+                source.data + prior_original_end,
+                from_start - prior_original_end);
             for (size_t j = printed_lines; j < source_lines; j++)
                 core_buffer_putc(&result, '\n');
-            core_buffer_append(&result, printed + gap_start, gap_len);
+            core_buffer_append(&result, printed + gap_start + head,
+                               gap_len - head);
         }
         else if (prior_original && source_lines > printed_lines
                  && !has_comment) {
+            // The line holding the prior token, when its first token also
+            // starts a line of the output (line_anchor): how far the output
+            // moved that line.
+            size_t line = prior_original_start;
+            while (line && source.data[line - 1] != '\n') line--;
+            bool anchored = line_anchor.set && line_anchor.source_line == line;
             for (size_t j = 0; j < source_lines; j++)
                 core_buffer_putc(&result, '\n');
             size_t spaces = 0;
@@ -3333,16 +4017,53 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 }
             }
             else {
+                // The source's indentation, moved as far as the output
+                // moved the line before it.
                 size_t j = from_start;
                 while (j > 0 && source.data[j - 1] == ' ') {
                     spaces++;
                     j--;
                 }
+                if (anchored)
+                    spaces = spaces + line_anchor.result_indent
+                            > line_anchor.source_indent
+                        ? spaces + line_anchor.result_indent
+                            - line_anchor.source_indent
+                        : 0;
             }
             for (size_t j = 0; j < spaces; j++)
                 core_buffer_putc(&result, ' ');
         }
+        else if (has_comment && prior_original) {
+            size_t head = n00bb_format_line_comment(&result,
+                printed + gap_start, gap_len,
+                source.data + prior_original_end,
+                from_start - prior_original_end);
+            core_buffer_append(&result, printed + gap_start + head,
+                               gap_len - head);
+        }
         else core_buffer_append(&result, printed + gap_start, gap_len);
+        // A token that starts its line in the source and in the output
+        // anchors that line: a break restored after it is indented by as
+        // much as the output moved the line.
+        size_t source_line = from_start, source_indent = 0;
+        while (source_line && source.data[source_line - 1] == ' ') {
+            source_line--;
+            source_indent++;
+        }
+        size_t result_line = result.byte_len, result_indent = 0;
+        while (result_line && result.data[result_line - 1] == ' ') {
+            result_line--;
+            result_indent++;
+        }
+        if ((!source_line || source.data[source_line - 1] == '\n')
+            && (!result_line || result.data[result_line - 1] == '\n'))
+            line_anchor = (n00bb_format_anchor_t){
+                .set = true,
+                .source_line = source_line,
+                .source_indent = source_indent,
+                .result_indent = result_indent,
+            };
         core_buffer_append(&result, printed + to_start, to_len);
         prior_original = from;
         prior_rendered = to;
@@ -3488,7 +4209,9 @@ n00bb_format_align(core_string_t input)
                 || n00bb_format_word(line->start, line->length, &at,
                                      "struct")
                 || n00bb_format_word(line->start, line->length, &at,
-                                     "object"))
+                                     "object")
+                || n00bb_format_word(line->start, line->length, &at,
+                                     "variant"))
                 for (size_t j = at; j < line->length; j++)
                     if (line->start[j] == '{') in_record = true;
         }
@@ -3575,9 +4298,39 @@ n00bb_signature_open(const char *text, n00bb_signature_line_t *line)
         at = before;
         break;
     }
-    if (!n00bb_format_word(text + line->start,
-                           line->end - line->start, &at, "func"))
-        return SIZE_MAX;
+    // Every spelling that declares a function: `func`, `fn`, `function`,
+    // the `<kind> litmod` prelude of a literal modifier, and the `call`,
+    // `handler` and `setup` roles of a callback, whose `(` may follow
+    // with no space.
+    const char *row = text + line->start;
+    size_t length = line->end - line->start;
+    bool function = n00bb_format_word(row, length, &at, "func")
+        || n00bb_format_word(row, length, &at, "fn")
+        || n00bb_format_word(row, length, &at, "function");
+    static const char *const roles[] = {"call", "handler", "setup"};
+    for (size_t r = 0; !function && r < sizeof(roles) / sizeof(roles[0]);
+         r++) {
+        size_t word = strlen(roles[r]), after = at + word;
+        if (after > length || memcmp(row + at, roles[r], word)) continue;
+        while (after < length && row[after] == ' ') after++;
+        if (after < length && row[after] == '(')
+            return line->start + after;
+    }
+    if (!function) {
+        size_t kind = at;
+        while (kind < length
+               && ((row[kind] >= 'a' && row[kind] <= 'z')
+                   || (row[kind] >= 'A' && row[kind] <= 'Z')
+                   || (row[kind] >= '0' && row[kind] <= '9')
+                   || row[kind] == '_'))
+            kind++;
+        size_t litmod = kind;
+        while (litmod < length && row[litmod] == ' ') litmod++;
+        if (kind == at || litmod == kind
+            || !n00bb_format_word(row, length, &litmod, "litmod"))
+            return SIZE_MAX;
+        at = litmod;
+    }
     for (size_t pos = line->start + at; pos < line->end; pos++)
         if (text[pos] == '(') return pos;
     return SIZE_MAX;
@@ -3770,6 +4523,16 @@ n00bb_format_signatures(parse_grammar_t *grammar, core_string_t input)
     return core_buffer_string(&result);
 }
 
+// `return: T` is the keyword spelling of the `-> T` result channel.
+static bool
+n00bb_format_return_channel(const char *text, size_t length)
+{
+    if (length < 7 || memcmp(text, "return", 6)) return false;
+    size_t at = 6;
+    while (at < length && text[at] == ' ') at++;
+    return at < length && text[at] == ':';
+}
+
 static core_string_t
 n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
 {
@@ -3780,8 +4543,17 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
     core_buffer_t result = {0};
     size_t length = input.u8_bytes, start = 0, paren_column = 0;
     size_t signature_close = SIZE_MAX;
+    size_t previous_start = SIZE_MAX, previous_end = SIZE_MAX;
     for (size_t i = 0; i <= length; i++) {
         if (i != length && text[i] != '\n') continue;
+        // A result channel continues the signature whose `)` ended the
+        // line before. Anywhere else, `->` gives a block its value.
+        bool after_signature = signature_close != SIZE_MAX
+            && previous_start != SIZE_MAX
+            && signature_close >= previous_start
+            && signature_close < previous_end;
+        previous_start = start;
+        previous_end = i;
         const char *line = text + start;
         size_t line_length = i - start, indent = 0;
         while (indent < line_length && line[indent] == ' ') indent++;
@@ -3801,8 +4573,10 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
             bool arrow = channel_start + 1 < i
                 && text[channel_start] == '-'
                 && text[channel_start + 1] == '>';
-            bool fail_channel = channel_start + 4 < i
-                && !memcmp(text + channel_start, "fail:", 5);
+            bool fail_channel = (channel_start + 4 < i
+                    && !memcmp(text + channel_start, "fail:", 5))
+                || n00bb_format_return_channel(text + channel_start,
+                                               i - channel_start);
             size_t body_end = i;
             while (body_end > channel_start && text[body_end - 1] == ' ')
                 body_end--;
@@ -3836,10 +4610,13 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
                 continue;
             }
         }
-        bool channel = (line_length - indent >= 2
-                && line[indent] == '-' && line[indent + 1] == '>')
-            || (line_length - indent >= 5
-                && !memcmp(line + indent, "fail:", 5));
+        bool channel = after_signature
+            && ((line_length - indent >= 2
+                 && line[indent] == '-' && line[indent + 1] == '>')
+                || (line_length - indent >= 5
+                    && !memcmp(line + indent, "fail:", 5))
+                || n00bb_format_return_channel(line + indent,
+                                               line_length - indent));
         if (channel && line[indent] == '-' && result.byte_len
             && result.data[result.byte_len - 1] == '\n') {
             size_t prior = result.byte_len - 1;
@@ -3864,8 +4641,10 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
                 core_buffer_string(&result), prior_start,
                 result.byte_len - prior_start);
             bool previous_has_channel = prior_len
-                && core_string_find(prior_text,
-                                    CORE_STRING_STATIC("-> ")) >= 0
+                && (core_string_find(prior_text,
+                                     CORE_STRING_STATIC("-> ")) >= 0
+                    || core_string_find(prior_text,
+                                        CORE_STRING_STATIC(") return:")) >= 0)
                 && !memchr(result.data + prior_start, '{', prior_len);
             if (((channel && previous_closes_params)
                  || (opening_brace && (previous_closes_params
@@ -3911,6 +4690,37 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
     }
     scan_token_stream_free(tokens);
     return core_buffer_string(&result);
+}
+
+// A comment that ends a line is scanned as leading trivia of the NEWLINE
+// that follows it. The printer breaks the line before every statement
+// terminator, which would carry the comment onto the next line, so it is
+// handed to the token it follows.
+static void
+n00bb_format_attach_line_comments(parse_grammar_t *grammar,
+                                  parse_token_stream_t *tokens)
+{
+    int64_t newline = parse_terminal_id(grammar,
+                                        CORE_STRING_STATIC("NEWLINE"));
+    int32_t count = tokens ? scan_stream_token_count(tokens) : 0;
+    for (int32_t i = 1; i < count; i++) {
+        parse_token_info_t *token = scan_stream_get(tokens, i);
+        parse_token_info_t *prior = scan_stream_get(tokens, i - 1);
+        if (!token || !prior || parse_token_tid(token) != newline
+            || parse_token_tid(prior) == newline) continue;
+        parse_trivia_t *moved = parse_token_leading_trivia(token);
+        bool comment = false;
+        for (parse_trivia_t *at = moved; at; at = at->next)
+            comment = comment || at->kind == PARSE_TRIVIA_COMMENT;
+        if (!comment) continue;
+        parse_trivia_t *trailing = parse_token_trailing_trivia(prior);
+        if (!trailing) parse_token_set_trailing_trivia(prior, moved);
+        else {
+            while (trailing->next) trailing = trailing->next;
+            trailing->next = moved;
+        }
+        parse_token_set_leading_trivia(token, nullptr);
+    }
 }
 
 static parse_pwz_parser_t *
@@ -4106,9 +4916,33 @@ n00bb_format_canonical_type(core_string_t printed)
     return core_buffer_string(&result);
 }
 
+// A type the normalizer cannot write on a declaration: one still holding a
+// variable that inference left unnamed (the result of a trait method on a
+// generic receiver, say), which the source printer writes as `_`, no type
+// at all; or an anonymous union, which a declared variable may not hold.
+static bool
+n00bb_format_unspellable_type(th_ctx *types, th_type *type)
+{
+    th_comb combination;
+    th_type *resolved = th_resolve(th_apply_subst(types, type));
+    if (resolved && th_sum_comb(resolved, &combination)
+        && combination == TH_UNION)
+        return true;
+    th_type **variables = nullptr;
+    size_t count = th_free_vars(types, type, &variables);
+    for (size_t i = 0; i < count; i++) {
+        th_type *variable = th_resolve(variables[i]);
+        if (variable && th_kind_of(variable) == TH_VAR
+            && !th_var_name(variable).data)
+            return true;
+    }
+    return false;
+}
+
 static core_string_t
 n00bb_format_inferred_types(parse_grammar_t *grammar,
-                            n00bb_tu_state_t *state, core_string_t source)
+                            n00bb_tu_state_t *state, core_string_t source,
+                            core_string_t module)
 {
     parse_symtab_t *symtab = state->annotations
         ? state->annotations->symtab : nullptr;
@@ -4153,8 +4987,10 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                 || memcmp(source.data + start,
                           symbol->name.data, symbol->name.u8_bytes))
                 continue;
+            if (n00bb_format_unspellable_type(state->types, symbol->type))
+                continue;
             core_string_t printed = n00bb_print_type_source(state->types,
-                                                            symbol->type);
+                symbol->type, module);
             if (!printed.data || !printed.u8_bytes
                 || core_string_find_byte(printed, '<') >= 0
                 || core_string_find_byte(printed, '$') >= 0
@@ -4191,98 +5027,6 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                        : core_string_dup(source);
 }
 
-static size_t
-utf8_sequence_length(unsigned char lead)
-{
-    return lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
-}
-
-static bool
-rich_tag_closes(const char *text, size_t at, size_t end, bool guillemet)
-{
-    if (at + 1 >= end) return false;
-    return guillemet
-        ? (unsigned char)text[at] == 0xc2
-            && (unsigned char)text[at + 1] == 0xbb
-        : text[at] == ':' && text[at + 1] == ']';
-}
-
-static void
-format_rich_body(core_buffer_t *out, const char *text, size_t start,
-                 size_t end, bool ascii)
-{
-    size_t i = start;
-    while (i < end) {
-        unsigned char c = (unsigned char)text[i];
-        if (c == '\\') {
-            size_t length = i + 1 < end
-                ? 1 + utf8_sequence_length((unsigned char)text[i + 1]) : 1;
-            if (i + length > end) length = end - i;
-            core_buffer_append(out, text + i, length);
-            i += length;
-            continue;
-        }
-        bool guillemet = c == 0xc2 && i + 1 < end
-            && (unsigned char)text[i + 1] == 0xab;
-        bool colon = c == '[' && i + 1 < end && text[i + 1] == ':';
-        size_t close = i + 2;
-        while ((guillemet || colon) && close < end
-               && !rich_tag_closes(text, close, end, guillemet))
-            close++;
-        if (!(guillemet || colon) || close >= end) {
-            core_buffer_putc(out, (char)c);
-            i++;
-            continue;
-        }
-        size_t tag = i + 2;
-        bool fits = true;
-        for (size_t j = tag; fits && j < close; j++)
-            fits = !rich_tag_closes(text, j, close, !ascii);
-        if (fits) {
-            core_buffer_append(out, ascii ? "[:" : "\xc2\xab", 2);
-            core_buffer_append(out, text + tag, close - tag);
-            core_buffer_append(out, ascii ? ":]" : "\xc2\xbb", 2);
-        }
-        else core_buffer_append(out, text + i, close + 2 - i);
-        i = close + 2;
-    }
-}
-
-static core_string_t
-n00bb_format_rich_tags(parse_grammar_t *grammar, core_string_t input,
-                       bool ascii)
-{
-    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, input);
-    if (!tokens) return (core_string_t){0};
-    while (scan_stream_next(tokens)) {}
-    core_buffer_t out = {0};
-    size_t copied = 0;
-    int32_t count = scan_stream_token_count(tokens);
-    for (int32_t i = 0; i < count; i++) {
-        parse_token_info_t *token = scan_stream_get(tokens, i);
-        if (!token || !core_option_is_set(parse_token_postfix_modifier(token))
-            || !core_string_eq(
-                   core_option_get(parse_token_postfix_modifier(token)),
-                   CORE_STRING_STATIC("r"))
-            || !core_string_eq(parse_terminal_name(grammar,
-                   parse_token_tid(token)), CORE_STRING_STATIC("STRING_LIT"))
-            || parse_token_start_byte(token) < copied
-            || parse_token_end_byte(token) > input.u8_bytes) continue;
-        size_t start = parse_token_start_byte(token) + 1;
-        size_t end = parse_token_end_byte(token);
-        while (end > start && input.data[end - 1] != '"') end--;
-        if (end == start) continue;
-        end--;
-        core_buffer_append(&out, input.data + copied, start - copied);
-        format_rich_body(&out, input.data, start, end, ascii);
-        copied = end;
-    }
-    core_buffer_append(&out, input.data + copied, input.u8_bytes - copied);
-    scan_token_stream_free(tokens);
-    core_buffer_ensure(&out, 1);
-    return core_buffer_string(&out);
-}
-
 static bool
 n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
                    locate_requests_t *requests, parse_cmdr_result_t *args)
@@ -4292,7 +5036,6 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         CORE_STRING_STATIC("--normalize"));
     bool keep_layout = normalize && parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--keep-layout"));
-    bool ascii_tags = n00bb_setting_bool(N00BB_KEY_FMT_ASCII_TAGS);
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (output.data && (check || parse_cmdr_arg_count(args) != 1)) {
@@ -4320,7 +5063,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             core_source_file_contents(&unit->source).data,
             core_source_file_size(&unit->source));
         core_string_t normalized = normalize
-            ? n00bb_format_inferred_types(grammar, state, source)
+            ? n00bb_format_inferred_types(grammar, state, source,
+                                          unit->module.identifier)
             : (core_string_t){0};
         parse_token_stream_t *normalized_tokens = nullptr;
         parse_pwz_parser_t *normalized_parser = normalized.data
@@ -4346,6 +5090,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         else {
             if (normalized_parser)
                 tree = parse_pwz_get_tree(normalized_parser);
+            n00bb_format_attach_line_comments(grammar, normalized_parser
+                ? normalized_tokens : state->lex->tokens);
             parse_print_opts_t options = {
                 .source = print_source,
                 .width = 88,
@@ -4366,14 +5112,10 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
                 ? n00bb_format_signatures(grammar, aligned)
                 : (core_string_t){0};
             core_free(aligned.data);
-            core_string_t channels = signatures.data
+            formatted = signatures.data
                 ? n00bb_format_channels(grammar, signatures)
                 : (core_string_t){0};
             core_free(signatures.data);
-            formatted = channels.data
-                ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
-                : (core_string_t){0};
-            core_free(channels.data);
         }
         if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
             n00bb_internal_error(requests->diagnostics, unit,
@@ -4532,6 +5274,28 @@ restart_excluding_cached(char **argv, core_string_t argv0,
     core_free(compiler.data);
 }
 
+static void
+restart_if_cache_unusable(const n00bb_cache_t *cache, char **argv,
+                          core_string_t argv0)
+{
+    core_buffer_t unloadable = {0};
+    n00bb_cache_unloadable_modules(cache, &unloadable);
+    if (unloadable.byte_len) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "cached IR names a function this program does not define"));
+        restart_excluding_cached(argv, argv0, &unloadable);
+    }
+    core_buffer_release(&unloadable);
+    core_buffer_t refreeze = {0};
+    n00bb_cache_refreeze_modules(cache, &refreeze);
+    if (refreeze.byte_len) {
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "comptime_main changes the state of cached modules"));
+        restart_excluding_cached(argv, argv0, &refreeze);
+    }
+    core_buffer_release(&refreeze);
+}
+
 static char **
 check_arguments_for(int argc, char **argv, parse_cmdr_result_t *args,
                     int32_t input_count, int32_t kept)
@@ -4660,6 +5424,23 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
         && n00bb_locate_operand(resolver, operand, &module, &source)
             == CORE_MODULE_RESOLVED;
     n00bb_cache_t *cache = nullptr;
+    // Every root is compiled from source, a library's many as a program's
+    // one.
+    core_buffer_t roots = {0};
+    for (int32_t i = 0; located && i < parse_cmdr_arg_count(args); i++) {
+        core_module_spec_t each = {0};
+        core_source_file_t each_source = {0};
+        if (n00bb_locate_operand(resolver, parse_cmdr_arg_str(args, i),
+                &each, &each_source) == CORE_MODULE_RESOLVED
+            && each.identifier.data) {
+            if (roots.byte_len) core_buffer_putc(&roots, ',');
+            core_buffer_append_string(&roots, each.identifier);
+        }
+        core_source_file_release(&each_source);
+        core_module_spec_release(&each);
+    }
+    n00bb_cache_set_roots(core_buffer_string(&roots));
+    core_buffer_release(&roots);
     if (located) {
         core_string_t root = core_source_file_path(&source);
         core_buffer_t libraries = {0};
@@ -4894,16 +5675,17 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
         // A folded branch can leave the only writes of a value that decides
         // another branch in blocks no path reaches (a `with` manager's exit
         // reason, say), so folding goes on once those blocks are gone.
+        // When a round folds nothing the function is as its analyses found
+        // it, so hoisting uses them in the same scope instead of building
+        // the value numbers, PDG and range analysis again.
         for (;;) {
             size_t scope = ir_analysis_scope_begin();
             uint32_t folded = ir_abcd_fold(function);
+            if (!folded) (void)ir_abcd_hoist(function);
             ir_analysis_scope_end(scope);
             if (!folded) break;
             n00bb_drop_unreachable_blocks(function);
         }
-        size_t scope = ir_analysis_scope_begin();
-        (void)ir_abcd_hoist(function);
-        ir_analysis_scope_end(scope);
     }
 }
 
@@ -4959,6 +5741,92 @@ check_post_specialization(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+drop_diagnostic(void *context, core_diag_severity_t *severity,
+                core_string_t code)
+{
+    (void)context;
+    (void)severity;
+    (void)code;
+    return false;
+}
+
+// Leaves out of the analysis of a program with errors each unit that
+// imports, directly or not, a unit with errors and has none of its own:
+// what the analysis would say about it follows from what is wrong in the
+// unit it depends on, so its functions are not analyzed for their own
+// sake (see build_function_summaries) and nothing the analysis reports in
+// it is kept. The units with errors are analyzed as before.
+static void
+leave_out_dependents_of_errors(core_link_unit_t *link,
+                               n00bb_link_analysis_t *analysis)
+{
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    if (!count) return;
+    core_dict_t affected;
+    core_dict_init(&affected, nullptr, nullptr);
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        if (core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+            core_dict_put(&affected, unit, unit);
+    }
+    if (!core_dict_len(&affected)) {
+        core_dict_free(&affected);
+        return;
+    }
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (size_t i = 0; i < count; i++) {
+            core_translation_unit_t *unit =
+                core_link_unit_translation_unit(link, i);
+            if (core_dict_contains(&affected, unit)) continue;
+            for (size_t m = 0; m < unit->imports.len; m++)
+                if (core_dict_contains(&affected, unit->imports.data[m])) {
+                    core_dict_put(&affected, unit, unit);
+                    grew = true;
+                    break;
+                }
+        }
+    }
+    core_dict_init(&analysis->unanalyzed_modules, nullptr, nullptr);
+    analysis->unanalyzed_ready = true;
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!core_dict_contains(&affected, unit)
+            || core_diagnostics_failed(diagnostics) || !state)
+            continue;
+        // The unit is noted too, for restore_dependents_of_errors.
+        core_dict_put(&analysis->unanalyzed_modules, unit, unit);
+        if (state->ir_module)
+            core_dict_put(&analysis->unanalyzed_modules, state->ir_module,
+                          unit);
+        core_diagnostics_set_policy(diagnostics, drop_diagnostic, nullptr);
+    }
+    core_dict_free(&affected);
+}
+
+static void
+restore_dependents_of_errors(core_link_unit_t *link,
+                             n00bb_link_analysis_t *analysis)
+{
+    if (!analysis->unanalyzed_ready) return;
+    size_t count = link ? core_link_unit_translation_unit_count(link) : 0;
+    for (size_t i = 0; i < count; i++) {
+        core_translation_unit_t *unit =
+            core_link_unit_translation_unit(link, i);
+        if (core_dict_contains(&analysis->unanalyzed_modules, unit))
+            core_diagnostics_set_policy(
+                core_translation_unit_diagnostics(unit), nullptr, nullptr);
+    }
+    core_dict_free(&analysis->unanalyzed_modules);
+    analysis->unanalyzed_ready = false;
+}
+
+static bool
 specialize_quietly(n00bb_link_analysis_t *analysis,
                    core_diagnostics_t *diagnostics)
 {
@@ -5001,6 +5869,16 @@ record_cache_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         restart_with_summaries(argv, argv0, cache);
 }
 
+static int
+compare_specializations(const void *left, const void *right)
+{
+    const n00bb_specialization_t *a = left, *b = right;
+    int order = core_string_cmp(ir_module_name(a->instance->owner),
+                                ir_module_name(b->instance->owner));
+    return order ? order : core_string_cmp(a->instance->name,
+                                           b->instance->name);
+}
+
 static bool
 specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                  core_diagnostics_t *diagnostics,
@@ -5034,6 +5912,13 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     core_list_free(seeds);
     if (ok && !check_only) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
+    // Instances are found in the order the program's functions are walked,
+    // which differs with which of them came from the cache; their objects
+    // and ABI rows go in their names' order instead.
+    if (ok && !check_only && analysis->specializations.len > 1)
+        qsort(analysis->specializations.data, analysis->specializations.len,
+              sizeof(*analysis->specializations.data),
+              compare_specializations);
     core_translation_unit_t *site = nullptr;
     for (size_t i = 0; !ok && failure.located && !site
          && i < analysis->units.len; i++)
@@ -5078,7 +5963,8 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION, failure_location,
             N00B_TEXT_GENERIC_MISSING_IMPLEMENTATION,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
-                       ARG_TEXT(failure.after), ARG_TEXT(failure.before)));
+                       ARG_TEXT(failure.after), ARG_TEXT(failure.before),
+                       ARG_TEXT(failure.trait)));
         core_translation_unit_t *user = nullptr;
         for (size_t i = 0; failure.site_located && !user
              && i < analysis->units.len; i++)
@@ -5091,6 +5977,9 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                 N00B_TEXT_USED_WITH_TYPE_HERE,
                 N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                            ARG_TEXT(failure.before)));
+        n00bb_note_unimplemented(failure_diagnostics,
+            ir_ctx_types(analysis->ir_context), failure.receiver,
+            failure.trait_name);
         n00bb_report_help(failure_diagnostics,
             N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
             N00BB_ARGS(ARG_TEXT(failure.trait), ARG_TEXT(failure.before)));
@@ -5229,13 +6118,20 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool lower_command = check_command || (!show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("lower")));
     collect_located_diagnostics = check_command;
-    n00bb_cache_set_check_only(check_command);
+    // `fmt --normalize` types the program as `check` does and emits no
+    // code, so it reads the cache as a check and stores nothing.
+    n00bb_cache_set_check_only(check_command || normalize_fmt);
     bool build_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("build"));
     bool library_command = !show_ffi
         && core_string_eq(command, CORE_STRING_STATIC("library"));
     bool emit_interface = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--emit-interface"));
+    // A library build reads and keeps modules in the cache as a check does,
+    // with each module's ABI object. One that writes a semantic interface
+    // archives what it compiled, so it compiles everything.
+    bool library_cache = library_command && !emit_interface;
+    if (library_cache) n00bb_cache_set_library();
     core_string_t interface_output = emit_interface
         ? parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--emit-interface")) : (core_string_t){0};
@@ -5355,7 +6251,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         n00bb_ffi_set_target(ffi, ffi_target.triple);
     n00bb_setting_id_t contract_dirs_key = N00BB_KEY_PATHS_CONTRACT_DIRS;
     for (size_t i = 0; i < n00bb_setting_count(contract_dirs_key); i++)
-        n00bb_ffi_add_contract_dir(ffi,
+        if (n00bb_setting_path_is_first(contract_dirs_key, i))
+            n00bb_ffi_add_contract_dir(ffi,
                                    n00bb_setting_at(contract_dirs_key, i));
     const n00bb_module_generator_t generator_items[] = {
         {CORE_STRING_STATIC("ffi"), n00bb_ffi_generate, ffi, n00bb_ffi_inputs},
@@ -5384,8 +6281,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
-    n00bb_cache_t *cache = (build_command || check_command) && scheduled
-        && options_valid && input_count == 1
+    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt
+                            || library_cache)
+        && scheduled
+        && options_valid && (input_count == 1 || library_cache)
         ? open_object_cache(resolver, args, ir_context, linked_interfaces,
                             (size_t)interface_count)
         : nullptr;
@@ -5422,6 +6321,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         }
         else {
             parse_grammar_finalize(grammar);
+            // Map the grammar's nonterminals to n00bb_rule_t now, before
+            // any worker asks.
+            (void)n00bb_rule_table(grammar);
             if (!scan_grammar_lex_compiled(grammar)) {
                 core_string_t error = scan_lex_compile_error();
                 n00bb_report(cli_diagnostics, nullptr,
@@ -5488,7 +6390,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             restart_with_strict_cache(argv, argv0);
         }
     }
-    if (cache && located) {
+    // A cached module found stale while loading is compiled again, whether
+    // or not loading succeeded: its kept warnings would be wrong either way.
+    if (cache) {
         core_buffer_t stale = {0};
         n00bb_cache_stale_modules(cache, &stale);
         if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);
@@ -5566,9 +6470,12 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
+    // A restart re-runs the command: settle it before writing anything.
+    if (located && normalize_fmt) restart_if_cache_unusable(cache, argv, argv0);
     if (located && normalize_fmt)
         located = n00bb_format_units(grammar, queue, &requests, args);
-    if (located && cache && !check_command && !defer_analysis)
+    if (located && cache && !check_command && !normalize_fmt
+        && !defer_analysis)
         record_cache_summaries(cache, link, link_analysis, optimistic_cache,
                                argv, argv0);
     core_string_t header_output = parse_cmdr_flag_str(args,
@@ -5634,6 +6541,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && n00bb_cache_snapshot(cache, link, link_analysis, false);
     if (check_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
+    bool library_snapshot = located && library_cache && cache
+        && !link_analysis->effect_checks_failed
+        && n00bb_cache_snapshot(cache, link, link_analysis, false);
     // The modules that checked clean in a broken program are as good as
     // in a clean check: store them, or every check of a broken program
     // redoes them. As for a clean check, the IR is taken before
@@ -5647,13 +6557,18 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (!located && link_analysis && link_analysis->lowered_with_errors
         && specialize && (build_command || check_command)) {
-        if (defer_analysis)
+        bool specialized = specialize_quietly(link_analysis,
+                                              cli_diagnostics);
+        if (defer_analysis) {
+            leave_out_dependents_of_errors(link, link_analysis);
             (void)n00bb_analyze_program(grammar, link, link_analysis,
                                         deferred.dump_control_flow,
                                         deferred.dump_pdg,
                                         deferred.dump_summaries);
-        bool analyzed = specialize_quietly(link_analysis, cli_diagnostics)
-            && n00bb_recompute_summaries(link_analysis);
+            restore_dependents_of_errors(link, link_analysis);
+        }
+        bool analyzed = specialized
+            && (defer_analysis || n00bb_recompute_summaries(link_analysis));
         if (analyzed) (void)check_post_specialization(link_analysis);
         if (analyzed && failed_snapshot && defer_analysis) {
             n00bb_cache_capture_summaries(cache, link_analysis,
@@ -5720,6 +6635,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         }
     }
     if (located && emit_program) {
+        n00bb_abi_emit_function_summaries(link_analysis->keep_summaries);
         located = n00bb_emit_abi_artifacts(link, link_analysis,
             !preprocessor_options.release_mode);
         if (profile_compile) {
@@ -5806,6 +6722,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         if (located)
             abi_emitted = located = n00bb_write_library_abi_artifact(link,
                 link_analysis, &link_analysis->target, args, cli_diagnostics);
+        if (located && library_snapshot)
+            (void)n00bb_store_library_modules(link, link_analysis);
     }
     if (located && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-link-unit")))
@@ -5840,22 +6758,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     core_string_t late_retry = optimistic_cache && !located
         ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
         : (core_string_t){0};
-    core_buffer_t unloadable = {0};
-    n00bb_cache_unloadable_modules(cache, &unloadable);
-    if (unloadable.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "cached IR names a function this program does not define"));
-        restart_excluding_cached(argv, argv0, &unloadable);
-    }
-    core_buffer_release(&unloadable);
-    core_buffer_t refreeze = {0};
-    n00bb_cache_refreeze_modules(cache, &refreeze);
-    if (refreeze.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_main changes the state of cached modules"));
-        restart_excluding_cached(argv, argv0, &refreeze);
-    }
-    core_buffer_release(&refreeze);
+    restart_if_cache_unusable(cache, argv, argv0);
 
     core_link_unit_free(link);
     th_env_free(environment);

@@ -253,9 +253,17 @@ n00bb_call_plan_bind(n00bb_call_plan_t *plan)
         size_t index = 0;
         if (varargs.data && core_string_eq(name, varargs))
             return fail(plan, N00BB_CALL_PLAN_VARARGS_BY_NAME, keyword, 0);
-        if (!plan->callee || !function_parameter_named(plan->grammar,
-                plan->callee, plan->formals, name, &index)
-            || index >= plan->slot_count)
+        // A function type names only its keyword parameters (a call
+        // through a function reference has no declaration to consult).
+        const th_kwparam *typed = th_func_kw_lookup(plan->signature, name);
+        bool found = plan->callee && function_parameter_named(plan->grammar,
+            plan->callee, plan->formals, name, &index);
+        if (!found && typed) {
+            index = plan->parameter_count
+                + (size_t)(typed - th_func_kw(plan->signature, 0));
+            found = true;
+        }
+        if (!found || index >= plan->slot_count)
             return fail(plan, N00BB_CALL_PLAN_UNKNOWN_NAME, keyword, 0);
         if (index < plan->offset || plan->slots[index].site)
             return fail(plan, N00BB_CALL_PLAN_REPEATED, keyword, index);

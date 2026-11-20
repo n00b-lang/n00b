@@ -139,6 +139,12 @@ typedef struct {
     bool (*owned_field)(void *context, th_type *record, core_string_t field);
     ir_summary_t *(*stored)(void *context, ir_summaries_t *summaries,
                             const ir_func_t *function);
+    // Adds the bodies in the program that the functions being summarized
+    // don't stand for but whose reinterpretations still count: a program's
+    // reinterpretations are all its code's, whichever of it is summarized
+    // afresh (collect_reinterpretations).
+    void (*reinterpretation_sources)(void *context, ir_summary_target_fn add,
+                                     void *sink);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
@@ -152,6 +158,10 @@ ir_summaries_t *ir_summaries_recompute(ir_func_t *const *functions,
 ir_summaries_t *ir_escapes_compute(ir_func_t *const *functions, size_t count,
                                    const ir_summary_hooks_t *hooks);
 void            ir_summaries_free(ir_summaries_t *summaries);
+// Lets go of the solved functions the summaries keep to answer questions
+// such as ir_address_escapes: summarizing escapes keeps one for nearly
+// every function. A function asked about after this is solved again then.
+void            ir_summaries_release_engines(ir_summaries_t *summaries);
 ir_summary_t   *ir_summary_of(ir_summaries_t *summaries,
                               const ir_func_t *function);
 bool            ir_summary_known(ir_summaries_t *summaries,

@@ -1,0 +1,25 @@
+// A `where` clause after a type in a function constrains the function's
+// variable of that name, as one after its signature does: every
+// occurrence of `'T` in one function is the same variable.
+func middle(a: int, b: 'U where 'U: Integer, c: int) -> int {
+    return a + c
+}
+func last(x: 'T where 'T: Integer, y: int) -> int {
+    return y
+}
+func trailing(x: 'T where 'T: Integer,) -> int {
+    return 1
+}
+// Clauses on the same variable add up.
+func both(x: 'T where 'T: Integer) -> 'T where 'T: Hash {
+    return x
+}
+// A clause in the body constrains the function's variable too.
+func local() {
+    var x: 'T where 'T: Integer = "hi"
+}
+require middle(1, "x", 3) == 4
+require last("no", 2) == 2
+require trailing("no") == 1
+require both(2.5) == 2.5
+local()

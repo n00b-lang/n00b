@@ -135,10 +135,12 @@ N00B_DIAG(LOOP_ASSIGNED_TYPE, "N00B-N0521", ERROR,
     "loop assigns that variable, which already has its type. Remove the\n"
     "type, or use a new name.")
 N00B_DIAG(GENERIC_ARITY, "N00B-T0515", ERROR,
-    "a generic type is given the wrong number of type arguments",
+    "a type is given the wrong number of type arguments",
     "A generic type takes exactly the type arguments its declaration lists:\n"
     "    var items: List[int] = []\n"
-    "    var table: Dict[string, int] = {:}")
+    "    var table: Dict[string, int] = {:}\n"
+    "A type that is not generic, such as `int`, `string`, `Any`, or a\n"
+    "record without type parameters, takes no type arguments.")
 N00B_DIAG(OPTION_USED_AS_VALUE, "N00B-T0516", ERROR,
     "an option that may be nil is used where its value is needed",
     "A value of type `T?` may be nil, so operators cannot use it directly.\n"
@@ -174,6 +176,14 @@ N00B_DIAG(CALLBACK_ROLES_MISMATCH, "N00B-T0544", ERROR,
     "A callback has a `call` and a `handler` role. The handler takes the\n"
     "call's parameters, after a `modify` state when there is a `setup`\n"
     "role; `setup` takes references to the handler and the state.")
+N00B_DIAG(CALLBACK_HANDLER_MODES, "N00B-T0610", ERROR,
+    "a callback's handler takes a parameter by another passing mode",
+    "A call through a callback passes its arguments as the callback's\n"
+    "`handler` role takes them, so the function given as its handler must\n"
+    "take a parameter the role passes by reference (`modify` or `out`, as\n"
+    "the state is when there is a `setup`) the same way, and the others\n"
+    "not by reference. Passing modes are no part of a function's type; a\n"
+    "reference to the function remembers them.")
 N00B_DIAG(FUNCTION_BODY_SIGNATURE_MISMATCH, "N00B-T0546", ERROR,
     "a function body returns or fails with a type its declaration does not allow",
     "The values a function returns, and the failures it raises, must match\n"
@@ -208,11 +218,14 @@ N00B_DIAG(FINALIZE_RETURNS_VALUE, "N00B-T0554", ERROR,
     "`__finalize` returns a value",
     "A finalizer returns nothing.")
 N00B_DIAG(TRAIT_TYPE_OUTSIDE_FUNCTION, "N00B-T0600", ERROR,
-    "a trait is used as a type outside a function",
+    "a trait or a constrained type variable is used outside a function",
     "A trait used as a type stands for whichever implementing type a\n"
-    "function is given, so it needs a function to belong to. Outside one,\n"
-    "name the implementing type, or `cast[Trait](value)` to check that a\n"
-    "value implements the trait.")
+    "function is given, so it needs a function to belong to. So does a\n"
+    "type variable a `where` clause constrains, as in\n"
+    "`var x: int where 'T: Integer` at module level, and so does a\n"
+    "generic alias with constrained parameters named without type\n"
+    "arguments. Outside one, name the type, or `cast[Trait](value)` to\n"
+    "check that a value implements the trait.")
 N00B_DIAG(FINALIZE_NOT_OBJECT, "N00B-T0599", ERROR,
     "`__finalize` is defined for a type that is not an `object`",
     "Only an `object` can have a finalizer. An object is a handle to its\n"
@@ -290,6 +303,13 @@ N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
     "from what is later assigned to it. When nothing settles it, give it a\n"
     "type:\n"
     "    var count: int")
+N00B_DIAG(FIELD_UNTYPED, "N00B-T0607", ERROR,
+    "a record or object field is declared without a type",
+    "Every field of a record or object names its type after a colon:\n"
+    "    record Point {\n"
+    "        x: int\n"
+    "        y: int\n"
+    "    }")
 N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
     "the names in a pattern do not match the shape of the value",
     "Pattern names bind the positions of tuple items in order, or the fields\n"
@@ -304,6 +324,12 @@ N00B_DIAG(TRAIT_PARAMETER_FIXED, "N00B-T0602", ERROR,
     "besides the receiver's. A bound such as `'C: Opener` fixes them once,\n"
     "so every call through `'C` uses the same types. To pass values of\n"
     "different types, pass a variant type that holds either.")
+N00B_DIAG(TRAIT_TYPE_UNSETTLED, "N00B-T0605", ERROR,
+    "nothing settles which type a trait used as a type stands for",
+    "Inside a function, a trait used as a type stands for one type that\n"
+    "implements it, settled by the values the function stores there. When\n"
+    "none is stored, name the implementing type instead:\n"
+    "    var shapes: Array[Square] = new[Array[Square]](2)")
 N00B_DIAG(NOT_A_CONTEXT, "N00B-T0601", ERROR,
     "a `with` statement is given a value that is not a context manager",
     "`with` needs a value whose type implements the `Context_Manager`\n"
@@ -324,6 +350,22 @@ N00B_DIAG(WITH_VALUE_DROPS, "N00B-T0604", ERROR,
     "`__exit` returns a `bool` can drop a failure by returning `true`, so\n"
     "it can only be used by a `with` statement. A manager that never drops\n"
     "a failure has an `__exit` that returns nothing.")
+N00B_DIAG(WHERE_ON_TYPE, "N00B-T0606", ERROR,
+    "a `where` clause follows a type in a callback",
+    "A `where` clause constrains a type variable of the function, trait,\n"
+    "record, variant or alias it is written in. One after a type inside a\n"
+    "callback is not supported yet. Put the constraint on a function that\n"
+    "uses the callback instead:\n"
+    "    func pick(x: 'T) -> 'T where 'T: Integer { return x }")
+N00B_DIAG(TYPE_ARGUMENT_EXCLUDED, "N00B-T0608", ERROR,
+    "a type variable is given a type its `where` clause excludes",
+    "A `where` clause can rule a type out for a type variable with `!=`.\n"
+    "Every call of the function, and every use of the record, variant or\n"
+    "alias, must then give that variable another type:\n"
+    "    func keep(x: 'T) -> 'T where 'T: != float { return x }\n"
+    "    keep(1.5)             // error: `float` is excluded\n"
+    "    record Key { value: 'K where 'K: != float }\n"
+    "    var key: Key[float]   // error: `float` is excluded")
 N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
     "an element of a tuple is assigned",
     "Tuples are values that cannot change in place. Build a new tuple and\n"
@@ -389,7 +431,12 @@ N00B_DIAG(VARIANT_ARM_UNCHECKED, "N00B-T0593", ERROR,
     "    switch shape {\n"
     "        case circle { return shape.circle }\n"
     "        else { return 0 }\n"
-    "    }")
+    "    }\n"
+    "or where assigning the arm has, until something could change the\n"
+    "variable: another assignment, passing it to a `modify` parameter, or\n"
+    "taking a `ref` to it:\n"
+    "    shape = (circle = 2.0)\n"
+    "    return shape.circle")
 N00B_DIAG(VARIANT_LITERAL_ARMS, "N00B-T0594", ERROR,
     "a variant literal names more than one arm",
     "A variant holds one arm at a time, so a literal for it names exactly\n"

@@ -1,0 +1,21 @@
+# An argument a function reference's or callback's `call` can't take is
+# reported against the parameter it is passed to, as a direct call's is.
+func scaled(a: int, scale: int = 2) -> int {
+    return a * scale
+}
+let by_type: Ref[(int, scale: int) -> int] = ref scaled
+require by_type.call(3, scale = "x") == 1
+require by_type.call("y") == 1
+func named(label: string) -> int {
+    return by_type.call(3, scale = label)
+}
+
+callback Joiner {
+    call(label: string, count: int) -> string
+    handler(label: string, count: int) -> string
+}
+func join(label: string, count: int) -> string {
+    return label
+}
+let joiner = callback[Joiner](ref join)
+require joiner.call(3, 2) == "x"

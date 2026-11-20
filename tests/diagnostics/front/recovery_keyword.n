@@ -1,0 +1,8 @@
+// A misspelled keyword (moved out of recovery.n, which reaches the error
+// limit first).
+func f(n: int) -> int {
+    return n
+}
+fucn h() {
+}
+require f(1) == 1

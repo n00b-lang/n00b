@@ -1,4 +1,5 @@
 #include "lower_internal.h"
+#include "static_branches.h"
 
 static bool
 collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
@@ -1932,17 +1933,34 @@ narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
     return arm->narrowed;
 }
 
-// Whether a `case` for `test` takes a value of type `member`.
+// Whether a `case` of `frame` takes a value of type `member` of the subject
+// type `subject`: one naming `member` (alone or among others), or naming
+// the whole subject type. A trait is a constraint, which other cases may
+// overlap, so a trait case covers no type.
 static bool
-typecase_arm_covers(th_ctx *types, th_type *test, th_type *member)
+typecase_arm_covers(th_ctx *types, n00bb_typecase_frame_t *frame,
+                    th_type *member, th_type *subject)
 {
-    th_type *wanted = test ? th_resolve(test) : nullptr;
-    core_string_t trait = {0};
-    if (!wanted || !member) return false;
-    if (th_hash(types, wanted) == th_hash(types, th_resolve(member)))
-        return true;
-    return th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait)
-        && th_env_implements(types, th_resolve(member), trait);
+    member = th_resolve(member);
+    for (size_t a = 0; a < frame->arms.len; a++) {
+        th_type *test = frame->arms.data[a].test;
+        th_type *wanted = test ? th_resolve(test) : nullptr;
+        th_comb comb;
+        bool several = wanted && th_sum_comb(wanted, &comb)
+            && comb == TH_UNION;
+        for (size_t i = 0; wanted && i < (several ? th_sum_len(wanted) : 1);
+             i++) {
+            th_type *named = several ? th_resolve(th_sum_arm(wanted, i))
+                                     : wanted;
+            if (th_kind_of(named) != TH_TRAIT
+                && (th_hash(types, named) == th_hash(types, member)
+                    || n00bb_static_pattern_accepts(types, member, named)
+                           > 0)) return true;
+        }
+        if (wanted && th_hash(types, wanted) == th_hash(types, subject))
+            return true;
+    }
+    return false;
 }
 
 // Reports a `typecase` with no `else` that doesn't cover every type its
@@ -1972,13 +1990,7 @@ check_typecase_coverage(ir_lower_context_t *context,
     for (size_t m = 0; m < count; m++) {
         th_type *member = item ? (m ? th_nil(types) : item)
             : is_union ? th_sum_arm(type, m) : type;
-        bool covered = false;
-        for (size_t a = 0; !covered && a < frame->arms.len; a++)
-            covered = typecase_arm_covers(types, frame->arms.data[a].test,
-                                          member)
-                || typecase_arm_covers(types, frame->arms.data[a].test,
-                                       type);
-        if (covered) continue;
+        if (typecase_arm_covers(types, frame, member, type)) continue;
         core_string_t member_text = lower_type_text(context, member);
         lower_report(context, N00B_DIAG_TYPECASE_NOT_EXHAUSTIVE, span,
                      N00B_TEXT_TYPECASE_MISSES,
@@ -2881,10 +2893,13 @@ n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
     parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
                                                 expression);
     // A function is never a value a case can match, so a function of the
-    // same name doesn't hide an arm or enum member.
+    // same name doesn't hide an arm or enum member. A case of a switch on a
+    // variant names one of its arms, whatever else has that name.
     if (symbol && symbol->kind != PARSE_SYM_ENUM_CONST
         && symbol->kind != PARSE_SYM_FUNCTION
-        && !n00bb_variant_arm_symbol(symbol)) return false;
+        && !n00bb_variant_arm_symbol(symbol)
+        && !identifier_is_variant_case_expression(grammar, lower->unit,
+                                                  expression)) return false;
     if (name) *name = text;
     return true;
 }

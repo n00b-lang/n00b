@@ -319,6 +319,16 @@ shift_count_casts(const ir_func_t *function, core_dict_t *out)
 static core_list_t(n00bb_ir_func_ptr_t)
 source_functions(n00bb_link_analysis_t *analysis);
 
+// Whether diagnose_overflow checks `in`: trapping arithmetic the user wrote,
+// other than a shift count's cast.
+static bool
+overflow_checked(const ir_instr_t *in, core_dict_t *counts)
+{
+    return in->span.start_line && !in->span.implied
+        && ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
+        && !core_dict_contains(counts, (void *)in);
+}
+
 bool
 diagnose_overflow(n00bb_link_analysis_t *analysis)
 {
@@ -330,17 +340,21 @@ diagnose_overflow(n00bb_link_analysis_t *analysis)
             unit_for_ir_module(analysis, function->owner);
         if (!unit) continue;
         size_t scope = ir_analysis_scope_begin();
-        ir_abcd_t *ranges = ir_func_abcd(function);
         core_dict_t counts;
         core_dict_init(&counts, nullptr, nullptr);
         shift_count_casts(function, &counts);
+        // Ranges are worked out only for a function with something to check.
+        bool checked = false;
+        for (uint32_t b = 0; !checked && b < function->n_blocks; b++)
+            for (uint32_t i = 0; !checked && i < function->blocks[b]->n_instrs;
+                 i++)
+                checked = overflow_checked(function->blocks[b]->instrs[i],
+                                           &counts);
+        ir_abcd_t *ranges = checked ? ir_func_abcd(function) : nullptr;
         for (uint32_t b = 0; ranges && b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
-                if (!in->span.start_line || in->span.implied
-                    || !ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
-                    || core_dict_contains(&counts, in))
-                    continue;
+                if (!overflow_checked(in, &counts)) continue;
                 ir_interval_t left = {0}, right = {0};
                 ir_overflow_t overflow = ir_abcd_overflow(ranges, in, &left,
                                                            &right);
@@ -498,10 +512,18 @@ condition_fact(ir_abcd_t *ranges, const ir_value_t *value,
         && depth < 8) {
         const ir_value_t *left = ir_operand_value(&test->operands[0]);
         const ir_value_t *right = ir_operand_value(&test->operands[1]);
-        comparison_fact_t inner_left = condition_fact(ranges, left, at,
-                                                      depth + 1);
-        comparison_fact_t inner_right = condition_fact(ranges, right, at,
-                                                       depth + 1);
+        // Truth values only decide `==` / `!=` when both sides are
+        // booleans; `1 == 2` compares two truthy integers that differ.
+        ir_module_t *module = test->block->owner->owner;
+        bool booleans = left && right
+            && ir_machine_of(module, left->type).class == IR_CLASS_BOOL
+            && ir_machine_of(module, right->type).class == IR_CLASS_BOOL;
+        comparison_fact_t inner_left = booleans
+            ? condition_fact(ranges, left, at, depth + 1)
+            : COMPARISON_UNKNOWN;
+        comparison_fact_t inner_right = booleans
+            ? condition_fact(ranges, right, at, depth + 1)
+            : COMPARISON_UNKNOWN;
         if (inner_left != COMPARISON_UNKNOWN
             && inner_right != COMPARISON_UNKNOWN
             && (test->op == IR_OP_EQ || test->op == IR_OP_NE))
@@ -526,6 +548,21 @@ condition_fact(ir_abcd_t *ranges, const ir_value_t *value,
     return found.seen.lo ? COMPARISON_TRUE : COMPARISON_FALSE;
 }
 
+// `require` and `assert` lower to a branch whose false edge reaches a
+// block ending in a trap tagged with the statement's failure kind.
+static int64_t
+branch_failure_kind(const ir_instr_t *branch)
+{
+    const ir_block_t *failure = branch->operands[2].kind == IR_OPD_BLOCK
+        ? branch->operands[2].block : nullptr;
+    ir_instr_t *last = failure && failure->n_instrs
+        ? failure->instrs[failure->n_instrs - 1] : nullptr;
+    if (!last || last->op != IR_OP_TRAP) return -1;
+    ir_annot_t *kind = ir_annot_get(&last->annots,
+        CORE_STRING_STATIC(N00BB_FAILURE_KIND_ANNOTATION));
+    return kind && kind->kind == IR_ANNOT_INT ? (int64_t)kind->i.mag : -1;
+}
+
 static void
 check_constant_condition(core_translation_unit_t *unit, ir_abcd_t *ranges,
                          ir_instr_t *branch)
@@ -538,9 +575,21 @@ check_constant_condition(core_translation_unit_t *unit, ir_abcd_t *ranges,
         || !comparison_op(test->op)) return;
     comparison_fact_t fact = condition_fact(ranges, condition, branch, 0);
     if (fact == COMPARISON_UNKNOWN) return;
-    report_at(unit, N00B_DIAG_CONSTANT_CONDITION, test,
-              fact == COMPARISON_TRUE ? N00B_TEXT_CONDITION_ALWAYS_TRUE
-                                      : N00B_TEXT_CONDITION_ALWAYS_FALSE,
+    n00bb_text_t message = fact == COMPARISON_TRUE
+        ? N00B_TEXT_CONDITION_ALWAYS_TRUE : N00B_TEXT_CONDITION_ALWAYS_FALSE;
+    if (fact == COMPARISON_FALSE) {
+        switch (branch_failure_kind(branch)) {
+        case N00BB_FAILURE_REQUIRE:
+            message = N00B_TEXT_REQUIREMENT_ALWAYS_FAILS;
+            break;
+        case N00BB_FAILURE_ASSERT:
+            message = N00B_TEXT_ASSERTION_ALWAYS_FAILS;
+            break;
+        default:
+            break;
+        }
+    }
+    report_at(unit, N00B_DIAG_CONSTANT_CONDITION, test, message,
               N00BB_NO_ARGS);
 }
 
@@ -600,6 +649,7 @@ source_functions(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         ir_module_t *module = state && !state->interface_module
+            && !n00bb_module_unanalyzed(analysis, state->ir_module)
             ? state->ir_module : nullptr;
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
@@ -646,6 +696,26 @@ feasible_blocks(ir_abcd_t *ranges, ir_func_t *function)
     return seen;
 }
 
+typedef enum : uint8_t {
+    RANGE_UNCHECKED,
+    RANGE_CONDITION,
+    RANGE_OPERAND,
+} range_check_t;
+
+// What diagnose_ranges checks at `site`: a branch's condition, or a
+// divisor or shift amount the user wrote.
+static range_check_t
+range_checked(const ir_site_t *site)
+{
+    if ((site->kind == IR_SITE_BRANCH || site->kind == IR_SITE_LOOP_BOUND)
+        && site->instr->op == IR_OP_BRANCH)
+        return RANGE_CONDITION;
+    if ((site->kind == IR_SITE_DIVISOR || site->kind == IR_SITE_SHIFT_AMOUNT)
+        && user_span(site->instr))
+        return RANGE_OPERAND;
+    return RANGE_UNCHECKED;
+}
+
 bool
 diagnose_ranges(n00bb_link_analysis_t *analysis)
 {
@@ -657,20 +727,23 @@ diagnose_ranges(n00bb_link_analysis_t *analysis)
                                                            function->owner);
         if (!unit) continue;
         size_t scope = ir_analysis_scope_begin();
-        ir_abcd_t *ranges = ir_func_abcd(function);
-        ir_sites_t *sites = ranges ? ir_func_sites(function) : nullptr;
+        // Ranges are worked out only for a function with a site to check.
+        ir_sites_t *sites   = ir_func_sites(function);
+        bool        checked = false;
+        for (uint32_t s = 0; !checked && sites && s < ir_sites_count(sites);
+             s++)
+            checked = range_checked(ir_site_at(sites, s)) != RANGE_UNCHECKED;
+        ir_abcd_t *ranges = checked ? ir_func_abcd(function) : nullptr;
+        if (!ranges) sites = nullptr;
         bool *feasible = sites ? feasible_blocks(ranges, function) : nullptr;
         for (uint32_t s = 0; feasible && s < ir_sites_count(sites); s++) {
             const ir_site_t *site = ir_site_at(sites, s);
             if (!site->instr->block
                 || !feasible[site->instr->block->index]) continue;
-            if ((site->kind == IR_SITE_BRANCH
-                 || site->kind == IR_SITE_LOOP_BOUND)
-                && site->instr->op == IR_OP_BRANCH)
+            range_check_t check = range_checked(site);
+            if (check == RANGE_CONDITION)
                 check_constant_condition(unit, ranges, site->instr);
-            else if ((site->kind == IR_SITE_DIVISOR
-                      || site->kind == IR_SITE_SHIFT_AMOUNT)
-                     && user_span(site->instr))
+            else if (check == RANGE_OPERAND)
                 ok = check_operand_domain(unit, function, ranges, site)
                     && ok;
         }
@@ -1079,9 +1152,14 @@ static void
 report_race(void *context, const ir_race_t *race)
 {
     n00bb_link_analysis_t *analysis = context;
-    core_translation_unit_t *unit = unit_for_ir_module(analysis,
-        race->site->block->owner->owner);
-    if (!unit || tu_state(unit)->interface_module) return;
+    // A race depends on the whole program's threads, which no module's
+    // cache key covers, so it is never kept with a module: a race in a
+    // module from the cache is reported here too, from its cached body.
+    ir_module_t *owner = race->site->block->owner->owner;
+    core_translation_unit_t *unit = unit_for_ir_module(analysis, owner);
+    if (!unit && owner)
+        unit = n00bb_unit_named(analysis, ir_module_name(owner));
+    if (!unit) return;
     core_string_t global = n00bb_name_leaf(race->place.global->name);
     report_at(unit, N00B_DIAG_DATA_RACE, race->site,
               race->self ? N00B_TEXT_RACE_SAME_ENTRY : N00B_TEXT_RACE,
@@ -1863,16 +1941,23 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                     ir_value_t *function_value = in->op == IR_OP_RETAIN_REF
                         && in->n_operands
                         ? ir_operand_value(&in->operands[0]) : nullptr;
-                    if (function_value && function_value->kind == IR_VAL_FUNC
-                        && function_value->owner
-                        && ir_annot_get(&function_value->owner->annots,
+                    // A reference adapter is to the function it adapts.
+                    ir_func_t *referred = function_value
+                            && function_value->kind == IR_VAL_FUNC
+                        ? function_value->owner : nullptr;
+                    ir_func_t *adapted = referred
+                        ? n00bb_reference_adapter_target(referred, nullptr,
+                                                         nullptr)
+                        : nullptr;
+                    if (adapted) referred = adapted;
+                    if (referred && ir_annot_get(&referred->annots,
                                N00BB_FIXED_REFERENCES_KEY)) {
                         n00bb_report(core_translation_unit_diagnostics(unit),
                             unit, N00B_DIAG_FIXED_REFERENCE_FUNCTION_VALUE,
                             n00bb_span_location(in->span),
                             N00B_TEXT_FIXED_REFERENCE_FUNCTION_VALUE,
                             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(
-                                function_value->owner->name))));
+                                referred->name))));
                         ok = false;
                         continue;
                     }
@@ -1913,6 +1998,104 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                             in->dest->type,
                             th_record_member(definition, m)->name,
                             ir_operand_value(&in->operands[m]));
+                }
+            }
+        }
+    }
+    return ok;
+}
+
+// The parameter of `function` passed by reference whose place it keeps a
+// reference to past the call, by its escape summary; UINT32_MAX if none.
+static uint32_t
+kept_place_parameter(n00bb_link_analysis_t *analysis, ir_func_t *function)
+{
+    th_type *signature = function ? th_resolve(function->type) : nullptr;
+    ir_func_t *body = function ? n00bb_cached_body(function) : nullptr;
+    ir_summary_t *summary = !signature
+            || th_kind_of(signature) != TH_FUNCTION ? nullptr
+        : ir_summary_of(analysis->escapes, function);
+    if (!summary && body && body != function)
+        summary = ir_summary_of(analysis->escapes, body);
+    for (uint32_t p = 0; summary && p < th_func_nparams(signature); p++)
+        if (th_mode_by_reference(th_func_param(signature, p)->mode)
+            && (ir_summary_param_escape(summary, p) & IR_SESCAPE_ADDRESS))
+            return p;
+    return UINT32_MAX;
+}
+
+bool
+check_reference_kept_places(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *module = state && !state->interface_module
+            ? state->ir_module : nullptr;
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+                ir_block_t *block = function->blocks[b];
+                for (uint32_t i = 0; i < block->n_instrs; i++) {
+                    ir_instr_t *in = block->instrs[i];
+                    for (uint32_t o = 0; o < in->n_operands; o++) {
+                        ir_value_t *value = ir_operand_value(
+                            &in->operands[o]);
+                        // A function reference (`ref f`), not a callee.
+                        if (!value || value->kind != IR_VAL_FUNC
+                            || !value->owner
+                            || (in->op == IR_OP_CALL && o == 0)
+                            || th_kind_of(th_resolve(value->type))
+                                != TH_INDIRECTION)
+                            continue;
+                        ir_func_t *target = n00bb_reference_adapter_target(
+                            value->owner, nullptr, nullptr);
+                        if (!target) target = value->owner;
+                        // A function that takes an argument away from its
+                        // caller can't be called through a reference that
+                        // doesn't say so either.
+                        th_type *signature = th_resolve(target->type);
+                        uint32_t consumed = UINT32_MAX;
+                        for (uint32_t p = 0; consumed == UINT32_MAX
+                             && th_kind_of(signature) == TH_FUNCTION
+                             && p < th_func_nparams(signature); p++)
+                            if (th_func_param(signature, p)->mode
+                                    == TH_CONSUME)
+                                consumed = p;
+                        uint32_t kept = consumed == UINT32_MAX
+                            ? kept_place_parameter(analysis, target)
+                            : consumed;
+                        if (kept == UINT32_MAX) continue;
+                        ir_func_t *body = n00bb_cached_body(target);
+                        if (!body || body->n_params <= kept) body = target;
+                        core_string_t name = n00bb_name_leaf(target->name);
+                        core_string_t parameter = kept < body->n_params
+                            ? body->params[kept]->name
+                            : CORE_STRING_STATIC("?");
+                        if (consumed != UINT32_MAX)
+                            n00bb_report(
+                                core_translation_unit_diagnostics(unit),
+                                unit, N00B_DIAG_REFERENCE_CONSUMES,
+                                n00bb_span_location(in->span),
+                                N00B_TEXT_REFERENCE_CONSUMES,
+                                N00BB_ARGS(ARG_TEXT(name),
+                                           ARG_TEXT(parameter)));
+                        else n00bb_report(
+                            core_translation_unit_diagnostics(unit),
+                            unit, N00B_DIAG_REFERENCE_KEEPS_PLACE,
+                            n00bb_span_location(in->span),
+                            N00B_TEXT_REFERENCE_KEEPS_PLACE,
+                            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(parameter),
+                                ARG_PHRASE_ID(n00bb_mode_parameter(
+                                    th_func_param(signature,
+                                                  kept)->mode))));
+                        n00bb_report_help(
+                            core_translation_unit_diagnostics(unit),
+                            N00B_TEXT_CALL_IT_DIRECTLY,
+                            N00BB_ARGS(ARG_TEXT(name)));
+                        ok = false;
+                    }
                 }
             }
         }
@@ -2189,8 +2372,12 @@ validate_thread_function_reads(
                 for (size_t f = 0; runtime_succeeds
                      && f < runtime->entry_functions.len; f++) {
                     ir_func_t *function = runtime->entry_functions.data[f];
+                    // Only reads the entry names: one through code the
+                    // analysis can't see is not evidence it reads this
+                    // variable, and would be reported wherever such code is
+                    // reached, library code included.
                     ir_instr_t *read = first_uninitialized_read(
-                        analysis, function, &place, entry_state);
+                        analysis, function, &place, entry_state, true);
                     core_translation_unit_t *unit = read
                         ? unit_for_ir_module(analysis, function->owner)
                         : nullptr;

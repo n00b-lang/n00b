@@ -1,0 +1,19 @@
+# A callback's handler must take its state as the `handler` role does, by
+# reference: a reference to the handler remembers its passing modes, which
+# its type doesn't say.
+record Tally { count: int }
+callback Counter {
+    call(value: int) -> int
+    handler(modify state: Tally, value: int) -> int
+    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
+}
+func peek(state: Tally, value: int) -> int {
+    return state.count + value
+}
+func setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil {}
+func make() -> Counter {
+    var tally: Tally
+    tally.count = 0
+    return callback[Counter](ref peek, ref tally)
+}
+require make().call(1) == 1

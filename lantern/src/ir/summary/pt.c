@@ -419,18 +419,34 @@ set_holds(const pt_set_t *set, const pt_item_t *item)
     return false;
 }
 
+// Logs the items of `now` that `old` doesn't hold; if `old` held one that
+// `now` doesn't, the log starts again with all of `now`. Both sets are in
+// set_order, so they are walked together rather than searched once per
+// item: a recomputed content memo did this for every item it held.
 static void
 log_new_items(pt_t *pt, core_list_t(pt_logged_t) *log, const pt_set_t *old,
               const pt_set_t *now)
 {
     bool removed = false;
-    for (size_t i = 0; !removed && i < old->len; i++)
-        removed = !set_holds(now, &old->data[i]);
+    for (size_t i = 0, n = 0; !removed && i < old->len; i++) {
+        while (n < now->len && set_order(&now->data[n], &old->data[i]) < 0)
+            n++;
+        removed = n == now->len
+            || set_order(&now->data[n], &old->data[i]) != 0;
+    }
     if (removed) log->len = 0;
-    for (size_t i = 0; i < now->len; i++)
-        if (removed || !set_holds(old, &now->data[i]))
+    for (size_t i = 0, o = 0; i < now->len; i++) {
+        bool held = false;
+        if (!removed) {
+            while (o < old->len
+                   && set_order(&old->data[o], &now->data[i]) < 0)
+                o++;
+            held = o < old->len && !set_order(&old->data[o], &now->data[i]);
+        }
+        if (!held)
             core_list_push(*log, ((pt_logged_t){now->data[i],
                                                 pt->generation}));
+    }
 }
 
 static core_hash_value_t
@@ -499,13 +515,25 @@ content_entry(pt_t *pt, const pt_loc_t *loc)
         if (pt->cuts != cuts) entry->memo.computed = false;
         log_new_items(pt, &entry->log, &old, &entry->items);
         core_list_free(old);
-        pt_set_t widened = (pt_set_t){0};
-        for (size_t i = 0; i < entry->items.len; i++)
-            set_add(pt, &widened, anywhere_below(entry->items.data[i]));
-        entry->widened = intern_widened(pt, &widened);
+        entry->widened = nullptr;
     }
     memo_use(pt, &entry->memo);
     return entry;
+}
+
+// What the entry's items reach anywhere below them, interned. Built when
+// first asked for after the items change rather than on every change: most
+// recomputed contents are never read this way, and widening them all took
+// as long as computing them.
+static const pt_set_t *
+widened_contents(pt_t *pt, content_memo_t *entry)
+{
+    if (entry->widened) return entry->widened;
+    pt_set_t widened = (pt_set_t){0};
+    for (size_t i = 0; i < entry->items.len; i++)
+        set_add(pt, &widened, anywhere_below(entry->items.data[i]));
+    entry->widened = intern_widened(pt, &widened);
+    return entry->widened;
 }
 
 static void
@@ -537,7 +565,7 @@ content_below(pt_t *pt, const pt_loc_t *loc, pt_set_t *into,
         merge_widened(pt, into, &reached, true);
         return;
     }
-    const pt_set_t *widened = content_entry(pt, loc)->widened;
+    const pt_set_t *widened = widened_contents(pt, content_entry(pt, loc));
     for (size_t m = 0; m < merged->len; m++)
         if (merged->data[m] == widened) return;
     core_list_push(*merged, widened);
@@ -726,6 +754,56 @@ visible_aliases(pt_t *pt, const uint32_t *sites, size_t count,
     }
 }
 
+// visible_aliases for a read at `loc` from `pt->at`, remembered. A function
+// whose callees publish many places under one external root reads that
+// root over and over, and scanning every alias under it on each read made
+// the solve cubic. Only pt_alias changes an alias list, and whenever it
+// does it notifies the alias's root; an alias a read can see has the read's
+// root, so the list stays exact until that root's key, or the alias list of
+// one of its sites, changes. Fills
+// `visible` and returns its signature.
+static uint64_t
+visible_at(pt_t *pt, uintptr_t root, const core_list_t(uint32_t) *sites,
+           const pt_loc_t *loc, core_list_t(uint64_t) *visible)
+{
+    content_key_t   probe = {*loc, pt->at};
+    bool            found = false;
+    visible_memo_t *entry = core_dict_get(&pt->visible_memo, &probe, &found);
+    if (!found) {
+        entry  = core_alloc(visible_memo_t);
+        *entry = (visible_memo_t){.key     = probe,
+                                  .visible = core_list_new(uint64_t)};
+        core_dict_put(&pt->visible_memo, &entry->key, entry);
+    }
+    uintptr_t changed = (uintptr_t)core_dict_get(
+        &pt->changed, (void *)alias_root_key(root), nullptr);
+    bool stale = !found || changed > entry->generation;
+    // The list holds indexes into the sites' alias lists, and pt_alias can
+    // move a site's aliases of other roots when it drops the ones a new
+    // alias covers, notifying only the site and the new alias's root.
+    for (size_t s = 0; !stale && s < sites->len; s++)
+        stale = (uintptr_t)core_dict_get(
+                    &pt->changed, (void *)aliases_key(sites->data[s]),
+                    nullptr)
+            > entry->generation;
+    if (stale) {
+        bool positional    = pt->positional;
+        pt->positional     = false;
+        entry->visible.len = 0;
+        visible_aliases(pt, sites->data, sites->len, loc, &entry->visible);
+        entry->positional = pt->positional;
+        entry->generation = pt->generation;
+        entry->signature  = core_xxh3_64bits_raw(
+            entry->visible.data ? (const void *)entry->visible.data : "",
+            entry->visible.len * sizeof(*entry->visible.data));
+        pt->positional = positional;
+    }
+    pt->positional = pt->positional || entry->positional;
+    for (size_t v = 0; v < entry->visible.len; v++)
+        core_list_push(*visible, entry->visible.data[v]);
+    return entry->signature;
+}
+
 static void
 aliased_from(pt_t *pt, const core_list_t(uint64_t) *visible,
              const pt_loc_t *loc, pt_set_t *into)
@@ -790,11 +868,7 @@ external_aliased(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
                                                  (void *)root, &found);
     if (!sites) return;
     core_list_t(uint64_t) visible = core_list_new(uint64_t);
-    visible_aliases(pt, sites->data, sites->len, loc, &visible);
-    aliased_key_t   probe = {
-        *loc, core_xxh3_64bits_raw(visible.data ? (const void *)visible.data
-                                                : "",
-                                   visible.len * sizeof(*visible.data))};
+    aliased_key_t probe = {*loc, visible_at(pt, root, sites, loc, &visible)};
     aliased_memo_t *entry = !visible.len || pt->reading.len
             || pt->delta_since
         ? nullptr : core_dict_get(&pt->aliased_memo, &probe, &found);
@@ -870,6 +944,86 @@ add_origin(core_list_t(summary_instr_ptr_t) *origins,
     return true;
 }
 
+static uint64_t visited_hash(const pt_loc_t *loc);
+static bool     same_visited(const pt_loc_t *a, const pt_loc_t *b);
+
+static uint64_t
+alias_call_hash(const pt_alias_call_t *call)
+{
+    const pt_item_t *item = &call->item;
+    uint64_t         hash = visited_hash(&item->loc) * 31 + call->site;
+    hash = hash * 31 + (uint64_t)(uintptr_t)call->origin;
+    hash = hash * 31
+        + ((uint64_t)item->kind << 16 | (uint64_t)item->flow << 8
+           | item->deep) + item->depth;
+    for (uint32_t s = 0; s < item->depth; s++)
+        hash = hash * 31 + (uint64_t)(uintptr_t)item->steps[s].data;
+    return hash ^ hash >> 31;
+}
+
+static bool
+same_alias_call(const void *left, const void *right)
+{
+    const pt_alias_call_t *a = left, *b = right;
+    const pt_item_t       *x = &a->item, *y = &b->item;
+    if (a->site != b->site || a->origin != b->origin || x->kind != y->kind
+        || x->flow != y->flow || x->deep != y->deep || x->depth != y->depth
+        || x->origin != y->origin || !same_visited(&x->loc, &y->loc))
+        return false;
+    if (x->steps == y->steps) return true;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if ((x->steps[s].data != y->steps[s].data
+             || x->steps[s].u8_bytes != y->steps[s].u8_bytes)
+            && !core_string_eq(x->steps[s], y->steps[s]))
+            return false;
+    return true;
+}
+
+// Doubles `table`, whose entries are `size` bytes, moving them by hash.
+static void
+table_grow(loc_table_t *table, size_t size)
+{
+    loc_table_t old = *table;
+    table->cap    = old.cap ? old.cap * 2 : 64;
+    table->slots  = core_alloc_array(uint8_t, table->cap * size);
+    table->hashes = core_alloc_array(uint64_t, table->cap);
+    table->used   = core_alloc_array(bool, table->cap);
+    size_t mask   = table->cap - 1;
+    for (size_t s = 0; s < old.cap; s++) {
+        if (!old.used[s]) continue;
+        size_t at = old.hashes[s] & mask;
+        while (table->used[at]) at = (at + 1) & mask;
+        memcpy((uint8_t *)table->slots + at * size,
+               (uint8_t *)old.slots + s * size, size);
+        table->hashes[at] = old.hashes[s];
+        table->used[at]   = true;
+    }
+    if (old.slots) core_free(old.slots);
+    if (old.hashes) core_free(old.hashes);
+    if (old.used) core_free(old.used);
+}
+
+// Adds the `size`-byte `entry`, whose hash is `hash`, to `table`; false if
+// `same` finds it there already. Inlined, so each caller's `same` and
+// `size` are constants: the walk's visited check is hot.
+static inline __attribute__((always_inline)) bool
+table_add(loc_table_t *table, const void *entry, size_t size, uint64_t hash,
+          bool (*same)(const void *, const void *))
+{
+    if (2 * (table->len + 1) > table->cap) table_grow(table, size);
+    size_t mask = table->cap - 1;
+    size_t at   = hash & mask;
+    for (; table->used[at]; at = (at + 1) & mask)
+        if (table->hashes[at] == hash
+            && same((uint8_t *)table->slots + at * size, entry))
+            return false;
+    memcpy((uint8_t *)table->slots + at * size, entry, size);
+    table->hashes[at] = hash;
+    table->used[at]   = true;
+    table->len++;
+    return true;
+}
+
 static void
 pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
          const ir_instr_t *origin)
@@ -887,6 +1041,15 @@ pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
                                 target->loc.path.depth);
         item.depth += target->loc.path.depth;
     }
+    // The same call again changes nothing: what it added then (the alias,
+    // or its origin) is still there, or has been folded into an alias that
+    // covers it, with its origins. spread_escapes makes every call again on
+    // each round, and finding that out from the site's aliases took a scan
+    // of all of them per call.
+    pt_alias_call_t call = {site, item, origin};
+    if (!table_add(&pt->alias_calls, &call, sizeof(call),
+                   alias_call_hash(&call), same_alias_call))
+        return;
     alias_list_t *aliases = &pt->sites.data[site].aliases;
     uintptr_t     root    = external_key(&alias.path);
     bool          known   = false;
@@ -1008,33 +1171,50 @@ owned_values(pt_t *pt, const pt_loc_t *at, const pt_set_t *values,
     return kept;
 }
 
+// Stores `values` at the place `address` names (see pt_store). With
+// `fresh`, the address has had every other value stored at it before, with
+// the same weakness, and only `fresh` is stored: storing a value again adds
+// nothing, as every step of a store only adds what isn't there. A slot
+// that owns what it holds stores copies of what the values hold now, which
+// can grow, so it always gets all of them.
+static void
+store_at(pt_t *pt, const pt_item_t *address, const pt_set_t *values,
+         const pt_set_t *fresh, bool weak)
+{
+    pt_loc_t at = location_of(pt, address);
+    if (!is_address(address)) return;
+    bool owned = owned_slot(pt, &at);
+    if (fresh && !owned) {
+        if (!fresh->len) return;
+        values = fresh;
+    }
+    pt_set_t        kept   = (pt_set_t){0};
+    const pt_set_t *stored = owned
+        ? owned_values(pt, &at, values, &kept) : values;
+    if (at.site == PT_EXTERNAL) {
+        pt_publish(pt, stored, &at);
+        note_external_write(pt, &at, stored);
+    }
+    else {
+        note_target(pt, pt->at, at.site, &at, weak);
+        for (size_t v = 0; v < stored->len; v++) {
+            pt_item_t item = item_under(at.path.steps, at.path.depth,
+                                        loc_deep(&at), stored->data[v]);
+            pt_add(pt, &pt->sites.data[at.site].contents,
+                   contents_key(at.site), item);
+            note_write(pt, at.site, &at, weak, item);
+        }
+    }
+    core_list_free(kept);
+}
+
 static void
 pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
          bool must)
 {
     bool weak = !must || addresses->len != 1;
-    for (size_t i = 0; i < addresses->len; i++) {
-        pt_loc_t at = location_of(pt, &addresses->data[i]);
-        if (!is_address(&addresses->data[i])) continue;
-        pt_set_t        kept   = (pt_set_t){0};
-        const pt_set_t *stored = owned_slot(pt, &at)
-            ? owned_values(pt, &at, values, &kept) : values;
-        if (at.site == PT_EXTERNAL) {
-            pt_publish(pt, stored, &at);
-            note_external_write(pt, &at, stored);
-        }
-        else {
-            note_target(pt, pt->at, at.site, &at, weak);
-            for (size_t v = 0; v < stored->len; v++) {
-                pt_item_t item = item_under(at.path.steps, at.path.depth,
-                                            loc_deep(&at), stored->data[v]);
-                pt_add(pt, &pt->sites.data[at.site].contents,
-                       contents_key(at.site), item);
-                note_write(pt, at.site, &at, weak, item);
-            }
-        }
-        core_list_free(kept);
-    }
+    for (size_t i = 0; i < addresses->len; i++)
+        store_at(pt, &addresses->data[i], values, nullptr, weak);
 }
 
 static bool

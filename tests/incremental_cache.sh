@@ -7,8 +7,16 @@ part=$3
 lto_flag=${4:-}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-N00B_CACHE="$tmp/cache"
-export N00B_CACHE
+# Each part builds copies of the sources in a fresh directory, so no cache
+# has seen the program's modules: the checks below are about how those are
+# stored and reused. The standard library comes from the caller's cache,
+# which saves compiling it from source for every part (the first build
+# costs about a tenth of what it does in an empty cache); a caller with no
+# cache gets an empty one of its own.
+if [ -z "${N00B_CACHE:-}" ]; then
+    N00B_CACHE="$tmp/cache"
+    export N00B_CACHE
+fi
 build_flags=
 
 fail() {

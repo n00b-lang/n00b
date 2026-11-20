@@ -72,6 +72,14 @@ static th_type *callee_type(gen_t *g, ir_func_t *target, ir_instr_t *call)
     bool     found  = false;
     th_type *scheme = core_dict_get(&g->schemes, target, &found);
 
+    // A callee with no body here (one read from the object cache) was not
+    // inferred, so it has no scheme carrying its bounds: its declared type
+    // is its scheme, and its type parameters' declared bounds hold for every
+    // call, as they do for a callee inferred from source.
+    if (!found && !target->n_blocks) {
+        return ty_instantiate_bounded(g->s, target->type, why_of(call, 2));
+    }
+
     return ty_instantiate(g->s, found ? scheme : target->type,
                           why_of(call, 2));
 }

@@ -87,7 +87,7 @@ static uint64_t
 storage_bits(ir_module_t *runtime, th_type *type, const n00b_abi_type_v1 *row)
 {
     const ir_final_layout_t *layout = type
-        ? ir_layout_final_visible(runtime, type, ir_module_target(runtime))
+        ? ir_layout_final(runtime, type, ir_module_target(runtime))
         : nullptr;
     return layout ? layout->intrinsic_bits : row->size_bits;
 }
@@ -97,7 +97,7 @@ storage_alignment(ir_module_t *runtime, th_type *type,
                   const n00b_abi_type_v1 *row)
 {
     const ir_final_layout_t *layout = type
-        ? ir_layout_final_visible(runtime, type, ir_module_target(runtime))
+        ? ir_layout_final(runtime, type, ir_module_target(runtime))
         : nullptr;
     return layout ? layout->alignment_bytes : row->alignment_bytes;
 }
@@ -477,7 +477,7 @@ encode_option_payload(array_writer_t *writer, th_type *type,
     th_type *option = th_builtin_applied(th_resolve(type), TH_BUILTIN_OPTION,
                                          1);
     const th_arg *argument = option ? th_named_arg(option, 0) : nullptr;
-    const ir_final_layout_t *layout = ir_layout_final_visible(
+    const ir_final_layout_t *layout = ir_layout_final(
         writer->runtime, type, ir_module_target(writer->runtime));
     uint32_t payload_index;
     if (!argument || argument->kind != TH_ARG_TYPE || !layout
@@ -610,7 +610,7 @@ encode_aggregate(array_writer_t *writer, th_type *type,
                  uint32_t source_kind, uint64_t source_bit_offset,
                  uint8_t *bytes, size_t byte_count, size_t depth)
 {
-    const ir_final_layout_t *layout = ir_layout_final_visible(writer->runtime,
+    const ir_final_layout_t *layout = ir_layout_final(writer->runtime,
         type, ir_module_target(writer->runtime));
     if (!layout || !value || depth > 64 || byte_count > SIZE_MAX / 8
         || layout->intrinsic_bits > byte_count * 8
@@ -1353,7 +1353,7 @@ n00bb_abi_storage_rows_build(
                 value_row = &types->rows[wrapped_index];
             }
         }
-        const ir_final_layout_t *layout = ir_layout_final_visible(runtime,
+        const ir_final_layout_t *layout = ir_layout_final(runtime,
             global->type, ir_module_target(runtime));
         uint32_t alignment = layout ? layout->alignment_bytes
                                     : type_row->alignment_bytes;
@@ -1429,7 +1429,7 @@ n00bb_abi_storage_rows_build(
         // The elements start 16 bytes in, after the array value, so the
         // storage is aligned for them too.
         const ir_final_layout_t *element_layout = inline_count
-            ? ir_layout_final_visible(runtime,
+            ? ir_layout_final(runtime,
                 n00bb_inline_global_element(global),
                 ir_module_target(runtime)) : nullptr;
         if (inline_count && (!element_layout

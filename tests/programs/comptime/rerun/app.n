@@ -1,0 +1,36 @@
+// Declaration initializers that rerun at run time because a comptime()
+// block writes their variable after them: each read gives 0, not 42.
+// `written.g` is written in its own module, whose initializer never reads
+// it; `direct` is read here directly; `via_func` only through a function.
+// A pure initializer that nothing else writes is still skipped (`kept`).
+import written
+
+func square_sum(n: int) -> int {
+    var total = 0
+    var i = 0
+    while i < n {
+        total = total + i * i
+        i = i + 1
+    }
+    return total
+}
+
+var direct: int = 0
+var via_func: int = 0
+if comptime() {
+    direct = 42
+    via_func = 42
+}
+var kept = square_sum(4)
+
+func get() -> int {
+    return via_func
+}
+
+__fd_write(2, "no read in init: " + decimal(written.g) + "\n")
+__fd_write(2, "direct read: " + decimal(direct) + "\n")
+__fd_write(2, "read via func: " + decimal(get()) + "\n")
+
+func main() {
+    __fd_write(2, "kept: " + decimal(kept) + "\n")
+}

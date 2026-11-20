@@ -1,9 +1,11 @@
 #!/bin/sh
 set -eu
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 root=$2
-tmp=$(mktemp -d)
+tmp=$(cd "$(mktemp -d)" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 mkdir "$tmp/elsewhere"
@@ -64,3 +66,113 @@ for place in "$root/../../../lib/sys" "$tmp"; do
         exit 1
     fi
 done
+
+# Every paths.path layer contributes roots, highest precedence first: a module
+# only on N00B_PATH is still found when --path is given, and the project and
+# user files add their entries too. When two layers hold the same module, the
+# --path copy wins.
+layers="$tmp/layers"
+# The compiler spells paths natively (D:/... on Windows), and on Windows reads
+# the user file from %APPDATA% and splits N00B_PATH at ';'.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) nlayers=$(cygpath -m "$layers") sep=';' ;;
+    *) nlayers=$layers sep=: ;;
+esac
+mkdir -p "$layers/flag" "$layers/env" "$layers/home/.config/n00b" \
+    "$layers/user" "$layers/project/plib"
+printf 'func pick() -> int { return 1 }\n' >"$layers/flag/both.n"
+printf 'func pick() -> int { return 2 }\n' >"$layers/env/both.n"
+printf 'func e() -> int { return 3 }\n' >"$layers/env/envonly.n"
+printf 'func p() -> int { return 4 }\n' >"$layers/project/plib/projonly.n"
+printf 'func u() -> int { return 5 }\n' >"$layers/user/useronly.n"
+printf '[paths]\npath = ["plib"]\n' >"$layers/project/n00b.cfg"
+printf '[paths]\npath = ["%s"]\n' "$nlayers/user" \
+    >"$layers/home/.config/n00b/config.cfg"
+cat >"$layers/project/main.n" <<'PROGRAM'
+import both
+import envonly
+import projonly
+import useronly
+require both.pick() == 1
+require envonly.e() + projonly.p() + useronly.u() == 12
+PROGRAM
+cd "$layers/project"
+if ! env -u XDG_CONFIG_HOME HOME="$layers/home" \
+        APPDATA="$nlayers/home/.config" N00B_PATH="$nlayers/env" \
+        "$compiler" build --path "$nlayers/flag" --output "$tmp/layers.bin" \
+        main.n >"$tmp/layers.log" 2>&1; then
+    echo 'paths.path layers did not all contribute roots' >&2
+    cat "$tmp/layers.log" >&2
+    exit 1
+fi
+"$tmp/layers.bin"
+
+# Each root is labelled by the layer it came from, in resolver notes and in
+# `n00b env`, and a directory named twice is searched and listed once.
+printf 'import nowhere\n' >"$layers/project/missing.n"
+labels() {
+    env -u XDG_CONFIG_HOME HOME="$layers/home" \
+        APPDATA="$nlayers/home/.config" \
+        N00B_PATH="$nlayers/env$sep$nlayers/env$sep$nlayers/flag$sep." \
+        "$compiler" "$@" --path "$nlayers/flag" --path "$nlayers/flag"
+}
+if labels check missing.n >"$tmp/labels.log" 2>&1; then
+    echo 'a missing module was found' >&2
+    exit 1
+fi
+expect_once() {
+    count=$(grep -cxF -- "$2" "$1" || true)
+    [ "$count" -eq 1 ] || {
+        echo "expected the line '$2' once, saw it $count times" >&2
+        cat "$1" >&2
+        exit 1
+    }
+}
+expect_once "$tmp/labels.log" '  note: searched the toolchain library'
+expect_once "$tmp/labels.log" '  note: searched the current directory'
+expect_once "$tmp/labels.log" \
+    "  note: searched \`--path\` entry \`$nlayers/flag\`"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`N00B_PATH\` entry \`$nlayers/env\`"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`paths.path\` entry \`plib\` from $nlayers/project/n00b.cfg:2"
+expect_once "$tmp/labels.log" \
+    "  note: searched \`paths.path\` entry \`$nlayers/user\` from $nlayers/home/.config/n00b/config.cfg:2"
+[ "$(grep -c 'note: searched' "$tmp/labels.log")" -eq 6 ] || {
+    echo 'duplicate roots were searched more than once' >&2
+    cat "$tmp/labels.log" >&2
+    exit 1
+}
+labels env >"$tmp/env.log" 2>&1 || true
+sed -n '/^package roots$/,/^$/p' "$tmp/env.log" >"$tmp/roots.log"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/flag  (\`--path\` entry \`$nlayers/flag\`)"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/env  (\`N00B_PATH\` entry \`$nlayers/env\`)"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/project/plib  (\`paths.path\` entry \`plib\` from $nlayers/project/n00b.cfg:2)"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/user  (\`paths.path\` entry \`$nlayers/user\` from $nlayers/home/.config/n00b/config.cfg:2)"
+[ "$(grep -c '^  ' "$tmp/roots.log")" -eq 6 ] || {
+    echo 'n00b env listed a root more than once' >&2
+    cat "$tmp/roots.log" >&2
+    exit 1
+}
+
+# Relative entries resolve against the canonical current directory, the same
+# one the resolver uses, even when it is reached through a symbolic link.
+mkdir -p "$layers/project/sub"
+ln -s "$layers/project" "$tmp/linked"
+(cd "$tmp/linked" && env -u XDG_CONFIG_HOME HOME="$layers/home" \
+    APPDATA="$nlayers/home/.config" \
+    "$compiler" env --path sub --path "$nlayers/project/sub") \
+    >"$tmp/linked.log" 2>&1 || true
+sed -n '/^package roots$/,/^$/p' "$tmp/linked.log" >"$tmp/roots.log"
+expect_once "$tmp/roots.log" "  $nlayers/project  (the current directory)"
+expect_once "$tmp/roots.log" "  $nlayers/project/sub  (\`--path\` entry \`sub\`)"
+if grep -q 'problem' "$tmp/roots.log" \
+        || [ "$(grep -c '`--path`' "$tmp/roots.log")" -ne 1 ]; then
+    echo 'a relative entry from a linked directory was mishandled' >&2
+    cat "$tmp/roots.log" >&2
+    exit 1
+fi

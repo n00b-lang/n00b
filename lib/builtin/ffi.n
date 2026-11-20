@@ -317,7 +317,9 @@ func ffi_release_holds_locked(event: string, keys: Array[u64]?, key: u64,
             ffi_drop_group(hold.group)
             if hold.release != nil {
                 let release: Ref[(u64) -> nil] = hold.release
-                release.call(hold.token)
+                # A call through a reference is given a place it may write.
+                var token = hold.token
+                release.call(token)
             }
             position = 0
         } else {

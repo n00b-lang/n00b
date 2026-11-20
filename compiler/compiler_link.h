@@ -226,7 +226,10 @@ typedef struct {
 static inline bool
 n00bb_injected_member(parse_sym_entry_t *symbol)
 {
-    return symbol && parse_sym_binding(symbol,
+    // A member is given its binding origin before this key, and an origin
+    // is never cleared: a symbol without one (most of those the scans over
+    // a module's scopes ask about) is answered without hashing the key.
+    return symbol && symbol->binding_origin && parse_sym_binding(symbol,
         CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY)) != nullptr;
 }
 typedef struct {
@@ -248,6 +251,8 @@ core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(
     n00bb_call_lookup_t lookup);
 const core_list_t(n00bb_import_source_t) *unqualified_import_sources(
     core_translation_unit_t *unit);
+parse_sym_entry_t *n00bb_unqualified_import_type(
+    core_translation_unit_t *unit, core_string_t name);
 typedef n00bb_trait_specialization_t *n00bb_trait_specialization_ptr_t;
 core_list_decl(n00bb_trait_specialization_ptr_t);
 
@@ -366,6 +371,11 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(core_translation_unit_ptr_t) units;
     core_dict_t unit_of_module;
     bool unit_of_module_ready;
+    // While a program with errors is analyzed: the modules of the units
+    // that import (transitively) a unit with errors and have none of their
+    // own. Their functions are not analyzed for their own sake.
+    core_dict_t unanalyzed_modules;
+    bool unanalyzed_ready;
     bool effect_checks_failed;
     bool lowered_with_errors;
     bool defer_program_analysis;
@@ -373,6 +383,9 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
     core_list_t(n00bb_ir_func_ptr_t) cached_functions;
+    // The bodies of the units reused from the cache (see
+    // n00bb_cached_unit_bodies), as the summary hooks were last bound.
+    core_list_t(n00bb_ir_func_ptr_t) cached_unit_bodies;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
     core_list_t(th_type_ptr_t) callback_handler_types;
     core_list_t(n00bb_ir_func_ptr_t) referenced_functions;
@@ -459,7 +472,21 @@ typedef struct n00bb_link_analysis_t {
     // Field uses name resolution could not type, with the IR value lowering
     // read the field from (see n00bb_note_lowered_field_use).
     core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
+    // Per IR module, how far n00bb_layout_module_types has got: the types
+    // it has walked and the named ones still waiting on a layout.
+    core_dict_t layout_progress;
+    bool layout_progress_ready;
 } n00bb_link_analysis_t;
+
+// Whether `module` belongs to a unit the analysis of a program with errors
+// leaves out (see unanalyzed_modules).
+static inline bool
+n00bb_module_unanalyzed(n00bb_link_analysis_t *analysis,
+                        const ir_module_t *module)
+{
+    return analysis && analysis->unanalyzed_ready && module
+        && core_dict_contains(&analysis->unanalyzed_modules, (void *)module);
+}
 
 void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
 

@@ -158,6 +158,21 @@ targets_answer(const call_targets_t *targets, bool hooked)
                             (uint64_t)hooked << 1 | targets->unknown);
 }
 
+// Whether `a` and `b` are one function: the same node, or a declaration
+// and the body it stands for, which a hook may hand back in its place
+// (a function a module reused from a cache declares).
+static bool
+same_function(const ir_func_t *a, const ir_func_t *b)
+{
+    if (a == b) return true;
+    a = a ? ir_func_definition((ir_func_t *)a) : nullptr;
+    b = b ? ir_func_definition((ir_func_t *)b) : nullptr;
+    return a == b
+        || (a && b && a->owner && b->owner && core_string_eq(a->name, b->name)
+            && core_string_eq(ir_module_name((ir_module_t *)a->owner),
+                              ir_module_name((ir_module_t *)b->owner)));
+}
+
 static bool
 plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
 {
@@ -165,7 +180,7 @@ plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
         ? ir_operand_value(&call->operands[0]) : nullptr;
     return hooked && !targets->unknown && targets->targets.len == 1
         && callee && callee->kind == IR_VAL_FUNC
-        && callee->owner == targets->targets.data[0];
+        && same_function(callee->owner, targets->targets.data[0]);
 }
 
 static void
@@ -244,6 +259,15 @@ note_global(ir_summaries_t *summaries, const ir_global_t *global,
     record_input(summaries, (summary_input_t){
         .kind = SUMMARY_INPUT_GLOBAL, .global = global,
         .answer = reachable ? 2 : 1});
+}
+
+static void
+note_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_global_t *global, uint8_t hidden)
+{
+    record_input(summaries, (summary_input_t){
+        .kind = SUMMARY_INPUT_HIDDEN, .caller = caller, .global = global,
+        .answer = (uint64_t)hidden + 1});
 }
 
 static bool
@@ -362,6 +386,11 @@ current_answer(ir_summaries_t *summaries, const summary_input_t *input)
         return (uint64_t)entries_access(summaries, input->site & 0xffff,
                                         &place) + 1;
     }
+    case SUMMARY_INPUT_HIDDEN:
+        return hooks && hooks->global_hidden && input->caller
+            ? (uint64_t)hooks->global_hidden(hooks->context, input->caller,
+                                             input->global) + 1
+            : (uint64_t)IR_SUMMARY_VISIBLE + 1;
     }
     return 0;
 }
@@ -381,6 +410,31 @@ inputs_hold(ir_summaries_t *summaries,
     summaries->sink      = sink;
     summaries->recording = recording;
     return holds;
+}
+
+// Whether each input answers now as it did, or went from "does not
+// overlap" (or "not reinterpreted") to the opposite, which is how
+// reinterpretations registered since change them.
+static bool
+inputs_grew(ir_summaries_t *summaries,
+            const core_list_t(summary_input_t) *inputs)
+{
+    core_list_t(summary_input_t) *sink = summaries->sink;
+    ir_summary_t *recording = summaries->recording;
+    summaries->sink      = nullptr;
+    summaries->recording = nullptr;
+    bool grew = true;
+    for (size_t i = 0; grew && i < inputs->len; i++) {
+        const summary_input_t *input = &inputs->data[i];
+        uint64_t now = current_answer(summaries, input);
+        grew = now == input->answer
+            || ((input->kind == SUMMARY_INPUT_OVERLAP
+                 || input->kind == SUMMARY_INPUT_REINTERPRETED)
+                && input->answer == 1 && now == 2);
+    }
+    summaries->sink      = sink;
+    summaries->recording = recording;
+    return grew;
 }
 
 static bool
@@ -560,7 +614,7 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
         input.answer = get_u64(&r);
-        if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.failed = true;
+        if (input.kind > SUMMARY_INPUT_HIDDEN) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
     if (r.failed || r.at != r.size || !summary->stable) {
@@ -585,8 +639,10 @@ decode_stored_body(ir_summary_t *summary)
     *summary            = *decoded;
     core_list_free(summary->deps);
     core_list_free(summary->inputs);
+    core_list_free(summary->fields);
     summary->deps       = shell.deps;
     summary->inputs     = shell.inputs;
+    summary->fields     = shell.fields;
     summary->identity   = shell.identity;
     summary->content    = shell.content;
     summary->stable     = shell.stable;
@@ -598,5 +654,6 @@ decode_stored_body(ir_summary_t *summary)
     *decoded        = shell;
     decoded->deps   = core_list_new(summary_dep_t);
     decoded->inputs = core_list_new(summary_input_t);
+    decoded->fields = core_list_new(ir_sfield_t);
     summary_free(decoded);
 }

@@ -38,6 +38,10 @@ typedef struct {
 } n00bb_dispatch_target_t;
 
 bool n00bb_reference_dispatch(core_string_t method, bool *writable);
+// Notes on the diagnostic being reported naming each of `trait`'s functions
+// that no function implements for `receiver`, when it implements others.
+void n00bb_note_unimplemented(core_diagnostics_t *diagnostics, th_ctx *types,
+                              th_type *receiver, core_string_t trait);
 // The type a built-in integer operation on operands of these two types runs
 // at: the smallest holding both, stopping at 64 bits unless one is 128-bit.
 // Null when they are the same type, or either is not a promotable integer.

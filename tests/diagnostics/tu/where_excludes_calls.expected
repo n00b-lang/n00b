@@ -1,0 +1,8 @@
+tests/diagnostics/tu/where_excludes_calls.n:3:11: note N00B-S0064: parameter `x` could be `view`: `keep` never writes anything reachable from it
+tests/diagnostics/tu/where_excludes_calls.n:4:36: error N00B-T0608: `keep` cannot take `string` here: its `where` clause excludes it
+  tests/diagnostics/tu/where_excludes_calls.n:3:6: note: `keep` is declared here
+tests/diagnostics/tu/where_excludes_calls.n:6:9: error N00B-T0608: `local` cannot take `string` here: its `where` clause excludes it
+tests/diagnostics/tu/where_excludes_calls.n:9:9: error N00B-T0608: `keep` cannot take `string` here: its `where` clause excludes it
+  tests/diagnostics/tu/where_excludes_calls.n:3:6: note: `keep` is declared here
+tests/diagnostics/tu/where_excludes_calls.n:11:9: error N00B-T0608: `keep` cannot take `string` here: its `where` clause excludes it
+  tests/diagnostics/tu/where_excludes_calls.n:3:6: note: `keep` is declared here

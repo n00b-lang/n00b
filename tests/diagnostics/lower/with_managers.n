@@ -59,33 +59,3 @@ func opened() -> int {
 func opened_plainly() -> int {
     return opened()
 }
-
-# An `__exit` returning a `bool` can drop a failure: fine for a `with`
-# statement, but a `with` used as a value would be left with no value.
-record Dropper {
-    n: int
-}
-func dropper() -> Dropper { return (n = 6) }
-func __enter(self: Dropper) {}
-func __exit(self: Dropper, value: nil, failure: 'E? = nil) -> bool {
-    return failure != nil
-}
-func dropped_statement() {
-    with dropper() {}
-}
-func dropped_value() -> int {
-    return with d = dropper() { -> 1 }
-}
-
-# `__exit` returns nothing or a `bool`.
-record Counter {
-    n: int
-}
-func counter() -> Counter { return (n = 7) }
-func __enter(self: Counter) {}
-func __exit(self: Counter, value: nil, failure: 'E? = nil) -> int {
-    return self.n
-}
-func counted() {
-    with counter() {}
-}

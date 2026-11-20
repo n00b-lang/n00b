@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# The checks below match diagnostic codes, whatever the caller's environment.
+export N00B_DIAGNOSTIC_CODES=1
 
 compiler=$1
 sources=$2
@@ -7,8 +9,9 @@ expected=$3
 names=$4
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-N00B_CACHE="$tmp/cache"
-export N00B_CACHE
+# The modules are copied to a directory no cache has seen, so the first
+# check reads them from source and the later ones from the cache. The
+# caller's cache supplies the standard library.
 cp "$sources"/*.n "$tmp/"
 cd "$tmp"
 

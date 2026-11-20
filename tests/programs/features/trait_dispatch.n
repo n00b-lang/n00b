@@ -133,3 +133,119 @@ let base: Base = (v = 4)
 assert summed(base) == 14
 assert base.total(1) == 5
 assert base.total() == 4
+
+# A trait method called as a function, `area(x)`, on a value whose type is
+# bound by the trait goes to the trait's method, as `x.area()` does, not to
+# the functions of that name that take concrete types.
+trait Shape {
+    func area(self: 'T) -> f64
+}
+
+record Square {
+    side: f64
+}
+
+record Circle {
+    r: f64
+}
+
+func area(self: Square) -> f64 {
+    return self.side * self.side
+}
+
+func area(self: Circle) -> f64 {
+    return 3.0 * self.r * self.r
+}
+
+func area_of(x: 'T) -> f64 where 'T: Shape {
+    return area(x)
+}
+
+func area_of_shape(x: Shape) -> f64 {
+    return area(x)
+}
+
+func area_of_any(x: Any) -> f64 {
+    typecase x {
+        case Shape {
+            return area(x)
+        }
+        else {
+            return 0.0
+        }
+    }
+}
+
+let square: Square = (side = 2.0)
+let circle: Circle = (r = 1.0)
+assert area_of(square) == 4.0
+assert area_of(circle) == 3.0
+assert area_of_shape(square) == 4.0
+assert area_of_shape(circle) == 3.0
+assert area_of_any(cast[Any] square) == 4.0
+
+# With one function of that name, a call on the bound variable still goes
+# through the bound, and a call on a concrete value goes to the function.
+trait Sized {
+    func size(self: 'T) -> int
+}
+
+record Pile {
+    n: int
+}
+
+func size(self: Pile) -> int {
+    return self.n
+}
+
+func size_of(x: 'T, pile: Pile) -> int where 'T: Sized {
+    return size(x) + 10 * size(pile)
+}
+
+let pile: Pile = (n = 3)
+let other: Pile = (n = 2)
+assert size_of(pile, other) == 23
+
+# Inside a function, a trait used as an element type is settled by what is
+# stored in the container.
+func stored_area(square: Square) -> f64 {
+    var shapes: Array[Shape] = new[Array[Shape]](2)
+    shapes[0] = square
+    shapes[1] = square
+    return shapes[0].area() + area(shapes[1])
+}
+
+assert stored_area(square) == 8.0
+
+# An implementation may add optional parameters the trait's method doesn't
+# name. Called through the trait they are left out, for every
+# implementation, not only the first one given an adapter.
+trait Weighed {
+    func weight(self: 'T) -> int
+}
+
+record Crate {
+    n: int
+}
+
+record Barrel {
+    m: int
+}
+
+func weight(self: Crate, factor: int = 1) -> int {
+    return self.n * factor
+}
+
+func weight(self: Barrel, factor: int = 1) -> int {
+    return self.m * factor
+}
+
+func weight_of(w: Weighed) -> int {
+    return w.weight()
+}
+
+let crate: Crate = (n = 3)
+let barrel: Barrel = (m = 5)
+assert weight_of(crate) == 3
+assert weight_of(barrel) == 5
+assert weight(barrel, factor = 2) == 10

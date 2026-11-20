@@ -1,0 +1,137 @@
+# A header comment, kept apart from the first declaration.
+# It runs for two lines.
+
+import shape
+
+// The section below is introduced by this comment.
+
+func a() -> int {
+    let x: int = 1
+
+    # Stands alone between two statements.
+
+    return x
+}
+
+/* A block comment */
+func b() -> int {
+    return 2
+}
+
+// Everything below is already formatted, and `fmt --check` keeps it so.
+
+#[setup#
+import sys.env
+#]setup#
+
+record E {
+    code: i64        # the code
+    text: string?    # the text
+    fn:   string     # the function
+}
+
+func f() -> int {
+    let a: int = 1    # one
+
+    let b: int = 2 /* two */
+    # standalone
+    return a + b      // done
+}
+
+// A multi-line case stays as it is.
+func classify(value: int) -> int {
+    switch value {
+        case 2 {
+            let doubled: int = value * 2
+            return doubled
+        }
+        else {
+            return 0
+        }
+    }
+}
+
+func classify_type(value: Any) -> int {
+    typecase value {
+        case string {
+            let fallback: int = 7
+            return fallback
+        }
+        else {
+            return 0
+        }
+    }
+}
+
+// Value sigils
+func risky(x: int) -> int fail: string {
+    if x < 0 {
+        fail "negative"
+    }
+    return x
+}
+
+func after_call() -> int {
+    let v = try {
+        risky(1)!
+        -> 3
+    } fail(e) {
+        -> 2
+    }
+    return v
+}
+
+func after_binding() -> int {
+    let v = try {
+        let a: int = risky(1)!
+        -> a
+    } fail(e) {
+        -> 2
+    }
+    return v
+}
+
+func b() -> int {
+    try {
+        return risky()!
+    } fail(e: string) {
+        return 1
+    }
+}
+
+func pick(c: bool) -> int {
+    let x = {
+        if c {
+            -> 1
+        }
+        -> 2
+    }
+    -> x
+}
+
+func total(items: List[int]) -> int {
+    var sum: int = 0
+    for item in items {
+        sum += item
+    }
+    return sum
+}
+
+// Not operator
+var p: bool = true
+let negated = not true == false
+let symbol = !p == false
+let both = not p and !p
+
+func f(q: bool) -> bool {
+    return not q
+}
+
+// An empty result: last, as a comment after an indented block would belong
+// to the block
+func idle():
+    pass
+
+func braced() {
+    pass
+}

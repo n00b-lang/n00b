@@ -83,6 +83,9 @@ static const struct {
 
 static core_string_t mode_name(const pctx *c, th_mode m)
 {
+    if (c->options && c->options->omit_modes) {
+        return CORE_STRING_STATIC("");
+    }
     switch (m) {
     case TH_OUT:     return CORE_STRING_STATIC("out ");
     case TH_INOUT:   return source_spelling(c) ? CORE_STRING_STATIC("modify ")

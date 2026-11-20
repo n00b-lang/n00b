@@ -1,0 +1,6 @@
+import shape
+
+package demo {
+  export shape
+        export shape.area
+}

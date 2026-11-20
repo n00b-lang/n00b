@@ -1,2 +1,6 @@
 tests/diagnostics/tu/untyped_variable.n:1:5: error N00B-T0586: cannot infer the type of `untyped`: it has no type or initial value, and nothing assigned to it settles one
   help: give it a type, as in `var untyped: int`
+tests/diagnostics/tu/untyped_variable.n:10:9: error N00B-T0586: `shape` is declared as the trait `Shape`, but nothing assigned to it settles which type that implements `Shape` it holds
+  help: assign `shape` a value, or declare it with the type that implements `Shape`
+tests/diagnostics/tu/untyped_variable.n:14:9: error N00B-T0586: `shape` is declared as the trait `Shape`, but nothing assigned to it settles which type that implements `Shape` it holds
+  help: assign `shape` a value, or declare it with the type that implements `Shape`

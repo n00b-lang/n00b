@@ -617,15 +617,14 @@ static bool binding_reentry_header(V *v, ir_func_t *function,
         ir_value_annots((ir_value_t *)binding),
         CORE_STRING_STATIC("ir.binding_reentry_header"));
     if (!annot) return true;
+    // The header must be a block of the function. It need not be reached,
+    // nor have a back edge: a loop whose body always leaves (`while true {
+    // ...; return }`) or that cannot run is not re-entered, and its binding
+    // is then checked as any other.
+    (void)graph;
     ir_block_t *header = annot->kind == IR_ANNOT_STR && annot->s.data
         ? ir_block_find(function, annot->s) : nullptr;
-    bool has_backedge = false;
-    for (uint32_t i = 0; header && i < ir_pred_count(graph, header); i++) {
-        ir_block_t *pred = ir_pred_at(graph, header, i);
-        has_backedge |= pred && ir_block_reachable(graph, pred)
-            && ir_dominates(graph, header, pred);
-    }
-    if (!header || !ir_block_reachable(graph, header) || !has_backedge) {
+    if (!header) {
         broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
               "phase.binding-reentry-region",
               "binding %.*s names an invalid loop re-entry header",

@@ -60,7 +60,7 @@ register_shape_trait(th_ctx *types, th_env *environment,
     th_type *methods = th_record(types, nullptr, 0);
     patterns->declared = methods && th_env_register_trait_contracts(
         environment, patterns->trait, CORE_STRING_STATIC("builtins"),
-        CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods);
+        N00BB_COMPILER_PACKAGE, TH_ENV_PUBLIC, methods);
     return patterns->declared;
 }
 

@@ -129,10 +129,10 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *address = value ? n00bb_place_of(context, value, true, span)
                                 : nullptr;
     lower->write_back_open_index = saved;
-    if ((!address && !accessed)
-        || (address && !n00bb_place_writable(address))) {
-        ir_local_t *local = nullptr;
-        ir_value_t *storage = nullptr;
+    ir_local_t *local = nullptr;
+    ir_value_t *storage = nullptr;
+    if (n00bb_argument_place(address, accessed, &local, &storage)
+            != N00BB_ARGUMENT_WRITABLE) {
         parse_sym_entry_t *variable = address
                 && n00bb_place_root(address, &local, &storage)
             ? ir_lower_binding_symbol(context, local, storage)
@@ -333,6 +333,48 @@ n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (overloaded && candidates) *candidates = found;
     else core_list_free(found);
     return overloaded;
+}
+
+// A call `f(x, ...)` to the one function named `f`, made in a function
+// with a trait bound whose trait declares `f`, when `f`'s first parameter
+// takes a concrete type. It is lowered as an overloaded call with that one
+// candidate, so typing can send it to the trait's method instead, as it
+// does `x.f(...)`, when `x`'s type is the bound variable. Types aren't
+// known yet here, so typing decides.
+static bool
+trait_method_candidate(ir_lower_context_t *context, parse_grammar_t *grammar,
+                       parse_tree_t *arguments, parse_sym_entry_t *symbol)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *signature = symbol->kind == PARSE_SYM_FUNCTION
+        ? n00bb_symbol_signature(symbol) : nullptr;
+    signature = signature ? th_resolve(signature) : nullptr;
+    while (signature && th_kind_of(signature) == TH_BINDER)
+        signature = th_resolve(th_binder_body(signature));
+    if (!signature || th_kind_of(signature) != TH_FUNCTION
+        || !th_func_nparams(signature)
+        || !th_is_closed(types, th_func_param(signature, 0)->type))
+        return false;
+    core_list_t(n00bb_tree_ptr_t) nodes = core_list_new(n00bb_tree_ptr_t);
+    collect_positional_nodes(grammar,
+        child_nt(grammar, arguments, CORE_STRING_STATIC("positional-args")),
+        &nodes);
+    size_t positional = nodes.len;
+    core_list_free(nodes);
+    if (!positional) return false;
+
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    n00bb_link_analysis_t *analysis = state ? state->link_analysis : nullptr;
+    core_list_t(th_trait_requirement) bounds =
+        n00bb_declared_bounds(lower ? lower->function_symbol : nullptr);
+    bool found = false;
+    for (size_t i = 0; analysis && !found && i < bounds.len; i++)
+        found = bounds.data[i].kind == TH_CON_IMPLEMENTS
+            && trait_method_requirement_symbol(grammar, analysis, lower->unit,
+                   bounds.data[i].iface, symbol->name);
+    core_list_free(bounds);
+    return found;
 }
 
 // A method's receiver is written back when the method takes it by
@@ -698,6 +740,38 @@ n00bb_emit_intrinsic(ir_lower_context_t *context, parse_sym_entry_t *symbol,
             : lower_builtin_failure(context, valid, span, symbol,
                 N00B_TEXT_PHRASE_TAKES_NO_ARGUMENTS);
     }
+    if (n00bb_builtin_native_entry_function(symbol)) {
+        // A function's name gives the function itself (native_entry_function
+        // in walk.c), whose type is a function's, not a reference's.
+        ir_value_t *function = count == 1 && !copyouts ? operands[0]
+                                                       : nullptr;
+        th_ctx *types = ir_module_types(context->module);
+        bool named = function && function->kind == IR_VAL_FUNC
+            && function->owner
+            && th_kind_of(th_resolve(function->type)) != TH_INDIRECTION;
+        if (named && !th_is_closed(types, function->owner->type)) {
+            lower_report(context, N00B_DIAG_NATIVE_ENTRY_NOT_FUNCTION, span,
+                N00B_TEXT_NATIVE_ENTRY_GENERIC,
+                N00BB_ARGS(ARG_TEXT(function->owner->name)));
+            return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        }
+        if (!named) {
+            lower_report(context, N00B_DIAG_NATIVE_ENTRY_NOT_FUNCTION, span,
+                N00B_TEXT_NATIVE_ENTRY_NOT_FUNCTION, N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_NAME_THE_FUNCTION_ITSELF,
+                       N00BB_NO_ARGS);
+            return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        }
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_BITCAST,
+                                                     span);
+        return cast && ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_native_entry_"),
+                call_result_type)
+            && ir_instr_operand_value(cast, function)
+            ? (ir_lower_result_t){IR_LOWER_VALUE, cast->dest}
+            : lower_internal(context, span,
+                             "could not emit a function's native entry");
+    }
     if (comptime_builtin) {
         bool valid = !count && !copyouts;
         ir_value_t *flag = valid
@@ -938,6 +1012,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                                            arguments, symbol->name,
                                            result_type, span, candidates);
     }
+    parse_tree_t *arguments = symbol ? (call_label
+            && call_label->kind == PARSE_CF_CALL ? call_label->then_body
+            : call_arguments_node(visit->grammar, call_node)) : nullptr;
+    if (symbol && trait_method_candidate(context, visit->grammar, arguments,
+                                         symbol)) {
+        candidates = core_list_new(parse_sym_entry_ptr_t);
+        core_list_push(candidates, symbol);
+        return n00bb_lower_overloaded_call(context, visit->grammar, call_node,
+                                           arguments, symbol->name,
+                                           result_type, span, candidates);
+    }
     if (!symbol && !bound && core_diagnostics_failed(lower_diagnostics(context)))
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     if (!symbol) {
@@ -1006,6 +1091,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool signal_fence_builtin = n00bb_builtin_signal_fence_function(symbol);
     bool machine_builtin = n00bb_builtin_machine_function(symbol);
     bool comptime_builtin = n00bb_builtin_comptime_function(symbol);
+    bool native_entry_builtin = n00bb_builtin_native_entry_function(symbol);
     bool prefetch_builtin = n00bb_builtin_prefetch_function(symbol);
     bool atomic_rmw_builtin = n00bb_builtin_atomic_rmw_function(symbol);
     bool atomic_cas_builtin = n00bb_builtin_atomic_cas_function(symbol);
@@ -1020,6 +1106,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || signal_fence_builtin
         || machine_builtin
         || comptime_builtin
+        || native_entry_builtin
         || prefetch_builtin
         || atomic_rmw_builtin
         || atomic_cas_builtin
@@ -1278,7 +1365,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             || prefetch_builtin
             || atomic_rmw_builtin || atomic_cas_builtin
             || atomic_access_builtin
-            || native_builtin
+            || native_builtin || native_entry_builtin
             || function_parameter_info(visit->grammar, symbol,
                 formal_params, i, &formal, nullptr, &flags, &mode);
         const th_param *parameter = th_func_param(signature, i);
@@ -1415,7 +1502,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || byte_diff_builtin || unsafe_arithmetic || bit_count_builtin
         || gc_memory_builtin || volatile_load_builtin || signal_fence_builtin
         || machine_builtin
-        || comptime_builtin || prefetch_builtin || atomic_rmw_builtin
+        || comptime_builtin || native_entry_builtin || prefetch_builtin
+        || atomic_rmw_builtin
         || atomic_cas_builtin || atomic_access_builtin;
     th_type *intrinsic_contract = n00bb_symbol_signature(symbol);
     bool open_intrinsic = intrinsic

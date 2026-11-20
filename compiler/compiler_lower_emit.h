@@ -22,6 +22,23 @@
 // able to drop a failure.
 #define N00BB_WITH_VALUE_EXIT_KEY CORE_STRING_STATIC("n00bb.with-value-exit")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
+// On a callback construction whose handler reference is a reference
+// adapter: the function it adapts, which the callback holds.
+#define N00BB_CALLBACK_HANDLER_KEY \
+    CORE_STRING_STATIC("n00bb.callback-handler")
+// On a reference adapter's call of its function: each argument that is one
+// of the adapter's own optional parameters, given to an optional parameter,
+// is passed on as the adapter was given it, present or omitted.
+#define N00BB_FORWARDS_OPTIONAL_KEY \
+    CORE_STRING_STATIC("n00bb.forwards-optional")
+// On the storage a variable is kept in (an IR_OP_ALLOC): its name.
+#define N00BB_STORAGE_NAME_KEY CORE_STRING_STATIC("n00bb.storage-name")
+// On the storage a `const` is kept in.
+#define N00BB_STORAGE_CONST_KEY CORE_STRING_STATIC("n00bb.storage-const")
+// On a reference adapter's IR function: the function it adapts
+// (n00bb_reference_adapter_target).
+#define N00BB_REFERENCE_ADAPTER_TARGET_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter.target")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
 #define N00BB_COMPOUND_KEY CORE_STRING_STATIC("n00bb.compound")
 #define N00BB_ZEROED_NEW_KEY CORE_STRING_STATIC("n00bb.zeroed-new")
@@ -36,6 +53,8 @@ ir_value_t *n00bb_emit_hook_call(ir_lower_context_t *context,
                                  ir_value_t *argument, ir_span_t span);
 core_string_t describe_parameter_target(th_mode mode, parse_sym_entry_t *callee,
                                         core_string_t parameter);
+// "a `modify` parameter", and so on, for a parameter passed by `mode`.
+n00bb_text_t n00bb_mode_parameter(th_mode mode);
 
 n00bb_lower_context_t *n00bb_solved_lower_new(n00bb_link_analysis_t *analysis,
                                               parse_grammar_t *grammar,
@@ -120,9 +139,65 @@ bool n00bb_emit_indirect_write(ir_lower_context_t *context,
                                ir_span_t span);
 ir_value_t *n00bb_place_of(ir_lower_context_t *context, ir_value_t *value,
                            bool writing, ir_span_t span);
+bool n00bb_place_root(ir_value_t *place, ir_local_t **local,
+                      ir_value_t **storage);
+bool n00bb_place_writable(const ir_value_t *place);
+// Whether an argument can be given to a parameter that takes it by place
+// (`out` or `modify`, or any parameter of a call through a function
+// reference whose function isn't known): the one decision direct calls,
+// method calls and calls through references all make. `place` is where
+// the argument was read from, nullptr when it is no place (a literal or a
+// temporary); `accessed` says it is an element its container reaches
+// through `__read`, which the call writes back through `__write`.
+// `local` and `storage` are set to the variable the place is part of,
+// when it is one, for the report of why.
+typedef enum : uint8_t {
+    N00BB_ARGUMENT_WRITABLE,
+    // No place at all: a literal or a temporary.
+    N00BB_ARGUMENT_NO_PLACE,
+    // Part of a `let` or `const`.
+    N00BB_ARGUMENT_IMMUTABLE,
+    // Part of a parameter that isn't itself passed by reference.
+    N00BB_ARGUMENT_VALUE_PARAMETER,
+} n00bb_argument_place_t;
+n00bb_argument_place_t n00bb_argument_place(ir_value_t *place, bool accessed,
+                                            ir_local_t **local,
+                                            ir_value_t **storage);
 bool n00bb_from_reference_address(ir_value_t *value);
 bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                      ir_span_t span);
+ir_value_t *n00bb_emit_local_read(ir_lower_context_t *context,
+                                  ir_local_t *local, ir_span_t span);
+ir_block_t *n00bb_branch_block_named(ir_lower_context_t *context,
+                                     n00bb_lower_context_t *lower,
+                                     core_string_t role);
+ir_instr_t *n00bb_emit_uint_constant(ir_lower_context_t *context,
+                                     th_type *uint_type, uint64_t value,
+                                     ir_span_t span, core_string_t prefix);
+
+// The IR function of reference adapter `symbol` (n00bb_reference_adapter_t),
+// noted with the function it adapts and the order it passes its
+// parameters in, for n00bb_reference_adapter_target. nullptr if `symbol`
+// is no reference adapter or its functions can't be found.
+ir_func_t *n00bb_note_reference_adapter(n00bb_link_analysis_t *analysis,
+                                        parse_sym_entry_t *symbol);
+
+// The function reference adapter `adapter` adapts, when it is one that was
+// noted (n00bb_note_reference_adapter), else nullptr. With `order`, also
+// the order (allocated) and its `count`: the function's parameter `i` is
+// passed the adapter's `(*order)[i]`.
+ir_func_t *n00bb_reference_adapter_target(const ir_func_t *adapter,
+                                          uint32_t **order, size_t *count);
+
+// The reference adapter of generic function instance `instance`, as
+// referred to through a reference of type `value_type` (the referent, which
+// names the keyword parameters), made in the instance's module when it
+// isn't yet (`*made`): `instance` itself when it takes only `in`
+// parameters and declares its keyword ones in the type's order. nullptr
+// when it can't be made.
+ir_func_t *n00bb_instance_reference_adapter(ir_ctx_t *ir_context,
+                                            ir_func_t *instance,
+                                            th_type *value_type, bool *made);
 ir_lower_result_t n00bb_emit_char_array(ir_lower_context_t *context,
                                         const uint8_t *bytes, size_t length,
                                         th_type *result_type, ir_span_t span);

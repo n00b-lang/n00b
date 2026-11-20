@@ -1,7 +1,9 @@
 #include "lib/object_section.h"
 
+#include <stdlib.h>
 #include <string.h>
 
+#include "lib/alloc.h"
 #include "lib/byteorder.h"
 
 static bool span(size_t total, uint64_t offset, uint64_t length)
@@ -805,7 +807,59 @@ bool core_object_symbol_at(const void *image, size_t image_size,
     return true;
 }
 
-bool core_object_symbol_extent(const void *image, size_t image_size,
+typedef struct {
+    uint32_t section;
+    uint64_t offset;
+} symbol_place_t;
+
+struct core_object_symbol_places_t {
+    symbol_place_t *places;
+    size_t count;
+};
+
+static int compare_symbol_places(const void *left, const void *right)
+{
+    const symbol_place_t *a = left, *b = right;
+    if (a->section != b->section) return a->section < b->section ? -1 : 1;
+    return (a->offset > b->offset) - (a->offset < b->offset);
+}
+
+core_object_symbol_places_t *core_object_symbol_places_new(
+    const void *image, size_t image_size, core_target_object_format_t format,
+    const core_object_section_t *section)
+{
+    symbol_table_t table;
+    if (!image || !section
+        || !symbol_table(image, image_size, format, section, &table))
+        return nullptr;
+    core_object_symbol_places_t *places =
+        core_alloc(core_object_symbol_places_t);
+    places->places = core_alloc_array(symbol_place_t,
+                                      table.count ? table.count : 1);
+    // The symbols core_object_symbol_extent compares against, in its order.
+    for (uint64_t i = 0; i < table.count; i++) {
+        symbol_entry_t other;
+        if (symbol_entry(image, image_size, format, &table, i, &other))
+            places->places[places->count++] =
+                (symbol_place_t){other.section, other.offset};
+        if (format == CORE_TARGET_OBJECT_COFF)
+            i += table.entries[i * table.width + 17];
+    }
+    if (places->count)
+        qsort(places->places, places->count, sizeof(*places->places),
+              compare_symbol_places);
+    return places;
+}
+
+void core_object_symbol_places_free(core_object_symbol_places_t *places)
+{
+    if (!places) return;
+    core_free(places->places);
+    core_free(places);
+}
+
+bool core_object_symbol_extent(const core_object_symbol_places_t *places,
+                               const void *image, size_t image_size,
                                core_target_object_format_t format,
                                const core_object_section_t *section,
                                uint32_t native_symbol_index,
@@ -832,14 +886,30 @@ bool core_object_symbol_extent(const void *image, size_t image_size,
     if (!core_object_section_at(image, image_size, format, home.section,
                                 &owner) || home.offset >= owner.size)
         return false;
+    // The first place past the symbol's own in its section, if any, ends it.
     uint64_t end = owner.size;
-    for (uint64_t i = 0; i < table.count; i++) {
-        symbol_entry_t other;
-        if (symbol_entry(bytes, image_size, format, &table, i, &other)
-            && other.section == home.section && other.offset > home.offset
-            && other.offset < end) end = other.offset;
-        if (format == CORE_TARGET_OBJECT_COFF)
-            i += table.entries[i * table.width + 17];
+    if (!places) {
+        for (uint64_t i = 0; i < table.count; i++) {
+            symbol_entry_t other;
+            if (symbol_entry(bytes, image_size, format, &table, i, &other)
+                && other.section == home.section && other.offset > home.offset
+                && other.offset < end) end = other.offset;
+            if (format == CORE_TARGET_OBJECT_COFF)
+                i += table.entries[i * table.width + 17];
+        }
+    } else {
+        symbol_place_t wanted = {home.section, home.offset};
+        size_t low = 0, high = places->count;
+        while (low < high) {
+            size_t middle = low + (high - low) / 2;
+            if (compare_symbol_places(&places->places[middle], &wanted) <= 0)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        if (low < places->count && places->places[low].section == home.section
+            && places->places[low].offset < end)
+            end = places->places[low].offset;
     }
     *out_bytes = end - home.offset;
     return true;

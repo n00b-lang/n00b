@@ -1,0 +1,19 @@
+tests/diagnostics/narrowing/changed_after_test.n:4:5: warning N00B-N0024: `current` is never used
+  help: remove it
+tests/diagnostics/narrowing/changed_after_test.n:6:6: warning N00B-N0019: function `clear` is never called
+  help: call it or delete it
+tests/diagnostics/narrowing/changed_after_test.n:10:6: warning N00B-N0019: function `clear_twice` is never called
+  help: call it or delete it
+tests/diagnostics/narrowing/changed_after_test.n:17:16: error N00B-S0009: `current` may be nil here
+  help: use its value only where a test such as `current != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/changed_after_test.n:26:26: error N00B-S0009: `current` may be nil here
+  help: use its value only where a test such as `current != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/changed_after_test.n:36:16: error N00B-S0009: `current` may be nil here
+  help: use its value only where a test such as `current != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/changed_after_test.n:46:26: error N00B-S0009: `held` may be nil here
+  tests/diagnostics/narrowing/changed_after_test.n:44:31: note: `held` is assigned here, after the test
+  help: use its value only where a test such as `held != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/changed_after_test.n:52:6: warning N00B-N0019: function `reset` is never called
+  help: call it or delete it
+tests/diagnostics/narrowing/changed_after_test.n:59:26: error N00B-S0009: `current` may be nil here
+  help: use its value only where a test such as `current != nil` proves it, with no assignment to it in between

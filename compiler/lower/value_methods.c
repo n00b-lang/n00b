@@ -63,12 +63,76 @@ n00bb_branch_on(ir_block_t *block, ir_value_t *test, ir_block_t *yes,
         && ir_instr_operand_block(branch, no);
 }
 
+// `==` on a type with a `__cmp` and no `__equal` follows `__cmp`: the two
+// are equal when it gives `Comparison.equal`.
+static ir_value_t *
+n00bb_cmp_equal_test(ir_lower_context_t *context, n00bb_tu_state_t *state,
+                     ir_block_t *current, const th_env_method_t *selected,
+                     ir_value_t *left, ir_value_t *right, size_t field,
+                     uint32_t depth)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *comparison = th_name(types, CORE_STRING_STATIC("Comparison"));
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    parse_sym_entry_t *equal = comparison
+        ? n00bb_comparison_member(state->link_analysis, comparison,
+                                  CORE_STRING_STATIC("equal"))
+        : nullptr;
+    n00bb_enum_value_t *ordinal = equal && equal->type
+        && equal->has_comptime_value ? equal->comptime_value : nullptr;
+    char buffer[3][64];
+    ir_value_t *ordered = ordinal ? n00bb_record_field_call(context, current,
+        selected, left, right, comparison, n00bb_format_name(buffer[0],
+            sizeof buffer[0], "field_%zu_%u_cmp", field, depth)) : nullptr;
+    ir_instr_t *constant = ordered
+        ? ir_instr_add(current, IR_OP_ENUM_CONST) : nullptr;
+    if (!constant || !ir_instr_set_dest(constant, n00bb_format_name(
+                buffer[1], sizeof buffer[1], "field_%zu_%u_cmp_equal",
+                field, depth), equal->type)
+        || !ir_instr_operand_name(constant, equal->name)
+        || !ir_instr_operand_int_lit(constant, (ir_lit_t){
+                .mag = ordinal->magnitude, .neg = ordinal->negative}))
+        return nullptr;
+    ir_instr_t *test = ir_instr_add(current, IR_OP_EQ);
+    return test && ir_instr_set_dest(test, n00bb_format_name(buffer[2],
+            sizeof buffer[2], "field_%zu_%u_equal", field, depth), boolean)
+        && ir_instr_operand_value(test, ordered)
+        && ir_instr_operand_value(test, constant->dest) ? test->dest
+        : nullptr;
+}
+
+th_env_method_status_t
+n00bb_user_equality(th_ctx *types, th_type *type, th_env_method_t *selected,
+                    bool *by_cmp)
+{
+    *by_cmp = false;
+    th_env_method_status_t status = th_env_method_resolve(types, type,
+        N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"), selected);
+    if (status == TH_ENV_METHOD_NOT_FOUND) {
+        *by_cmp = true;
+        status = th_env_method_resolve(types, type, N00BB_COMPARABLE_TRAIT,
+            CORE_STRING_STATIC("__cmp"), selected);
+    }
+    return status;
+}
+
+// How `==` compares values of a field's type (n00bb_user_equality), when
+// it can't fail.
+static bool
+n00bb_field_equality(n00bb_tu_state_t *state, th_type *type,
+                     th_env_method_t *selected, bool *by_cmp)
+{
+    return n00bb_user_equality(state->types, type, selected, by_cmp)
+            == TH_ENV_METHOD_FOUND
+        && (!selected->error_type || th_is_nil(selected->error_type));
+}
+
 static bool
 n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
                    ir_block_t *current, const th_env_method_t *selected,
-                   th_type *type, ir_value_t *left, ir_value_t *right,
-                   ir_block_t *next, ir_block_t *mismatch, size_t field,
-                   uint32_t depth)
+                   bool by_cmp, th_type *type, ir_value_t *left,
+                   ir_value_t *right, ir_block_t *next, ir_block_t *mismatch,
+                   size_t field, uint32_t depth)
 {
     ir_func_t *function = current->owner;
     th_ctx *types = ir_module_types(context->module);
@@ -77,10 +141,8 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     char buffer[6][64];
     if (item) {
         th_env_method_t inner = {0};
-        if (th_env_method_resolve(state->types, item,
-                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
-                &inner) != TH_ENV_METHOD_FOUND
-            || (inner.error_type && !th_is_nil(inner.error_type)))
+        bool inner_by_cmp = false;
+        if (!n00bb_field_equality(state, item, &inner, &inner_by_cmp))
             return false;
         ir_value_t *left_nil = n00bb_equal_value(current, IR_OP_OPTION_IS_NIL,
             n00bb_format_name(buffer[0], sizeof buffer[0],
@@ -113,15 +175,17 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
                               "field_%zu_%u_right_item", field, depth),
             item, right);
         return left_item && right_item
-            && n00bb_equal_branch(context, state, both, &inner, item,
-                                  left_item, right_item, next, mismatch,
-                                  field, depth + 1);
+            && n00bb_equal_branch(context, state, both, &inner,
+                                  inner_by_cmp, item, left_item, right_item,
+                                  next, mismatch, field, depth + 1);
     }
     core_string_t test_name = n00bb_format_name(buffer[5], sizeof buffer[5],
         "field_%zu_%u_equal", field, depth);
     ir_value_t *test = nullptr;
-    if (selected->module.data
-        && core_string_eq(selected->module, CORE_STRING_STATIC("builtins"))) {
+    if (by_cmp)
+        test = n00bb_cmp_equal_test(context, state, current, selected, left,
+                                    right, field, depth);
+    else if (n00bb_compiler_package(selected->package)) {
         ir_instr_t *equal = ir_instr_add(current, IR_OP_EQ);
         if (equal && ir_instr_set_dest(equal, test_name, boolean)
             && ir_instr_operand_value(equal, left)
@@ -157,11 +221,9 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *field = th_record_member(shape, i);
         th_env_method_t selected = {0};
-        if (!field || th_env_method_resolve(state->types, field->type,
-                N00BB_EQUAL_TRAIT, CORE_STRING_STATIC("__equal"),
-                &selected) != TH_ENV_METHOD_FOUND
-            || (selected.error_type
-                && !th_is_nil(selected.error_type)))
+        bool by_cmp = false;
+        if (!field
+            || !n00bb_field_equality(state, field->type, &selected, &by_cmp))
             return nullptr;
         char left_buffer[64], right_buffer[64], next_buffer[64];
         core_string_t left_name = n00bb_format_name(left_buffer,
@@ -181,7 +243,7 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
             || !ir_instr_operand_value(right_field, right)
             || !ir_instr_operand_name(right_field, field->name)
             || !n00bb_equal_branch(context, state, current, &selected,
-                                   field->type, left_field->dest,
+                                   by_cmp, field->type, left_field->dest,
                                    right_field->dest, next, mismatch, i, 0))
             return nullptr;
         current = next;
@@ -444,7 +506,8 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                 th_type *receiver = parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
                 if (!receiver || parse_sym_binding(symbol,
-                        CORE_STRING_STATIC("n00bb.dispatch-adapter")))
+                        CORE_STRING_STATIC("n00bb.dispatch-adapter"))
+                    || parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY))
                     continue;
                 bool record_hash = symbol->name.data
                     && core_string_starts_with(symbol->name,
@@ -509,9 +572,19 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
 typedef struct {
     ir_lower_context_t *context;
     ir_func_t *target;
+    // The module whose function `target` is.
+    ir_module_t *target_module;
     th_type *signature;
     ir_value_t **inputs;
+    // The adapter's parameter that the target's parameter `i` is passed:
+    // `order[i]`, or `i` itself when there is no order.
+    const uint32_t *order;
+    // A reference adapter's: each parameter is given by place.
+    bool by_place;
+    // The adapter's optional parameters, by presence level, and each
+    // parameter's level (UINT32_MAX when it isn't optional).
     uint32_t *optional;
+    uint32_t *level;
     size_t optional_count;
 } dispatch_adapter_t;
 
@@ -537,23 +610,53 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
     th_type *error = th_func_error(callee);
     bool fails = error && th_is_closed(ir_module_types(module), error)
         && ir_machine_of(module, error).class != IR_CLASS_VOID;
-    ir_instr_t *call = ir_lower_emit_instruction(context, IR_OP_CALL,
-                                                 IR_SPAN_UNKNOWN);
-    bool ok = call && success && ir_lower_set_temp_dest(context, call,
+    size_t count = th_func_nparams(callee);
+    ir_value_t **arguments = core_alloc_array(ir_value_t *, count + 1);
+    bool ok = arguments != nullptr;
+    size_t given = th_func_nparams(adapter->signature);
+    for (size_t i = 0; ok && i < count; i++) {
+        uint32_t from = adapter->order ? adapter->order[i] : (uint32_t)i;
+        const th_param *formal = th_func_param(callee, i);
+        // A parameter the trait's method doesn't name is left out, as is
+        // an optional one the caller omitted; the target takes it missing.
+        if (from >= given
+            || (adapter->level[from] != UINT32_MAX
+                && (missing >> adapter->level[from] & 1u))) {
+            ok = ir_func_parameter_is_optional(adapter->target, (uint32_t)i);
+            continue;
+        }
+        // A reference adapter is given each positional parameter's place,
+        // and each keyword parameter as its value, passed on as given or
+        // omitted (n00bb_reference_adapter_t). A place the target takes by
+        // reference is passed on, the caller's own (the target keeps no
+        // reference to it, N00B-S0106); any other is read, for the target
+        // to take as its mode says, `in` or `view` (a function with a
+        // `consume` parameter is never referred to, N00B-S0107).
+        bool placed = adapter->by_place && th_mode_by_reference(
+            th_func_param(adapter->signature, from)->mode);
+        arguments[i] = placed && !th_mode_by_reference(formal->mode)
+            ? n00bb_emit_indirect_read(context, adapter->inputs[from],
+                                       formal->type, IR_SPAN_UNKNOWN)
+            : adapter->inputs[from];
+        ok = arguments[i] != nullptr;
+    }
+    ir_instr_t *call = ok ? ir_lower_emit_instruction(context, IR_OP_CALL,
+                                                      IR_SPAN_UNKNOWN)
+                          : nullptr;
+    ok = call && success && ir_lower_set_temp_dest(context, call,
             CORE_STRING_STATIC("__n00bb_adapter_call_"),
             fails ? ir_call_outcome_type(module, callee) : success)
         && ir_instr_operand_value(call,
-               ir_func_address(module, adapter->target));
-    size_t optional_index = 0;
-    for (size_t i = 0; ok && i < th_func_nparams(callee); i++) {
-        bool optional = ir_func_parameter_is_optional(adapter->target,
-                                                      (uint32_t)i);
-        if (optional && (missing >> optional_index & 1u))
-            ok = ir_instr_operand_missing(call);
-        else ok = ir_instr_operand_value(call, adapter->inputs[i]);
-        optional_index += optional;
-    }
-    ok = ok && ir_instr_set_call_signature(call, adapter->target->type);
+               ir_func_address(adapter->target_module, adapter->target));
+    for (size_t i = 0; ok && i < count; i++)
+        ok = arguments[i] ? ir_instr_operand_value(call, arguments[i])
+                          : ir_instr_operand_missing(call);
+    ok = ok && ir_instr_set_call_signature(call, adapter->target->type)
+        && (!adapter->by_place || ir_annot_set(ir_module_ctx(module),
+               &call->annots, (ir_annot_t){
+                   .key = N00BB_FORWARDS_OPTIONAL_KEY,
+                   .kind = IR_ANNOT_BOOL, .b = true}));
+    core_free(arguments);
     ir_value_t *outcome = ok ? call->dest : nullptr;
     ir_value_t *value = outcome;
     if (ok && fails) {
@@ -617,10 +720,22 @@ n00bb_adapter_presence(dispatch_adapter_t *adapter, size_t level,
                                   missing | UINT64_C(1) << level);
 }
 
+// The body of an adapter that calls `target` (in `target_module`) with its
+// own parameters, passing each optional one the caller omitted as missing,
+// so `target` evaluates that default itself. A dispatch adapter passes its
+// parameters in the same order, narrowing the generic receiver to
+// `receiver`, and takes as optional the parameters `required` (the
+// trait's method, when given) or else `target` makes optional. A
+// reference adapter (`order` given) already declares its optional
+// parameters, and passes `target`'s parameter `i` its parameter
+// `order[i]`: a positional parameter's place to one `target` takes by
+// reference, the value read from it to any other, and a keyword parameter
+// as given or omitted.
 static bool
-n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
-                            ir_ctx_t *ir_context, ir_func_t *adapter,
-                            ir_func_t *target, th_type *receiver)
+n00bb_adapter_body(core_translation_unit_t *unit, ir_ctx_t *ir_context,
+                   ir_func_t *adapter, ir_func_t *target,
+                   ir_module_t *target_module, ir_func_t *required,
+                   th_type *receiver, const uint32_t *order)
 {
     if (!adapter || adapter->n_blocks || !target || !target->type)
         return false;
@@ -637,11 +752,16 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
     dispatch_adapter_t state = {
         .context = &context,
         .target = target,
+        .target_module = target_module,
         .signature = signature,
+        .order = order,
+        .by_place = order != nullptr,
         .inputs = count ? core_alloc_array(ir_value_t *, count) : nullptr,
         .optional = count ? core_alloc_array(uint32_t, count) : nullptr,
+        .level = count ? core_alloc_array(uint32_t, count) : nullptr,
     };
-    bool ok = context.block && (!count || (state.inputs && state.optional));
+    bool ok = context.block
+        && (!count || (state.inputs && state.optional && state.level));
     for (size_t i = 0; ok && i < count; i++) {
         const th_param *parameter = th_func_param(signature, i);
         char buffer[32];
@@ -653,14 +773,25 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
         ir_value_t *value = ir_param_add(adapter, name, by_reference
             ? th_ind(types, 0, parameter->type) : parameter->type);
         ok = value != nullptr;
-        if (ok && ir_func_parameter_is_optional(target, (uint32_t)i)) {
+        // The adapter is called as the trait's method is: a parameter is
+        // optional in it when the trait's method makes it optional. A
+        // reference adapter passes each optional parameter on as given
+        // or omitted (N00BB_FORWARDS_OPTIONAL_KEY), with no tail for each
+        // combination of omitted ones, which would be exponential in them.
+        bool optional = !order
+            && ir_func_parameter_is_optional(required ? required : target,
+                                             (uint32_t)i);
+        state.level[i] = UINT32_MAX;
+        if (ok && optional) {
             ok = state.optional_count < 64
                 && ir_func_set_parameter_optional(adapter, (uint32_t)i,
                                                   true);
+            state.level[i] = (uint32_t)state.optional_count;
             state.optional[state.optional_count++] = (uint32_t)i;
         }
         state.inputs[i] = value;
-        if (!ok || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
+        if (!ok || !receiver
+            || th_kind_of(th_resolve(parameter->type)) != TH_VAR)
             continue;
         th_type *narrowed = by_reference ? th_ind(types, 0, receiver)
                                          : receiver;
@@ -675,7 +806,177 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
     ok = ok && n00bb_adapter_presence(&state, 0, 0);
     core_free(state.inputs);
     core_free(state.optional);
+    core_free(state.level);
     return ok;
+}
+
+#define N00BB_REFERENCE_ADAPTER_ORDER_KEY \
+    CORE_STRING_STATIC("n00bb.reference-adapter.order")
+
+// Notes that `adapter` adapts `target`, passing its parameter `i` the
+// adapter's `order[i]` (n00bb_reference_adapter_target).
+static bool
+note_adapted(ir_ctx_t *ir_context, ir_func_t *adapter, ir_func_t *target,
+             const uint32_t *order, size_t count)
+{
+    if (ir_annot_get(&adapter->annots, N00BB_REFERENCE_ADAPTER_TARGET_KEY))
+        return true;
+    core_buffer_t text = {0};
+    for (size_t i = 0; i < count; i++)
+        core_buffer_printf(&text, "%s%u", i ? "," : "", order[i]);
+    ir_value_t *address = ir_func_address(target->owner, target);
+    bool ok = address
+        && ir_annot_set(ir_context, &adapter->annots,
+               (ir_annot_t){.key = N00BB_REFERENCE_ADAPTER_ORDER_KEY,
+                            .kind = IR_ANNOT_STR,
+                            .s = ir_strdup(ir_context,
+                                           core_buffer_string(&text))})
+        && ir_annot_set(ir_context, &adapter->annots,
+               (ir_annot_t){.key = N00BB_REFERENCE_ADAPTER_TARGET_KEY,
+                            .kind = IR_ANNOT_VALUE, .v = address});
+    core_buffer_release(&text);
+    return ok;
+}
+
+ir_func_t *
+n00bb_note_reference_adapter(n00bb_link_analysis_t *analysis,
+                             parse_sym_entry_t *symbol)
+{
+    const n00bb_reference_adapter_t *order = symbol
+        ? parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY) : nullptr;
+    ir_func_t *adapter = order
+        ? link_ir_function_for_symbol(analysis, symbol) : nullptr;
+    ir_func_t *target = adapter
+        ? link_ir_function_for_symbol(analysis, order->target) : nullptr;
+    return target && note_adapted(analysis->ir_context, adapter, target,
+                                  order->order, order->count)
+        ? adapter : nullptr;
+}
+
+ir_func_t *
+n00bb_reference_adapter_target(const ir_func_t *adapter, uint32_t **order,
+                               size_t *count)
+{
+    ir_annot_t *target = adapter
+        ? ir_annot_get((ir_annots_t *)&adapter->annots,
+                       N00BB_REFERENCE_ADAPTER_TARGET_KEY)
+        : nullptr;
+    ir_annot_t *text = target
+        ? ir_annot_get((ir_annots_t *)&adapter->annots,
+                       N00BB_REFERENCE_ADAPTER_ORDER_KEY)
+        : nullptr;
+    ir_func_t *callee = target && target->kind == IR_ANNOT_VALUE && target->v
+            && target->v->kind == IR_VAL_FUNC
+        ? target->v->owner : nullptr;
+    if (!order) return callee;
+    *order = nullptr;
+    *count = 0;
+    size_t expected = callee ? th_func_nparams(th_resolve(callee->type)) : 0;
+    uint32_t *parsed = callee && text && text->kind == IR_ANNOT_STR
+        ? core_alloc_array(uint32_t, expected + 1) : nullptr;
+    size_t parsed_count = 0;
+    bool ok = parsed != nullptr;
+    for (size_t at = 0; ok && at < text->s.u8_bytes; parsed_count++) {
+        uint32_t value = 0;
+        while (at < text->s.u8_bytes && text->s.data[at] >= '0'
+               && text->s.data[at] <= '9')
+            value = value * 10 + (uint32_t)(text->s.data[at++] - '0');
+        ok = parsed_count < expected && value < expected;
+        if (ok) parsed[parsed_count] = value;
+        if (at < text->s.u8_bytes) at++;
+    }
+    if (!ok || parsed_count != expected) {
+        core_free(parsed);
+        return nullptr;
+    }
+    *order = parsed;
+    *count = parsed_count;
+    return callee;
+}
+
+// The body of reference adapter `symbol` (n00bb_reference_adapter_t), now
+// that the types are known.
+static bool
+generate_reference_adapter(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit,
+                           parse_sym_entry_t *symbol,
+                           const n00bb_reference_adapter_t *order)
+{
+    ir_func_t *adapter = link_ir_function_for_symbol(analysis, symbol);
+    ir_func_t *target = link_ir_function_for_symbol(analysis, order->target);
+    // A function whose errors are reported has no body to adapt.
+    if (target && !target->n_blocks && n00bb_unit_failed(unit)) return true;
+    bool ok = adapter && target && target->n_blocks
+        && th_func_nparams(th_resolve(target->type)) == order->count
+        && n00bb_adapter_body(unit, analysis->ir_context, adapter, target,
+                              target->owner, nullptr, nullptr,
+                              order->order)
+        && n00bb_note_reference_adapter(analysis, symbol) == adapter
+        && ir_annot_set(analysis->ir_context, &adapter->annots,
+               (ir_annot_t){
+                   .key = CORE_STRING_STATIC("n00bb.generated-value-method"),
+                   .kind = IR_ANNOT_BOOL, .b = true});
+    if (!ok)
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            link_source_location(order->target->decl_node),
+            "generating dispatch adapters",
+            "could not generate the reference adapter for `%.*s`",
+            (int)order->target->name.u8_bytes, order->target->name.data);
+    return ok;
+}
+
+static bool
+instance_parameter_name(void *context, size_t index, core_string_t *name)
+{
+    ir_func_t *instance = context;
+    if (index >= instance->n_params) return false;
+    *name = instance->params[index]->name;
+    return true;
+}
+
+ir_func_t *
+n00bb_instance_reference_adapter(ir_ctx_t *ir_context, ir_func_t *instance,
+                                 th_type *value_type, bool *made)
+{
+    *made = false;
+    // Taken as a declared function's adapter takes them
+    // (n00bb_reference_adapter).
+    n00bb_reference_adapter_t shape = {0};
+    th_type *signature = nullptr;
+    if (!instance || !n00bb_reference_adapter_signature(
+            ir_module_types(instance->owner), instance->type, value_type,
+            instance_parameter_name, instance, &shape, &signature))
+        return nullptr;
+    if (!signature) return instance;
+    core_buffer_t name = {0};
+    core_buffer_printf(&name, "__n00bb_reference_adapter_%.*s",
+                       (int)instance->name.u8_bytes, instance->name.data);
+    ir_func_t *adapter = ir_func_find(instance->owner,
+                                      core_buffer_string(&name));
+    bool ok = adapter != nullptr;
+    if (!adapter) {
+        adapter = ir_func_add(instance->owner, core_buffer_string(&name),
+                              signature, instance->linkage);
+        for (size_t k = 0; adapter && k < shape.keywords; k++)
+            if (!ir_func_set_parameter_optional(adapter,
+                    (uint32_t)(shape.positional + k), true))
+                adapter = nullptr;
+        ok = adapter
+            && n00bb_adapter_body(nullptr, ir_context, adapter, instance,
+                                  instance->owner, nullptr, nullptr,
+                                  shape.order)
+            && note_adapted(ir_context, adapter, instance, shape.order,
+                            shape.count)
+            && ir_annot_set(ir_context, &adapter->annots,
+                   (ir_annot_t){
+                       .key = CORE_STRING_STATIC(
+                           "n00bb.generated-value-method"),
+                       .kind = IR_ANNOT_BOOL, .b = true});
+        *made = ok;
+    }
+    core_buffer_release(&name);
+    core_free(shape.order);
+    return ok ? adapter : nullptr;
 }
 
 bool
@@ -689,6 +990,15 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
+                n00bb_reference_adapter_t *order = parse_sym_binding(symbol,
+                    N00BB_REFERENCE_ADAPTER_KEY);
+                if (order) {
+                    if (generate_reference_adapter(analysis, unit, symbol,
+                                                   order))
+                        continue;
+                    core_list_free(scopes);
+                    return false;
+                }
                 parse_sym_entry_t *implementation = parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.dispatch-adapter"));
                 th_type *receiver = implementation ? parse_sym_binding(symbol,
@@ -699,6 +1009,11 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                                                  symbol);
                 ir_func_t *target = link_ir_function_for_symbol(analysis,
                                                                 implementation);
+                parse_sym_entry_t *requirement = parse_sym_binding(symbol,
+                    CORE_STRING_STATIC("n00bb.dispatch-requirement"));
+                ir_func_t *required = requirement
+                    ? link_ir_function_for_symbol(analysis, requirement)
+                    : nullptr;
                 // An adapter only forwards to its target, so it fails as
                 // the target does, once the target's failure is inferred.
                 th_type *adapter_type = adapter && adapter->type
@@ -716,8 +1031,9 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                     th_var_bind(adapter_failure,
                                 th_resolve(th_func_error(target_type)));
                 if (target && target->n_blocks
-                    && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
-                                                   adapter, target, receiver)
+                    && n00bb_adapter_body(unit, analysis->ir_context,
+                                          adapter, target, adapter->owner,
+                                          required, receiver, nullptr)
                     && ir_annot_set(analysis->ir_context, &adapter->annots,
                         (ir_annot_t){
                             .key = CORE_STRING_STATIC(

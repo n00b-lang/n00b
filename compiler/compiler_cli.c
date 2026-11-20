@@ -181,6 +181,9 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
     KEYED_FLAG("--no-hints", NO_ALIAS, BOOL, false,
                "hide hints such as parameters that could be `view`",
                SETS(DIAGNOSTICS_HINTS, false)),
+    KEYED_FLAG("--stop-on-error", NO_ALIAS, WORD, true,
+               "errors shown per file before it stops (default 5), or all",
+               SETS(DIAGNOSTICS_STOP_ON_ERROR, true)),
     KEYED_FLAG("--color", NO_ALIAS, WORD, true,
                "color diagnostics: auto, always or never",
                SETS(DIAGNOSTICS_COLOR, true)),
@@ -216,9 +219,6 @@ static const parse_cmdr_flag_t FMT_FLAGS[] = {
          "normalize source using inferred type information"),
     FLAG("--keep-layout", NO_ALIAS, BOOL, false,
          "with --normalize, rewrite only what normalization changes"),
-    KEYED_FLAG("--ascii-tags", NO_ALIAS, BOOL, false,
-               "write rich-string tags as [: :] instead of « »",
-               SETS(FMT_ASCII_TAGS, true)),
     END_FLAGS,
 };
 

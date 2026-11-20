@@ -391,6 +391,63 @@ copy_paths(ir_summary_t *next, const ir_summary_t *old)
                 .function = old->deps.data[d].function}));
 }
 
+// Starts a cycle's rounds from what the previous pass found for it,
+// rather than from nothing, when that is below what this pass will find.
+// The rounds then climb to the same least fixed point in fewer steps.
+//
+// Why it is below: each round computes the members' summaries from the
+// current ones, and the parts it does not join in (paths, heaps) from them
+// alone; what it computes only grows as the members' summaries, its other
+// inputs and the trap proofs it can lean on are less precise. Here the
+// members' bodies are the same, every callee outside the cycle has the
+// summary it had then, and every input the previous pass asked about
+// answers as it did or went from "does not overlap" to "overlaps", the one
+// way reinterpretations registered between the passes change them. The
+// only other difference between the passes is that this one binds no
+// summaries for the analyses, which proves fewer traps, and so adds to
+// what the rounds compute. So each round of the previous pass computed
+// no more than the same round now, its result is no more than this
+// pass's least fixed point, and rounds started there end at that point,
+// as the rounds started from nothing do.
+static void
+seed_component(ir_summaries_t *summaries, ir_func_t *const *members,
+               size_t count)
+{
+    if (!summaries->reusable || summaries->defer_changed
+        || !summaries->previous) return;
+    ir_summary_t **olds = core_alloc_array(ir_summary_t *, count);
+    bool seedable = true;
+    for (size_t i = 0; seedable && i < count; i++) {
+        ir_summary_t *old = summary_shell(summaries->previous, members[i]);
+        seedable = old && old->identity && !old->stored
+            && !core_dict_contains(&summaries->previous->adopted, old)
+            && old->identity == ir_func_identity(members[i])
+            && inputs_grew(summaries, &old->inputs);
+        for (size_t d = 0; seedable && d < old->deps.len; d++) {
+            const summary_dep_t *dep = &old->deps.data[d];
+            if (member_index(members, count, dep->function) < count) continue;
+            seedable = summary_content(dep_summary(summaries,
+                (ir_func_t *)dep->function)) == dep->content;
+        }
+        olds[i] = old;
+    }
+    uint32_t shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
+    for (size_t i = 0; seedable && i < count; i++) {
+        ir_summary_t       *seed = ir_summary_of(summaries, members[i]);
+        const ir_summary_t *old  = olds[i];
+        copy_paths(seed, old);
+        seed->flags = (old->flags & ~shrinking)
+            | (seed->flags & old->flags & shrinking);
+        seed->own_flags = (old->own_flags & ~shrinking)
+            | (seed->own_flags & old->own_flags & shrinking);
+        seed->traps           |= old->traps;
+        seed->own_traps       |= old->own_traps;
+        seed->callback_params |= old->callback_params;
+        merge_effects(seed, old);
+    }
+    core_free(olds);
+}
+
 static bool
 adopt_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
@@ -424,6 +481,12 @@ stored_component(ir_summaries_t *summaries, ir_func_t *const *members,
             && inputs_hold(summaries, &found[i]->inputs);
     for (size_t i = 0; all && i < count; i++)
         core_dict_put(&summaries->by_function, members[i], found[i]);
+    // A stored summary leaves out the fields its function uses, which come
+    // from the body alone: find them as solve_component would.
+    for (size_t i = 0; all && !summaries->escapes_only && i < count; i++) {
+        found[i]->fields.len = 0;
+        summarize_fields(summaries, found[i], members[i]);
+    }
     if (all) stamp_component(summaries, members, count);
     core_free(found);
     return all;
@@ -461,6 +524,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     }
     member_callers_t *callers = member_callers(summaries, members, count);
     bool cyclic = count > 1 || callers[0].len;
+    if (cyclic) seed_component(summaries, members, count);
     const ir_summary_t *reused = reusable_paths(summaries, members, count,
                                                 cyclic);
     if (reused) record_inputs(summaries, &reused->inputs);
@@ -497,7 +561,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             else summarize_function(summaries, next, members[i],
                                     cyclic ? &settled[i] : nullptr);
             if (reused) copy_paths(next, reused);
-            else summarize_paths(summaries, next, members[i]);
+            else summarize_paths(summaries, next, members[i], !cyclic);
             const ir_summary_hooks_t *hooks = summaries->hooks;
             uint64_t bookkept = hooks && hooks->bookkeeping
                 ? hooks->bookkeeping(hooks->context, members[i], next) : 0;
@@ -661,6 +725,13 @@ strongconnect(tarjan_t *t, ir_func_t *root)
 }
 
 static void
+push_pending(void *sink, ir_func_t *function)
+{
+    core_list_t(summary_func_ptr_t) *pending = sink;
+    if (function) core_list_push(*pending, function);
+}
+
+static void
 collect_reinterpretations(ir_summaries_t *summaries,
                           ir_func_t *const *functions, size_t count)
 {
@@ -670,6 +741,10 @@ collect_reinterpretations(ir_summaries_t *summaries,
     core_list_t(summary_func_ptr_t) pending = core_list_new(summary_func_ptr_t);
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (hooks && hooks->reinterpretation_sources)
+        hooks->reinterpretation_sources(hooks->context, push_pending,
+                                        &pending);
     for (size_t i = 0; i < count; i++) core_list_push(pending, functions[i]);
     while (pending.len) {
         ir_func_t *f = ir_func_definition(pending.data[--pending.len]);
@@ -709,7 +784,8 @@ same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
         && a->callee_effects == b->callee_effects
         && a->call_flags == b->call_flags
         && a->call_finalizers == b->call_finalizers
-        && a->owned_field == b->owned_field && a->stored == b->stored;
+        && a->owned_field == b->owned_field && a->stored == b->stored
+        && a->reinterpretation_sources == b->reinterpretation_sources;
 }
 
 static ir_summaries_t *
@@ -732,9 +808,19 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->reusable = previous && hooks && count && !escapes_only
         && !previous->escapes_only
         && same_hooks(&previous->hook_values, hooks);
-    summaries->proofs_changed = summaries->reusable
+    // A summary whose trap proofs saw callees through other summaries than
+    // the ones bound now may prove other traps when computed again, so only
+    // one that proved none can be reused (see reusable_member). Reusing the
+    // others made what a function's summary says depend on whether the
+    // inputs that would have recomputed it changed between the passes,
+    // which they do on a cold build and not on a warm one.
+    summaries->proof_context  = ir_analysis_summaries();
+    summaries->defer_changed  = summaries->reusable
         && previous->hook_values.defer_trap_proofs
                != hooks->defer_trap_proofs;
+    summaries->proofs_changed = summaries->defer_changed
+        || (summaries->reusable
+            && previous->proof_context != summaries->proof_context);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
     core_dict_init(&t.index, nullptr, nullptr);

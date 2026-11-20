@@ -1451,7 +1451,7 @@ record Counter_State {
 callback State_Counter {
     call(value: int) -> int
     handler(modify state: Counter_State, value: int) -> int
-    setup(handler: Ref[(modify state: Counter_State, value: int) -> int],
+    setup(handler: Ref[(Counter_State, int) -> int],
           state: Ref[Counter_State]) -> nil
 }
 
@@ -1460,7 +1460,7 @@ func state_handle(modify state: Counter_State, value: int) -> int {
     return state.count
 }
 
-func setup(handler: Ref[(modify state: Counter_State, value: int) -> int],
+func setup(handler: Ref[(Counter_State, int) -> int],
            state: Ref[Counter_State]) -> nil {
 }
 
@@ -1484,7 +1484,7 @@ record Ref_State {
 callback Ref_Counter {
     call(value: int) -> int
     handler(modify state: Ref_State, value: int) -> int
-    setup(handler: Ref[(modify state: Ref_State, value: int) -> int],
+    setup(handler: Ref[(Ref_State, int) -> int],
           state: Ref[Ref_State]) -> nil
 }
 
@@ -1493,7 +1493,7 @@ func ref_handle(modify state: Ref_State, value: int) -> int {
     return state.count
 }
 
-func setup(handler: Ref[(modify state: Ref_State, value: int) -> int],
+func setup(handler: Ref[(Ref_State, int) -> int],
            state: Ref[Ref_State]) -> nil {
 }
 
@@ -1521,7 +1521,7 @@ record Setup_State {
 callback Setup_Counter {
     call(value: int) -> int
     handler(modify state: Setup_State, value: int) -> int
-    setup(handler: Ref[(modify state: Setup_State, value: int) -> int],
+    setup(handler: Ref[(Setup_State, int) -> int],
           state: Ref[Setup_State], priority: int = 1) -> nil
 }
 
@@ -1530,7 +1530,7 @@ func setup_handle(modify state: Setup_State, value: int) -> int {
     return state.count
 }
 
-func setup(handler: Ref[(modify state: Setup_State, value: int) -> int],
+func setup(handler: Ref[(Setup_State, int) -> int],
            state: Ref[Setup_State], priority: int = 1) -> nil {
     var current = state.__value
     current.count = priority
@@ -1563,7 +1563,7 @@ record Setup_Fail_State {
 callback Setup_Fail_Counter {
     call(value: int) -> int
     handler(modify state: Setup_Fail_State, value: int) -> int
-    setup(handler: Ref[(modify state: Setup_Fail_State, value: int) -> int],
+    setup(handler: Ref[(Setup_Fail_State, int) -> int],
           state: Ref[Setup_Fail_State], should_fail: bool) -> nil fail: int
 }
 
@@ -1572,7 +1572,7 @@ func setup_fail_handle(modify state: Setup_Fail_State, value: int) -> int {
     return state.count
 }
 
-func setup(handler: Ref[(modify state: Setup_Fail_State, value: int) -> int],
+func setup(handler: Ref[(Setup_Fail_State, int) -> int],
            state: Ref[Setup_Fail_State], should_fail: bool) -> nil fail: int {
     if should_fail {
         fail 7
@@ -1610,7 +1610,7 @@ record Fail_State {
 callback Fail_Counter {
     call(value: int) -> int fail: string
     handler(modify state: Fail_State, value: int) -> int fail: string
-    setup(handler: Ref[(modify state: Fail_State, value: int) -> int fail: string],
+    setup(handler: Ref[(Fail_State, int) -> int fail: string],
           state: Ref[Fail_State]) -> nil fail: string
 }
 
@@ -1622,7 +1622,7 @@ func fail_handle(modify state: Fail_State, value: int) -> int fail: string {
     return state.count
 }
 
-func setup(handler: Ref[(modify state: Fail_State, value: int) -> int fail: string],
+func setup(handler: Ref[(Fail_State, int) -> int fail: string],
            state: Ref[Fail_State]) -> nil fail: string {
 }
 

@@ -1,0 +1,5 @@
+tests/diagnostics/build/litmod_string_fail.n:2:27: warning N00B-S0063: parameter `raw` is never used
+  help: if a signature requires it, name it `_raw`
+tests/diagnostics/build/litmod_string_fail.n:6:6: warning N00B-N0019: function `value` is never called
+  help: call it or delete it
+tests/diagnostics/build/litmod_string_fail.n:7:12: error N00B-B0116: literal modifier `'reject` failed: bad literal

@@ -115,6 +115,12 @@ n00bb_abi_object_open(const core_target_desc_t *target,
         .header = header,
         .directory = directory, .directory_count = count,
     };
+    for (uint32_t i = 0; i < count && i < UINT8_MAX; i++) {
+        uint32_t kind = directory[i].kind;
+        if (kind <= N00B_ABI_TABLE_LAST && !out->table_entries[kind])
+            out->table_entries[kind] = (uint8_t)(i + 1);
+    }
+    out->tables_indexed = count < UINT8_MAX;
     index_relocations(out);
     return true;
 }
@@ -309,6 +315,9 @@ const n00bb_abi_directory_entry_t *
 n00bb_abi_object_table(const n00bb_abi_object_view_t *view, uint32_t kind)
 {
     if (!view || !view->directory) return nullptr;
+    if (view->tables_indexed && kind <= N00B_ABI_TABLE_LAST)
+        return view->table_entries[kind]
+            ? &view->directory[view->table_entries[kind] - 1] : nullptr;
     for (size_t i = 0; i < view->directory_count; i++)
         if (view->directory[i].kind == kind) return &view->directory[i];
     return nullptr;
@@ -611,6 +620,11 @@ n00bb_abi_select_objects(core_link_unit_t *link,
 struct n00bb_abi_index_plan_t {
     core_index_remap_t **maps;
     uint32_t *counts;
+    // For a table whose rows are matched by identity: the input row each
+    // linked row is copied from. Every other input's row for that identity
+    // is the same (but for what only a declaration has), so it is dropped,
+    // and so is what only it refers to.
+    n00bb_abi_row_origin_t **sources;
     size_t input_count;
     size_t kind_count;
 };
@@ -630,10 +644,6 @@ typedef struct {
 } abi_link_key_t;
 
 static bool nonconcrete_key_init(abi_link_key_t *key);
-static bool link_key_from_owner_type(abi_link_key_t *key,
-                                     uint32_t type_index, uint32_t kind);
-static bool link_key_from_type_argument(abi_link_key_t *key);
-static bool link_key_from_member(abi_link_key_t *key, uint32_t kind);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -699,25 +709,6 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         key->length = sizeof(key->scalar);
         return true;
     }
-    case N00B_ABI_TABLE_LAYOUT: {
-        const n00b_abi_layout_v1 *layout = key->row;
-        return link_key_from_owner_type(key, layout->type_index, kind);
-    }
-    case N00B_ABI_TABLE_TRACE: {
-        const n00b_abi_trace_v1 *trace = key->row;
-        return link_key_from_owner_type(key, trace->type_index, kind);
-    }
-    case N00B_ABI_TABLE_CALL_SIGNATURE: {
-        const n00b_abi_call_signature_v1 *signature = key->row;
-        return link_key_from_owner_type(key, signature->type_index, kind);
-    }
-    case N00B_ABI_TABLE_TYPE_ARGUMENT:
-        return link_key_from_type_argument(key);
-    case N00B_ABI_TABLE_FIELD:
-    case N00B_ABI_TABLE_ARM:
-    case N00B_ABI_TABLE_ENUM_ITEM:
-    case N00B_ABI_TABLE_TRAIT_METHOD:
-        return link_key_from_member(key, kind);
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -727,6 +718,17 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     case N00B_ABI_TABLE_SCC:
         key->bytes = key->row;
         key->length = 2 * sizeof(uint64_t);
+        return true;
+    // A run is a value that refers to nothing: every module that lays a
+    // type out describes it with the same runs, and the linked image keeps
+    // one of each.
+    case N00B_ABI_TABLE_PHYSICAL_RUN:
+        key->bytes = key->row;
+        key->length = sizeof(n00b_abi_physical_run_v1);
+        return true;
+    case N00B_ABI_TABLE_PACKED_RUN:
+        key->bytes = key->row;
+        key->length = sizeof(n00b_abi_packed_run_v1);
         return true;
     case N00B_ABI_TABLE_SOURCE_FILE: {
         const n00b_abi_source_file_v1 *file = key->row;
@@ -752,95 +754,82 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     }
 }
 
+// Rows that belong to one type: its layout, trace and call signature, its
+// named arguments, and its members. Their identity is their type's and
+// their place in it, so they are matched once every type row has its
+// linked index.
 static bool
-link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index,
-                         uint32_t kind)
+link_kind_is_type_part(uint32_t kind)
 {
-    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, type_index);
-    if (!type) return false;
-    uint32_t owner_index = kind == N00B_ABI_TABLE_LAYOUT
-        ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
-            ? type->tracing_index : type->call_signature_index;
-    if (owner_index != key->local_index) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = type_index;
-    owner.bytes = nullptr;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
+    switch (kind) {
+    case N00B_ABI_TABLE_LAYOUT:
+    case N00B_ABI_TABLE_TRACE:
+    case N00B_ABI_TABLE_CALL_SIGNATURE:
+    case N00B_ABI_TABLE_TYPE_ARGUMENT:
+    case N00B_ABI_TABLE_FIELD:
+    case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_ENUM_ITEM:
+    case N00B_ABI_TABLE_TRAIT_METHOD:
+        return true;
+    default:
         return false;
     }
-    key->scalar = owner.scalar;
-    key->auxiliary = owner.auxiliary;
-    key->owned_bytes = owner.owned_bytes;
-    key->unique = owner.unique;
-    key->bytes = owner.bytes == (const uint8_t *)&owner.scalar
-        ? (const uint8_t *)&key->scalar : owner.bytes;
-    key->length = owner.length;
-    return true;
 }
 
+// A type part's identity: its type's linked index and its ordinal in the
+// type (zero for a layout, trace or call signature, of which a type has
+// one). Two rows match exactly when their types' rows did.
 static bool
-link_key_from_type_argument(abi_link_key_t *key)
+link_type_part_key_init(const n00bb_abi_index_plan_t *plan,
+                        abi_link_key_t *key, uint32_t kind)
 {
-    const n00b_abi_type_argument_v1 *argument = key->row;
-    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, argument->owner_type_index);
-    if (!type || argument->ordinal >= type->named_arguments.count
-        || type->named_arguments.first + argument->ordinal
-            != key->local_index) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = argument->owner_type_index;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
-        return false;
+    uint32_t type_index = 0, ordinal = 0;
+    const n00b_abi_type_v1 *type = nullptr;
+    switch (kind) {
+    case N00B_ABI_TABLE_LAYOUT:
+    case N00B_ABI_TABLE_TRACE:
+    case N00B_ABI_TABLE_CALL_SIGNATURE: {
+        type_index = kind == N00B_ABI_TABLE_LAYOUT
+            ? ((const n00b_abi_layout_v1 *)key->row)->type_index
+            : kind == N00B_ABI_TABLE_TRACE
+            ? ((const n00b_abi_trace_v1 *)key->row)->type_index
+            : ((const n00b_abi_call_signature_v1 *)key->row)->type_index;
+        type = n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
+                                    type_index);
+        if (!type) return false;
+        uint32_t part_index = kind == N00B_ABI_TABLE_LAYOUT
+            ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
+                ? type->tracing_index : type->call_signature_index;
+        if (part_index != key->local_index) return false;
+        break;
     }
-    key->owned_bytes = core_buffer_empty();
-    core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
-                       owner.length);
-    core_buffer_append(key->owned_bytes, (const char *)&argument->ordinal,
-                       sizeof(argument->ordinal));
-    core_buffer_free(owner.owned_bytes);
-    key->bytes = (const uint8_t *)key->owned_bytes->data;
-    key->length = key->owned_bytes->byte_len;
-    return true;
-}
-
-static bool
-link_key_from_member(abi_link_key_t *key, uint32_t kind)
-{
-    n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(kind, key->row);
-    const n00b_abi_type_v1 *type = facts.parent
-        ? n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
-                               facts.parent) : nullptr;
-    if (!type) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = facts.parent;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
-        return false;
+    case N00B_ABI_TABLE_TYPE_ARGUMENT: {
+        const n00b_abi_type_argument_v1 *argument = key->row;
+        type_index = argument->owner_type_index;
+        ordinal = argument->ordinal;
+        type = n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
+                                    type_index);
+        if (!type || ordinal >= type->named_arguments.count
+            || type->named_arguments.first + ordinal != key->local_index)
+            return false;
+        break;
     }
-    key->unique = owner.unique;
-    key->auxiliary = owner.auxiliary;
-    if (!key->unique) {
-        key->owned_bytes = core_buffer_empty();
-        core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
-                           owner.length);
-        core_buffer_append(key->owned_bytes, (const char *)&facts.ordinal,
-                           sizeof(facts.ordinal));
-        key->bytes = (const uint8_t *)key->owned_bytes->data;
-        key->length = key->owned_bytes->byte_len;
+    default: {
+        n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(kind,
+                                                                key->row);
+        type_index = facts.parent;
+        ordinal = facts.ordinal;
+        if (!type_index || !n00bb_abi_object_row(key->view,
+                N00B_ABI_TABLE_TYPE, type_index)) return false;
+        break;
     }
-    core_buffer_free(owner.owned_bytes);
+    }
+    uint32_t linked_type = 0;
+    if (!n00bb_abi_index_plan_map(plan, key->input_index,
+            N00B_ABI_TABLE_TYPE, type_index, &linked_type)) return false;
+    key->scalar = ((uint64_t)linked_type << 32) | ordinal;
+    key->bytes = (const uint8_t *)&key->scalar;
+    key->length = sizeof(key->scalar);
     return true;
 }
 
@@ -1356,14 +1345,68 @@ type_is_import_reference(const n00b_abi_type_v1 *type)
             || type->kind == N00B_ABI_TYPE_OBJECT);
 }
 
+// Whether `held` lacks declaration facts `candidate` has: `held` omits
+// the declaration's members, or is only a reference to the type.
+static bool
+type_row_less_complete(const n00b_abi_type_v1 *held,
+                       const n00b_abi_type_v1 *candidate)
+{
+    bool held_partial = type_is_import_reference(held)
+        || (held->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
+    bool candidate_partial = type_is_import_reference(candidate)
+        || (candidate->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
+    if (held_partial != candidate_partial) return held_partial;
+    // A reference lacks the layout a using module's row has.
+    return type_is_import_reference(held)
+        && !type_is_import_reference(candidate);
+}
+
+// Whether the linked row is copied from `candidate` rather than `held`,
+// whatever order the inputs come in: a type row that keeps its
+// declaration's facts (the declaring module's), or that has a layout or
+// tracing `held` lacks, a record's or variant's member with its symbol, and
+// a type variable with its owner scope (a module that imports the
+// variable's function names it through its requirement instead).
+static bool
+source_row_less_complete(uint32_t kind, const void *held,
+                         const void *candidate)
+{
+    if (kind == N00B_ABI_TABLE_TYPE) {
+        const n00b_abi_type_v1 *old = held, *next = candidate;
+        return type_row_less_complete(old, next)
+            || (!old->owner_module_index && next->owner_module_index)
+            || (!old->layout_index && next->layout_index
+                && (!old->tracing_index || next->tracing_index)
+                && (!old->call_signature_index
+                    || next->call_signature_index)
+                && (!old->fields_or_arms.count
+                    || next->fields_or_arms.count)
+                && (!old->components.count || next->components.count))
+            || ((old->kind == N00B_ABI_TYPE_OPTION
+                 || old->kind == N00B_ABI_TYPE_ATOMIC
+                 || old->kind == N00B_ABI_TYPE_WRAPPER)
+                && !old->tracing_index && next->tracing_index)
+            || (old->kind == N00B_ABI_TYPE_VARIABLE
+                && old->typevar_import_requirement_index
+                && next->typevar_owner_scope_index);
+    }
+    if (kind == N00B_ABI_TABLE_FIELD || kind == N00B_ABI_TABLE_ARM) {
+        const n00b_abi_field_v1 *old = held, *next = candidate;
+        return !old->symbol_index && next->symbol_index;
+    }
+    return false;
+}
+
 static bool
 compatible_type_components(const abi_link_key_t *first,
                            const abi_link_key_t *candidate)
 {
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     if (a->components.count != b->components.count)
-        return (!a->components.count && type_is_import_reference(a))
-            || (!b->components.count && type_is_import_reference(b));
+        return (!a->components.count && (type_is_import_reference(a)
+                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
+            || (!b->components.count && (type_is_import_reference(b)
+                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
     if (!valid_index_range(first->view, a->components)
         || !valid_index_range(candidate->view, b->components)) return false;
     for (uint32_t i = 0; i < a->components.count; i++) {
@@ -1385,8 +1428,10 @@ compatible_type_members(const abi_link_key_t *first,
     n00b_abi_range_v1 a_range = a->fields_or_arms;
     n00b_abi_range_v1 b_range = b->fields_or_arms;
     if (a_range.count != b_range.count)
-        return (!a_range.count && type_is_import_reference(a))
-            || (!b_range.count && type_is_import_reference(b));
+        return (!a_range.count && (type_is_import_reference(a)
+                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
+            || (!b_range.count && (type_is_import_reference(b)
+                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
     if (!valid_index_range(first->view, a_range)
         || !valid_index_range(candidate->view, b_range)) return false;
     uint32_t member_kind = a->kind == N00B_ABI_TYPE_RECORD
@@ -1783,7 +1828,8 @@ compatible_type_identity(const abi_link_key_t *first,
     n00bb_abi_string_view_t a_name, b_name;
     bool a_import = type_is_import_reference(a);
     bool b_import = type_is_import_reference(b);
-    uint32_t a_flags = a->flags, b_flags = b->flags;
+    uint32_t a_flags = a->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
+    uint32_t b_flags = b->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     if (a_import || b_import) {
         if ((a_import && (a_flags & N00B_ABI_TYPE_FLAG_PACKABLE))
             || (b_import && (b_flags & N00B_ABI_TYPE_FLAG_PACKABLE)))
@@ -1896,6 +1942,8 @@ link_kind_is_positional(uint32_t kind)
     case N00B_ABI_TABLE_LAYOUT:
     case N00B_ABI_TABLE_FIELD:
     case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_PACKED_RUN:
+    case N00B_ABI_TABLE_PHYSICAL_RUN:
     case N00B_ABI_TABLE_TRACE:
     case N00B_ABI_TABLE_TRAIT_METHOD:
     case N00B_ABI_TABLE_SOURCE_FILE:
@@ -1910,12 +1958,211 @@ link_kind_is_positional(uint32_t kind)
     }
 }
 
+// Positional rows only identity-matched rows refer to: an input's rows of
+// these land in the linked image only where a row it is the source of, or
+// a positional row, refers to them.
+static bool
+link_kind_is_referenced(uint32_t kind)
+{
+    return kind == N00B_ABI_TABLE_U32_STREAM
+        || kind == N00B_ABI_TABLE_TRACE_ARM
+        || kind == N00B_ABI_TABLE_TRACE_CHILD;
+}
+
+static bool
+plan_row_is_source(const n00bb_abi_index_plan_t *plan, uint32_t kind,
+                   uint32_t final, size_t input, uint32_t local)
+{
+    const n00bb_abi_row_origin_t *sources = kind < plan->kind_count
+        ? plan->sources[kind] : nullptr;
+    if (!sources) return true;
+    return final < plan->counts[kind] && sources[final].present
+        && sources[final].input == input && sources[final].local == local;
+}
+
+typedef struct {
+    uint8_t *u32;
+    uint8_t *arms;
+    uint8_t *children;
+    uint32_t u32_count;
+    uint32_t arm_count;
+    uint32_t child_count;
+} link_live_rows_t;
+
+static bool
+kind_has_u32_ranges(uint32_t kind)
+{
+    for (size_t i = 0; i < sizeof(abi_range_columns)
+         / sizeof(abi_range_columns[0]); i++)
+        if (abi_range_columns[i].row_kind == kind
+            && abi_range_columns[i].stream_kind == N00B_ABI_TABLE_U32_STREAM)
+            return true;
+    return false;
+}
+
+// Marks the stream entries a live row's ranges cover, and the trace arms
+// and children those entries name.
+static bool
+mark_live_ranges(const n00bb_abi_object_view_t *view, uint32_t kind,
+                 const uint8_t *row, size_t row_bytes, link_live_rows_t *live)
+{
+    for (size_t i = 0; i < sizeof(abi_range_columns)
+         / sizeof(abi_range_columns[0]); i++) {
+        const abi_range_column_t *field = &abi_range_columns[i];
+        if (field->row_kind != kind
+            || field->stream_kind != N00B_ABI_TABLE_U32_STREAM) continue;
+        if (field->offset > row_bytes
+            || sizeof(n00b_abi_range_v1) > row_bytes - field->offset)
+            return false;
+        n00b_abi_range_v1 range;
+        memcpy(&range, row + field->offset, sizeof(range));
+        if (!range.count) continue;
+        if (range.first >= live->u32_count
+            || range.count > live->u32_count - range.first) return false;
+        uint8_t *targets = field->target_kind == N00B_ABI_TABLE_TRACE_ARM
+            ? live->arms
+            : field->target_kind == N00B_ABI_TABLE_TRACE_CHILD
+            ? live->children : nullptr;
+        uint32_t target_count = field->target_kind == N00B_ABI_TABLE_TRACE_ARM
+            ? live->arm_count : live->child_count;
+        for (uint32_t j = 0; j < range.count; j++) {
+            live->u32[range.first + j] = 1;
+            if (!targets && (field->target_kind == N00B_ABI_TABLE_TRACE_ARM
+                    || field->target_kind == N00B_ABI_TABLE_TRACE_CHILD))
+                return false;
+            if (!targets) continue;
+            uint32_t local = core_le_load_u32(n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_U32_STREAM, range.first + j));
+            if (local >= target_count) return false;
+            targets[local] = 1;
+        }
+    }
+    return true;
+}
+
+static bool
+assign_live_rows(core_index_remap_t *remap, const uint8_t *live,
+                 uint32_t count, uint32_t first, uint64_t *next,
+                 uint32_t max_index)
+{
+    for (uint32_t local = first; local < count; local++) {
+        if (!live[local]) continue;
+        if (*next > max_index
+            || !core_index_remap_set(remap, local, (uint32_t)(*next)++))
+            return false;
+    }
+    return true;
+}
+
+// Places each input's referenced positional rows (see
+// link_kind_is_referenced) once every identity has its source row.
+static bool
+plan_place_referenced_rows(n00bb_abi_index_plan_t *plan,
+                           const n00bb_abi_selected_objects_t *selected,
+                           uint64_t *positional_next, bool *positional_seen)
+{
+    bool valid = true;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *u32 = n00bb_abi_object_table(view,
+            N00B_ABI_TABLE_U32_STREAM);
+        const n00bb_abi_directory_entry_t *arms = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_TRACE_ARM);
+        const n00bb_abi_directory_entry_t *children = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_TRACE_CHILD);
+        link_live_rows_t live = {
+            .u32_count = u32 ? u32->record_count : 0,
+            .arm_count = arms ? arms->record_count : 0,
+            .child_count = children ? children->record_count : 0,
+        };
+        live.u32 = core_alloc_array(uint8_t, live.u32_count + 1);
+        live.arms = core_alloc_array(uint8_t, live.arm_count + 1);
+        live.children = core_alloc_array(uint8_t, live.child_count + 1);
+        // The stream's first entry stays where it was: the linked stream
+        // starts with the first input's.
+        live.u32[0] = 1;
+        for (size_t j = 0; valid && j < view->directory_count; j++) {
+            const n00bb_abi_directory_entry_t *directory =
+                &view->directory[j];
+            uint32_t kind = directory->kind;
+            if (link_kind_is_referenced(kind) || link_kind_is_stream(kind)
+                || !kind_has_u32_ranges(kind)) continue;
+            // The manifests are rebuilt from every input's package and
+            // SCC rows.
+            bool every_row = link_kind_is_positional(kind)
+                || kind == N00B_ABI_TABLE_PACKAGE
+                || kind == N00B_ABI_TABLE_SCC;
+            for (uint32_t local = 1; valid
+                 && local < directory->record_count; local++) {
+                uint32_t final;
+                if (!every_row
+                    && (!n00bb_abi_index_plan_map(plan, input, kind, local,
+                                                  &final)
+                        || !plan_row_is_source(plan, kind, final, input,
+                                               local))) continue;
+                valid = mark_live_ranges(view, kind,
+                    view->metadata.bytes + directory->file_offset
+                        + (size_t)local * directory->record_bytes,
+                    directory->record_bytes, &live);
+            }
+        }
+        for (uint32_t local = 1; valid && arms
+             && local < arms->record_count; local++)
+            if (live.arms[local])
+                valid = mark_live_ranges(view, N00B_ABI_TABLE_TRACE_ARM,
+                    view->metadata.bytes + arms->file_offset
+                        + (size_t)local * arms->record_bytes,
+                    arms->record_bytes, &live);
+        const struct {
+            uint32_t kind;
+            const uint8_t *live;
+            uint32_t count;
+            uint32_t first;
+        } placed[] = {
+            {N00B_ABI_TABLE_U32_STREAM, live.u32, live.u32_count, 0},
+            {N00B_ABI_TABLE_TRACE_ARM, live.arms, live.arm_count, 1},
+            {N00B_ABI_TABLE_TRACE_CHILD, live.children, live.child_count, 1},
+        };
+        for (size_t k = 0; valid && k < sizeof(placed) / sizeof(*placed);
+             k++) {
+            uint32_t kind = placed[k].kind;
+            core_index_remap_t *remap =
+                plan->maps[input * plan->kind_count + kind];
+            if (!remap) continue;
+            if (!positional_seen[kind]) {
+                positional_seen[kind] = true;
+                positional_next[kind] = placed[k].first;
+            }
+            valid = assign_live_rows(remap, placed[k].live, placed[k].count,
+                placed[k].first, &positional_next[kind], UINT32_MAX - 1);
+        }
+        core_free(live.children);
+        core_free(live.arms);
+        core_free(live.u32);
+    }
+    return valid;
+}
+
+bool
+n00bb_abi_index_plan_copies(const n00bb_abi_index_plan_t *plan,
+                            size_t input_index, uint32_t kind,
+                            uint32_t local_index)
+{
+    uint32_t final;
+    return plan && n00bb_abi_index_plan_map(plan, input_index, kind,
+                                            local_index, &final)
+        && plan_row_is_source(plan, kind, final, input_index, local_index);
+}
+
 void
 n00bb_abi_index_plan_free(n00bb_abi_index_plan_t *plan)
 {
     if (!plan) return;
     for (size_t i = 0; i < plan->input_count * plan->kind_count; i++)
         core_index_remap_free(plan->maps[i]);
+    for (size_t i = 0; plan->sources && i < plan->kind_count; i++)
+        core_free(plan->sources[i]);
+    core_free(plan->sources);
     core_free(plan->maps);
     core_free(plan->counts);
     core_free(plan);
@@ -2045,78 +2292,95 @@ n00bb_abi_index_plan_build_detailed(
     bool valid = true;
     const abi_link_key_t *first_nil = nullptr;
     size_t next_key = 0;
+    // The first pass matches every row but a type's parts; the second
+    // matches those by their type's linked index. Each table's rows are
+    // still numbered in input order.
+    for (int pass = 0; valid && pass < 2; pass++)
     for (size_t input = 0; valid && input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
         for (size_t j = 0; valid && j < view->directory_count; j++) {
             const n00bb_abi_directory_entry_t *directory =
                 &view->directory[j];
             uint32_t kind = directory->kind;
-            bool stream = link_kind_is_stream(kind);
-            if (!kind || kind >= kind_count || (!stream
-                && !directory->record_count)) {
-                if (failure) *failure = (n00bb_abi_index_plan_failure_t){
-                    .input = input, .table_kind = kind,
-                    .reason = CORE_STRING_STATIC(
-                        "invalid table kind or row count"),
-                };
-                valid = false;
-                break;
-            }
-            uint32_t max_index = kind == N00B_ABI_TABLE_TYPE
-                ? INT32_MAX : UINT32_MAX - 1;
-            bool positional = link_kind_is_positional(kind);
-            if (!positional && !tables[kind])
-                tables[kind] = core_indexed_table_new(1, max_index,
-                    link_key_hash, link_key_eq);
-            if (positional && !positional_seen[kind]) {
-                positional_seen[kind] = true;
-                positional_next[kind] = stream ? 0 : 1;
-            }
-            core_index_remap_t *remap = core_index_remap_new(
-                directory->record_count, max_index);
-            plan->maps[input * kind_count + kind] = remap;
-            valid = (positional || tables[kind]) && remap;
-            if (!valid) break;
-            uint32_t first = 0;
-            if (!stream) {
-                const void *row = view->metadata.bytes
-                    + directory->file_offset;
-                valid = core_index_remap_set(remap, 0, 0);
-                if (kind == N00B_ABI_TABLE_TYPE) {
-                    abi_link_key_t *nil = &keys[next_key++];
-                    *nil = (abi_link_key_t){
-                        .selected = selected, .view = view, .row = row};
-                    const n00b_abi_type_v1 *type = row;
-                    valid = valid && type->kind == N00B_ABI_TYPE_NIL
-                        && type->typehash && (!first_nil
-                            || (type->typehash
-                                == ((const n00b_abi_type_v1 *)
-                                    first_nil->row)->typehash
-                                && compatible_type_identity(first_nil, nil,
-                                                            nullptr)));
-                    if (!first_nil) first_nil = nil;
+            bool type_part = link_kind_is_type_part(kind);
+            if (pass && !type_part) continue;
+            core_index_remap_t *remap = pass
+                ? plan->maps[input * kind_count + kind] : nullptr;
+            uint32_t first = 1;
+            if (!pass) {
+                bool stream = link_kind_is_stream(kind);
+                if (!kind || kind >= kind_count || (!stream
+                    && !directory->record_count)) {
+                    if (failure) *failure = (n00bb_abi_index_plan_failure_t){
+                        .input = input, .table_kind = kind,
+                        .reason = CORE_STRING_STATIC(
+                            "invalid table kind or row count"),
+                    };
+                    valid = false;
+                    break;
                 }
-                else valid = valid && reserved_row_is_zero(row,
-                    directory->record_bytes);
-                if (!valid && failure)
-                    *failure = (n00bb_abi_index_plan_failure_t){
-                        .input = input, .table_kind = kind,
-                        .reason = CORE_STRING_STATIC("invalid reserved row"),
-                    };
-                first = 1;
-            }
-            if (positional) {
-                for (uint32_t local = first; valid
-                     && local < directory->record_count; local++)
-                    valid = positional_next[kind] <= max_index
-                        && core_index_remap_set(remap, local,
-                               (uint32_t)positional_next[kind]++);
-                if (!valid && failure)
-                    *failure = (n00bb_abi_index_plan_failure_t){
-                        .input = input, .table_kind = kind,
-                        .reason = CORE_STRING_STATIC("could not remap row"),
-                    };
-                continue;
+                uint32_t max_index = kind == N00B_ABI_TABLE_TYPE
+                    ? INT32_MAX : UINT32_MAX - 1;
+                bool positional = link_kind_is_positional(kind);
+                if (!positional && !tables[kind])
+                    tables[kind] = core_indexed_table_new(1, max_index,
+                        link_key_hash, link_key_eq);
+                if (positional && !positional_seen[kind]) {
+                    positional_seen[kind] = true;
+                    positional_next[kind] = stream ? 0 : 1;
+                }
+                remap = core_index_remap_new(directory->record_count,
+                                             max_index);
+                plan->maps[input * kind_count + kind] = remap;
+                valid = (positional || tables[kind]) && remap;
+                if (!valid) break;
+                first = 0;
+                if (!stream) {
+                    const void *row = view->metadata.bytes
+                        + directory->file_offset;
+                    valid = core_index_remap_set(remap, 0, 0);
+                    if (kind == N00B_ABI_TABLE_TYPE) {
+                        abi_link_key_t *nil = &keys[next_key++];
+                        *nil = (abi_link_key_t){
+                            .selected = selected, .view = view, .row = row};
+                        const n00b_abi_type_v1 *type = row;
+                        valid = valid && type->kind == N00B_ABI_TYPE_NIL
+                            && type->typehash && (!first_nil
+                                || (type->typehash
+                                    == ((const n00b_abi_type_v1 *)
+                                        first_nil->row)->typehash
+                                    && compatible_type_identity(first_nil,
+                                                                nil,
+                                                                nullptr)));
+                        if (!first_nil) first_nil = nil;
+                    }
+                    else valid = valid && reserved_row_is_zero(row,
+                        directory->record_bytes);
+                    if (!valid && failure)
+                        *failure = (n00bb_abi_index_plan_failure_t){
+                            .input = input, .table_kind = kind,
+                            .reason = CORE_STRING_STATIC(
+                                "invalid reserved row"),
+                        };
+                    first = 1;
+                }
+                if (positional) {
+                    // Placed once every identity has its source row.
+                    if (link_kind_is_referenced(kind)) continue;
+                    for (uint32_t local = first; valid
+                         && local < directory->record_count; local++)
+                        valid = positional_next[kind] <= max_index
+                            && core_index_remap_set(remap, local,
+                                   (uint32_t)positional_next[kind]++);
+                    if (!valid && failure)
+                        *failure = (n00bb_abi_index_plan_failure_t){
+                            .input = input, .table_kind = kind,
+                            .reason = CORE_STRING_STATIC(
+                                "could not remap row"),
+                        };
+                    continue;
+                }
+                if (type_part) continue;
             }
             for (uint32_t local = first; valid
                  && local < directory->record_count; local++) {
@@ -2129,7 +2393,9 @@ n00bb_abi_index_plan_build_detailed(
                     .input_index = input, .local_index = local,
                 };
                 bool inserted = false;
-                bool key_valid = link_key_init(key, kind);
+                bool key_valid = type_part
+                    ? link_type_part_key_init(plan, key, kind)
+                    : link_key_init(key, kind);
                 const core_indexed_entry_t *entry = key_valid
                     ? core_indexed_table_intern(tables[kind], key, key,
                         &inserted) : nullptr;
@@ -2138,6 +2404,12 @@ n00bb_abi_index_plan_build_detailed(
                     || kind != N00B_ABI_TABLE_TYPE
                     || compatible_type_identity(entry->value, key,
                                                 &identity_reason));
+                // The linked row is the declaration's, whichever input
+                // brought a using module's row first.
+                if (compatible && !inserted
+                    && source_row_less_complete(kind,
+                        ((const abi_link_key_t *)entry->value)->row, row))
+                    ((core_indexed_entry_t *)entry)->value = key;
                 valid = compatible && core_index_remap_set(remap, local,
                                                             entry->index);
                 if (!valid && failure)
@@ -2193,10 +2465,45 @@ n00bb_abi_index_plan_build_detailed(
             }
         }
     }
+    plan->sources = valid ? core_alloc_array(n00bb_abi_row_origin_t *,
+                                             kind_count) : nullptr;
     for (size_t kind = 1; valid && kind < kind_count; kind++) {
-        if (!tables[kind] && !positional_seen[kind]) continue;
-        size_t rows = tables[kind] ? core_indexed_table_len(tables[kind])
-                                   : (size_t)positional_next[kind];
+        if (!tables[kind]) continue;
+        size_t rows = core_indexed_table_len(tables[kind]);
+        valid = rows && rows <= UINT32_MAX;
+        if (!valid) break;
+        plan->counts[kind] = (uint32_t)rows;
+        n00bb_abi_row_origin_t *sources = core_alloc_array(
+            n00bb_abi_row_origin_t, rows);
+        plan->sources[kind] = sources;
+        // The reserved row is the first input's.
+        for (size_t input = 0; input < selected->count; input++)
+            if (plan->maps[input * kind_count + kind]) {
+                sources[0] = (n00bb_abi_row_origin_t){input, 0, true};
+                break;
+            }
+        for (uint32_t final = 1; valid && final < rows; final++) {
+            const core_indexed_entry_t *entry = core_indexed_table_at(
+                tables[kind], final);
+            const abi_link_key_t *key = entry ? entry->value : nullptr;
+            valid = key != nullptr;
+            if (valid) sources[final] = (n00bb_abi_row_origin_t){
+                key->input_index, key->local_index, true,
+            };
+        }
+    }
+    if (valid) {
+        valid = plan_place_referenced_rows(plan, selected, positional_next,
+                                           positional_seen);
+        if (!valid && failure)
+            *failure = (n00bb_abi_index_plan_failure_t){
+                .reason = CORE_STRING_STATIC(
+                    "invalid range in a referenced row"),
+            };
+    }
+    for (size_t kind = 1; valid && kind < kind_count; kind++) {
+        if (tables[kind] || !positional_seen[kind]) continue;
+        size_t rows = (size_t)positional_next[kind];
         valid = rows <= UINT32_MAX;
         if (valid) plan->counts[kind] = (uint32_t)rows;
     }
@@ -4410,7 +4717,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
     };
     n00bb_abi_row_origin_t **origins = core_alloc_array(
         n00bb_abi_row_origin_t *, schema_count);
-    size_t max_width = 0;
     uint32_t base_u32_count = 0;
     uint32_t import_count = 0;
     bool valid = schemas && schema_count && built.strings
@@ -4451,8 +4757,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         };
         origins[i] = count ? core_alloc_array(n00bb_abi_row_origin_t, count)
                            : nullptr;
-        if (schema->record_bytes > max_width)
-            max_width = schema->record_bytes;
         if (schema->kind == N00B_ABI_TABLE_PACKAGE)
             memcpy(built.tables[i].records, manifests.packages,
                    (size_t)count * schema->record_bytes);
@@ -4464,7 +4768,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                    (size_t)manifests.u32_count * schema->record_bytes);
     }
 
-    uint8_t *scratch = valid ? core_alloc_size(1, max_width) : nullptr;
     n00bb_abi_u32_stream_build_t stream = {
         .values = manifests.u32_stream, .kinds = manifests.u32_kinds,
         .count = base_u32_count,
@@ -4515,12 +4818,17 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                 }
                 continue;
             }
+            bool referenced = link_kind_is_referenced(table->kind);
             for (uint32_t local = 0; valid
                  && local < source_table->record_count; local++) {
                 uint32_t final;
-                valid = n00bb_abi_index_plan_map(plan, input,
-                    table->kind, local, &final)
-                    && final < table->record_count;
+                if (!n00bb_abi_index_plan_map(plan, input, table->kind,
+                                              local, &final)) {
+                    // Only a dropped row refers to it.
+                    valid = referenced;
+                    continue;
+                }
+                valid = final < table->record_count;
                 if (!valid) break;
                 n00bb_abi_row_origin_t *origin = &origins[ti][final];
                 uint8_t *destination = table->records
@@ -4549,49 +4857,15 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                         table->kind, local), table->record_bytes);
                 }
                 else {
-                    // Only a type row can replace an earlier input's copy;
-                    // any other row already placed is kept as it is.
-                    if (origin->present && table->kind != N00B_ABI_TABLE_TYPE)
-                        continue;
+                    // Every input's row for one identity is the same, but
+                    // for what only a declaration has; the plan names the
+                    // one the linked row is copied from.
+                    if (origin->present || !plan_row_is_source(plan,
+                            table->kind, final, input, local)) continue;
                     valid = n00bb_abi_remap_row(selected, plan, input,
-                        table->kind, local, scratch, table->record_bytes,
-                        &stream);
+                            table->kind, local, destination,
+                            table->record_bytes, &stream);
                     if (!valid) break;
-                    bool replace = !origin->present;
-                    if (table->kind == N00B_ABI_TABLE_TYPE
-                        && origin->present) {
-                        const n00b_abi_type_v1 *old = (const void *)destination;
-                        const n00b_abi_type_v1 *next = (const void *)scratch;
-                        if (old->owner_module_index
-                            && next->owner_module_index
-                            && old->owner_module_index
-                                != next->owner_module_index) {
-                            valid = false;
-                            break;
-                        }
-                        replace = (!old->owner_module_index
-                            && next->owner_module_index)
-                            || (!old->layout_index && next->layout_index
-                                && (!old->tracing_index
-                                    || next->tracing_index)
-                                && (!old->call_signature_index
-                                    || next->call_signature_index)
-                                && (!old->fields_or_arms.count
-                                    || next->fields_or_arms.count)
-                                && (!old->components.count
-                                    || next->components.count))
-                            || ((old->kind == N00B_ABI_TYPE_OPTION
-                                 || old->kind == N00B_ABI_TYPE_ATOMIC
-                                 || old->kind == N00B_ABI_TYPE_WRAPPER)
-                                && !old->tracing_index
-                                && next->tracing_index)
-                            || (old->kind == N00B_ABI_TYPE_VARIABLE
-                                && old->typevar_import_requirement_index
-                                && next->typevar_owner_scope_index);
-                    }
-                    if (replace) memcpy(destination, scratch,
-                                        table->record_bytes);
-                    else continue;
                 }
                 *origin = (n00bb_abi_row_origin_t){input, local, true};
             }
@@ -4605,43 +4879,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
             break;
         }
     if (type_table == schema_count) valid = false;
-    for (uint32_t i = 1; valid
-         && i < built.tables[type_table].record_count; i++) {
-        n00bb_abi_row_origin_t source = origins[type_table][i];
-        const n00bb_abi_object_view_t *view = source.present
-            ? &selected->views[source.input] : nullptr;
-        const n00b_abi_type_v1 *type = view
-            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE,
-                                   source.local) : nullptr;
-        if (!type) { valid = false; break; }
-        const uint32_t kinds[] = {
-            N00B_ABI_TABLE_LAYOUT, N00B_ABI_TABLE_TRACE,
-        };
-        const uint32_t local_indices[] = {
-            type->layout_index, type->tracing_index,
-        };
-        for (size_t k = 0; valid && k < sizeof(kinds) / sizeof(*kinds); k++) {
-            if (!local_indices[k]) continue;
-            size_t ti = 0;
-            while (ti < schema_count && built.tables[ti].kind != kinds[k])
-                ti++;
-            uint32_t final = 0;
-            valid = ti < schema_count
-                && n00bb_abi_index_plan_map(plan, source.input,
-                    kinds[k], local_indices[k], &final)
-                && final < built.tables[ti].record_count
-                && n00bb_abi_remap_row(selected, plan, source.input,
-                    kinds[k], local_indices[k], scratch,
-                    built.tables[ti].record_bytes, &stream);
-            if (!valid) break;
-            memcpy(built.tables[ti].records
-                + (size_t)final * built.tables[ti].record_bytes,
-                scratch, built.tables[ti].record_bytes);
-            origins[ti][final] = (n00bb_abi_row_origin_t){
-                source.input, local_indices[k], true,
-            };
-        }
-    }
 
     for (size_t ti = 0; valid && ti < schema_count; ti++) {
         const n00bb_abi_merged_table_t *table = &built.tables[ti];
@@ -4693,7 +4930,6 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                                            origins, schema_count);
     if (valid) valid = complete_merged_traces(&built);
     if (valid) valid = flatten_merged_traces(&built);
-    core_free(scratch);
     for (size_t i = 0; i < schema_count; i++) {
         if (rebased_row_bytes(built.tables[i].kind))
             built.tables[i].origins = origins[i];

@@ -1,0 +1,32 @@
+# A function's type names only its keyword parameters, so a call through a
+# function reference may pass those by name (or omit them), and passes the
+# positional ones by position; a callback's `call` takes the names its role
+# declares.
+func scaled(a: int, scale: int = 2) -> int {
+    return a * scale
+}
+func less(a: int, b: int) -> int {
+    return a - b
+}
+let by_name: Ref[(int, scale: int) -> int] = ref scaled
+require by_name.call(3, scale = 4) == 12
+require by_name.call(3) == 6
+require by_name.call(3, 4) == 12
+func use(r: Ref[(int, int) -> int]) -> int {
+    var three = 3
+    var five = 5
+    return r.call(b = three, a = five)
+}
+require use(ref less) == 2
+let by_position: Ref[(int, int) -> int] = ref scaled
+
+callback Joiner {
+    call(label: string, count: int) -> string
+    handler(label: string, count: int) -> string
+}
+func join(label: string, count: int) -> string {
+    return label
+}
+let joiner = callback[Joiner](ref join)
+require joiner.call(count = 2, lable = "x") == "x"
+require joiner.call(count = "2", label = "x") == "x"

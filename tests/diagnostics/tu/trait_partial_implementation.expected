@@ -1,0 +1,12 @@
+tests/diagnostics/tu/trait_partial_implementation.n:14:18: note N00B-S0064: parameter `item` could be `view`: `render_only` never writes anything reachable from it
+tests/diagnostics/tu/trait_partial_implementation.n:17:8: warning N00B-N0023: type `Holder` is never used
+  help: remove it
+tests/diagnostics/tu/trait_partial_implementation.n:20:20: error N00B-T0021: `Dot` does not implement `Render`, which `Holder` requires
+  note: no function implements `Render.label` for `Dot`
+  note: no function implements `Render.measure` for `Dot`
+  help: give `Holder` a type that implements `Render`, or implement `Render` for this one
+tests/diagnostics/tu/trait_partial_implementation.n:24:9: error N00B-T0021: `Dot` does not implement `Render`, which `render_only` requires
+  tests/diagnostics/tu/trait_partial_implementation.n:14:6: note: `render_only` is declared here
+  note: no function implements `Render.label` for `Dot`
+  note: no function implements `Render.measure` for `Dot`
+  help: implement `Render` for `Dot`, or call a function that does not need it

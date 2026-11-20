@@ -1,0 +1,24 @@
+// A variable given to a constrained record, variant or alias takes on the
+// type's constraint, so it is part of the contract of the function that
+// writes the use; declarations may come in any order.
+func mk(x: 'T) -> Box['T] { return (v = x) }
+func pick(m: Maybe['U]) -> int { return 1 }
+func later(b: Bag['V]) -> uint { return b.len() }
+record Box {
+    v: 'T where 'T: Integer
+}
+variant Maybe {
+    some: 'T where 'T: != string
+    none: nil
+}
+alias Bag = Dict['K, nil] where 'K: Integer
+func choose() -> int {
+    var m: Maybe[string]
+    m.none = nil
+    return pick(m)
+}
+require mk(3).v == 3
+require mk("s").v == "s"
+let words: Dict[string, nil] = {"x": nil}
+require later(words) == 1
+require choose() == 1

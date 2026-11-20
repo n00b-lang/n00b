@@ -227,6 +227,15 @@ bool th_env_type_visible(const th_ctx *context,
                          core_string_t qualified_type_name);
 bool th_env_implements(th_ctx *context, th_type *receiver,
                        core_string_t trait_name);
+// The trait's methods that no function implements for `receiver`, each on
+// its own: their names, up to `max_names` of them, in `names`; returns how
+// many there are, and sets `*methods` (when given) to how many methods the
+// trait has. A receiver that has each method but not all of them together
+// (or not the trait's requirements) has none.
+size_t th_env_unimplemented_methods(th_ctx *context, th_type *receiver,
+                                    core_string_t trait_name,
+                                    core_string_t *names, size_t max_names,
+                                    size_t *methods);
 th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
                                              core_string_t trait_name,
                                              core_string_t method_name,

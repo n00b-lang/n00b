@@ -34,7 +34,6 @@ typedef parse_sym_entry_t *(*n00bb_abi_type_owner_lookup_fn)(
  * left for the complete type emitter; these rows are not standalone output. */
 bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions,
     const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names,

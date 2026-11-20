@@ -20,3 +20,7 @@ bool n00bb_write_library_abi_artifact(core_link_unit_t *link,
                                       const core_target_desc_t *target,
                                       parse_cmdr_result_t *args,
                                       core_diagnostics_t *diagnostics);
+// Keeps the library build's modules in the cache with their ABI objects
+// (compiler_cache.c's library phase), as a build keeps them with their code.
+bool n00bb_store_library_modules(core_link_unit_t *link,
+                                 n00bb_link_analysis_t *analysis);

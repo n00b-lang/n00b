@@ -23,6 +23,10 @@ typedef struct {
     n00bb_abi_image_header_t header;
     n00bb_abi_directory_entry_t *directory;
     size_t directory_count;
+    // Each table kind's first directory entry, plus one; zero for none.
+    // Set by n00bb_abi_object_open; a view made otherwise is searched.
+    uint8_t table_entries[N00B_ABI_TABLE_LAST + 1];
+    bool tables_indexed;
     core_object_absolute64_relocation_t *relocations;
     uint32_t relocation_count;
     bool relocations_valid;
@@ -130,6 +134,13 @@ bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
                               uint32_t local_index, uint32_t *out_index);
 const core_index_remap_t *n00bb_abi_index_plan_remap(
     const n00bb_abi_index_plan_t *plan, size_t input_index, uint32_t kind);
+/* Whether the linked image copies this input row. Rows matched by identity
+ * all map to one linked row, which is copied from one input's; stream
+ * entries and trace arms and children that only uncopied rows refer to
+ * have no linked index at all. */
+bool n00bb_abi_index_plan_copies(const n00bb_abi_index_plan_t *plan,
+                                 size_t input_index, uint32_t kind,
+                                 uint32_t local_index);
 
 /* `values` is the merged U32 stream; `kinds` is a same-length zeroed build
  * buffer that detects conflicting interpretations of a source slot. Neither

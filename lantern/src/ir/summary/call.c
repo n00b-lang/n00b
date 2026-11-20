@@ -37,6 +37,7 @@ typedef struct {
     pt_set_t to;
     pt_set_t from;
     bool     must;
+    size_t   dest;
 } store_pair_t;
 
 core_list_decl(store_pair_t);
@@ -46,10 +47,93 @@ static core_hash_value_t resolved_hash(void *key);
 static void resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into,
                          pt_set_t *seen);
 
+static uint64_t
+visited_hash(const pt_loc_t *loc)
+{
+    const ir_spath_t *path = &loc->path;
+    uint64_t          hash = (uint64_t)loc->site * 0x9e3779b97f4a7c15ull
+        ^ ((uint64_t)path->root << 40 | (uint64_t)path->output << 32
+           | (uint64_t)path->flags << 24 | path->depth);
+    hash = hash * 31 + path->param;
+    hash = hash * 31 + (uint64_t)(uintptr_t)path->global;
+    hash = hash * 31 + (uint64_t)(uintptr_t)path->type;
+    for (uint32_t s = 0; s < path->depth; s++)
+        hash = hash * 31 + (uint64_t)(uintptr_t)path->steps[s].data
+            + path->steps[s].u8_bytes;
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdull;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ull;
+    return hash ^ hash >> 33;
+}
+
+static bool
+same_visited(const pt_loc_t *a, const pt_loc_t *b)
+{
+    const ir_spath_t *x = &a->path, *y = &b->path;
+    if (a->site != b->site || x->root != y->root || x->output != y->output
+        || x->flags != y->flags || x->depth != y->depth
+        || x->param != y->param || x->global != y->global
+        || x->type != y->type)
+        return false;
+    if (x->steps == y->steps) return true;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if ((x->steps[s].data != y->steps[s].data
+             || x->steps[s].u8_bytes != y->steps[s].u8_bytes)
+            && !core_string_eq(x->steps[s], y->steps[s]))
+            return false;
+    return true;
+}
+
+static bool
+same_loc(const void *a, const void *b)
+{
+    return same_visited(a, b);
+}
+
+// Adds `loc` to `table`; false if it was there already.
+static bool
+loc_table_add(loc_table_t *table, const pt_loc_t *loc)
+{
+    return table_add(table, loc, sizeof(*loc), visited_hash(loc), same_loc);
+}
+
+static void
+loc_table_free(loc_table_t *table)
+{
+    if (table->slots) core_free(table->slots);
+    if (table->hashes) core_free(table->hashes);
+    if (table->used) core_free(table->used);
+    *table = (loc_table_t){0};
+}
+
+// Whether the walk under way has met exactly `loc` before, noting it if
+// not. A location met before needs nothing more: either it was resolved
+// then, adding everything it reaches, or `seen` already covered it. The
+// check stands in front of `seen`, whose covering lookups were most of the
+// time a function with many mutually reachable sites spent solving: each
+// site's contents name most of the other sites, so each site is met once
+// per site that holds it.
+static bool
+visited_before(pt_t *pt, const pt_loc_t *loc)
+{
+    return !loc_table_add(&pt->walk->visited, loc);
+}
+
+// Resolves what `held` points to, deeply. Where it points depends on its
+// location and kind alone, and once the walk has gone through one such item
+// it has met that place (see visited_before), so going through another
+// item with the same location and kind finds nothing new. Many sites hold
+// items naming the same places, and working out each one's place again (a
+// step pushed and interned, slot types looked up) only to find it visited
+// was most of what the walk did.
 static void
 resolve_through(pt_t *pt, const pt_item_t *held, pt_set_t *into,
                 pt_set_t *seen)
 {
+    if (!loc_table_add(&pt->walk->through[held->kind == PT_CONTENTS],
+                       &held->loc))
+        return;
     pt_loc_t next = location_of(pt, held);
     next.path.flags |= IR_SPATH_DEEP;
     next.path.flags &= (uint8_t)~SPATH_INLINE;
@@ -72,33 +156,45 @@ foreign_deref(const pt_t *pt, const pt_loc_t *loc)
     return slot;
 }
 
-static void
-resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
+// Whether `held`, an item of `site`'s contents, is a pointer that lies in a
+// string value there, or a value copied out of (or from inside) a string.
+static bool
+string_pointer(const pt_t *pt, uint32_t site, const pt_item_t *held)
 {
-    if (loc.site == PT_EXTERNAL) {
-        set_add(pt, into, item_at(loc));
-        return;
-    }
-    if (!set_add(pt, seen, item_at(loc))) return;
-    const ir_spath_t *path    = &loc.path;
-    bool              deep    = loc_deep(&loc);
-    bool              through = deep && !(path->flags & SPATH_INLINE);
-    uint32_t          slot    = foreign_deref(pt, &loc);
-    if (slot == path->depth) {
-        set_add(pt, into, item_at(loc));
-        if (!through) return;
-    }
-    uint32_t             count = slot < path->depth
+    pt_loc_t at = {.site = site,
+                   .path = {.steps = held->steps, .depth = held->depth}};
+    if (within_string(pt, &at, held->depth)) return true;
+    return held->kind == PT_CONTENTS
+        && within_string(pt, &held->loc, held->loc.path.depth);
+}
+
+// A place to write that runs on below a string value stops at the string's
+// own storage: what lies past its data pointer is never written.
+static void
+string_value_only(const pt_t *pt, pt_loc_t *loc)
+{
+    if (loc_deep(loc) && !(loc->path.flags & SPATH_INLINE)
+        && within_string(pt, loc, loc->path.depth))
+        loc->path.flags |= SPATH_INLINE;
+}
+
+// Goes through `count` of the items a site location `loc` of the walk holds.
+static void
+resolve_held(pt_t *pt, const pt_loc_t *loc, const pt_item_t *items,
+             size_t count, pt_set_t *into, pt_set_t *seen)
+{
+    const ir_spath_t    *path  = &loc->path;
+    uint32_t             slot  = foreign_deref(pt, loc);
+    uint32_t             rest  = slot < path->depth
         ? path->depth - slot - 1 : 0;
     // A path with no steps has none to point into (`steps` may be null).
-    const core_string_t *tail  = count ? path->steps + slot + 1 : nullptr;
+    const core_string_t *tail  = rest ? path->steps + slot + 1 : nullptr;
     uint8_t              flags = path->flags
         & (uint8_t)(IR_SPATH_DEEP | SPATH_INLINE);
-    pt_depend(pt, contents_key(loc.site));
-    const pt_set_t *contents = &pt->sites.data[loc.site].contents;
-    for (size_t i = 0; i < contents->len; i++) {
-        pt_item_t held = contents->data[i];
+    for (size_t i = 0; i < count; i++) {
+        pt_item_t held = items[i];
         if (held.flow != PT_SAME) continue;
+        if (pt->writing && string_pointer(pt, loc->site, &held)) continue;
         if (slot == path->depth) {
             if (steps_prefix(path->depth, path->steps, held.depth,
                              held.steps)
@@ -125,11 +221,47 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
             resolve_through(pt, &held, into, seen);
             continue;
         }
-        loc_extend(pt, &next, tail, count, false);
+        loc_extend(pt, &next, tail, rest, false);
         if (!loc_deep(&next)) next.path.flags |= flags;
         else next.path.flags &= (uint8_t)~SPATH_INLINE;
         resolve_into(pt, next, into, seen);
     }
+}
+
+static void
+resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
+{
+    if (pt->writing) string_value_only(pt, &loc);
+    if (loc.site == PT_EXTERNAL) {
+        // Met before in this walk, it was added then (see visited_before).
+        if (visited_before(pt, &loc)) return;
+        if (!pt->writing || !immutable_place(pt, &loc))
+            set_add(pt, into, item_at(loc));
+        return;
+    }
+    if (visited_before(pt, &loc) || !set_add(pt, seen, item_at(loc)))
+        return;
+    const ir_spath_t *path    = &loc.path;
+    bool              deep    = loc_deep(&loc);
+    bool              through = deep && !(path->flags & SPATH_INLINE);
+    uint32_t          slot    = foreign_deref(pt, &loc);
+    if (slot == path->depth) {
+        set_add(pt, into, item_at(loc));
+        if (!through) return;
+    }
+    // Strings are immutable: what a string's data points to (its bytes, its
+    // rich body and everything in that) is written only while it is being
+    // made, through the storage itself, never through a string. So a place
+    // to write is never found by following a pointer that lies in a string
+    // value, or one copied out of a string.
+    if (pt->writing && slot < path->depth && within_string(pt, &loc, slot))
+        return;
+    pt_depend(pt, contents_key(loc.site));
+    const pt_site_t *site = &pt->sites.data[loc.site];
+    core_list_push(pt->walk->nodes, ((resolve_node_t){
+        .loc = loc, .through = site->added.len}));
+    resolve_held(pt, &loc, site->contents.data, site->contents.len, into,
+                 seen);
 }
 
 static core_hash_value_t
@@ -201,6 +333,9 @@ growth_only_stale(pt_t *pt, const pt_memo_t *memo)
 {
     if (!memo->computed || (memo->positional && memo->at != pt->at))
         return false;
+    // Growth since before the content logs were let go (see
+    // pt_release_solve) can't be read from them.
+    if (memo->generation < pt->released_at) return false;
     for (size_t d = 0; d < memo->depends.len; d++) {
         uintptr_t key     = (uintptr_t)memo->depends.data[d];
         uintptr_t changed = (uintptr_t)core_dict_get(
@@ -277,30 +412,121 @@ memo_free(pt_memo_t *memo)
     core_list_free(memo->depends);
 }
 
+// Carries a resolve walk on from where it stopped, after sites it went
+// into gained contents. Contents only grow, and a walk only adds: what it
+// finds from a site location is what it finds from each item the site
+// holds, and from what that reaches. So the places the walk found then are
+// all still found, and what it has yet to find is reached from the items
+// added since, through the site locations it went into (and from any site
+// location that turns up on the way, which it goes into as it would have).
+// Going through those items alone, in each location's context, reaches the
+// same places as walking from the start again. An item since folded into
+// one that covers it is still gone through; what it reaches, the covering
+// item reaches too, so it adds nothing a new walk would not.
 static void
-pt_resolve(pt_t *pt, pt_loc_t loc, pt_set_t *into)
+resolve_again(pt_t *pt, resolved_t *entry)
+{
+    for (size_t n = 0; n < entry->nodes.len; n++) {
+        resolve_node_t node = entry->nodes.data[n];
+        pt_depend(pt, contents_key(node.loc.site));
+        const pt_set_t *added = &pt->sites.data[node.loc.site].added;
+        size_t          now   = added->len;
+        if (node.through == now) continue;
+        entry->nodes.data[n].through = now;
+        resolve_held(pt, &node.loc, added->data + node.through,
+                     now - node.through, &entry->items, &entry->seen);
+    }
+}
+
+static void
+resolved_release(resolved_t *entry)
+{
+    core_list_free(entry->items);
+    memo_free(&entry->memo);
+    loc_table_free(&entry->visited);
+    loc_table_free(&entry->through[0]);
+    loc_table_free(&entry->through[1]);
+    core_list_free(entry->seen);
+    core_list_free(entry->nodes);
+}
+
+static void
+release_walk(resolved_t *entry)
+{
+    loc_table_free(&entry->visited);
+    loc_table_free(&entry->through[0]);
+    loc_table_free(&entry->through[1]);
+    core_list_free(entry->seen);
+    core_list_free(entry->nodes);
+    entry->released = true;
+}
+
+// Lets go of what a solved `pt` keeps only to carry its solve on
+// incrementally: each resolve walk's state and each site's record of the
+// items added to it (see resolve_again), and each content memo's log of
+// the items it gained (see content_at). An engine outlives its solve, and
+// with these it held about twice what its solution does; a program keeps
+// an engine for most of its functions (see keep_engine). What was found
+// stays. A walk asked for again after the sites it went into grew starts
+// from the beginning, which finds the same places (see resolve_again), and
+// a memo that last saw the contents before now reads them whole instead of
+// reading only what was logged since (see growth_only_stale).
+static void
+pt_release_solve(pt_t *pt)
+{
+    core_dict_foreach(&pt->resolved, entry) release_walk(entry->value);
+    core_dict_foreach(&pt->resolved_writes, entry)
+        release_walk(entry->value);
+    for (size_t s = 0; s < pt->sites.len; s++)
+        core_list_free(pt->sites.data[s].added);
+    core_dict_foreach(&pt->contents_memo, entry) {
+        content_memo_t *content = entry->value;
+        core_list_free(content->log);
+    }
+    pt->released_at = pt->generation;
+}
+
+// The places `loc` stands for; with `writes`, only those a write can reach
+// (see resolve_into).
+static void
+pt_resolve_places(pt_t *pt, pt_loc_t loc, bool writes, pt_set_t *into)
 {
     if (loc.site == PT_EXTERNAL) {
-        set_add(pt, into, item_at(loc));
+        if (!writes || !immutable_place(pt, &loc))
+            set_add(pt, into, item_at(loc));
         return;
     }
-    bool        found = false;
-    resolved_t *entry = core_dict_get(&pt->resolved, &loc, &found);
+    core_dict_t *memo  = writes ? &pt->resolved_writes : &pt->resolved;
+    bool         found = false;
+    resolved_t  *entry = core_dict_get(memo, &loc, &found);
     if (!found) {
         entry  = core_alloc(resolved_t);
         *entry = (resolved_t){.loc = loc};
-        core_dict_put(&pt->resolved, &entry->loc, entry);
+        core_dict_put(memo, &entry->loc, entry);
     }
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
+        bool            again = entry->memo.computed && !entry->released;
+        if (entry->released) entry->items.len = 0;
+        entry->released = false;
         memo_begin(pt, &entry->memo, &frame);
-        entry->items.len = 0;
-        pt->seen.len     = 0;
-        resolve_into(pt, loc, &entry->items, &pt->seen);
+        resolved_t *outer = pt->walk;
+        pt->walk    = entry;
+        pt->writing = writes;
+        if (!again) resolve_into(pt, loc, &entry->items, &entry->seen);
+        else resolve_again(pt, entry);
+        pt->writing = false;
+        pt->walk    = outer;
         memo_end(pt, &entry->memo, &frame);
     }
     memo_use(pt, &entry->memo);
     set_merge(pt, into, &entry->items);
+}
+
+static void
+pt_resolve(pt_t *pt, pt_loc_t loc, pt_set_t *into)
+{
+    pt_resolve_places(pt, loc, false, into);
 }
 
 static void
@@ -362,7 +588,7 @@ fresh_entry_path(const ir_instr_t *call, const ir_spath_t *path)
 
 static void
 map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
-                bool inline_tail, pt_set_t *into)
+                bool inline_tail, bool writes, pt_set_t *into)
 {
     if (fresh_entry_path(call, path)) return;
     pt_set_t items = (pt_set_t){0};
@@ -399,7 +625,7 @@ map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         }
         else
             continue;
-        pt_resolve(pt, loc, into);
+        pt_resolve_places(pt, loc, writes, into);
     }
     core_list_free(items);
 }
@@ -408,7 +634,7 @@ static void
 map_param_path(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                pt_set_t *into)
 {
-    map_param_place(pt, call, path, false, into);
+    map_param_place(pt, call, path, false, false, into);
 }
 
 
@@ -524,6 +750,99 @@ valued_eq(const void *a, const void *b)
     return x->mode == y->mode && resolved_eq(&x->loc, &y->loc);
 }
 
+static core_hash_value_t
+places_hash(const pt_set_t *places, uint8_t mode)
+{
+    core_hash_value_t hash = places->len * 8 + mode;
+    for (size_t p = 0; p < places->len; p++) {
+        const pt_item_t *item = &places->data[p];
+        hash = hash * 1000003
+            ^ (spath_hash((void *)&item->loc.path) * 31 + item->loc.site);
+        hash = hash * 31
+            + ((core_hash_value_t)item->kind << 16
+               | (core_hash_value_t)item->flow << 8 | item->deep)
+            + item->depth;
+        for (uint32_t s = 0; s < item->depth; s++)
+            hash = hash * 31 + core_string_hash(item->steps[s]);
+        hash = hash * 31 + (core_hash_value_t)(uintptr_t)item->origin;
+    }
+    return hash;
+}
+
+static bool
+identical_place(const pt_item_t *a, const pt_item_t *b)
+{
+    const ir_spath_t *x = &a->loc.path, *y = &b->loc.path;
+    if (a->kind != b->kind || a->flow != b->flow || a->deep != b->deep
+        || a->depth != b->depth || a->origin != b->origin
+        || a->loc.site != b->loc.site || x->flags != y->flags
+        || x->type != y->type || compare_path_roots(x, y)
+        || x->depth != y->depth)
+        return false;
+    for (uint32_t s = 0; s < a->depth; s++)
+        if (!core_string_eq(a->steps[s], b->steps[s])) return false;
+    for (uint32_t s = 0; s < x->depth; s++)
+        if (!core_string_eq(x->steps[s], y->steps[s])) return false;
+    return true;
+}
+
+static core_hash_value_t
+places_memo_hash(void *key)
+{
+    return ((const places_memo_t *)key)->hash;
+}
+
+static bool
+places_memo_eq(const void *a, const void *b)
+{
+    const places_memo_t *x = a, *y = b;
+    if (x->hash != y->hash || x->mode != y->mode
+        || x->places.len != y->places.len)
+        return false;
+    for (size_t p = 0; p < x->places.len; p++)
+        if (!identical_place(&x->places.data[p], &y->places.data[p]))
+            return false;
+    return true;
+}
+
+// places_value, remembered by places and mode. Many of a callee's paths
+// resolve to the same places (every path under a deeply aliased parameter
+// reaches all of it), and each recomputed its value separately, merging
+// every place's contents again; a function whose calls kept changing what
+// those places hold spent nearly all its solve doing that. The entry is an
+// ordinary memo, so it is recomputed whenever anything it read changes.
+static void
+shared_places_value(pt_t *pt, pt_set_t *places, uint8_t mode,
+                    pt_set_t *into)
+{
+    if (pt->reading.len || pt->delta_since) {
+        places_value(pt, places, mode, into);
+        return;
+    }
+    places_memo_t  probe = {.places = *places, .mode = mode,
+                            .hash   = places_hash(places, mode)};
+    bool           found = false;
+    places_memo_t *entry = core_dict_get(&pt->places_memo, &probe, &found);
+    if (!found) {
+        entry  = core_alloc(places_memo_t);
+        *entry = (places_memo_t){.mode = mode, .hash = probe.hash};
+        for (size_t p = 0; p < places->len; p++)
+            core_list_push(entry->places, places->data[p]);
+        core_dict_put(&pt->places_memo, entry, entry);
+    }
+    if (memo_stale(pt, &entry->memo)) {
+        pt_memo_frame_t frame;
+        uint64_t        cuts = pt->cuts;
+        entry->items.len = 0;
+        memo_begin(pt, &entry->memo, &frame);
+        places_value(pt, places, mode, &entry->items);
+        memo_end(pt, &entry->memo, &frame);
+        if (pt->cuts != cuts) entry->memo.computed = false;
+    }
+    memo_use(pt, &entry->memo);
+    set_merge(pt, into, &entry->items);
+}
+
 static void
 resolved_value(pt_t *pt, pt_loc_t loc, uint8_t mode, pt_set_t *into)
 {
@@ -541,7 +860,7 @@ resolved_value(pt_t *pt, pt_loc_t loc, uint8_t mode, pt_set_t *into)
         memo_begin(pt, &entry->memo, &frame);
         entry->items.len = 0;
         pt_resolve(pt, loc, &places);
-        places_value(pt, &places, mode, &entry->items);
+        shared_places_value(pt, &places, mode, &entry->items);
         core_list_free(places);
         memo_end(pt, &entry->memo, &frame);
     }
@@ -628,6 +947,80 @@ heap_site_eq(const void *a, const void *b)
     return x->call == y->call && x->origin == y->origin;
 }
 
+typedef struct {
+    core_list_t(summary_type_ptr_t) vars;
+    core_list_t(summary_type_ptr_t) values;
+} type_binding_t;
+
+// Matches `pattern` (a callee's signature) against `concrete` (the
+// signature at a call to it), collecting what each of the pattern's
+// unbound variables stands for. Binds nothing: false unless the two have
+// the same shape throughout and every variable stands for one type.
+static bool
+bind_types(type_binding_t *b, th_type *pattern, th_type *concrete,
+           uint32_t depth)
+{
+    pattern  = th_resolve(pattern);
+    concrete = th_resolve(concrete);
+    if (!pattern || !concrete) return pattern == concrete;
+    if (depth > 64) return false;
+    if (th_kind_of(pattern) == TH_VAR) {
+        for (size_t v = 0; v < b->vars.len; v++)
+            if (b->vars.data[v] == pattern)
+                return th_same_type(b->values.data[v], concrete);
+        core_list_push(b->vars, pattern);
+        core_list_push(b->values, concrete);
+        return true;
+    }
+    if (pattern == concrete) return true;
+    if (!th_same_shape(pattern, concrete)) return false;
+    size_t children = th_child_count(pattern);
+    if (children != th_child_count(concrete)) return false;
+    for (size_t c = 0; c < children; c++)
+        if (!bind_types(b, th_child(pattern, c), th_child(concrete, c),
+                        depth + 1))
+            return false;
+    return true;
+}
+
+// The type of storage a callee allocates as this call fixes it: the
+// callee's (generic) heap type with its variables replaced by what they
+// stand for here. Null when the callee's signature doesn't match the call
+// exactly, or nothing in the type changes.
+static th_type *
+heap_instance(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+              th_type *type, th_ctx *types)
+{
+    if (!type || !types || !callee->function || !callee->function->type
+        || th_is_closed(types, type))
+        return nullptr;
+    th_type *pattern = th_resolve(callee->function->type);
+    if (pattern && th_kind_of(pattern) == TH_INDIRECTION)
+        pattern = th_resolve(th_ind_referent(pattern));
+    if (pattern && th_kind_of(pattern) == TH_BINDER)
+        pattern = th_resolve(th_binder_body(pattern));
+    th_type *concrete = ir_call_function_type(call);
+    if (!pattern || !concrete || th_kind_of(pattern) != TH_FUNCTION)
+        return nullptr;
+    type_binding_t binding = {core_list_new(summary_type_ptr_t),
+                              core_list_new(summary_type_ptr_t)};
+    th_type *instance = nullptr;
+    if (bind_types(&binding, pattern, concrete, 0) && binding.vars.len)
+        instance = th_substitute(types, type, binding.vars.data,
+                                 binding.values.data, binding.vars.len);
+    core_list_free(binding.vars);
+    core_list_free(binding.values);
+    (void)pt;
+    return instance;
+}
+
+// Storage a callee allocates, as a site of this call. Its type is the
+// callee's heap type as this call instantiates it. When that type is
+// closed, the site's origin (its name in this function's summary) is the
+// callee's refined by the type: storage of two different types is never
+// the same object, so callers keep, say, a List[string]'s storage apart
+// from a List[Rule]'s that one generic allocation made. A type still open
+// keeps the callee's origin, shared as before.
 static uint32_t
 heap_site(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
           uint32_t origin)
@@ -641,12 +1034,25 @@ heap_site(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     heap_site_key_t  *key  = core_alloc(heap_site_key_t);
     const ir_sheap_t *heap = callee ? ir_summary_heap_for(callee, origin)
                                     : nullptr;
+    th_ctx  *types = pt->f->owner ? ir_module_types(pt->f->owner) : nullptr;
+    th_type *type  = heap ? heap->type : nullptr;
+    th_type *found_type = heap
+        ? heap_instance(pt, call, callee, type, types) : nullptr;
+    uint32_t named = origin;
+    if (found_type) {
+        type = found_type;
+        if (th_is_closed(types, type)) {
+            uint64_t parts[2] = {origin, th_hash(types, type)};
+            uint64_t hash     = core_xxh3_64bits_raw(parts, sizeof parts);
+            named = (uint32_t)(hash ^ hash >> 32) | 1;
+        }
+    }
     *key = probe;
     site = pt->sites.len;
     core_list_push(pt->sites, ((pt_site_t){
         .key = key, .contents = (pt_set_t){0}, .aliases = (alias_list_t){0},
-        .type = heap ? heap->type : nullptr, .elements = heap && heap->elements,
-        .call = call, .origin = origin}));
+        .type = type, .elements = heap && heap->elements,
+        .call = call, .origin = named, .base = origin}));
     core_dict_put(&pt->heap_sites, key, (void *)site);
     return (uint32_t)site;
 }
@@ -665,6 +1071,9 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
                        path->flags & IR_SPATH_DEEP);
         else extend_tail(pt, &loc, path->steps, path->depth,
                          path->flags & IR_SPATH_DEEP, inline_tail);
+        // Nothing writes through a string (see resolve_into).
+        if (!value && immutable_place(pt, &loc)) return;
+        if (!value) string_value_only(pt, &loc);
         if (!value || root) set_add(pt, into, item_at(loc));
         else if (mode == MAP_DERIVED) set_add(pt, into, contents_item(loc));
         else content_at(pt, &loc, into);
@@ -672,12 +1081,14 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     else if (path->root == IR_SPLACE_PARAM && value)
         map_param_value(pt, call, path, mode == MAP_DERIVED, into);
     else if (path->root == IR_SPLACE_PARAM)
-        map_param_place(pt, call, path, inline_tail, into);
+        map_param_place(pt, call, path, inline_tail, true, into);
     else {
         pt_loc_t loc = path_loc(path);
         if (inline_tail && loc_deep(&loc)
             && loc.path.root != IR_SPLACE_UNKNOWN)
             loc.path.flags |= SPATH_INLINE;
+        if (!value && immutable_place(pt, &loc)) return;
+        if (!value) string_value_only(pt, &loc);
         set_add(pt, into, value && !root && named_root(loc.path.root)
             ? contents_item(loc) : item_at(loc));
     }
@@ -985,6 +1396,100 @@ sole_callee(pt_t *pt, const ir_instr_t *call)
         && callees->callees.data[0]->results_known;
 }
 
+static core_hash_value_t
+stored_pair_hash(void *key)
+{
+    return core_hash_raw(key, sizeof(stored_pair_key_t));
+}
+
+static bool
+stored_pair_eq(const void *a, const void *b)
+{
+    const stored_pair_key_t *x = a, *y = b;
+    return x->call == y->call && x->callee == y->callee
+        && x->dest == y->dest;
+}
+
+static bool
+same_item(const pt_item_t *a, const pt_item_t *b)
+{
+    const ir_spath_t *x = &a->loc.path, *y = &b->loc.path;
+    if (a->depth != b->depth || a->deep != b->deep || a->kind != b->kind
+        || a->flow != b->flow || a->origin != b->origin
+        || a->loc.site != b->loc.site || x->root != y->root
+        || x->param != y->param || x->global != y->global
+        || x->type != y->type || x->depth != y->depth
+        || x->flags != y->flags || x->output != y->output)
+        return false;
+    for (uint32_t s = 0; a->steps != b->steps && s < a->depth; s++)
+        if (!step_eq(a->steps[s], b->steps[s])) return false;
+    for (uint32_t s = 0; x->steps != y->steps && s < x->depth; s++)
+        if (!step_eq(x->steps[s], y->steps[s])) return false;
+    return true;
+}
+
+// Whether `set`, sorted as sets are, holds an item identical to `item`.
+static bool
+holds_same(const pt_set_t *set, const pt_item_t *item)
+{
+    size_t low = 0, high = set->len;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (set_order(&set->data[middle], item) < 0) low = middle + 1;
+        else high = middle;
+    }
+    for (; low < set->len && !set_order(&set->data[low], item); low++)
+        if (same_item(&set->data[low], item)) return true;
+    return false;
+}
+
+static void
+copy_set(pt_set_t *into, const pt_set_t *from)
+{
+    into->len = 0;
+    for (size_t i = 0; i < from->len; i++)
+        core_list_push(*into, from->data[i]);
+}
+
+// Stores one of a call's store pairs (see apply_stores). A call is stepped
+// again whenever anything it reads changes, and storing every value at
+// every place again each time was most of what stepping it cost, though
+// nearly all of those stores were made the time before. What a store does
+// is only add what isn't there yet, so storing the same value at the same
+// place, as weakly, again changes nothing: the places and values this
+// destination stored last time are kept, and a place stored before gets
+// only the values that are new since (see store_at).
+static void
+store_pair(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
+           const store_pair_t *pair)
+{
+    bool              weak  = !pair->must || pair->to.len != 1;
+    stored_pair_key_t probe = {call, callee, pair->dest};
+    bool              found = false;
+    stored_pair_t    *last  = core_dict_get(&pt->stored_pairs, &probe,
+                                            &found);
+    if (!found) {
+        last  = core_alloc(stored_pair_t);
+        *last = (stored_pair_t){.key = probe};
+        core_dict_put(&pt->stored_pairs, &last->key, last);
+    }
+    bool     known = found && last->weak == weak;
+    pt_set_t fresh = (pt_set_t){0};
+    for (size_t v = 0; known && v < pair->from.len; v++)
+        if (!holds_same(&last->from, &pair->from.data[v]))
+            core_list_push(fresh, pair->from.data[v]);
+    for (size_t a = 0; a < pair->to.len; a++) {
+        const pt_item_t *address = &pair->to.data[a];
+        store_at(pt, address, &pair->from,
+                 known && holds_same(&last->to, address) ? &fresh : nullptr,
+                 weak);
+    }
+    core_list_free(fresh);
+    last->weak = weak;
+    copy_set(&last->to, &pair->to);
+    copy_set(&last->from, &pair->from);
+}
+
 static bool
 apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
              ir_summary_t *summary)
@@ -1003,7 +1508,8 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
-        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d]};
+        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d],
+                             .dest = d};
         size_t source = shared[d] == d ? SIZE_MAX : paired[shared[d]];
         if (shared[d] == d) flowed_items(pt, &mapped, groups, d, &pair.from);
         for (size_t i = 0; source < pairs.len
@@ -1024,7 +1530,7 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     for (size_t p = 0; p < pairs.len; p++) {
         store_pair_t *pair = &pairs.data[p];
         if (summary) record_stores(pt, summary, &pair->to, &pair->from);
-        else pt_store(pt, &pair->to, &pair->from, pair->must);
+        else store_pair(pt, call, callee, pair);
         core_list_free(pair->to);
         core_list_free(pair->from);
     }
@@ -1129,19 +1635,46 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         note_unknown(pt, CORE_STRING_STATIC("a call whose target is unknown"),
                      nullptr);
         pt_loc_t unknown = unknown_loc();
-        for (uint32_t o = 1; o < call->n_operands; o++) {
-            pt_set_t items = (pt_set_t){0};
-            pt_read(pt, referenced(call, o), &items);
-            pt_publish(pt, &items, &unknown);
-            for (size_t i = 0; i < items.len; i++)
-                if (items.data[i].loc.site != PT_EXTERNAL
-                    && items.data[i].flow == PT_SAME) {
-                    pt_loc_t whole = items.data[i].loc;
-                    whole.path.flags |= IR_SPATH_DEEP;
-                    write_reach(pt, &whole, &reach);
-                }
-            core_list_free(items);
+        // An `out` or `modify` argument is the caller's place, which the
+        // call borrows: what the place holds escapes to the unknown callee,
+        // and can be stored anywhere it writes, but not the place itself
+        // (as escaping_items has it for a known callee that keeps no
+        // reference to it). An unknown callee is reached through a function
+        // reference, and no function that keeps a reference to a by-
+        // reference parameter can be referred to (n00b's N00B-S0106).
+        th_type *signature = ir_instr_call_signature(call);
+        signature = signature ? th_resolve(signature) : nullptr;
+        pt_set_t *arguments = core_alloc_array(pt_set_t, call->n_operands);
+        pt_set_t written = (pt_set_t){0};
+        for (uint32_t o = 1; arguments && o < call->n_operands; o++) {
+            pt_read(pt, referenced(call, o), &arguments[o]);
+            bool borrowed = call->op == IR_OP_CALL && signature
+                && th_kind_of(signature) == TH_FUNCTION
+                && o - 1 < th_func_nparams(signature)
+                && th_mode_by_reference(th_func_param(signature, o - 1)->mode);
+            pt_set_t held = (pt_set_t){0};
+            if (borrowed) pt_load(pt, &arguments[o], &held);
+            pt_set_t *escaping = borrowed ? &held : &arguments[o];
+            pt_publish(pt, escaping, &unknown);
+            merge_widened(pt, &written, escaping, false);
+            core_list_free(held);
         }
+        set_add(pt, &written, deep_item(unknown));
+        // Known callees among the targets may write what they read too.
+        if (callees->callees.len) merge_widened(pt, &written, &reach, false);
+        for (uint32_t o = 1; arguments && o < call->n_operands; o++) {
+            pt_set_t *items = &arguments[o];
+            for (size_t i = 0; i < items->len; i++)
+                if (items->data[i].loc.site != PT_EXTERNAL
+                    && items->data[i].flow == PT_SAME) {
+                    pt_loc_t whole = items->data[i].loc;
+                    whole.path.flags |= IR_SPATH_DEEP;
+                    write_reach(pt, &whole, &written);
+                }
+            core_list_free(*items);
+        }
+        core_free(arguments);
+        core_list_free(written);
         set_add(pt, &result, deep_item(unknown));
     }
     bool settled = true;

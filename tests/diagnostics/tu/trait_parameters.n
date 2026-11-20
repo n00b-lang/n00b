@@ -11,6 +11,11 @@ func both(c: 'C, i: int?, s: string?) -> bool where 'C: Stopper {
     return c.stop(i) and c.stop(s)
 }
 
+# The same calls written as functions go through the bound too.
+func both_free(c: 'C, i: int?, s: string?) -> bool where 'C: Stopper {
+    return stop(c, i) and stop(c, s)
+}
+
 func main() {
     let q: Q = (n = 1)
     require both(q, 1, "x")

@@ -16,6 +16,16 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
 
+# An option local assigned from a call whose type the rewrite settles keeps
+# its option type (this used to be an internal error in the LLVM backend).
+# It is its own program: the miscompile depended on the module's shape.
+"$compiler" build --output "$tmp/settled" \
+    "$src/tests/programs/option_local_settled_call.n" \
+    >"$tmp/compile.out" 2>"$tmp/compile.err"
+"$tmp/settled" >"$tmp/stdout" 2>"$tmp/stderr"
+test ! -s "$tmp/stdout"
+test "$(cat "$tmp/stderr")" = ok
+
 # Reaching `unreachable()` stops the program with its own message.
 cat >"$tmp/unreachable.n" <<'EOF'
 func f(x: int) -> int {
@@ -41,19 +51,6 @@ var d: Dict[int, int] = {}
 var a: Array[int][3][]
 let s = {1, 2}
 EOF
-"$compiler" fmt --normalize "$tmp/normalize.n"
-grep -q 'Tuple\[u8, u8\]' "$tmp/normalize.n"
-grep -q 'Tuple\[a : u8, b : u8\]' "$tmp/normalize.n"
-grep -q 'Dict\[u8, nil\]' "$tmp/normalize.n"
-if grep -q 'builtin\.' "$tmp/normalize.n"; then
-    echo 'normalized types name builtin modules' >&2
-    exit 1
-fi
-"$compiler" check "$tmp/normalize.n" >"$tmp/check.out" 2>"$tmp/check.err" || {
-    cat "$tmp/check.err" >&2
-    exit 1
-}
-
 # Literal sizing: a product of literals fits its value; a module constant
 # sizes what it meets; set literals that meet get one element type; a
 # literal past 2^127 is `u128`.
@@ -68,7 +65,33 @@ func meet() {
     let both = small + large
 }
 EOF
-"$compiler" fmt --normalize "$tmp/sizing.n"
+# A loop counter bounded by a declared `uint` stays 64-bit even when a
+# product of it passes 64 bits: without explicit evidence the range
+# analysis caps at 64.
+cat >"$tmp/counter.n" <<'EOF'
+func g(n: uint) -> uint {
+    var i = 4
+    while i < n {
+        i += 1
+    }
+    return 32 * (i - 4)
+}
+EOF
+# One run normalizes all three, each as it would on its own.
+"$compiler" fmt --normalize "$tmp/normalize.n" "$tmp/sizing.n" \
+    "$tmp/counter.n"
+grep -q 'Tuple\[u8, u8\]' "$tmp/normalize.n"
+grep -q 'Tuple\[a: u8, b: u8\]' "$tmp/normalize.n"
+grep -q 'Dict\[u8, nil\]' "$tmp/normalize.n"
+if grep -q 'builtin\.' "$tmp/normalize.n"; then
+    echo 'normalized types name builtin modules' >&2
+    exit 1
+fi
+"$compiler" check "$tmp/normalize.n" >"$tmp/check.out" 2>"$tmp/check.err" || {
+    cat "$tmp/check.err" >&2
+    exit 1
+}
+
 # The formatter aligns the declarations, so allow spaces after the colon.
 grep -q 'let product: *uint ' "$tmp/sizing.n"
 grep -q 'let base: *uint ' "$tmp/sizing.n"
@@ -93,17 +116,4 @@ status=0
 test "$status" -eq 101
 grep -q 'overflows `u8`' "$tmp/stderr"
 
-# A loop counter bounded by a declared `uint` stays 64-bit even when a
-# product of it passes 64 bits: without explicit evidence the range
-# analysis caps at 64.
-cat >"$tmp/counter.n" <<'EOF'
-func g(n: uint) -> uint {
-    var i = 4
-    while i < n {
-        i += 1
-    }
-    return 32 * (i - 4)
-}
-EOF
-"$compiler" fmt --normalize "$tmp/counter.n"
 grep -q 'var i: *uint ' "$tmp/counter.n"

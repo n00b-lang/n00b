@@ -744,6 +744,13 @@ plan_pattern(pattern_plan_t *plan, th_type *pattern)
     if (th_is_closed(types, pattern))
         return plan_word(plan, 1, nullptr, false)
             && plan_word(plan, 0, pattern, false);
+    // An option is a builtin, not a declared generic: like a sequence, it
+    // is matched by its kind and then its one component, the item.
+    th_type *item = th_option_item(pattern);
+    if (item)
+        return plan_word(plan, 3, nullptr, false)
+            && plan_word(plan, N00B_ABI_TYPE_OPTION, nullptr, false)
+            && plan_pattern(plan, item);
     switch (th_kind_of(pattern)) {
     case TH_VAR: {
         for (uint32_t i = 0; i < plan->slots; i++)
@@ -878,6 +885,42 @@ rewrite_closed_type_test(box_calls_t *calls, ir_func_t *caller,
         && ir_instr_operand_value(instruction, expected);
 }
 
+static bool rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
+                              ir_instr_t *instruction);
+
+// A `case` naming several types tests the union of them: the boxed value
+// matches when its type matches any member. Each member gets its own test,
+// and the tests are or-ed together.
+static bool
+rewrite_union_type_test(box_calls_t *calls, ir_func_t *caller,
+                        ir_instr_t *instruction, th_type *pattern)
+{
+    ir_value_t *value = instruction->operands[0].value;
+    th_type *truth = instruction->dest->type;
+    ir_value_t *any = nullptr;
+    for (size_t i = 0; i < th_sum_len(pattern); i++) {
+        ir_instr_t *member = fresh_instruction(instruction->block,
+            instruction->index, instruction->span, IR_OP_TYPE_TEST, truth);
+        if (!member || !ir_instr_operand_value(member, value)
+            || !ir_instr_operand_type(member, th_sum_arm(pattern, i))
+            || !rewrite_type_test(calls, caller, member)) return false;
+        if (!any) {
+            any = member->dest;
+            continue;
+        }
+        ir_instr_t *either = fresh_instruction(instruction->block,
+            instruction->index, instruction->span, IR_OP_OR, truth);
+        if (!either || !ir_instr_operand_value(either, any)
+            || !ir_instr_operand_value(either, member->dest)) return false;
+        any = either->dest;
+    }
+    if (!any) return false;
+    instruction->op = IR_OP_COPY;
+    instruction->n_operands = 0;
+    instruction->n_mods = 0;
+    return ir_instr_operand_value(instruction, any);
+}
+
 static bool
 rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
                   ir_instr_t *instruction)
@@ -899,6 +942,11 @@ rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
         || th_builtin_applied(source, TH_BUILTIN_ANY, 0);
     th_type *pattern = instruction->operands[1].type;
     if (!word || !target || !boxed) return true;
+    th_comb comb;
+    if (pattern && th_sum_comb(th_resolve(pattern), &comb)
+        && comb == TH_UNION)
+        return rewrite_union_type_test(calls, caller, instruction,
+                                       th_resolve(pattern));
     if (pattern && th_kind_of(th_resolve(pattern)) != TH_TRAIT
         && th_is_closed(types, pattern))
         return rewrite_closed_type_test(calls, caller, instruction, pattern);

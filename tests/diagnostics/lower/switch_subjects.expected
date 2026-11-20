@@ -1,0 +1,10 @@
+tests/diagnostics/lower/switch_subjects.n:4:9: warning N00B-N0023: type `Perm` is never used
+  help: remove it
+tests/diagnostics/lower/switch_subjects.n:7:12: error N00B-S0067: a `switch` cannot match `f64` values
+  help: compare them with `if` and `elif` instead
+tests/diagnostics/lower/switch_subjects.n:19:14: error N00B-S0090: `case is` only matches flagsets, but this `switch` matches `int`
+tests/diagnostics/lower/switch_subjects.n:32:5: warning N00B-N0021: field `n` of `Dropper` is set but never read
+tests/diagnostics/lower/switch_subjects.n:43:21: error N00B-T0604: `dropper()` can drop a failure (its `__exit` returns `bool`), but this `with` is used as a value, which a dropped failure would leave without one
+  help: use a `with` statement here, or have this manager's `__exit` return nothing if it never drops a failure
+tests/diagnostics/lower/switch_subjects.n:60:10: error N00B-T0603: `__exit` for `Counter` returns `int`; it returns nothing, or a `bool` saying whether to drop the failure
+  help: return nothing if it never drops a failure

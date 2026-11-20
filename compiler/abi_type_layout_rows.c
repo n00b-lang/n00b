@@ -3,10 +3,12 @@
 #include "compiler_visibility.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ir/layout.h"
 #include "ir/typelang.h"
+#include "parse/annot_walk.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "field_extent.h"
@@ -37,6 +39,7 @@ typedef struct {
     const n00bb_abi_type_identity_rows_t *types;
     const n00b_abi_range_v1 *members;
     const core_list_t(n00b_abi_field_v1) *fields;
+    const core_list_t(parse_sym_entry_ptr_t) *field_symbols;
     const core_list_t(n00b_abi_arm_v1) *arms;
     const core_list_t(uint32_t) *indexes;
     const n00bb_abi_decl_index_t *declarations;
@@ -161,10 +164,8 @@ trace_need(trace_source_t *source, uint32_t type_index)
         if (!type->layout_index) {
             th_type *actual = n00bb_abi_type_index_at(source->index,
                                                        type_index);
-            ir_module_t *owner = actual
-                ? ir_type_definition_owner(source->module, actual) : nullptr;
-            const ir_final_layout_t *layout = owner && owner != source->module
-                ? ir_layout_final_visible(source->module, actual,
+            const ir_final_layout_t *layout = actual
+                ? ir_layout_final(source->module, actual,
                     ir_module_target(source->module)) : nullptr;
             th_type *definition = layout
                 ? ir_type_definition(source->module, actual) : nullptr;
@@ -174,7 +175,7 @@ trace_need(trace_source_t *source, uint32_t type_index)
                 break;
             }
             source->need[type_index] = TRACE_ACTIVE;
-            // The owner's layout, not the declared types: an inline array's
+            // The layout, not the declared types: an inline array's
             // declared type is `Array[T]`, but its storage is the elements.
             for (size_t i = 0; i < layout->n_members; i++) {
                 const ir_final_member_layout_t *member = &layout->members[i];
@@ -263,10 +264,8 @@ trace_child_append(const trace_source_t *source,
     if (!child->layout_index && (!child_bits || !child_alignment)) {
         th_type *actual = n00bb_abi_type_index_at(source->index,
                                                    child_index);
-        ir_module_t *owner = actual
-            ? ir_type_definition_owner(source->module, actual) : nullptr;
-        const ir_final_layout_t *layout = owner && owner != source->module
-            ? ir_layout_final_visible(source->module, actual,
+        const ir_final_layout_t *layout = actual
+            ? ir_layout_final(source->module, actual,
                 ir_module_target(source->module)) : nullptr;
         if (layout) {
             child_bits = layout->intrinsic_bits;
@@ -301,36 +300,27 @@ trace_child_append(const trace_source_t *source,
     return trace_index_append(stream_base, indexes, index, range);
 }
 
-static bool
-external_untraced(const trace_source_t *source, uint32_t type_index)
-{
-    const n00b_abi_type_v1 *type = &source->types->rows[type_index];
-    if (type->tracing_index || type->layout_index) return false;
-    th_type *actual = n00bb_abi_type_index_at(source->index, type_index);
-    ir_module_t *owner = actual
-        ? ir_type_definition_owner(source->module, actual) : nullptr;
-    return owner && owner != source->module;
-}
 
-static bool
-linked_unary_trace(trace_source_t *source, uint32_t type_index)
+// The symbol that declares a record field row's field, found through the
+// record's declaration in every module that has a row for the record, not
+// only the one that declares it.
+static parse_sym_entry_t *
+trace_field_symbol(const trace_source_t *source,
+                   const n00b_abi_field_v1 *field)
 {
-    const n00b_abi_type_v1 *type = &source->types->rows[type_index];
-    uint32_t child_index = 0;
-    return (type->kind == N00B_ABI_TYPE_OPTION
-            || type->kind == N00B_ABI_TYPE_WRAPPER
-            || type->kind == N00B_ABI_TYPE_ATOMIC)
-        && trace_unary_component(source, type_index, &child_index)
-        && external_untraced(source, child_index);
+    if (!source->field_symbols || field < source->fields->data
+        || field >= source->fields->data + source->fields->len)
+        return nullptr;
+    size_t row = (size_t)(field - source->fields->data);
+    return row < source->field_symbols->len
+        ? source->field_symbols->data[row] : nullptr;
 }
 
 static const n00bb_field_union_t *
 trace_field_union(const trace_source_t *source,
                   const n00b_abi_field_v1 *field)
 {
-    parse_sym_entry_t *symbol = field->symbol_index && source->declarations
-        ? n00bb_abi_decl_symbol_at(source->declarations, field->symbol_index)
-        : nullptr;
+    parse_sym_entry_t *symbol = trace_field_symbol(source, field);
     return symbol ? parse_sym_binding(symbol, N00BB_FIELD_UNION_KEY)
                   : nullptr;
 }
@@ -343,10 +333,9 @@ union_tag_extractor(const trace_source_t *source, uint32_t type_index,
 {
     for (uint32_t i = 0; i < source->members[type_index].count; i++) {
         const n00b_abi_field_v1 *field = trace_member(source, type_index, i);
-        parse_sym_entry_t *symbol = field && field->symbol_index
-            ? n00bb_abi_decl_symbol_at(source->declarations,
-                                       field->symbol_index) : nullptr;
-        if (!field || symbol != member->discriminant) continue;
+        parse_sym_entry_t *symbol = field
+            ? trace_field_symbol(source, field) : nullptr;
+        if (!field || !symbol || symbol != member->discriminant) continue;
         const n00b_abi_type_v1 *type =
             &source->types->rows[field->child_type_index];
         if (type->kind != N00B_ABI_TYPE_PRIMITIVE
@@ -435,17 +424,8 @@ append_traces(trace_source_t *source,
         n00b_abi_type_v1 *type = &source->types->rows[type_index];
         trace_need_t need = trace_need(source, type_index);
         if (need == TRACE_INVALID) return false;
-        if (need != TRACE_PRESENT || linked_unary_trace(source, type_index))
-            continue;
-        if (!type->layout_index) {
-            th_type *actual = n00bb_abi_type_index_at(source->index,
-                                                       type_index);
-            ir_module_t *owner = actual
-                ? ir_type_definition_owner(source->module, actual) : nullptr;
-            if (owner && owner != source->module) continue;
-            return false;
-        }
-        if (type->layout_index >= layouts->len
+        if (need != TRACE_PRESENT) continue;
+        if (!type->layout_index || type->layout_index >= layouts->len
             || traces->len >= UINT32_MAX) return false;
         type->tracing_index = (uint32_t)traces->len;
         core_list_push(*traces, ((n00b_abi_trace_v1){
@@ -606,7 +586,9 @@ record_policy(const parse_sym_entry_t *owner, uint32_t *out)
     if (!owner) return true;
     n00bb_record_layout_request_t *request = parse_sym_binding(owner,
         CORE_STRING_STATIC("n00bb.record-layout-request"));
-    if (!request || !request->policy_node) return true;
+    // A request read back from a cached interface has no syntax node, but
+    // the same policy as the one parsed from source.
+    if (!request) return true;
     switch (request->policy) {
     case N00BB_RECORD_DEFAULT: *out = N00B_ABI_LAYOUT_DEFAULT; return true;
     case N00BB_RECORD_ORDERED: *out = N00B_ABI_LAYOUT_ORDERED; return true;
@@ -628,8 +610,9 @@ build_member_row(n00bb_abi_type_index_t *index,
                  core_list_t(n00b_abi_packed_run_v1) *packed,
                  core_list_t(n00b_abi_physical_run_v1) *physical,
                  core_list_t(uint32_t) *indexes,
-                 n00b_abi_field_v1 *row)
+                 n00b_abi_field_v1 *row, parse_sym_entry_t **out_field)
 {
+    *out_field = nullptr;
     *row = (n00b_abi_field_v1){
             .parent_type_index = parent_type_index,
             .declaration_ordinal = member->ordinal,
@@ -650,6 +633,7 @@ build_member_row(n00bb_abi_type_index_t *index,
                     || !n00bb_abi_decl_find_symbol(declarations, field,
                                                    &row->symbol_index)))))
             return false;
+        *out_field = field;
         row->visibility = member_is_private(field, owner)
             ? N00B_ABI_VISIBILITY_PRIVATE : N00B_ABI_VISIBILITY_PUBLIC;
         if (!member->type || !n00bb_abi_type_index_find(index, member->type,
@@ -673,15 +657,31 @@ build_member_row(n00bb_abi_type_index_t *index,
     return true;
 }
 
+// The order th_hash sorts a record's members in: shorter names first, then
+// bytewise.
+static int
+compare_structural_members(const void *left, const void *right)
+{
+    const ir_final_member_layout_t *a =
+        *(const ir_final_member_layout_t *const *)left;
+    const ir_final_member_layout_t *b =
+        *(const ir_final_member_layout_t *const *)right;
+    if (a->name.u8_bytes != b->name.u8_bytes)
+        return a->name.u8_bytes < b->name.u8_bytes ? -1 : 1;
+    return a->name.u8_bytes
+        ? memcmp(a->name.data, b->name.data, a->name.u8_bytes) : 0;
+}
+
 static bool
 append_members(n00bb_abi_type_index_t *index,
                const n00bb_abi_decl_index_t *declarations,
                n00bb_abi_name_pool_t *names,
                const parse_sym_entry_t *owner,
-               bool local_owner,
+               bool local_owner, bool structural,
                const ir_final_layout_t *final, uint32_t parent_type_index,
                uint32_t stream_base,
                core_list_t(n00b_abi_field_v1) *fields,
+               core_list_t(parse_sym_entry_ptr_t) *field_symbols,
                core_list_t(n00b_abi_arm_v1) *arms,
                core_list_t(n00b_abi_packed_run_v1) *packed,
                core_list_t(n00b_abi_physical_run_v1) *physical,
@@ -696,20 +696,32 @@ append_members(n00bb_abi_type_index_t *index,
              > UINT32_MAX - final->n_members)
         return false;
     uint32_t *member_indexes = core_alloc_array(uint32_t, final->n_members);
-    bool valid = member_indexes != nullptr;
+    const ir_final_member_layout_t **order = core_alloc_array(
+        const ir_final_member_layout_t *, final->n_members);
+    bool valid = member_indexes != nullptr && order != nullptr;
+    for (size_t i = 0; valid && i < final->n_members; i++)
+        order[i] = &final->members[i];
+    // A structural record is the same type whatever order its fields were
+    // written in, so its rows list them in the order its type hash does.
+    if (valid && structural && final->n_members > 1)
+        qsort(order, final->n_members, sizeof(*order),
+              compare_structural_members);
     for (size_t i = 0; valid && i < final->n_members; i++) {
-        const ir_final_member_layout_t *member = &final->members[i];
+        const ir_final_member_layout_t *member = order[i];
         uint32_t row_index = (uint32_t)(variant ? arms->len : fields->len);
         n00b_abi_field_v1 row;
+        parse_sym_entry_t *symbol = nullptr;
         if (!build_member_row(index, declarations, names, owner, local_owner,
                               final,
                               member, parent_type_index, stream_base,
                               variant ? N00B_ABI_TABLE_ARM
                                       : N00B_ABI_TABLE_FIELD,
-                              row_index, packed, physical, indexes, &row)) {
+                              row_index, packed, physical, indexes, &row,
+                              &symbol)) {
             valid = false;
             break;
         }
+        if (structural) row.declaration_ordinal = (uint32_t)i;
         if (variant) {
             if (member->ordinal != i || i >= UINT32_MAX) {
                 valid = false;
@@ -723,6 +735,7 @@ append_members(n00bb_abi_type_index_t *index,
         }
         member_indexes[i] = (uint32_t)fields->len;
         core_list_push(*fields, row);
+        core_list_push(*field_symbols, symbol);
     }
     if (valid) {
         if (indexes->len > UINT32_MAX - stream_base
@@ -737,6 +750,7 @@ append_members(n00bb_abi_type_index_t *index,
                 core_list_push(*indexes, member_indexes[i]);
         }
     }
+    core_free(order);
     core_free(member_indexes);
     return valid;
 }
@@ -744,7 +758,7 @@ append_members(n00bb_abi_type_index_t *index,
 bool
 n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions, uint32_t stream_base,
+    uint32_t stream_base,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
@@ -772,6 +786,8 @@ n00bb_abi_type_layout_rows_build(
     core_list_push(runs, ((n00b_abi_physical_run_v1){0}));
     core_list_push(packed, ((n00b_abi_packed_run_v1){0}));
     core_list_push(fields, ((n00b_abi_field_v1){0}));
+    core_list_t(parse_sym_entry_ptr_t) field_symbols = {0};
+    core_list_push(field_symbols, (parse_sym_entry_t *)nullptr);
     core_list_push(arms, ((n00b_abi_arm_v1){0}));
     core_list_push(tag_extractors, ((n00b_abi_tag_extractor_v1){0}));
     bool valid = true;
@@ -779,21 +795,8 @@ n00bb_abi_type_layout_rows_build(
     for (size_t i = 0; valid && i < types->count; i++) {
         current = i;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
-            type);
         const ir_final_layout_t *final = ir_layout_final(
             runtime, type, ir_module_target(runtime));
-        size_t named_arguments = 0;
-        bool specialization = th_named_info(th_resolve(type), nullptr,
-            nullptr, &named_arguments) && named_arguments != 0;
-        if (!include_external_definitions
-            && (!types->owners || !types->owners[i])
-            && definition_owner && definition_owner != runtime
-            && types->rows[i].kind != N00B_ABI_TYPE_ATOMIC
-            && (!specialization || !final)) {
-            types->rows[i].flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
-            continue;
-        }
         if (!final) {
             if (types->rows[i].flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
                 continue;
@@ -896,7 +899,11 @@ n00bb_abi_type_layout_rows_build(
             && (wrapper || types->rows[i].kind == N00B_ABI_TYPE_CALLBACK
                 || append_members(index, declarations, names, owner,
                                   local_owner,
-                final, (uint32_t)i, stream_base, &fields, &arms, &packed,
+                                  types->rows[i].kind == N00B_ABI_TYPE_RECORD
+                                  && th_kind_of(th_resolve(type))
+                                      == TH_RECORD,
+                final, (uint32_t)i, stream_base, &fields, &field_symbols,
+                &arms, &packed,
                 &runs, &indexes, &type_field_ranges[i]));
         if (valid && types->rows[i].kind == N00B_ABI_TYPE_TUPLE)
             row.policy = N00B_ABI_LAYOUT_ORDERED;
@@ -918,7 +925,8 @@ n00bb_abi_type_layout_rows_build(
                 .index = index,
                 .module = runtime,
                 .types = types, .members = type_field_ranges,
-                .fields = &fields, .arms = &arms, .indexes = &indexes,
+                .fields = &fields, .field_symbols = &field_symbols,
+                .arms = &arms, .indexes = &indexes,
                 .declarations = declarations,
                 .stream_base = stream_base, .need = need,
             };
@@ -928,6 +936,7 @@ n00bb_abi_type_layout_rows_build(
         }
         core_free(need);
     }
+    core_list_free(field_symbols);
     if (valid) {
         *out = (n00bb_abi_type_layout_rows_t){
             .layouts = layouts.data, .layout_count = layouts.len,

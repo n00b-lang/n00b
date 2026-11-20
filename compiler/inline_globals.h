@@ -44,7 +44,7 @@ n00bb_inline_global_count(ir_module_t *module, const ir_global_t *global)
     }
     if (!rank || !element || th_kind_of(element) == TH_SEQUENCE
         || !th_is_closed(ir_module_types(module), element)) return 0;
-    const ir_final_layout_t *layout = ir_layout_final_visible(module,
+    const ir_final_layout_t *layout = ir_layout_final(module,
         element, ir_module_target(module));
     if (!layout || !layout->alignment_bytes || layout->alignment_bytes > 16)
         return 0;

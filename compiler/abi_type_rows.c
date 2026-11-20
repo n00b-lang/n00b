@@ -1,4 +1,5 @@
 #include "abi_type_rows.h"
+#include "compiler_system.h"
 
 #include <limits.h>
 #include <string.h>
@@ -170,7 +171,7 @@ type_category(ir_module_t *module, th_type *type,
 bool
 n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions, const parse_symtab_t *symbols,
+    const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
@@ -324,19 +325,10 @@ n00bb_abi_type_identity_rows_build(
             || (type_parameters && type_parameters->len)
             || (definition && !th_is_closed(types, definition)))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
-        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
-            type);
-        size_t named_arguments = 0;
-        bool specialization = th_named_info(th_resolve(type), nullptr,
-            nullptr, &named_arguments) && named_arguments != 0;
         bool object = row->kind == N00B_ABI_TYPE_OBJECT;
-        bool external = !include_external_definitions && !owner
-            && definition_owner && definition_owner != runtime
-            && row->kind != N00B_ABI_TYPE_ATOMIC && !object;
         const ir_final_layout_t *final = ir_layout_final(runtime,
             object && definition ? definition : type,
             ir_module_target(runtime));
-        if (external && !specialization) final = nullptr;
         if (final) {
             row->size_bits = final->intrinsic_bits;
             row->alignment_bytes = final->alignment_bytes;
@@ -516,8 +508,7 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             || !declaration.contract
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
-        bool builtin = core_string_eq(declaration.module,
-                                      CORE_STRING_STATIC("builtins"));
+        bool builtin = n00bb_compiler_package(declaration.package);
         uint32_t owner_index = 0;
         if (!n00bb_abi_type_index_find(index, declaration.contract,
                                        &owner_index)) {
@@ -904,8 +895,13 @@ n00bb_abi_type_components_build(
             break;
         }
         size_t first = indexes.len;
-        valid = append_type_components(index, module, type,
-            types->owners ? types->owners[i] : nullptr,
+        const parse_sym_entry_t *owner = types->owners
+            ? types->owners[i] : nullptr;
+        // A callback's role signatures are its declaration's: only the
+        // module that declares it has them.
+        if (types->rows[i].kind == N00B_ABI_TYPE_CALLBACK && !owner)
+            types->rows[i].flags |= N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
+        valid = append_type_components(index, module, type, owner,
             types->rows[i].kind, &indexes)
             && indexes.len <= UINT32_MAX - stream_base;
         if (valid && indexes.len != first)

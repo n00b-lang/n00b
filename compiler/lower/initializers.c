@@ -315,6 +315,18 @@ add_comptime_prologue(ir_ctx_t *ir_context, ir_func_t *function,
         if (!call || !ir_instr_set_fresh_dest(call, "constants", nil_type)
             || !ir_instr_operand_value(call,
                    ir_func_address(module, constants))) return false;
+        // Stop here if any of the module's literal handlers failed, so
+        // the compiler can report each failure at its literal.
+        ir_func_t *checked = comptime_native(ir_context, module,
+            CORE_STRING_STATIC(N00BB_COMPTIME_LITERALS_CHECKED_NATIVE),
+            CORE_STRING_STATIC("nil"));
+        ir_instr_t *check_call = checked ? ir_instr_generated(run,
+            IR_OP_CALL, span, pass, run->n_instrs) : nullptr;
+        if (!check_call
+            || !ir_instr_set_fresh_dest(check_call, "comptime", nil_type)
+            || !ir_instr_operand_value(check_call,
+                   ir_func_address(module, checked))
+            || !ir_instr_operand_value(check_call, key->dest)) return false;
     }
     ir_instr_t *jump = ir_instr_generated(run, IR_OP_JUMP, span, pass,
                                           run->n_instrs);
@@ -833,6 +845,13 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
             if (!value_method && declared)
                 value_method = ir_annot_get(&declared->annots,
                     CORE_STRING_STATIC("n00bb.generated-value-method"));
+            // A reference adapter is emitted as its function is: when
+            // something refers to it, or with the rest of its module.
+            if (value_method && (n00bb_reference_adapter_target(function,
+                                     nullptr, nullptr)
+                                 || n00bb_reference_adapter_target(declared,
+                                     nullptr, nullptr)))
+                value_method = nullptr;
             if (function && function->n_blocks && value_method
                 && th_is_closed(ir_module_types(function->owner),
                                 function->type))

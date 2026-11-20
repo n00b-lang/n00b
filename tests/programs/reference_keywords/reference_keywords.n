@@ -1,0 +1,395 @@
+# Calls through function references pass keyword parameters by name, or
+# omit them; an omitted one's default is evaluated by the function, in its
+# own scope. A function's type names its keyword parameters, in no
+# particular order.
+import keyword_lib
+import keyword_refs
+
+func scaled(a: int, scale: int = 2) -> int {
+    return a * scale
+}
+
+# Defaults that use a positional parameter and an earlier keyword one.
+func digits(a: int, b: int = 10, c: int = b + a) -> int {
+    return a * 100 + b * 10 + c
+}
+
+# Declared in an order other than the one its type lists them in.
+func ordered(a: int, zz: int = 1, b: int = 2) -> int {
+    return a * 100 + zz * 10 + b
+}
+
+func summed(a: int, *rest: int, scale: int = 2) -> int {
+    var total = a
+    for item in rest {
+        total += item
+    }
+    return total * scale
+}
+
+func limited(a: int, limit: int = 5) -> int fail: string {
+    if a > limit {
+        fail "too big"
+    }
+    return a
+}
+
+let by_type: Ref[(int, scale: int) -> int] = ref scaled
+require by_type.call(3) == 6
+require by_type.call(3, scale = 4) == 12
+require by_type.call(scale = 5, 3) == 15
+
+let starred: Ref[(int, **scale: int) -> int] = ref scaled
+require starred.call(3, scale = 3) == 9
+
+let inferred = ref digits
+require inferred.call(1) == 211
+require inferred.call(1, c = 7) == 207
+require inferred.call(1, b = 2) == 123
+
+let reordered = ref ordered
+require reordered.call(5) == 512
+require reordered.call(5, b = 7) == 517
+require reordered.call(5, zz = 3) == 532
+require reordered.call(5, b = 4, zz = 3) == 534
+
+let listed: Ref[(int, b: int, zz: int) -> int] = ref ordered
+require listed.call(1, zz = 9) == 192
+
+let varargs: Ref[(int, *int, scale: int) -> int] = ref summed
+require varargs.call(1) == 2
+require varargs.call(1, 2, 3) == 12
+require varargs.call(1, 2, 3, scale = 3) == 18
+
+# A call through a reference whose function isn't known is given places it
+# may write: variables, not literals.
+func twice(f: Ref[(int, scale: int) -> int]) -> int {
+    var seven = 7
+    var one = 1
+    var hundred = 100
+    return f.call(seven) + f.call(one, scale = hundred)
+}
+require twice(ref scaled) == 114
+
+let failing: Ref[(int, limit: int) -> int fail: string] = ref limited
+let imported_join = ref keyword_lib.joined
+let imported_check = ref keyword_lib.checked
+# Every module's `ref` of a function is the same reference, however its
+# keyword parameters are declared.
+require imported_check == keyword_refs.checked_ref()
+let local_order: Ref[(int, b: int, zz: int) -> int] = ref ordered
+require local_order == reordered
+
+func failures() -> int fail: string {
+    require failing.call(3)! == 3
+    require failing.call(9, limit = 20)! == 9
+    var caught = false
+    try {
+        require failing.call(9)! == 0
+    } fail(problem) {
+        caught = problem == "too big"
+    }
+    require caught
+    require imported_check.call(5)! == 512
+    require imported_check.call(5, b = 7)! == 517
+    caught = false
+    try {
+        require imported_check.call(-1, zz = 3)! == 0
+    } fail(problem) {
+        caught = problem == "negative"
+    }
+    require caught
+    return 1
+}
+
+try {
+    require failures()! == 1
+} fail(problem) {
+    require false
+}
+
+# A generic function's references are instances of it.
+func either(a: 'T, other: 'T = a) -> 'T {
+    return other
+}
+func counted(first: 'T, *rest: 'T, extra: int = 0) -> int {
+    return len(rest) + 1 + extra
+}
+func both(f: Ref[(string, other: string) -> string]) -> string {
+    var x = "x"
+    var y = "y"
+    return f.call(x) + f.call(x, other = y)
+}
+let either_int: Ref[(int, other: int) -> int] = ref either
+let either_text: Ref[(string, other: string) -> string] = ref either
+require either_int.call(1) == 1
+require either_int.call(1, other = 5) == 5
+require either_text.call("a") == "a"
+require either_text.call("a", other = "b") == "b"
+require both(ref either) == "xy"
+let counted_flags: Ref[(bool, *bool, extra: int) -> int] = ref counted
+require counted_flags.call(true, false, true) == 3
+require counted_flags.call(true, extra = 10) == 11
+func counted_through(f: Ref[(int, *int, extra: int) -> int]) -> int {
+    var one = 1
+    var two = 2
+    var three = 3
+    var ten = 10
+    return f.call(one, two, three) + f.call(one, extra = ten)
+}
+require counted_through(ref counted) == 14
+
+# A generic function that takes a parameter other than `in`, or declares
+# its keyword parameters in another order than its type lists them in, is
+# referred to through its instance's reference adapter: a reference to it,
+# held anywhere, passes its arguments as the instance takes them.
+func later(a: 'T, zz: 'T = a, b: 'T = a) -> 'T {
+    return b
+}
+let later_ints: Ref[(int, b: int, zz: int) -> int] = ref later
+require later_ints.call(1) == 1
+require later_ints.call(1, b = 5) == 5
+require later_ints.call(1, zz = 7) == 1
+func later_through(f: Ref[(int, b: int, zz: int) -> int]) -> int {
+    var two = 2
+    var nine = 9
+    var three = 3
+    var four = 4
+    return f.call(two, b = nine) + f.call(three, zz = four)
+}
+require later_through(ref later) == 12
+func replaced(modify old: 'T, given: 'T) -> 'T {
+    old = given
+    return given
+}
+func replaced_through(f: Ref[(int, int) -> int]) -> int {
+    var value = 1
+    var given = 8
+    _ = f.call(value, given)
+    return value
+}
+require replaced_through(ref replaced) == 8
+func generic_held() {
+    var held: Ref[(string, string) -> string] = ref replaced
+    var text = "a"
+    var b = "b"
+    require held.call(text, b) == "b"
+    require text == "b"
+    let kept: Ref[(int, int) -> int] = ref replaced
+    var number = 1
+    require kept.call(number, 3) == 3
+    require number == 3
+    var ordered_later: Ref[(string, b: string, zz: string) -> string] =
+        ref later
+    var x = "x"
+    var y = "y"
+    var z = "z"
+    require ordered_later.call(x, b = y) == "y"
+    require ordered_later.call(x, zz = z) == "x"
+}
+generic_held()
+
+# A function reference remembers its function's passing modes, which are no
+# part of its type: a call through it passes the caller's place to a
+# `modify` or `out` parameter.
+record Tally {
+    count: int
+}
+func tally_add(modify tally: Tally, by: int) -> int {
+    tally.count += by
+    return tally.count
+}
+func tally_step(modify tally: Tally, by: int = 1) -> int {
+    tally.count += by
+    return tally.count
+}
+func tally_set(out tally: Tally, value: int) -> int {
+    tally.count = value
+    return value
+}
+let module_add: Ref[(Tally, int) -> int] = ref tally_add
+func remembered_modes() {
+    var tally: Tally
+    tally.count = 1
+    let add: Ref[(Tally, int) -> int] = ref tally_add
+    require add.call(tally, 2) == 3
+    require tally.count == 3
+    let inferred = ref tally_add
+    require inferred.call(tally, 1) == 4
+    require tally.count == 4
+    let step: Ref[(Tally, by: int) -> int] = ref tally_step
+    require step.call(tally) == 5
+    require step.call(tally, by = 5) == 10
+    require tally.count == 10
+    require module_add.call(tally, 1) == 11
+    require tally.count == 11
+    # A `let` bound to one remembers what that one does.
+    let again = module_add
+    require again.call(tally, 1) == 12
+    let added = add
+    require added.call(tally, 1) == 13
+    require tally.count == 13
+    var fresh: Tally
+    let set: Ref[(Tally, int) -> int] = ref tally_set
+    require set.call(fresh, 7) == 7
+    require fresh.count == 7
+}
+remembered_modes()
+
+# A callback's `setup` is given a reference to the handler: calling it,
+# directly or through a `let`, passes the state's place.
+callback Tally_Counter {
+    call(value: int) -> int
+    handler(modify tally: Tally, value: int) -> int
+    setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil
+}
+func setup(handler: Ref[(Tally, int) -> int], state: Ref[Tally]) -> nil {
+    var started = state.__value
+    var hundred = 100
+    _ = handler.call(started, hundred)
+    let kept = handler
+    var thousand = 1000
+    _ = kept.call(started, thousand)
+    state.__value = started
+}
+func make_counter() -> Tally_Counter {
+    var tally: Tally
+    tally.count = 0
+    return callback[Tally_Counter](ref tally_add, ref tally)
+}
+require make_counter().call(1) == 1101
+
+# A handler held in a `var` only ever given a `ref` of one function is
+# that function, as one held in a `let` is.
+func make_var_counter() -> Tally_Counter {
+    var tally: Tally
+    tally.count = 0
+    var handler = ref tally_add
+    return callback[Tally_Counter](handler, ref tally)
+}
+let var_counter = make_var_counter()
+require var_counter.call(2) == 1102
+require var_counter.call(3) == 1105
+
+# A reference whose function isn't known where it is called (a parameter, a
+# `var`, a field, a call's result) passes its arguments by place to a
+# function with a parameter other than `in`, or with keyword parameters
+# declared in another order (through its reference adapter), and by value
+# to any other function.
+func apply(f: Ref[(int, b: int, zz: int) -> int]) -> int {
+    var five = 5
+    var seven = 7
+    return f.call(five, b = seven)
+}
+require apply(ref ordered) == 517
+
+func plain_add(a: int, b: int) -> int {
+    return a + b
+}
+func plain_through(f: Ref[(int, int) -> int]) -> int {
+    var three = 3
+    var four = 4
+    return f.call(three, four)
+}
+require plain_through(ref plain_add) == 7
+
+func call_through(f: Ref[(Tally, int) -> int], start: int, by: int) -> int {
+    var tally: Tally
+    tally.count = start
+    var amount = by
+    let returned = f.call(tally, amount)
+    return tally.count * 1000 + returned
+}
+require call_through(ref tally_add, 1, 2) == 3003
+require call_through(ref tally_set, 1, 9) == 9009
+
+func step_through(f: Ref[(Tally, by: int) -> int]) -> int {
+    var tally: Tally
+    tally.count = 0
+    _ = f.call(tally)
+    var ten = 10
+    _ = f.call(tally, by = ten)
+    return tally.count
+}
+require step_through(ref tally_step) == 11
+
+record Tally_Action {
+    action: Ref[(Tally, int) -> int]
+}
+func picked(setting: bool) -> Ref[(Tally, int) -> int] {
+    if setting {
+        return ref tally_set
+    }
+    return ref tally_add
+}
+func held_modes() {
+    var tally: Tally
+    tally.count = 10
+    var held: Ref[(Tally, int) -> int] = ref tally_add
+    var by = 5
+    require held.call(tally, by) == 15
+    require tally.count == 15
+    held = ref tally_set
+    by = 2
+    require held.call(tally, by) == 2
+    require tally.count == 2
+    var holder: Tally_Action
+    holder.action = ref tally_add
+    by = 3
+    require holder.action.call(tally, by) == 5
+    require tally.count == 5
+    holder.action = ref tally_set
+    by = 40
+    require holder.action.call(tally, by) == 40
+    require tally.count == 40
+    by = 1
+    require picked(false).call(tally, by) == 41
+    require tally.count == 41
+    by = 6
+    require picked(true).call(tally, by) == 6
+    require tally.count == 6
+}
+held_modes()
+
+# A `modify` argument of a call through a reference whose function isn't
+# known is the caller's own place, not a copy: the function sees its
+# writes at once through another reference to the place, and the caller
+# reads them after.
+func bump_and_peek(modify count: int, seen: Ref[int]) -> int {
+    count += 5
+    return seen.__value
+}
+func aliased_through(f: Ref[(int, Ref[int]) -> int]) -> int {
+    var count = 1
+    var seen = ref count
+    let peeked = f.call(count, seen)
+    require count == 6
+    return peeked
+}
+require aliased_through(ref bump_and_peek) == 6
+
+# `ref` of a function whose parameters are all `in`, with no keyword
+# parameters to reorder, is the function itself; of any other, it is the
+# function's reference adapter (reference_keywords.sh reads which).
+let plain_reference = ref plain_add
+let adapted_reference = ref tally_add
+require plain_reference.call(1, 2) == 3
+func adapted_use() -> int {
+    var tally: Tally
+    tally.count = 1
+    _ = adapted_reference.call(tally, 1)
+    return tally.count
+}
+require adapted_use() == 2
+
+# Native code is given a function's own code, `native_entry(f)`, never its
+# reference adapter (reference_keywords.sh reads which).
+let adapted_entry: Ref[byte] = native_entry(tally_add)
+require __abi_ref_address(adapted_entry) != 0
+
+require imported_join.call("a") == "a,."
+require imported_join.call("a", "b", "c") == "a,b,c,."
+require imported_join.call("a", "b", zsep = "-") == "a-b-."
+require imported_join.call("a", "b", aend = "!") == "a,b!"
+
+__fd_write(2, "ok")

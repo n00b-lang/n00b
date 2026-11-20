@@ -1,0 +1,5 @@
+tests/diagnostics/link/callback_handler_modes.n:13:6: warning N00B-N0019: function `setup` is never called
+  help: call it or delete it
+tests/diagnostics/link/callback_handler_modes.n:13:12: note N00B-S0064: parameter `handler` could be `view`: `setup` never writes anything reachable from it
+tests/diagnostics/link/callback_handler_modes.n:13:47: note N00B-S0064: parameter `state` could be `view`: `setup` never writes anything reachable from it
+tests/diagnostics/link/callback_handler_modes.n:17:30: error N00B-T0610: this handler takes its parameter 1 as an `in` parameter, but the callback's `handler` role takes it as a `modify` parameter

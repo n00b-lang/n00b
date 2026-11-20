@@ -1,0 +1,64 @@
+// A `switch` on floats and `case is` on a value that is not a flagset
+// (moved out of switch_case_kinds.n and flagset_switch.n, which reach the
+// error limit first).
+flagset Perm { read, write, exec, rw = read + write }
+
+func by_float(f: f64) -> uint {
+    switch f {
+        case 1.5 {
+            return 1
+        }
+        else {
+            return 0
+        }
+    }
+}
+
+func not_flags(n: int) -> int {
+    switch n {
+        case is rw {
+            return 1
+        }
+        else {
+            return 0
+        }
+    }
+}
+require by_float(1.5) == 1 and not_flags(1) == 1
+// What an `__exit` may return, and a `with` value whose manager can drop
+// its failure (moved out of with_managers.n, which reaches the error limit
+// first).
+record Dropper {
+    n: int
+}
+func dropper() -> Dropper {
+    return (n = 6)
+}
+func __enter(self: Dropper) {
+}
+func __exit(self: Dropper, value: nil, failure: 'E? = nil) -> bool {
+    return failure != nil
+}
+func dropped_value() -> int {
+    return with d = dropper() {
+        -> 1
+    }
+}
+
+record Counter {
+    n: int
+}
+func counter() -> Counter {
+    return (n = 7)
+}
+func __enter(self: Counter) {
+}
+func __exit(self: Counter, value: nil, failure: 'E? = nil) -> int {
+    return self.n
+}
+func counted() {
+    with counter() {
+    }
+}
+require dropped_value() == 1
+counted()

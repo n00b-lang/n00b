@@ -1,1 +1,21 @@
 var untyped
+
+# A variable declared as a trait stands for one type that implements it,
+# which what is assigned to it settles.
+trait Shape {
+    func area(self: 'T) -> f64
+}
+
+func declared() {
+    var shape: Shape
+}
+
+func generic(x: 'T) -> 'T {
+    var shape: Shape
+    return x
+}
+
+func main() {
+    declared()
+    require generic(1) == 1
+}

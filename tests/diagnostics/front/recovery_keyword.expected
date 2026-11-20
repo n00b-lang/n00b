@@ -1,0 +1,2 @@
+tests/diagnostics/front/recovery_keyword.n:6:1: error N00B-P0005: unknown keyword `fucn`
+  help: did you mean `func`?

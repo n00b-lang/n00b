@@ -1,11 +1,13 @@
 #include <string.h>
 
 #include "call_plan.h"
+#include "compiler_layout.h"
 #include "compiler_link.h"
 #include "interface_summaries.h"
 #include "language_hooks.h"
 #include "storage_placement.h"
 #include "compiler_tu.h"
+#include "compiler_visibility.h"
 #include "qualified_names.h"
 #include "diagnostics.h"
 #include "preprocessor.h"
@@ -283,6 +285,15 @@ bind_field_member_uses(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
+static bool enum_like_scope(const parse_scope_t *scope);
+static bool module_member_is_call(parse_grammar_t *grammar,
+                                  parse_tree_t *node);
+static void report_enum_member_missing(core_translation_unit_t *unit,
+                                       parse_tree_t *node,
+                                       parse_sym_entry_t *type,
+                                       parse_scope_t *scope,
+                                       core_string_t name);
+
 bool
 resolve_type_member_references(core_link_unit_t *link,
                                n00bb_link_analysis_t *analysis)
@@ -308,10 +319,19 @@ resolve_type_member_references(core_link_unit_t *link,
             core_translation_unit_t *owner = nullptr;
             parse_scope_t *scope = record_scope_for_type(analysis,
                 receiver->type, &owner);
+            core_string_t name = first_token_text(core_tree_child(node, 2));
             parse_sym_entry_t *member = scope && owner
-                ? parse_symtab_lookup_in(scope,
-                      first_token_text(core_tree_child(node, 2)))
+                ? parse_symtab_lookup_in(scope, name)
                 : nullptr;
+            if (!member && scope && owner
+                && enum_like_scope(scope)
+                && !module_member_is_call(grammar, node)) {
+                report_enum_member_missing(unit, node, receiver, scope,
+                                           name);
+                site->unresolved = true;
+                site->blocks_lowering = true;
+                continue;
+            }
             if (!member || member->kind != PARSE_SYM_ENUM_CONST) continue;
             if (site->symbol && site->symbol != member)
                 parse_sym_remove_use(site->symbol, node);
@@ -381,7 +401,8 @@ diagnose_reserved_declarations(core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || state->interface_module || !state->annotations
         || !state->annotations->symtab) return true;
-    bool system = n00bb_system_module(unit->module.identifier)
+    // By origin, not name: a default-package builtin.n is the user's.
+    bool system = n00bb_system_unit(unit)
         || n00bb_generated_source(core_source_file_path(&unit->source));
     bool clean = true;
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
@@ -502,8 +523,7 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
             }));
         }
         n00bb_declared_trait_requirements_t *requirements =
-            parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.trait.requirements"));
+            parse_sym_binding(symbol, N00BB_TRAIT_REQUIREMENTS_KEY);
         th_type *trait = valid && requirements
             ? th_trait(state->types, core_buffer_string(&qualified), methods.data,
                 methods.len, requirements->data, requirements->len)
@@ -767,11 +787,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 return false;
             }
-            th_type *target_type = is_trait_type_symbol(grammar, symbol)
-                ? trait_type_reference(grammar, unit,
-                    symbol->decl_node ? symbol->owner_unit : unit, symbol,
-                    reference)
-                : symbol->type;
+            th_type *target_type = n00bb_type_reference_type(grammar, unit,
+                nullptr, symbol, reference, symbol->type);
             th_type *previous_type = parse_tree_type(reference);
             // A generic alias applied to arguments already holds the
             // applied type; filling it from the alias's own type would bind
@@ -827,7 +844,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     bool changed = !previous
                         || th_hash(state->types, th_resolve(previous))
                             != th_hash(state->types, th_resolve(type));
-                    if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                    if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                         && alias_declaration_is_transparent(grammar,
                             symbol->decl_node)
                         && previous) {
@@ -863,11 +880,10 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         n00bb_tu_state_t *owner_state = tu_state(owner);
                         if (!owner_state || !owner_state->types)
                             return false;
-                        th_type *reference_type =
-                            is_trait_type_symbol(grammar, symbol)
-                            ? trait_type_reference(grammar, owner, unit,
-                                                   symbol, reference)
-                            : type;
+                        // A generic alias named bare in a declaration that
+                        // owns type variables has that owner's own.
+                        th_type *reference_type = n00bb_type_reference_type(
+                            grammar, owner, unit, symbol, reference, type);
                         if (!reference_type
                             || applied_generic_alias(grammar, state->types,
                                    symbol, reference))
@@ -913,7 +929,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
                 if (!is_named_type_declaration(grammar, symbol)) continue;
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && alias_declaration_is_transparent(grammar,
                                                         symbol->decl_node)
                     && transparent_alias_has_cycle(grammar, units, symbol)) {
@@ -928,7 +944,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         N00BB_NO_ARGS);
                     return false;
                 }
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && alias_declaration_is_transparent(grammar,
                                                         symbol->decl_node))
                     symbol->adt_kind = CORE_STRING_STATIC("alias");
@@ -941,7 +957,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                         (int)symbol->name.u8_bytes, symbol->name.data);
                     return false;
                 }
-                if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
+                if (NT_IS(grammar, symbol->decl_node, "alias-stmt")
                     && !alias_declaration_is_transparent(grammar,
                                                          symbol->decl_node)) {
                     th_type *representation = declared_type_from_node(
@@ -1390,8 +1406,10 @@ resolve_module_member_site(parse_grammar_t *grammar,
     size_t failures = core_diagnostics_failures(diagnostics);
     bool resolved = resolve_member_site(grammar, unit, node);
     if (!resolved && site
-        && core_diagnostics_failures(diagnostics) > failures)
+        && core_diagnostics_failures(diagnostics) > failures) {
         site->unresolved = true;
+        site->blocks_lowering = !is_type_reference_node(grammar, node);
+    }
     return resolved;
 }
 
@@ -1680,6 +1698,21 @@ unqualified_import_candidates(core_translation_unit_t *unit,
     return candidates;
 }
 
+// The type an unqualified name names from the module's imports, when
+// exactly one provides it: what resolving its use site binds it to
+// (resolve_prelude_value), known before that runs.
+parse_sym_entry_t *
+n00bb_unqualified_import_type(core_translation_unit_t *unit,
+                              core_string_t name)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        unqualified_import_candidates(unit, name, true);
+    parse_sym_entry_t *type = candidates.len == 1 ? candidates.data[0]
+                                                  : nullptr;
+    core_list_free(candidates);
+    return type;
+}
+
 static parse_sym_entry_t *
 unqualified_import_type(core_translation_unit_t *unit, core_string_t name)
 {
@@ -1947,6 +1980,41 @@ enum_like_scope(const parse_scope_t *scope)
         && (core_string_eq(scope->scope_tag, CORE_STRING_STATIC("enum"))
             || core_string_eq(scope->scope_tag,
                               CORE_STRING_STATIC("flagset")));
+}
+
+// `Type.name` where `Type` is an enum or flagset that declares no `name`.
+static void
+report_enum_member_missing(core_translation_unit_t *unit, parse_tree_t *node,
+                           parse_sym_entry_t *type, parse_scope_t *scope,
+                           core_string_t name)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_MEMBER_MISSING,
+        n00bb_node_span(member_name_node(node)), N00B_TEXT_TYPE_HAS_NO_MEMBER,
+        N00BB_ARGS(ARG_TEXT(scope->scope_tag), ARG_TEXT(type->name),
+                   ARG_TEXT(name)));
+    // Members are visible wherever their type is. Scope order differs
+    // between parsed modules and cached interfaces, so sort by name.
+    core_list_t(core_string_t) members = core_list_new(core_string_t);
+    for (parse_sym_entry_t *member = scope->first_in_scope; member;
+         member = member->next_in_scope) {
+        if (member->kind != PARSE_SYM_ENUM_CONST || member->is_synthetic)
+            continue;
+        size_t at = members.len;
+        while (at && core_string_cmp(members.data[at - 1], member->name) > 0)
+            at--;
+        core_list_insert(members, at, member->name);
+    }
+    if (n00bb_diag_did_you_mean(diagnostics, name, members.data,
+                                members.len)) {
+        core_list_free(members);
+        return;
+    }
+    if (members.len)
+        n00bb_report_note(diagnostics, N00B_TEXT_TYPE_HAS_MEMBERS,
+            N00BB_ARGS(ARG_NAMES(members.data, members.len),
+                       ARG_TEXT(type->name)));
+    core_list_free(members);
 }
 
 static parse_sym_entry_t *
@@ -2432,6 +2500,7 @@ resolve_module_member_name(core_translation_unit_t *unit,
     else if (found.len > 1) {
         report_ambiguous_member(unit, site->node, name, &found);
         site->unresolved = true;
+        site->blocks_lowering = true;
     }
     core_list_free(found);
     return ok;
@@ -2478,17 +2547,10 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                            type_resolution.target.symbol, site->node)) {
                     parse_sym_entry_t *type_symbol =
                         type_resolution.target.symbol;
-                    bool trait = is_trait_type_symbol(grammar, type_symbol);
-                    core_translation_unit_t *declaration_unit = trait
-                        ? type_symbol->decl_node
-                            ? type_symbol->owner_unit
-                            : unit
-                        : nullptr;
                     th_type *previous = parse_tree_type(site->node);
-                    th_type *target_type = trait
-                        ? trait_type_reference(grammar, unit,
-                            declaration_unit, type_symbol, site->node)
-                        : type_symbol->type;
+                    th_type *target_type = n00bb_type_reference_type(grammar,
+                        unit, nullptr, type_symbol, site->node,
+                        type_symbol->type);
                     th_type *resolved = !target_type ? nullptr : previous
                         ? th_fill(previous,
                             target_type)
@@ -2518,15 +2580,24 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 if (!site->symbol
                     && !resolve_prelude_value(grammar, unit, state, site))
                     return false;
+                n00bb_missing_member_t missing = {0};
                 if (!site->symbol)
-                    resolve_local_enum_constant(grammar, state, site);
-                if (!site->symbol
+                    resolve_local_enum_constant(grammar, state, site,
+                                                &missing);
+                if (!site->symbol && missing.type
+                    && !module_member_is_call(grammar, missing.path)) {
+                    report_enum_member_missing(unit, missing.path,
+                        missing.type, missing.type->member_scope,
+                        missing.name);
+                    site->unresolved = true;
+                    site->blocks_lowering = true;
+                }
+                if (!site->symbol && !site->unresolved
                     && !resolve_module_member_name(unit, state, site))
                     return false;
-                if (site->unresolved) {
-                    all_resolved = false;
-                    continue;
-                }
+                // The error is reported; keep resolving so every name
+                // error is, and stop before lowering instead.
+                if (site->unresolved) continue;
             }
             if (site->symbol && site->symbol->kind == PARSE_SYM_MODULE
                 && !site->dotted_path
@@ -2771,8 +2842,13 @@ unit_for_module_site(core_translation_unit_t *unit,
                      n00bb_link_use_site_t *site, bool allow_suffix)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (module_path_matches_site(state, site, unit->module.identifier,
-                                 allow_suffix)) return unit;
+    // A default-package module has its own identity: a name it imports, a
+    // standard library package's above all, means the import, even when
+    // the module's own name is the same (`import unicode` in unicode.n).
+    bool self_first = !n00bb_default_package(unit);
+    if (self_first && module_path_matches_site(state, site,
+                                               unit->module.identifier,
+                                               allow_suffix)) return unit;
     for (size_t i = 0; state && i < state->import_aliases.len; i++) {
         n00bb_import_alias_t *alias = &state->import_aliases.data[i];
         if ((alias->renamed || !import_path_hidden(state, alias->unit))
@@ -2788,6 +2864,9 @@ unit_for_module_site(core_translation_unit_t *unit,
                                         imported->module.identifier,
                                         allow_suffix)) return imported;
     }
+    if (!self_first && module_path_matches_site(state, site,
+                                                unit->module.identifier,
+                                                allow_suffix)) return unit;
     return nullptr;
 }
 
@@ -3074,9 +3153,12 @@ package_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_sym_entry_t *binding = types
         ? parse_symtab_lookup_in(types, trait_name) : nullptr;
     parse_sym_entry_t *origin = canonical_symbol(binding);
-    return origin && origin->decl_node
-        && nt_is(grammar, origin->decl_node, CORE_STRING_STATIC("trait-decl"))
-        ? binding : nullptr;
+    // A trait read from the package's interface (a cached or linked
+    // package) has no declaration node, only its kind.
+    bool trait = origin && (origin->decl_node
+        ? nt_is(grammar, origin->decl_node, CORE_STRING_STATIC("trait-decl"))
+        : core_string_eq(origin->adt_kind, CORE_STRING_STATIC("trait")));
+    return trait ? binding : nullptr;
 }
 
 static parse_sym_entry_t *
@@ -3280,12 +3362,12 @@ nested_module_declaration_owner(parse_grammar_t *grammar,
     for (parse_tree_t *parent = declaration
             ? parse_tree_parent(declaration) : nullptr;
          parent; parent = parse_tree_parent(parent)) {
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))) return nullptr;
+        if (NT_IS(grammar, parent, "func-def")) return nullptr;
         if (field_record_declaration(grammar, parent)
-            || nt_is(grammar, parent, CORE_STRING_STATIC("enum-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("flagset-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("variant-decl"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("trait-decl"))) return parent;
+            || NT_IS(grammar, parent, "enum-stmt")
+            || NT_IS(grammar, parent, "flagset-stmt")
+            || NT_IS(grammar, parent, "variant-decl")
+            || NT_IS(grammar, parent, "trait-decl")) return parent;
     }
     return nullptr;
 }
@@ -3778,6 +3860,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         CORE_STRING_STATIC("__cpu_relax"),
         CORE_STRING_STATIC("__stack_pointer"),
         CORE_STRING_STATIC("comptime"),
+        CORE_STRING_STATIC("native_entry"),
         CORE_STRING_STATIC("__gc_prefetch"),
         CORE_STRING_STATIC("__atomic_fetch_or"),
         CORE_STRING_STATIC("__atomic_fetch_or_release"),
@@ -3820,8 +3903,8 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
                  d++) {
                 core_link_declaration_t *candidate =
                     core_link_unit_declaration_at(link, d);
-                if (core_string_eq(core_link_declaration_module(candidate),
-                                   CORE_STRING_STATIC("builtins"))
+                if (n00bb_compiler_package(
+                        core_link_declaration_module(candidate))
                     && core_string_eq(core_link_declaration_key(candidate),
                                       name)) {
                     declaration = candidate;
@@ -3834,8 +3917,10 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
                     .visibility = 0,
                     .contract = n00bb_symbol_signature(symbol),
                 };
+                // In the compiler's own link module, which no source
+                // module shares (a user's builtins.n is module `builtins`).
                 if (!core_link_unit_require_external(link,
-                        CORE_STRING_STATIC("builtins"), name, &metadata,
+                        N00BB_COMPILER_PACKAGE, name, &metadata,
                         &declaration)) return false;
             }
             if (!core_dict_add(declarations_by_symbol, symbol, declaration))
@@ -3873,7 +3958,7 @@ register_link_use_sites(core_link_unit_t *link,
             if (n00bb_builtin_function(symbol)) {
                 core_link_reference_t *reference = nullptr;
                 bool ok = core_link_unit_reference_at_scoped_kind(link, unit,
-                    node, site->scope, CORE_STRING_STATIC("builtins"),
+                    node, site->scope, N00BB_COMPILER_PACKAGE,
                     symbol->name, PARSE_SYM_FUNCTION, &reference);
                 core_string_t provenance = core_source_file_path(&unit->source);
                 if (!ok || !core_link_reference_set_source_info(link,
@@ -3916,6 +4001,20 @@ register_link_use_sites(core_link_unit_t *link,
     return true;
 }
 
+// Whether `use` reads `declaration` through a `typecase` arm's narrowed view
+// of it. The use links to the declaration (which a module variable is), but
+// it keeps naming the view, so it reads as the arm's type.
+static bool
+narrows_declaration(parse_tree_t *use, parse_sym_entry_t *declaration)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(use);
+    parse_sym_entry_t *view = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    return view && view != declaration
+        && parse_sym_binding(view, CORE_STRING_STATIC("n00bb.typecase-subject"))
+        && canonical_symbol(view) == declaration;
+}
+
 bool
 bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
 {
@@ -3931,7 +4030,9 @@ bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
         n00bb_link_payload_t *payload = target
             ? core_link_declaration_payload(target) : nullptr;
         if (!use_site || !payload || !payload->symbol
-            || !parse_tree_set_resolution_symbol(use_site, payload->symbol)
+            || (!narrows_declaration(use_site, payload->symbol)
+                && !parse_tree_set_resolution_symbol(use_site,
+                                                     payload->symbol))
             || !bind_array_shape_type_source(grammar, use_site,
                                              payload->symbol)) {
             core_translation_unit_t *unit =
@@ -3985,6 +4086,11 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
                               "the modules they name");
     bool names_resolved = resolve_imported_module_symbols(analysis->grammar,
                                                           &analysis->units);
+    // Before functions are indexed by their contracts, which include what
+    // their variables take on from the constrained types given them.
+    names_resolved = names_resolved
+        && n00bb_imply_type_argument_constraints(analysis->units.data,
+                                                 analysis->units.len);
     bool brings_valid = check_import_brings(analysis);
     bool declarations_indexed = register_link_declarations(link,
         analysis->grammar, &analysis->units,
@@ -4096,6 +4202,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     }
     if (analysis->cached_bodies_ready)
         core_dict_free(&analysis->cached_bodies);
+    n00bb_layout_progress_release(analysis);
     core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
     th_ctx_free(analysis->link_types);
@@ -4104,6 +4211,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
     core_list_free(analysis->cached_functions);
+    core_list_free(analysis->cached_unit_bodies);
     core_list_free(analysis->callback_handlers);
     core_list_free(analysis->callback_handler_types);
     core_list_free(analysis->referenced_functions);
@@ -4183,6 +4291,10 @@ n00bb_link_stage_inputs(core_link_unit_t *link, uint32_t stage_kind,
     return CORE_LINK_STAGE_RESULT_COMPLETE;
 }
 
+// Whether every field of a record has the method, or will be given a
+// derived one by register_builtin_value_defaults, under the same rules. A
+// field whose `==` follows its `__cmp` serves the derived `__equal` (it
+// compares the field with `__cmp`).
 static bool
 record_default_fields_support(th_ctx *probe, th_ctx *source,
                               th_type *receiver, core_string_t trait,
@@ -4213,9 +4325,17 @@ record_default_fields_support(th_ctx *probe, th_ctx *source,
         if (status == TH_ENV_METHOD_FOUND)
             supported = !selected.error_type
                 || th_is_nil(selected.error_type);
-        else if (status == TH_ENV_METHOD_NOT_FOUND)
-            supported = record_default_fields_support(probe, source,
-                field->type, trait, method, visiting);
+        else if (status == TH_ENV_METHOD_NOT_FOUND) {
+            // A field with its own equality has no derived hash; one whose
+            // `==` follows its `__cmp` serves a derived `__equal`.
+            bool by_cmp = false;
+            bool own = field_type && n00bb_user_equality(probe, field_type,
+                &selected, &by_cmp) == TH_ENV_METHOD_FOUND;
+            supported = own
+                ? by_cmp && core_string_eq(trait, N00BB_EQUAL_TRAIT)
+                : record_default_fields_support(probe, source,
+                    field->type, trait, method, visiting);
+        }
         else supported = false;
     }
     core_dict_remove(visiting, receiver);
@@ -4329,24 +4449,17 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                             != TH_INDIRECTION))) continue;
                 th_type *candidate = th_type_clone(probe, receiver);
                 th_env_method_t selected = {0};
-                bool custom_equal = candidate &&
-                    th_env_method_resolve(probe, candidate,
-                        N00BB_EQUAL_TRAIT,
-                        CORE_STRING_STATIC("__equal"), &selected)
-                        == TH_ENV_METHOD_FOUND;
                 bool custom_hash = hash_available && candidate &&
                     th_env_method_resolve(probe, candidate,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &selected)
                         == TH_ENV_METHOD_FOUND;
-                // With a `__cmp` and no `__equal`, equality comes from
-                // `__cmp`, and a hash of the fields would disagree with it.
-                bool custom_cmp = !custom_equal && candidate &&
-                    th_env_method_resolve(probe, candidate,
-                        N00BB_COMPARABLE_TRAIT,
-                        CORE_STRING_STATIC("__cmp"), &selected)
-                        == TH_ENV_METHOD_FOUND;
-                custom_equal = custom_equal || custom_cmp;
+                // A user `__equal`, or a `__cmp` that `==` follows, means
+                // no derived `__equal` and, without a user `hash`, no
+                // derived hash either.
+                bool by_cmp = false;
+                bool custom_equal = candidate && n00bb_user_equality(probe,
+                    candidate, &selected, &by_cmp) == TH_ENV_METHOD_FOUND;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal
@@ -4430,6 +4543,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
 typedef struct {
     core_string_t method;
     core_string_t trait;
+    th_type      *contract;
     size_t        next;
 } trait_method_ref_t;
 core_list_decl(trait_method_ref_t);
@@ -4453,7 +4567,8 @@ trait_method_index_build(const th_env *environment,
             const th_member *method = th_trait_method(trait.contract, m);
             if (method && method->name.data)
                 core_list_push(index->refs, ((trait_method_ref_t){
-                    .method = method->name, .trait = trait.qualified_name}));
+                    .method = method->name, .trait = trait.qualified_name,
+                    .contract = method->type}));
         }
     }
     core_dict_init_string(&index->by_method);
@@ -4472,7 +4587,8 @@ trait_method_index_free(trait_method_index_t *index)
     core_list_free(index->refs);
 }
 
-static bool
+// The trait method `symbol` implements for `receiver`, if any.
+static const trait_method_ref_t *
 implements_trait_method(const trait_method_index_t *index, th_ctx *types,
                         parse_grammar_t *grammar,
                         core_translation_unit_t *unit,
@@ -4482,11 +4598,11 @@ implements_trait_method(const trait_method_index_t *index, th_ctx *types,
     bool present = false;
     uintptr_t first = (uintptr_t)core_dict_get(
         (core_dict_t *)&index->by_method, &root, &present);
-    if (!present) return false;
+    if (!present) return nullptr;
     core_buffer_t qualified = {0};
     bool named = append_environment_symbol_name(grammar, unit, symbol,
                                                 &qualified) && qualified.data;
-    bool found = false;
+    const trait_method_ref_t *found = nullptr;
     for (size_t r = first; named && !found && r;
          r = index->refs.data[r - 1].next) {
         const trait_method_ref_t *ref = &index->refs.data[r - 1];
@@ -4497,19 +4613,24 @@ implements_trait_method(const trait_method_index_t *index, th_ctx *types,
                 == TH_ENV_METHOD_FOUND
             && chosen.qualified_name.data
             && core_string_eq(chosen.qualified_name,
-                              core_buffer_string(&qualified));
+                              core_buffer_string(&qualified))
+            ? ref : nullptr;
     }
     core_buffer_release(&qualified);
     return found;
 }
 
+// An adapter is called as the trait's method is, so it takes the
+// parameters the trait's method names (`arity` of them), not the further
+// optional ones its implementation adds: those it leaves out.
 static th_type *
 dispatch_adapter_signature(th_ctx *types, th_type *signature,
-                           th_type *receiver)
+                           th_type *receiver, size_t arity)
 {
     uint64_t receiver_hash = th_hash(types, receiver);
     th_type *self = th_var(types);
     size_t count = th_func_nparams(signature);
+    if (arity && arity < count) count = arity;
     th_param *parameters = count ? core_alloc_array(th_param, count)
                                  : nullptr;
     bool valid = self && (!count || parameters);
@@ -4534,6 +4655,131 @@ dispatch_adapter_signature(th_ctx *types, th_type *signature,
         : nullptr;
     core_free(parameters);
     return adapter;
+}
+
+static parse_sym_entry_t *named_function(parse_grammar_t *grammar,
+                                         core_translation_unit_t *unit,
+                                         parse_tree_t *operand);
+
+// The functions `unit`'s `ref` operators name.
+static void
+referenced_functions(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                     core_dict_t *referenced)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; i < state->call_nodes.len; i++) {
+        parse_tree_t *node = state->call_nodes.data[i];
+        const parse_rule_t *rule = node && !core_tree_is_leaf(node)
+            ? parse_tree_rule(grammar, node) : nullptr;
+        parse_annotation_t *operator = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
+            : nullptr;
+        if (!operator
+            || !core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref")))
+            continue;
+        parse_tree_t *operand = nullptr;
+        for (size_t c = 0; !operand && c < core_tree_num_children(node); c++)
+            if (!core_tree_is_leaf(core_tree_child(node, c)))
+                operand = core_tree_child(node, c);
+        parse_sym_entry_t *function = named_function(grammar, unit, operand);
+        if (function) {
+            function = canonical_symbol(function);
+            core_dict_put(referenced, function, function);
+        }
+    }
+}
+
+// The reference adapter (n00bb_reference_adapter_t) of each function of
+// `unit` that takes a parameter other than `in`, or declares its keyword
+// parameters in an order its type doesn't list them in, when another
+// module can refer to it (it is exported) or this one does (`ref` names
+// it). It is a function of that module, as a dispatch adapter is, so every
+// `ref` of the function, from any module, refers to the one adapter.
+static bool
+register_reference_adapters(core_link_unit_t *link,
+                            parse_grammar_t *grammar,
+                            n00bb_link_analysis_t *analysis,
+                            core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symbols = state->annotations->symtab;
+    core_dict_t referenced;
+    core_dict_init(&referenced, nullptr, nullptr);
+    referenced_functions(grammar, unit, &referenced);
+    core_list_t(parse_sym_entry_ptr_t) functions =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (parse_scope_t *scope = symbols->all_scopes; scope;
+         scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope)
+            // A name bound to another module's function (an alias or an
+            // import) refers to that function's adapter, and a native
+            // binding's function has no ABI function row for an adapter to
+            // name, so it has none yet.
+            if (symbol->kind == PARSE_SYM_FUNCTION && !symbol->is_synthetic
+                && !symbol->binding_origin
+                && !parse_sym_binding(symbol, N00BB_REFERENCE_ADAPTER_KEY)
+                && !parse_sym_binding(symbol, N00BB_FUNCTION_ADAPTER_KEY)
+                && !parse_sym_binding(symbol,
+                       CORE_STRING_STATIC("n00bb.generated-extern"))
+                && ((!symbol->owner_type && !symbol_is_private(symbol))
+                    || core_dict_contains(&referenced, symbol)))
+                core_list_push(functions, symbol);
+    core_dict_free(&referenced);
+    bool ok = true;
+    for (size_t f = 0; ok && f < functions.len; f++) {
+        parse_sym_entry_t *symbol = functions.data[f];
+        n00bb_reference_adapter_t *order =
+            core_alloc(n00bb_reference_adapter_t);
+        th_type *flat = th_func_collect_rest(state->types,
+                                             n00bb_symbol_signature(symbol));
+        // A generic function's adapter would share its type variables, and
+        // typing the adapter would bind the function's.
+        th_type *adapter_type = order && flat
+                && th_is_closed(state->types, flat)
+            ? n00bb_reference_adapter(state->types, grammar, symbol, flat,
+                                      order)
+            : nullptr;
+        if (!adapter_type) {
+            core_free(order);
+            continue;
+        }
+        core_buffer_t qualified = {0};
+        core_buffer_t name = {0};
+        if (append_environment_symbol_name(grammar, unit, symbol,
+                                           &qualified) && qualified.data)
+            core_buffer_printf(&name, "__n00bb_reference_adapter_%016llx",
+                (unsigned long long)core_xxh3_64bits_raw(qualified.data,
+                                                         qualified.byte_len));
+        core_buffer_release(&qualified);
+        parse_symtab_enter_scope_all(symbols, module_scope(state));
+        parse_sym_entry_t *adapter = name.data
+            ? parse_symtab_add(symbols, CORE_STRING_STATIC(""),
+                core_buffer_string(&name), PARSE_SYM_FUNCTION, nullptr)
+            : nullptr;
+        parse_symtab_leave_scope_all(symbols);
+        core_buffer_release(&name);
+        ok = adapter != nullptr;
+        if (!ok) break;
+        adapter->type = adapter->callable_contract = adapter_type;
+        adapter->error_type = th_func_error(adapter_type);
+        adapter->adt_kind = symbol->adt_kind;
+        adapter->visibility = symbol->visibility;
+        adapter->is_synthetic = true;
+        // Generated, as a dispatch adapter is: emitted with its module,
+        // and not a declaration of the source.
+        ok = parse_sym_set_binding(adapter,
+                CORE_STRING_STATIC("n00bb.generated-value-method"),
+                adapter_type)
+            && parse_sym_set_binding(adapter, N00BB_REFERENCE_ADAPTER_KEY,
+                                     order)
+            && parse_sym_set_binding(symbol, N00BB_FUNCTION_ADAPTER_KEY,
+                                     adapter)
+            && register_link_declaration(link, unit, grammar,
+                   &analysis->declarations_by_symbol, adapter);
+    }
+    core_list_free(functions);
+    return ok;
 }
 
 bool
@@ -4577,8 +4823,20 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
             th_type *signature = th_resolve(th_func_collect_rest(state->types,
                 n00bb_symbol_signature(symbol)));
             th_type *receiver = th_resolve(th_func_param(signature, 0)->type);
+            const trait_method_ref_t *implemented = implements_trait_method(
+                &index, state->types, grammar, unit, symbol, receiver);
+            th_type *required = implemented && implemented->contract
+                ? th_resolve(th_func_collect_rest(state->types,
+                                                  implemented->contract))
+                : nullptr;
+            size_t arity = required && th_kind_of(required) == TH_FUNCTION
+                ? th_func_nparams(required) : 0;
+            parse_sym_entry_t *requirement = implemented
+                ? trait_method_requirement_symbol(grammar, analysis, unit,
+                      implemented->trait, implemented->method)
+                : nullptr;
             th_type *adapter_type = dispatch_adapter_signature(state->types,
-                signature, receiver);
+                signature, receiver, arity);
             if (!adapter_type) continue;
             core_buffer_t qualified = {0};
             core_buffer_t name = {0};
@@ -4608,6 +4866,9 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
                     receiver)
                 || !parse_sym_set_binding(adapter,
                     CORE_STRING_STATIC("n00bb.dispatch-adapter"), symbol)
+                || (requirement && !parse_sym_set_binding(adapter,
+                    CORE_STRING_STATIC("n00bb.dispatch-requirement"),
+                    requirement))
                 || !register_link_declaration(link, unit, grammar,
                     &analysis->declarations_by_symbol, adapter)) {
                 core_list_free(targets);
@@ -4616,6 +4877,10 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
             }
         }
         core_list_free(targets);
+        if (!register_reference_adapters(link, grammar, analysis, unit)) {
+            trait_method_index_free(&index);
+            return false;
+        }
     }
     trait_method_index_free(&index);
     return true;

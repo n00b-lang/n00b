@@ -51,6 +51,11 @@ bool n00bb_abi_write_object(
 typedef struct {
     core_string_t symbol;
     uint64_t *type_hashes;
+    // The type at each entry. Code compiled against this table finds a
+    // type's entry by position, so a later emission of the same TU given
+    // these (as out_index_table's contents on entry) keeps each of them at
+    // its place and adds any new types after them.
+    th_type **types;
     size_t type_count;
     ir_func_t **functions;
     size_t function_count;
@@ -62,6 +67,20 @@ core_string_t n00bb_abi_baked_node_symbol(core_string_t package,
                                           size_t ordinal,
                                           core_target_object_format_t format);
 
+// Whether a module's ABI object carries its functions' summaries (a
+// SUMMARY_STREAM and the names it uses). On by default; a program build
+// that won't keep them (no --function-summaries) turns it off: the link
+// strips them anyway, and they are what the whole program found, so a
+// cached module's ABI object would carry the summaries of whichever
+// program built it first.
+void n00bb_abi_emit_function_summaries(bool keep);
+
+// Lays out every closed type interned in `module` that a value of it
+// reaches. The emitter interns each type its rows describe and calls it,
+// so a row's layout and tracing follow from the type alone, the same in
+// every module that has a row for it.
+typedef bool (*n00bb_abi_layout_fn)(void *context, ir_module_t *module);
+
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
@@ -72,6 +91,7 @@ bool n00bb_abi_emit_unit(
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     const n00bb_abi_graph_source_t *graphs,
+    n00bb_abi_layout_fn layout, void *layout_context,
     n00bb_abi_packed_tables_t *out_tables,
     n00bb_abi_index_table_t *out_index_table,
     uint8_t **out_object, size_t *out_object_bytes);

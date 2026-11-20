@@ -110,6 +110,9 @@ typedef struct {
     core_string_t    option_suffix;
     bool             omit_nil_failure;
     bool             source_spelling;
+    // Leave out function parameters' passing modes, for a language whose
+    // function types don't have them.
+    bool             omit_modes;
 } th_print_options_t;
 
 typedef struct {
@@ -338,10 +341,7 @@ th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
 
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
 size_t   th_generic_arity(th_ctx *ctx, core_string_t name);
-bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
-                              void *owner);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
-void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_fields_record(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
@@ -354,6 +354,8 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
                             size_t nkw);
 th_type *th_func_collect_rest(th_ctx *ctx, th_type *function);
 th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body);
+// `binder`'s variables (its arity and their names) over another `body`.
+th_type *th_binder_with_body(th_ctx *ctx, th_type *binder, th_type *body);
 th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
 th_type *th_var(th_ctx *ctx);
@@ -476,6 +478,10 @@ th_type *th_text_type(th_ctx *ctx, core_string_t text);
 void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
+// `type` with each unbound variable vars[i] replaced by values[i], built
+// anew: unlike binding the variables, it changes no type.
+th_type *th_substitute(th_ctx *ctx, th_type *type, th_type *const *vars,
+                       th_type *const *values, size_t count);
 bool     th_match(th_type *pattern, th_type *concrete);
 bool     th_matches(th_type *pattern, th_type *concrete);
 typedef bool (*th_binding_fn)(void *context, th_type *variable,

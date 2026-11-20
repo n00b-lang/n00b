@@ -1,5 +1,6 @@
 #include "lower_internal.h"
 #include "comptime.h"
+#include "compiler_layout.h"
 #include "static_branches.h"
 
 static int
@@ -15,7 +16,8 @@ report_view_candidates(parse_grammar_t *grammar,
                        core_translation_unit_t *unit,
                        ir_summaries_t *summaries);
 static bool
-reintern_unit_types(core_list_t(core_translation_unit_ptr_t) *units);
+reintern_unit_types(n00bb_link_analysis_t *analysis,
+                    core_list_t(core_translation_unit_ptr_t) *units);
 
 static void
 n00bb_mark_synthetic_locals(ir_module_t *module)
@@ -185,13 +187,17 @@ n00bb_solved_lower_new(n00bb_link_analysis_t *analysis,
 }
 
 static bool
-reintern_unit_types(core_list_t(core_translation_unit_ptr_t) *units)
+reintern_unit_types(n00bb_link_analysis_t *analysis,
+                    core_list_t(core_translation_unit_ptr_t) *units)
 {
     bool ok = true;
     for (size_t i = 0; i < units->len; i++) {
         ir_module_t *module = tu_state(units->data[i])->ir_module;
         ok = (!module || ir_module_reintern_types(module)) && ok;
     }
+    // Reinterning renumbers a module's types, so laying them out starts
+    // over.
+    n00bb_layout_progress_release(analysis);
     return ok;
 }
 
@@ -438,11 +444,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     double typing_start = profile ? n00bb_profile_seconds() : 0;
     if (ok && !n00bb_infer_types(analysis, units.data, units.len, &typing))
         ok = typing.recovered && explained_by_errors(&units);
-    ok = ok && reintern_unit_types(&units);
+    ok = ok && reintern_unit_types(analysis, &units);
     double rewrite_start = profile ? n00bb_profile_seconds() : 0;
     if (ok && !n00bb_rewrite_typed_ir(analysis, grammar, &typing))
         ok = explained_by_errors(&units);
-    ok = ok && reintern_unit_types(&units)
+    ok = ok && reintern_unit_types(analysis, &units)
         && n00bb_generate_dispatch_adapters(analysis);
     if (ok && !n00bb_check_required_fields(analysis))
         ok = explained_by_errors(&units);
@@ -528,6 +534,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             n00bb_profile_seconds() - profile_start);
     if (ok) ok = check_field_array_lengths(analysis)
         || explained_by_errors(&units);
+    if (ok) ok = check_reference_kept_places(analysis)
+        || explained_by_errors(&units);
     if (ok) ok = place_unit_allocations(analysis)
         || explained_by_errors(&units);
     exclude_failed_functions(analysis, &units, marks);
@@ -546,6 +554,12 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     exclude_failed_functions(analysis, &units, marks);
     core_free(marks);
+    // The questions about where addresses escape are asked above, by the
+    // storage placement and the checks before it. The solves kept to answer
+    // them are most of what the escape facts hold, and they would stay
+    // through specializing and code generation, when the compile needs the
+    // most memory.
+    ir_summaries_release_engines(analysis->escapes);
     if (ok && dump_ir) ok = n00bb_dump_ir(analysis);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
@@ -682,8 +696,12 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) {
         ir_analysis_read_only_begin();
         bool frozen = validate_frozen_writes(analysis);
+        // Both range diagnoses use each function's ranges; their own
+        // per-function scopes would release them between the two.
+        size_t range_scope = ir_analysis_scope_begin();
         bool overflow = diagnose_overflow(analysis);
         bool ranges = diagnose_ranges(analysis);
+        ir_analysis_scope_end(range_scope);
         ir_analysis_read_only_end();
         warn_unbounded_recursion(analysis);
         warn_dead_stores(analysis);

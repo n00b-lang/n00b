@@ -1,0 +1,14 @@
+# An error of its own leaves this module out of the analysis of the whole
+# program, and so what `settings` sets is seen only through `settings`'s
+# own functions, which the second check loads from the cache.
+import settings
+
+func run() -> uint {
+    var maybe: int? = 1
+    if maybe != nil {
+        maybe = nil
+        let unset: int = maybe
+    }
+    settings.reset()
+    return 0
+}

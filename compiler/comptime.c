@@ -535,6 +535,94 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
     (n00bb_report(diagnostics, unit, id, (core_diag_location_t){0}, text,   \
                   args), false)
 
+// The token that starts at byte `at`; with `modified`, the one there that
+// carries a literal modifier (a zero-width token can start there too).
+static parse_token_info_t *
+token_at(parse_tree_t *node, uint64_t at, bool modified)
+{
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node)) {
+        parse_token_info_t *token = parse_node_token(node);
+        return token && parse_token_start_byte(token) == at
+                && (!modified || core_option_is_set(
+                        parse_token_postfix_modifier(token)))
+            ? token : nullptr;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_token_info_t *found = token_at(core_tree_child(node, i), at,
+                                             modified);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+// The literal that a comptime run's failure record names: the module's key,
+// and the byte offsets of the literal's first token (low 32 bits of `site`)
+// and of the token that carries its modifier (high 32 bits).
+static bool
+failed_literal(n00bb_link_analysis_t *analysis, uint64_t module,
+               uint64_t site, core_translation_unit_t **owner,
+               parse_token_info_t **first, parse_token_info_t **modified)
+{
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state || !state->ir_module
+            || n00bb_comptime_module_key(ir_module_name(state->ir_module))
+                != module) continue;
+        parse_tree_t *tree = n00bb_tu_parsed_tree(state);
+        *modified = token_at(tree, site >> 32, true);
+        *first = token_at(tree, site & 0xffffffffu, false);
+        if (*first && *modified
+            && parse_token_start_byte(*first)
+                == parse_token_start_byte(*modified))
+            *first = *modified;
+        if (!*first || !*modified) continue;
+        *owner = unit;
+        return true;
+    }
+    return false;
+}
+
+// A comptime run that stopped because literal handlers failed: report each
+// failure at its literal.
+static bool
+report_literal_failures(n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *unit, reader_t *reader,
+                        core_diagnostics_t *diagnostics)
+{
+    uint64_t count = 0;
+    if (!read_word(reader, 8, &count)) return false;
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t module = 0, site = 0;
+        core_string_t message = {0};
+        if (!read_word(reader, 8, &module) || !read_word(reader, 8, &site)
+            || !read_text(reader, &message)) return false;
+        core_translation_unit_t *owner = unit;
+        parse_token_info_t *first = nullptr, *modified = nullptr;
+        bool found = failed_literal(analysis, module, site, &owner, &first,
+                                    &modified);
+        core_option_t(core_string_t) modifier = found
+            ? parse_token_postfix_modifier(modified)
+            : core_option_none(core_string_t);
+        core_diag_location_t location = found ? (core_diag_location_t){
+            .line = parse_token_line(first),
+            .column = parse_token_column(first),
+            .end_line = parse_token_endline(modified),
+            .end_column = parse_token_endcol(modified),
+            .has_location = true,
+        } : (core_diag_location_t){0};
+        n00bb_report(diagnostics, owner, N00B_DIAG_LITERAL_MODIFIER_FAILED,
+            location,
+            N00B_TEXT_LITERAL_MODIFIER_FAILED,
+            N00BB_ARGS(ARG_TEXT(core_option_is_set(modifier)
+                                    ? core_option_get(modifier)
+                                    : CORE_STRING_STATIC("?")),
+                       ARG_TEXT(message)));
+    }
+    return reader->at == reader->size;
+}
+
 static bool
 magic_is(const uint8_t *magic, core_string_t expected)
 {
@@ -620,6 +708,13 @@ n00bb_comptime_run(n00bb_link_analysis_t *analysis,
                   : N00B_TEXT_COMPTIME_MODULE_EXITED,
             N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER((int64_t)code)));
     }
+    else if (magic_is(magic, CORE_STRING_STATIC("N00BCTLF"))) {
+        // The failures are the errors; the run itself did what it should.
+        if (!report_literal_failures(analysis, unit, &reader, diagnostics))
+            (void)comptime_failed(unit, N00B_DIAG_COMPTIME_RUN_FAILED,
+                N00B_TEXT_COMPTIME_RUN_NO_STATE, N00BB_ARGS(ARG_TEXT(name)));
+        ok = false;
+    }
     else if (magic_is(magic, CORE_STRING_STATIC("N00BCTFL"))) {
         core_string_t path = {0}, global = {0}, message = {0};
         ok = read_text(&reader, &path) && read_text(&reader, &global)
@@ -650,7 +745,7 @@ n00bb_comptime_run(n00bb_link_analysis_t *analysis,
 
 typedef struct {
     core_dict_t counts;
-    // Writes that can run at run time, per global.
+    // Writes per global, in either phase.
     core_dict_t writes;
     // Whether the initializer being touched has effects the summaries
     // can't see; the units whose initializers did.
@@ -697,34 +792,6 @@ touch_write(touches_t *touches, const ir_global_t *global)
     core_dict_put(&touches->writes, identity, count + 1);
 }
 
-// The blocks of `function` that can run at run time: a branch on
-// `comptime()` only takes its runtime side.
-static bool *
-runtime_blocks(ir_func_t *function)
-{
-    ir_block_t *entry = ir_block_entry(function);
-    if (!entry) return nullptr;
-    bool *seen = core_alloc_array(bool, function->n_blocks);
-    ir_block_t **stack = core_alloc_array(ir_block_t *, function->n_blocks);
-    size_t depth = 0;
-    stack[depth++] = entry;
-    seen[entry->index] = true;
-    while (depth) {
-        ir_instr_t *term = ir_block_terminator(stack[--depth]);
-        uint32_t taken = term ? ir_phase_successor(term, false) : UINT32_MAX;
-        uint32_t count = term ? ir_succ_count(term) : 0;
-        for (uint32_t s = 0; s < count; s++) {
-            ir_block_t *next = ir_succ_at(term, s);
-            if ((taken != UINT32_MAX && s != taken) || !next
-                || seen[next->index]) continue;
-            seen[next->index] = true;
-            stack[depth++] = next;
-        }
-    }
-    core_free(stack);
-    return seen;
-}
-
 static void
 touch_summary(void *context, const ir_func_t *target,
               const ir_summary_t *summary)
@@ -760,7 +827,6 @@ static bool
 comptime_only_call(const ir_instr_t *call)
 {
     return calls_native(call, CORE_STRING_STATIC(N00BB_COMPTIME_FREEZE_NATIVE))
-        || calls_native(call, CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME))
         || ir_pdg_asks_frozen(call);
 }
 
@@ -768,7 +834,6 @@ static void
 touch_function(ir_summaries_t *summaries, ir_func_t *function,
                touches_t *touches)
 {
-    bool *runtime = function ? runtime_blocks(function) : nullptr;
     for (uint32_t b = 0; function && b < function->n_blocks; b++)
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = function->blocks[b]->instrs[i];
@@ -778,11 +843,11 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                 if (!value || value->kind != IR_VAL_GLOBAL) continue;
                 touch(touches, value->global, 1);
                 // A copy of a global reads it; anything else that names it
-                // may write it.
+                // may write it, in either phase. A write behind `comptime()`
+                // still changes the value comptime hands to run time.
                 bool read = in->op == IR_OP_COPY
                     || (in->op == IR_OP_GLOBAL_STORE && k == 1);
-                if (!read && runtime && runtime[b])
-                    touch_write(touches, value->global);
+                if (!read) touch_write(touches, value->global);
             }
             if (in->op == IR_OP_CALLBACK_INVOKE) touches->opaque = true;
             if (in->op == IR_OP_CALL && !comptime_only_call(in)
@@ -790,7 +855,6 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                                             touches))
                 touches->opaque = true;
         }
-    core_free(runtime);
 }
 
 static bool
@@ -1092,9 +1156,9 @@ prunable_store(purity_t *purity, ir_module_t *module,
         || !identity->has_static_initializer
         || identity->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
-        // Comptime's value is the starting value unless the runtime
-        // initializer writes the variable again: this store is its only
-        // runtime write. Reads see the comptime value.
+        // Skipping this store is only sound when comptime's value is what
+        // rerunning it gives: nothing else writes the variable, in either
+        // phase, so this store is its only write. Reads are fine.
         || (uintptr_t)core_dict_get(&touches->writes, identity, nullptr) != 1
         || !always_runs(function, in->block, true)
         || !always_runs(function, in->block, false)) return false;

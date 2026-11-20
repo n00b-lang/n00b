@@ -1,0 +1,7 @@
+import helper
+let m1: bool = 1
+let m2: bool = 2
+let m3: bool = 3
+let m4: bool = 4
+let m5: bool = 5
+let m6: bool = 6
