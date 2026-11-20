@@ -1957,8 +1957,8 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *entries);
 
 void
-n00bb_cached_package_bodies(n00bb_link_analysis_t *analysis,
-                            core_list_t(n00bb_ir_func_ptr_t) *out);
+n00bb_cached_unit_bodies(n00bb_link_analysis_t *analysis, bool root_package,
+                         core_list_t(n00bb_ir_func_ptr_t) *out);
 
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);

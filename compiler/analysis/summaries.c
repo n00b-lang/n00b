@@ -501,6 +501,30 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
         || core_dict_contains(import_closure(analysis, from), to);
 }
 
+// Adds the bodies of the functions of the units reused from the cache: of
+// all of them, or only of those in the root's package that are analyzed.
+void
+n00bb_cached_unit_bodies(n00bb_link_analysis_t *analysis, bool root_package,
+                         core_list_t(n00bb_ir_func_ptr_t) *out)
+{
+    core_translation_unit_t *root = analysis->units.len
+        ? analysis->units.data[0] : nullptr;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (!state || !state->ir_module || !state->interface_module
+            || (root_package
+                && (!n00bb_same_package(unit, root)
+                    || n00bb_module_unanalyzed(analysis, state->ir_module))))
+            continue;
+        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(
+                ir_func_at(state->ir_module, f));
+            if (body && body->n_blocks) core_list_push(*out, body);
+        }
+    }
+}
+
 // The bodies of the modules reused from the cache: their reinterpretations
 // are the program's as much as those of the modules compiled from source,
 // which are summarized whether anything reaches them or not.
@@ -508,16 +532,8 @@ static void
 reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
 {
     n00bb_link_analysis_t *analysis = context;
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || !state->interface_module)
-            continue;
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
-            ir_func_t *body = n00bb_cached_body(
-                ir_func_at(state->ir_module, f));
-            if (body && body->n_blocks) add(sink, body);
-        }
-    }
+    for (size_t i = 0; i < analysis->cached_unit_bodies.len; i++)
+        add(sink, analysis->cached_unit_bodies.data[i]);
 }
 
 void
@@ -530,6 +546,8 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     }
     ir_reinterpretations_set_visibility(analysis->ir_context,
                                         n00bb_module_sees, analysis);
+    analysis->cached_unit_bodies.len = 0;
+    n00bb_cached_unit_bodies(analysis, false, &analysis->cached_unit_bodies);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
@@ -600,23 +618,15 @@ push_cached_reach(n00bb_link_analysis_t *analysis,
                             .work = core_list_new(n00bb_ir_func_ptr_t)};
     core_dict_init(&reach.source, nullptr, nullptr);
     core_dict_init(&reach.seen, nullptr, nullptr);
-    bool cached = false;
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module) continue;
-        if (state->interface_module) cached = true;
-        else core_dict_put(&reach.source, state->ir_module, state->ir_module);
+        if (state && state->ir_module && !state->interface_module)
+            core_dict_put(&reach.source, state->ir_module, state->ir_module);
     }
-    for (size_t u = 0; cached && u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || !state->interface_module) continue;
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
-            ir_func_t *body = n00bb_cached_body(
-                ir_func_at(state->ir_module, f));
-            if (body && body->n_blocks
-                && core_dict_add(&reach.seen, body, body))
-                core_list_push(reach.work, body);
-        }
+    for (size_t i = 0; i < analysis->cached_unit_bodies.len; i++) {
+        ir_func_t *body = analysis->cached_unit_bodies.data[i];
+        if (core_dict_add(&reach.seen, body, body))
+            core_list_push(reach.work, body);
     }
     while (reach.work.len) {
         ir_func_t *f = reach.work.data[--reach.work.len];
@@ -648,44 +658,6 @@ push_cached_reach(n00bb_link_analysis_t *analysis,
     core_dict_free(&reach.seen);
 }
 
-// The bodies of the functions a build emits from the units of the root's
-// package that come from the cache. Compiled from source, those functions
-// are emitted, and so summarized, and the unused-item checks read what
-// they write from their summaries (see n00bb_report_unused_items); loaded
-// from the cache, they would otherwise have none, and a global or field
-// only they set would read as never used.
-void
-n00bb_cached_package_bodies(n00bb_link_analysis_t *analysis,
-                            core_list_t(n00bb_ir_func_ptr_t) *out)
-{
-    core_translation_unit_t *root = analysis->units.len
-        ? analysis->units.data[0] : nullptr;
-    // The cached functions belong to the modules loaded from the cache, not
-    // to the units' interface modules: match them by name.
-    core_dict_t modules;
-    core_dict_init_string(&modules);
-    for (size_t u = 0; root && u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || !state->interface_module
-            || !n00bb_same_package(analysis->units.data[u], root)
-            || n00bb_module_unanalyzed(analysis, state->ir_module))
-            continue;
-        core_string_t name = ir_module_name(state->ir_module);
-        if (!core_dict_contains(&modules, &name))
-            core_dict_put(&modules, core_dict_string_key_copy(name), 1);
-    }
-    for (size_t i = 0; modules.count && i < analysis->cached_functions.len;
-         i++) {
-        ir_func_t    *function = analysis->cached_functions.data[i];
-        ir_func_t    *body     = n00bb_cached_body(function);
-        core_string_t name     = ir_module_name(function->owner);
-        if (body && body->n_blocks && core_dict_contains(&modules, &name))
-            core_list_push(*out, body);
-    }
-    core_dict_foreach(&modules, item) core_dict_string_key_free(item->key);
-    core_dict_free(&modules);
-}
-
 bool
 build_function_summaries(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *initializers,
@@ -701,7 +673,12 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
                 analysis->emitted_functions.data[i]->owner))
             core_list_push(roots, n00bb_cached_body(
                 analysis->emitted_functions.data[i]));
-    n00bb_cached_package_bodies(analysis, &roots);
+    // Compiled from source, the functions of the root's package are
+    // emitted, and so summarized, and the unused-item checks read what they
+    // write from their summaries (see n00bb_report_unused_items); loaded
+    // from the cache, they would otherwise have none, and a global or field
+    // only they set would read as never used.
+    n00bb_cached_unit_bodies(analysis, true, &roots);
     for (size_t i = 0; i < initializers->len; i++)
         core_list_push(roots, n00bb_cached_body(initializers->data[i]));
     for (size_t i = 0; i < entries->len; i++)

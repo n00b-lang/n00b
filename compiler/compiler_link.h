@@ -383,6 +383,9 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
     core_list_t(n00bb_ir_func_ptr_t) cached_functions;
+    // The bodies of the units reused from the cache (see
+    // n00bb_cached_unit_bodies), as the summary hooks were last bound.
+    core_list_t(n00bb_ir_func_ptr_t) cached_unit_bodies;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
     core_list_t(th_type_ptr_t) callback_handler_types;
     core_list_t(n00bb_ir_func_ptr_t) referenced_functions;

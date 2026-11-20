@@ -720,7 +720,7 @@ used_field_readers(n00bb_link_analysis_t *analysis)
     core_list_t(n00bb_ir_func_ptr_t) used = core_list_new(n00bb_ir_func_ptr_t);
     core_list_t(n00bb_ir_func_ptr_t) initializers =
         initializer_bodies(analysis);
-    n00bb_cached_package_bodies(analysis, &initializers);
+    n00bb_cached_unit_bodies(analysis, true, &initializers);
     for (size_t f = 0; f < analysis->emitted_functions.len
          + initializers.len; f++) {
         ir_func_t *function = f < analysis->emitted_functions.len
@@ -1203,7 +1203,7 @@ n00bb_report_unused_items(n00bb_link_analysis_t *analysis)
                 analysis->emitted_functions.data[f], &text, &reads, &writes);
         core_list_t(n00bb_ir_func_ptr_t) initializers =
             initializer_bodies(analysis);
-        n00bb_cached_package_bodies(analysis, &initializers);
+        n00bb_cached_unit_bodies(analysis, true, &initializers);
         for (size_t f = 0; f < initializers.len; f++)
             note_global_accesses(analysis, initializers.data[f], &text,
                                  &reads, &writes);
