@@ -4499,6 +4499,14 @@ static bool dispatch_plan_reports(parse_grammar_t         *grammar,
                                core_translation_unit_diagnostics(unit),
                                site->span);
     }
+    // Only a function reference's `call` has no declaration to name its
+    // parameters.
+    if (!bound && !target->function
+        && plan.status == N00BB_CALL_PLAN_UNKNOWN_NAME) {
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+                          N00B_TEXT_FUNCTION_TYPE_POSITIONAL_UNNAMED,
+                          N00BB_NO_ARGS);
+    }
     n00bb_call_plan_free(&plan);
 
     return !bound;
@@ -4716,59 +4724,86 @@ static core_string_t literal_kind(core_string_t trait)
 static parse_sym_entry_t *callback_call_role(const n00bb_dispatch_index_t *index,
                                              th_type *receiver);
 
-// A literal that its parameter can't take, passed to a function
-// reference's or a callback's `call` (`user`, as its `operand`): said as
-// report_literal_argument says it of a direct call, naming the parameter
-// by the name the callback's `call` role declares, or the reference's type
-// gives a keyword parameter.
-static bool report_literal_call_argument(th_ctx *types,
-                                         const n00bb_dispatch_index_t *index,
-                                         core_translation_unit_t *unit,
-                                         const ir_instr_t *user,
-                                         uint32_t operand,
-                                         const ir_instr_t *literal,
-                                         core_string_t kind,
-                                         th_type *receiver)
+// The signature of `at`, a `call` on a function reference or a callback
+// (`receiver`), without the receiver; nullptr when it is no such call.
+static th_type *callback_call_signature(th_ctx *types,
+                                        const n00bb_dispatch_index_t *index,
+                                        const ir_instr_t *at,
+                                        th_type *receiver)
 {
-    n00bb_dispatch_target_t target = {0};
-
-    receiver = receiver ? th_resolve(receiver) : nullptr;
-    if (!receiver
-        || !n00bb_dispatch_target(index, receiver, user->operands[0].name,
-                                  &target)
-        || target.kind != N00BB_TARGET_CALLBACK) {
-        return false;
-    }
-
-    th_type *signature = th_resolve(target.signature);
+    n00bb_dispatch_target_t target    = {0};
+    th_type                *signature = receiver
+            && n00bb_dispatch_target(index, th_resolve(receiver),
+                                     at->operands[0].name, &target)
+            && target.kind == N00BB_TARGET_CALLBACK
+        ? th_resolve(target.signature) : nullptr;
 
     if (!signature || th_kind_of(signature) != TH_FUNCTION
         || !th_func_nparams(signature)) {
-        return false;
+        return nullptr;
     }
 
+    size_t      count    = th_func_nparams(signature) - 1;
+    size_t      keywords = th_func_nkw(signature);
+    th_param   *params   = core_alloc_array(th_param, count + 1);
+    th_kwparam *named    = core_alloc_array(th_kwparam, keywords + 1);
+
+    for (size_t i = 0; i < count; i++) {
+        params[i] = *th_func_param(signature, i + 1);
+    }
+    for (size_t k = 0; k < keywords; k++) {
+        named[k] = *th_func_kw(signature, k);
+    }
+
+    th_type *called = th_func_with_error(types, th_func_ret(signature),
+                                         th_func_error(signature), params,
+                                         count, th_func_rest(signature),
+                                         named, keywords);
+
+    core_free(params);
+    core_free(named);
+
+    return called;
+}
+
+// Argument `operand` of `at`, a `call` on a function reference or a
+// callback (`receiver`, whose signature is `called`), that its parameter
+// can't take: said as report_literal_argument says it of a direct call,
+// with `argument` saying what it is, at `where`, naming the parameter by
+// the name the callback's `call` role declares, or the reference's type
+// gives a keyword parameter. Given the argument's type, `actual`, only one
+// that differs from the parameter's is. Returns whether it reported one.
+static bool report_call_argument(th_ctx *types,
+                                 const n00bb_dispatch_index_t *index,
+                                 core_translation_unit_t *unit,
+                                 const ir_instr_t *at, uint32_t operand,
+                                 th_type *receiver, th_type *called,
+                                 th_type *actual, core_diag_location_t where,
+                                 core_string_t argument)
+{
     parse_grammar_t    *grammar = index->analysis->grammar;
-    parse_sym_entry_t  *role    = callback_call_role(index, receiver);
-    const ir_operand_t *slot    = &user->operands[operand];
-    size_t              count   = th_func_nparams(signature) - 1;
-    // The receiver is the signature's first parameter, and the first
-    // argument written is its second.
+    parse_sym_entry_t  *role    = callback_call_role(index,
+                                                     th_resolve(receiver));
+    parse_tree_t       *formals = role
+        ? callable_formal_parameters(grammar, role) : nullptr;
+    const ir_operand_t *slot    = &at->operands[operand];
+    size_t              count   = th_func_nparams(called);
+    // The first argument written is the call's second operand.
     size_t              p       = operand - 2;
     th_type            *formal  = nullptr;
     core_string_t       name    = {0};
 
     if (slot->kind == IR_OPD_NAMED_ARG) {
-        const th_kwparam *keyword = th_func_kw_lookup(signature,
+        const th_kwparam *keyword = th_func_kw_lookup(called,
                                                       slot->named.name);
 
         if (keyword) {
-            p = count + (size_t)(keyword - th_func_kw(signature, 0));
+            p = count + (size_t)(keyword - th_func_kw(called, 0));
             formal = keyword->type;
         }
         else if (!role
-                 || !function_parameter_named(grammar, role,
-                        callable_formal_parameters(grammar, role),
-                        slot->named.name, &p)
+                 || !function_parameter_named(grammar, role, formals,
+                                              slot->named.name, &p)
                  || p >= count) {
             return false;
         }
@@ -4778,32 +4813,32 @@ static bool report_literal_call_argument(th_ctx *types,
         return false;
     }
     else if (role) {
-        (void)function_parameter_info(grammar, role,
-            callable_formal_parameters(grammar, role), p, nullptr, &name,
-            nullptr, nullptr);
+        (void)function_parameter_info(grammar, role, formals, p, nullptr,
+                                      &name, nullptr, nullptr);
     }
-    if (!formal) {
-        formal = th_func_param(signature, p + 1)->type;
+    formal = th_resolve(formal ? formal : th_func_param(called, p)->type);
+    if (actual
+        && (th_same_type(actual, formal) || !th_is_closed(types, formal)
+            || !th_is_closed(types, actual)
+            || is_integer_type(actual) == is_integer_type(formal))) {
+        return false;
     }
 
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     core_string_t       callee      = role ? role->name
-                                           : user->operands[0].name;
+                                           : at->operands[0].name;
     core_string_t       subject     = name.u8_bytes
         ? n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
                      N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(name),
                                 ARG_TEXT(callee)))
         : n00bb_text(N00B_TEXT_PARAMETER_NUMBER_OF,
                      N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(callee)));
-    core_string_t       phrase      = literal_phrase(kind);
 
-    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
-                 n00bb_span_location(literal->span),
+    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE, where,
                  N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
                  N00BB_ARGS(ARG_TEXT(subject),
                             ARG_TEXT(n00bb_print_type(types, formal)),
-                            ARG_TEXT(phrase)));
-    core_free(phrase.data);
+                            ARG_TEXT(argument)));
     core_free(subject.data);
     if (role) {
         n00bb_diag_declared_here(diagnostics, role,
@@ -4948,9 +4983,19 @@ static bool report_literal_argument(th_ctx *types,
     if (!callee && (!self
                     || !dispatch_callee(index, unit, user, self->type, method,
                                         user->n_operands - 1, &target))) {
-        if (self && report_literal_call_argument(types, index, unit, user,
-                                                 operand, literal, kind,
-                                                 self->type)) {
+        th_type      *called = self ? callback_call_signature(types, index,
+                                                              user, self->type)
+                                    : nullptr;
+        core_string_t phrase = called ? literal_phrase(kind)
+                                      : (core_string_t){0};
+        bool          said   = called
+            && report_call_argument(types, index, unit, user, operand,
+                                    self->type, called, nullptr,
+                                    n00bb_span_location(literal->span),
+                                    phrase);
+
+        core_free(phrase.data);
+        if (said) {
             return true;
         }
 
@@ -6179,66 +6224,19 @@ static bool callback_call_reports(th_ctx *types,
                                   const n00bb_written_call_t *call,
                                   th_type *receiver)
 {
-    n00bb_dispatch_target_t target = {0};
+    th_type *called = callback_call_signature(types, index, at, receiver);
 
-    receiver = receiver ? th_resolve(receiver) : nullptr;
-    if (!receiver
-        || !n00bb_dispatch_target(index, receiver, at->operands[0].name,
-                                  &target)
-        || target.kind != N00BB_TARGET_CALLBACK) {
+    if (!called) {
         return false;
     }
 
-    th_type *signature = th_resolve(target.signature);
+    n00bb_dispatch_target_t target = {
+        .function  = callback_call_role(index, th_resolve(receiver)),
+        .signature = called,
+    };
 
-    if (!signature || th_kind_of(signature) != TH_FUNCTION
-        || !th_func_nparams(signature)) {
-        return false;
-    }
-
-    size_t    count  = th_func_nparams(signature) - 1;
-    th_param *params = core_alloc_array(th_param, count + 1);
-
-    for (size_t i = 0; i < count; i++) {
-        params[i] = *th_func_param(signature, i + 1);
-    }
-
-    size_t      keywords = th_func_nkw(signature);
-    th_kwparam *named    = core_alloc_array(th_kwparam, keywords + 1);
-
-    for (size_t k = 0; k < keywords; k++) {
-        named[k] = *th_func_kw(signature, k);
-    }
-
-    th_type *called = th_func_with_error(types, th_func_ret(signature),
-                                         th_func_error(signature), params,
-                                         count, th_func_rest(signature),
-                                         named, keywords);
-
-    core_free(params);
-    core_free(named);
-
-    parse_grammar_t   *grammar = index->analysis->grammar;
-    parse_sym_entry_t *role    = callback_call_role(index, receiver);
-    n00bb_call_plan_t  plan    = {0};
-    bool               bound   = n00bb_call_plan_init(&plan, grammar, role,
-                                                      called, 0);
-
-    if (bound) {
-        n00bb_call_plan_use(&plan, call);
-        bound = n00bb_call_plan_bind(&plan);
-    }
-
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-
-    if (!bound) {
-        n00bb_call_plan_report(&plan, unit, diagnostics, call->span);
-        if (!role && plan.status == N00BB_CALL_PLAN_UNKNOWN_NAME) {
-            n00bb_report_help(diagnostics,
-                              N00B_TEXT_FUNCTION_TYPE_POSITIONAL_UNNAMED,
-                              N00BB_NO_ARGS);
-        }
-        n00bb_call_plan_free(&plan);
+    if (dispatch_plan_reports(index->analysis->grammar, unit, call, &target,
+                              false)) {
         return true;
     }
 
@@ -6249,54 +6247,21 @@ static bool callback_call_reports(th_ctx *types,
 
     for (uint32_t o = 1; !reported && o < at->n_operands; o++) {
         const ir_operand_t *operand = &at->operands[o];
-        size_t              p       = 0;
-        const th_kwparam   *keyword = !role
-                && operand->kind == IR_OPD_NAMED_ARG
-            ? th_func_kw_lookup(called, operand->named.name) : nullptr;
+        th_type            *actual  = operand->kind == IR_OPD_NAMED_ARG
+                && operand->named.value
+            ? th_resolve(operand->named.value->type) : nullptr;
 
-        if (keyword) {
-            p = count + (size_t)(keyword - th_func_kw(called, 0));
-        }
-        if (operand->kind != IR_OPD_NAMED_ARG || !operand->named.value
-            || (!keyword
-                && (!role
-                    || !function_parameter_named(grammar, role,
-                                                 plan.formals,
-                                                 operand->named.name, &p)
-                    || p >= count))) {
+        if (!actual) {
             continue;
         }
 
-        th_type *formal = th_resolve(keyword ? keyword->type
-                                             : th_func_param(called, p)->type);
-        th_type *actual = th_resolve(operand->named.value->type);
-
-        if (th_same_type(actual, formal) || !th_is_closed(types, formal)
-            || !th_is_closed(types, actual)
-            || is_integer_type(actual) == is_integer_type(formal)) {
-            continue;
-        }
-
-        core_string_t subject  = n00bb_text(N00B_TEXT_PARAMETER_NAMED_OF,
-            N00BB_ARGS(ARG_NUMBER(p + 1), ARG_TEXT(operand->named.name),
-                       ARG_TEXT(role ? role->name : at->operands[0].name)));
         core_string_t argument = quoted_type(types, actual);
 
-        n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
-                     value_source(unit, operand->named.value, at->span).at,
-                     N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
-                     N00BB_ARGS(ARG_TEXT(subject),
-                                ARG_TEXT(n00bb_print_type(types, formal)),
-                                ARG_TEXT(argument)));
+        reported = report_call_argument(types, index, unit, at, o, receiver,
+            called, actual,
+            value_source(unit, operand->named.value, at->span).at, argument);
         core_free(argument.data);
-        core_free(subject.data);
-        if (role) {
-            n00bb_diag_declared_here(diagnostics, role,
-                                     N00B_TEXT_IS_DECLARED_HERE);
-        }
-        reported = true;
     }
-    n00bb_call_plan_free(&plan);
 
     return reported;
 }
