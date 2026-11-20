@@ -62,45 +62,20 @@ compare() {
     fi
 }
 
-# A program the check rejects reports the same diagnostics from a cold
-# cache as from $shared, which other programs filled; $expected is how
-# many errors.
+# TARGET, which the check rejects, reports the same diagnostics in two
+# checks, the first with the environment setting FIRST (`NAME=value`) and
+# the second with SECOND: from a cold cache and from one other programs
+# filled, or from source and then from the cache. EXPECTED is how many
+# errors.
 compare_rejected() {
     target=$1
-    shared=$2
-    label=$3
-    expected=$4
-    if N00B_CACHE="$tmp/$label.cold" N00B_DIAGNOSTICS=terse "$compiler" \
-            check --no-syntax-warnings "$target" \
-            >/dev/null 2>"$tmp/$label.cold.err"; then
-        echo "$label: check passed, but should be rejected" >&2
-        exit 1
-    fi
-    N00B_CACHE="$shared" N00B_DIAGNOSTICS=terse "$compiler" \
-        check --no-syntax-warnings "$target" >/dev/null \
-        2>"$tmp/$label.warm.err" || true
-    if ! cmp -s "$tmp/$label.cold.err" "$tmp/$label.warm.err"; then
-        echo "$label: diagnostics differ between cold and shared-cache runs" >&2
-        diff "$tmp/$label.cold.err" "$tmp/$label.warm.err" >&2 || true
-        exit 1
-    fi
-    errors=$(grep -c ': error' "$tmp/$label.cold.err" || true)
-    if [ "$errors" -ne "$expected" ]; then
-        echo "$label: expected $expected errors, got $errors" >&2
-        cat "$tmp/$label.cold.err" >&2
-        exit 1
-    fi
-}
-
-# A rejected program checked twice with one cache reports the same
-# diagnostics both times; $expected is how many errors.
-compare_repeated() {
-    target=$1
-    path=$2
-    label=$3
-    expected=$4
+    label=$2
+    expected=$3
+    first=$4
+    second=$5
     for run in first second; do
-        if N00B_PATH="$path" N00B_DIAGNOSTICS=terse "$compiler" check \
+        if [ "$run" = first ]; then setting=$first; else setting=$second; fi
+        if env "$setting" N00B_DIAGNOSTICS=terse "$compiler" check \
                 --no-syntax-warnings "$target" \
                 >/dev/null 2>"$tmp/$label.$run.err"; then
             echo "$label: the $run check passed, but should be rejected" >&2
@@ -108,7 +83,8 @@ compare_repeated() {
         fi
     done
     if ! cmp -s "$tmp/$label.first.err" "$tmp/$label.second.err"; then
-        echo "$label: diagnostics differ between cold and cached checks" >&2
+        echo "$label: diagnostics differ between the $first and" \
+            "$second checks" >&2
         diff "$tmp/$label.first.err" "$tmp/$label.second.err" >&2 || true
         exit 1
     fi
@@ -157,9 +133,10 @@ compare_warm() {
 # What is cached here is the program's own dependency, so its modules are
 # copied to a directory no cache has seen and the caller's cache is used:
 # the first check reads them from source, the second from the cache. (The
-# library being cold or warm is what compare_rejected covers.)
+# library being cold or warm is what state_unset's check below covers.)
 cp -R "$programs/cache_errors" "$tmp/cache_errors"
-compare_repeated "$tmp/cache_errors/app.n" "$tmp/cache_errors" cache_errors 2
+compare_rejected "$tmp/cache_errors/app.n" cache_errors 2 \
+    "N00B_PATH=$tmp/cache_errors" "N00B_PATH=$tmp/cache_errors"
 cold "$programs/merged/calls.n" calls
 cold "$programs/features/fast_suite.n" fast
 # calls.n from the cache fast_suite.n filled, then fast_suite.n from the
@@ -167,8 +144,8 @@ cold "$programs/features/fast_suite.n" fast
 compare "$programs/merged/calls.n" calls "$tmp/fast.cold"
 compare "$programs/features/fast_suite.n" fast "$tmp/calls.cold"
 # That cache now holds what both programs need.
-compare_rejected "$programs/callbacks/state_unset.n" "$tmp/calls.cold" \
-    state_unset 1
+compare_rejected "$programs/callbacks/state_unset.n" state_unset 1 \
+    "N00B_CACHE=$tmp/state_unset.cold" "N00B_CACHE=$tmp/calls.cold"
 # A program that starts threads, after one that starts none filled the
 # cache with the library.
 compare_warm "$programs/shared_cache/lex_import.n" \
