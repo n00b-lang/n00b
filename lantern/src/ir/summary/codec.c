@@ -1,7 +1,100 @@
 #include "internal.h"
 
 // 2: callee storage named by an origin refined by its instantiated type.
-enum { SUMMARY_CODEC_VERSION = 2 };
+// 3: an open heap type is written with the function's signature.
+enum { SUMMARY_CODEC_VERSION = 3 };
+
+// A heap type with type variables names the function's own: a caller
+// instantiates it by binding the function's signature at the call
+// (heap_instance). Text names a variable only within one printed type, so
+// such a type is written in one type with the signature,
+// `(signature) -> heap`, after this prefix, and read back with its
+// variables bound to the signature's (heap_type_text, heap_type_from_text).
+static const core_string_t heap_signature_prefix =
+    CORE_STRING_STATIC("with-signature ");
+
+static core_string_t
+heap_type_text(th_ctx *types, const ir_func_t *function, th_type *type)
+{
+    if (!types || !type) return (core_string_t){0};
+    if (th_is_closed(types, type) || !function || !function->type
+        || !function->owner)
+        return ir_types_text(types, type);
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
+    th_param signature = {.mode = TH_IN, .type = function->type};
+    th_type *pair = nil_type ? th_func_with_error(types, type, nil_type,
+        &signature, 1, nullptr, nullptr, 0) : nullptr;
+    if (!pair) return ir_types_text(types, type);
+    core_buffer_t text = {0};
+    core_buffer_append_string(&text, heap_signature_prefix);
+    core_buffer_append_string(&text, ir_types_text(types, pair));
+    core_string_t kept = ir_strdup(function->owner->ctx,
+                                   core_buffer_string(&text));
+    core_buffer_release(&text);
+    return kept;
+}
+
+typedef struct {
+    core_list_t(summary_type_ptr_t) vars;
+    core_list_t(summary_type_ptr_t) values;
+} signature_binding_t;
+
+// Binds each variable of `pattern` to what stands in its place in
+// `actual`, which has the same shape.
+static bool
+bind_signature(signature_binding_t *b, th_type *pattern, th_type *actual,
+               uint32_t depth)
+{
+    pattern = th_resolve(pattern);
+    actual  = th_resolve(actual);
+    if (!pattern || !actual) return pattern == actual;
+    if (depth > 64) return false;
+    if (th_kind_of(pattern) == TH_VAR) {
+        for (size_t v = 0; v < b->vars.len; v++)
+            if (b->vars.data[v] == pattern)
+                return b->values.data[v] == actual;
+        core_list_push(b->vars, pattern);
+        core_list_push(b->values, actual);
+        return true;
+    }
+    if (pattern == actual) return true;
+    if (!th_same_shape(pattern, actual)
+        || th_child_count(pattern) != th_child_count(actual))
+        return false;
+    for (size_t c = 0; c < th_child_count(pattern); c++)
+        if (!bind_signature(b, th_child(pattern, c), th_child(actual, c),
+                            depth + 1))
+            return false;
+    return true;
+}
+
+static th_type *
+heap_type_from_text(th_ctx *types, const ir_func_t *function,
+                    core_string_t text)
+{
+    if (!core_string_starts_with(text, heap_signature_prefix))
+        return ir_type_from_text(types, text);
+    th_type *pair = function && function->type ? ir_type_from_text(types,
+        core_string_slice(text, heap_signature_prefix.u8_bytes,
+                          text.u8_bytes - heap_signature_prefix.u8_bytes))
+        : nullptr;
+    pair = pair ? th_resolve(pair) : nullptr;
+    const th_param *signature = pair && th_kind_of(pair) == TH_FUNCTION
+            && th_func_nparams(pair) == 1
+        ? th_func_param(pair, 0) : nullptr;
+    th_type *heap = signature ? th_func_ret(pair) : nullptr;
+    if (!heap) return nullptr;
+    signature_binding_t binding = {core_list_new(summary_type_ptr_t),
+                                   core_list_new(summary_type_ptr_t)};
+    th_type *type = bind_signature(&binding, signature->type,
+                                   function->type, 0)
+        ? th_substitute(types, heap, binding.vars.data, binding.values.data,
+                        binding.vars.len)
+        : nullptr;
+    core_list_free(binding.vars);
+    core_list_free(binding.values);
+    return type;
+}
 
 static const core_string_t callbacks_prefix =
     CORE_STRING_STATIC("ir.callbacks:");
@@ -353,8 +446,8 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     for (size_t i = 0; i < summary->heaps.len; i++) {
         const ir_sheap_t *heap = heaps[i];
         put_u32(out, heap->origin);
-        put_text(out, texts, types && heap->type
-            ? ir_types_text(types, heap->type) : (core_string_t){0});
+        put_text(out, texts, heap_type_text(types, summary->function,
+                                            heap->type));
         put_u8(out, heap->elements);
         put_text(out, texts, positions ? heap->module : (core_string_t){0});
         put_text(out, texts, positions ? heap->name : (core_string_t){0});
@@ -633,7 +726,7 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
         ir_sheap_t    heap = {.origin = get_u32(&r)};
         core_string_t type = get_text(&r);
         if (r.types && type.u8_bytes)
-            heap.type = ir_type_from_text(r.types, type);
+            heap.type = heap_type_from_text(r.types, function, type);
         heap.elements = get_u8(&r) != 0;
         heap.module   = get_owned_text(&r, function);
         heap.name   = get_owned_text(&r, function);
