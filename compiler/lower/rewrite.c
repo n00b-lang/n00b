@@ -1317,6 +1317,53 @@ n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
     return ok;
 }
 
+// The arguments of call `in` passed by name, after those passed by
+// position, go to the parameters of `signature` before `end` that they
+// name (`names`, one for each parameter), in order: one omitted is passed
+// missing when `optional` (if given) says the parameter may be. With a
+// `rewrite`, each is converted to what its parameter takes. Any other
+// stays passed by name.
+static bool
+n00bb_place_by_name(n00bb_rewrite_t *rewrite, ir_instr_t *in,
+                    th_type *signature, size_t end,
+                    const core_string_t *names, ir_func_t *optional)
+{
+    uint32_t count = in->n_operands;
+    uint32_t positional = 1;
+    while (positional < count
+           && in->operands[positional].kind != IR_OPD_NAMED_ARG)
+        positional++;
+    ir_operand_t *named = core_alloc_array(ir_operand_t,
+                                           count - positional + 1);
+    for (uint32_t o = positional; named && o < count; o++)
+        named[o - positional] = in->operands[o];
+    bool *used = core_alloc_array(bool, count - positional + 1);
+    bool ok = named && used;
+    in->n_operands = positional;
+    for (uint32_t p = positional - 1; ok && p < end; p++) {
+        ir_value_t *value = nullptr;
+        for (uint32_t k = 0; !value && names[p].data && k < count - positional;
+             k++)
+            if (!used[k] && core_string_eq(named[k].named.name, names[p])) {
+                used[k] = true;
+                value = named[k].named.value;
+            }
+        const th_param *formal = th_func_param(signature, p);
+        ok = value ? ir_instr_operand_value(in, value)
+                && (!rewrite || n00bb_rewrite_operand(rewrite, in, p + 1,
+                                                      formal->type))
+            : optional && ir_func_parameter_is_optional(optional, p)
+                && th_mode_is_input_only(formal->mode)
+                && ir_instr_operand_missing(in);
+    }
+    for (uint32_t k = 0; ok && k < count - positional; k++)
+        ok = used[k] || ir_instr_operand_named(in, named[k].named.name,
+                                               named[k].named.value);
+    core_free(named);
+    core_free(used);
+    return ok;
+}
+
 bool
 n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
 {
@@ -1325,40 +1372,18 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
     while (positional < count
            && in->operands[positional].kind != IR_OPD_NAMED_ARG)
         positional++;
-    if (positional == count
-        && count - 1 >= th_func_nparams(th_resolve(function->type)))
-        return true;
-    ir_operand_t *named = core_alloc_array(ir_operand_t,
-                                           count - positional + 1);
-    for (uint32_t o = positional; named && o < count; o++)
-        named[o - positional] = in->operands[o];
-    bool *used = core_alloc_array(bool, count - positional + 1);
-    bool ok = named && used;
-    in->n_operands = positional;
     th_type *signature = th_resolve(function->type);
+    size_t parameters = th_func_nparams(signature);
+    if (positional == count && count - 1 >= parameters) return true;
     ir_func_t *declared = function->n_params ? function
                                              : n00bb_cached_body(function);
-    for (uint32_t p = positional - 1; ok && p < th_func_nparams(signature);
-         p++) {
-        ir_value_t *value = nullptr;
-        core_string_t name = declared && p < declared->n_params
-            ? declared->params[p]->name : (core_string_t){0};
-        for (uint32_t k = 0; !value && name.data && k < count - positional;
-             k++)
-            if (!used[k] && core_string_eq(named[k].named.name, name)) {
-                used[k] = true;
-                value = named[k].named.value;
-            }
-        th_mode mode = th_func_param(signature, p)->mode;
-        ok = value ? ir_instr_operand_value(in, value)
-            : ir_func_parameter_is_optional(function, p)
-                && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
-    }
-    for (uint32_t k = 0; ok && k < count - positional; k++)
-        ok = used[k] || ir_instr_operand_named(in, named[k].named.name,
-                                               named[k].named.value);
-    core_free(named);
-    core_free(used);
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t p = 0; declared && p < parameters && p < declared->n_params;
+         p++)
+        names[p] = declared->params[p]->name;
+    bool ok = n00bb_place_by_name(nullptr, in, signature, parameters, names,
+                                  function);
+    core_free(names);
     return ok;
 }
 
@@ -1482,6 +1507,24 @@ n00bb_rewrite_byte_literal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && n00bb_rewrite_replace(rewrite, in, call->dest);
 }
 
+// An array of `collected` holding the arguments of call `in` from operand
+// `from` up to `end`: varargs.
+static ir_value_t *
+n00bb_pack_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in, uint32_t from,
+                     uint32_t end, th_type *collected)
+{
+    ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
+                                                 IR_OP_AGGREGATE, in->span);
+    bool ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
+            CORE_STRING_STATIC("__n00bb_rest_"), collected)
+        && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
+    for (uint32_t o = from; ok && o < end; o++) {
+        ir_value_t *value = ir_operand_value(&in->operands[o]);
+        ok = value && ir_instr_operand_value(pack, value);
+    }
+    return ok ? pack->dest : nullptr;
+}
+
 static bool
 n00bb_rewrite_pack_operands(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                             uint32_t fixed, th_type *collected)
@@ -1490,23 +1533,15 @@ n00bb_rewrite_pack_operands(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     while (end < in->n_operands && in->operands[end].kind != IR_OPD_NAMED_ARG)
         end++;
     if (end < fixed + 1) return true;
-    ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
-                                                 IR_OP_AGGREGATE, in->span);
-    bool ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
-            CORE_STRING_STATIC("__n00bb_rest_"), collected)
-        && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
-    for (uint32_t o = fixed + 1; ok && o < end; o++) {
-        ir_value_t *value = ir_operand_value(&in->operands[o]);
-        ok = value && ir_instr_operand_value(pack, value);
-    }
-    ir_value_t *array = ok ? pack->dest : nullptr;
+    ir_value_t *array = n00bb_pack_arguments(rewrite, in, fixed + 1, end,
+                                             collected);
     uint32_t count = in->n_operands;
     ir_operand_t *named = array
         ? core_alloc_array(ir_operand_t, count - end + 1) : nullptr;
     for (uint32_t o = end; named && o < count; o++)
         named[o - end] = in->operands[o];
     in->n_operands = named ? fixed + 1 : in->n_operands;
-    ok = named && ir_instr_operand_value(in, array);
+    bool ok = named && ir_instr_operand_value(in, array);
     for (uint32_t o = 0; ok && o < count - end; o++)
         ok = ir_instr_operand_named(in, named[o].named.name,
                                     named[o].named.value);
@@ -2286,25 +2321,14 @@ n00bb_place_callback_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         ? callable_formal_parameters(grammar, role) : nullptr;
     size_t parameters = th_func_nparams(signature);
     if (!formals || count - 1 != parameters) return true;
-    // Every parameter after the positional ones is named exactly once.
-    ir_value_t **by_parameter = core_alloc_array(ir_value_t *,
-                                                 parameters + 1);
-    bool placed = true;
-    for (uint32_t o = positional; placed && o < count; o++) {
-        size_t p = 0;
-        placed = function_parameter_named(grammar, role, formals,
-                                          in->operands[o].named.name, &p)
-            && p + 1 >= positional && p < parameters && !by_parameter[p];
-        if (placed) by_parameter[p] = in->operands[o].named.value;
-    }
-    in->n_operands = placed ? positional : count;
-    bool ok = true;
-    for (size_t p = positional - 1; placed && ok && p < parameters; p++)
-        ok = ir_instr_operand_value(in, by_parameter[p])
-            && n00bb_rewrite_operand(rewrite, in, (uint32_t)p + 1,
-                                     th_func_param(signature, p)->type);
-    core_free(by_parameter);
-    if (placed && ok) ir_instr_uses_changed(in);
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t p = 0; p < parameters; p++)
+        (void)function_parameter_info(grammar, role, formals, p, nullptr,
+                                      &names[p], nullptr, nullptr);
+    bool ok = n00bb_place_by_name(rewrite, in, signature, parameters, names,
+                                  nullptr);
+    core_free(names);
+    if (ok) ir_instr_uses_changed(in);
     return ok;
 }
 
@@ -2373,54 +2397,39 @@ n00bb_rewrite_reference_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         signature, positional, keywords) : nullptr;
     if (!shape) return false;
     // The operands as written: the reference, then the arguments, those
-    // passed by name in a block before or after the others.
+    // passed by name in a block before or after the others, which go last.
     uint32_t count = in->n_operands;
     ir_operand_t *written = core_alloc_array(ir_operand_t, count);
     for (uint32_t o = 0; o < count; o++) written[o] = in->operands[o];
-    ir_value_t **items = core_alloc_array(ir_value_t *, count);
-    size_t item_count = 0;
-    in->op = IR_OP_CALL;
-    in->n_operands = 1;
-    bool ok = true;
-    for (uint32_t o = 1; ok && o < count; o++) {
-        if (written[o].kind == IR_OPD_NAMED_ARG) continue;
-        // There is room: the operands only move toward the front.
-        if (in->n_operands <= positional) {
-            in->operands[in->n_operands++] = written[o];
-            continue;
-        }
-        ir_value_t *value = ir_operand_value(&written[o]);
-        ok = rest && value;
-        if (ok) items[item_count++] = value;
-    }
-    for (size_t k = 0; ok && k < keywords; k++) {
-        const th_kwparam *keyword = th_func_kw(instance, k);
-        ir_value_t *value = nullptr;
-        for (uint32_t o = 1; !value && o < count; o++)
-            if (written[o].kind == IR_OPD_NAMED_ARG
-                && core_string_eq(written[o].named.name, keyword->name))
-                value = written[o].named.value;
-        uint32_t at = in->n_operands;
-        ok = value ? ir_instr_operand_value(in, value)
-                && n00bb_rewrite_operand(rewrite, in, at, keyword->type)
-            : th_mode_is_input_only(keyword->mode)
-                && ir_instr_operand_missing(in);
-    }
-    if (ok && rest) {
-        ir_instr_t *pack = ir_lower_emit_instruction(&rewrite->context,
-                                                     IR_OP_AGGREGATE,
-                                                     in->span);
-        ok = pack && ir_lower_set_temp_dest(&rewrite->context, pack,
-                CORE_STRING_STATIC("__n00bb_rest_"),
-                th_func_param(signature, parameters - 1)->type)
-            && ir_instr_set_aggregate_form(pack, IR_AGGREGATE_ELEMENTS);
-        for (size_t i = 0; ok && i < item_count; i++)
-            ok = ir_instr_operand_value(pack, items[i]);
-        ok = ok && n00bb_rewrite_splice(rewrite, in)
-            && ir_instr_operand_value(in, pack->dest);
-    }
-    core_free(items);
+    uint32_t end = 1;
+    for (uint32_t pass = 0, at = 1; pass < 2; pass++)
+        for (uint32_t o = 1; o < count; o++)
+            if ((written[o].kind == IR_OPD_NAMED_ARG) == (pass == 1)) {
+                in->operands[at++] = written[o];
+                if (!pass) end = at;
+            }
     core_free(written);
+    in->op = IR_OP_CALL;
+    // Those past the positional parameters are the varargs, an array that
+    // goes after the keyword arguments.
+    uint32_t items = end > positional + 1 ? end - (uint32_t)positional - 1
+                                          : 0;
+    ir_value_t *array = rest ? n00bb_pack_arguments(rewrite, in,
+        (uint32_t)positional + 1, end, th_func_param(signature,
+                                                     parameters - 1)->type)
+        : nullptr;
+    for (uint32_t o = end; o < count; o++)
+        in->operands[o - items] = in->operands[o];
+    in->n_operands = count - items;
+    core_string_t *names = core_alloc_array(core_string_t, parameters + 1);
+    for (size_t k = 0; k < keywords; k++)
+        names[positional + k] = th_func_kw(instance, k)->name;
+    bool ok = (rest ? array != nullptr : !items)
+        && n00bb_place_by_name(rewrite, in, signature, positional + keywords,
+                               names, shape)
+        && (!array || (n00bb_rewrite_splice(rewrite, in)
+                       && ir_instr_operand_value(in, array)));
+    core_free(names);
     if (!ok) return false;
     ir_instr_uses_changed(in);
     if (!n00bb_rewrite_by_reference_arguments(rewrite, in, signature, false,
