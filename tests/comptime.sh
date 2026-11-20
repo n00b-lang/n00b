@@ -117,11 +117,12 @@ start)
 phase recomputed
 items recomputed
 kept" runtime_prune.kept "$programs/runtime_prune.n"
-    prunes rerun_direct "direct read: 0" "" "$programs/rerun_direct.n"
-    prunes rerun_func "read via func: 0
-kept: 14" rerun_func.kept "$programs/rerun_func.n"
-    N00B_PATH="$programs/rerun" prunes rerun_import "no read in init: 0" "" \
-        "$programs/rerun/app.n"
+    # One build for the three ways a rerun initializer's variable is read
+    # (see rerun/app.n): only `kept` is pruned.
+    N00B_PATH="$programs/rerun" prunes rerun "no read in init: 0
+direct read: 0
+read via func: 0
+kept: 14" app.kept "$programs/rerun/app.n"
     prunes prune_literal "list kept" prune_literal.names \
         "$programs/prune_literal.n" ;;
 entry)
