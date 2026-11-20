@@ -490,17 +490,14 @@ static ir_typeslot_t *type_find(ir_module_t *m, uint64_t h)
     return found ? &m->types[at - 1] : nullptr;
 }
 
-th_type *ir_type_intern(ir_module_t *m, th_type *t)
+// `h` is ir_type_id(m, t), which a caller computes once: it hashes an open
+// type afresh each time.
+static ir_typeslot_t *type_intern(ir_module_t *m, th_type *t, uint64_t h)
 {
-    if (!m || !t) {
-        return nullptr;
-    }
-
-    uint64_t       h    = ir_type_id(m, t);
     ir_typeslot_t *slot = type_find(m, h);
 
     if (slot) {
-        return slot->type;
+        return slot;
     }
 
     m->types = ir_grow(m->ctx, m->types, &m->cap_types, m->n_types + 1,
@@ -509,7 +506,16 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t)
     m->n_types++;
     core_dict_put((core_dict_t *)m->type_index, h, m->n_types);
 
-    return t;
+    return &m->types[m->n_types - 1];
+}
+
+th_type *ir_type_intern(ir_module_t *m, th_type *t)
+{
+    if (!m || !t) {
+        return nullptr;
+    }
+
+    return type_intern(m, t, ir_type_id(m, t))->type;
 }
 
 ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t)
@@ -517,9 +523,8 @@ ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t)
     if (!m || !t) {
         return nullptr;
     }
-    ir_type_intern(m, t);
 
-    return type_find(m, ir_type_id(m, t));
+    return type_intern(m, t, ir_type_id(m, t));
 }
 
 ir_typeslot_t *ir_type_slot_find(ir_module_t *m, th_type *t)
@@ -604,10 +609,12 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     }
     if (!th_type_define(m->ctx->types, named, def)) return false;
 
-    ir_type_intern(m, named);
+    uint64_t named_id = ir_type_id(m, named);
+    type_intern(m, named, named_id);
     ir_type_intern(m, def);
 
-    ir_typeslot_t *slot = type_find(m, ir_type_id(m, named));
+    // Interning `def` can move the slots.
+    ir_typeslot_t *slot = type_find(m, named_id);
     th_type *canonical = th_type_definition(m->ctx->types, named);
 
     if (!slot || !canonical) {
