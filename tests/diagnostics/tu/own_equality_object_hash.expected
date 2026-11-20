@@ -1,0 +1,3 @@
+tests/diagnostics/tu/own_equality_object_hash.n:14:18: error N00B-T0017: no trait that `Point` implements provides `hash`
+tests/diagnostics/tu/own_equality_object_hash.n:15:37: error N00B-T0021: `Point` does not implement `Hash`, which `__init` requires
+  help: implement `Hash` for `Point`, or call a function that does not need it

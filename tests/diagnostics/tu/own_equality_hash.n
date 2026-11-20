@@ -1,0 +1,32 @@
+# A type with its own `==` (a user `__equal`, or a `__cmp` that `==`
+# follows) and no user `hash` gets no derived hash, and nor does a record
+# holding a field of such a type. Declaring one is fine; hashing it,
+# directly or as a dict key, is diagnosed at the use.
+record Eq_Field {
+    v: int
+}
+func __equal(view a: Eq_Field, view b: Eq_Field) -> bool {
+    return a.v == b.v
+}
+record Eq_Holder {
+    inner: Eq_Field
+    n: int
+}
+record Cmp_Field {
+    v: int
+}
+func __cmp(view a: Cmp_Field, view b: Cmp_Field) -> Comparison {
+    if a.v < b.v { return Comparison.less }
+    if a.v > b.v { return Comparison.greater }
+    return Comparison.equal
+}
+record Cmp_Holder {
+    inner: Cmp_Field
+    n: int
+}
+let eq: Eq_Holder = (inner = (v = 1), n = 2)
+let cmp: Cmp_Holder = (inner = (v = 1), n = 2)
+let eq_hash = eq.hash()
+var eq_keyed: Dict[Eq_Holder, int] = new[Dict[Eq_Holder, int]]()
+let cmp_hash = cmp.hash()
+var cmp_keyed: Dict[Cmp_Holder, int] = new[Dict[Cmp_Holder, int]]()

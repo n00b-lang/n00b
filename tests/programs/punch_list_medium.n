@@ -192,7 +192,8 @@ require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
 # A record's derived `==` compares each field with the field type's own
 # `==`: a user `__equal`, or the `__cmp` that `==` follows when there is no
 # `__equal`. (A record holding such a field once failed to build at all;
-# it gets no derived hash, which tests/punch_list_medium.sh checks.)
+# it gets no derived hash, which tests/diagnostics/tu/own_equality_hash.n
+# checks.)
 record Eq_Field {
     v: int
     tag: int
@@ -216,6 +217,18 @@ let cmp_one: Cmp_Holder = (inner = (v = 1, tag = 1), n = 3)
 let cmp_two: Cmp_Holder = (inner = (v = 1, tag = 2), n = 3)
 let cmp_three: Cmp_Holder = (inner = (v = 2, tag = 1), n = 3)
 require cmp_one == cmp_two and cmp_one != cmp_three
+# An object with its own `__equal` is declared and compared as well; it,
+# too, gets no derived hash (tests/diagnostics/tu/own_equality_*hash.n).
+object Point {
+    x: int
+}
+func __init(self: Point, x: int) {
+    self.x = x
+}
+func __equal(view self: Point, view other: Point) -> bool {
+    return self.x == other.x
+}
+require new[Point](1) == new[Point](1) and new[Point](1) != new[Point](2)
 
 # With no `fail:` clause, a function's failure type is inferred from its
 # body, mutual recursion included (#9).

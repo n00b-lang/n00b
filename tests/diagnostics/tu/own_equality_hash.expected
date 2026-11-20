@@ -1,0 +1,10 @@
+tests/diagnostics/tu/own_equality_hash.n:12:5: warning N00B-N0021: field `inner` of `Eq_Holder` is set but never read
+tests/diagnostics/tu/own_equality_hash.n:13:5: warning N00B-N0021: field `n` of `Eq_Holder` is set but never read
+tests/diagnostics/tu/own_equality_hash.n:24:5: warning N00B-N0021: field `inner` of `Cmp_Holder` is set but never read
+tests/diagnostics/tu/own_equality_hash.n:25:5: warning N00B-N0021: field `n` of `Cmp_Holder` is set but never read
+tests/diagnostics/tu/own_equality_hash.n:29:15: error N00B-T0017: no trait that `Eq_Holder` implements provides `hash`
+tests/diagnostics/tu/own_equality_hash.n:30:38: error N00B-T0021: `Eq_Holder` does not implement `Hash`, which `__init` requires
+  help: implement `Hash` for `Eq_Holder`, or call a function that does not need it
+tests/diagnostics/tu/own_equality_hash.n:31:16: error N00B-T0017: no trait that `Cmp_Holder` implements provides `hash`
+tests/diagnostics/tu/own_equality_hash.n:32:40: error N00B-T0021: `Cmp_Holder` does not implement `Hash`, which `__init` requires
+  help: implement `Hash` for `Cmp_Holder`, or call a function that does not need it
