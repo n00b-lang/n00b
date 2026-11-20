@@ -318,62 +318,55 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
 }
 
 n00bb_stdlib_shadow_t *
-n00bb_resolver_record_shadow(n00bb_resolver_t *resolver, core_string_t name,
-                             core_string_t shadow, core_string_t stdlib,
-                             bool warning)
+n00bb_resolver_note_shadow(n00bb_resolver_t *resolver, core_string_t name,
+                           core_string_t shadow, core_string_t stdlib,
+                           bool warning, bool reported)
 {
     if (!resolver) return nullptr;
-    // One record per clash, however many importers find it.
     pthread_mutex_lock(&resolver->shadows_lock);
-    for (size_t i = 0; i < resolver->shadows.len; i++) {
-        n00bb_stdlib_shadow_t *known = resolver->shadows.data[i];
-        if (core_string_eq(known->name, name)
-            && core_string_eq(known->shadow, shadow)) {
-            pthread_mutex_unlock(&resolver->shadows_lock);
-            return known;
-        }
+    n00bb_stdlib_shadow_t *record = nullptr;
+    for (size_t i = 0; !record && i < resolver->shadows.len; i++)
+        if (core_string_eq(resolver->shadows.data[i]->name, name)
+            && core_string_eq(resolver->shadows.data[i]->shadow, shadow))
+            record = resolver->shadows.data[i];
+    if (!record) {
+        record = core_alloc(n00bb_stdlib_shadow_t);
+        record->name = core_string_dup(name);
+        record->shadow = core_string_dup(shadow);
+        record->stdlib = core_string_dup(stdlib);
+        record->warning = warning;
+        core_list_push(resolver->shadows, record);
     }
-    n00bb_stdlib_shadow_t *record = core_alloc(n00bb_stdlib_shadow_t);
-    record->name = core_string_dup(name);
-    record->shadow = core_string_dup(shadow);
-    record->stdlib = core_string_dup(stdlib);
-    record->warning = warning;
-    core_list_push(resolver->shadows, record);
+    record->reported |= reported;
     pthread_mutex_unlock(&resolver->shadows_lock);
     return record;
 }
 
-bool
-n00bb_resolver_claim_shadow(n00bb_resolver_t *resolver,
-                            n00bb_stdlib_shadow_t *shadow)
+static int
+compare_shadows(const void *a, const void *b)
 {
-    if (!resolver || !shadow) return false;
-    pthread_mutex_lock(&resolver->shadows_lock);
-    bool first = !shadow->reported;
-    shadow->reported = true;
-    pthread_mutex_unlock(&resolver->shadows_lock);
-    return first;
+    const n00bb_stdlib_shadow_t *left = *(n00bb_stdlib_shadow_t *const *)a;
+    const n00bb_stdlib_shadow_t *right = *(n00bb_stdlib_shadow_t *const *)b;
+    int names = core_string_cmp(left->name, right->name);
+    return names ? names : core_string_cmp(left->shadow, right->shadow);
 }
 
-size_t
-n00bb_resolver_shadow_count(n00bb_resolver_t *resolver)
+n00bb_stdlib_shadow_t **
+n00bb_resolver_drain_shadows(n00bb_resolver_t *resolver, size_t *count)
 {
-    if (!resolver) return 0;
-    pthread_mutex_lock(&resolver->shadows_lock);
-    size_t count = resolver->shadows.len;
-    pthread_mutex_unlock(&resolver->shadows_lock);
-    return count;
-}
-
-n00bb_stdlib_shadow_t *
-n00bb_resolver_shadow_at(n00bb_resolver_t *resolver, size_t index)
-{
+    *count = 0;
     if (!resolver) return nullptr;
     pthread_mutex_lock(&resolver->shadows_lock);
-    n00bb_stdlib_shadow_t *shadow = index < resolver->shadows.len
-        ? resolver->shadows.data[index] : nullptr;
+    n00bb_stdlib_shadow_t **drained = core_alloc_array(
+        n00bb_stdlib_shadow_t *, resolver->shadows.len + 1);
+    for (size_t i = 0; i < resolver->shadows.len; i++) {
+        n00bb_stdlib_shadow_t *shadow = resolver->shadows.data[i];
+        if (!shadow->reported) drained[(*count)++] = shadow;
+        shadow->reported = true;
+    }
     pthread_mutex_unlock(&resolver->shadows_lock);
-    return shadow;
+    qsort(drained, *count, sizeof(*drained), compare_shadows);
+    return drained;
 }
 
 bool

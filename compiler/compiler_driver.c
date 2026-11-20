@@ -1236,15 +1236,6 @@ report_shadow(core_diagnostics_t *diagnostics, core_translation_unit_t *unit,
         N00BB_ARGS(ARG_TEXT(cause->shadow)));
 }
 
-static int
-compare_shadows(const void *a, const void *b)
-{
-    const n00bb_stdlib_shadow_t *left = *(n00bb_stdlib_shadow_t *const *)a;
-    const n00bb_stdlib_shadow_t *right = *(n00bb_stdlib_shadow_t *const *)b;
-    int names = core_string_cmp(left->name, right->name);
-    return names ? names : core_string_cmp(left->shadow, right->shadow);
-}
-
 // A library module file fails to load while another root holds a file with
 // its module path, however it was reached: by an import, as a package's
 // manifest, as a runtime module, or named on the command line.
@@ -1258,17 +1249,16 @@ stdlib_file_shadowed(n00bb_resolver_t *resolver,
                unit->module.identifier, &shadow))
         return false;
     // It fails quietly; the clash is reported once loading is over.
-    n00bb_stdlib_shadow_t *cause = n00bb_resolver_record_shadow(resolver,
-        unit->module.identifier, shadow,
-        core_source_file_path(&unit->source), false);
     n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_stdlib_shadow_t *cause = n00bb_resolver_note_shadow(resolver,
+        unit->module.identifier, shadow,
+        core_source_file_path(&unit->source), false, !state);
     if (state) {
         state->stdlib_shadow = cause;
         state->import_failure_reported = true;
     }
-    else if (n00bb_resolver_claim_shadow(resolver, cause))
-        report_shadow(core_translation_unit_diagnostics(unit), unit,
-                      (core_diag_location_t){}, cause);
+    else report_shadow(core_translation_unit_diagnostics(unit), unit,
+                       (core_diag_location_t){}, cause);
     core_free(shadow.data);
     return true;
 }
@@ -2116,20 +2106,19 @@ report_stdlib_shadow(import_driver_t *driver,
                      parse_tree_t *statement, core_string_t name,
                      core_string_t shadow, core_string_t stdlib)
 {
-    n00bb_stdlib_shadow_t *cause = n00bb_resolver_record_shadow(
-        driver->resolver, name, shadow, stdlib, false);
     // A user's import statement is reported here. An import inside the
     // library, or an implicit one, is no place the user can fix: the
     // importer fails quietly, and the clash is reported once loading is
     // over.
+    bool here = statement && importer
+        && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer);
+    n00bb_stdlib_shadow_t *cause = n00bb_resolver_note_shadow(
+        driver->resolver, name, shadow, stdlib, false, here);
     n00bb_tu_state_t *state = importer ? tu_state(importer) : nullptr;
     if (state && !state->stdlib_shadow) state->stdlib_shadow = cause;
-    if (statement && importer
-        && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer)) {
-        (void)n00bb_resolver_claim_shadow(driver->resolver, cause);
+    if (here)
         report_shadow(core_translation_unit_diagnostics(importer), importer,
                       import_location(statement), cause);
-    }
     mark_import_failure_reported(importer);
 }
 
@@ -2192,8 +2181,8 @@ reject_stdlib_shadow(import_driver_t *driver,
         // itself, built as asked.
         if (!direct_named
             && !n00bb_resolver_unit_in_stdlib(driver->resolver, importer))
-            (void)n00bb_resolver_record_shadow(driver->resolver, name,
-                core_source_file_path(&direct->source), stdlib, true);
+            (void)n00bb_resolver_note_shadow(driver->resolver, name,
+                core_source_file_path(&direct->source), stdlib, true, false);
         core_free(stdlib.data);
         return false;
     }
@@ -3413,12 +3402,10 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             && !n00bb_resolver_unit_in_stdlib(resolver, unit)
             && stdlib_package_manifest(&import_driver,
                    unit->module.identifier, &library)) {
-            n00bb_stdlib_shadow_t *cause = n00bb_resolver_record_shadow(
-                resolver, unit->module.identifier,
-                core_source_file_path(&unit->source), library, false);
-            if (n00bb_resolver_claim_shadow(resolver, cause))
-                report_shadow(diags, nullptr, (core_diag_location_t){},
-                              cause);
+            report_shadow(diags, nullptr, (core_diag_location_t){},
+                n00bb_resolver_note_shadow(resolver, unit->module.identifier,
+                    core_source_file_path(&unit->source), library, false,
+                    true));
             core_free(library.data);
             shadowed_root = true;
             success = false;
@@ -3576,17 +3563,12 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
         if (requests->ordered.data[i].root_input)
             first_root = core_work_job_result(queue,
                                               requests->ordered.data[i].job);
-    size_t shadow_count = n00bb_resolver_shadow_count(resolver);
-    n00bb_stdlib_shadow_t **shadows = core_alloc_array(n00bb_stdlib_shadow_t *,
-                                                       shadow_count + 1);
-    for (size_t i = 0; i < shadow_count; i++)
-        shadows[i] = n00bb_resolver_shadow_at(resolver, i);
-    qsort(shadows, shadow_count, sizeof(*shadows), compare_shadows);
+    size_t shadow_count = 0;
+    n00bb_stdlib_shadow_t **shadows = n00bb_resolver_drain_shadows(resolver,
+                                                                   &shadow_count);
     for (size_t i = 0; i < shadow_count; i++) {
         bool warning = shadows[i]->warning;
-        if ((!warning && success)
-            || !n00bb_resolver_claim_shadow(resolver, shadows[i]))
-            continue;
+        if (!warning && success) continue;
         if (warning && first_root)
             report_shadow(core_translation_unit_diagnostics(first_root),
                           first_root, (core_diag_location_t){}, shadows[i]);

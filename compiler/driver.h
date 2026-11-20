@@ -94,10 +94,6 @@ bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
                                      core_string_t name,
                                      core_string_t *module_path,
                                      core_string_t *directory_path);
-// The standard library cannot be shadowed. These find the pieces of a clash:
-// whether a unit came from the toolchain library, the module file a root
-// other than the library holds for `identifier` (`path` is owned by the
-// caller), and the library's manifests that may declare `declared_name`.
 // A standard library module that failed because a file elsewhere has its
 // module path. A user's import reports it where it finds it; otherwise it
 // is reported once loading is over.
@@ -112,17 +108,20 @@ typedef struct n00bb_stdlib_shadow_t {
     bool          warning;
 } n00bb_stdlib_shadow_t;
 
-// Records a clash (or, with `warning`, a passed-over default-package
-// module); the resolver owns the record for its lifetime.
-n00bb_stdlib_shadow_t *n00bb_resolver_record_shadow(
+// Notes a clash (or, with `warning`, a passed-over default-package module)
+// once, however often it is found; `reported` says the caller reports it
+// where it found it. The resolver owns the record for its lifetime.
+n00bb_stdlib_shadow_t *n00bb_resolver_note_shadow(
     n00bb_resolver_t *resolver, core_string_t name, core_string_t shadow,
-    core_string_t stdlib, bool warning);
-// True for the one caller that gets to report the clash.
-bool n00bb_resolver_claim_shadow(n00bb_resolver_t *resolver,
-                                 n00bb_stdlib_shadow_t *shadow);
-size_t n00bb_resolver_shadow_count(n00bb_resolver_t *resolver);
-n00bb_stdlib_shadow_t *n00bb_resolver_shadow_at(n00bb_resolver_t *resolver,
-                                                size_t index);
+    core_string_t stdlib, bool warning, bool reported);
+// The records noted and not reported yet, by name, now marked reported:
+// `*count` of them, in an array freed with `core_free`.
+n00bb_stdlib_shadow_t **n00bb_resolver_drain_shadows(
+    n00bb_resolver_t *resolver, size_t *count);
+// The standard library cannot be shadowed. These find the pieces of a clash:
+// whether a unit came from the toolchain library, the module file a root
+// other than the library holds for `identifier` (`path` is owned by the
+// caller), and the library's manifests that may declare `declared_name`.
 bool n00bb_resolver_unit_in_stdlib(const n00bb_resolver_t *resolver,
                                    const core_translation_unit_t *unit);
 bool n00bb_resolver_shadowing_source(n00bb_resolver_t *resolver,
