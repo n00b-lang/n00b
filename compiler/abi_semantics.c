@@ -327,16 +327,16 @@ function_index_for_method(th_ctx *ctx, link_index_t *link,
 }
 
 static bool
-scope_for_type_owner(th_ctx *ctx,
-                     const n00bb_abi_selected_objects_t *selected,
-                     const n00bb_abi_index_plan_t *plan,
-                     uint32_t owner_index)
+scope_for_declaring_module(th_ctx *ctx,
+                           const n00bb_abi_selected_objects_t *selected,
+                           const n00bb_abi_index_plan_t *plan,
+                           uint32_t module_index)
 {
     for (size_t input = 0; input < selected->count; input++) {
         uint32_t mapped = 0;
         if (!n00bb_abi_index_plan_map(plan, input, N00B_ABI_TABLE_MODULE,
                                       1, &mapped)) return false;
-        if (mapped != owner_index) continue;
+        if (mapped != module_index) continue;
         const n00bb_abi_object_view_t *view = &selected->views[input];
         const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_MODULE, 1);
@@ -763,17 +763,17 @@ n00bb_abi_link_semantic_rows(
         receiver_t receiver = receivers.data[i];
         n00b_abi_type_v1 *row = (void *)(types->records
             + (size_t)receiver.index * types->record_bytes);
-        uint32_t owner = row->owner_module_index;
-        th_type *head = owner ? nullptr
+        uint32_t declaring = row->declaring_module_index;
+        th_type *head = declaring ? nullptr
             : n00bb_generic_head(ctx, receiver.type);
         uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
         if (parent && parent != receiver.index)
-            owner = ((const n00b_abi_type_v1 *)(types->records
-                + (size_t)parent * types->record_bytes))->owner_module_index;
-        if (!owner) continue;
+            declaring = ((const n00b_abi_type_v1 *)(types->records
+                + (size_t)parent * types->record_bytes))->declaring_module_index;
+        if (!declaring) continue;
         th_type *reference = th_ind(ctx, 0, receiver.type);
-        if (!reference || !scope_for_type_owner(ctx, selected, plan,
-                                                 owner)) {
+        if (!reference || !scope_for_declaring_module(ctx, selected, plan,
+                                                       declaring)) {
             valid = false;
             break;
         }

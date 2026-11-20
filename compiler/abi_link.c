@@ -244,6 +244,55 @@ n00bb_abi_functions_rooted(const n00bb_abi_object_view_t *view,
         ? rows_named(&view->function_roots, root) : nullptr;
 }
 
+static bool
+name_has_prefix(n00bb_abi_string_view_t name, const char *prefix)
+{
+    size_t length = strlen(prefix);
+    return name.length > length && !memcmp(name.bytes, prefix, length);
+}
+
+static bool
+name_is_identifier(const uint8_t *bytes, size_t length)
+{
+    if (!length) return false;
+    for (size_t i = 0; i < length; i++) {
+        uint8_t c = bytes[i];
+        if (!(c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+              || (c >= 'A' && c <= 'Z') || c >= 0x80)) return false;
+    }
+    return !(bytes[0] >= '0' && bytes[0] <= '9');
+}
+
+bool
+n00bb_abi_type_declaring_module_path(const n00bb_abi_object_view_t *view,
+                                     const n00b_abi_type_v1 *type,
+                                     n00bb_abi_string_view_t *out_module)
+{
+    n00bb_abi_string_view_t name;
+    if (!view || !type || !out_module
+        || (type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
+        || type->kind == N00B_ABI_TYPE_NIL
+        || type->kind == N00B_ABI_TYPE_VARIABLE
+        || !n00bb_abi_object_string(view, &type->canonical_name, &name))
+        return false;
+    static const char *const spellings[] = {"variant ", "trait "};
+    for (size_t i = 0; i < sizeof(spellings) / sizeof(*spellings); i++)
+        if (name_has_prefix(name, spellings[i])) {
+            size_t skip = strlen(spellings[i]);
+            name.bytes += skip;
+            name.length -= skip;
+            break;
+        }
+    size_t dot = name.length;
+    while (dot && name.bytes[dot - 1] != '.') dot--;
+    if (dot < 2 || !name_is_identifier(name.bytes + dot, name.length - dot))
+        return false;
+    *out_module = (n00bb_abi_string_view_t){
+        .bytes = name.bytes, .length = dot - 1,
+    };
+    return true;
+}
+
 typedef struct {
     const core_target_desc_t *target;
     n00bb_abi_archive_inputs_t inputs;
@@ -639,7 +688,7 @@ typedef struct {
 } abi_link_key_t;
 
 static bool nonconcrete_key_init(abi_link_key_t *key);
-static bool link_key_from_owner_type(abi_link_key_t *key,
+static bool link_key_from_parent_type(abi_link_key_t *key,
                                      uint32_t type_index, uint32_t kind);
 static bool link_key_from_type_argument(abi_link_key_t *key);
 static bool link_key_from_member(abi_link_key_t *key, uint32_t kind);
@@ -710,15 +759,15 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     }
     case N00B_ABI_TABLE_LAYOUT: {
         const n00b_abi_layout_v1 *layout = key->row;
-        return link_key_from_owner_type(key, layout->type_index, kind);
+        return link_key_from_parent_type(key, layout->type_index, kind);
     }
     case N00B_ABI_TABLE_TRACE: {
         const n00b_abi_trace_v1 *trace = key->row;
-        return link_key_from_owner_type(key, trace->type_index, kind);
+        return link_key_from_parent_type(key, trace->type_index, kind);
     }
     case N00B_ABI_TABLE_CALL_SIGNATURE: {
         const n00b_abi_call_signature_v1 *signature = key->row;
-        return link_key_from_owner_type(key, signature->type_index, kind);
+        return link_key_from_parent_type(key, signature->type_index, kind);
     }
     case N00B_ABI_TABLE_TYPE_ARGUMENT:
         return link_key_from_type_argument(key);
@@ -736,6 +785,17 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     case N00B_ABI_TABLE_SCC:
         key->bytes = key->row;
         key->length = 2 * sizeof(uint64_t);
+        return true;
+    // A run is a value that refers to nothing: every module that lays a
+    // type out describes it with the same runs, and the linked image keeps
+    // one of each.
+    case N00B_ABI_TABLE_PHYSICAL_RUN:
+        key->bytes = key->row;
+        key->length = sizeof(n00b_abi_physical_run_v1);
+        return true;
+    case N00B_ABI_TABLE_PACKED_RUN:
+        key->bytes = key->row;
+        key->length = sizeof(n00b_abi_packed_run_v1);
         return true;
     case N00B_ABI_TABLE_SOURCE_FILE: {
         const n00b_abi_source_file_v1 *file = key->row;
@@ -762,33 +822,33 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
 }
 
 static bool
-link_key_from_owner_type(abi_link_key_t *key, uint32_t type_index,
+link_key_from_parent_type(abi_link_key_t *key, uint32_t type_index,
                          uint32_t kind)
 {
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
         N00B_ABI_TABLE_TYPE, type_index);
     if (!type) return false;
-    uint32_t owner_index = kind == N00B_ABI_TABLE_LAYOUT
+    uint32_t parent_index = kind == N00B_ABI_TABLE_LAYOUT
         ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
             ? type->tracing_index : type->call_signature_index;
-    if (owner_index != key->local_index) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = type_index;
-    owner.bytes = nullptr;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
+    if (parent_index != key->local_index) return false;
+    abi_link_key_t parent = *key;
+    parent.row = type;
+    parent.local_index = type_index;
+    parent.bytes = nullptr;
+    parent.owned_bytes = nullptr;
+    parent.unique = false;
+    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(parent.owned_bytes);
         return false;
     }
-    key->scalar = owner.scalar;
-    key->auxiliary = owner.auxiliary;
-    key->owned_bytes = owner.owned_bytes;
-    key->unique = owner.unique;
-    key->bytes = owner.bytes == (const uint8_t *)&owner.scalar
-        ? (const uint8_t *)&key->scalar : owner.bytes;
-    key->length = owner.length;
+    key->scalar = parent.scalar;
+    key->auxiliary = parent.auxiliary;
+    key->owned_bytes = parent.owned_bytes;
+    key->unique = parent.unique;
+    key->bytes = parent.bytes == (const uint8_t *)&parent.scalar
+        ? (const uint8_t *)&key->scalar : parent.bytes;
+    key->length = parent.length;
     return true;
 }
 
@@ -797,25 +857,25 @@ link_key_from_type_argument(abi_link_key_t *key)
 {
     const n00b_abi_type_argument_v1 *argument = key->row;
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, argument->owner_type_index);
+        N00B_ABI_TABLE_TYPE, argument->parent_type_index);
     if (!type || argument->ordinal >= type->named_arguments.count
         || type->named_arguments.first + argument->ordinal
             != key->local_index) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = argument->owner_type_index;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
+    abi_link_key_t parent = *key;
+    parent.row = type;
+    parent.local_index = argument->parent_type_index;
+    parent.owned_bytes = nullptr;
+    parent.unique = false;
+    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(parent.owned_bytes);
         return false;
     }
     key->owned_bytes = core_buffer_empty();
-    core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
-                       owner.length);
+    core_buffer_append(key->owned_bytes, (const char *)parent.bytes,
+                       parent.length);
     core_buffer_append(key->owned_bytes, (const char *)&argument->ordinal,
                        sizeof(argument->ordinal));
-    core_buffer_free(owner.owned_bytes);
+    core_buffer_free(parent.owned_bytes);
     key->bytes = (const uint8_t *)key->owned_bytes->data;
     key->length = key->owned_bytes->byte_len;
     return true;
@@ -829,27 +889,27 @@ link_key_from_member(abi_link_key_t *key, uint32_t kind)
         ? n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
                                facts.parent) : nullptr;
     if (!type) return false;
-    abi_link_key_t owner = *key;
-    owner.row = type;
-    owner.local_index = facts.parent;
-    owner.owned_bytes = nullptr;
-    owner.unique = false;
-    if (!link_key_init(&owner, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(owner.owned_bytes);
+    abi_link_key_t parent = *key;
+    parent.row = type;
+    parent.local_index = facts.parent;
+    parent.owned_bytes = nullptr;
+    parent.unique = false;
+    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
+        core_buffer_free(parent.owned_bytes);
         return false;
     }
-    key->unique = owner.unique;
-    key->auxiliary = owner.auxiliary;
+    key->unique = parent.unique;
+    key->auxiliary = parent.auxiliary;
     if (!key->unique) {
         key->owned_bytes = core_buffer_empty();
-        core_buffer_append(key->owned_bytes, (const char *)owner.bytes,
-                           owner.length);
+        core_buffer_append(key->owned_bytes, (const char *)parent.bytes,
+                           parent.length);
         core_buffer_append(key->owned_bytes, (const char *)&facts.ordinal,
                            sizeof(facts.ordinal));
         key->bytes = (const uint8_t *)key->owned_bytes->data;
         key->length = key->owned_bytes->byte_len;
     }
-    core_buffer_free(owner.owned_bytes);
+    core_buffer_free(parent.owned_bytes);
     return true;
 }
 
@@ -899,9 +959,9 @@ static bool
 find_imported_variable(const n00bb_abi_selected_objects_t *selected,
                        const n00bb_abi_object_view_t *requester,
                        const n00b_abi_type_v1 *foreign,
-                       const n00bb_abi_object_view_t **owner_view,
-                       size_t *owner_input,
-                       const n00b_abi_type_v1 **owner_type)
+                       const n00bb_abi_object_view_t **declaring_view,
+                       size_t *declaring_input,
+                       const n00b_abi_type_v1 **declaring_type)
 {
     const n00b_abi_requirement_v1 *requirement = n00bb_abi_object_row(
         requester, N00B_ABI_TABLE_REQUIREMENT,
@@ -957,18 +1017,18 @@ find_imported_variable(const n00bb_abi_selected_objects_t *selected,
                     provider, N00B_ABI_TABLE_TYPE, j);
                 if (!candidate || candidate->kind != N00B_ABI_TYPE_VARIABLE
                     || candidate->typevar_import_requirement_index
-                    || candidate->typevar_owner_type_index
+                    || candidate->typevar_declaring_type_index
                     || candidate->typevar_ordinal != foreign->typevar_ordinal)
                     continue;
                 const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
                     provider, N00B_ABI_TABLE_SCOPE,
-                    candidate->typevar_owner_scope_index);
+                    candidate->typevar_declaring_scope_index);
                 if (!scope || scope->module_index != 1
                     || scope->source_location_index
                         != symbol->declaration_location_index) continue;
-                *owner_view = provider;
-                *owner_input = input;
-                *owner_type = candidate;
+                *declaring_view = provider;
+                *declaring_input = input;
+                *declaring_type = candidate;
                 matches++;
             }
         }
@@ -991,18 +1051,18 @@ key_append_variable(const n00bb_abi_selected_objects_t *selected,
             && key_append_variable(selected, provider, provider_input,
                 owned, out);
     }
-    if (type->typevar_owner_type_index) {
-        const n00b_abi_type_v1 *owner = n00bb_abi_object_row(view,
-            N00B_ABI_TABLE_TYPE, type->typevar_owner_type_index);
-        if (!owner || !owner->typehash) return false;
+    if (type->typevar_declaring_type_index) {
+        const n00b_abi_type_v1 *declaring = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_TYPE, type->typevar_declaring_type_index);
+        if (!declaring || !declaring->typehash) return false;
         core_buffer_putc(out, 'T');
-        key_append_u64(out, owner->typehash);
+        key_append_u64(out, declaring->typehash);
         key_append_u64(out, type->typevar_ordinal);
         return true;
     }
     const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(view,
-        N00B_ABI_TABLE_SCOPE, type->typevar_owner_scope_index);
-    if (!scope || !type->typevar_owner_scope_index) return false;
+        N00B_ABI_TABLE_SCOPE, type->typevar_declaring_scope_index);
+    if (!scope || !type->typevar_declaring_scope_index) return false;
     core_buffer_putc(out, 'V');
     if (scope->source_location_index && scope->module_index) {
         const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
@@ -1025,7 +1085,7 @@ key_append_variable(const n00bb_abi_selected_objects_t *selected,
     else {
         core_buffer_putc(out, 'L');
         key_append_u64(out, input_index);
-        key_append_u64(out, type->typevar_owner_scope_index);
+        key_append_u64(out, type->typevar_declaring_scope_index);
     }
     key_append_u64(out, type->typevar_ordinal);
     return true;
@@ -1170,7 +1230,8 @@ compatible_type_layout(const abi_link_key_t *first,
                        const abi_link_key_t *candidate)
 {
     const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
-    if (!a_type->layout_index || !b_type->layout_index) return true;
+    if (!a_type->layout_index || !b_type->layout_index)
+        return !a_type->layout_index && !b_type->layout_index;
     const n00b_abi_layout_v1 *a = n00bb_abi_object_row(first->view,
         N00B_ABI_TABLE_LAYOUT, a_type->layout_index);
     const n00b_abi_layout_v1 *b = n00bb_abi_object_row(candidate->view,
@@ -1295,34 +1356,13 @@ compatible_trace_arms(const n00bb_abi_object_view_t *a_view,
     return true;
 }
 
-static bool type_is_import_reference(const n00b_abi_type_v1 *type);
-
-static bool
-deferred_unary_trace(const abi_link_key_t *key)
-{
-    const n00b_abi_type_v1 *type = key->row;
-    if (type->tracing_index || type->components.count != 1
-        || (type->kind != N00B_ABI_TYPE_WRAPPER
-            && type->kind != N00B_ABI_TYPE_ATOMIC)
-        || !valid_index_range(key->view, type->components)) return false;
-    const uint8_t *slot = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_U32_STREAM, type->components.first);
-    const n00b_abi_type_v1 *child = slot ? n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, core_le_load_u32(slot)) : nullptr;
-    return child && !child->tracing_index && type_is_import_reference(child);
-}
-
 static bool
 compatible_type_trace(const abi_link_key_t *first,
                       const abi_link_key_t *candidate)
 {
     const n00b_abi_type_v1 *a_type = first->row, *b_type = candidate->row;
     if (!a_type->tracing_index || !b_type->tracing_index)
-        return a_type->tracing_index == b_type->tracing_index
-            || deferred_unary_trace(first) || deferred_unary_trace(candidate)
-            || !a_type->layout_index || !b_type->layout_index
-            || (a_type->kind == N00B_ABI_TYPE_OPTION
-                && b_type->kind == N00B_ABI_TYPE_OPTION);
+        return !a_type->tracing_index && !b_type->tracing_index;
     const n00b_abi_trace_v1 *a = n00bb_abi_object_row(first->view,
         N00B_ABI_TABLE_TRACE, a_type->tracing_index);
     const n00b_abi_trace_v1 *b = n00bb_abi_object_row(candidate->view,
@@ -1351,34 +1391,25 @@ compatible_type_trace(const abi_link_key_t *first,
                                  candidate->view, b->arms);
 }
 
+// Every module that uses a type emits the same row for it. The one
+// exception is what only its declaration has (an enum's or flagset's items,
+// a declared trait's methods, a callback's role signatures, a record's or
+// variant's member symbols): a row from a module that doesn't declare the
+// type leaves those out and says so.
 static bool
-type_is_import_reference(const n00b_abi_type_v1 *type)
+type_declaration_omitted(const n00b_abi_type_v1 *type)
 {
-    return !type->owner_module_index && !type->layout_index
-        && (type->kind == N00B_ABI_TYPE_RECORD
-            || type->kind == N00B_ABI_TYPE_VARIANT
-            || type->kind == N00B_ABI_TYPE_ENUM
-            || type->kind == N00B_ABI_TYPE_FLAGSET
-            || type->kind == N00B_ABI_TYPE_CALLBACK
-            || type->kind == N00B_ABI_TYPE_TRAIT
-            || type->kind == N00B_ABI_TYPE_WRAPPER
-            || type->kind == N00B_ABI_TYPE_OBJECT);
+    return type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
 }
 
-// Whether `held` lacks declaration facts `candidate` has: `held` omits
-// the declaration's members, or is only a reference to the type.
+// Whether `held` lacks the declaration facts `candidate` has, so the
+// linked row is the declaring module's, whatever order the inputs come in.
 static bool
 type_row_less_complete(const n00b_abi_type_v1 *held,
                        const n00b_abi_type_v1 *candidate)
 {
-    bool held_partial = type_is_import_reference(held)
-        || (held->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
-    bool candidate_partial = type_is_import_reference(candidate)
-        || (candidate->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
-    if (held_partial != candidate_partial) return held_partial;
-    // A reference lacks the layout a using module's row has.
-    return type_is_import_reference(held)
-        && !type_is_import_reference(candidate);
+    return type_declaration_omitted(held)
+        && !type_declaration_omitted(candidate);
 }
 
 static bool
@@ -1387,10 +1418,8 @@ compatible_type_components(const abi_link_key_t *first,
 {
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     if (a->components.count != b->components.count)
-        return (!a->components.count && (type_is_import_reference(a)
-                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
-            || (!b->components.count && (type_is_import_reference(b)
-                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
+        return (!a->components.count && type_declaration_omitted(a))
+            || (!b->components.count && type_declaration_omitted(b));
     if (!valid_index_range(first->view, a->components)
         || !valid_index_range(candidate->view, b->components)) return false;
     for (uint32_t i = 0; i < a->components.count; i++) {
@@ -1412,10 +1441,8 @@ compatible_type_members(const abi_link_key_t *first,
     n00b_abi_range_v1 a_range = a->fields_or_arms;
     n00b_abi_range_v1 b_range = b->fields_or_arms;
     if (a_range.count != b_range.count)
-        return (!a_range.count && (type_is_import_reference(a)
-                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
-            || (!b_range.count && (type_is_import_reference(b)
-                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
+        return (!a_range.count && type_declaration_omitted(a))
+            || (!b_range.count && type_declaration_omitted(b));
     if (!valid_index_range(first->view, a_range)
         || !valid_index_range(candidate->view, b_range)) return false;
     uint32_t member_kind = a->kind == N00B_ABI_TYPE_RECORD
@@ -1428,24 +1455,11 @@ compatible_type_members(const abi_link_key_t *first,
         : a->kind == N00B_ABI_TYPE_TRAIT
             ? N00B_ABI_TABLE_TRAIT_METHOD : 0;
     if (!member_kind) return !a_range.count;
-    bool by_name = member_kind == N00B_ABI_TABLE_FIELD
-        && a->kind == N00B_ABI_TYPE_RECORD
-        && !a->owner_module_index && !b->owner_module_index;
     for (uint32_t i = 0; i < a_range.count; i++) {
         const void *a_row = indexed_range_row(first->view, a_range, i,
                                                member_kind);
         const void *b_row = indexed_range_row(candidate->view, b_range, i,
                                                member_kind);
-        for (uint32_t j = 0; by_name && a_row && j < b_range.count; j++) {
-            const n00b_abi_field_v1 *named = indexed_range_row(
-                candidate->view, b_range, j, member_kind);
-            if (named && compatible_string_values(first->view,
-                    &((const n00b_abi_field_v1 *)a_row)->name,
-                    candidate->view, &named->name)) {
-                b_row = named;
-                break;
-            }
-        }
         if (!a_row || !b_row) return false;
         if (member_kind == N00B_ABI_TABLE_TRAIT_METHOD) {
             const n00b_abi_trait_method_v1 *a_method = a_row;
@@ -1483,6 +1497,15 @@ compatible_type_members(const abi_link_key_t *first,
             continue;
         }
         const n00b_abi_field_v1 *a_field = a_row, *b_field = b_row;
+        // A member's symbol is its declaration's: a flagged row leaves it
+        // out, and every other row has it.
+        bool a_symbol = !type_declaration_omitted(a);
+        bool b_symbol = !type_declaration_omitted(b);
+        if ((!a_symbol && a_field->symbol_index)
+            || (!b_symbol && b_field->symbol_index)
+            || (a_symbol && b_symbol
+                && !a_field->symbol_index != !b_field->symbol_index))
+            return false;
         if (a_field->parent_type_index != first->local_index
             || b_field->parent_type_index != candidate->local_index
             || a_field->visibility != b_field->visibility
@@ -1500,9 +1523,7 @@ compatible_type_members(const abi_link_key_t *first,
                     a_field->inline_element_type_index,
                     candidate->view,
                     b_field->inline_element_type_index))
-            || ((a->owner_module_index || b->owner_module_index)
-                && a_field->declaration_ordinal
-                    != b_field->declaration_ordinal)
+            || a_field->declaration_ordinal != b_field->declaration_ordinal
             || !compatible_string_values(first->view, &a_field->name,
                 candidate->view, &b_field->name)
             || !compatible_child_type(first->view,
@@ -1787,7 +1808,7 @@ declared_function_constraints_valid(
                         continue;
                     const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
                         view, N00B_ABI_TABLE_SCOPE,
-                        type->typevar_owner_scope_index);
+                        type->typevar_declaring_scope_index);
                     if (!scope || scope->module_index != function->module_index
                         || scope->parent_scope_index != function->scope_index
                         || scope->source_location_index
@@ -1810,21 +1831,8 @@ compatible_type_identity(const abi_link_key_t *first,
 #define TYPE_MISMATCH(message) do { if (reason) *reason = CORE_STRING_STATIC(message); return false; } while (0)
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     n00bb_abi_string_view_t a_name, b_name;
-    bool a_import = type_is_import_reference(a);
-    bool b_import = type_is_import_reference(b);
     uint32_t a_flags = a->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     uint32_t b_flags = b->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
-    if (a_import || b_import) {
-        if ((a_import && (a_flags & N00B_ABI_TYPE_FLAG_PACKABLE))
-            || (b_import && (b_flags & N00B_ABI_TYPE_FLAG_PACKABLE)))
-            TYPE_MISMATCH("imported type marked packable");
-        a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
-        b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
-    }
-    if (!a->size_bits || !b->size_bits) {
-        a_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
-        b_flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
-    }
     if (a->named_arguments.count != b->named_arguments.count
         || !compatible_string_values(first->view, &a->named_constructor,
             candidate->view, &b->named_constructor))
@@ -1848,8 +1856,8 @@ compatible_type_identity(const abi_link_key_t *first,
         const n00b_abi_type_argument_v1 *right = n00bb_abi_object_row(
             candidate->view, N00B_ABI_TABLE_TYPE_ARGUMENT,
             b->named_arguments.first + i);
-        if (!left || !right || left->owner_type_index != first->local_index
-            || right->owner_type_index != candidate->local_index
+        if (!left || !right || left->parent_type_index != first->local_index
+            || right->parent_type_index != candidate->local_index
             || left->ordinal != i || right->ordinal != i
             || left->kind != right->kind
             || left->scalar_bits != right->scalar_bits
@@ -1864,16 +1872,13 @@ compatible_type_identity(const abi_link_key_t *first,
     if (a->kind != b->kind || a->typehash != b->typehash
         || a_flags != b_flags)
         TYPE_MISMATCH("type kind, hash, or flags mismatch");
-    if (a->size_bits && b->size_bits && a->size_bits != b->size_bits)
+    if (a->size_bits != b->size_bits)
         TYPE_MISMATCH("type size mismatch");
-    if (a->alignment_bytes && b->alignment_bytes
-        && a->alignment_bytes != b->alignment_bytes)
+    if (a->alignment_bytes != b->alignment_bytes)
         TYPE_MISMATCH("type alignment mismatch");
-    if (a->semantic_width_bits && b->semantic_width_bits
-        && a->semantic_width_bits != b->semantic_width_bits)
+    if (a->semantic_width_bits != b->semantic_width_bits)
         TYPE_MISMATCH("semantic width mismatch");
-    if (a->unpacked_storage_bits && b->unpacked_storage_bits
-        && a->unpacked_storage_bits != b->unpacked_storage_bits)
+    if (a->unpacked_storage_bits != b->unpacked_storage_bits)
         TYPE_MISMATCH("unpacked storage width mismatch");
     if (!n00bb_abi_object_string(first->view, &a->canonical_name, &a_name)
         || !n00bb_abi_object_string(candidate->view, &b->canonical_name,
@@ -1926,6 +1931,8 @@ link_kind_is_positional(uint32_t kind)
     case N00B_ABI_TABLE_LAYOUT:
     case N00B_ABI_TABLE_FIELD:
     case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_PACKED_RUN:
+    case N00B_ABI_TABLE_PHYSICAL_RUN:
     case N00B_ABI_TABLE_TRACE:
     case N00B_ABI_TABLE_TRAIT_METHOD:
     case N00B_ABI_TABLE_SOURCE_FILE:
@@ -2159,7 +2166,12 @@ n00bb_abi_index_plan_build_detailed(
                     .input_index = input, .local_index = local,
                 };
                 bool inserted = false;
-                bool key_valid = link_key_init(key, kind);
+                // A module's own object doesn't name a type's declaring
+                // module; only the linker does, from the type's name.
+                bool key_valid = link_key_init(key, kind)
+                    && (kind != N00B_ABI_TABLE_TYPE
+                        || !((const n00b_abi_type_v1 *)row)
+                            ->declaring_module_index);
                 const core_indexed_entry_t *entry = key_valid
                     ? core_indexed_table_intern(tables[kind], key, key,
                         &inserted) : nullptr;
@@ -2197,10 +2209,10 @@ n00bb_abi_index_plan_build_detailed(
                     };
                 if (!valid && failure && kind == N00B_ABI_TABLE_LAYOUT) {
                     const n00b_abi_layout_v1 *layout = row;
-                    const n00b_abi_type_v1 *owner = n00bb_abi_object_row(
+                    const n00b_abi_type_v1 *parent = n00bb_abi_object_row(
                         view, N00B_ABI_TABLE_TYPE, layout->type_index);
-                    failure->owner_type_index = layout->type_index;
-                    failure->owner_row_index = owner ? owner->layout_index : 0;
+                    failure->parent_type_index = layout->type_index;
+                    failure->parent_row_index = parent ? parent->layout_index : 0;
                 }
                 if (!valid && failure && kind == N00B_ABI_TABLE_TYPE) {
                     const n00b_abi_type_v1 *type = row;
@@ -2305,7 +2317,7 @@ type_backlinks_valid(const n00bb_abi_object_view_t *view,
             const n00b_abi_type_argument_v1 *arg = n00bb_abi_object_row(
                 view, N00B_ABI_TABLE_TYPE_ARGUMENT,
                 type->named_arguments.first + i);
-            if (!arg || arg->owner_type_index != type_index
+            if (!arg || arg->parent_type_index != type_index
                 || arg->ordinal != i) return false;
         }
     }
@@ -2438,7 +2450,7 @@ object_parameter_reader(const n00bb_abi_object_view_t *view)
 }
 
 static bool
-row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
+row_parent_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 uint32_t local_index, const void *row)
 {
     if (!local_index) return true;
@@ -2544,7 +2556,7 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
     if (kind == N00B_ABI_TABLE_TYPE_ARGUMENT) {
         const n00b_abi_type_argument_v1 *argument = row;
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
-            N00B_ABI_TABLE_TYPE, argument->owner_type_index);
+            N00B_ABI_TABLE_TYPE, argument->parent_type_index);
         if (!type || argument->ordinal >= type->named_arguments.count
             || type->named_arguments.first + argument->ordinal
                 != local_index) return false;
@@ -2572,12 +2584,12 @@ row_owner_valid(const n00bb_abi_object_view_t *view, uint32_t kind,
                 : ((const n00b_abi_call_signature_v1 *)row)->type_index;
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, parent);
-        bool owner_valid = type && (kind == N00B_ABI_TABLE_LAYOUT
+        bool parent_valid = type && (kind == N00B_ABI_TABLE_LAYOUT
             ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
                 ? type->tracing_index : type->call_signature_index)
             == local_index;
-        if (!owner_valid || kind != N00B_ABI_TABLE_CALL_SIGNATURE)
-            return owner_valid;
+        if (!parent_valid || kind != N00B_ABI_TABLE_CALL_SIGNATURE)
+            return parent_valid;
         const n00b_abi_call_signature_v1 *signature = row;
         n00bb_abi_parameter_reader_t reader = object_parameter_reader(view);
         return n00bb_abi_parameter_contract_valid(&reader,
@@ -2782,7 +2794,7 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
             table->record_bytes, nullptr)) return false;
     if ((kind == N00B_ABI_TABLE_TYPE
          && !type_backlinks_valid(view, source, local_index))
-        || !row_owner_valid(view, kind, local_index, source)) return false;
+        || !row_parent_valid(view, kind, local_index, source)) return false;
     memmove(out, source, table->record_bytes);
     uint8_t *bytes = out;
     for (size_t i = 0; i < sizeof(abi_index_columns)
@@ -2830,8 +2842,8 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
     if (kind == N00B_ABI_TABLE_TYPE) {
         n00b_abi_type_v1 *type = out;
         if (type->kind == N00B_ABI_TYPE_VARIABLE
-            && !type->typevar_owner_scope_index
-            && !type->typevar_owner_type_index
+            && !type->typevar_declaring_scope_index
+            && !type->typevar_declaring_type_index
             && !type->typevar_import_requirement_index) return false;
         uint32_t start = type->specialization_start_ix;
         uint32_t end = type->specialization_end_ix;
@@ -4380,6 +4392,79 @@ n00bb_abi_add_native_bindings(
     return true;
 }
 
+// A declared type's module is part of its name, so the linked row's
+// declaring_module_index is the linked module whose path its name gives.
+static bool
+name_declaring_modules(const n00bb_abi_selected_objects_t *selected,
+                       const n00bb_abi_index_plan_t *plan,
+                       n00bb_abi_merged_rows_t *built,
+                       const n00bb_abi_row_origin_t *type_origins)
+{
+    n00bb_abi_merged_table_t *types = merged_table_mut(built,
+        N00B_ABI_TABLE_TYPE);
+    if (!types || !type_origins) return false;
+    size_t module_rows = 0;
+    for (size_t input = 0; input < selected->count; input++) {
+        const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
+            &selected->views[input], N00B_ABI_TABLE_MODULE);
+        if (modules) module_rows += modules->record_count;
+    }
+    core_string_t *paths = core_alloc_array(core_string_t,
+                                            module_rows ? module_rows : 1);
+    uint32_t *indexes = core_alloc_array(uint32_t,
+                                         module_rows ? module_rows : 1);
+    core_dict_t by_path;
+    core_dict_init_string(&by_path);
+    bool valid = true;
+    size_t next = 0;
+    for (size_t input = 0; valid && input < selected->count; input++) {
+        const n00bb_abi_object_view_t *view = &selected->views[input];
+        const n00bb_abi_directory_entry_t *modules = n00bb_abi_object_table(
+            view, N00B_ABI_TABLE_MODULE);
+        for (uint32_t local = 1; valid && modules
+             && local < modules->record_count; local++) {
+            const n00b_abi_module_v1 *module = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_MODULE, local);
+            n00bb_abi_string_view_t path;
+            valid = module && n00bb_abi_object_string(view,
+                    &module->full_path, &path)
+                && n00bb_abi_index_plan_map(plan, input,
+                    N00B_ABI_TABLE_MODULE, local, &indexes[next]);
+            if (!valid) break;
+            paths[next] = borrowed_name(path);
+            bool found = false;
+            uint32_t *held = core_dict_get(&by_path, &paths[next], &found);
+            if (held) valid = *held == indexes[next];
+            else core_dict_put(&by_path, &paths[next], &indexes[next]);
+            next++;
+        }
+    }
+    for (uint32_t final = 1; valid && final < types->record_count; final++) {
+        n00bb_abi_row_origin_t origin = type_origins[final];
+        const n00bb_abi_object_view_t *view = origin.present
+            ? &selected->views[origin.input] : nullptr;
+        const n00b_abi_type_v1 *source = view
+            ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE, origin.local)
+            : nullptr;
+        n00b_abi_type_v1 *row = (void *)(types->records
+            + (size_t)final * types->record_bytes);
+        valid = source != nullptr;
+        if (!valid) break;
+        row->declaring_module_index = 0;
+        n00bb_abi_string_view_t path;
+        if (!n00bb_abi_type_declaring_module_path(view, source, &path))
+            continue;
+        core_string_t key = borrowed_name(path);
+        bool found = false;
+        const uint32_t *module = core_dict_get(&by_path, &key, &found);
+        if (module) row->declaring_module_index = *module;
+    }
+    core_dict_free(&by_path);
+    core_free(indexes);
+    core_free(paths);
+    return valid;
+}
+
 static bool
 remap_summary_names(const n00bb_abi_selected_objects_t *selected,
                     const n00bb_abi_index_plan_t *plan,
@@ -4585,45 +4670,38 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                         table->kind, local), table->record_bytes);
                 }
                 else {
-                    // Only a type row can replace an earlier input's copy;
-                    // any other row already placed is kept as it is.
-                    if (origin->present && table->kind != N00B_ABI_TABLE_TYPE)
+                    // Rows for one type agree on everything but what only
+                    // its declaration has, so an earlier input's copy is
+                    // kept unless it leaves that out: a type row or a
+                    // record's member rows from a module that doesn't
+                    // declare the type. Any other row already placed is
+                    // kept as it is.
+                    bool member = table->kind == N00B_ABI_TABLE_FIELD
+                        || table->kind == N00B_ABI_TABLE_ARM;
+                    if (origin->present && table->kind != N00B_ABI_TABLE_TYPE
+                        && !member)
                         continue;
                     valid = n00bb_abi_remap_row(selected, plan, input,
                         table->kind, local, scratch, table->record_bytes,
                         &stream);
                     if (!valid) break;
                     bool replace = !origin->present;
+                    if (member && origin->present) {
+                        const n00b_abi_field_v1 *old = (const void *)destination;
+                        const n00b_abi_field_v1 *next = (const void *)scratch;
+                        replace = !old->symbol_index && next->symbol_index;
+                    }
                     if (table->kind == N00B_ABI_TABLE_TYPE
                         && origin->present) {
                         const n00b_abi_type_v1 *old = (const void *)destination;
                         const n00b_abi_type_v1 *next = (const void *)scratch;
-                        if (old->owner_module_index
-                            && next->owner_module_index
-                            && old->owner_module_index
-                                != next->owner_module_index) {
-                            valid = false;
-                            break;
-                        }
-                        replace = (!old->owner_module_index
-                            && next->owner_module_index)
-                            || (!old->layout_index && next->layout_index
-                                && (!old->tracing_index
-                                    || next->tracing_index)
-                                && (!old->call_signature_index
-                                    || next->call_signature_index)
-                                && (!old->fields_or_arms.count
-                                    || next->fields_or_arms.count)
-                                && (!old->components.count
-                                    || next->components.count))
-                            || ((old->kind == N00B_ABI_TYPE_OPTION
-                                 || old->kind == N00B_ABI_TYPE_ATOMIC
-                                 || old->kind == N00B_ABI_TYPE_WRAPPER)
-                                && !old->tracing_index
-                                && next->tracing_index)
+                        replace = ((old->flags
+                                    & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
+                                && !(next->flags
+                                     & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED))
                             || (old->kind == N00B_ABI_TYPE_VARIABLE
                                 && old->typevar_import_requirement_index
-                                && next->typevar_owner_scope_index);
+                                && next->typevar_declaring_scope_index);
                     }
                     if (replace) memcpy(destination, scratch,
                                         table->record_bytes);
@@ -4725,6 +4803,8 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                 table->record_bytes, built.strings);
         }
     }
+    if (valid) valid = name_declaring_modules(selected, plan, &built,
+                                              origins[type_table]);
     if (valid) valid = remap_summary_names(selected, plan, &built,
                                            origins, schema_count);
     if (valid) valid = complete_merged_traces(&built);

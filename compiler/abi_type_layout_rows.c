@@ -580,11 +580,11 @@ append_accesses(const ir_layout_access_t *source, size_t count,
 }
 
 static bool
-record_policy(const parse_sym_entry_t *owner, uint32_t *out)
+record_policy(const parse_sym_entry_t *type_declaration, uint32_t *out)
 {
     *out = N00B_ABI_LAYOUT_DEFAULT;
-    if (!owner) return true;
-    n00bb_record_layout_request_t *request = parse_sym_binding(owner,
+    if (!type_declaration) return true;
+    n00bb_record_layout_request_t *request = parse_sym_binding(type_declaration,
         CORE_STRING_STATIC("n00bb.record-layout-request"));
     // A request read back from a cached interface has no syntax node, but
     // the same policy as the one parsed from source.
@@ -601,8 +601,8 @@ static bool
 build_member_row(n00bb_abi_type_index_t *index,
                  const n00bb_abi_decl_index_t *declarations,
                  n00bb_abi_name_pool_t *names,
-                 const parse_sym_entry_t *owner,
-                 bool local_owner,
+                 const parse_sym_entry_t *type_declaration,
+                 bool local_declaration,
                  const ir_final_layout_t *final,
                  const ir_final_member_layout_t *member,
                  uint32_t parent_type_index, uint32_t stream_base,
@@ -619,22 +619,22 @@ build_member_row(n00bb_abi_type_index_t *index,
             .logical_bit_offset = member->bit_offset,
             .visibility = N00B_ABI_VISIBILITY_PRIVATE,
         };
-        parse_sym_entry_t *field = owner && owner->member_scope
+        parse_sym_entry_t *field = type_declaration && type_declaration->member_scope
             && member->name.data
-            ? parse_symtab_lookup_in(owner->member_scope, member->name)
+            ? parse_symtab_lookup_in(type_declaration->member_scope, member->name)
             : nullptr;
         bool arm = table_kind == N00B_ABI_TABLE_ARM;
-        if (owner && member->name.data
+        if (type_declaration && member->name.data
             && (!field || (arm ? (field->kind != PARSE_SYM_TAG
                                    && field->kind != PARSE_SYM_VARIABLE)
                                   : !field->is_field)
-                || field->owner_type != owner
-                || (local_owner && (!declarations
+                || field->owner_type != type_declaration
+                || (local_declaration && (!declarations
                     || !n00bb_abi_decl_find_symbol(declarations, field,
                                                    &row->symbol_index)))))
             return false;
         *out_field = field;
-        row->visibility = member_is_private(field, owner)
+        row->visibility = member_is_private(field, type_declaration)
             ? N00B_ABI_VISIBILITY_PRIVATE : N00B_ABI_VISIBILITY_PUBLIC;
         if (!member->type || !n00bb_abi_type_index_find(index, member->type,
                                                          &row->child_type_index)
@@ -676,8 +676,8 @@ static bool
 append_members(n00bb_abi_type_index_t *index,
                const n00bb_abi_decl_index_t *declarations,
                n00bb_abi_name_pool_t *names,
-               const parse_sym_entry_t *owner,
-               bool local_owner, bool structural,
+               const parse_sym_entry_t *type_declaration,
+               bool local_declaration, bool structural,
                const ir_final_layout_t *final, uint32_t parent_type_index,
                uint32_t stream_base,
                core_list_t(n00b_abi_field_v1) *fields,
@@ -711,7 +711,7 @@ append_members(n00bb_abi_type_index_t *index,
         uint32_t row_index = (uint32_t)(variant ? arms->len : fields->len);
         n00b_abi_field_v1 row;
         parse_sym_entry_t *symbol = nullptr;
-        if (!build_member_row(index, declarations, names, owner, local_owner,
+        if (!build_member_row(index, declarations, names, type_declaration, local_declaration,
                               final,
                               member, parent_type_index, stream_base,
                               variant ? N00B_ABI_TABLE_ARM
@@ -800,16 +800,16 @@ n00bb_abi_type_layout_rows_build(
         if (!final) {
             if (types->rows[i].flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
                 continue;
-            if (types->owners && types->owners[i]
-                && (core_string_eq(types->owners[i]->adt_kind,
+            if (types->declarations && types->declarations[i]
+                && (core_string_eq(types->declarations[i]->adt_kind,
                                    CORE_STRING_STATIC("record"))
-                    || core_string_eq(types->owners[i]->adt_kind,
+                    || core_string_eq(types->declarations[i]->adt_kind,
                                       CORE_STRING_STATIC("object"))
-                    || core_string_eq(types->owners[i]->adt_kind,
+                    || core_string_eq(types->declarations[i]->adt_kind,
                                       CORE_STRING_STATIC("variant"))
-                    || (types->owners[i]->member_scope
+                    || (types->declarations[i]->member_scope
                         && core_string_eq(
-                            types->owners[i]->member_scope->scope_tag,
+                            types->declarations[i]->member_scope->scope_tag,
                             CORE_STRING_STATIC("variant")))))
                 valid = false;
             continue;
@@ -837,11 +837,12 @@ n00bb_abi_type_layout_rows_build(
             .type_index = (uint32_t)i,
             .policy = N00B_ABI_LAYOUT_DEFAULT,
         };
-        const parse_sym_entry_t *owner = types->owners
-            ? types->owners[i] : nullptr;
-        bool local_owner = owner != nullptr;
-        if (!owner && types->owner_lookup)
-            owner = types->owner_lookup(types->owner_lookup_context, type);
+        const parse_sym_entry_t *type_declaration = types->declarations
+            ? types->declarations[i] : nullptr;
+        bool local_declaration = type_declaration != nullptr;
+        if (!type_declaration && types->declaration_lookup)
+            type_declaration = types->declaration_lookup(
+                types->declaration_lookup_context, type);
         if (own_tag) {
             const ir_layout_access_t *access = &final->discriminant;
             if (access->unit_bit_offset % 8 || !access->unit_width_bits
@@ -889,7 +890,7 @@ n00bb_abi_type_layout_rows_build(
                 .kind = tag_kind,
             }));
         }
-        valid = record_policy(owner, &row.policy)
+        valid = record_policy(type_declaration, &row.policy)
             && append_runs(final->occupied, final->n_occupied,
             final->intrinsic_bits, stream_base, &runs, &indexes,
             &row.occupied_runs)
@@ -897,14 +898,21 @@ n00bb_abi_type_layout_rows_build(
                 final->intrinsic_bits, stream_base, &runs, &indexes,
                 &row.reserved_runs)
             && (wrapper || types->rows[i].kind == N00B_ABI_TYPE_CALLBACK
-                || append_members(index, declarations, names, owner,
-                                  local_owner,
+                || append_members(index, declarations, names, type_declaration,
+                                  local_declaration,
                                   types->rows[i].kind == N00B_ABI_TYPE_RECORD
                                   && th_kind_of(th_resolve(type))
                                       == TH_RECORD,
                 final, (uint32_t)i, stream_base, &fields, &field_symbols,
                 &arms, &packed,
                 &runs, &indexes, &type_field_ranges[i]));
+        // A declared record's or variant's member symbols are its
+        // declaration's: only the module that declares the type has them.
+        if (valid && type_declaration && !local_declaration
+            && type_field_ranges[i].count
+            && (types->rows[i].kind == N00B_ABI_TYPE_RECORD
+                || types->rows[i].kind == N00B_ABI_TYPE_VARIANT))
+            types->rows[i].flags |= N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
         if (valid && types->rows[i].kind == N00B_ABI_TYPE_TUPLE)
             row.policy = N00B_ABI_LAYOUT_ORDERED;
         if (!valid) break;

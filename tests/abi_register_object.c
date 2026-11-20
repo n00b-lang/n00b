@@ -482,7 +482,7 @@ main(int argc, char **argv)
                 const n00b_abi_type_argument_v1 *arg =
                     n00b_abi_v1_type_argument(snapshot,
                         type->named_arguments.first + j);
-                assert(arg && arg->owner_type_index == i && arg->ordinal == j);
+                assert(arg && arg->parent_type_index == i && arg->ordinal == j);
             }
             matches++;
         }

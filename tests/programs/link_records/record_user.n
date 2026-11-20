@@ -1,0 +1,4 @@
+import record_dep
+func user_remote(item: record_dep.SharedRecord) -> int {
+    return item.remote
+}

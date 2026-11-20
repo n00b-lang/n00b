@@ -87,8 +87,10 @@ for pair in alone:cycles.cycle_first empty_first:empty; do
         exit 1
     }
 done
-# The linked library is record_root's, checked below.
-library_dump "$records" "$tmp/records" record_root shared_link_first
+# The linked library is record_root's, checked below. record_user is a
+# second module that uses record_dep's record without declaring it.
+library_dump "$records" "$tmp/records" record_root shared_link_first \
+    record_user
 library_dump "$interface_programs" "$tmp/interfaces" \
     "$abi_programs/foreign_flagset_user.n" \
     "$interface_programs/operator_enum_signed_user.n"
@@ -116,6 +118,8 @@ for object in "$rec"/*.n00bm; do
 done
 "$abi_link_input_test" --records "$rec/record_root.n00bm" \
     "$rec/record_dep.n00bm" "$@"
+"$abi_link_input_test" --using-rows "$rec/record_root.n00bm" \
+    "$rec/record_user.n00bm" record_dep.SharedRecord
 "$abi_register_object_test" "$rec/linked.n00bm" '>=2'
 "$abi_link_input_test" --function-import "$rec/shared_link_first.n00bm" \
     "$rec/shared_link_dep.facade.n00bm" "$rec/shared_link_dep.impl.n00bm" "$@"

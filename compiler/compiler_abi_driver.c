@@ -27,9 +27,9 @@
 #include "cached_body.h"
 #include "qualified_names.h"
 #include "compiler_object_io.h"
-#include "compiler_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
+#include "compiler_layout.h"
 #include "abi_semantics.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
@@ -2782,19 +2782,22 @@ abi_declaration_for_symbol(void *context, parse_sym_entry_t *symbol)
 typedef struct {
     core_indexed_table_t *scopes;
     th_ctx *types;
-    core_dict_t type_owners;
-    core_dict_t generic_type_owners;
+    core_dict_t type_declarations;
+    core_dict_t generic_type_declarations;
 } n00bb_abi_source_context_t;
 
+// The symbol that declares `type`. An instance of a generic record,
+// variant, callback or object takes its declaration facts from the
+// generic's declaration; an instance has no module of its own.
 static parse_sym_entry_t *
-abi_type_owner(void *context, th_type *type)
+abi_type_declaration(void *context, th_type *type)
 {
     n00bb_abi_source_context_t *sources = context;
     if (!sources || !sources->types || !type) return nullptr;
     uint64_t typehash = th_hash(sources->types, th_resolve(type));
-    parse_sym_entry_t *owner = core_dict_get(&sources->type_owners,
-        (uintptr_t)typehash, nullptr);
-    if (owner) return canonical_symbol(owner);
+    parse_sym_entry_t *declaration = core_dict_get(
+        &sources->type_declarations, (uintptr_t)typehash, nullptr);
+    if (declaration) return canonical_symbol(declaration);
     core_string_t name = {};
     size_t arguments = 0;
     if (!th_named_info(th_resolve(type), &name, nullptr, &arguments)
@@ -2802,18 +2805,18 @@ abi_type_owner(void *context, th_type *type)
     th_type *base = th_name(sources->types, name);
     if (!base) return nullptr;
     typehash = th_hash(sources->types, base);
-    owner = core_dict_get(&sources->generic_type_owners,
+    declaration = core_dict_get(&sources->generic_type_declarations,
         (uintptr_t)typehash, nullptr);
-    return owner ? canonical_symbol(owner) : nullptr;
+    return declaration ? canonical_symbol(declaration) : nullptr;
 }
 
 static bool
-abi_collect_type_owners(core_link_unit_t *link,
+abi_collect_type_declarations(core_link_unit_t *link,
                         n00bb_abi_source_context_t *sources)
 {
     if (!link || !sources || !sources->types) return false;
-    core_dict_init(&sources->type_owners, nullptr, nullptr);
-    core_dict_init(&sources->generic_type_owners, nullptr, nullptr);
+    core_dict_init(&sources->type_declarations, nullptr, nullptr);
+    core_dict_init(&sources->generic_type_declarations, nullptr, nullptr);
     for (size_t i = 0; i < core_link_unit_translation_unit_count(link); i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link, i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
@@ -2838,22 +2841,33 @@ abi_collect_type_owners(core_link_unit_t *link,
                 if (!symbol->adt_kind.u8_bytes && !shaped) continue;
                 uintptr_t typehash = (uintptr_t)th_hash(sources->types,
                     th_resolve(symbol->type));
-                core_dict_add(&sources->type_owners, typehash, symbol);
+                core_dict_add(&sources->type_declarations, typehash, symbol);
                 th_type *reference = core_string_eq(symbol->adt_kind,
                         CORE_STRING_STATIC("object"))
                     ? th_type_definition(sources->types, symbol->type)
                     : nullptr;
                 reference = reference ? th_resolve(reference) : nullptr;
                 if (reference && th_kind_of(reference) == TH_INDIRECTION)
-                    core_dict_add(&sources->type_owners,
+                    core_dict_add(&sources->type_declarations,
                         (uintptr_t)th_hash(sources->types,
                             th_resolve(th_ind_referent(reference))),
                         symbol);
+                // An instance of a generic type (`List[int]`) has no
+                // declaration of its own: its declaration facts (a
+                // record's field visibility, a callback's roles) are the
+                // generic's.
                 if (core_string_eq(symbol->adt_kind,
                         CORE_STRING_STATIC("callback"))
                     || core_string_eq(symbol->adt_kind,
-                        CORE_STRING_STATIC("object")))
-                    core_dict_add(&sources->generic_type_owners,
+                        CORE_STRING_STATIC("object"))
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("record"))
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("variant"))
+                    || (symbol->member_scope
+                        && core_string_eq(symbol->member_scope->scope_tag,
+                                          CORE_STRING_STATIC("variant"))))
+                    core_dict_add(&sources->generic_type_declarations,
                         typehash, symbol);
             }
         }
@@ -2954,7 +2968,7 @@ emit_specialization_abi(core_link_unit_t *link,
             symbols, generic_state->lex->tokens, module, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis, nullptr, nullptr,
-            abi_type_owner, sources, nullptr, abi_layout_module, analysis,
+            abi_type_declaration, sources, nullptr, abi_layout_module, analysis,
             &artifact->packed, &artifact->index_table,
             &artifact->object, &artifact->object_bytes);
     if (!valid && unit.diagnostics)
@@ -2998,15 +3012,15 @@ abi_sources_open(core_link_unit_t *link, n00bb_abi_source_context_t *sources)
             valid = entry && entry->value == state;
         }
     }
-    return valid && abi_collect_type_owners(link, sources);
+    return valid && abi_collect_type_declarations(link, sources);
 }
 
 static void
 abi_sources_close(n00bb_abi_source_context_t *sources)
 {
     if (sources->scopes) core_indexed_table_free(sources->scopes);
-    core_dict_free(&sources->type_owners);
-    core_dict_free(&sources->generic_type_owners);
+    core_dict_free(&sources->type_declarations);
+    core_dict_free(&sources->generic_type_declarations);
 }
 
 static bool
@@ -3020,7 +3034,7 @@ abi_emit_source_unit(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         state->annotations->symtab, state->lex->tokens, state->ir_module,
         &analysis->target, debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
         abi_declaration_for_symbol, analysis,
-        abi_source_of_node, sources, abi_type_owner, sources,
+        abi_source_of_node, sources, abi_type_declaration, sources,
         n00bb_comptime_graph(unit), abi_layout_module, analysis,
         &artifact->packed, &artifact->index_table,
         &artifact->object, &artifact->object_bytes);
@@ -3321,9 +3335,9 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
         if (plan_failure.reason.data
             && plan_failure.table_kind == N00B_ABI_TABLE_LAYOUT)
             core_buffer_printf(&message,
-                "; owner type %u points to layout %u",
-                plan_failure.owner_type_index,
-                plan_failure.owner_row_index);
+                "; parent type %u points to layout %u",
+                plan_failure.parent_type_index,
+                plan_failure.parent_row_index);
         if (plan_failure.reason.data
             && plan_failure.table_kind == N00B_ABI_TABLE_TYPE)
             core_buffer_printf(&message,

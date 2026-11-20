@@ -207,8 +207,10 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_TYPE_INDEX = 1u << 6,
     N00B_ABI_TYPE_FLAG_BOOL = 1u << 7,
     // The row is a using module's: it omits the members only the type's
-    // declaration has (an enum's items, which are its declaration's
-    // symbols). Linking replaces it with the declaring module's row.
+    // declaration has (an enum's or flagset's items, a declared trait's
+    // methods, a callback's role signatures: its declaration's symbols).
+    // Every other fact of the row is the same in every module. Linking
+    // keeps the declaring module's row.
     N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED = 1u << 8,
 } n00b_abi_type_flag_v1;
 
@@ -395,7 +397,10 @@ typedef struct {
     uint32_t flags;
     uint32_t alignment_bytes;
     uint32_t layout_index;
-    uint32_t owner_module_index;
+    /* Linked images only: the module whose path the type's name begins
+     * with, for a declared nominal type. A module's own object leaves it
+     * zero; the linker derives it from the name and its module table. */
+    uint32_t declaring_module_index;
     uint32_t tracing_index;
     n00b_abi_range_v1 components;
     n00b_abi_range_v1 fields_or_arms;
@@ -403,21 +408,22 @@ typedef struct {
     uint32_t semantic_width_bits;
     uint32_t unpacked_storage_bits;
     uint32_t call_signature_index;
-    uint32_t typevar_owner_scope_index;
+    uint32_t typevar_declaring_scope_index;
     uint32_t typevar_ordinal;
     uint32_t specialization_start_ix;
     uint32_t specialization_end_ix;
-    /* Link-only: identifies the imported function requirement that owns this
-     * variable. Zero in a consolidated image and on locally owned types. */
+    /* Link-only: identifies the imported function requirement that declares
+     * this variable. Zero in a consolidated image and on variables declared
+     * locally. */
     uint32_t typevar_import_requirement_index;
     n00b_abi_string_v1 named_constructor;
     n00b_abi_range_v1 named_arguments; /* Direct TYPE_ARGUMENT row span. */
     uint32_t finalizer_function_index;
-    uint32_t typevar_owner_type_index;
+    uint32_t typevar_declaring_type_index;
 } n00b_abi_type_v1;
 
 typedef struct {
-    uint32_t owner_type_index;
+    uint32_t parent_type_index;
     uint32_t ordinal;
     uint32_t kind; /* n00b_abi_type_arg_kind_v1 */
     uint32_t type_index; /* Only for TYPE; nil is index zero. */
@@ -1005,8 +1011,8 @@ _Static_assert(sizeof(n00b_abi_specialization_link_v1) == 4,
                "specialization link width");
 _Static_assert(offsetof(n00b_abi_type_v1, call_signature_index) == 88,
                "type signature offset");
-_Static_assert(offsetof(n00b_abi_type_v1, typevar_owner_scope_index) == 92,
-               "type-variable owner offset");
+_Static_assert(offsetof(n00b_abi_type_v1, typevar_declaring_scope_index) == 92,
+               "type-variable declaring scope offset");
 _Static_assert(offsetof(n00b_abi_type_v1, specialization_start_ix) == 100,
                "type specialization range offset");
 _Static_assert(offsetof(n00b_abi_type_v1, specialization_end_ix) == 104,

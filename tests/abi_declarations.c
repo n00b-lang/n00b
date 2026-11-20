@@ -173,7 +173,8 @@ main(void)
             == N00B_ABI_VISIBILITY_PUBLIC
         && !(rows.symbols[field_symbol_index].flags
             & N00B_ABI_SYMBOL_FLAG_EXPORTED)
-        && type_rows.rows[type_index_value].owner_module_index == 1);
+        // Only a linked image names a type's declaring module.
+        && !type_rows.rows[type_index_value].declaring_module_index);
     const n00b_abi_source_location_v1 *type_location =
         &rows.locations[rows.symbols[type_symbol_index]
             .declaration_location_index];

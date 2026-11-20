@@ -16,17 +16,17 @@
 core_list_decl(n00b_abi_type_argument_v1);
 
 static bool
-kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
+kind_from_declaration(const parse_sym_entry_t *declaration, uint32_t *kind)
 {
-    if (!owner) return false;
-    if (owner->member_scope
-        && core_string_eq(owner->member_scope->scope_tag,
+    if (!declaration) return false;
+    if (declaration->member_scope
+        && core_string_eq(declaration->member_scope->scope_tag,
                           CORE_STRING_STATIC("flagset"))) {
         *kind = N00B_ABI_TYPE_FLAGSET;
         return true;
     }
-    if (!owner->adt_kind.u8_bytes) return false;
-    core_string_t adt = owner->adt_kind;
+    if (!declaration->adt_kind.u8_bytes) return false;
+    core_string_t adt = declaration->adt_kind;
     if (core_string_eq(adt, CORE_STRING_STATIC("record")))
         *kind = N00B_ABI_TYPE_RECORD;
     else if (core_string_eq(adt, CORE_STRING_STATIC("variant")))
@@ -49,20 +49,20 @@ kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
 
 static bool
 type_category(ir_module_t *module, th_type *type,
-              const parse_sym_entry_t *owner, n00b_abi_type_v1 *row)
+              const parse_sym_entry_t *declaration, n00b_abi_type_v1 *row)
 {
-    if (owner && core_string_eq(owner->adt_kind,
+    if (declaration && core_string_eq(declaration->adt_kind,
                                 CORE_STRING_STATIC("object"))) {
         core_string_t name = {0}, object_name = {0};
         if (!th_named_info(th_resolve(type), &name, nullptr, nullptr)
-            || !owner->type
-            || !th_named_info(th_resolve(owner->type), &object_name,
+            || !declaration->type
+            || !th_named_info(th_resolve(declaration->type), &object_name,
                               nullptr, nullptr)) return false;
         row->kind = core_string_eq(name, object_name) ? N00B_ABI_TYPE_OBJECT
                                                       : N00B_ABI_TYPE_RECORD;
         return true;
     }
-    if (kind_from_owner(owner, &row->kind)) return true;
+    if (kind_from_declaration(declaration, &row->kind)) return true;
     switch (th_kind_of(type)) {
     case TH_BITINT: {
         uint64_t width = 0;
@@ -148,7 +148,8 @@ type_category(ir_module_t *module, th_type *type,
         return true;
     case TH_BINDER:
         return th_binder_body(type)
-            && type_category(module, th_binder_body(type), owner, row);
+            && type_category(module, th_binder_body(type), declaration,
+                             row);
     case TH_SUM: {
         th_comb combination;
         if (!th_sum_comb(type, &combination)
@@ -172,7 +173,7 @@ bool
 n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
     const parse_symtab_t *symbols,
-    n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
+    n00bb_abi_type_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
     if (!index || !runtime || !ir_module_target(runtime).data || !names
@@ -181,7 +182,7 @@ n00bb_abi_type_identity_rows_build(
     size_t count = n00bb_abi_type_index_count(index);
     if (!count || count > (UINT32_MAX >> 1)) return false;
     n00b_abi_type_v1 *rows = core_alloc_array(n00b_abi_type_v1, count);
-    parse_sym_entry_t **owners = core_alloc_array(parse_sym_entry_t *, count);
+    parse_sym_entry_t **declarations = core_alloc_array(parse_sym_entry_t *, count);
     core_list_t(n00b_abi_type_argument_v1) arguments = {0};
     core_list_push(arguments, ((n00b_abi_type_argument_v1){0}));
     for (parse_scope_t *scope = symbols ? symbols->all_scopes : nullptr;
@@ -195,9 +196,9 @@ n00bb_abi_type_identity_rows_build(
             uint32_t row = 0;
             if (!n00bb_abi_type_index_find(index, symbol->type, &row))
                 continue;
-            if (!owners[row] || (!owners[row]->adt_kind.u8_bytes
+            if (!declarations[row] || (!declarations[row]->adt_kind.u8_bytes
                                  && symbol->adt_kind.u8_bytes))
-                owners[row] = symbol;
+                declarations[row] = symbol;
             th_type *reference = core_string_eq(symbol->adt_kind,
                     CORE_STRING_STATIC("object"))
                 ? ir_type_definition(runtime, symbol->type) : nullptr;
@@ -205,8 +206,8 @@ n00bb_abi_type_identity_rows_build(
                 && th_kind_of(th_resolve(reference)) == TH_INDIRECTION
                 ? th_ind_referent(th_resolve(reference)) : nullptr;
             if (shape && n00bb_abi_type_index_find(index, shape, &row)
-                && !owners[row])
-                owners[row] = symbol;
+                && !declarations[row])
+                declarations[row] = symbol;
         }
     }
     th_ctx *types = ir_module_types(runtime);
@@ -216,12 +217,13 @@ n00bb_abi_type_identity_rows_build(
     for (size_t i = 0; valid && i < count; i++) {
         failing_index = i;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        parse_sym_entry_t *owner = owners[i];
-        parse_sym_entry_t *category_owner = owner ? owner
+        parse_sym_entry_t *declaration = declarations[i];
+        parse_sym_entry_t *category_declaration = declaration
+            ? declaration
             : lookup ? lookup(lookup_context, type) : nullptr;
         n00b_abi_type_v1 *row = &rows[i];
         failed_reason = CORE_STRING_STATIC("type category");
-        valid = type && type_category(runtime, type, category_owner, row);
+        valid = type && type_category(runtime, type, category_declaration, row);
         if (!valid) break;
         if (row->kind == N00B_ABI_TYPE_VARIABLE) continue;
         failed_reason = CORE_STRING_STATIC("canonical type name");
@@ -255,7 +257,7 @@ n00bb_abi_type_identity_rows_build(
             for (size_t ordinal = 0; valid && ordinal < n; ordinal++) {
                 const th_arg *arg = th_named_arg(type, ordinal);
                 n00b_abi_type_argument_v1 value = {
-                    .owner_type_index = (uint32_t)i,
+                    .parent_type_index = (uint32_t)i,
                     .ordinal = (uint32_t)ordinal,
                 };
                 if (!arg) { valid = false; break; }
@@ -289,9 +291,9 @@ n00bb_abi_type_identity_rows_build(
             }
             if (!valid) break;
         }
-        if (category_owner && row->kind == N00B_ABI_TYPE_ENUM) {
+        if (category_declaration && row->kind == N00B_ABI_TYPE_ENUM) {
             failed_reason = CORE_STRING_STATIC("enum range");
-            const n00bb_enum_range_t *range = parse_sym_binding(category_owner,
+            const n00bb_enum_range_t *range = parse_sym_binding(category_declaration,
                 CORE_STRING_STATIC("n00bb.enum-range"));
             if (!range || !range->storage_bits) {
                 valid = false;
@@ -301,24 +303,24 @@ n00bb_abi_type_identity_rows_build(
             if (range->storage_signed)
                 row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
         }
-        if (category_owner && row->kind == N00B_ABI_TYPE_FLAGSET) {
+        if (category_declaration && row->kind == N00B_ABI_TYPE_FLAGSET) {
             failed_reason = CORE_STRING_STATIC("flagset information");
             const n00bb_flagset_info_t *info = parse_sym_binding(
-                category_owner, CORE_STRING_STATIC("n00bb.flagset-info"));
+                category_declaration, CORE_STRING_STATIC("n00bb.flagset-info"));
             if (!info || !info->atomic_count || info->atomic_count > 128) {
                 valid = false;
                 break;
             }
             row->semantic_width_bits = info->atomic_count;
         }
-        parse_sym_entry_t *declaration_owner = owner;
-        if (!declaration_owner && category_owner && category_owner->type
+        parse_sym_entry_t *type_declaration = declaration;
+        if (!type_declaration && category_declaration && category_declaration->type
             && th_hash(types, type) ==
-                th_hash(types, category_owner->type))
-            declaration_owner = category_owner;
-        n00bb_signature_typevars_t *type_parameters = declaration_owner
-            && declaration_owner->kind == PARSE_SYM_TYPEDEF
-            ? parse_sym_binding(declaration_owner, N00BB_SIGNATURE_TYPEVARS_KEY)
+                th_hash(types, category_declaration->type))
+            type_declaration = category_declaration;
+        n00bb_signature_typevars_t *type_parameters = type_declaration
+            && type_declaration->kind == PARSE_SYM_TYPEDEF
+            ? parse_sym_binding(type_declaration, N00BB_SIGNATURE_TYPEVARS_KEY)
             : nullptr;
         th_type *definition = th_type_definition(types, type);
         if (!th_is_closed(types, type)
@@ -380,14 +382,14 @@ n00bb_abi_type_identity_rows_build(
         out->failed_type_index = failing_index < count
             ? (uint32_t)failing_index : 0;
         out->failed_reason = failed_reason;
-        core_free(owners);
+        core_free(declarations);
         core_free(rows);
         core_list_free(arguments);
         return false;
     }
     *out = (n00bb_abi_type_identity_rows_t){
-        .rows = rows, .owners = owners, .count = count,
-        .owner_lookup = lookup, .owner_lookup_context = lookup_context,
+        .rows = rows, .declarations = declarations, .count = count,
+        .declaration_lookup = lookup, .declaration_lookup_context = lookup_context,
         .arguments = arguments.data, .argument_count = arguments.len,
     };
     return true;
@@ -430,10 +432,10 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
                 "declared type variable resolves to a non-variable type");
             return false;
         }
-        if (row->typevar_owner_type_index) continue;
-        if (row->typevar_owner_scope_index) {
+        if (row->typevar_declaring_type_index) continue;
+        if (row->typevar_declaring_scope_index) {
             if (reason) *reason = CORE_STRING_STATIC(
-                "declared type variable has a local declaration owner");
+                "declared type variable has a local declaring scope");
             return false;
         }
         if (row->typevar_import_requirement_index
@@ -464,12 +466,12 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
         }
         n00b_abi_type_v1 *row = &rows->rows[type_index];
         if (row->kind != N00B_ABI_TYPE_VARIABLE
-            || row->typevar_owner_scope_index) {
+            || row->typevar_declaring_scope_index) {
             if (reason) *reason = CORE_STRING_STATIC(
-                "free type variable has a declaration owner");
+                "free type variable has a declaring scope");
             return false;
         }
-        if (row->typevar_owner_type_index) continue;
+        if (row->typevar_declaring_type_index) continue;
         if (row->typevar_import_requirement_index) {
             if (row->typevar_import_requirement_index != requirement_index) {
                 if (reason) *reason = CORE_STRING_STATIC(
@@ -509,9 +511,9 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             || th_kind_of(th_resolve(declaration.contract)) != TH_TRAIT)
             continue;
         bool builtin = n00bb_compiler_package(declaration.package);
-        uint32_t owner_index = 0;
+        uint32_t declaring_type_index = 0;
         if (!n00bb_abi_type_index_find(index, declaration.contract,
-                                       &owner_index)) {
+                                       &declaring_type_index)) {
             if (builtin) return false;
             continue;
         }
@@ -527,13 +529,13 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             }
             n00b_abi_type_v1 *row = &rows->rows[type_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE) return false;
-            if (row->typevar_owner_scope_index
+            if (row->typevar_declaring_scope_index
                 || row->typevar_import_requirement_index) {
                 if (builtin) return false;
                 continue;
             }
-            if (row->typevar_owner_type_index) continue;
-            row->typevar_owner_type_index = owner_index;
+            if (row->typevar_declaring_type_index) continue;
+            row->typevar_declaring_type_index = declaring_type_index;
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
@@ -548,20 +550,20 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 && type_row->kind != N00B_ABI_TYPE_OBJECT)
             || type_row->named_arguments.count) continue;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        parse_sym_entry_t *owner = rows->owners[i] ? rows->owners[i]
-            : rows->owner_lookup
-                ? rows->owner_lookup(rows->owner_lookup_context, type)
+        parse_sym_entry_t *declaration = rows->declarations[i] ? rows->declarations[i]
+            : rows->declaration_lookup
+                ? rows->declaration_lookup(rows->declaration_lookup_context, type)
                 : nullptr;
-        if (!owner || owner->kind != PARSE_SYM_TYPEDEF || !owner->type
-            || core_string_eq(owner->adt_kind, CORE_STRING_STATIC("alias")))
+        if (!declaration || declaration->kind != PARSE_SYM_TYPEDEF || !declaration->type
+            || core_string_eq(declaration->adt_kind, CORE_STRING_STATIC("alias")))
             continue;
-        uint32_t owner_index = 0;
-        if (!n00bb_abi_type_index_find(index, owner->type, &owner_index)
-            || owner_index != i) continue;
-        th_type *definition = th_type_definition(types, owner->type);
+        uint32_t declaring_type_index = 0;
+        if (!n00bb_abi_type_index_find(index, declaration->type, &declaring_type_index)
+            || declaring_type_index != i) continue;
+        th_type *definition = th_type_definition(types, declaration->type);
         th_type **variables = nullptr;
         size_t count = th_free_vars(types,
-            definition ? definition : owner->type, &variables);
+            definition ? definition : declaration->type, &variables);
         if (count > UINT32_MAX) return false;
         for (size_t ordinal = 0; ordinal < count; ordinal++) {
             uint32_t variable_index = 0;
@@ -570,15 +572,15 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             n00b_abi_type_v1 *row = &rows->rows[variable_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE
                 || row->typevar_import_requirement_index
-                || row->typevar_owner_scope_index
-                || (row->typevar_owner_type_index
-                    && (row->typevar_owner_type_index != owner_index
+                || row->typevar_declaring_scope_index
+                || (row->typevar_declaring_type_index
+                    && (row->typevar_declaring_type_index != declaring_type_index
                         || row->typevar_ordinal != ordinal))) {
                 if (reason) *reason = CORE_STRING_STATIC(
-                    "named type variable has a conflicting owner");
+                    "named type variable has a conflicting declaration");
                 return false;
             }
-            row->typevar_owner_type_index = owner_index;
+            row->typevar_declaring_type_index = declaring_type_index;
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
@@ -587,11 +589,11 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
     for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
-        uint32_t owner_index = 0;
+        uint32_t declaring_type_index = 0;
         if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
             || !core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("alias"))
             || !n00bb_abi_type_index_find(index, th_resolve(symbol->type),
-                                          &owner_index))
+                                          &declaring_type_index))
             continue;
         th_type **variables = nullptr;
         size_t count = th_free_vars(types, th_resolve(symbol->type),
@@ -603,10 +605,10 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                                            &variable_index)) continue;
             n00b_abi_type_v1 *row = &rows->rows[variable_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE
-                || row->typevar_owner_type_index
-                || row->typevar_owner_scope_index
+                || row->typevar_declaring_type_index
+                || row->typevar_declaring_scope_index
                 || row->typevar_import_requirement_index) continue;
-            row->typevar_owner_type_index = owner_index;
+            row->typevar_declaring_type_index = declaring_type_index;
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
@@ -637,20 +639,20 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             if (!n00bb_abi_type_index_find(index, variable, &type_index))
                 continue;
             n00b_abi_type_v1 *row = &rows->rows[type_index];
-            if (row->typevar_owner_type_index) continue;
+            if (row->typevar_declaring_type_index) continue;
             if (row->kind != N00B_ABI_TYPE_VARIABLE
                 || row->typevar_import_requirement_index
-                || (row->typevar_owner_scope_index
-                    && (row->typevar_owner_scope_index != scope_index
+                || (row->typevar_declaring_scope_index
+                    && (row->typevar_declaring_scope_index != scope_index
                         || row->typevar_ordinal != ordinal))) {
                 if (reason) *reason = row->typevar_import_requirement_index
                     ? CORE_STRING_STATIC(
                         "local type variable is owned by an imported function")
                     : CORE_STRING_STATIC(
-                        "local type variable has a conflicting declaration owner");
+                        "local type variable has a conflicting declaring scope");
                 return false;
             }
-            row->typevar_owner_scope_index = scope_index;
+            row->typevar_declaring_scope_index = scope_index;
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
@@ -685,8 +687,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                     "local function variable has non-variable type");
                 return false;
             }
-            if (row->typevar_owner_scope_index
-                || row->typevar_owner_type_index
+            if (row->typevar_declaring_scope_index
+                || row->typevar_declaring_type_index
                 || row->typevar_import_requirement_index) continue;
             if (!scope_index) {
                 parse_scope_t *scope = symbol->decl_node
@@ -695,12 +697,12 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                         &scope_index) || !scope_index) return false;
             }
             if (next_ordinal > UINT32_MAX) return false;
-            row->typevar_owner_scope_index = scope_index;
+            row->typevar_declaring_scope_index = scope_index;
             row->typevar_ordinal = (uint32_t)next_ordinal++;
         }
     }
     /* A body-local binding can retain an open type copied while resolving a
-     * generic call. Give that copy a stable local owner as well. */
+     * generic call. Give that copy a stable local declaring scope as well. */
     for (size_t symbol_index = 1;
          symbol_index < n00bb_abi_decl_symbol_count(declarations);
          symbol_index++) {
@@ -717,8 +719,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 continue;
             n00b_abi_type_v1 *row = &rows->rows[type_index];
             if (row->kind != N00B_ABI_TYPE_VARIABLE
-                || row->typevar_owner_scope_index
-                || row->typevar_owner_type_index
+                || row->typevar_declaring_scope_index
+                || row->typevar_declaring_type_index
                 || row->typevar_import_requirement_index) continue;
             uint32_t scope_index = 0;
             if (!n00bb_abi_decl_find_scope(declarations, symbol->scope,
@@ -727,13 +729,13 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             for (size_t j = 1; j < rows->count; j++) {
                 const n00b_abi_type_v1 *other = &rows->rows[j];
                 if (other->kind != N00B_ABI_TYPE_VARIABLE
-                    || other->typevar_owner_scope_index != scope_index)
+                    || other->typevar_declaring_scope_index != scope_index)
                     continue;
                 if (other->typevar_ordinal == UINT32_MAX) return false;
                 if (ordinal <= other->typevar_ordinal)
                     ordinal = other->typevar_ordinal + 1;
             }
-            row->typevar_owner_scope_index = scope_index;
+            row->typevar_declaring_scope_index = scope_index;
             row->typevar_ordinal = ordinal;
         }
     }
@@ -747,8 +749,8 @@ n00bb_abi_type_variables_validate(const n00bb_abi_type_identity_rows_t *rows,
     if (!rows || !rows->rows) return false;
     for (size_t i = 1; i < rows->count; i++)
         if (rows->rows[i].kind == N00B_ABI_TYPE_VARIABLE
-            && !rows->rows[i].typevar_owner_scope_index
-            && !rows->rows[i].typevar_owner_type_index
+            && !rows->rows[i].typevar_declaring_scope_index
+            && !rows->rows[i].typevar_declaring_type_index
             && !rows->rows[i].typevar_import_requirement_index) {
             if (reason) *reason = CORE_STRING_STATIC(
                 "catalog has an unowned type variable");
@@ -763,7 +765,7 @@ n00bb_abi_type_identity_rows_release(
 {
     if (!rows) return;
     core_free(rows->rows);
-    core_free(rows->owners);
+    core_free(rows->declarations);
     core_free(rows->arguments);
     *rows = (n00bb_abi_type_identity_rows_t){0};
 }
@@ -781,21 +783,21 @@ append_component(n00bb_abi_type_index_t *index, th_type *component,
 
 static bool
 append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
-                       th_type *type, const parse_sym_entry_t *owner,
+                       th_type *type, const parse_sym_entry_t *declaration,
                        uint32_t kind,
                        core_list_t(uint32_t) *indexes)
 {
     th_kind source_kind = th_kind_of(type);
     if (kind == N00B_ABI_TYPE_CALLBACK) {
-        if (!owner) return true;
-        if (!owner->member_scope) return false;
+        if (!declaration) return true;
+        if (!declaration->member_scope) return false;
         static const core_string_t roles[] = {
             CORE_STRING_STATIC("call"), CORE_STRING_STATIC("handler"),
             CORE_STRING_STATIC("setup"),
         };
         for (size_t i = 0; i < 3; i++) {
             parse_sym_entry_t *role = parse_symtab_lookup_in(
-                owner->member_scope, roles[i]);
+                declaration->member_scope, roles[i]);
             if (!role) {
                 if (i == 2) break;
                 return false;
@@ -895,13 +897,13 @@ n00bb_abi_type_components_build(
             break;
         }
         size_t first = indexes.len;
-        const parse_sym_entry_t *owner = types->owners
-            ? types->owners[i] : nullptr;
+        const parse_sym_entry_t *declaration = types->declarations
+            ? types->declarations[i] : nullptr;
         // A callback's role signatures are its declaration's: only the
         // module that declares it has them.
-        if (types->rows[i].kind == N00B_ABI_TYPE_CALLBACK && !owner)
+        if (types->rows[i].kind == N00B_ABI_TYPE_CALLBACK && !declaration)
             types->rows[i].flags |= N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
-        valid = append_type_components(index, module, type, owner,
+        valid = append_type_components(index, module, type, declaration,
             types->rows[i].kind, &indexes)
             && indexes.len <= UINT32_MAX - stream_base;
         if (valid && indexes.len != first)

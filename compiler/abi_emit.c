@@ -751,7 +751,7 @@ n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed)
 static bool
 publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
     ir_module_t *module, const core_target_desc_t *target,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context);
+    n00bb_abi_type_declaration_lookup_fn type_declaration, void *type_declaration_context);
 
 bool
 n00bb_abi_write_object(
@@ -1186,7 +1186,7 @@ layout_index_types(core_translation_unit_t *unit,
 static bool
 publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
     ir_module_t *module, const core_target_desc_t *target,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context)
+    n00bb_abi_type_declaration_lookup_fn type_declaration, void *type_declaration_context)
 {
     bool progress;
     do {
@@ -1207,8 +1207,8 @@ publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
                     != nullptr;
                 continue;
             }
-            parse_sym_entry_t *symbol = type_owner
-                ? type_owner(type_owner_context, type) : nullptr;
+            parse_sym_entry_t *symbol = type_declaration
+                ? type_declaration(type_declaration_context, type) : nullptr;
             if (symbol && parse_sym_binding(symbol,
                     CORE_STRING_STATIC("n00bb.record-layout-request")))
                 continue;
@@ -1279,14 +1279,14 @@ append_imported_type_requirements(
     n00bb_abi_type_identity_rows_t *types,
     const core_translation_unit_t *unit,
     n00bb_abi_node_source_fn node_source, void *source_context,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
+    n00bb_abi_type_declaration_lookup_fn type_declaration, void *type_declaration_context,
     n00bb_abi_name_pool_t *pool, n00b_abi_requirement_v1 *requirements,
     size_t *count)
 {
-    if (!type_owner || !node_source) return true;
+    if (!type_declaration || !node_source) return true;
     for (uint32_t i = 1; i < types->count; i++) {
         const n00b_abi_type_v1 *type = &types->rows[i];
-        if (type->owner_module_index) continue;
+        if (types->declarations && types->declarations[i]) continue;
         if (type->kind != N00B_ABI_TYPE_RECORD
             && type->kind != N00B_ABI_TYPE_VARIANT
             && type->kind != N00B_ABI_TYPE_ENUM
@@ -1296,34 +1296,36 @@ append_imported_type_requirements(
             && type->kind != N00B_ABI_TYPE_WRAPPER
             && type->kind != N00B_ABI_TYPE_OBJECT) continue;
         th_type *graph_type = n00bb_abi_type_index_at(index, i);
-        parse_sym_entry_t *owner = graph_type
-            ? type_owner(type_owner_context, graph_type) : nullptr;
-        if (owner && parse_sym_binding(owner,
+        parse_sym_entry_t *declaration = graph_type
+            ? type_declaration(type_declaration_context, graph_type) : nullptr;
+        if (declaration && parse_sym_binding(declaration,
                 CORE_STRING_STATIC("n00bb.builtin-type"))) continue;
-        if (!owner || (!owner->decl_node && !owner->owner_unit)) continue;
+        if (!declaration
+            || (!declaration->decl_node && !declaration->owner_unit))
+            continue;
         uint32_t declaration_index;
-        if (!owner->type || !n00bb_abi_type_index_find(index, owner->type,
+        if (!declaration->type || !n00bb_abi_type_index_find(index, declaration->type,
                 &declaration_index) || declaration_index != i) continue;
-        const core_translation_unit_t *declaring_unit = owner->owner_unit;
+        const core_translation_unit_t *declaring_unit = declaration->owner_unit;
         parse_token_stream_t *declaring_tokens = nullptr;
-        if ((owner->decl_node
-                && (!node_source(source_context, owner->decl_node,
+        if ((declaration->decl_node
+                && (!node_source(source_context, declaration->decl_node,
                         &declaring_unit, &declaring_tokens)
                     || !declaring_tokens))
-            || !declaring_unit || !owner->name.data
-            || !owner->name.u8_bytes) {
+            || !declaring_unit || !declaration->name.data
+            || !declaration->name.u8_bytes) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
-                "imported type '%.*s' has no source owner (owner=%.*s, current=%.*s, declaration=%s)",
-                (int)owner->name.u8_bytes,
-                owner->name.data ? owner->name.data : "",
+                "imported type '%.*s' has no declaring module (declaring=%.*s, current=%.*s, declaration=%s)",
+                (int)declaration->name.u8_bytes,
+                declaration->name.data ? declaration->name.data : "",
                 declaring_unit
                     ? (int)declaring_unit->module.identifier.u8_bytes : 0,
                 declaring_unit
                     ? declaring_unit->module.identifier.data : "",
                 (int)unit->module.identifier.u8_bytes,
                 unit->module.identifier.data,
-                owner->decl_node ? "present" : "missing");
+                declaration->decl_node ? "present" : "missing");
             abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
@@ -1334,7 +1336,7 @@ append_imported_type_requirements(
         core_buffer_append(&path, declaring_unit->module.identifier.data,
             declaring_unit->module.identifier.u8_bytes);
         core_buffer_putc(&path, '.');
-        core_buffer_append(&path, owner->name.data, owner->name.u8_bytes);
+        core_buffer_append(&path, declaration->name.data, declaration->name.u8_bytes);
         size_t next = ++*count;
         requirements[next] = (n00b_abi_requirement_v1){
             .symbol_kind = N00B_ABI_SYMBOL_TYPE,
@@ -1350,17 +1352,18 @@ append_imported_type_requirements(
         core_string_t reason = {};
         if (valid)
             valid = n00bb_abi_type_variables_bind_import(index,
-                type_context, owner, owner->type, (uint32_t)next,
+                type_context, declaration, declaration->type,
+                (uint32_t)next,
                 types, &reason);
         th_type *definition = valid
-            ? th_type_definition(type_context, owner->type) : nullptr;
-        if (valid && definition && definition != owner->type)
+            ? th_type_definition(type_context, declaration->type) : nullptr;
+        if (valid && definition && definition != declaration->type)
             valid = n00bb_abi_type_variables_bind_import(index,
-                type_context, owner, definition, (uint32_t)next,
+                type_context, declaration, definition, (uint32_t)next,
                 types, &reason);
         for (parse_sym_entry_t *member = (type->kind == N00B_ABI_TYPE_CALLBACK
-                || type->kind == N00B_ABI_TYPE_TRAIT) && owner->member_scope
-                ? owner->member_scope->first_in_scope : nullptr;
+                || type->kind == N00B_ABI_TYPE_TRAIT) && declaration->member_scope
+                ? declaration->member_scope->first_in_scope : nullptr;
              valid && member; member = member->next_in_scope) {
             if (member->kind != PARSE_SYM_FUNCTION || !member->type)
                 continue;
@@ -1375,7 +1378,7 @@ append_imported_type_requirements(
             core_buffer_t message = {0};
             core_buffer_printf(&message,
                 "cannot bind imported type variables for %.*s: %.*s",
-                (int)owner->name.u8_bytes, owner->name.data,
+                (int)declaration->name.u8_bytes, declaration->name.data,
                 (int)reason.u8_bytes, reason.data);
             abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
@@ -1564,9 +1567,9 @@ collect_declared_bound_types(ir_module_t *module,
 
 static bool
 collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *context)
+    n00bb_abi_type_declaration_lookup_fn type_declaration, void *context)
 {
-    if (!type_owner) return true;
+    if (!type_declaration) return true;
     for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         // Only a nominal type has a declaration. A type variable has none;
@@ -1575,12 +1578,13 @@ collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
         // what it's built with.
         th_kind kind = type ? th_kind_of(th_resolve(type)) : TH_VAR;
         if (kind != TH_NAMED && kind != TH_TRAIT) continue;
-        parse_sym_entry_t *owner = type_owner(context, type);
-        if (!owner || !(owner->decl_node || owner->owner_unit)
-            || !owner->type) continue;
-        bool added = th_kind_of(th_resolve(owner->type)) == TH_TRAIT
-            ? n00bb_abi_type_index_add_imported_trait(index, owner->type)
-            : n00bb_abi_type_index_add(index, owner->type, nullptr);
+        parse_sym_entry_t *declaration = type_declaration(context, type);
+        if (!declaration
+            || !(declaration->decl_node || declaration->owner_unit)
+            || !declaration->type) continue;
+        bool added = th_kind_of(th_resolve(declaration->type)) == TH_TRAIT
+            ? n00bb_abi_type_index_add_imported_trait(index, declaration->type)
+            : n00bb_abi_type_index_add(index, declaration->type, nullptr);
         if (!added) return false;
     }
     return true;
@@ -1771,13 +1775,13 @@ typedef struct {
     const core_translation_unit_t *unit;
     n00bb_abi_node_source_fn source;
     void *context;
-} abi_symbol_owner_t;
+} abi_symbol_source_t;
 
 static bool
 symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
                bool *include)
 {
-    const abi_symbol_owner_t *owner = opaque;
+    const abi_symbol_source_t *unit_source = opaque;
     parse_tree_t *node = symbol->decl_node;
     if (!node && symbol->definition_count)
         node = symbol->definition_nodes[0];
@@ -1791,9 +1795,10 @@ symbol_in_unit(void *opaque, const parse_sym_entry_t *symbol,
     }
     const core_translation_unit_t *source_unit = nullptr;
     parse_token_stream_t *tokens = nullptr;
-    if (!owner->source(owner->context, node, &source_unit, &tokens))
+    if (!unit_source->source(unit_source->context, node, &source_unit,
+                             &tokens))
         return false;
-    *include = source_unit == owner->unit;
+    *include = source_unit == unit_source->unit;
     return true;
 }
 
@@ -1830,7 +1835,7 @@ n00bb_abi_emit_unit(
     const core_target_desc_t *target, uint64_t artifact_capabilities,
     n00bb_abi_declaration_lookup_fn lookup, void *lookup_context,
     n00bb_abi_node_source_fn node_source, void *source_context,
-    n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
+    n00bb_abi_type_declaration_lookup_fn type_declaration, void *type_declaration_context,
     const n00bb_abi_graph_source_t *graphs,
     n00bb_abi_layout_fn layout, void *layout_context,
     n00bb_abi_packed_tables_t *out_tables,
@@ -1846,7 +1851,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_index_table_t index_table = {0};
     if (link && !node_source)
         return abi_unit_error(unit, CORE_STRING_STATIC(
-            "linked ABI emission requires source ownership for syntax nodes"));
+            "linked ABI emission requires the source unit of syntax nodes"));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     if (!declarations)
         return abi_unit_error(unit,
@@ -2032,7 +2037,7 @@ n00bb_abi_emit_unit(
     size_t stream_base = prefix_stream_count;
     size_t signature_stream_base = 0;
     size_t function_stream_base = 0;
-    abi_symbol_owner_t symbol_owner = {
+    abi_symbol_source_t symbol_source = {
         .unit = unit, .source = node_source, .context = source_context,
     };
 #define ABI_STAGE_TEXT(name, call) ((call) || ((failed_stage = (name)), false))
@@ -2045,7 +2050,7 @@ n00bb_abi_emit_unit(
                 (ir_module_t *)runtime_ir))
         && ABI_STAGE("symbol type collection",
             n00bb_abi_type_index_collect_symbols(type_index, symbols,
-                node_source ? symbol_in_unit : nullptr, &symbol_owner))
+                node_source ? symbol_in_unit : nullptr, &symbol_source))
         && ABI_STAGE("imported type collection",
             collect_imported_symbol_types(link, unit, type_index,
                 ir_module_types((ir_module_t *)runtime_ir)))
@@ -2056,8 +2061,8 @@ n00bb_abi_emit_unit(
             collect_declared_bound_types((ir_module_t *)runtime_ir,
                                          declarations, type_index))
         && ABI_STAGE("imported nominal declarations",
-            collect_imported_nominal_declarations(type_index, type_owner,
-                type_owner_context))
+            collect_imported_nominal_declarations(type_index, type_declaration,
+                type_declaration_context))
         && ABI_STAGE("direct type layouts",
             publish_catalog_direct_layouts(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
@@ -2068,8 +2073,8 @@ n00bb_abi_emit_unit(
                     layout_context))
             : ABI_STAGE("imported record specialization layouts",
                 publish_catalog_record_specializations(type_index,
-                    (ir_module_t *)runtime_ir, target, type_owner,
-                    type_owner_context)))
+                    (ir_module_t *)runtime_ir, target, type_declaration,
+                    type_declaration_context)))
         && ABI_STAGE("frame payload type collection",
             collect_frame_payload_types(unit, type_index,
                 (ir_module_t *)runtime_ir, target))
@@ -2083,8 +2088,8 @@ n00bb_abi_emit_unit(
                 layout_context)))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
-                (ir_module_t *)runtime_ir, symbols, type_owner,
-                type_owner_context, pool,
+                (ir_module_t *)runtime_ir, symbols, type_declaration,
+                type_declaration_context, pool,
                 &type_rows))
         && ABI_STAGE("imported function requirements",
             append_imported_symbol_requirements(link, unit, type_index,
@@ -2172,7 +2177,7 @@ n00bb_abi_emit_unit(
             valid = append_imported_type_requirements(type_index,
                 ir_module_types((ir_module_t *)runtime_ir), &type_rows,
                 unit, node_source, source_context,
-                type_owner, type_owner_context, pool, requirements,
+                type_declaration, type_declaration_context, pool, requirements,
                 &requirement_count);
         }
     }

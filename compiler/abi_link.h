@@ -67,6 +67,15 @@ const n00bb_abi_rows_t *n00bb_abi_symbols_named(
     const n00bb_abi_object_view_t *view, n00bb_abi_string_view_t name);
 const n00bb_abi_rows_t *n00bb_abi_functions_rooted(
     const n00bb_abi_object_view_t *view, core_string_t root);
+/* A declared nominal type's name is its declaring module's path and its
+ * own name (`module.Name`, spelled `variant module.Name` for a variant and
+ * `trait module.Name` for a trait). Sets *out_module to that path. False
+ * for any other name, such as an instantiation's (`module.List[int]`), and
+ * for a row that leaves out its declaration's facts: that row is a using
+ * module's, or an instantiation's that prints like its generic. */
+bool n00bb_abi_type_declaring_module_path(
+    const n00bb_abi_object_view_t *view, const n00b_abi_type_v1 *type,
+    n00bb_abi_string_view_t *out_module);
 const n00bb_abi_directory_entry_t *n00bb_abi_object_table(
     const n00bb_abi_object_view_t *view, uint32_t kind);
 const void *n00bb_abi_object_row(const n00bb_abi_object_view_t *view,
@@ -99,17 +108,17 @@ void n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected);
 typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
 
 /* Assigns one final index to each pre-remap identity and retains a checked
- * local-to-final map for every input table. Type-owned layout, trace, and
- * signature rows share their owner's identity; other reference-dependent
- * rows remain distinct until the remap/merge stage. */
+ * local-to-final map for every input table. A type's layout, trace, and
+ * signature rows share their parent type's identity; other
+ * reference-dependent rows remain distinct until the remap/merge stage. */
 n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
     const n00bb_abi_selected_objects_t *selected);
 typedef struct {
     size_t input;
     uint32_t table_kind;
     uint32_t row_index;
-    uint32_t owner_type_index;
-    uint32_t owner_row_index;
+    uint32_t parent_type_index;
+    uint32_t parent_row_index;
     uint32_t type_kind;
     uint32_t type_flags;
     uint64_t typehash;

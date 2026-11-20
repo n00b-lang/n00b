@@ -26,7 +26,7 @@ record Type_Record layout(c) {
     flags:                            u32
     alignment_bytes:                  u32
     layout_index:                     u32
-    owner_module_index:               u32
+    declaring_module_index:           u32
     tracing_index:                    u32
     components:                       Range
     fields_or_arms:                   Range
@@ -34,7 +34,7 @@ record Type_Record layout(c) {
     semantic_width_bits:              u32
     unpacked_storage_bits:            u32
     call_signature_index:             u32
-    typevar_owner_scope_index:        u32
+    typevar_declaring_scope_index:    u32
     typevar_ordinal:                  u32
     specialization_start_ix:          u32
     specialization_end_ix:            u32

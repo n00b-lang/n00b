@@ -18,7 +18,7 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     n00bb_abi_type_identity_rows_t *types, n00bb_abi_enum_rows_t *out)
 {
     if (!index || !declarations || !names || !types || !types->rows
-        || !types->owners || !out
+        || !types->declarations || !out
         || types->count != n00bb_abi_type_index_count(index)) return false;
     core_list_t(n00b_abi_enum_item_v1) rows = {0};
     core_list_t(uint32_t) stream = {0};
@@ -29,19 +29,20 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
     for (size_t i = 1; valid && i < types->count; i++) {
         bool flagset = types->rows[i].kind == N00B_ABI_TYPE_FLAGSET;
         if (types->rows[i].kind != N00B_ABI_TYPE_ENUM && !flagset) continue;
-        parse_sym_entry_t *owner = types->owners[i];
-        while (owner && parse_sym_binding_origin(owner))
-            owner = parse_sym_binding_origin(owner);
-        if (!owner) continue;
-        if (!owner->member_scope || !owner->decl_node) {
+        parse_sym_entry_t *declaration = types->declarations[i];
+        while (declaration && parse_sym_binding_origin(declaration))
+            declaration = parse_sym_binding_origin(declaration);
+        if (!declaration) continue;
+        if (!declaration->member_scope || !declaration->decl_node) {
             valid = false;
             break;
         }
         core_list_t(enum_symbol_ptr_t) items = {0};
-        for (parse_sym_entry_t *item = owner->member_scope->first_in_scope;
+        for (parse_sym_entry_t *item =
+                 declaration->member_scope->first_in_scope;
              item; item = item->next_in_scope) {
             if (item->kind != PARSE_SYM_ENUM_CONST) continue;
-            if (item->owner_type != owner || !item->decl_node
+            if (item->owner_type != declaration || !item->decl_node
                 || !item->has_comptime_value || !item->comptime_value) {
                 valid = false;
                 break;
@@ -109,7 +110,7 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
                 && types->rows[i].kind != N00B_ABI_TYPE_FLAGSET) continue;
             // Items are the declaration's symbols: only the module that
             // declares the enum has them.
-            if (types->owners[i])
+            if (types->declarations[i])
                 types->rows[i].fields_or_arms = ranges[i];
             else
                 types->rows[i].flags |=

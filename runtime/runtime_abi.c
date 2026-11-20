@@ -371,19 +371,20 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                     typevar_import_requirement_index));
         if (!n00bb_abi_type_variable_final_valid(type))
             return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
-        if (type && type->typevar_owner_type_index) {
-            const n00b_abi_type_v1 *owner = n00b_abi_v1_type(snapshot,
-                type->typevar_owner_type_index);
-            // A declared type owns its parameters; a generic alias's are
-            // owned by its target, which can be any type that can hold a
-            // variable (`alias Ints = Array['T]` has an array own `'T`).
-            if (!owner || owner->kind == N00B_ABI_TYPE_NIL
-                || owner->kind == N00B_ABI_TYPE_PRIMITIVE
-                || owner->kind == N00B_ABI_TYPE_STRING
-                || owner->kind == N00B_ABI_TYPE_VARIABLE
-                || owner->kind == N00B_ABI_TYPE_FOREIGN)
+        if (type && type->typevar_declaring_type_index) {
+            const n00b_abi_type_v1 *declaring = n00b_abi_v1_type(snapshot,
+                type->typevar_declaring_type_index);
+            // A declared type declares its parameters; a generic alias's
+            // are declared by its target, which can be any type that can
+            // hold a variable (`alias Ints = Array['T]` has an array
+            // declare `'T`).
+            if (!declaring || declaring->kind == N00B_ABI_TYPE_NIL
+                || declaring->kind == N00B_ABI_TYPE_PRIMITIVE
+                || declaring->kind == N00B_ABI_TYPE_STRING
+                || declaring->kind == N00B_ABI_TYPE_VARIABLE
+                || declaring->kind == N00B_ABI_TYPE_FOREIGN)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i,
-                    offsetof(n00b_abi_type_v1, typevar_owner_type_index));
+                    offsetof(n00b_abi_type_v1, typevar_declaring_type_index));
         }
         if (type->layout_index) {
             const n00b_abi_layout_v1 *layout = n00b_abi_v1_layout(snapshot,
@@ -507,7 +508,7 @@ metadata_named_arguments_valid(const n00b_abi_snapshot_v1 *snapshot,
             const n00b_abi_type_argument_v1 *arg = n00b_abi_v1_record(
                 snapshot, N00B_ABI_TABLE_TYPE_ARGUMENT,
                 type->named_arguments.first + j, nullptr);
-            if (!arg || arg->owner_type_index != i || arg->ordinal != j)
+            if (!arg || arg->parent_type_index != i || arg->ordinal != j)
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i, 0);
         }
     }
@@ -515,7 +516,7 @@ metadata_named_arguments_valid(const n00b_abi_snapshot_v1 *snapshot,
         const n00b_abi_type_argument_v1 *arg = n00b_abi_v1_record(
             snapshot, N00B_ABI_TABLE_TYPE_ARGUMENT, i, nullptr);
         const n00b_abi_type_v1 *type = arg
-            ? n00b_abi_v1_type(snapshot, arg->owner_type_index) : nullptr;
+            ? n00b_abi_v1_type(snapshot, arg->parent_type_index) : nullptr;
         if (!type || arg->ordinal >= type->named_arguments.count
             || type->named_arguments.first + arg->ordinal != i)
             return invalid_record(error, N00B_ABI_TABLE_TYPE_ARGUMENT, i, 0);
