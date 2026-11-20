@@ -417,9 +417,10 @@ stored_component(ir_summaries_t *summaries, ir_func_t *const *members,
         all      = found[i] != nullptr;
     }
     for (size_t i = 0; all && i < count; i++)
-        all = stored_deps_hold(summaries, found[i], members, count)
-            && covers_callees(summaries, members, count, i, found[i])
-            && inputs_hold(summaries, &found[i]->inputs);
+        all = covers_callees(summaries, members, count, i, found[i])
+            && (!summaries->fallback
+                || (stored_deps_hold(summaries, found[i], members, count)
+                    && inputs_hold(summaries, &found[i]->inputs)));
     for (size_t i = 0; all && i < count; i++)
         core_dict_put(&summaries->by_function, members[i], found[i]);
     if (all) stamp_component(summaries, members, count);

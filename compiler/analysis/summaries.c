@@ -560,13 +560,13 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots,
-                       n00bb_cached_body(analysis->emitted_functions.data[i]));
-    for (size_t i = 0; i < initializers->len; i++)
-        core_list_push(roots, n00bb_cached_body(initializers->data[i]));
-    for (size_t i = 0; i < entries->len; i++)
-        core_list_push(roots, n00bb_cached_body(entries->data[i]));
+    const core_list_t(n00bb_ir_func_ptr_t) *lists[] = {
+        &analysis->emitted_functions, &analysis->reachable_functions,
+        initializers, entries,
+    };
+    for (size_t l = 0; l < sizeof(lists) / sizeof(*lists); l++)
+        for (size_t i = 0; i < lists[l]->len; i++)
+            core_list_push(roots, n00bb_cached_body(lists[l]->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         if (!state || !state->ir_module || state->interface_module) continue;

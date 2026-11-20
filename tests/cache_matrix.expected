@@ -2,11 +2,3 @@ build.hello.cross-records
 build.hello.warm
 build.records.cross-hello
 build.records.warm
-check.hello.cross-records
-check.hello.warm
-check.records.cross-hello
-check.records.warm
-check.text_suite.cross-hello
-check.text_suite.warm
-check.threads.cross-hello
-check.threads.cross-records

@@ -5,9 +5,7 @@
 #include "lib/os.h"
 
 #define HANDOFF_VARIABLE CORE_STRING_STATIC("N00BB_HANDOFF")
-#define CACHE_STRICT CORE_STRING_STATIC("cache_strict")
 #define CACHE_EXCLUDE CORE_STRING_STATIC("cache_exclude")
-#define CACHE_SUMMARIES CORE_STRING_STATIC("cache_summaries")
 #define TOOLCHAIN_REASON CORE_STRING_STATIC("toolchain_reason")
 
 static n00bb_handoff_t handoff;
@@ -20,15 +18,6 @@ put(core_buffer_t *out, core_string_t name, core_string_t value)
     core_buffer_printf(out, "=%zu:", value.u8_bytes);
     core_buffer_append_string(out, value);
     core_buffer_putc(out, ';');
-}
-
-static void
-put_number(core_buffer_t *out, core_string_t name, int64_t value)
-{
-    core_buffer_t text = {0};
-    core_buffer_printf(&text, "%lld", (long long)value);
-    put(out, name, core_buffer_string(&text));
-    core_buffer_release(&text);
 }
 
 static bool
@@ -62,14 +51,8 @@ load(void)
     core_string_t name = {};
     core_string_t value = {};
     while (rest.u8_bytes && take(&rest, &name, &value)) {
-        int64_t number = 0;
-        (void)core_string_parse_i64(value, 10, &number, nullptr);
-        if (core_string_eq(name, CACHE_STRICT))
-            handoff.cache_strict = number != 0;
-        else if (core_string_eq(name, CACHE_EXCLUDE))
+        if (core_string_eq(name, CACHE_EXCLUDE))
             n00bb_handoff_set(&handoff.cache_exclude, value);
-        else if (core_string_eq(name, CACHE_SUMMARIES))
-            n00bb_handoff_set(&handoff.cache_summaries, value);
         else if (core_string_eq(name, TOOLCHAIN_REASON))
             n00bb_handoff_set(&handoff.toolchain_reason, value);
     }
@@ -96,11 +79,8 @@ n00bb_handoff_pass(void)
 {
     const n00bb_handoff_t *record = n00bb_handoff();
     core_buffer_t out = {0};
-    if (record->cache_strict) put_number(&out, CACHE_STRICT, 1);
     if (record->cache_exclude.u8_bytes)
         put(&out, CACHE_EXCLUDE, record->cache_exclude);
-    if (record->cache_summaries.u8_bytes)
-        put(&out, CACHE_SUMMARIES, record->cache_summaries);
     if (record->toolchain_reason.u8_bytes)
         put(&out, TOOLCHAIN_REASON, record->toolchain_reason);
     bool passed = out.byte_len

@@ -503,7 +503,8 @@ static bool
 collect_phase_reachable_function(ir_func_t *function, void *raw)
 {
     reachable_collection_t *collection = raw;
-    if (!n00bb_cache_owns(collection->cache, function->owner))
+    if (!collection->cached
+        || !n00bb_cache_owns(collection->cache, function->owner))
         core_list_push(*collection->functions, function);
     else if (collection->cached && function->n_blocks)
         core_list_push(*collection->cached, function);
