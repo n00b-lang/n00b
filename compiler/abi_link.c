@@ -693,10 +693,6 @@ typedef struct {
 } abi_link_key_t;
 
 static bool nonconcrete_key_init(abi_link_key_t *key);
-static bool link_key_from_parent_type(abi_link_key_t *key,
-                                     uint32_t type_index, uint32_t kind);
-static bool link_key_from_type_argument(abi_link_key_t *key);
-static bool link_key_from_member(abi_link_key_t *key, uint32_t kind);
 
 static core_hash_value_t
 link_key_hash(void *value)
@@ -762,25 +758,6 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
         key->length = sizeof(key->scalar);
         return true;
     }
-    case N00B_ABI_TABLE_LAYOUT: {
-        const n00b_abi_layout_v1 *layout = key->row;
-        return link_key_from_parent_type(key, layout->type_index, kind);
-    }
-    case N00B_ABI_TABLE_TRACE: {
-        const n00b_abi_trace_v1 *trace = key->row;
-        return link_key_from_parent_type(key, trace->type_index, kind);
-    }
-    case N00B_ABI_TABLE_CALL_SIGNATURE: {
-        const n00b_abi_call_signature_v1 *signature = key->row;
-        return link_key_from_parent_type(key, signature->type_index, kind);
-    }
-    case N00B_ABI_TABLE_TYPE_ARGUMENT:
-        return link_key_from_type_argument(key);
-    case N00B_ABI_TABLE_FIELD:
-    case N00B_ABI_TABLE_ARM:
-    case N00B_ABI_TABLE_ENUM_ITEM:
-    case N00B_ABI_TABLE_TRAIT_METHOD:
-        return link_key_from_member(key, kind);
     case N00B_ABI_TABLE_PACKAGE:
         return link_key_string(key,
             &((const n00b_abi_package_v1 *)key->row)->name);
@@ -826,95 +803,82 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
     }
 }
 
+// Rows that belong to one type: its layout, trace and call signature, its
+// named arguments, and its members. Their identity is their type's and
+// their place in it, so they are matched once every type row has its
+// linked index.
 static bool
-link_key_from_parent_type(abi_link_key_t *key, uint32_t type_index,
-                         uint32_t kind)
+link_kind_is_type_part(uint32_t kind)
 {
-    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, type_index);
-    if (!type) return false;
-    uint32_t parent_index = kind == N00B_ABI_TABLE_LAYOUT
-        ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
-            ? type->tracing_index : type->call_signature_index;
-    if (parent_index != key->local_index) return false;
-    abi_link_key_t parent = *key;
-    parent.row = type;
-    parent.local_index = type_index;
-    parent.bytes = nullptr;
-    parent.owned_bytes = nullptr;
-    parent.unique = false;
-    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(parent.owned_bytes);
+    switch (kind) {
+    case N00B_ABI_TABLE_LAYOUT:
+    case N00B_ABI_TABLE_TRACE:
+    case N00B_ABI_TABLE_CALL_SIGNATURE:
+    case N00B_ABI_TABLE_TYPE_ARGUMENT:
+    case N00B_ABI_TABLE_FIELD:
+    case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_ENUM_ITEM:
+    case N00B_ABI_TABLE_TRAIT_METHOD:
+        return true;
+    default:
         return false;
     }
-    key->scalar = parent.scalar;
-    key->auxiliary = parent.auxiliary;
-    key->owned_bytes = parent.owned_bytes;
-    key->unique = parent.unique;
-    key->bytes = parent.bytes == (const uint8_t *)&parent.scalar
-        ? (const uint8_t *)&key->scalar : parent.bytes;
-    key->length = parent.length;
-    return true;
 }
 
+// A type part's identity: its type's linked index and its ordinal in the
+// type (zero for a layout, trace or call signature, of which a type has
+// one). Two rows match exactly when their types' rows did.
 static bool
-link_key_from_type_argument(abi_link_key_t *key)
+link_type_part_key_init(const n00bb_abi_index_plan_t *plan,
+                        abi_link_key_t *key, uint32_t kind)
 {
-    const n00b_abi_type_argument_v1 *argument = key->row;
-    const n00b_abi_type_v1 *type = n00bb_abi_object_row(key->view,
-        N00B_ABI_TABLE_TYPE, argument->parent_type_index);
-    if (!type || argument->ordinal >= type->named_arguments.count
-        || type->named_arguments.first + argument->ordinal
-            != key->local_index) return false;
-    abi_link_key_t parent = *key;
-    parent.row = type;
-    parent.local_index = argument->parent_type_index;
-    parent.owned_bytes = nullptr;
-    parent.unique = false;
-    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(parent.owned_bytes);
-        return false;
+    uint32_t type_index = 0, ordinal = 0;
+    const n00b_abi_type_v1 *type = nullptr;
+    switch (kind) {
+    case N00B_ABI_TABLE_LAYOUT:
+    case N00B_ABI_TABLE_TRACE:
+    case N00B_ABI_TABLE_CALL_SIGNATURE: {
+        type_index = kind == N00B_ABI_TABLE_LAYOUT
+            ? ((const n00b_abi_layout_v1 *)key->row)->type_index
+            : kind == N00B_ABI_TABLE_TRACE
+            ? ((const n00b_abi_trace_v1 *)key->row)->type_index
+            : ((const n00b_abi_call_signature_v1 *)key->row)->type_index;
+        type = n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
+                                    type_index);
+        if (!type) return false;
+        uint32_t part_index = kind == N00B_ABI_TABLE_LAYOUT
+            ? type->layout_index : kind == N00B_ABI_TABLE_TRACE
+                ? type->tracing_index : type->call_signature_index;
+        if (part_index != key->local_index) return false;
+        break;
     }
-    key->owned_bytes = core_buffer_empty();
-    core_buffer_append(key->owned_bytes, (const char *)parent.bytes,
-                       parent.length);
-    core_buffer_append(key->owned_bytes, (const char *)&argument->ordinal,
-                       sizeof(argument->ordinal));
-    core_buffer_free(parent.owned_bytes);
-    key->bytes = (const uint8_t *)key->owned_bytes->data;
-    key->length = key->owned_bytes->byte_len;
-    return true;
-}
-
-static bool
-link_key_from_member(abi_link_key_t *key, uint32_t kind)
-{
-    n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(kind, key->row);
-    const n00b_abi_type_v1 *type = facts.parent
-        ? n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
-                               facts.parent) : nullptr;
-    if (!type) return false;
-    abi_link_key_t parent = *key;
-    parent.row = type;
-    parent.local_index = facts.parent;
-    parent.owned_bytes = nullptr;
-    parent.unique = false;
-    if (!link_key_init(&parent, N00B_ABI_TABLE_TYPE)) {
-        core_buffer_free(parent.owned_bytes);
-        return false;
+    case N00B_ABI_TABLE_TYPE_ARGUMENT: {
+        const n00b_abi_type_argument_v1 *argument = key->row;
+        type_index = argument->parent_type_index;
+        ordinal = argument->ordinal;
+        type = n00bb_abi_object_row(key->view, N00B_ABI_TABLE_TYPE,
+                                    type_index);
+        if (!type || ordinal >= type->named_arguments.count
+            || type->named_arguments.first + ordinal != key->local_index)
+            return false;
+        break;
     }
-    key->unique = parent.unique;
-    key->auxiliary = parent.auxiliary;
-    if (!key->unique) {
-        key->owned_bytes = core_buffer_empty();
-        core_buffer_append(key->owned_bytes, (const char *)parent.bytes,
-                           parent.length);
-        core_buffer_append(key->owned_bytes, (const char *)&facts.ordinal,
-                           sizeof(facts.ordinal));
-        key->bytes = (const uint8_t *)key->owned_bytes->data;
-        key->length = key->owned_bytes->byte_len;
+    default: {
+        n00bb_abi_member_facts_t facts = n00bb_abi_member_facts(kind,
+                                                                key->row);
+        type_index = facts.parent;
+        ordinal = facts.ordinal;
+        if (!type_index || !n00bb_abi_object_row(key->view,
+                N00B_ABI_TABLE_TYPE, type_index)) return false;
+        break;
     }
-    core_buffer_free(parent.owned_bytes);
+    }
+    uint32_t linked_type = 0;
+    if (!n00bb_abi_index_plan_map(plan, key->input_index,
+            N00B_ABI_TABLE_TYPE, type_index, &linked_type)) return false;
+    key->scalar = ((uint64_t)linked_type << 32) | ordinal;
+    key->bytes = (const uint8_t *)&key->scalar;
+    key->length = sizeof(key->scalar);
     return true;
 }
 
@@ -2309,80 +2273,95 @@ n00bb_abi_index_plan_build_detailed(
     bool valid = true;
     const abi_link_key_t *first_nil = nullptr;
     size_t next_key = 0;
+    // The first pass matches every row but a type's parts; the second
+    // matches those by their type's linked index. Each table's rows are
+    // still numbered in input order.
+    for (int pass = 0; valid && pass < 2; pass++)
     for (size_t input = 0; valid && input < selected->count; input++) {
         const n00bb_abi_object_view_t *view = &selected->views[input];
         for (size_t j = 0; valid && j < view->directory_count; j++) {
             const n00bb_abi_directory_entry_t *directory =
                 &view->directory[j];
             uint32_t kind = directory->kind;
-            bool stream = link_kind_is_stream(kind);
-            if (!kind || kind >= kind_count || (!stream
-                && !directory->record_count)) {
-                if (failure) *failure = (n00bb_abi_index_plan_failure_t){
-                    .input = input, .table_kind = kind,
-                    .reason = CORE_STRING_STATIC(
-                        "invalid table kind or row count"),
-                };
-                valid = false;
-                break;
-            }
-            uint32_t max_index = kind == N00B_ABI_TABLE_TYPE
-                ? INT32_MAX : UINT32_MAX - 1;
-            bool positional = link_kind_is_positional(kind);
-            if (!positional && !tables[kind])
-                tables[kind] = core_indexed_table_new(1, max_index,
-                    link_key_hash, link_key_eq);
-            if (positional && !positional_seen[kind]) {
-                positional_seen[kind] = true;
-                positional_next[kind] = stream ? 0 : 1;
-            }
-            core_index_remap_t *remap = core_index_remap_new(
-                directory->record_count, max_index);
-            plan->maps[input * kind_count + kind] = remap;
-            valid = (positional || tables[kind]) && remap;
-            if (!valid) break;
-            uint32_t first = 0;
-            if (!stream) {
-                const void *row = view->metadata.bytes
-                    + directory->file_offset;
-                valid = core_index_remap_set(remap, 0, 0);
-                if (kind == N00B_ABI_TABLE_TYPE) {
-                    abi_link_key_t *nil = &keys[next_key++];
-                    *nil = (abi_link_key_t){
-                        .selected = selected, .view = view, .row = row};
-                    const n00b_abi_type_v1 *type = row;
-                    valid = valid && type->kind == N00B_ABI_TYPE_NIL
-                        && type->typehash && (!first_nil
-                            || (type->typehash
-                                == ((const n00b_abi_type_v1 *)
-                                    first_nil->row)->typehash
-                                && compatible_type_identity(first_nil, nil,
-                                                            nullptr)));
-                    if (!first_nil) first_nil = nil;
+            bool type_part = link_kind_is_type_part(kind);
+            if (pass && !type_part) continue;
+            core_index_remap_t *remap = pass
+                ? plan->maps[input * kind_count + kind] : nullptr;
+            uint32_t first = 1;
+            if (!pass) {
+                bool stream = link_kind_is_stream(kind);
+                if (!kind || kind >= kind_count || (!stream
+                    && !directory->record_count)) {
+                    if (failure) *failure = (n00bb_abi_index_plan_failure_t){
+                        .input = input, .table_kind = kind,
+                        .reason = CORE_STRING_STATIC(
+                            "invalid table kind or row count"),
+                    };
+                    valid = false;
+                    break;
                 }
-                else valid = valid && reserved_row_is_zero(row,
-                    directory->record_bytes);
-                if (!valid && failure)
-                    *failure = (n00bb_abi_index_plan_failure_t){
-                        .input = input, .table_kind = kind,
-                        .reason = CORE_STRING_STATIC("invalid reserved row"),
-                    };
-                first = 1;
-            }
-            if (positional) {
-                // Placed once every identity has its source row.
-                if (link_kind_is_referenced(kind)) continue;
-                for (uint32_t local = first; valid
-                     && local < directory->record_count; local++)
-                    valid = positional_next[kind] <= max_index
-                        && core_index_remap_set(remap, local,
-                               (uint32_t)positional_next[kind]++);
-                if (!valid && failure)
-                    *failure = (n00bb_abi_index_plan_failure_t){
-                        .input = input, .table_kind = kind,
-                        .reason = CORE_STRING_STATIC("could not remap row"),
-                    };
-                continue;
+                uint32_t max_index = kind == N00B_ABI_TABLE_TYPE
+                    ? INT32_MAX : UINT32_MAX - 1;
+                bool positional = link_kind_is_positional(kind);
+                if (!positional && !tables[kind])
+                    tables[kind] = core_indexed_table_new(1, max_index,
+                        link_key_hash, link_key_eq);
+                if (positional && !positional_seen[kind]) {
+                    positional_seen[kind] = true;
+                    positional_next[kind] = stream ? 0 : 1;
+                }
+                remap = core_index_remap_new(directory->record_count,
+                                             max_index);
+                plan->maps[input * kind_count + kind] = remap;
+                valid = (positional || tables[kind]) && remap;
+                if (!valid) break;
+                first = 0;
+                if (!stream) {
+                    const void *row = view->metadata.bytes
+                        + directory->file_offset;
+                    valid = core_index_remap_set(remap, 0, 0);
+                    if (kind == N00B_ABI_TABLE_TYPE) {
+                        abi_link_key_t *nil = &keys[next_key++];
+                        *nil = (abi_link_key_t){
+                            .selected = selected, .view = view, .row = row};
+                        const n00b_abi_type_v1 *type = row;
+                        valid = valid && type->kind == N00B_ABI_TYPE_NIL
+                            && type->typehash && (!first_nil
+                                || (type->typehash
+                                    == ((const n00b_abi_type_v1 *)
+                                        first_nil->row)->typehash
+                                    && compatible_type_identity(first_nil,
+                                                                nil,
+                                                                nullptr)));
+                        if (!first_nil) first_nil = nil;
+                    }
+                    else valid = valid && reserved_row_is_zero(row,
+                        directory->record_bytes);
+                    if (!valid && failure)
+                        *failure = (n00bb_abi_index_plan_failure_t){
+                            .input = input, .table_kind = kind,
+                            .reason = CORE_STRING_STATIC(
+                                "invalid reserved row"),
+                        };
+                    first = 1;
+                }
+                if (positional) {
+                    // Placed once every identity has its source row.
+                    if (link_kind_is_referenced(kind)) continue;
+                    for (uint32_t local = first; valid
+                         && local < directory->record_count; local++)
+                        valid = positional_next[kind] <= max_index
+                            && core_index_remap_set(remap, local,
+                                   (uint32_t)positional_next[kind]++);
+                    if (!valid && failure)
+                        *failure = (n00bb_abi_index_plan_failure_t){
+                            .input = input, .table_kind = kind,
+                            .reason = CORE_STRING_STATIC(
+                                "could not remap row"),
+                        };
+                    continue;
+                }
+                if (type_part) continue;
             }
             for (uint32_t local = first; valid
                  && local < directory->record_count; local++) {
@@ -2397,7 +2376,9 @@ n00bb_abi_index_plan_build_detailed(
                 bool inserted = false;
                 // A module's own object doesn't name a type's declaring
                 // module; only the linker does, from the type's name.
-                bool key_valid = link_key_init(key, kind)
+                bool key_valid = (type_part
+                        ? link_type_part_key_init(plan, key, kind)
+                        : link_key_init(key, kind))
                     && (kind != N00B_ABI_TABLE_TYPE
                         || !((const n00b_abi_type_v1 *)row)
                             ->declaring_module_index);
