@@ -54,7 +54,7 @@ function_symbol(const void *object, size_t object_bytes,
     if (relocation.target_is_section
         || !core_object_symbol_at(object, object_bytes, format, section,
                relocation.native_symbol_index, &symbol)
-        || !core_object_symbol_extent_in(places, object, object_bytes, format,
+        || !core_object_symbol_extent(places, object, object_bytes, format,
                section, relocation.native_symbol_index, &out->code_bytes))
         return false;
     out->name = symbol.name;
