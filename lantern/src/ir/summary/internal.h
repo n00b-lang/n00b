@@ -73,6 +73,8 @@ typedef enum : uint8_t {
     SUMMARY_INPUT_OVERLAP,
     SUMMARY_INPUT_REINTERPRETED,
     SUMMARY_INPUT_ENTRY_ACCESS,
+    // Whether a global is hidden from a caller's module (global_hidden).
+    SUMMARY_INPUT_HIDDEN,
 } summary_input_kind_t;
 
 typedef struct {
@@ -88,6 +90,12 @@ typedef struct {
     uint64_t             answer;
 } summary_input_t;
 core_list_decl(summary_input_t);
+
+typedef struct {
+    const ir_global_t *global;
+    uint8_t            hidden;
+} summary_hidden_t;
+core_list_decl(summary_hidden_t);
 
 struct ir_summary_t {
     const ir_func_t           *function;
@@ -158,6 +166,10 @@ struct ir_summaries_t {
     // Callee summaries as callers behind a barrier see them, by callee and
     // the caller's module.
     core_dict_t               views;
+    // While a view is made, the hidden questions it asks (pairs of a
+    // global and its answer), kept with the view to note again whenever
+    // a caller is handed it.
+    core_list_t(summary_hidden_t) *view_hidden;
 };
 
 typedef ir_spath_list_t path_list_t;
@@ -662,6 +674,8 @@ static void note_entries(ir_summaries_t *summaries, uint32_t flag,
                          const ir_summary_t *entry);
 static void note_global(ir_summaries_t *summaries, const ir_global_t *global,
                         bool reachable);
+static void note_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
+                        const ir_global_t *global, uint8_t hidden);
 static bool inherits_answer(ir_summaries_t *summaries,
                             const ir_func_t *caller, const ir_func_t *callee,
                             core_string_t effect);

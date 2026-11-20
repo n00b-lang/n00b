@@ -246,6 +246,15 @@ note_global(ir_summaries_t *summaries, const ir_global_t *global,
         .answer = reachable ? 2 : 1});
 }
 
+static void
+note_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
+            const ir_global_t *global, uint8_t hidden)
+{
+    record_input(summaries, (summary_input_t){
+        .kind = SUMMARY_INPUT_HIDDEN, .caller = caller, .global = global,
+        .answer = (uint64_t)hidden + 1});
+}
+
 static bool
 inherits_answer(ir_summaries_t *summaries, const ir_func_t *caller,
                 const ir_func_t *callee, core_string_t effect)
@@ -362,6 +371,11 @@ current_answer(ir_summaries_t *summaries, const summary_input_t *input)
         return (uint64_t)entries_access(summaries, input->site & 0xffff,
                                         &place) + 1;
     }
+    case SUMMARY_INPUT_HIDDEN:
+        return hooks && hooks->global_hidden && input->caller
+            ? (uint64_t)hooks->global_hidden(hooks->context, input->caller,
+                                             input->global) + 1
+            : (uint64_t)IR_SUMMARY_VISIBLE + 1;
     }
     return 0;
 }

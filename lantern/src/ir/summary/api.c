@@ -704,6 +704,7 @@ typedef struct {
     const ir_module_t  *module;
     uint64_t      stamp;
     uint64_t      revision;
+    core_list_t(summary_hidden_t) hidden;
 } summary_view_t;
 
 static uint8_t
@@ -711,11 +712,18 @@ path_hidden(ir_summaries_t *summaries, const ir_func_t *caller,
             const ir_spath_t *path)
 {
     const ir_summary_hooks_t *hooks = summaries->hooks;
-    return (path->root == IR_SPLACE_GLOBAL
-            || path->root == IR_SPLACE_THREAD) && path->global
-        ? hooks->global_hidden(hooks->context, caller,
-                               ir_global_identity(path->global))
-        : IR_SUMMARY_VISIBLE;
+    if ((path->root != IR_SPLACE_GLOBAL && path->root != IR_SPLACE_THREAD)
+        || !path->global) return IR_SUMMARY_VISIBLE;
+    const ir_global_t *global = ir_global_identity(path->global);
+    uint8_t hidden = hooks->global_hidden(hooks->context, caller, global);
+    // The answer is one of the summary's inputs, as a global's
+    // reachability is: a summary kept that relied on it is only reused
+    // where the global hides from the caller the same way.
+    note_hidden(summaries, caller, global, hidden);
+    if (summaries->view_hidden)
+        core_list_push(*summaries->view_hidden, ((summary_hidden_t){
+            .global = global, .hidden = hidden}));
+    return hidden;
 }
 
 static bool
@@ -752,6 +760,7 @@ views_free(ir_summaries_t *summaries)
     core_dict_foreach(&summaries->views, entry) {
         summary_view_t *cached = entry->value;
         view_release(cached->view);
+        core_list_free(cached->hidden);
         core_free(cached);
     }
     core_dict_free(&summaries->views);
@@ -818,8 +827,15 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
     summary_view_t *cached = core_dict_get(&summaries->views, key, nullptr);
     uint64_t stamp = view_stamp(callee);
     if (cached && cached->source == callee && cached->module == caller->owner
-        && cached->stamp == stamp && cached->revision == callee->revision)
+        && cached->stamp == stamp && cached->revision == callee->revision) {
+        for (size_t i = 0; i < cached->hidden.len; i++)
+            note_hidden(summaries, caller, cached->hidden.data[i].global,
+                        cached->hidden.data[i].hidden);
         return cached->view ? cached->view : callee;
+    }
+    core_list_t(summary_hidden_t) asked = core_list_new(summary_hidden_t);
+    core_list_t(summary_hidden_t) *outer = summaries->view_hidden;
+    summaries->view_hidden = &asked;
     bool hides = false;
     for (size_t i = 0; !hides && i < callee->paths.len; i++)
         hides = hidden_path(summaries, caller, &callee->paths.data[i]);
@@ -843,15 +859,20 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
         view_flows(summaries, caller, &view->flows[IR_SFLOW_STORES],
                    &callee->flows[IR_SFLOW_STORES]);
     }
+    summaries->view_hidden = outer;
     if (!cached) {
         cached = core_alloc(summary_view_t);
         *cached = (summary_view_t){0};
         core_dict_put(&summaries->views, key, cached);
     }
-    else view_release(cached->view);
+    else {
+        view_release(cached->view);
+        core_list_free(cached->hidden);
+    }
     *cached = (summary_view_t){.view = view, .source = callee,
                                .module = caller->owner, .stamp = stamp,
-                               .revision = callee->revision};
+                               .revision = callee->revision,
+                               .hidden = asked};
     return view ? view : callee;
 }
 
