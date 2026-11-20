@@ -145,12 +145,14 @@ expect_once "$tmp/labels.log" \
 }
 labels env >"$tmp/env.log" 2>&1 || true
 sed -n '/^package roots$/,/^$/p' "$tmp/env.log" >"$tmp/roots.log"
-expect_once "$tmp/roots.log" "  --path     $nlayers/flag"
-expect_once "$tmp/roots.log" "  N00B_PATH  $nlayers/env"
 expect_once "$tmp/roots.log" \
-    "  project    $nlayers/project/plib  (from $nlayers/project/n00b.cfg:2)"
+    "  $nlayers/flag  (\`--path\` entry \`$nlayers/flag\`)"
 expect_once "$tmp/roots.log" \
-    "  user       $nlayers/user  (from $nlayers/home/.config/n00b/config.cfg:2)"
+    "  $nlayers/env  (\`N00B_PATH\` entry \`$nlayers/env\`)"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/project/plib  (\`paths.path\` entry \`plib\` from $nlayers/project/n00b.cfg:2)"
+expect_once "$tmp/roots.log" \
+    "  $nlayers/user  (\`paths.path\` entry \`$nlayers/user\` from $nlayers/home/.config/n00b/config.cfg:2)"
 [ "$(grep -c '^  ' "$tmp/roots.log")" -eq 6 ] || {
     echo 'n00b env listed a root more than once' >&2
     cat "$tmp/roots.log" >&2
@@ -166,10 +168,10 @@ ln -s "$layers/project" "$tmp/linked"
     "$compiler" env --path sub --path "$nlayers/project/sub") \
     >"$tmp/linked.log" 2>&1 || true
 sed -n '/^package roots$/,/^$/p' "$tmp/linked.log" >"$tmp/roots.log"
-expect_once "$tmp/roots.log" "  default    $nlayers/project"
-expect_once "$tmp/roots.log" "  --path     sub"
+expect_once "$tmp/roots.log" "  $nlayers/project  (the current directory)"
+expect_once "$tmp/roots.log" "  $nlayers/project/sub  (\`--path\` entry \`sub\`)"
 if grep -q 'problem' "$tmp/roots.log" \
-        || [ "$(grep -c '^  --path' "$tmp/roots.log")" -ne 1 ]; then
+        || [ "$(grep -c '`--path`' "$tmp/roots.log")" -ne 1 ]; then
     echo 'a relative entry from a linked directory was mishandled' >&2
     cat "$tmp/roots.log" >&2
     exit 1

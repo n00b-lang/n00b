@@ -1489,6 +1489,23 @@ root_display(const n00bb_root_t *root, core_string_t cwd)
     }
 }
 
+size_t
+n00bb_resolver_root_count(const n00bb_resolver_t *resolver)
+{
+    return resolver ? resolver->roots.len : 0;
+}
+
+core_string_t
+n00bb_resolver_root(const n00bb_resolver_t *resolver, size_t index,
+                    core_string_t *display)
+{
+    core_string_t cwd = canonical_cwd();
+    const n00bb_root_t *root = &resolver->roots.data[index];
+    *display = root_display(root, cwd);
+    core_free(cwd.data);
+    return root->path;
+}
+
 void
 n00bb_resolver_note_roots(n00bb_resolver_t *resolver,
                           core_diagnostics_t *diagnostics)

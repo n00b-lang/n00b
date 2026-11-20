@@ -65,6 +65,11 @@ core_string_t n00bb_package_id(const core_translation_unit_t *unit);
 core_string_t n00bb_package_namespace(const core_translation_unit_t *unit);
 void n00bb_source_file_set_package(core_source_file_t *source,
                                   core_string_t package_id);
+// The package roots, in search order: root `index`'s directory (owned by
+// the resolver) and, in `display`, how it is shown (owned by the caller).
+size_t n00bb_resolver_root_count(const n00bb_resolver_t *resolver);
+core_string_t n00bb_resolver_root(const n00bb_resolver_t *resolver,
+                                  size_t index, core_string_t *display);
 void n00bb_resolver_note_roots(n00bb_resolver_t *resolver,
                                core_diagnostics_t *diagnostics);
 void n00bb_resolver_note_search(n00bb_resolver_t *resolver,
