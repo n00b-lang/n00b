@@ -49,16 +49,6 @@ host_triple(void)
 #endif
 }
 
-// A module's object never names a type's declaring module (only a linked
-// image does, from the type's name); the declaring module's row is the one
-// that keeps the declaration's facts.
-static bool
-declared_here(const n00b_abi_type_v1 *type)
-{
-    return !type->declaring_module_index
-        && !(type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
-}
-
 static bool
 host_target(core_target_desc_t *target)
 {
@@ -949,167 +939,6 @@ test_duplicate_record_field(core_string_t path)
     free(right_object);
 }
 
-// The linked row for `spelling` once the inputs are linked in `order`.
-static n00b_abi_type_v1
-linked_type_row(const n00bb_abi_selected_objects_t *selected,
-                const size_t *order, core_string_t spelling)
-{
-    n00bb_abi_selected_objects_t ordered = {
-        .views = calloc(selected->count, sizeof(*ordered.views)),
-        .count = selected->count,
-    };
-    assert(ordered.views);
-    for (size_t i = 0; i < selected->count; i++)
-        ordered.views[i] = selected->views[order[i]];
-    n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&ordered);
-    n00bb_abi_merged_rows_t merged = {0};
-    assert(plan && n00bb_abi_merge_rows(&ordered, plan, &merged));
-    n00b_abi_type_v1 row = {0};
-    bool found = false;
-    for (size_t i = 0; !found && i < ordered.count; i++) {
-        uint32_t local = find_named_type(&ordered.views[i], spelling);
-        uint32_t linked = 0;
-        if (!local) continue;
-        assert(n00bb_abi_index_plan_map(plan, i, N00B_ABI_TABLE_TYPE,
-                                        local, &linked));
-        const n00b_abi_type_v1 *type = n00bb_abi_merged_row(&merged,
-            N00B_ABI_TABLE_TYPE, linked);
-        assert(type);
-        row = *type;
-        found = true;
-    }
-    assert(found);
-    n00bb_abi_merged_rows_release(&merged);
-    n00bb_abi_index_plan_free(plan);
-    free(ordered.views);
-    return row;
-}
-
-// Every module that uses a type emits the same row for it, apart from the
-// facts only its declaration has, so the linked row is the declaring
-// module's whatever order the inputs are linked in.
-static void
-check_type_link_order(const n00bb_abi_selected_objects_t *selected,
-                      core_string_t spelling)
-{
-    size_t *forward = calloc(selected->count, sizeof(*forward));
-    size_t *backward = calloc(selected->count, sizeof(*backward));
-    assert(forward && backward);
-    for (size_t i = 0; i < selected->count; i++) {
-        forward[i] = i;
-        backward[i] = selected->count - 1 - i;
-    }
-    n00b_abi_type_v1 a = linked_type_row(selected, forward, spelling);
-    n00b_abi_type_v1 b = linked_type_row(selected, backward, spelling);
-    assert(a.declaring_module_index && b.declaring_module_index
-        && !(a.flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
-        && a.kind == b.kind && a.flags == b.flags
-        && a.typehash == b.typehash && a.size_bits == b.size_bits
-        && a.alignment_bytes == b.alignment_bytes
-        && !!a.layout_index == !!b.layout_index
-        && !!a.tracing_index == !!b.tracing_index
-        && a.fields_or_arms.count == b.fields_or_arms.count
-        && a.components.count == b.components.count);
-    free(forward);
-    free(backward);
-}
-
-static const void *
-indexed_range_row(const n00bb_abi_object_view_t *view,
-                  n00b_abi_range_v1 range, uint32_t i, uint32_t kind)
-{
-    const uint8_t *slot = n00bb_abi_object_row(view,
-        N00B_ABI_TABLE_U32_STREAM, range.first + i);
-    return slot ? n00bb_abi_object_row(view, kind, core_le_load_u32(slot))
-                : nullptr;
-}
-
-// Two modules that use a type and don't declare it emit the same flagged
-// row for it: byte for byte, once the references that only mean something
-// inside one object (string offsets, row indexes) are set aside, and the
-// same for its layout and member rows.
-static void
-check_same_type_rows(const n00bb_abi_object_view_t *a_view, uint32_t a_index,
-                     const n00bb_abi_object_view_t *b_view, uint32_t b_index)
-{
-    const n00b_abi_type_v1 *a_row = n00bb_abi_object_row(a_view,
-        N00B_ABI_TABLE_TYPE, a_index);
-    const n00b_abi_type_v1 *b_row = n00bb_abi_object_row(b_view,
-        N00B_ABI_TABLE_TYPE, b_index);
-    assert(a_index && b_index && a_row && b_row
-        && (a_row->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
-        && a_row->layout_index && b_row->layout_index
-        && !!a_row->tracing_index == !!b_row->tracing_index);
-    n00bb_abi_string_view_t a_name, b_name;
-    assert(n00bb_abi_object_string(a_view, &a_row->canonical_name, &a_name)
-        && n00bb_abi_object_string(b_view, &b_row->canonical_name, &b_name)
-        && core_string_eq(view_text(a_name), view_text(b_name)));
-    n00b_abi_type_v1 a = *a_row, b = *b_row;
-    n00b_abi_type_v1 *local[] = {&a, &b};
-    for (size_t i = 0; i < 2; i++) {
-        local[i]->canonical_name = (n00b_abi_string_v1){0};
-        local[i]->named_constructor = (n00b_abi_string_v1){0};
-        local[i]->layout_index = local[i]->tracing_index = 0;
-        local[i]->call_signature_index = 0;
-        local[i]->components.first = local[i]->fields_or_arms.first = 0;
-        local[i]->constraints.first = local[i]->named_arguments.first = 0;
-    }
-    assert(!memcmp(&a, &b, sizeof(a)));
-    const n00b_abi_layout_v1 *a_layout_row = n00bb_abi_object_row(a_view,
-        N00B_ABI_TABLE_LAYOUT, a_row->layout_index);
-    const n00b_abi_layout_v1 *b_layout_row = n00bb_abi_object_row(b_view,
-        N00B_ABI_TABLE_LAYOUT, b_row->layout_index);
-    assert(a_layout_row && b_layout_row);
-    n00b_abi_layout_v1 a_layout = *a_layout_row, b_layout = *b_layout_row;
-    n00b_abi_layout_v1 *layouts[] = {&a_layout, &b_layout};
-    for (size_t i = 0; i < 2; i++) {
-        layouts[i]->type_index = layouts[i]->tag_extractor_index = 0;
-        layouts[i]->occupied_runs.first = layouts[i]->reserved_runs.first = 0;
-    }
-    assert(!memcmp(&a_layout, &b_layout, sizeof(a_layout)));
-    for (uint32_t i = 0; i < a.fields_or_arms.count; i++) {
-        const n00b_abi_field_v1 *a_field_row = indexed_range_row(a_view,
-            a_row->fields_or_arms, i, N00B_ABI_TABLE_FIELD);
-        const n00b_abi_field_v1 *b_field_row = indexed_range_row(b_view,
-            b_row->fields_or_arms, i, N00B_ABI_TABLE_FIELD);
-        assert(a_field_row && b_field_row && !a_field_row->symbol_index
-            && n00bb_abi_object_string(a_view, &a_field_row->name, &a_name)
-            && n00bb_abi_object_string(b_view, &b_field_row->name, &b_name)
-            && core_string_eq(view_text(a_name), view_text(b_name)));
-        n00b_abi_field_v1 a_field = *a_field_row, b_field = *b_field_row;
-        n00b_abi_field_v1 *fields[] = {&a_field, &b_field};
-        for (size_t f = 0; f < 2; f++) {
-            fields[f]->name = (n00b_abi_string_v1){0};
-            fields[f]->parent_type_index = fields[f]->child_type_index = 0;
-            fields[f]->inline_element_type_index = 0;
-            fields[f]->packed_runs.first = fields[f]->physical_runs.first = 0;
-        }
-        assert(!memcmp(&a_field, &b_field, sizeof(a_field)));
-    }
-}
-
-// `spelling`'s rows in two objects of modules that use it without
-// declaring it.
-static void
-test_using_module_rows(core_string_t a_path, core_string_t b_path,
-                       core_string_t spelling)
-{
-    core_target_desc_t target;
-    size_t a_bytes = 0, b_bytes = 0;
-    uint8_t *a_object = read_object(a_path, &a_bytes);
-    uint8_t *b_object = read_object(b_path, &b_bytes);
-    n00bb_abi_object_view_t a_view = {0}, b_view = {0};
-    assert(host_target(&target)
-        && n00bb_abi_object_open(&target, a_object, a_bytes, &a_view)
-        && n00bb_abi_object_open(&target, b_object, b_bytes, &b_view));
-    check_same_type_rows(&a_view, find_named_type(&a_view, spelling),
-                         &b_view, find_named_type(&b_view, spelling));
-    n00bb_abi_object_close(&a_view);
-    n00bb_abi_object_close(&b_view);
-    free(a_object);
-    free(b_object);
-}
-
 static void
 test_imported_record_selection(const core_string_t *paths, size_t object_count)
 {
@@ -1138,23 +967,11 @@ test_imported_record_selection(const core_string_t *paths, size_t object_count)
         N00B_ABI_TABLE_TYPE, root_type);
     const n00b_abi_type_v1 *definition = n00bb_abi_object_row(dep_view,
         N00B_ABI_TABLE_TYPE, dep_type);
-    // The using module's row describes the record as the declaring
-    // module's does, apart from the field symbols only the declaration has:
-    // it leaves those out and says so.
+    // The using module lays the record out as the declaring module does.
     assert(root_type && dep_type && reference && definition
-        && !reference->declaring_module_index && reference->layout_index
-        && declared_here(definition)
-        && definition->layout_index
-        && (reference->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
-        && !(definition->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
-        && (reference->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)
-            == definition->flags
-        && reference->size_bits == definition->size_bits
-        && reference->alignment_bytes == definition->alignment_bytes
-        && reference->fields_or_arms.count
-            == definition->fields_or_arms.count
-        && !!reference->tracing_index == !!definition->tracing_index);
-    check_type_link_order(&selected, S("record_dep.SharedRecord"));
+        && !reference->owner_module_index && reference->layout_index
+        && definition->owner_module_index == 1
+        && definition->layout_index);
     const n00b_abi_requirement_v1 *type_requirement =
         fixture_requirement(root_view, N00B_ABI_SYMBOL_TYPE,
             S("record_dep.SharedRecord"));
@@ -1176,7 +993,7 @@ test_imported_record_selection(const core_string_t *paths, size_t object_count)
     const n00b_abi_type_v1 *final_type = n00bb_abi_merged_row(&merged,
         N00B_ABI_TABLE_TYPE, from_root);
     assert(final_type && final_type->layout_index
-        && final_type->declaring_module_index == dep_module
+        && final_type->owner_module_index == dep_module
         && final_type->fields_or_arms.count == 1);
     uint8_t *linked = nullptr;
     size_t linked_bytes = 0;
@@ -1269,7 +1086,7 @@ test_trait_type_requirement(core_string_t path)
             const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
                 N00B_ABI_TABLE_TYPE, row->contract_type_index);
             trait |= type && type->kind == N00B_ABI_TYPE_TRAIT
-                && !type->declaring_module_index
+                && !type->owner_module_index
                 && VIEW_IS(path_name, "trait_methods.Readable");
         }
     }
@@ -1309,7 +1126,7 @@ test_trait_type_import(core_string_t path)
     const n00b_abi_type_v1 *callable = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_TYPE, function->type_index);
     assert(trait_type && trait_type->kind == N00B_ABI_TYPE_TRAIT
-        && trait_type->declaring_module_index == trait->module_index
+        && trait_type->owner_module_index == trait->module_index
         && trait_type->fields_or_arms.count == 2
         && callable && callable->kind == N00B_ABI_TYPE_FUNCTION
         && callable->call_signature_index);
@@ -1335,7 +1152,7 @@ test_trait_type_import(core_string_t path)
     const n00b_abi_type_v1 *variable = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_TYPE, parameter->type_index);
     assert(variable && variable->kind == N00B_ABI_TYPE_VARIABLE
-        && variable->typevar_declaring_scope_index
+        && variable->typevar_owner_scope_index
         && variable->constraints.count == 1);
     slot = n00bb_abi_object_row(&view, N00B_ABI_TABLE_U32_STREAM,
         variable->constraints.first);
@@ -1455,7 +1272,7 @@ test_linked_flagset(core_string_t path)
     const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
         N00B_ABI_TABLE_TYPE, symbol->type_index);
     assert(type && type->kind == N00B_ABI_TYPE_FLAGSET
-        && type->declaring_module_index == provider_index
+        && type->owner_module_index == provider_index
         && type->semantic_width_bits == 2
         && type->fields_or_arms.count == 4);
     const core_string_t names[] = {
@@ -1734,7 +1551,7 @@ test_imported_callback_reference(core_string_t provider_path,
         ? n00bb_abi_object_row(&views[0], N00B_ABI_TABLE_TYPE,
             symbol->type_index) : nullptr;
     assert(definition && definition->kind == N00B_ABI_TYPE_CALLBACK
-        && definition->components.count && declared_here(definition));
+        && definition->components.count && definition->owner_module_index);
     const n00bb_abi_directory_entry_t *types = n00bb_abi_object_table(
         &views[1], N00B_ABI_TABLE_TYPE);
     assert(types);
@@ -1744,7 +1561,7 @@ test_imported_callback_reference(core_string_t provider_path,
             N00B_ABI_TABLE_TYPE, i);
         if (!candidate || candidate->kind != N00B_ABI_TYPE_CALLBACK
             || candidate->typehash != definition->typehash
-            || declared_here(candidate)) continue;
+            || candidate->owner_module_index) continue;
         assert(!reference_index && !candidate->layout_index
             && !candidate->components.count);
         reference_index = i;
@@ -3450,7 +3267,7 @@ test_semantic_rows_link(core_string_t path, bool trait)
             const n00b_abi_type_v1 *type = n00bb_abi_object_row(&view,
                 N00B_ABI_TABLE_TYPE, i);
             if (type->kind != N00B_ABI_TYPE_TRAIT
-                || !declared_here(type)) continue;
+                || !type->owner_module_index) continue;
             assert(!owner);
             owner = type;
             owner_index = i;
@@ -3704,20 +3521,14 @@ test_imported_generic_owner(core_string_t consumer_path,
             if (!file) {
                 if (type->typevar_import_requirement_index
                     != requirement_index) continue;
-                // The importing module's row leaves out the declaring
-                // scope, and says so.
-                assert(!type->typevar_declaring_scope_index
-                    && (type->flags
-                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
+                assert(!type->typevar_owner_scope_index);
             }
             else {
-                if (!type->typevar_declaring_scope_index) continue;
-                assert(!type->typevar_import_requirement_index
-                    && !(type->flags
-                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
+                if (!type->typevar_owner_scope_index) continue;
+                assert(!type->typevar_import_requirement_index);
                 const n00b_abi_scope_v1 *scope = n00bb_abi_object_row(
                     &view, N00B_ABI_TABLE_SCOPE,
-                    type->typevar_declaring_scope_index);
+                    type->typevar_owner_scope_index);
                 assert(scope);
                 if (scope->parent_scope_index != keep_scope_index
                     || scope->source_location_index != keep_location_index)
@@ -3748,34 +3559,6 @@ test_imported_generic_owner(core_string_t consumer_path,
     n00bb_abi_index_plan_t *plan = n00bb_abi_index_plan_build(&selected);
     assert(plan);
     n00bb_abi_index_plan_free(plan);
-    // The linked variable is copied from the declaring module's row, by the
-    // declaration flag alone, whichever input comes first.
-    for (size_t order = 0; order < 2; order++) {
-        n00bb_abi_object_view_t ordered[2] = {
-            views[order], views[1 - order],
-        };
-        n00bb_abi_selected_objects_t pair = {.views = ordered, .count = 2};
-        n00bb_abi_index_plan_t *ordered_plan =
-            n00bb_abi_index_plan_build(&pair);
-        assert(ordered_plan);
-        uint32_t copied = 0;
-        for (size_t input = 0; input < 2; input++) {
-            const n00bb_abi_directory_entry_t *input_types =
-                n00bb_abi_object_table(&ordered[input], N00B_ABI_TABLE_TYPE);
-            for (uint32_t i = 1; i < input_types->record_count; i++) {
-                const n00b_abi_type_v1 *type = n00bb_abi_object_row(
-                    &ordered[input], N00B_ABI_TABLE_TYPE, i);
-                if (type->kind != N00B_ABI_TYPE_VARIABLE
-                    || !(type->flags
-                        & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)) continue;
-                assert(!n00bb_abi_index_plan_copies(ordered_plan, input,
-                    N00B_ABI_TABLE_TYPE, i));
-                copied++;
-            }
-        }
-        assert(copied);
-        n00bb_abi_index_plan_free(ordered_plan);
-    }
     const n00b_abi_function_v1 *provider_function =
         n00bb_abi_object_row(&views[1], N00B_ABI_TABLE_FUNCTION, 1);
     assert(provider_function && provider_function->constraints.count == 1);
@@ -3838,7 +3621,7 @@ test_type_variable_shape(void)
     image.types[1] = (n00b_abi_type_v1){
         .kind = N00B_ABI_TYPE_VARIABLE,
         .flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE,
-        .typevar_declaring_scope_index = 1,
+        .typevar_owner_scope_index = 1,
     };
     n00bb_abi_directory_entry_t directory[2] = {
         {
@@ -3872,10 +3655,6 @@ test_type_variable_shape(void)
     assert(!n00bb_abi_index_plan_build(&selected));
     image.types[1].size_bits = 0;
     image.types[1].flags |= N00B_ABI_TYPE_FLAG_SIGNED;
-    assert(!n00bb_abi_index_plan_build(&selected));
-    // Only a row that names an import requirement leaves out the scope.
-    image.types[1].flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE
-        | N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     assert(!n00bb_abi_index_plan_build(&selected));
     image.types[1].flags = 0;
     image.types[1].kind = N00B_ABI_TYPE_PRIMITIVE;
@@ -3965,11 +3744,6 @@ main(int argc, char **argv)
     if (argc >= 5 && IS(args[1], "--function-import")) {
         test_imported_function_requirement(args + 2,
             (size_t)argc - 2);
-        return 0;
-    }
-    // --using-rows A B TYPE: TYPE's rows in two modules that use it.
-    if (argc == 5 && IS(args[1], "--using-rows")) {
-        test_using_module_rows(args[2], args[3], args[4]);
         return 0;
     }
     if (argc == 5 && IS(args[1], "--generic-import")) {

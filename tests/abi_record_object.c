@@ -47,16 +47,6 @@ short_name_is(const n00b_abi_string_v1 *value, core_string_t name)
         && (!length || !memcmp(value->short_value.bytes, name.data, length));
 }
 
-// A module's object never names a type's declaring module (only a linked
-// image does, from the type's name); the declaring module's row is the one
-// that keeps the declaration's facts.
-static bool
-declared_here(const n00b_abi_type_v1 *type)
-{
-    return !type->declaring_module_index
-        && !(type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
-}
-
 static bool
 find_metadata(const uint8_t *object, size_t length,
               core_object_section_t *metadata)
@@ -232,7 +222,7 @@ check_flagset(const core_object_section_t *metadata,
     assert(type_index && type_index < types->record_count);
     const n00b_abi_type_v1 *type = row_at(metadata, types, type_index);
     assert(type->kind == N00B_ABI_TYPE_FLAGSET);
-    assert(declared_here(type));
+    assert(type->owner_module_index == 1);
     assert(type->semantic_width_bits == 2);
     assert(type->unpacked_storage_bits == 8);
     assert(type->fields_or_arms.count == 4);
@@ -383,15 +373,15 @@ check_imported_record(const core_object_section_t *metadata,
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         if (type->typehash == local_hash) {
             assert(type->kind == N00B_ABI_TYPE_RECORD
-                && declared_here(type));
+                && type->owner_module_index == 1);
             assert(type->layout_index && type->fields_or_arms.count == 1);
             local_records++;
         }
         else if (type->typehash == imported_hash) {
             assert(type->kind == N00B_ABI_TYPE_RECORD);
-            // A using module describes the record the way its declaring
-            // module does, less the declaration's facts.
-            assert(!type->declaring_module_index && type->layout_index
+            // A using module lays the record out as its declaring module
+            // does.
+            assert(!type->owner_module_index && type->layout_index
                 && type->fields_or_arms.count == 1);
             imported_records++;
             imported_index = i;
@@ -464,7 +454,7 @@ check_imported_enum(const core_object_section_t *metadata,
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         if (type->typehash == comparison_hash) {
             assert(type->kind == N00B_ABI_TYPE_ENUM
-                && !type->declaring_module_index && !type->fields_or_arms.count
+                && !type->owner_module_index && !type->fields_or_arms.count
                 && type->semantic_width_bits == 2);
             builtin_enums++;
         }
@@ -472,7 +462,7 @@ check_imported_enum(const core_object_section_t *metadata,
         assert(type->kind == N00B_ABI_TYPE_ENUM);
         // A using module lays the enum out as its declaring module does,
         // but its items are the declaration's: the row says it omits them.
-        assert(!type->declaring_module_index && type->layout_index
+        assert(!type->owner_module_index && type->layout_index
             && !type->fields_or_arms.count
             && type->semantic_width_bits == 3
             && (type->flags & N00B_ABI_TYPE_FLAG_SIGNED)
@@ -519,7 +509,7 @@ check_imported_flagset(const core_object_section_t *metadata,
         if (type->typehash != hash) continue;
         assert(!type_index);
         assert(type->kind == N00B_ABI_TYPE_FLAGSET
-            && !type->declaring_module_index && type->layout_index
+            && !type->owner_module_index && type->layout_index
             && !type->fields_or_arms.count
             && type->semantic_width_bits == 2
             && (type->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED));
@@ -561,7 +551,7 @@ check_variant(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         if (type->kind != N00B_ABI_TYPE_VARIANT
-            || !declared_here(type)) continue;
+            || !type->owner_module_index) continue;
         assert(!variant_index);
         variant_index = i;
     }
@@ -647,11 +637,11 @@ check_generic(const core_object_section_t *metadata,
         && !type->layout_index && !type->canonical_name.words[0]
         && !type->canonical_name.words[1]
         && (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-        && type->typevar_declaring_scope_index
-        && type->typevar_declaring_scope_index < scopes->record_count
+        && type->typevar_owner_scope_index
+        && type->typevar_owner_scope_index < scopes->record_count
         && !type->typevar_ordinal);
     const n00b_abi_scope_v1 *scope = row_at(metadata, scopes,
-        type->typevar_declaring_scope_index);
+        type->typevar_owner_scope_index);
     assert(SHORT_NAME_IS(&scope->kind_name, "function"));
     uint32_t parameter_symbol = 0;
     uint32_t local_symbol = 0;
@@ -664,10 +654,10 @@ check_generic(const core_object_section_t *metadata,
             local_symbol = i;
             continue;
         }
-        if (symbol->scope_index != type->typevar_declaring_scope_index
+        if (symbol->scope_index != type->typevar_owner_scope_index
             || !short_name_is(&symbol->name, parameter_name)) continue;
         assert(!parameter_symbol && symbol->type_index == variable_index);
-        assert(symbol->scope_index == type->typevar_declaring_scope_index);
+        assert(symbol->scope_index == type->typevar_owner_scope_index);
         parameter_symbol = i;
     }
     assert(parameter_symbol);
@@ -707,9 +697,9 @@ check_constraint(const core_object_section_t *metadata,
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
         if (type->kind != N00B_ABI_TYPE_VARIABLE
-            || !type->typevar_declaring_scope_index) continue;
+            || !type->typevar_owner_scope_index) continue;
         variable_count++;
-        assert(type->typevar_declaring_scope_index
+        assert(type->typevar_owner_scope_index
             && type->typevar_ordinal == constraint->variable_ordinal
             && type->constraints.count >= 1);
         uint32_t first = type->constraints.first;
@@ -744,7 +734,8 @@ check_trait_methods(const core_object_section_t *metadata,
     uint32_t trait_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(metadata, types, i);
-        if (type->kind == N00B_ABI_TYPE_TRAIT && declared_here(type)) {
+        if (type->kind == N00B_ABI_TYPE_TRAIT
+            && type->owner_module_index == 1) {
             assert(!trait_index);
             trait_index = i;
         }
@@ -948,7 +939,7 @@ check_callbacks(const core_object_section_t *metadata,
                 const n00b_abi_type_v1 *variable = row_at(metadata, types,
                     variables[i]);
                 assert(variable->kind == N00B_ABI_TYPE_VARIABLE
-                    && variable->typevar_declaring_scope_index);
+                    && variable->typevar_owner_scope_index);
             }
             assert(generic_argument != generic_success
                 && generic_argument != generic_failure
@@ -1750,7 +1741,7 @@ check_generic_record(const core_object_section_t *metadata,
             concrete_index = i;
             assert(type->kind == N00B_ABI_TYPE_RECORD
                 && !(type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-                && !type->declaring_module_index && type->layout_index
+                && !type->owner_module_index && type->layout_index
                 && type->layout_index < layouts->record_count
                 && type->size_bits == 256 && type->fields_or_arms.count == 3);
         }
@@ -1766,9 +1757,9 @@ check_generic_record(const core_object_section_t *metadata,
     }
     const n00b_abi_type_v1 *bare_row = row_at(metadata, types, bare_index);
     if (provides) {
-        assert(declared_here(bare_row) && !concrete_index);
+        assert(bare_row->owner_module_index == 1 && !concrete_index);
     } else {
-        assert(!bare_row->declaring_module_index && concrete_index);
+        assert(!bare_row->owner_module_index && concrete_index);
         unsigned matches = 0;
         for (uint32_t i = 1; i < requirements->record_count; i++) {
             const n00b_abi_requirement_v1 *request = row_at(metadata,
@@ -2332,7 +2323,7 @@ check_anonymous_record_storage(const uint8_t *object, size_t length,
         && first->type_index < types->record_count);
     const n00b_abi_type_v1 *type = row_at(metadata, types,
         first->type_index);
-    assert(type->kind == N00B_ABI_TYPE_RECORD && !type->declaring_module_index
+    assert(type->kind == N00B_ABI_TYPE_RECORD && !type->owner_module_index
         && type->fields_or_arms.count == 3
         && type->layout_index < layouts->record_count);
     const n00b_abi_layout_v1 *layout = row_at(metadata, layouts,
@@ -2933,7 +2924,7 @@ main(int argc, char **argv)
         const n00b_abi_type_v1 *type = row_at(&metadata, types,
                                                alias->type_index);
         assert(SHORT_NAME_IS(&type->canonical_name, "int")
-            && !type->declaring_module_index);
+            && !type->owner_module_index);
         free(entries);
         free(object);
         return 0;
@@ -3203,14 +3194,14 @@ main(int argc, char **argv)
         const n00b_abi_type_v1 *signed_type = row_at(&metadata, types,
                                                      signed_index);
         assert(zero->kind == N00B_ABI_TYPE_ENUM
-            && declared_here(zero)
+            && zero->owner_module_index == 1
             && zero->semantic_width_bits == 1
             && zero->unpacked_storage_bits == 8
             && zero->fields_or_arms.count == 1
             && zero->layout_index < layouts->record_count
             && !(zero->flags & N00B_ABI_TYPE_FLAG_SIGNED));
         assert(signed_type->kind == N00B_ABI_TYPE_ENUM
-            && declared_here(signed_type)
+            && signed_type->owner_module_index == 1
             && signed_type->semantic_width_bits == 4
             && signed_type->unpacked_storage_bits == 8
             && signed_type->fields_or_arms.count == 3
@@ -3234,7 +3225,8 @@ main(int argc, char **argv)
     uint32_t record_index = 0;
     for (uint32_t i = 1; i < types->record_count; i++) {
         const n00b_abi_type_v1 *type = row_at(&metadata, types, i);
-        if (type->kind == N00B_ABI_TYPE_RECORD && declared_here(type)
+        if (type->kind == N00B_ABI_TYPE_RECORD
+            && type->owner_module_index == 1
             && type->fields_or_arms.count == 1) {
             assert(!record_index);
             record_index = i;

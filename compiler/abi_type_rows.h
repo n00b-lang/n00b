@@ -11,12 +11,9 @@
 
 typedef struct {
     n00b_abi_type_v1 *rows;
-    // The symbol declaring each row's type, where this module declares it.
-    parse_sym_entry_t **declarations;
-    // The symbol declaring a type, wherever it is declared; an instance of
-    // a generic type gets the generic's declaration.
-    parse_sym_entry_t *(*declaration_lookup)(void *context, th_type *type);
-    void *declaration_lookup_context;
+    parse_sym_entry_t **owners;
+    parse_sym_entry_t *(*owner_lookup)(void *context, th_type *type);
+    void *owner_lookup_context;
     size_t count;
     n00b_abi_type_argument_v1 *arguments;
     size_t argument_count;
@@ -29,7 +26,7 @@ typedef struct {
     size_t count;
 } n00bb_abi_type_components_t;
 
-typedef parse_sym_entry_t *(*n00bb_abi_type_declaration_lookup_fn)(
+typedef parse_sym_entry_t *(*n00bb_abi_type_owner_lookup_fn)(
     void *context, th_type *type);
 
 /* Populates identity, category and finalized extent facts. Relationship
@@ -38,7 +35,7 @@ typedef parse_sym_entry_t *(*n00bb_abi_type_declaration_lookup_fn)(
 bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
     const parse_symtab_t *symbols,
-    n00bb_abi_type_declaration_lookup_fn lookup, void *lookup_context,
+    n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *out);
 void n00bb_abi_type_identity_rows_release(

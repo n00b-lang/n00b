@@ -14,12 +14,9 @@ typedef struct {
     size_t stream_index_count;
 } n00bb_abi_trait_method_rows_t;
 
-// A declared trait's methods are its declaration's symbols: a row for a
-// trait the module doesn't declare leaves them out and carries
-// N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED.
 bool n00bb_abi_trait_method_rows_build(
     n00bb_abi_type_index_t *index,
-    n00bb_abi_type_identity_rows_t *types,
+    const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_decl_index_t *declarations,
     const th_env *environment,
     n00bb_abi_trait_method_rows_t *out);

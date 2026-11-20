@@ -21,7 +21,7 @@ typedef struct {
     n00bb_abi_node_source_fn node_source;
     void *source_context;
     core_list_t(n00b_abi_source_file_v1) files;
-    core_list_t(abi_source_unit_t) units;
+    core_list_t(abi_source_unit_t) owners;
 } location_context_t;
 
 static core_hash_value_t
@@ -41,8 +41,8 @@ source_index(location_context_t *context,
              const core_translation_unit_t *unit, uint32_t *out)
 {
     if (!unit || !out) return false;
-    for (size_t i = 1; i < context->units.len; i++)
-        if (context->units.data[i] == unit) {
+    for (size_t i = 1; i < context->owners.len; i++)
+        if (context->owners.data[i] == unit) {
             *out = (uint32_t)i;
             return true;
         }
@@ -55,7 +55,7 @@ source_index(location_context_t *context,
             index, offsetof(n00b_abi_source_file_v1, path), &row.path))
         return false;
     core_list_push(context->files, row);
-    core_list_push(context->units, unit);
+    core_list_push(context->owners, unit);
     *out = index;
     return true;
 }
@@ -288,7 +288,7 @@ n00bb_abi_declarations_build(
         1, UINT32_MAX, pointer_hash, pointer_equal);
     core_list_push(locations, ((n00b_abi_source_location_v1){0}));
     core_list_push(sources.files, ((n00b_abi_source_file_v1){0}));
-    core_list_push(sources.units, ((abi_source_unit_t)nullptr));
+    core_list_push(sources.owners, ((abi_source_unit_t)nullptr));
     uint32_t local_source_index = 0;
     bool valid = location_index != nullptr
         && source_index(&sources, unit, &local_source_index)
@@ -367,6 +367,26 @@ n00bb_abi_declarations_build(
             && append_group(&stream, stream_base, &members[i],
                 &scopes[i].symbols);
     if (valid) {
+        for (size_t i = 1; i < symbol_count; i++) {
+            parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(
+                declarations, (uint32_t)i);
+            if (symbol->kind == PARSE_SYM_TYPEDEF
+                && !parse_sym_binding_origin(symbol)
+                && ((symbol->adt_kind.u8_bytes
+                     && !core_string_eq(symbol->adt_kind,
+                         CORE_STRING_STATIC("alias")))
+                    || (symbol->member_scope
+                        && (core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("variant"))
+                            || core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("flagset"))
+                            || core_string_eq(
+                                symbol->member_scope->scope_tag,
+                                CORE_STRING_STATIC("trait"))))))
+                type_rows->rows[symbols[i].type_index].owner_module_index = 1;
+        }
         *out = (n00bb_abi_declarations_t){
             .scopes = scopes, .scope_count = scope_count,
             .symbols = symbols, .symbol_count = symbol_count,
@@ -384,7 +404,7 @@ n00bb_abi_declarations_build(
         core_list_free(stream);
     }
     core_indexed_table_free(location_index);
-    core_list_free(sources.units);
+    core_list_free(sources.owners);
     for (size_t i = 0; i < scope_count; i++) {
         core_list_free(children[i]);
         core_list_free(members[i]);

@@ -372,7 +372,7 @@ main(int argc, char **argv)
     image.types[3] = (n00b_abi_type_v1){
         .kind = N00B_ABI_TYPE_VARIABLE,
         .flags = N00B_ABI_TYPE_FLAG_NON_CONCRETE,
-        .typevar_declaring_scope_index = 1,
+        .typevar_owner_scope_index = 1,
     };
     image.types[3].semantic_width_bits = 8;
     assert(n00b_abi_v1_register_image(&descriptor, &generation, &error)

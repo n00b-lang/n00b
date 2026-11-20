@@ -203,7 +203,7 @@ main(void)
             == string_component_index);
     const n00b_abi_type_argument_v1 *args = handle_rows.arguments
         + named_row->named_arguments.first;
-    assert(args[0].parent_type_index == named_index
+    assert(args[0].owner_type_index == named_index
         && args[0].kind == N00B_ABI_TYPE_ARG_TYPE
         && args[0].type_index == string_component_index
         && args[1].ordinal == 1

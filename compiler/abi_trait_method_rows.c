@@ -31,12 +31,12 @@ compare_source_order(const void *left, const void *right)
 bool
 n00bb_abi_trait_method_rows_build(
     n00bb_abi_type_index_t *index,
-    n00bb_abi_type_identity_rows_t *types,
+    const n00bb_abi_type_identity_rows_t *types,
     const n00bb_abi_decl_index_t *declarations,
     const th_env *environment,
     n00bb_abi_trait_method_rows_t *out)
 {
-    if (!index || !types || !types->rows || !types->declarations
+    if (!index || !types || !types->rows || !types->owners
         || !declarations || !out
         || types->count != n00bb_abi_type_index_count(index)) return false;
     core_list_t(n00b_abi_trait_method_v1) rows = {0};
@@ -44,7 +44,7 @@ n00bb_abi_trait_method_rows_build(
     bool valid = true;
     for (size_t i = 1; valid && i < types->count; i++) {
         if (types->rows[i].kind != N00B_ABI_TYPE_TRAIT) continue;
-        if (!types->declarations[i]) {
+        if (!types->owners[i]) {
             const th_type *trait = n00bb_abi_type_index_at(index, (uint32_t)i);
             bool builtin = false;
             for (size_t j = 0; environment
@@ -63,11 +63,7 @@ n00bb_abi_trait_method_rows_build(
                     && declaration_index == i) builtin = true;
             }
             if (!valid) break;
-            if (!builtin) {
-                types->rows[i].flags |=
-                    N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
-                continue;
-            }
+            if (!builtin) continue;
             if (!trait || th_kind_of((th_type *)trait) != TH_TRAIT
                 || th_trait_len(trait) > UINT32_MAX) {
                 valid = false;
@@ -95,20 +91,19 @@ n00bb_abi_trait_method_rows_build(
             }
             continue;
         }
-        parse_sym_entry_t *declaration = types->declarations[i];
+        parse_sym_entry_t *owner = types->owners[i];
         th_type *trait = n00bb_abi_type_index_at(index, (uint32_t)i);
         if (!trait || th_kind_of(trait) != TH_TRAIT
-            || !declaration->member_scope
+            || !owner->member_scope
             || th_trait_len(trait) > UINT32_MAX) {
             valid = false;
             break;
         }
         core_list_t(trait_method_symbol_t) methods = {0};
-        for (parse_sym_entry_t *symbol =
-                 declaration->member_scope->first_in_scope;
+        for (parse_sym_entry_t *symbol = owner->member_scope->first_in_scope;
              valid && symbol; symbol = symbol->next_in_scope) {
             if (symbol->kind != PARSE_SYM_FUNCTION
-                || symbol->owner_type != declaration) continue;
+                || symbol->owner_type != owner) continue;
             uint32_t symbol_index = 0, signature_type_index = 0;
             int32_t start = symbol->decl_node
                 && !parse_node_is_token(symbol->decl_node)
@@ -196,10 +191,10 @@ n00bb_abi_trait_method_rows_attach(
     if (!indexes) return false;
     uint32_t previous = 0;
     for (size_t i = 1; i < methods->count;) {
-        uint32_t trait = methods->rows[i].trait_type_index;
-        if (!trait || trait <= previous || trait >= types->count
-            || types->rows[trait].kind != N00B_ABI_TYPE_TRAIT
-            || types->rows[trait].fields_or_arms.count) {
+        uint32_t owner = methods->rows[i].trait_type_index;
+        if (!owner || owner <= previous || owner >= types->count
+            || types->rows[owner].kind != N00B_ABI_TYPE_TRAIT
+            || types->rows[owner].fields_or_arms.count) {
             core_free(indexes);
             return false;
         }
@@ -212,12 +207,12 @@ n00bb_abi_trait_method_rows_attach(
             indexes[i - 1] = (uint32_t)i;
             i++;
         } while (i < methods->count
-                 && methods->rows[i].trait_type_index == trait);
-        types->rows[trait].fields_or_arms = (n00b_abi_range_v1){
+                 && methods->rows[i].trait_type_index == owner);
+        types->rows[owner].fields_or_arms = (n00b_abi_range_v1){
             .first = stream_base + (uint32_t)(first - 1),
             .count = (uint32_t)(i - first),
         };
-        previous = trait;
+        previous = owner;
     }
     methods->stream_indexes = indexes;
     methods->stream_index_count = count;

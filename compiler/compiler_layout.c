@@ -304,14 +304,14 @@ inline_array_member_storage(parse_sym_entry_t *field, th_type *type,
 
 static bool
 publish_c_record_symbol(n00bb_link_analysis_t *analysis,
-                        core_translation_unit_t *declaring,
+                        core_translation_unit_t *owner,
                         parse_sym_entry_t *symbol, ir_module_t *module);
 
 static parse_sym_entry_t *
 requested_record_symbol_for_type(n00bb_link_analysis_t *analysis,
                                  th_type *type,
                                  n00bb_record_policy_t policy,
-                                 core_translation_unit_t **declaring_out)
+                                 core_translation_unit_t **owner_out)
 {
     if (!analysis || !analysis->units.len || !type) return nullptr;
     th_ctx *types = tu_state(analysis->units.data[0])->types;
@@ -361,7 +361,7 @@ requested_record_symbol_for_type(n00bb_link_analysis_t *analysis,
         &analysis->record_requests_by_type[policy],
         th_hash(types, th_resolve(type)), &found);
     if (!found || !site) return nullptr;
-    if (declaring_out) *declaring_out = site->unit;
+    if (owner_out) *owner_out = site->unit;
     return site->symbol;
 }
 
@@ -371,10 +371,10 @@ publish_c_record_representation(n00bb_link_analysis_t *analysis,
 {
     type = th_resolve(type);
     if (!type || th_kind_of(type) != TH_NAMED) return false;
-    core_translation_unit_t *declaring = nullptr;
+    core_translation_unit_t *owner = nullptr;
     parse_sym_entry_t *record = requested_record_symbol_for_type(analysis,
-        type, N00BB_RECORD_C, &declaring);
-    if (record) return publish_c_record_symbol(analysis, declaring, record, module);
+        type, N00BB_RECORD_C, &owner);
+    if (record) return publish_c_record_symbol(analysis, owner, record, module);
     th_type *base = ir_type_definition(module, type);
     base = base ? th_resolve(base) : nullptr;
     if (!base || base == type || th_kind_of(base) != TH_NAMED
@@ -386,7 +386,7 @@ publish_c_record_representation(n00bb_link_analysis_t *analysis,
 
 static bool
 publish_c_record_symbol(n00bb_link_analysis_t *analysis,
-                        core_translation_unit_t *declaring,
+                        core_translation_unit_t *owner,
                         parse_sym_entry_t *symbol, ir_module_t *module)
 {
     th_type *record = symbol->type ? th_apply_subst(
@@ -404,7 +404,7 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     for (size_t i = 0; valid && i < fields.len; i++) {
         parse_sym_entry_t *field = fields.data[i];
         th_type *declared = field->decl_node
-            ? declared_type_from_node(analysis->grammar, declaring,
+            ? declared_type_from_node(analysis->grammar, owner,
                                       field->decl_node)
             : field->type;
         th_type *type = declared ? th_apply_subst(
@@ -433,10 +433,10 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
         }
         if (!compatible) {
             core_diagnostics_t *diagnostics =
-                core_translation_unit_diagnostics(declaring);
+                core_translation_unit_diagnostics(owner);
             core_string_t shown = n00bb_print_type(ir_module_types(module),
                                                    physical);
-            if (n00bb_report(diagnostics, declaring, N00B_DIAG_C_LAYOUT_FIELD_TYPE,
+            if (n00bb_report(diagnostics, owner, N00B_DIAG_C_LAYOUT_FIELD_TYPE,
                 link_source_location(field->decl_node),
                 N00B_TEXT_FIELD_OF_LAYOUT_C_RECORD,
                 N00BB_ARGS(ARG_TEXT(field->name), ARG_TEXT(symbol->name),
@@ -459,7 +459,7 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
         };
     }
     uint32_t alignment = 0, natural = 0;
-    if (valid && !n00bb_record_alignment(analysis->grammar, declaring, symbol,
+    if (valid && !n00bb_record_alignment(analysis->grammar, owner, symbol,
                                          true, &alignment)) {
         core_free(members);
         core_list_free(fields);
@@ -473,8 +473,8 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
         n00bb_record_layout_request_t *request = parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.record-layout-request"));
         core_diagnostics_t *diagnostics =
-            core_translation_unit_diagnostics(declaring);
-        if (n00bb_report(diagnostics, declaring,
+            core_translation_unit_diagnostics(owner);
+        if (n00bb_report(diagnostics, owner,
             N00B_DIAG_RECORD_ALIGNMENT_TOO_SMALL,
             link_source_location(request && request->alignment_node
                 ? request->alignment_node : symbol->decl_node),
@@ -487,7 +487,7 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     }
     if (!valid && !call_units_failed(analysis->units.data,
                                      analysis->units.len))
-        n00bb_internal_error(core_translation_unit_diagnostics(declaring), declaring,
+        n00bb_internal_error(core_translation_unit_diagnostics(owner), owner,
             link_source_location(symbol->decl_node), "computing type layouts",
             "could not compute the C layout of `%.*s`",
             (int)symbol->name.u8_bytes, symbol->name.data);
@@ -509,8 +509,8 @@ static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
-        core_translation_unit_t *declaring = analysis->units.data[u];
-        n00bb_tu_state_t *state = tu_state(declaring);
+        core_translation_unit_t *owner = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(owner);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
         if (!symtab) return false;
@@ -537,11 +537,11 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
             parse_sym_entry_t *symbol = requested.data[s];
             for (size_t d = 0; d < analysis->units.len; d++) {
                 core_translation_unit_t *importer = analysis->units.data[d];
-                if (importer != declaring
-                    && !n00bb_unit_reaches_import(importer, declaring)) continue;
+                if (importer != owner
+                    && !n00bb_unit_reaches_import(importer, owner)) continue;
                 n00bb_tu_state_t *destination = tu_state(importer);
                 if (!destination->ir_module
-                    || !publish_c_record_symbol(analysis, declaring, symbol,
+                    || !publish_c_record_symbol(analysis, owner, symbol,
                                                 destination->ir_module)) {
                     core_list_free(requested);
                     return false;

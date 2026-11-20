@@ -418,14 +418,9 @@ requirement_target(const n00bb_abi_selected_objects_t *selected,
             const n00b_abi_type_v1 *definition = n00bb_abi_object_row(
                 provider, N00B_ABI_TABLE_TYPE, symbol->type_index);
             uint32_t definition_index;
-            n00bb_abi_string_view_t declaring = {0};
             if (!definition
                 || (request->symbol_kind == N00B_ABI_SYMBOL_TYPE
-                    && (!n00bb_abi_type_declaring_module_path(provider,
-                            definition, &declaring)
-                        || declaring.length != module_name.length
-                        || memcmp(declaring.bytes, module_name.bytes,
-                                  declaring.length)))
+                    && definition->owner_module_index != 1)
                 || (request->symbol_kind == N00B_ABI_SYMBOL_FUNCTION
                     && definition->kind != N00B_ABI_TYPE_FUNCTION))
                 return -1;
