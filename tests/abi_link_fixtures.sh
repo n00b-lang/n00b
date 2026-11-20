@@ -43,8 +43,11 @@ library_dump() {
 # Such a build keeps the root a check is about first, as it would be on its
 # own (the first root's object is not the same as another root's), and its
 # other roots only add modules the check doesn't look at.
+# The last roots are one declaration kind each, whose own objects are
+# checked below.
 library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
-    abi_value_root foreign_enum_user cycles.cycle_first partial_method_root
+    abi_value_root foreign_enum_user cycles.cycle_first partial_method_root \
+    alias callback enum function record string_storage trait_methods
 # These builds' linked libraries are checked below as well.
 library_dump "$abi_programs" "$tmp/cycle_long" cycles.cycle_long_a
 library_dump "$abi_programs" "$tmp/cycle_self" cycles.cycle_self
@@ -101,6 +104,11 @@ cycle_long="$tmp/cycle_long"
 cycle_self="$tmp/cycle_self"
 
 "$abi_record_object_test" "$abi/import_root.n00bm" import
+"$abi_record_object_test" "$abi/record.n00bm"
+for mode in alias callback enum function string-storage trait-methods; do
+    "$abi_record_object_test" "$abi/$(printf '%s' "$mode" | tr - _).n00bm" \
+        "$mode"
+done
 "$abi_record_object_test" "$abi/__ffi_c_foreign___ffi_literal_1.n00bm" c-foreign
 "$abi_record_object_test" "$rec/record_root.n00bm" import-record
 "$abi_link_input_test" --field "$rec/record_dep.n00bm"
