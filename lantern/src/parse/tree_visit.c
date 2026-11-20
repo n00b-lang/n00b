@@ -942,9 +942,11 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root)
             && f->next < core_tree_num_children(f->node)) {
             parse_tree_t *ch = core_tree_child(f->node, f->next++);
             reducer_t *own = unit_leaf_of(st, w->g, f->node);
+            // Read before the push, which may move the frames (and `f`).
+            reducer_t *unit_leaf = own ? own : f->unit_leaf;
 
             core_list_push(frames, ((rframe_t){
-                .node = ch, .unit_leaf = own ? own : f->unit_leaf,
+                .node = ch, .unit_leaf = unit_leaf,
             }));
             continue;
         }
