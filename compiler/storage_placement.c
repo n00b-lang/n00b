@@ -199,63 +199,8 @@ write_through(ir_instr_t *in, ir_local_t *holder, ir_value_t *held,
         ? store : nullptr;
 }
 
-// Whether `local` needs storage of its own from the function's entry: only
-// when it may be used (read, written, or its address taken) before an
-// initialization has given it storage. An initializing write makes the
-// local's storage where it runs (write_through: fresh storage, or the
-// object a `new` made), so a local every use of which follows one needs
-// none before: the set-before-read check (ir_unset_locals) has nothing to
-// find there, and a frame root's slot is null from entry anyway.
 static bool
-needs_entry_storage(ir_doms_t *doms, ir_func_t *function,
-                    const ir_local_t *local)
-{
-    typedef struct {
-        ir_block_t *block;
-        uint32_t    at;
-    } site_t;
-    size_t count = 0, capacity = 0;
-    site_t *sites = nullptr;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *in = block->instrs[i];
-            if (in->dest_kind != IR_DEST_LOCAL || in->dest_local != local
-                || !ir_instr_is_binding_initialization(in))
-                continue;
-            if (count == capacity) {
-                capacity = capacity ? 2 * capacity : 4;
-                sites = core_realloc(sites, capacity * sizeof(*sites));
-            }
-            sites[count++] = (site_t){block, i};
-        }
-    }
-    bool needed = false;
-    for (uint32_t b = 0; !needed && b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; !needed && i < block->n_instrs; i++) {
-            const ir_instr_t *in = block->instrs[i];
-            // A plain assignment writes through the storage, so it is a use.
-            bool uses = in->dest_kind == IR_DEST_LOCAL
-                && in->dest_local == local
-                && !ir_instr_is_binding_initialization(in);
-            for (uint32_t k = 0; !uses && k < in->n_operands; k++)
-                uses = in->operands[k].kind == IR_OPD_VALUE
-                    && in->operands[k].value == local->value;
-            bool set = false;
-            for (size_t s = 0; uses && !set && s < count; s++)
-                set = sites[s].block == block ? sites[s].at < i
-                    : ir_dominates(doms, sites[s].block, block);
-            needed = uses && !set;
-        }
-    }
-    core_free(sites);
-    return needed;
-}
-
-static bool
-move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
-                      bool entry_storage)
+move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local)
 {
     th_type *storage_type = th_ind(types, 0, local->type);
     core_buffer_t name = {0};
@@ -267,19 +212,16 @@ move_local_to_storage(ir_func_t *function, th_ctx *types, ir_local_t *local,
     core_buffer_release(&name);
     ir_value_t *held = holder ? ir_local_value(function, holder) : nullptr;
     ir_value_t *target = local->value;
-    if (!held || !target || !function->n_blocks) return false;
-    // The storage stands for the local from here on; the checks that a
-    // local is set before it's read follow it there (ir_unset_locals). A
-    // local initialized before every use needs none (needs_entry_storage).
-    ir_value_t *storage = entry_storage
+    ir_value_t *storage = held && target && function->n_blocks
         ? fresh_storage(function->blocks[0], 0, function->span, local,
                         holder, storage_type)
         : nullptr;
-    if (entry_storage && (!storage
-            || !ir_annot_set(ir_module_ctx(function->owner),
-                   &storage->def->annots, (ir_annot_t){
-                       .key = CORE_STRING_STATIC("ir.placed_local"),
-                       .kind = IR_ANNOT_STR, .s = local->name})))
+    // The storage stands for the local from here on; the checks that a
+    // local is set before it's read follow it there (ir_unset_locals).
+    if (!storage || !ir_annot_set(ir_module_ctx(function->owner),
+            &storage->def->annots, (ir_annot_t){
+                .key = CORE_STRING_STATIC("ir.placed_local"),
+                .kind = IR_ANNOT_STR, .s = local->name}))
         return false;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
@@ -949,14 +891,10 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         core_dict_t escaping;
         core_dict_init(&escaping, nullptr, nullptr);
         escaping_locals(summaries, function, &escaping);
-        bool *entry = core_alloc_array(bool, locals + 1);
-        ir_doms_t *doms = ir_func_doms(function);
         for (uint32_t l = 0; l < locals; l++) {
             ir_local_t *local = function->locals[l];
             if (!local->address_taken
                 || !core_dict_contains(&escaping, local->value)) continue;
-            entry[count] = !doms
-                || needs_entry_storage(doms, function, local);
             moved[count++] = local;
         }
         core_dict_free(&escaping);
@@ -964,10 +902,9 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         bool ok = true;
         for (uint32_t m = 0; ok && m < count; m++) {
             release_scope_finalizer(function, moved[m]->value);
-            ok = move_local_to_storage(function, types, moved[m], entry[m]);
+            ok = move_local_to_storage(function, types, moved[m]);
         }
         core_free(moved);
-        core_free(entry);
         if (!ok) return false;
         if (!annotate_allocations(context, summaries, module, function)
             || !retire_scope_finalizers(context, function))

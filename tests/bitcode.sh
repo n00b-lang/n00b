@@ -72,17 +72,13 @@ runtime)
     "$compiler" build --output "$tmp/generic_finalizer_probe" \
         "$program_dir/bitcode_generic_finalizer_probe.n"
     "$tmp/generic_finalizer_probe"
-    # Three programs built, run and dumped as one (their functions don't
+    # Two programs built, run and dumped as one (their functions don't
     # touch, and the build dumps the program's own symbols and IR, after
     # storage placement, without lowering the library again as `lower`
-    # does): bitcode_typeof_storage.n (whose `ok` the other's stands for),
-    # bitcode_shared_ranges.n and bitcode_escaping_new.n.
-    {
-        sed '/^__fd_write(2, "ok")$/d' \
-            "$program_dir/bitcode_typeof_storage.n"
-        cat "$program_dir/bitcode_shared_ranges.n" \
-            "$program_dir/bitcode_escaping_new.n"
-    } >"$tmp/storage_facts.n"
+    # does): bitcode_shared_ranges.n and bitcode_typeof_storage.n, whose
+    # `ok` ends the run.
+    cat "$program_dir/bitcode_shared_ranges.n" \
+        "$program_dir/bitcode_typeof_storage.n" >"$tmp/storage_facts.n"
     # Ranges the analyses share are checked as they are computed.
     "$compiler" build --verify-analyses --dump-symbols --dump-ir \
         --output "$tmp/storage_facts" "$tmp/storage_facts.n" \
@@ -99,10 +95,6 @@ runtime)
         echo 'type-only probe was moved to heap storage' >&2
         exit 1
     fi
-    # A local only bound to a `new` lives in the object `new` makes: one
-    # node allocation in `prepend`, none for the local itself.
-    test "$(awk '/^  func @prepend\(/, /^  }/' "$tmp/storage_facts.dump" \
-        | grep -c ' = alloc storage_facts\.Chain_Node ')" = 1
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
