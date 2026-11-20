@@ -30,11 +30,8 @@ func reset() -> int {
     return x + 1
 }
 EOF
-if "$compiler" check "$tmp/maybe.n" >"$tmp/check.out" 2>"$tmp/check.err"; then
-    echo 'a possibly-nil option was narrowed' >&2
-    exit 1
-fi
-test "$(grep -c 'may be `nil`' "$tmp/check.err")" -eq 2
+# (Checked below, in the same rejected file as the `Point` key: every check
+# is a full compile, and the two programs' errors don't touch.)
 
 # A stateful callback keeps the address of its state where the state was
 # declared: a module variable, or a local of the function that uses the
@@ -70,20 +67,13 @@ func local_tally() -> int {
 require local_tally() == 15
 __fd_write(2, "ok")
 EOF
-"$compiler" build --no-syntax-warnings \
-    --output "$tmp/callback_state" "$tmp/callback_state.n" \
-    >"$tmp/compile.out" 2>"$tmp/compile.err" || {
-    cat "$tmp/compile.err" >&2
-    exit 1
-}
-"$tmp/callback_state" >"$tmp/stdout" 2>"$tmp/stderr"
-test "$(cat "$tmp/stderr")" = ok
 
 # The state a callback retains is read through it later, so it must be
-# set in full when the callback is made.
+# set in full when the callback is made. (The analysis reports it, so
+# `check` stops where `build` would.)
 sed -e 's/^    var local: Tally = (count = 10)$/    var local: Tally/' \
     "$tmp/callback_state.n" >"$tmp/unset_state.n"
-if "$compiler" build --no-syntax-warnings --output "$tmp/unset_state" \
+if "$compiler" check --no-syntax-warnings \
         "$tmp/unset_state.n" >"$tmp/compile.out" 2>"$tmp/compile.err"; then
     echo 'callback state with no value was retained' >&2
     exit 1
@@ -117,13 +107,20 @@ require joiner.call("y", 2) == "yy"
 require joined() == "ababab"
 __fd_write(2, "ok")
 EOF
+# The two callback programs are built and run as one: both make callbacks,
+# so neither runs at comptime either way, and each part's requires run as
+# they did on their own. The result writes `ok` once, after all of them.
+{
+    sed '/^__fd_write(2, "ok")$/d' "$tmp/callback_state.n"
+    cat "$tmp/callback_names.n"
+} >"$tmp/callbacks.n"
 "$compiler" build --no-syntax-warnings \
-    --output "$tmp/callback_names" "$tmp/callback_names.n" \
+    --output "$tmp/callbacks" "$tmp/callbacks.n" \
     >"$tmp/compile.out" 2>"$tmp/compile.err" || {
     cat "$tmp/compile.err" >&2
     exit 1
 }
-"$tmp/callback_names" >"$tmp/stdout" 2>"$tmp/stderr"
+"$tmp/callbacks" >"$tmp/stdout" 2>"$tmp/stderr"
 test "$(cat "$tmp/stderr")" = ok
 
 # A type with its own `==` (a user `__equal`, or a `__cmp` that `==`
@@ -203,11 +200,19 @@ grep -Fq 'errors not shown: 1 ' "$tmp/own.err" || {
 cp "$tmp/own_equality.n" "$tmp/own_point.n"
 printf 'var point_keyed: Dict[Point, int] = new[Dict[Point, int]]()\n' \
     >>"$tmp/own_point.n"
+cat "$tmp/maybe.n" >>"$tmp/own_point.n"
 if "$compiler" check "$tmp/own_point.n" >"$tmp/point.out" 2>"$tmp/point.err"
 then
     echo 'keying by Point passed' >&2
     exit 1
 fi
+# A variable that may still be `nil` on some path stays an option: both
+# of maybe.n's functions are reported (and only they say so).
+test "$(grep -c 'may be `nil`' "$tmp/point.err")" -eq 2 || {
+    echo 'a possibly-nil option was narrowed' >&2
+    cat "$tmp/point.err" >&2
+    exit 1
+}
 cat "$tmp/point.err" >>"$tmp/own.err"
 for type in Eq_Holder Cmp_Holder Point; do
     grep -Fq "no trait that \`$type\` implements provides \`hash\`" \
