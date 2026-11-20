@@ -600,8 +600,17 @@ func when_main() -> bool {
 }
 
 # A global the loop condition proves present, set to nil after its read in
-# the body: the condition tests it again before each pass.
+# the body: the condition tests it again before each pass. Bindings in a
+# loop that never comes back to its header are checked as any other.
 var loop_cursor: int? = 3
+
+func loop_once() -> int {
+    while true {
+        let value: int = 1
+        return value
+    }
+    return 0
+}
 
 func loop_bindings_main() -> bool {
     var total: int = 0
@@ -610,7 +619,13 @@ func loop_bindings_main() -> bool {
         total += value
         loop_cursor = nil
     }
-    return total == 3
+    var seen: int = 0
+    while seen < total {
+        let step: int = seen + 1
+        seen = step
+        break
+    }
+    return total == 3 and seen == 1 and loop_once() == 1
 }
 
 gc_collect_main()
