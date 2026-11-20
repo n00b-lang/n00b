@@ -1,3 +1,0 @@
-import cross_dep
-
-require cross_dep.twice(7) == 14
