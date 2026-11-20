@@ -2784,8 +2784,6 @@ warning_group_order(const void *left_raw, const void *right_raw)
 // A warning that depends on more than its module's key covers is not kept
 // with the module: each compile reports it afresh, cached modules
 // included.
-// - A library module passed over or shadowed (M0026, M0025): the files on
-//   the search roots (report_shadow_sites).
 // - A data race (S0060): the program's threads (report_race reports it in
 //   cached modules too).
 // Warnings kept that depend on other things beyond the key are checked
@@ -2794,8 +2792,6 @@ static bool
 reported_afresh(core_string_t code)
 {
     static const n00bb_diag_t afresh[] = {
-        N00B_DIAG_DEFAULT_MODULE_NAMES_STDLIB,
-        N00B_DIAG_MODULE_SHADOWS_STDLIB,
         N00B_DIAG_DATA_RACE,
     };
     for (size_t i = 0; i < sizeof(afresh) / sizeof(afresh[0]); i++)

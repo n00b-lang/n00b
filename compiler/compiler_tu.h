@@ -712,7 +712,8 @@ typedef struct {
     bool interface_module;
     bool import_failure_reported;
     // Set when this module failed, directly or through its imports, because
-    // a standard library module is shadowed (owned by the resolver).
+    // a standard library module is shadowed (owned by the resolver), so a
+    // missing parent manifest is not reported as well.
     struct n00bb_stdlib_shadow_t *stdlib_shadow;
     bool package_interface;
     bool package_manifest_restored;

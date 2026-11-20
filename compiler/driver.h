@@ -99,8 +99,8 @@ bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
 // other than the library holds for `identifier` (`path` is owned by the
 // caller), and the library's manifests that may declare `declared_name`.
 // A standard library module that failed because a file elsewhere has its
-// module path. The failure travels up the chain of importers to the first
-// module outside the library, where it is reported once, at the import.
+// module path. A user's import reports it where it finds it; otherwise it
+// is reported once loading is over.
 typedef struct n00bb_stdlib_shadow_t {
     core_string_t name;
     core_string_t shadow;
