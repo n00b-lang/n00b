@@ -3176,9 +3176,12 @@ package_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_sym_entry_t *binding = types
         ? parse_symtab_lookup_in(types, trait_name) : nullptr;
     parse_sym_entry_t *origin = canonical_symbol(binding);
-    return origin && origin->decl_node
-        && nt_is(grammar, origin->decl_node, CORE_STRING_STATIC("trait-decl"))
-        ? binding : nullptr;
+    // A trait read from the package's interface (a cached or linked
+    // package) has no declaration node, only its kind.
+    bool trait = origin && (origin->decl_node
+        ? nt_is(grammar, origin->decl_node, CORE_STRING_STATIC("trait-decl"))
+        : core_string_eq(origin->adt_kind, CORE_STRING_STATIC("trait")));
+    return trait ? binding : nullptr;
 }
 
 static parse_sym_entry_t *

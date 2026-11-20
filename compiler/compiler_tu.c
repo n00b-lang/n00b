@@ -4225,7 +4225,19 @@ apply_one_signature_constraint(parse_grammar_t *grammar,
         core_buffer_release(&name);
         return true;
     }
-    if (trait_symbol && owner) {
+    // A trait a package exports, read from its interface (a cached or
+    // linked package), is required by the name it was declared under, as
+    // when the package is compiled from source.
+    n00bb_export_origin_t *origin = trait_symbol && !trait_symbol->decl_node
+        ? parse_sym_binding(trait_symbol,
+                            CORE_STRING_STATIC("n00bb.export-origin"))
+        : nullptr;
+    if (origin) {
+        core_buffer_release(&name);
+        core_buffer_printf(&name, "%.*s", (int)origin->declaration.u8_bytes,
+                           origin->declaration.data);
+    }
+    else if (trait_symbol && owner) {
         core_buffer_t qualified = {0};
         n00bb_qualify(&qualified, owner->module.identifier,
                       trait_symbol->name);
