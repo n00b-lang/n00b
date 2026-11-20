@@ -10239,26 +10239,40 @@ declared_type_parameters(th_ctx *types, parse_sym_entry_t *declaration,
     return variables->len;
 }
 
-// The requirement the `where` clause `declared` of a type puts on the
-// argument given for its parameter, or false when it names none of them.
+// Appends to `out` the requirements the `where` clauses of `declaration`
+// put on the arguments `check` gives it: each clause naming one of the
+// type's parameters, made about the argument given for it. False when one
+// can't be made.
 static bool
-argument_requirement(th_ctx *types, th_trait_requirement declared,
-                     th_type *const *parameters, th_type *const *arguments,
-                     size_t count, th_trait_requirement *out, bool *valid)
+argument_requirements(th_ctx *types, parse_sym_entry_t *declaration,
+                      const n00bb_type_argument_check_t *check,
+                      core_list_t(th_trait_requirement) *out)
 {
-    th_type *subject = th_resolve(declared.subject);
-    size_t at = count;
-    for (size_t i = 0; i < count && at == count; i++)
-        if (parameters[i] && th_resolve(parameters[i]) == subject) at = i;
-    if (at == count || !arguments[at]) return false;
-    *out = declared;
-    out->subject = arguments[at];
-    if (declared.target) {
-        out->target = th_type_clone_replacing(types, declared.target,
-            (const th_type *const *)parameters, arguments, count);
-        *valid = out->target != nullptr;
+    n00bb_declared_where_t *declared = parse_sym_binding(declaration,
+        N00BB_DECLARED_WHERE_KEY);
+    th_type **parameters = nullptr;
+    size_t count = check->count;
+    bool fits = declared && declared_type_parameters(types, declaration,
+        check->alias, &parameters) == count;
+    bool valid = true;
+    for (size_t r = 0; valid && fits && r < declared->len; r++) {
+        th_trait_requirement requirement = declared->data[r];
+        th_type *subject = th_resolve(requirement.subject);
+        size_t at = count;
+        for (size_t i = 0; i < count && at == count; i++)
+            if (parameters[i] && th_resolve(parameters[i]) == subject) at = i;
+        if (at == count || !check->arguments[at]) continue;
+        requirement.subject = check->arguments[at];
+        if (requirement.target) {
+            requirement.target = th_type_clone_replacing(types,
+                requirement.target, (const th_type *const *)parameters,
+                check->arguments, count);
+            valid = requirement.target != nullptr;
+        }
+        if (valid) core_list_push(*out, requirement);
     }
-    return *valid;
+    if (!check->alias) core_free(parameters);
+    return valid;
 }
 
 // `arguments`, given at `site` to `declaration`, must satisfy the `where`
@@ -10333,16 +10347,10 @@ n00bb_imply_type_argument_constraints(core_translation_unit_t *const *units,
                 &state->type_argument_checks.data[c];
             if (check->implied) continue;
             check->implied = true;
-            parse_sym_entry_t *declaration =
-                canonical_symbol(check->declaration);
-            n00bb_declared_where_t *declared = parse_sym_binding(
-                declaration, N00BB_DECLARED_WHERE_KEY);
-            th_type **parameters = nullptr;
-            size_t parameter_count = declared
-                ? declared_type_parameters(state->types, declaration,
-                                           check->alias, &parameters) : 0;
             core_list_t(th_trait_requirement) taken =
                 core_list_new(th_trait_requirement);
+            ok = argument_requirements(state->types,
+                canonical_symbol(check->declaration), check, &taken);
             parse_sym_entry_t *owner = typevar_owner(state->grammar,
                                                      check->site);
             // A variable only a function's body names is given its type by
@@ -10351,20 +10359,15 @@ n00bb_imply_type_argument_constraints(core_translation_unit_t *const *units,
             // require it again.
             bool function = owner && owner->decl_node
                 && NT_IS(state->grammar, owner->decl_node, "func-def");
-            for (size_t r = 0; ok && parameter_count == check->count
-                 && r < declared->len; r++) {
-                th_trait_requirement requirement = {0};
-                if (argument_requirement(state->types, declared->data[r],
-                        parameters, check->arguments, check->count,
-                        &requirement, &ok)
-                    && th_kind_of(th_resolve(requirement.subject)) == TH_VAR
-                    && (!function || (!owner->type
-                        || th_occurs(state->types,
-                                     th_resolve(requirement.subject),
-                                     owner->type))))
-                    core_list_push(taken, requirement);
+            size_t kept = 0;
+            for (size_t r = 0; r < taken.len; r++) {
+                th_type *subject = th_resolve(taken.data[r].subject);
+                if (th_kind_of(subject) == TH_VAR
+                    && (!function || !owner->type
+                        || th_occurs(state->types, subject, owner->type)))
+                    taken.data[kept++] = taken.data[r];
             }
-            if (!check->alias) core_free(parameters);
+            taken.len = kept;
             owner = ok && taken.len ? owner : nullptr;
             ok = ok && (!owner
                 || add_owner_constraints(state->grammar, state, owner,
@@ -10393,19 +10396,12 @@ n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
         for (size_t c = 0; c < state->type_argument_checks.len; c++) {
             n00bb_type_argument_check_t *check =
                 &state->type_argument_checks.data[c];
-            n00bb_declared_where_t *declared = parse_sym_binding(
-                check->declaration, N00BB_DECLARED_WHERE_KEY);
-            th_type **parameters = nullptr;
-            size_t parameter_count = declared
-                ? declared_type_parameters(types, check->declaration,
-                                           check->alias, &parameters) : 0;
-            bool valid = true;
-            for (size_t r = 0; parameter_count == check->count
-                 && r < declared->len; r++) {
-                th_trait_requirement requirement = {0};
-                if (!argument_requirement(types, declared->data[r],
-                        parameters, check->arguments, check->count,
-                        &requirement, &valid)) continue;
+            core_list_t(th_trait_requirement) given =
+                core_list_new(th_trait_requirement);
+            bool valid = argument_requirements(types, check->declaration,
+                                               check, &given);
+            for (size_t r = 0; r < given.len; r++) {
+                th_trait_requirement requirement = given.data[r];
                 th_type *argument = th_resolve(requirement.subject);
                 // An argument that is still open is constrained, if at all,
                 // where it is declared.
@@ -10432,9 +10428,8 @@ n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
                 }
                 else if (requirement.kind == TH_CON_EXCLUDES
                          && requirement.target
-                         && th_hash(types, argument)
-                            == th_hash(types,
-                                       th_resolve(requirement.target))) {
+                         && th_same_type(argument,
+                                         th_resolve(requirement.target))) {
                     n00bb_report(diagnostics, units[u],
                         N00B_DIAG_TYPE_ARGUMENT_EXCLUDED,
                         n00bb_node_span(check->site),
@@ -10444,7 +10439,7 @@ n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
                     ok = false;
                 }
             }
-            if (!check->alias) core_free(parameters);
+            core_list_free(given);
             if (!valid) {
                 n00bb_tu_internal_error(units[u], check->site,
                     "checking types",
