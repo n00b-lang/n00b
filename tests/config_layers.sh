@@ -173,7 +173,10 @@ expect_line "contract dir from the user file" \
 # A missing paths.path entry named by several layers is warned about once,
 # naming the highest-precedence layer.
 printf '[paths]\npath = ["%s"]\n' "$tmp/project/src/missing-lib" >"$project"
-isolated "$@" N00B_PATH="missing-lib${sep}missing-lib" "$compiler" check \
+# (The path settings are resolved, and their warnings given, before any
+# command reads its input, so `parse` reports exactly what `check` does
+# here, without loading the library.)
+isolated N00B_PATH="missing-lib${sep}missing-lib" "$compiler" parse \
     --path missing-lib main.n >"$tmp/out" 2>&1
 expect_line "missing path entry" \
     "warning N00B-C0033: \`--path\` entry \`missing-lib\` does not exist, so it is skipped"
