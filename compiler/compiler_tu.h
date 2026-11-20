@@ -69,10 +69,7 @@ typedef struct {
     uint32_t parameter_count;
     ir_shape_t **parameters;
 } n00bb_callable_shapes_t;
-typedef struct {
-    th_trait_requirement *data;
-    size_t len;
-} n00bb_declared_trait_requirements_t;
+typedef n00bb_declared_where_t n00bb_declared_trait_requirements_t;
 typedef parse_tree_t *n00bb_tree_ptr_t;
 typedef ir_instr_t *n00bb_ir_instr_ptr_t;
 core_list_decl(n00bb_ir_instr_ptr_t);

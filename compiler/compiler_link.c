@@ -523,8 +523,7 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
             }));
         }
         n00bb_declared_trait_requirements_t *requirements =
-            parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.trait.requirements"));
+            parse_sym_binding(symbol, N00BB_TRAIT_REQUIREMENTS_KEY);
         th_type *trait = valid && requirements
             ? th_trait(state->types, core_buffer_string(&qualified), methods.data,
                 methods.len, requirements->data, requirements->len)

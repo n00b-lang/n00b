@@ -3855,8 +3855,8 @@ note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
 }
 
 static bool add_declared_where(n00bb_tu_state_t *state,
-    parse_sym_entry_t *symbol,
-    const core_list_t(th_trait_requirement) *declared);
+    parse_sym_entry_t *symbol, core_string_t key,
+    const core_list_t(th_trait_requirement) *declared, bool bounds_only);
 
 void
 record_cached_declared_function_signature(parse_grammar_t *grammar,
@@ -3951,7 +3951,8 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
             "could not retain the function signature");
         return;
     }
-    if (!add_declared_where(state, symbol, &declared)) {
+    if (!add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
+                            &declared, false)) {
         core_list_free(declared);
         n00bb_tu_internal_error(unit, signature, "checking declarations",
             "could not retain declared where constraints");
@@ -3963,14 +3964,18 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     symbol->callable_contract = unified;
 }
 
-// Adds `declared` to the `where` requirements `symbol` already has.
+// Adds `declared` to the requirements `symbol` already has under `key`:
+// its `where` requirements (N00BB_DECLARED_WHERE_KEY) or, for a trait,
+// those its type carries (N00BB_TRAIT_REQUIREMENTS_KEY). With
+// `bounds_only`, just the implements and excludes ones.
 static bool
 add_declared_where(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
-                   const core_list_t(th_trait_requirement) *declared)
+                   core_string_t key,
+                   const core_list_t(th_trait_requirement) *declared,
+                   bool bounds_only)
 {
     if (!declared->len) return true;
-    n00bb_declared_where_t *previous = parse_sym_binding(symbol,
-        N00BB_DECLARED_WHERE_KEY);
+    n00bb_declared_where_t *previous = parse_sym_binding(symbol, key);
     size_t before = previous ? previous->len : 0;
     if (declared->len > SIZE_MAX / sizeof(th_trait_requirement) - before)
         return false;
@@ -3980,10 +3985,13 @@ add_declared_where(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
         (before + declared->len) * sizeof(*items));
     if (!facts || !items) return false;
     if (before) memcpy(items, previous->data, before * sizeof(*items));
-    memcpy(items + before, declared->data, declared->len * sizeof(*items));
-    *facts = (n00bb_declared_where_t){.data = items,
-                                      .len = before + declared->len};
-    return parse_sym_set_binding(symbol, N00BB_DECLARED_WHERE_KEY, facts);
+    size_t len = before;
+    for (size_t i = 0; i < declared->len; i++)
+        if (!bounds_only || declared->data[i].kind == TH_CON_IMPLEMENTS
+            || declared->data[i].kind == TH_CON_EXCLUDES)
+            items[len++] = declared->data[i];
+    *facts = (n00bb_declared_where_t){.data = items, .len = len};
+    return parse_sym_set_binding(symbol, key, facts);
 }
 
 // A `where` clause after a type in a function's body constrains the
@@ -4004,7 +4012,8 @@ record_function_body_constraints(parse_grammar_t *grammar,
     signature_typevars_for_symbol(symbol, &variables);
     bool valid = apply_signature_constraints(grammar, unit, body,
         state->types, &variables, &declared)
-        && add_declared_where(state, symbol, &declared);
+        && add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
+                              &declared, false);
     core_list_free(variables);
     core_list_free(declared);
     if (!valid)
@@ -10278,27 +10287,12 @@ add_owner_constraints(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                       parse_sym_entry_t *owner,
                       const core_list_t(th_trait_requirement) *taken)
 {
-    if (!add_declared_where(state, owner, taken)) return false;
-    if (!owner->decl_node || !NT_IS(grammar, owner->decl_node, "trait-decl"))
-        return true;
-    n00bb_declared_trait_requirements_t *previous = parse_sym_binding(owner,
-        CORE_STRING_STATIC("n00bb.trait.requirements"));
-    size_t before = previous ? previous->len : 0;
-    n00bb_declared_trait_requirements_t *facts = core_arena_alloc(
-        &state->semantic_values, sizeof(*facts));
-    th_trait_requirement *items = core_arena_alloc(&state->semantic_values,
-        (before + taken->len) * sizeof(*items));
-    if (!facts || !items) return false;
-    if (before) memcpy(items, previous->data, before * sizeof(*items));
-    size_t len = before;
-    for (size_t i = 0; i < taken->len; i++)
-        if (taken->data[i].kind == TH_CON_IMPLEMENTS
-            || taken->data[i].kind == TH_CON_EXCLUDES)
-            items[len++] = taken->data[i];
-    *facts = (n00bb_declared_trait_requirements_t){.data = items,
-                                                   .len = len};
-    return parse_sym_set_binding(owner,
-        CORE_STRING_STATIC("n00bb.trait.requirements"), facts);
+    return add_declared_where(state, owner, N00BB_DECLARED_WHERE_KEY, taken,
+                              false)
+        && (!owner->decl_node
+            || !NT_IS(grammar, owner->decl_node, "trait-decl")
+            || add_declared_where(state, owner, N00BB_TRAIT_REQUIREMENTS_KEY,
+                                  taken, true));
 }
 
 // A variable of the declaration around a use, given to a constrained
@@ -10476,7 +10470,8 @@ record_type_constraints(parse_grammar_t *grammar,
         core_list_push(declared, traits->data[i]);
     valid = valid && apply_signature_constraints(grammar, unit, declaration,
         state->types, &variables, &declared)
-        && add_declared_where(state, symbol, &declared);
+        && add_declared_where(state, symbol, N00BB_DECLARED_WHERE_KEY,
+                              &declared, false);
     core_list_free(variables);
     core_list_free(declared);
     if (!valid)
