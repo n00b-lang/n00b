@@ -6,8 +6,8 @@
 #include "lib/alloc.h"
 #include "th/environment.h"
 
-static th_type *
-test_source_type(th_ctx *types, ir_value_t *value)
+th_type *
+n00bb_type_test_source(th_ctx *types, ir_value_t *value)
 {
     for (size_t depth = 0; value && depth < 8; depth++) {
         if (th_is_closed(types, value->type)) return value->type;
@@ -39,19 +39,17 @@ boxed_source(th_type *type)
         || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY;
 }
 
-// Whether `pattern` takes the concrete type `resolved`, or -1 when that is
-// not known until run time. A union pattern (a `case` naming several types)
-// takes it when any of its members does.
-static int
-static_pattern_accepts(th_ctx *types, th_type *resolved, th_type *pattern)
+int
+n00bb_static_pattern_accepts(th_ctx *types, th_type *resolved,
+                             th_type *pattern)
 {
     th_type *wanted = th_resolve(pattern);
     th_comb comb;
     if (th_sum_comb(wanted, &comb) && comb == TH_UNION) {
         int result = 0;
         for (size_t i = 0; result < 1 && i < th_sum_len(wanted); i++) {
-            int member = static_pattern_accepts(types, resolved,
-                                                th_sum_arm(wanted, i));
+            int member = n00bb_static_pattern_accepts(types, resolved,
+                th_sum_arm(wanted, i));
             result = member > 0 ? 1 : member < 0 ? -1 : result;
         }
         return result;
@@ -72,13 +70,13 @@ n00bb_static_type_test(const ir_instr_t *test)
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value || !test->block) return -1;
     th_ctx *types = ir_module_types(test->block->owner->owner);
-    th_type *source = test_source_type(types, test->operands[0].value);
+    th_type *source = n00bb_type_test_source(types, test->operands[0].value);
     th_type *pattern = test->operands[1].type;
     th_type *resolved = source ? th_resolve(source) : nullptr;
     if (!resolved || !pattern || !th_is_closed(types, resolved)
         || th_kind_of(resolved) == TH_SUM || th_kind_of(resolved) == TH_TRAIT
         || th_builtin_kind_of(resolved) == TH_BUILTIN_ANY) return -1;
-    return static_pattern_accepts(types, resolved, pattern);
+    return n00bb_static_pattern_accepts(types, resolved, pattern);
 }
 
 static bool *

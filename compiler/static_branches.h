@@ -7,6 +7,14 @@
 // can drop a failure.
 #define N00BB_EXIT_VERDICT_KEY "n00bb.exit-verdict"
 
+// The closed type a type test's subject `value` held before narrowings
+// that kept it.
+th_type *n00bb_type_test_source(th_ctx *types, ir_value_t *value);
+// Whether `pattern` takes the concrete type `resolved`, or -1 when that is
+// not known until run time. A union pattern (a `case` naming several types)
+// takes it when any of its members does.
+int n00bb_static_pattern_accepts(th_ctx *types, th_type *resolved,
+                                 th_type *pattern);
 int n00bb_static_type_test(const ir_instr_t *test);
 uint64_t n00bb_type_test_outcomes(const ir_instr_t *test);
 bool n00bb_instantiated(const ir_func_t *function);

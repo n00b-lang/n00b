@@ -3,6 +3,7 @@
 #include "compiler_axioms.h"
 #include "sequence_transfer.h"
 #include "inline_globals.h"
+#include "static_branches.h"
 
 #include "ir/layout.h"
 #include "ir/analyses.h"
@@ -8012,76 +8013,18 @@ native_array_slot(lower_state_t *state, LLVMValueRef array_address,
 
 /* Specialization can make a trait dispatch's type test constant. Exclude
  * impossible edges before lowering so their values never enter LLVM phis. */
-static th_type *
-type_test_source_type(lower_state_t *state, ir_value_t *value)
-{
-    th_ctx *types = ir_module_types(state->function->owner);
-    for (size_t depth = 0; value && depth < 8; depth++) {
-        if (th_is_closed(types, value->type)) return value->type;
-        ir_instr_t *narrow = value->kind == IR_VAL_INSTR
-            ? value->def : nullptr;
-        if (!narrow || narrow->op != IR_OP_TYPE_NARROW
-            || narrow->n_operands != 2
-            || narrow->operands[0].kind != IR_OPD_VALUE
-            || narrow->operands[1].kind != IR_OPD_TYPE)
-            break;
-        ir_value_t *source = narrow->operands[0].value;
-        th_type *concrete = source ? source->type : nullptr;
-        if (concrete && th_is_closed(types, concrete)
-            && !th_env_type_pattern_accepts(types,
-                narrow->operands[1].type, concrete)) break;
-        value = source;
-    }
-    return value ? value->type : nullptr;
-}
-
-// Whether `pattern` takes the closed type `source`, or -1 when unknown. A
-// union pattern (a `case` naming several types) takes it when any of its
-// members does.
-static int
-static_pattern_result(lower_state_t *state, th_type *source,
-                      th_type *pattern)
-{
-    th_ctx *types = ir_module_types(state->function->owner);
-    th_type *wanted = th_resolve(pattern);
-    th_comb comb;
-    if (th_sum_comb(wanted, &comb) && comb == TH_UNION) {
-        int result = 0;
-        for (size_t i = 0; result < 1 && i < th_sum_len(wanted); i++) {
-            int member = static_pattern_result(state, source,
-                                               th_sum_arm(wanted, i));
-            result = member > 0 ? 1 : member < 0 ? -1 : result;
-        }
-        return result;
-    }
-    core_string_t trait = {0};
-    if (th_kind_of(wanted) == TH_TRAIT && th_trait_name(wanted, &trait))
-        return th_env_implements(types, source, trait);
-    if (!th_is_closed(types, pattern))
-        return th_env_type_pattern_accepts(types, pattern, source);
-    uint32_t source_index = 0, pattern_index = 0;
-    if (!runtime_type_index(state, source, &source_index)
-        || !runtime_type_index(state, pattern, &pattern_index)) return -1;
-    return source_index == pattern_index;
-}
-
 static int
 static_type_test_result(lower_state_t *state, const ir_instr_t *test)
 {
     if (!state || !test || test->op != IR_OP_TYPE_TEST
         || test->n_operands != 2
-        || test->operands[0].kind != IR_OPD_VALUE
-        || test->operands[1].kind != IR_OPD_TYPE
-        || !test->operands[0].value) return -1;
-    th_type *source = type_test_source_type(state,
-                                           test->operands[0].value);
-    th_type *pattern = test->operands[1].type;
-    th_ctx *types = ir_module_types(state->function->owner);
+        || test->operands[0].kind != IR_OPD_VALUE) return -1;
+    th_type *source = n00bb_type_test_source(
+        ir_module_types(state->function->owner), test->operands[0].value);
     LLVMContextRef context = LLVMGetModuleContext(state->module);
-    if (!source || !pattern || !th_is_closed(types, source)
-        || value_type(state->function->owner, source, context)
+    if (!source || value_type(state->function->owner, source, context)
             == box_llvm_type(context)) return -1;
-    return static_pattern_result(state, source, pattern);
+    return n00bb_static_type_test(test);
 }
 
 static int
