@@ -1,5 +1,5 @@
 # Calls through function references a library made, typed and linked
-# against the library's archived interface (reference_archive.sh). A call
+# against the library's archived interface (reference_keywords.sh). A call
 # through a reference whose function isn't known is given variables, which
 # it may write.
 import modlib
