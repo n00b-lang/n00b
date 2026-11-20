@@ -679,8 +679,12 @@ typedef struct {
     specialize_state_t *state;
     const n00bb_trait_binder_t *binder;
     size_t              scanned;
+    // Each module's own sets: the heap types it has made finalizers for,
+    // and the instances it has asked for.
     core_dict_t         heap_types;
+    core_dict_t         requested;
     core_dict_t         modules;
+    core_list_t(n00bb_ir_func_ptr_t) module_order;
     core_dict_t         finalizers;
     n00bb_specialization_failure_t *report;
 } finalize_state_t;
@@ -691,9 +695,49 @@ collect_modules(finalize_state_t *finalize)
     const function_list_t *functions = finalize->state->functions;
     for (; finalize->scanned < functions->len; finalize->scanned++) {
         ir_func_t *function = functions->data[finalize->scanned];
-        if (function && function->owner)
-            core_dict_add(&finalize->modules, function->owner, 1);
+        if (function && function->owner
+            && core_dict_add(&finalize->modules, function->owner, 1))
+            core_list_push(finalize->module_order,
+                           (ir_func_t *)function->owner);
     }
+}
+
+// Adds `key` to `module`'s set in `sets`; true when it was not there yet.
+static bool
+module_set_add(core_dict_t *sets, ir_module_t *module, uintptr_t key)
+{
+    core_dict_t *set = core_dict_get(sets, module, nullptr);
+    if (!set) {
+        set = core_alloc(core_dict_t);
+        if (!set) return true;
+        core_dict_init(set, nullptr, nullptr);
+        core_dict_put(sets, module, set);
+    }
+    return core_dict_add(set, key, 1);
+}
+
+static void
+module_sets_free(core_dict_t *sets)
+{
+    core_dict_foreach(sets, item) {
+        core_dict_free((core_dict_t *)item->value);
+        core_free(item->value);
+    }
+    core_dict_free(sets);
+}
+
+// Records that `requester` uses `copy`, once for each module however many
+// times it asks. Every module that needs an instance records it, not only
+// the first to ask, so a cached module's requests are the same in any
+// program and in any order its modules are specialized in.
+static void
+request_instance(finalize_state_t *finalize, ir_module_t *requester,
+                 ir_func_t *copy)
+{
+    if (requester && copy
+        && module_set_add(&finalize->requested, requester, (uintptr_t)copy))
+        core_list_push(*finalize->state->requests,
+            ((n00bb_specialization_request_t){requester, copy}));
 }
 
 static ir_func_t *
@@ -746,6 +790,7 @@ concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
     target = n00bb_cached_body(target);
     ir_func_t *copy = actual ? find_instance(specializations, target,
         th_hash(types, actual), types) : nullptr;
+    if (copy) request_instance(finalize, requester, copy);
     if (copy || !actual) return copy;
     core_list_t(type_binding_t) bindings = {0};
     bool matched = match_type(types, target->type, actual, &bindings)
@@ -760,8 +805,7 @@ concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
     core_list_push(*finalize->state->instances,
         ((n00bb_specialization_t){target, copy, actual}));
     core_list_push(*finalize->state->functions, copy);
-    core_list_push(*finalize->state->requests,
-        ((n00bb_specialization_request_t){requester, copy}));
+    request_instance(finalize, requester, copy);
     return copy;
 }
 
@@ -814,7 +858,8 @@ heap_finalizer_instance(finalize_state_t *finalize, ir_func_t *caller,
                                        th_ind_referent(type), depth + 1);
     if (th_kind_of(type) != TH_NAMED || !th_named_nargs(type)
         || !th_is_closed(types, type)
-        || !core_dict_add(&finalize->heap_types, th_hash(types, type) | 1, 1))
+        || !module_set_add(&finalize->heap_types, caller->owner,
+                           (uintptr_t)(th_hash(types, type) | 1)))
         return true;
     for (size_t i = 0; i < th_named_nargs(type); i++) {
         const th_arg *argument = th_named_arg(type, i);
@@ -912,14 +957,21 @@ record_boxed_hook(finalize_state_t *finalize, ir_module_t *module,
 {
     th_ctx *types = ir_module_types(module);
     uint64_t hash = th_hash(types, type);
-    if (core_dict_contains(seen, (void *)(uintptr_t)(hash | 1))) return true;
+    bool known = false;
+    ir_func_t *function = core_dict_get(seen, (void *)(uintptr_t)(hash | 1),
+                                        &known);
+    if (known) {
+        if (instance_slot(finalize->state->specializations, function))
+            request_instance(finalize, module, function);
+        return true;
+    }
     ir_func_t *target = hook_implementation(finalize, types, type,
                                             hook_method(mutable));
-    ir_func_t *function = target
-        ? concrete_hook(finalize, module, target, type) : nullptr;
+    function = target ? concrete_hook(finalize, module, target, type)
+                      : nullptr;
     if (function) {
         core_list_push(*boxed, ((n00bb_boxed_finalizer_t){hash, function}));
-        core_dict_add(seen, hash | 1, 1);
+        core_dict_put(seen, (void *)(uintptr_t)(hash | 1), function);
     }
     return true;
 }
@@ -930,23 +982,22 @@ seen_hooks(core_dict_t *seen,
 {
     core_dict_init(seen, nullptr, nullptr);
     for (size_t i = 0; i < boxed->len; i++)
-        core_dict_add(seen, boxed->data[i].typehash | 1, 1);
+        core_dict_put(seen, (void *)(uintptr_t)(boxed->data[i].typehash | 1),
+                      boxed->data[i].function);
 }
 
+// Visits modules in the order their functions were reached, so which
+// module first makes a hook does not depend on where modules sit in memory.
 static bool
 record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
 {
     collect_modules(finalize);
-    core_list_t(n00bb_ir_func_ptr_t) modules =
-        core_list_new(n00bb_ir_func_ptr_t);
-    core_dict_foreach(&finalize->modules, item)
-        core_list_push(modules, (ir_func_t *)item->key);
     core_dict_t seen, seen_mutable;
     seen_hooks(&seen, &boxed->addresses);
     seen_hooks(&seen_mutable, &boxed->mutable_addresses);
     bool valid = true;
-    for (size_t m = 0; valid && m < modules.len; m++) {
-        ir_module_t *module = (ir_module_t *)modules.data[m];
+    for (size_t m = 0; valid && m < finalize->module_order.len; m++) {
+        ir_module_t *module = (ir_module_t *)finalize->module_order.data[m];
         th_ctx *types = ir_module_types(module);
         for (size_t t = 0; valid && t < ir_type_count(module); t++) {
             th_type *type = ir_type_at(module, t);
@@ -962,7 +1013,6 @@ record_boxed_addresses(finalize_state_t *finalize, n00bb_boxed_hooks_t *boxed)
     }
     core_dict_free(&seen);
     core_dict_free(&seen_mutable);
-    core_list_free(modules);
     return valid;
 }
 
@@ -1338,8 +1388,10 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     };
     finalize_state_t finalize = {
         .state = &state, .binder = binder, .report = report,
+        .module_order = core_list_new(n00bb_ir_func_ptr_t),
     };
     core_dict_init(&finalize.heap_types, nullptr, nullptr);
+    core_dict_init(&finalize.requested, nullptr, nullptr);
     core_dict_init(&finalize.modules, nullptr, nullptr);
     core_dict_init(&finalize.finalizers, nullptr, nullptr);
     bool valid = true;
@@ -1532,7 +1584,9 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     specializations_free(&specializations);
     core_dict_free(&inline_bodies);
     core_dict_free(&finalize.finalizers);
-    core_dict_free(&finalize.heap_types);
+    module_sets_free(&finalize.heap_types);
+    module_sets_free(&finalize.requested);
     core_dict_free(&finalize.modules);
+    core_list_free(finalize.module_order);
     return valid;
 }
