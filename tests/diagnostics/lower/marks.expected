@@ -37,4 +37,3 @@ tests/diagnostics/lower/marks.n:69:6: warning N00B-N0019: function `normalized` 
 tests/diagnostics/lower/marks.n:75:6: warning N00B-N0019: function `plain` is never called
   help: call it or delete it
 tests/diagnostics/lower/marks.n:81:17: error N00B-S0082: `plain` can't fail, so it can't clear a mark
-tests/diagnostics/lower/marks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 11 (`--stop-on-error=all` shows every one)

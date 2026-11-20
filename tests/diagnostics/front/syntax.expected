@@ -4,4 +4,3 @@ tests/diagnostics/front/syntax.n:18:1: error N00B-P0010: `comptime` is a functio
 tests/diagnostics/front/syntax.n:23:8: error N00B-P0001: expected an expression, found end of line in the declaration of `x`
 tests/diagnostics/front/syntax.n:25:10: error N00B-P0001: expected `)`, `,`, `:` or `=`, found `int` in the parameter list of function `f`
 tests/diagnostics/front/syntax.n:29:9: error N00B-P0004: unexpected `)` with no matching `(`
-tests/diagnostics/front/syntax.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

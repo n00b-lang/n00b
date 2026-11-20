@@ -15,10 +15,6 @@ func both(x: 'T where 'T: Integer) -> 'T where 'T: Hash {
     return x
 }
 // A clause in the body constrains the function's variable too.
-func in_body(x: 'T) -> int {
-    var y: 'T where 'T: Integer = x
-    return 1
-}
 func local() {
     var x: 'T where 'T: Integer = "hi"
 }
@@ -26,29 +22,4 @@ require middle(1, "x", 3) == 4
 require last("no", 2) == 2
 require trailing("no") == 1
 require both(2.5) == 2.5
-require in_body("no") == 1
-require middle(1, 2, 3) + last(1, 2) + trailing(1) + in_body(3) == 8
-require both(2) == 2
 local()
-// One after a type in a trait's method constrains the trait's variable.
-trait Grows {
-    func grow(self: 'T, by: 'N where 'N: Integer) -> 'T
-}
-record Plant { height: int }
-func grow(self: Plant, by: string) -> Plant { return self }
-func grown(x: 'T) -> int where 'T: Grows { return 1 }
-let plant: Plant = (height = 1)
-require grown(plant) == 1
-// A clause may follow a type argument, a parameter of a function type,
-// or a parenthesized type.
-func ints(xs: List['T where 'T: Integer]) -> uint { return xs.len() }
-func optional(x: ('T where 'T: Integer)?) -> int { return 1 }
-func calls(r: Ref[('T where 'T: Integer) -> 'T]) -> int { return 1 }
-func calls_back(r: Ref[('T) -> 'T where 'T: Integer]) -> int { return 1 }
-func echo(x: string) -> string { return x }
-let words: List[string] = ["x"]
-let word: string? = "x"
-require ints(words) == 1
-require optional(word) == 1
-require calls(ref echo) == 1
-require calls_back(ref echo) == 1

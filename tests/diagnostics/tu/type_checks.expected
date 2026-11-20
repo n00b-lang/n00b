@@ -13,4 +13,4 @@ tests/diagnostics/tu/type_checks.n:33:5: error N00B-T0501: cannot write through 
 tests/diagnostics/tu/type_checks.n:37:5: error N00B-T0501: cannot write through constant `points`; nothing reachable from a constant is writable
   tests/diagnostics/tu/type_checks.n:22:7: note: `points` is declared here
   help: declare `points` with `var` to make it writable
-tests/diagnostics/tu/type_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 33 (`--stop-on-error=all` shows every one)
+tests/diagnostics/tu/type_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

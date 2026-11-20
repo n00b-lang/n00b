@@ -12,4 +12,4 @@ tests/diagnostics/tu/where_on_type_declarations.n:19:19: error N00B-T0021: `stri
 tests/diagnostics/tu/where_on_type_declarations.n:20:20: error N00B-T0608: `Pair` cannot take `i8` as a type argument: its `where` clause excludes it
 tests/diagnostics/tu/where_on_type_declarations.n:21:25: error N00B-T0021: `string` does not implement `Integer`, which `Later` requires
   help: give `Later` a type that implements `Integer`, or implement `Integer` for this one
-tests/diagnostics/tu/where_on_type_declarations.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 2 (`--stop-on-error=all` shows every one)
+tests/diagnostics/tu/where_on_type_declarations.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

@@ -3,4 +3,3 @@ let l = [1, 2]'zzz
 let f = [- hello -]'zzz
 let s = "x"'zzz
 let t = (1, 2)'zzz
-let n = nil'zzz

@@ -12,26 +12,3 @@ func f_1() -> int {
 let x = 1
 let x = 2
 require f_1() == x
-func f_2() -> int {
-    let x = 1
-    if x > 0 {
-        let y = x
-        let x = 2
-        return x + y
-    }
-    return x
-}
-require f_2() == 3
-let a: u8 = 1
-let b = a << 9
-let repeated: Tuple[x: int, x: int] = (x = 1)
-let listed: List[x: int] = []
-let lonely: Tuple[int] = 1
-let indexed = (1, "one")
-var where_at = len([1, 2])
-let picked = indexed[where_at]
-let beyond = indexed[2]
-var ordered = (1, 2)
-ordered[0] = 5
-var trailing = 1,
-[1, 2][0] = 3

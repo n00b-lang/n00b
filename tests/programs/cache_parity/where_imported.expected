@@ -14,5 +14,4 @@ where_imported.n:15:11: note N00B-S0064: parameter `b` could be `view`: `bare` n
 where_imported.n:16:9: error N00B-T0021: `string` does not implement `Integer`, which `bare` requires
   where_imported.n:15:6: note: `bare` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
-where_imported.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 4 (`--stop-on-error=all` shows every one)
 status 1

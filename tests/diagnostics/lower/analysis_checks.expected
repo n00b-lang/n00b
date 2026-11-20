@@ -13,4 +13,4 @@ tests/diagnostics/lower/analysis_checks.n:47:46: error N00B-S0052: this initiali
   tests/diagnostics/lower/analysis_checks.n:43:5: note: `pointer_state` is declared here
 tests/diagnostics/lower/analysis_checks.n:48:15: error N00B-S0052: this initializer reads global `p` before it is guaranteed to be initialized through the call to `total`
   tests/diagnostics/lower/analysis_checks.n:44:5: note: `p` is declared here
-tests/diagnostics/lower/analysis_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 8 (`--stop-on-error=all` shows every one)
+tests/diagnostics/lower/analysis_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

@@ -52,4 +52,3 @@ tests/diagnostics/lower/value_checks.n:185:6: warning N00B-N0019: function `leak
 tests/diagnostics/lower/value_checks.n:186:5: error N00B-S0011: this stores a reference reachable from view parameter `o` where it outlives the call
   tests/diagnostics/lower/value_checks.n:179:5: note: `kept_leaf` outlives the call
   help: store a copy, or return the reference instead of keeping it
-tests/diagnostics/lower/value_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 5 (`--stop-on-error=all` shows every one)

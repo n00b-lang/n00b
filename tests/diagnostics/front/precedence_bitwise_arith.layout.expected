@@ -42,5 +42,3 @@ tests/diagnostics/front/precedence_bitwise_arith.n:9:20: error: `<<` followed by
   help: add parentheses to say which one you mean:
     9 | let shift_back = (a << b) >> c
     9 | let shift_back = a << (b >> c)
-
-tests/diagnostics/front/precedence_bitwise_arith.n: note: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

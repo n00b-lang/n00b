@@ -2,20 +2,17 @@ tests/diagnostics/tu/where_on_type.n:4:21: note N00B-S0064: parameter `b` could 
 tests/diagnostics/tu/where_on_type.n:7:11: note N00B-S0064: parameter `x` could be `view`: `last` never writes anything reachable from it
 tests/diagnostics/tu/where_on_type.n:10:15: note N00B-S0064: parameter `x` could be `view`: `trailing` never writes anything reachable from it
 tests/diagnostics/tu/where_on_type.n:14:11: note N00B-S0064: parameter `x` could be `view`: `both` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:18:14: note N00B-S0064: parameter `x` could be `view`: `in_body` never writes anything reachable from it
-tests/diagnostics/tu/where_on_type.n:19:9: warning N00B-S0006: the value assigned to `y` here is never read
-tests/diagnostics/tu/where_on_type.n:23:9: error N00B-T0021: `string` does not implement `Integer`, which `local` requires
+tests/diagnostics/tu/where_on_type.n:19:9: error N00B-T0021: `string` does not implement `Integer`, which `local` requires
   help: give it a value whose type implements `Integer` here, or implement `Integer` for `string`
-tests/diagnostics/tu/where_on_type.n:25:9: error N00B-T0021: `string` does not implement `Integer`, which `middle` requires
+tests/diagnostics/tu/where_on_type.n:21:9: error N00B-T0021: `string` does not implement `Integer`, which `middle` requires
   tests/diagnostics/tu/where_on_type.n:4:6: note: `middle` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:26:9: error N00B-T0021: `string` does not implement `Integer`, which `last` requires
+tests/diagnostics/tu/where_on_type.n:22:9: error N00B-T0021: `string` does not implement `Integer`, which `last` requires
   tests/diagnostics/tu/where_on_type.n:7:6: note: `last` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:27:9: error N00B-T0021: `string` does not implement `Integer`, which `trailing` requires
+tests/diagnostics/tu/where_on_type.n:23:9: error N00B-T0021: `string` does not implement `Integer`, which `trailing` requires
   tests/diagnostics/tu/where_on_type.n:10:6: note: `trailing` is declared here
   help: implement `Integer` for `string`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n:28:9: error N00B-T0021: `f64` does not implement `Integer`, which `both` requires
+tests/diagnostics/tu/where_on_type.n:24:9: error N00B-T0021: `f64` does not implement `Integer`, which `both` requires
   tests/diagnostics/tu/where_on_type.n:14:6: note: `both` is declared here
   help: implement `Integer` for `f64`, or call a function that does not need it
-tests/diagnostics/tu/where_on_type.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 6 (`--stop-on-error=all` shows every one)

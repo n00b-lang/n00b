@@ -18,4 +18,3 @@ tests/diagnostics/lower/effect_checks.n:48:5: error N00B-S0073: this check is fa
 tests/diagnostics/lower/effect_checks.n:53:5: error N00B-S0074: this check mixes effect questions with values known only when the program runs
   help: put the run-time part in a statement of its own
 tests/diagnostics/lower/effect_checks.n:58:5: error N00B-S0075: `teleport` is not an effect
-tests/diagnostics/lower/effect_checks.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 7 (`--stop-on-error=all` shows every one)

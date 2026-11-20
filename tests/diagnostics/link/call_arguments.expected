@@ -10,4 +10,3 @@ tests/diagnostics/link/call_arguments.n:25:16: error N00B-T0005: parameter 1 (`s
   tests/diagnostics/link/call_arguments.n:7:6: note: `label` is declared here
 tests/diagnostics/link/call_arguments.n:30:15: error N00B-T0005: parameter 1 (`x`) of `f` is `int`, but this argument is `string`
   tests/diagnostics/link/call_arguments.n:13:6: note: `f` is declared here
-tests/diagnostics/link/call_arguments.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 2 (`--stop-on-error=all` shows every one)

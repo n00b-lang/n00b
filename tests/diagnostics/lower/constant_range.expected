@@ -9,4 +9,3 @@ tests/diagnostics/lower/constant_range.n:15:18: error N00B-T1049: index 3 is out
   help: its indexes run from 0 to 2, or from -3 to -1 counting from the end
 tests/diagnostics/lower/constant_range.n:16:15: error N00B-T1049: index 2 is out of range for this array of length 2
   help: its indexes run from 0 to 1, or from -2 to -1 counting from the end
-tests/diagnostics/lower/constant_range.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 6 (`--stop-on-error=all` shows every one)

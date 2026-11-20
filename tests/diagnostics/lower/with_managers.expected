@@ -32,4 +32,3 @@ tests/diagnostics/lower/with_managers.n:57:5: warning N00B-S0005: this code can 
 tests/diagnostics/lower/with_managers.n:60:12: error N00B-S0025: `opened` can fail with `string`, so this call needs a trailing `!` or a `try`
   tests/diagnostics/lower/with_managers.n:55:6: note: `opened` is declared here
   help: write `opened(...)!` to pass the failure to the caller, or handle it with `try`
-tests/diagnostics/lower/with_managers.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 2 (`--stop-on-error=all` shows every one)

@@ -10,4 +10,3 @@ tests/diagnostics/link/method_call_sites.n:26:20: error N00B-T0001: `scale` take
   help: remove the extra argument
 tests/diagnostics/link/method_call_sites.n:27:9: error N00B-T0002: `scale` takes 1 argument, but this call passes 0
   tests/diagnostics/link/method_call_sites.n:9:6: note: `scale` is declared here
-tests/diagnostics/link/method_call_sites.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

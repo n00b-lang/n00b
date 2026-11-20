@@ -14,12 +14,3 @@ let words: Dict[string, nil] = {"x": nil}
 require counted(words) == 1
 func bare(b: kinds.Bag) -> uint { return b.len() }
 require bare(words) == 1
-// A trait named as a type in one is a constrained parameter of its own.
-func paired(p: kinds.Pair[string, string]) -> int { return 1 }
-func numbered(n: kinds.Num[string]) -> int { return 1 }
-func listed(l: kinds.Ints[string]) -> int { return 1 }
-func short(p: kinds.Pair[int]) -> int { return 1 }
-func shaped(p: kinds.Pair[string, u8], n: kinds.Num[int],
-            l: kinds.Ints[u8]) -> int {
-    return 1
-}

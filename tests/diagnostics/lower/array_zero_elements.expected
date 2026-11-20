@@ -8,4 +8,4 @@ tests/diagnostics/lower/array_zero_elements.n:26:9: error N00B-S0098: this array
   help: make the element `Holder?`, or give the array an initializer
 tests/diagnostics/lower/array_zero_elements.n:27:16: error N00B-S0098: this array starts zeroed, but `Level` has no zero value
   help: make the element `Level?`, or give the array an initializer
-tests/diagnostics/lower/array_zero_elements.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 5 (`--stop-on-error=all` shows every one)
+tests/diagnostics/lower/array_zero_elements.n: note N00B-C0106: this file reached the error limit of 5; its later warnings are not shown (`--stop-on-error=all` shows every one)

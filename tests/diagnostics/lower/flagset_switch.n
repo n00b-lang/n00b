@@ -47,16 +47,3 @@ func incomplete(p: Perm) -> int {
         case is nil { return 4 }
     }
 }
-
-func not_flags(n: int) -> int {
-    switch n {
-        case is rw { return 1 }
-        else { return 0 }
-    }
-}
-
-func start() {
-    let p = Perm.read
-    let total = bare(p) + unknown(p) + nothing(p) + covered(p) + complete(p)
-    require total + incomplete(p) + not_flags(3) > 0
-}

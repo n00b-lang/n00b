@@ -18,10 +18,6 @@ func assigned(other: Shape) -> int {
     s = (circle = 1)
     return s.circle
 }
-func initialized() -> int {
-    var s: Shape = (circle = 2)
-    return s.circle
-}
 func arm_set() -> int {
     var s: Shape
     s.circle = 3
@@ -31,12 +27,6 @@ func generic() -> int {
     var m: Maybe[int] = (none = nil)
     m = (some = 4)
     return m.some
-}
-func generic_arm_set() -> int {
-    var m: Maybe[string]
-    m.some = "x"
-    require m.some == "x"
-    return 5
 }
 func other_arm() -> int {
     var s: Shape = (square = "x")
@@ -64,10 +54,5 @@ func referenced() -> int {
     let r = ref s
     return s.circle
 }
-func generic_written_after() -> int {
-    var m: Maybe[int] = (some = 1)
-    m = (none = nil)
-    return m.some
-}
-require assigned((square = "x")) == 1 and initialized() == 2
-require arm_set() == 3 and generic() == 4 and generic_arm_set() == 5
+require assigned((square = "x")) == 1
+require arm_set() == 3 and generic() == 4

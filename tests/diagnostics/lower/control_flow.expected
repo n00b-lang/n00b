@@ -10,4 +10,3 @@ tests/diagnostics/lower/control_flow.n:20:9: error N00B-S0002: `a` is a `let` de
   help: declare `a` with `var`, or declare it inside the loop
 tests/diagnostics/lower/control_flow.n:26:18: error N00B-T1000: `n` is `int`, but an operand of `and` must be `bool`
   help: write the comparison you mean, such as `n != 0`
-tests/diagnostics/lower/control_flow.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 7 (`--stop-on-error=all` shows every one)

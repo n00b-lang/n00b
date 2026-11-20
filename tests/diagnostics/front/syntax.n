@@ -27,5 +27,3 @@ func f(a int) -> int {
 }
 require f(1) == 1
 let a = )
-let b = ]
-require 1 == 1

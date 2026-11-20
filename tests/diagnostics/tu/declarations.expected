@@ -12,4 +12,3 @@ tests/diagnostics/tu/declarations.n:12:5: warning N00B-N0024: `x` is never used
 tests/diagnostics/tu/declarations.n:13:5: error N00B-N0501: `x` is already declared in this scope
   tests/diagnostics/tu/declarations.n:12:5: note: `x` is first declared here
   help: rename one of them, or assign to the existing `x` instead of declaring it again
-tests/diagnostics/tu/declarations.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 9 (`--stop-on-error=all` shows every one)

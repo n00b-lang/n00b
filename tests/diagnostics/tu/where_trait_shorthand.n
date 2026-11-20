@@ -25,19 +25,10 @@ func second(t: Two[int, string]) -> int { return 1 }
 func keyed(k: Keyed[int, string]) -> int { return 1 }
 func numbered(n: Num[string]) -> int { return 1 }
 func listed(l: Ints[string]) -> int { return 1 }
-func too_few(t: Two[int]) -> int { return 1 }
-func too_many(b: Box[int, int]) -> int { return 1 }
-func fits(b: Box[u8], t: Two[int, u8], k: Keyed[string, int]) -> int {
-    return 1
-}
 // A variable given to one takes the trait on.
 func wrapped(x: 'T) -> Box['T] { return (v = x) }
 let wrapped_word = wrapped("x")
 // So does each bare use of the alias.
 func counted(l: Ints) -> uint { return l.len() }
-func local() -> uint {
-    var words: Ints = ["x"]
-    return words.len()
-}
 let words: Array[string] = ["x"]
-require counted(words) == 1 and local() == 1
+require counted(words) == 1

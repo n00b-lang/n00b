@@ -10,4 +10,3 @@ tests/diagnostics/coercion/buffer_conversions.n:9:12: error N00B-T0529: `"text"`
   help: copy it into a buffer with `buffer_from_string("text")`
 tests/diagnostics/coercion/buffer_conversions.n:14:14: error N00B-T0500: `r` is `Ref[int]`, which does not convert to `int`
   help: read the referenced value with `.__value`
-tests/diagnostics/coercion/buffer_conversions.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

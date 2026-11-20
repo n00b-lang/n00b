@@ -13,4 +13,3 @@ tests/diagnostics/front/parameter_declarations.n:13:21: error N00B-P0040: `modif
 tests/diagnostics/front/parameter_declarations.n:17:26: error N00B-P0040: `out` cannot be used on varargs parameter `rest`
   help: only positional parameters can be `modify` or `out`; remove `out`:
     17 | func out_varargs(a: int, *rest: int) -> int {
-tests/diagnostics/front/parameter_declarations.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 1 (`--stop-on-error=all` shows every one)

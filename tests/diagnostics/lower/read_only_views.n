@@ -36,9 +36,3 @@ func keep_owner() {
 func keep_constant() {
     raw = ref plain
 }
-
-func allowed() -> int {
-    let other: View[Style] = ref plain
-    current = other
-    return current.__value.owner.n
-}

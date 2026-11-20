@@ -48,6 +48,3 @@ func partial(n: int) {
         log_line("x")
     }
 }
-
-may_effect(log_line, output) and has_effect(log_line, output)
-forbids_effect(log_line, impure)

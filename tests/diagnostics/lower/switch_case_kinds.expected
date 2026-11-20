@@ -3,4 +3,3 @@ tests/diagnostics/lower/switch_case_kinds.n:10:14: error N00B-T0500: this case i
 tests/diagnostics/lower/switch_case_kinds.n:18:14: error N00B-T0500: this case is an integer, but the `switch` value is `bool`
 tests/diagnostics/lower/switch_case_kinds.n:25:14: error N00B-T0500: this case is a boolean, but the `switch` value is `uint`
 tests/diagnostics/lower/switch_case_kinds.n:32:14: error N00B-T0500: this case is `string`, but the `switch` value is `uint`
-tests/diagnostics/lower/switch_case_kinds.n: note N00B-C0106: this file reached the error limit of 5; errors not shown: 6 (`--stop-on-error=all` shows every one)
