@@ -281,7 +281,7 @@ publish_from_definition(ir_module_t *module, th_type *type,
                         bool *handled)
 {
     const ir_final_layout_t *base = atomic
-        ? ir_layout_final_visible(module, definition, target->triple)
+        ? ir_layout_final(module, definition, target->triple)
         : nullptr;
     if (!base) {
         if (th_kind_of(definition) == TH_RECORD) return true;
@@ -898,7 +898,7 @@ publish_tuple_layout(ir_module_t *module, th_type *type,
             break;
         }
         if (!ir_layout_final(module, child, target->triple)) {
-            const ir_final_layout_t *visible = ir_layout_final_visible(
+            const ir_final_layout_t *visible = ir_layout_final(
                 module, child, target->triple);
             if (!visible || !ir_layout_publish_final(module, child,
                     target->triple, visible)) {

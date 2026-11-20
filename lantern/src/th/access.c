@@ -458,7 +458,7 @@ static th_type_record_t *record_lookup(th_ctx *ctx, const th_type *type)
 }
 
 static th_type_record_t *record_insert(th_ctx *ctx, th_type *type,
-                                       th_type *definition, void *owner)
+                                       th_type *definition)
 {
     bool closed = th_is_closed(ctx, type);
     uint64_t hash = closed ? th_hash(ctx, type) : 0;
@@ -466,7 +466,6 @@ static th_type_record_t *record_insert(th_ctx *ctx, th_type *type,
         .hash = hash,
         .type = type,
         .definition = definition,
-        .owner = owner,
     }));
     void *slot = (void *)(uintptr_t)ctx->type_records.len;
     if (closed)
@@ -496,41 +495,15 @@ size_t th_generic_arity(th_ctx *ctx, core_string_t name)
     return 0;
 }
 
-bool th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
-                          void *owner)
+bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
 {
     type = type ? th_resolve(type) : nullptr;
     if (!ctx || !type || !definition || th_kind_of(type) != TH_NAMED)
         return false;
     th_type_record_t *record = record_lookup(ctx, type);
-    if (!record) return record_insert(ctx, type, definition, owner) != nullptr;
-    if (record->definition != definition
-        && th_hash(ctx, record->definition) != th_hash(ctx, definition))
-        return false;
-    if (!record->owner && !record->shared) record->owner = owner;
-    return true;
-}
-
-bool th_type_define_shared(th_ctx *ctx, th_type *type, th_type *definition)
-{
-    if (!th_type_define_owned(ctx, type, definition, nullptr)) return false;
-    th_type_record_t *record = record_lookup(ctx, th_resolve(type));
-    if (!record) return false;
-    record->shared = true;
-    record->owner = nullptr;
-    return true;
-}
-
-bool th_type_define(th_ctx *ctx, th_type *type, th_type *definition)
-{
-    return th_type_define_owned(ctx, type, definition, nullptr);
-}
-
-void *th_type_definition_owner(th_ctx *ctx, const th_type *type)
-{
-    if (!ctx || !type) return nullptr;
-    th_type_record_t *record = record_lookup(ctx, th_resolve_c(type));
-    return record ? record->owner : nullptr;
+    if (!record) return record_insert(ctx, type, definition) != nullptr;
+    return record->definition == definition
+        || th_hash(ctx, record->definition) == th_hash(ctx, definition);
 }
 
 th_type *th_fields_record(th_ctx *ctx, th_type *type)
@@ -605,7 +578,7 @@ th_type *th_type_definition(th_ctx *ctx, const th_type *type)
     core_free(to);
     core_free(from);
     if (definition && th_is_closed(ctx, (th_type *)type))
-        record_insert(ctx, (th_type *)type, definition, nullptr);
+        record_insert(ctx, (th_type *)type, definition);
     return definition;
 }
 

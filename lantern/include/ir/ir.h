@@ -539,13 +539,10 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
 th_type *ir_type_at(ir_module_t *m, size_t i);
+// Records `def` as the definition of `named` and adds both to `m`'s types.
+// Every module that uses a type defines it the same way; none owns it.
 bool     ir_type_define(ir_module_t *m, th_type *named, th_type *def);
-// Defines `named` in `m` without making `m` its owner: for a type no
-// module declares (one the compiler provides to every module), so which
-// module defines it first doesn't decide who owns it.
-bool     ir_type_define_shared(ir_module_t *m, th_type *named, th_type *def);
 th_type *ir_type_definition(ir_module_t *m, th_type *named);
-ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named);
 
 int32_t     ir_file_add(ir_module_t *m, core_string_t path);
 core_string_t ir_file_path(const ir_module_t *m, int32_t id);

@@ -4192,7 +4192,7 @@ static bool
 n00bb_placement_automatic(n00bb_rewrite_t *rewrite, th_type *type)
 {
     ir_module_t *module = rewrite->context.module;
-    const ir_final_layout_t *published = ir_layout_final_visible(module,
+    const ir_final_layout_t *published = ir_layout_final(module,
         type, ir_module_target(module));
     uint64_t size = 0;
     bool known = published && ir_layout_final_byte_extent(published, &size);

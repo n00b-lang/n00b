@@ -24,9 +24,6 @@ typedef struct {
   uint64_t hash;
   th_type *type;
   th_type *definition;
-  void *owner;
-  // No module owns it (th_type_define_shared).
-  bool shared;
 } th_type_record_t;
 
 typedef struct {

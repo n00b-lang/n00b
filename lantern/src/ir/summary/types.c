@@ -452,20 +452,15 @@ owned_slot(const pt_t *pt, const pt_loc_t *loc)
 }
 
 static bool
-layout_member_inline(const ir_func_t *f, th_type *named, th_type *record,
-                     core_string_t name, bool *known)
+layout_member_inline(const ir_func_t *f, th_type *record, core_string_t name,
+                     bool *known)
 {
-    bool         inside = ir_layout_member_inline(f->owner, record, name,
-                                                  known);
-    ir_module_t *owner  = *known || !named
-        ? nullptr : ir_type_definition_owner(f->owner, named);
-    if (owner && owner != f->owner)
-        inside = ir_layout_member_inline(owner, record, name, known);
+    bool inside = ir_layout_member_inline(f->owner, record, name, known);
     return *known && inside;
 }
 
 static bool
-member_inline(const ir_func_t *f, pt_t *pt, th_type *named, th_type *record,
+member_inline(const ir_func_t *f, pt_t *pt, th_type *record,
               core_string_t name, bool *known)
 {
     bool           found   = false;
@@ -481,7 +476,7 @@ member_inline(const ir_func_t *f, pt_t *pt, th_type *named, th_type *record,
         *members = core_list_new(pt_member_t);
         core_dict_put(&pt->types->members, record, members);
     }
-    bool inside = layout_member_inline(f, named, record, name, known);
+    bool inside = layout_member_inline(f, record, name, known);
     core_list_push(*members, ((pt_member_t){name, inside, *known}));
     return inside;
 }
@@ -547,7 +542,7 @@ inline_depth(const ir_func_t *f, th_type *type, bool sequence_root,
                 *known = false;
                 return i;
             }
-            inline_elements = layout_member_inline(f, type, current, step,
+            inline_elements = layout_member_inline(f, current, step,
                                                    &layout_known);
             type            = member;
             break;

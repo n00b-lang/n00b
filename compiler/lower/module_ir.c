@@ -154,14 +154,8 @@ register_nominal_types(parse_grammar_t *grammar,
                                       CORE_STRING_STATIC("flagset")));
             if (!nominal && !scalar) continue;
             th_type *representation = th_type_definition(state->types, symbol->type);
-            // Every module has the compiler's own types (Comparison); none
-            // owns them, or the first module defined (the first root) would.
-            bool builtin = parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.builtin-type")) != nullptr;
-            if (!representation || !(builtin
-                    ? ir_type_define_shared(module, symbol->type,
-                                            representation)
-                    : ir_type_define(module, symbol->type, representation)))
+            if (!representation
+                || !ir_type_define(module, symbol->type, representation))
                 return false;
         }
     }

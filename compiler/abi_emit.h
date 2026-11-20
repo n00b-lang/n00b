@@ -75,6 +75,12 @@ core_string_t n00bb_abi_baked_node_symbol(core_string_t package,
 // program built it first.
 void n00bb_abi_emit_function_summaries(bool keep);
 
+// Lays out every closed type interned in `module` that a value of it
+// reaches. The emitter interns each type its rows describe and calls it,
+// so a row's layout and tracing follow from the type alone, the same in
+// every module that has a row for it.
+typedef bool (*n00bb_abi_layout_fn)(void *context, ir_module_t *module);
+
 bool n00bb_abi_emit_unit(
     core_link_unit_t *link, core_translation_unit_t *unit,
     core_string_t package_id,
@@ -85,6 +91,7 @@ bool n00bb_abi_emit_unit(
     n00bb_abi_node_source_fn node_source, void *source_context,
     n00bb_abi_type_owner_lookup_fn type_owner, void *type_owner_context,
     const n00bb_abi_graph_source_t *graphs,
+    n00bb_abi_layout_fn layout, void *layout_context,
     n00bb_abi_packed_tables_t *out_tables,
     n00bb_abi_index_table_t *out_index_table,
     uint8_t **out_object, size_t *out_object_bytes);

@@ -104,11 +104,17 @@ n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,
         core_list_free(items);
     }
     if (valid) {
-        for (size_t i = 1; i < types->count; i++)
-            if ((types->rows[i].kind == N00B_ABI_TYPE_ENUM
-                 || types->rows[i].kind == N00B_ABI_TYPE_FLAGSET)
-                && types->owners[i])
+        for (size_t i = 1; i < types->count; i++) {
+            if (types->rows[i].kind != N00B_ABI_TYPE_ENUM
+                && types->rows[i].kind != N00B_ABI_TYPE_FLAGSET) continue;
+            // Items are the declaration's symbols: only the module that
+            // declares the enum has them.
+            if (types->owners[i])
                 types->rows[i].fields_or_arms = ranges[i];
+            else
+                types->rows[i].flags |=
+                    N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
+        }
         *out = (n00bb_abi_enum_rows_t){
             .items = rows.data, .item_count = rows.len,
             .stream_indexes = stream.data, .stream_index_count = stream.len,

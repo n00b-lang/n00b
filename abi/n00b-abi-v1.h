@@ -206,6 +206,10 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_PLAIN_REF = 1u << 5,
     N00B_ABI_TYPE_FLAG_TYPE_INDEX = 1u << 6,
     N00B_ABI_TYPE_FLAG_BOOL = 1u << 7,
+    // The row is a using module's: it omits the members only the type's
+    // declaration has (an enum's items, which are its declaration's
+    // symbols). Linking replaces it with the declaring module's row.
+    N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED = 1u << 8,
 } n00b_abi_type_flag_v1;
 
 typedef enum {

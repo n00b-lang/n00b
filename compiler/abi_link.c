@@ -1365,14 +1365,32 @@ type_is_import_reference(const n00b_abi_type_v1 *type)
             || type->kind == N00B_ABI_TYPE_OBJECT);
 }
 
+// Whether `held` lacks declaration facts `candidate` has: `held` omits
+// the declaration's members, or is only a reference to the type.
+static bool
+type_row_less_complete(const n00b_abi_type_v1 *held,
+                       const n00b_abi_type_v1 *candidate)
+{
+    bool held_partial = type_is_import_reference(held)
+        || (held->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
+    bool candidate_partial = type_is_import_reference(candidate)
+        || (candidate->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED);
+    if (held_partial != candidate_partial) return held_partial;
+    // A reference lacks the layout a using module's row has.
+    return type_is_import_reference(held)
+        && !type_is_import_reference(candidate);
+}
+
 static bool
 compatible_type_components(const abi_link_key_t *first,
                            const abi_link_key_t *candidate)
 {
     const n00b_abi_type_v1 *a = first->row, *b = candidate->row;
     if (a->components.count != b->components.count)
-        return (!a->components.count && type_is_import_reference(a))
-            || (!b->components.count && type_is_import_reference(b));
+        return (!a->components.count && (type_is_import_reference(a)
+                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
+            || (!b->components.count && (type_is_import_reference(b)
+                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
     if (!valid_index_range(first->view, a->components)
         || !valid_index_range(candidate->view, b->components)) return false;
     for (uint32_t i = 0; i < a->components.count; i++) {
@@ -1394,8 +1412,10 @@ compatible_type_members(const abi_link_key_t *first,
     n00b_abi_range_v1 a_range = a->fields_or_arms;
     n00b_abi_range_v1 b_range = b->fields_or_arms;
     if (a_range.count != b_range.count)
-        return (!a_range.count && type_is_import_reference(a))
-            || (!b_range.count && type_is_import_reference(b));
+        return (!a_range.count && (type_is_import_reference(a)
+                    || (a->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)))
+            || (!b_range.count && (type_is_import_reference(b)
+                    || (b->flags & N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED)));
     if (!valid_index_range(first->view, a_range)
         || !valid_index_range(candidate->view, b_range)) return false;
     uint32_t member_kind = a->kind == N00B_ABI_TYPE_RECORD
@@ -1792,7 +1812,8 @@ compatible_type_identity(const abi_link_key_t *first,
     n00bb_abi_string_view_t a_name, b_name;
     bool a_import = type_is_import_reference(a);
     bool b_import = type_is_import_reference(b);
-    uint32_t a_flags = a->flags, b_flags = b->flags;
+    uint32_t a_flags = a->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
+    uint32_t b_flags = b->flags & ~N00B_ABI_TYPE_FLAG_DECLARATION_OMITTED;
     if (a_import || b_import) {
         if ((a_import && (a_flags & N00B_ABI_TYPE_FLAG_PACKABLE))
             || (b_import && (b_flags & N00B_ABI_TYPE_FLAG_PACKABLE)))
@@ -2147,6 +2168,12 @@ n00bb_abi_index_plan_build_detailed(
                     || kind != N00B_ABI_TABLE_TYPE
                     || compatible_type_identity(entry->value, key,
                                                 &identity_reason));
+                // The linked row is the declaration's, whichever input
+                // brought a using module's row first.
+                if (compatible && !inserted && kind == N00B_ABI_TABLE_TYPE
+                    && type_row_less_complete(
+                        ((const abi_link_key_t *)entry->value)->row, row))
+                    ((core_indexed_entry_t *)entry)->value = key;
                 valid = compatible && core_index_remap_set(remap, local,
                                                             entry->index);
                 if (!valid && failure)

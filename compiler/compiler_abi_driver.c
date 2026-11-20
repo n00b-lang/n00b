@@ -27,6 +27,7 @@
 #include "cached_body.h"
 #include "qualified_names.h"
 #include "compiler_object_io.h"
+#include "compiler_layout.h"
 #include "abi_emit.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
@@ -2909,6 +2910,12 @@ free_abi_artifact(void *payload)
 }
 
 static bool
+abi_layout_module(void *context, ir_module_t *module)
+{
+    return n00bb_layout_module_types(context, module);
+}
+
+static bool
 emit_specialization_abi(core_link_unit_t *link,
                         n00bb_link_analysis_t *analysis,
                         const n00bb_specialization_t *specialization,
@@ -2947,7 +2954,7 @@ emit_specialization_abi(core_link_unit_t *link,
             symbols, generic_state->lex->tokens, module, &analysis->target,
             debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
             abi_declaration_for_symbol, analysis, nullptr, nullptr,
-            abi_type_owner, sources, nullptr,
+            abi_type_owner, sources, nullptr, abi_layout_module, analysis,
             &artifact->packed, &artifact->index_table,
             &artifact->object, &artifact->object_bytes);
     if (!valid && unit.diagnostics)
@@ -3014,7 +3021,7 @@ abi_emit_source_unit(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         &analysis->target, debug_enabled ? N00B_ABI_CAP_DEBUG : 0,
         abi_declaration_for_symbol, analysis,
         abi_source_of_node, sources, abi_type_owner, sources,
-        n00bb_comptime_graph(unit),
+        n00bb_comptime_graph(unit), abi_layout_module, analysis,
         &artifact->packed, &artifact->index_table,
         &artifact->object, &artifact->object_bytes);
 }

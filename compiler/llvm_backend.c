@@ -697,7 +697,7 @@ packed_value_width(ir_module_t *module, th_type *type)
         && th_bitint_info(definition, &width, &flavor)
         && flavor == TH_BITINT_BITS)
         return width && width <= N00BB_PACKED_MAX_BITS ? width : 0;
-    const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
+    const ir_final_layout_t *layout = ir_layout_final(module, type,
         ir_module_target(module));
     return n00bb_abi_layout_packable(layout)
         && layout->occupied[0].width <= N00BB_PACKED_MAX_BITS
@@ -821,7 +821,7 @@ record_member_extent(ir_module_t *module,
     th_type *storage = member->inline_element_count
         ? member->inline_element_type : member->type;
     const ir_final_layout_t *child = storage
-        ? ir_layout_final_visible(module, storage, ir_module_target(module))
+        ? ir_layout_final(module, storage, ir_module_target(module))
         : nullptr;
     uint64_t stride = 0;
     if (!child || !ir_layout_final_stride_bits(child, &stride)
@@ -887,14 +887,10 @@ record_shape_build(ir_module_t *requester, th_type *type,
 {
     *shape = (record_shape_t){0};
     ir_module_t *module = requester;
-    ir_module_t *owner = type
-        ? ir_type_definition_owner(requester, type) : nullptr;
-    if (owner && ir_layout_final(owner, type, ir_module_target(owner)))
-        module = owner;
     th_type *definition = type ? ir_type_definition(module, type) : nullptr;
     if (type && !definition && th_kind_of(th_resolve(type)) == TH_RECORD)
         definition = th_resolve(type);
-    const ir_final_layout_t *layout = type ? ir_layout_final_visible(module,
+    const ir_final_layout_t *layout = type ? ir_layout_final(module,
         type, ir_module_target(module)) : nullptr;
     size_t count = layout ? layout->n_members : 0;
     uint64_t stride_bits = 0;
@@ -1074,7 +1070,7 @@ shared_option_value_type(ir_module_t *module, th_type *type,
     if (!child) return nullptr;
     core_string_t target = ir_module_target(module);
     const ir_final_layout_t *outer = ir_layout_final(module, type, target);
-    const ir_final_layout_t *inner = ir_layout_final_visible(module, child,
+    const ir_final_layout_t *inner = ir_layout_final(module, child,
                                                                target);
     if (!outer || !inner || !outer->has_discriminant
         || !inner->has_discriminant || outer->discriminant_is_niche
@@ -1109,7 +1105,7 @@ packed_option_type(ir_module_t *module, th_type *type,
         || !th_is_closed(ir_module_types(module), type)) return nullptr;
     core_string_t target = ir_module_target(module);
     const ir_final_layout_t *outer = ir_layout_final(module, type, target);
-    const ir_final_layout_t *inner = ir_layout_final_visible(module, child,
+    const ir_final_layout_t *inner = ir_layout_final(module, child,
                                                                target);
     LLVMTypeRef payload = value_type(module, child, context);
     bool aggregate_payload = payload
@@ -1206,7 +1202,7 @@ atomic_record_integer(ir_module_t *module, th_type *atomic,
 {
     const ir_final_layout_t *layout = element && atomic_element_type(atomic)
             && LLVMGetTypeKind(element) == LLVMStructTypeKind
-        ? ir_layout_final_visible(module, atomic, ir_module_target(module))
+        ? ir_layout_final(module, atomic, ir_module_target(module))
         : nullptr;
     return layout && layout->intrinsic_bits && layout->intrinsic_bits <= 128
         ? LLVMIntTypeInContext(context, (unsigned)layout->intrinsic_bits)
@@ -1272,7 +1268,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
         && !th_is_closed(ir_module_types(module), type))
         return box_llvm_type(context);
     if (definition && th_kind_of(definition) == TH_BITINT) {
-        const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
+        const ir_final_layout_t *layout = ir_layout_final(module, type,
             ir_module_target(module));
         uint64_t bytes = 0, semantic_bits = 0;
         if (!layout || !ir_layout_final_byte_extent(layout, &bytes)
@@ -1301,7 +1297,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
     if (builtin == TH_BUILTIN_ANY && !arguments)
         return box_llvm_type(context);
     if (variant) {
-        const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
+        const ir_final_layout_t *layout = ir_layout_final(module, type,
             ir_module_target(module));
         uint64_t stride_bits = 0;
         if (!layout || !layout->alignment_bytes
@@ -2690,7 +2686,7 @@ reference_bitptr(lower_state_t *state, LLVMValueRef reference,
                 "at compile time");
             return nullptr;
         }
-        const ir_final_layout_t *layout = ir_layout_final_visible(module,
+        const ir_final_layout_t *layout = ir_layout_final(module,
             referent, ir_module_target(module));
         uint64_t width = 0;
         uint32_t type_index = 0;
@@ -3158,7 +3154,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                                LLVMTypeRef native, LLVMTargetDataRef target)
 {
     type = th_resolve(type);
-    const ir_final_layout_t *layout = ir_layout_final_visible(module, type,
+    const ir_final_layout_t *layout = ir_layout_final(module, type,
         ir_module_target(module));
     uint64_t stride_bits = 0;
     if (!layout || !native || !target
@@ -4588,7 +4584,7 @@ array_flat_item_stride(lower_state_t *state, th_type *type,
         element = th_resolve(th_seq_elem(element));
         depth++;
         if (depth < first_depth) continue;
-        const ir_final_layout_t *layout = ir_layout_final_visible(module,
+        const ir_final_layout_t *layout = ir_layout_final(module,
             element, ir_module_target(module));
         uint64_t bits = 0;
         LLVMValueRef selected = LLVMBuildICmp(state->builder, LLVMIntEQ,
@@ -5019,7 +5015,7 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
         rank++;
     }
     const ir_final_layout_t *layout = element
-        ? ir_layout_final_visible(module, element, ir_module_target(module))
+        ? ir_layout_final(module, element, ir_module_target(module))
         : nullptr;
     uint64_t stride_bits = 0;
     uint64_t packed_width = packed_array_width(module, element);

@@ -624,6 +624,70 @@ analysis_module_at(const n00bb_link_analysis_t *analysis, size_t index)
         .instance->owner;
 }
 
+static void
+intern_reached_type(ir_module_t *module, th_type *type)
+{
+    if (type && th_is_closed(ir_module_types(module), type))
+        ir_type_intern(module, type);
+}
+
+// Interns the types a value of `type` holds or reaches: the same closure
+// a module's ABI type rows describe, so every module that has a row for a
+// type has laid out everything that row's layout and tracing depend on.
+static void
+intern_reached_types(ir_module_t *module, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) return;
+    switch (th_kind_of(type)) {
+    case TH_NAMED: {
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *argument = th_named_arg(type, i);
+            if (argument && argument->kind == TH_ARG_TYPE)
+                intern_reached_type(module, argument->type);
+        }
+        th_type *definition = ir_type_definition(module, type);
+        if (definition && th_kind_of(th_resolve(definition)) == TH_RECORD)
+            intern_reached_types(module, definition);
+        else intern_reached_type(module, definition);
+        return;
+    }
+    case TH_INDIRECTION:
+        intern_reached_type(module, th_ind_referent(type));
+        return;
+    case TH_SEQUENCE:
+        intern_reached_type(module, th_seq_elem(type));
+        return;
+    case TH_RECORD:
+        for (size_t i = 0; i < th_record_len(type); i++) {
+            const th_member *member = th_record_member(type, i);
+            if (member) intern_reached_type(module, member->type);
+        }
+        return;
+    case TH_FUNCTION: {
+        intern_reached_type(module, th_func_ret(type));
+        intern_reached_type(module, th_func_error(type));
+        for (size_t i = 0; i < th_func_nparams(type); i++) {
+            const th_param *parameter = th_func_param(type, i);
+            if (parameter) intern_reached_type(module, parameter->type);
+        }
+        const th_param *rest = th_func_rest(type);
+        if (rest) intern_reached_type(module, rest->type);
+        for (size_t i = 0; i < th_func_nkw(type); i++) {
+            const th_kwparam *parameter = th_func_kw(type, i);
+            if (parameter) intern_reached_type(module, parameter->type);
+        }
+        return;
+    }
+    case TH_SUM:
+        for (size_t i = 0; i < th_sum_len(type); i++)
+            intern_reached_type(module, th_sum_arm(type, i));
+        return;
+    default:
+        return;
+    }
+}
+
 bool
 publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
 {
@@ -651,6 +715,20 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         analysis->target.triple) != nullptr;
             }
         }
+        valid = valid && n00bb_layout_module_types(analysis, module);
+    }
+    return valid;
+}
+
+// Lays out the module's types and every type a value of one reaches, until
+// no more can be laid out. The ABI emitter calls it again after interning
+// the types its rows describe, so each row's layout follows from the type.
+bool
+n00bb_layout_module_types(n00bb_link_analysis_t *analysis,
+                          ir_module_t *module)
+{
+    bool valid = true;
+    {
         core_list_t(uint32_t) pending = core_list_new(uint32_t);
         size_t seen = 0;
         bool progress;
@@ -662,6 +740,11 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
             for (size_t p = 0; valid && p < pending.len; p++) {
                 uint32_t i = pending.data[p];
                 th_type *registered = ir_type_at(module, i);
+                // The module lays out every type its code can reach a
+                // value of, as well as the types it names itself.
+                if (registered && th_is_closed(ir_module_types(module),
+                                               registered))
+                    intern_reached_types(module, registered);
                 if (!registered
                     || th_kind_of(th_resolve(registered)) != TH_NAMED)
                     continue;
@@ -682,20 +765,17 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 }
                 if (!definition || th_kind_of(definition) != TH_RECORD)
                     continue;
-                core_translation_unit_t *owner = nullptr;
-                if (requested_record_symbol_for_type(analysis, type,
-                        N00BB_RECORD_C, &owner)) {
-                    ir_module_t *source = u >= analysis->units.len && owner
-                        ? tu_state(owner)->ir_module : nullptr;
-                    const ir_final_layout_t *layout = source
-                        ? ir_layout_final(source, type,
-                                          analysis->target.triple)
-                        : nullptr;
-                    if (layout) {
-                        valid = ir_layout_publish_final(module, type,
-                            analysis->target.triple, layout);
-                        progress = progress || valid;
-                    }
+                core_translation_unit_t *declaring = nullptr;
+                parse_sym_entry_t *c_record =
+                    requested_record_symbol_for_type(analysis, type,
+                        N00BB_RECORD_C, &declaring);
+                if (c_record) {
+                    // A `layout(c)` record's layout follows from its
+                    // declaration alone, so any module that reaches a
+                    // value of it lays it out the same way.
+                    valid = declaring && publish_c_record_symbol(analysis,
+                        declaring, c_record, module);
+                    progress = progress || valid;
                     continue;
                 }
                 size_t count = th_record_len(definition);
@@ -794,25 +874,6 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return valid;
 }
 
-static bool
-borrow_owner_layouts(ir_module_t *module, th_type *type,
-                     core_string_t target, size_t depth)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || depth > 16 || th_kind_of(type) != TH_NAMED) return true;
-    for (size_t i = 0; i < th_named_nargs(type); i++) {
-        const th_arg *argument = th_named_arg(type, i);
-        if (argument && argument->kind == TH_ARG_TYPE
-            && !borrow_owner_layouts(module, argument->type, target,
-                                     depth + 1)) return false;
-    }
-    if (ir_layout_final(module, type, target)) return true;
-    ir_module_t *owner = ir_type_definition_owner(module, type);
-    const ir_final_layout_t *layout = owner && owner != module
-        ? ir_layout_final(owner, type, target) : nullptr;
-    return !layout || ir_layout_publish_final(module, type, target, layout);
-}
-
 bool
 publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
@@ -829,9 +890,7 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 if (!channels[c] || !th_is_closed(ir_module_types(module),
                                                  channels[c])) continue;
                 bool handled = false;
-                if (!borrow_owner_layouts(module, channels[c],
-                        analysis->target.triple, 0)
-                    || !n00bb_abi_publish_direct_layout(module,
+                if (!n00bb_abi_publish_direct_layout(module,
                         channels[c], &analysis->target, &handled))
                     return false;
             }
@@ -840,10 +899,8 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 bool handled = false;
                 if (parameter && parameter->type
                     && th_is_closed(ir_module_types(module), parameter->type)
-                    && (!borrow_owner_layouts(module, parameter->type,
-                            analysis->target.triple, 0)
-                        || !n00bb_abi_publish_direct_layout(module,
-                            parameter->type, &analysis->target, &handled)))
+                    && !n00bb_abi_publish_direct_layout(module,
+                            parameter->type, &analysis->target, &handled))
                     return false;
             }
             for (size_t b = 0; b < function->n_blocks; b++) {
@@ -1009,7 +1066,7 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
                 th_type *type = th_apply_subst(ir_module_types(module),
                                                symbol->type);
                 const ir_final_layout_t *published = type
-                    ? ir_layout_final_visible(module, type,
+                    ? ir_layout_final(module, type,
                                               ir_module_target(module))
                     : nullptr;
                 uint64_t size_bytes = 0;
