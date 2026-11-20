@@ -23,8 +23,6 @@ static bool
 merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
             const ir_func_t *function, bool callback);
 static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis);
-static void
 dump_text(core_buffer_t *out);
 static void
 dump_param(const ir_func_t *function, uint32_t p);
@@ -784,8 +782,15 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
     return analysis->entry_summaries[slot];
 }
 
-static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis)
+// The globals whose address leaves the function that takes it, by the
+// escape facts. They are collected as soon as the facts are built
+// (build_escape_facts), from the bodies the facts are about: once
+// specializing binds calls to instances the facts don't cover, an address
+// passed to one counts as escaping. Collected at the first question
+// instead, the answer depended on whether the program asked one before
+// specializing, and so did the summaries kept for its cached modules.
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis)
 {
     if (analysis->escaped_owner == analysis->escapes) return;
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
@@ -833,7 +838,7 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
             || parse_sym_binding(symbol,
                    CORE_STRING_STATIC("n00bb.external-export"))))
         return true;
-    collect_escaped_globals(analysis);
+    n00bb_collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 

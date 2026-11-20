@@ -1963,6 +1963,9 @@ n00bb_cached_package_bodies(n00bb_link_analysis_t *analysis,
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);
 
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis);
+
 bool
 mark_diverging_calls(n00bb_link_analysis_t *analysis);
 

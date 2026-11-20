@@ -37,6 +37,7 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
     analysis->summary_phase = 0;
     ir_analysis_bind_summaries(analysis->escapes);
     core_list_free(roots);
+    if (analysis->escapes) n00bb_collect_escaped_globals(analysis);
     return analysis->escapes != nullptr;
 }
 
