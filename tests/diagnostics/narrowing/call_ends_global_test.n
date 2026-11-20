@@ -1,0 +1,26 @@
+# Any call between a test of a global and its read ends the proof, even one
+# that never touches the global: a callee's writes are not known when the
+# test is checked.
+var current: int? = 3
+var calls: int = 0
+
+func count_call() {
+    calls += 1
+}
+
+func untouched() -> int {
+    if current != nil {
+        count_call()
+        return current
+    }
+    return 0
+}
+
+func read_first() -> int {
+    if current != nil {
+        let value: int = current
+        count_call()
+        return value
+    }
+    return 0
+}

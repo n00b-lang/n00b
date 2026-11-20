@@ -415,6 +415,21 @@ static bool reaches_untested(const test_t *t, ir_instr_t *write,
     return found;
 }
 
+// Whether `in` may change a shared place other than by storing to it: a call
+// (no summary says yet what a callee writes, so any call may write a global
+// or what a reference reaches, directly or through its own calls), or
+// taking the place's address, after which writes through the reference are
+// writes to the place.
+static bool may_change(const ir_instr_t *in, const void *location)
+{
+    if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE) {
+        return true;
+    }
+
+    return in->op == IR_OP_ADDRESS_OF && in->n_operands == 1
+        && global_of(ir_operand_value(&in->operands[0])) == location;
+}
+
 static bool shadow_reaches(refine_t *r, const test_t *t, ir_instr_t *use)
 {
     const void *location = location_of(t->read);
@@ -425,7 +440,8 @@ static bool shadow_reaches(refine_t *r, const test_t *t, ir_instr_t *use)
         for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
             ir_instr_t *in = f->blocks[b]->instrs[k];
 
-            if (writes_location(in, location) && !present_value(in)
+            if (((writes_location(in, location) && !present_value(in))
+                 || may_change(in, location))
                 && ir_instr_reaches(r->reach, branch, in)
                 && ir_instr_reaches(r->reach, in, use)
                 && reaches_untested(t, in, use)) {
@@ -466,6 +482,57 @@ static bool kept_present(refine_t *r, ir_instr_t *a, ir_instr_t *b)
     return kept;
 }
 
+// Whether the local `read` reads has its address taken, and a store through
+// an address or a call (either may write through the reference) reaches the
+// read from the test without passing through the test again. Its reads see
+// what is written through the reference, which no definition of the local
+// records.
+// Whether `read` reads a local whose address its function takes.
+static bool reads_referenced_local(const ir_instr_t *read)
+{
+    const void *local = read->op == IR_OP_COPY && read->n_operands == 1
+                          ? (const void *)ir_operand_local(&read->operands[0])
+                          : nullptr;
+    ir_func_t  *f     = read->block->owner;
+
+    for (uint32_t b = 0; local && b < f->n_blocks; b++) {
+        for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
+            ir_instr_t *in = f->blocks[b]->instrs[k];
+
+            if (in->op == IR_OP_ADDRESS_OF && in->n_operands == 1
+                && (const void *)ir_operand_local(&in->operands[0]) == local) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool changed_through_reference(refine_t *r, const test_t *t,
+                                      ir_instr_t *read)
+{
+    ir_func_t  *f      = read->block->owner;
+    ir_instr_t *branch = reads_referenced_local(read) ? test_branch(t)
+                                                      : nullptr;
+
+    for (uint32_t b = 0; branch && b < f->n_blocks; b++) {
+        for (uint32_t k = 0; k < f->blocks[b]->n_instrs; k++) {
+            ir_instr_t *in = f->blocks[b]->instrs[k];
+
+            if ((in->op == IR_OP_STORE || in->op == IR_OP_CALL
+                 || in->op == IR_OP_CALLBACK_INVOKE)
+                && ir_instr_reaches(r->reach, branch, in)
+                && ir_instr_reaches(r->reach, in, read)
+                && reaches_untested(t, in, read)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 static bool refined(refine_t *r, ir_instr_t *read)
 {
     for (uint32_t i = first_test(&r->by_root, root_of(read)); i != UINT32_MAX;
@@ -474,7 +541,8 @@ static bool refined(refine_t *r, ir_instr_t *read)
 
         if (read != t->read
             && (same_read(r->g, read, t->read) || kept_present(r, read, t->read))
-            && under_test(r->g, read->block, t)) {
+            && under_test(r->g, read->block, t)
+            && !changed_through_reference(r, t, read)) {
             return true;
         }
     }
@@ -516,8 +584,10 @@ static bool assigned_present(refine_t *r, ir_instr_t *read)
                                ? th_resolve(read->dest->type)
                                : nullptr;
 
+    // A local written through a reference has assignments no definition
+    // records, so its own assignments prove nothing.
     if (!location || global_of(ir_operand_value(&read->operands[0]))
-        || !type || !th_option_item(type)) {
+        || !type || !th_option_item(type) || reads_referenced_local(read)) {
         return false;
     }
 

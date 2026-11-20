@@ -1,0 +1,10 @@
+tests/diagnostics/narrowing/call_ends_global_test.n:4:5: warning N00B-N0024: `current` is never used
+  help: remove it
+tests/diagnostics/narrowing/call_ends_global_test.n:5:5: warning N00B-N0024: `calls` is never used
+  help: remove it
+tests/diagnostics/narrowing/call_ends_global_test.n:7:6: warning N00B-N0019: function `count_call` is never called
+  help: call it or delete it
+tests/diagnostics/narrowing/call_ends_global_test.n:14:16: error N00B-S0009: `current` may be nil here
+  help: use its value only where a test such as `current != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/call_ends_global_test.n:19:6: warning N00B-N0019: function `read_first` is never called
+  help: call it or delete it
