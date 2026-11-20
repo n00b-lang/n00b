@@ -2650,6 +2650,23 @@ bare_generic_alias(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return instance;
 }
 
+th_type *
+n00bb_type_reference_type(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit,
+                          core_translation_unit_t *declaration,
+                          parse_sym_entry_t *symbol, parse_tree_t *reference,
+                          th_type *type)
+{
+    if (!is_trait_type_symbol(grammar, symbol)) {
+        th_type *bare = bare_generic_alias(grammar, unit, symbol, reference);
+        return bare ? bare : type;
+    }
+    if (!declaration)
+        declaration = symbol->decl_node ? symbol->owner_unit : unit;
+    return trait_type_reference(grammar, unit, declaration, symbol,
+                                reference);
+}
+
 void
 resolve_local_type_reference(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
@@ -2695,26 +2712,24 @@ resolve_local_type_reference(parse_grammar_t *grammar,
         || !bind_array_shape_alias_source(grammar, node, symbol))
         n00bb_tu_internal_error(unit, node, "resolving names",
             "could not bind the type reference node");
-    if (is_trait_type_symbol(grammar, symbol)) {
-        th_type *type = trait_type_reference(grammar, unit, unit, symbol,
-                                             node);
-        if (type) parse_tree_set_type(node, type);
+    // A trait's variable is the reference's own; any other type fills what
+    // the reference held.
+    bool trait = is_trait_type_symbol(grammar, symbol);
+    th_type *named = trait || symbol->type
+        ? n00bb_type_reference_type(grammar, unit, unit, symbol, node,
+                                    symbol->type)
+        : nullptr;
+    th_type *previous_type = trait ? nullptr : parse_tree_type(node);
+    th_type *resolved_type = named && previous_type
+        ? th_fill(previous_type, named)
+        : named;
+    if (!trait && symbol->type && !resolved_type) {
+        n00bb_tu_internal_error_unless_reported(unit, node,
+            "resolving names",
+            "type reference conflicts with its declaration");
+        return;
     }
-    else if (symbol->type) {
-        th_type *instance = bare_generic_alias(grammar, unit, symbol, node);
-        th_type *named = instance ? instance : symbol->type;
-        th_type *previous_type = parse_tree_type(node);
-        th_type *resolved_type = previous_type
-            ? th_fill(previous_type, named)
-            : named;
-        if (!resolved_type) {
-            n00bb_tu_internal_error_unless_reported(unit, node,
-                "resolving names",
-                "type reference conflicts with its declaration");
-            return;
-        }
-        parse_tree_set_type(node, resolved_type);
-    }
+    if (resolved_type) parse_tree_set_type(node, resolved_type);
 }
 
 bool

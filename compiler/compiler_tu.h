@@ -1196,6 +1196,13 @@ bool n00bb_type_arguments_fit(th_ctx *types,
 th_type *bare_generic_alias(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_sym_entry_t *symbol,
     parse_tree_t *node);
+// The type `reference`, written in `unit`, names by naming the type
+// `symbol`: a trait's variable there (trait_type_reference, with the trait
+// declared in `declaration`, or by default where `symbol` is), a bare
+// generic alias's own instance (bare_generic_alias), or else `type`.
+th_type *n00bb_type_reference_type(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, core_translation_unit_t *declaration,
+    parse_sym_entry_t *symbol, parse_tree_t *reference, th_type *type);
 bool n00bb_imply_type_argument_constraints(
     core_translation_unit_t *const *units, size_t count);
 th_type *explicit_trait_method_signature(parse_grammar_t *grammar,
