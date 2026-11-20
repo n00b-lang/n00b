@@ -13,6 +13,7 @@
 #include "compiler_native_roots.h"
 #include "compiler_phases.h"
 #include "config.h"
+#include "llvm_backend.h"
 #include "llvm_native_cache.h"
 #include "lib/alloc.h"
 #include "diag/diagnostics.h"
@@ -1594,7 +1595,10 @@ compile_uncached(const n00bb_ffi_t *ffi, core_string_t triple, size_t index, cor
     core_buffer_puts(&output, ".bc");
     ok = ok
       && run_clang(ffi, triple, directory_text, core_buffer_string(&source), core_buffer_string(&output))
-      && read_whole_file(core_buffer_string(&output), bitcode);
+      && read_whole_file(core_buffer_string(&output), bitcode)
+      // Not the temporary directory it was compiled in: the same shim
+      // compiles to the same bitcode, whichever compile made it.
+      && n00bb_llvm_rename_bitcode_source(bitcode, ffi->shims.data[index].name);
     unlink_path(core_buffer_string(&output));
     for (size_t i = 0; i < written.len; i++) {
         unlink_path(core_buffer_string(&written.data[i]));

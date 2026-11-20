@@ -139,3 +139,8 @@ bool n00bb_llvm_backend_link_bitcode(
     bool debug_enabled, bool native_cpu, uint64_t target_features,
     bool emit_frame_maps, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
+// Names `bitcode`'s source file `name` (its source_filename), as clang
+// would have called it compiled in place, instead of the path it was
+// compiled from.
+bool n00bb_llvm_rename_bitcode_source(core_buffer_t *bitcode,
+                                      core_string_t name);

@@ -16154,3 +16154,32 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     return ok;
 }
 
+
+bool
+n00bb_llvm_rename_bitcode_source(core_buffer_t *bitcode, core_string_t name)
+{
+    if (!bitcode || !bitcode->data || !bitcode->byte_len || !name.data)
+        return false;
+    LLVMContextRef context = LLVMContextCreate();
+    LLVMMemoryBufferRef buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(
+        bitcode->data, bitcode->byte_len, "n00bb-shim");
+    LLVMModuleRef module = nullptr;
+    bool ok = buffer && !LLVMParseBitcodeInContext2(context, buffer, &module);
+    if (buffer) LLVMDisposeMemoryBuffer(buffer);
+    LLVMMemoryBufferRef written = nullptr;
+    if (ok) {
+        LLVMSetSourceFileName(module, name.data, name.u8_bytes);
+        LLVMSetModuleIdentifier(module, name.data, name.u8_bytes);
+        written = LLVMWriteBitcodeToMemoryBuffer(module);
+        ok = written != nullptr;
+    }
+    if (ok) {
+        bitcode->byte_len = 0;
+        core_buffer_append(bitcode, LLVMGetBufferStart(written),
+                           LLVMGetBufferSize(written));
+        LLVMDisposeMemoryBuffer(written);
+    }
+    if (module) LLVMDisposeModule(module);
+    LLVMContextDispose(context);
+    return ok;
+}
