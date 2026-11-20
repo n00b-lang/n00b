@@ -759,7 +759,8 @@ visible_aliases(pt_t *pt, const uint32_t *sites, size_t count,
 // root over and over, and scanning every alias under it on each read made
 // the solve cubic. Only pt_alias changes an alias list, and whenever it
 // does it notifies the alias's root; an alias a read can see has the read's
-// root, so the list stays exact until that root's key changes. Fills
+// root, so the list stays exact until that root's key, or the alias list of
+// one of its sites, changes. Fills
 // `visible` and returns its signature.
 static uint64_t
 visible_at(pt_t *pt, uintptr_t root, const core_list_t(uint32_t) *sites,
@@ -776,7 +777,16 @@ visible_at(pt_t *pt, uintptr_t root, const core_list_t(uint32_t) *sites,
     }
     uintptr_t changed = (uintptr_t)core_dict_get(
         &pt->changed, (void *)alias_root_key(root), nullptr);
-    if (!found || changed > entry->generation) {
+    bool stale = !found || changed > entry->generation;
+    // The list holds indexes into the sites' alias lists, and pt_alias can
+    // move a site's aliases of other roots when it drops the ones a new
+    // alias covers, notifying only the site and the new alias's root.
+    for (size_t s = 0; !stale && s < sites->len; s++)
+        stale = (uintptr_t)core_dict_get(
+                    &pt->changed, (void *)aliases_key(sites->data[s]),
+                    nullptr)
+            > entry->generation;
+    if (stale) {
         bool positional    = pt->positional;
         pt->positional     = false;
         entry->visible.len = 0;
