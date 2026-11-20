@@ -3,7 +3,7 @@ dev test 2
 pr wall 90
 pr test 20
 dev tests 214
-pr tests 94
+pr tests 95
 release lto-n00b
 release ffi
 release array-uint-index-n00b
@@ -13,6 +13,7 @@ exempt lto-n00b 31
 exempt diagnostics 36
 exempt check-programs-a 36
 exempt check-programs-b 36
+exempt guardrails-clones 3
 exempt ffi 28
 exempt ffi-zlib 23
 exempt text-theme-builtin-immutable 25

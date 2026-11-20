@@ -86,3 +86,11 @@ test-writ: $(WRIT_ALL:%=test/writ/%)
 
 bench: $(LANTERN_BENCH:%=bench/lantern/%)
 	@tools/test_summary.sh
+
+.PHONY: guardrails
+guardrails:
+	@status=0; \
+	python3 tools/guardrails.py $(SRC) || status=1; \
+	sh tests/guardrails_planted.sh $(SRC) > /dev/null || status=1; \
+	python3 tools/check_change_budget.py $(SRC) $(RANGE) || status=1; \
+	exit $$status
