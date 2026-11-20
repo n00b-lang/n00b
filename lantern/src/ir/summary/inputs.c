@@ -599,7 +599,7 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
         input.answer = get_u64(&r);
-        if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.failed = true;
+        if (input.kind > SUMMARY_INPUT_HIDDEN) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
     if (r.failed || r.at != r.size || !summary->stable) {
