@@ -124,6 +124,7 @@ struct ir_summary_t {
 };
 
 struct ir_summaries_t {
+    ir_summaries_t           *fallback;
     const ir_summary_hooks_t *hooks;
     ir_summary_hooks_t        hook_values;
     core_list_t(summary_ptr_t) owned;

@@ -689,7 +689,9 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
         analysis->target.enabled_features, module_diagnostics);
     item->backend = backend;
     if (!backend) return item->ok = false;
-    n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
+    n00bb_llvm_backend_bind_summaries(backend,
+        n00bb_summary_open(analysis, item->module)
+            ? analysis->library_summaries : analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
     core_string_t table_symbol = artifact

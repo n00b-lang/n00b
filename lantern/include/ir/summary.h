@@ -109,7 +109,7 @@ typedef struct {
     uint32_t (*adjust)(void *context, const ir_func_t *function,
                        uint32_t flags);
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
-                                   uint32_t flag);
+                                   uint32_t flag, const ir_func_t *subject);
     bool (*global_reachable)(void *context, const ir_global_t *global);
     bool (*global_named)(void *context, const ir_func_t *function,
                          const ir_global_t *global);
@@ -128,6 +128,8 @@ typedef struct {
     bool (*owned_field)(void *context, th_type *record, core_string_t field);
     ir_summary_t *(*stored)(void *context, ir_summaries_t *summaries,
                             const ir_func_t *function);
+    void (*reinterpretation_sources)(void *context, ir_summary_target_fn add,
+                                     void *sink);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
@@ -138,6 +140,9 @@ ir_summaries_t *ir_summaries_recompute(ir_func_t *const *functions,
                                        size_t count,
                                        const ir_summary_hooks_t *hooks,
                                        ir_summaries_t *previous);
+ir_summaries_t *ir_summaries_over(ir_func_t *const *functions, size_t count,
+                                  const ir_summary_hooks_t *hooks,
+                                  ir_summaries_t *fallback);
 ir_summaries_t *ir_escapes_compute(ir_func_t *const *functions, size_t count,
                                    const ir_summary_hooks_t *hooks);
 void            ir_summaries_free(ir_summaries_t *summaries);
