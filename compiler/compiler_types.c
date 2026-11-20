@@ -1433,23 +1433,15 @@ static bool report_trait_parameter(th_ctx *types,
     core_string_t call         = method_style
         ? (core_string_t){0} : span_text(unit, failure->why.at->span);
 
-    if (call.u8_bytes) {
-        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
-                     n00bb_span_location(failure->why.at->span),
-                     N00B_TEXT_TRAIT_PARAMETER_FIXED_CALL,
-                     N00BB_ARGS(ARG_TEXT(call), ARG_TEXT(variable),
-                                ARG_TEXT(shown(types, failure->actual)),
-                                ARG_TEXT(shown(types, failure->expected))));
-    }
-    else {
-        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
-                     n00bb_span_location(failure->why.at->span),
-                     N00B_TEXT_TRAIT_PARAMETER_FIXED,
-                     N00BB_ARGS(ARG_TEXT(failure->why.at->operands[0].name),
-                                ARG_TEXT(variable),
-                                ARG_TEXT(shown(types, failure->actual)),
-                                ARG_TEXT(shown(types, failure->expected))));
-    }
+    n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_PARAMETER_FIXED,
+                 n00bb_span_location(failure->why.at->span),
+                 call.u8_bytes ? N00B_TEXT_TRAIT_PARAMETER_FIXED_CALL
+                               : N00B_TEXT_TRAIT_PARAMETER_FIXED,
+                 N00BB_ARGS(ARG_TEXT(call.u8_bytes
+                                ? call : failure->why.at->operands[0].name),
+                            ARG_TEXT(variable),
+                            ARG_TEXT(shown(types, failure->actual)),
+                            ARG_TEXT(shown(types, failure->expected))));
     n00bb_report_help(diagnostics, N00B_TEXT_TRAIT_PARAMETERS_ARE_PER_BOUND,
                       N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(trait)),
                                  ARG_TEXT(variable)));
