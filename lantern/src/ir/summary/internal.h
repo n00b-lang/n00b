@@ -216,26 +216,16 @@ typedef struct {
     uint32_t   site;
 } pt_loc_t;
 
-// A set of locations, exactly: an open-addressed table of `cap` slots,
-// `len` of them in use.
+// A set of locations (or of other fixed-size entries, such as the pt_alias
+// calls made so far), exactly: an open-addressed table of `cap` slots,
+// `len` of them in use, each with its hash.
 typedef struct {
-    pt_loc_t *slots;
+    void     *slots;
     uint64_t *hashes;
     bool     *used;
     size_t    cap;
     size_t    len;
 } loc_table_t;
-
-typedef struct pt_alias_call_t pt_alias_call_t;
-
-// The pt_alias calls made so far, exactly (see pt_alias): like a
-// loc_table_t.
-typedef struct {
-    pt_alias_call_t *slots;
-    bool            *used;
-    size_t           cap;
-    size_t           len;
-} alias_calls_t;
 
 typedef struct stored_t stored_t;
 
@@ -268,11 +258,12 @@ typedef struct {
 } pt_item_t;
 core_list_decl(pt_item_t);
 
-struct pt_alias_call_t {
+// A pt_alias call, as pt_t.alias_calls notes it.
+typedef struct {
     uint32_t          site;
     pt_item_t         item;
     const ir_instr_t *origin;
-};
+} pt_alias_call_t;
 typedef core_list_t(pt_item_t) pt_set_t;
 core_list_decl(pt_set_t);
 typedef const pt_set_t *pt_set_ptr_t;
@@ -451,7 +442,7 @@ struct pt_t {
     // walks done for that, by location.
     bool                   writing;
     core_dict_t            resolved_writes;
-    alias_calls_t          alias_calls;
+    loc_table_t            alias_calls;
     core_list_t(pt_frame_t) reading;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;

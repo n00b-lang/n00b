@@ -85,36 +85,17 @@ same_visited(const pt_loc_t *a, const pt_loc_t *b)
     return true;
 }
 
+static bool
+same_loc(const void *a, const void *b)
+{
+    return same_visited(a, b);
+}
+
 // Adds `loc` to `table`; false if it was there already.
 static bool
 loc_table_add(loc_table_t *table, const pt_loc_t *loc)
 {
-    if (2 * (table->len + 1) > table->cap) {
-        loc_table_t old = *table;
-        table->cap    = old.cap ? old.cap * 2 : 64;
-        table->slots  = core_alloc_array(pt_loc_t, table->cap);
-        table->hashes = core_alloc_array(uint64_t, table->cap);
-        table->used   = core_alloc_array(bool, table->cap);
-        memset(table->used, 0, table->cap * sizeof(bool));
-        table->len = 0;
-        for (size_t s = 0; s < old.cap; s++)
-            if (old.used[s]) loc_table_add(table, &old.slots[s]);
-        if (old.slots) core_free(old.slots);
-        if (old.hashes) core_free(old.hashes);
-        if (old.used) core_free(old.used);
-    }
-    uint64_t hash = visited_hash(loc);
-    size_t   mask = table->cap - 1;
-    size_t   at   = hash & mask;
-    for (; table->used[at]; at = (at + 1) & mask)
-        if (table->hashes[at] == hash
-            && same_visited(&table->slots[at], loc))
-            return false;
-    table->slots[at]  = *loc;
-    table->hashes[at] = hash;
-    table->used[at]   = true;
-    table->len++;
-    return true;
+    return table_add(table, loc, sizeof(*loc), visited_hash(loc), same_loc);
 }
 
 static void

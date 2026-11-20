@@ -962,9 +962,10 @@ alias_call_hash(const pt_alias_call_t *call)
 }
 
 static bool
-same_alias_call(const pt_alias_call_t *a, const pt_alias_call_t *b)
+same_alias_call(const void *left, const void *right)
 {
-    const pt_item_t *x = &a->item, *y = &b->item;
+    const pt_alias_call_t *a = left, *b = right;
+    const pt_item_t       *x = &a->item, *y = &b->item;
     if (a->site != b->site || a->origin != b->origin || x->kind != y->kind
         || x->flow != y->flow || x->deep != y->deep || x->depth != y->depth
         || x->origin != y->origin || !same_visited(&x->loc, &y->loc))
@@ -978,38 +979,49 @@ same_alias_call(const pt_alias_call_t *a, const pt_alias_call_t *b)
     return true;
 }
 
-// Notes a pt_alias call; false if the same one was made before.
-static bool
-alias_call_add(alias_calls_t *calls, const pt_alias_call_t *call)
+// Doubles `table`, whose entries are `size` bytes, moving them by hash.
+static void
+table_grow(loc_table_t *table, size_t size)
 {
-    if (2 * (calls->len + 1) > calls->cap) {
-        alias_calls_t old = *calls;
-        calls->cap   = old.cap ? old.cap * 2 : 64;
-        calls->slots = core_alloc_array(pt_alias_call_t, calls->cap);
-        calls->used  = core_alloc_array(bool, calls->cap);
-        memset(calls->used, 0, calls->cap * sizeof(bool));
-        calls->len = 0;
-        for (size_t s = 0; s < old.cap; s++)
-            if (old.used[s]) alias_call_add(calls, &old.slots[s]);
-        if (old.slots) core_free(old.slots);
-        if (old.used) core_free(old.used);
+    loc_table_t old = *table;
+    table->cap    = old.cap ? old.cap * 2 : 64;
+    table->slots  = core_alloc_array(uint8_t, table->cap * size);
+    table->hashes = core_alloc_array(uint64_t, table->cap);
+    table->used   = core_alloc_array(bool, table->cap);
+    size_t mask   = table->cap - 1;
+    for (size_t s = 0; s < old.cap; s++) {
+        if (!old.used[s]) continue;
+        size_t at = old.hashes[s] & mask;
+        while (table->used[at]) at = (at + 1) & mask;
+        memcpy((uint8_t *)table->slots + at * size,
+               (uint8_t *)old.slots + s * size, size);
+        table->hashes[at] = old.hashes[s];
+        table->used[at]   = true;
     }
-    size_t mask = calls->cap - 1;
-    size_t at   = alias_call_hash(call) & mask;
-    for (; calls->used[at]; at = (at + 1) & mask)
-        if (same_alias_call(&calls->slots[at], call)) return false;
-    calls->slots[at] = *call;
-    calls->used[at]  = true;
-    calls->len++;
-    return true;
+    if (old.slots) core_free(old.slots);
+    if (old.hashes) core_free(old.hashes);
+    if (old.used) core_free(old.used);
 }
 
-static void
-alias_calls_free(alias_calls_t *calls)
+// Adds the `size`-byte `entry`, whose hash is `hash`, to `table`; false if
+// `same` finds it there already. Inlined, so each caller's `same` and
+// `size` are constants: the walk's visited check is hot.
+static inline __attribute__((always_inline)) bool
+table_add(loc_table_t *table, const void *entry, size_t size, uint64_t hash,
+          bool (*same)(const void *, const void *))
 {
-    if (calls->slots) core_free(calls->slots);
-    if (calls->used) core_free(calls->used);
-    *calls = (alias_calls_t){0};
+    if (2 * (table->len + 1) > table->cap) table_grow(table, size);
+    size_t mask = table->cap - 1;
+    size_t at   = hash & mask;
+    for (; table->used[at]; at = (at + 1) & mask)
+        if (table->hashes[at] == hash
+            && same((uint8_t *)table->slots + at * size, entry))
+            return false;
+    memcpy((uint8_t *)table->slots + at * size, entry, size);
+    table->hashes[at] = hash;
+    table->used[at]   = true;
+    table->len++;
+    return true;
 }
 
 static void
@@ -1034,8 +1046,9 @@ pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
     // covers it, with its origins. spread_escapes makes every call again on
     // each round, and finding that out from the site's aliases took a scan
     // of all of them per call.
-    if (!alias_call_add(&pt->alias_calls,
-                        &(pt_alias_call_t){site, item, origin}))
+    pt_alias_call_t call = {site, item, origin};
+    if (!table_add(&pt->alias_calls, &call, sizeof(call),
+                   alias_call_hash(&call), same_alias_call))
         return;
     alias_list_t *aliases = &pt->sites.data[site].aliases;
     uintptr_t     root    = external_key(&alias.path);

@@ -272,7 +272,7 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->value_groups, entry) core_free(entry->value);
     core_dict_free(&pt->value_groups);
     core_list_free(pt->described);
-    alias_calls_free(&pt->alias_calls);
+    loc_table_free(&pt->alias_calls);
     core_list_free(pt->reading);
     core_list_free(pt->crossed);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
