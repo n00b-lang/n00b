@@ -1182,6 +1182,8 @@ missing_implementation(const n00bb_trait_binder_t *binder,
     report->before = n00bb_print_type(types, receiver->type);
     report->after = core_string_dup(core_buffer_string(&used));
     report->trait = core_string_dup(trait);
+    report->receiver = th_resolve(receiver->type);
+    report->trait_name = selection->operands[0].name;
     report->missing_implementation = true;
     core_buffer_release(&used);
     return true;

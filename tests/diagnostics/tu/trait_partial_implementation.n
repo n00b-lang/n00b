@@ -1,0 +1,24 @@
+// A type that implements some of a trait's functions but not all of them
+// does not implement the trait; the error says which functions it lacks.
+trait Render {
+    func render(self: 'T) -> int
+    func measure(self: 'T) -> int
+    func label(self: 'T) -> string
+}
+record Dot {
+    x: int
+}
+func render(self: Dot) -> int {
+    return self.x
+}
+func render_only(item: 'T) -> int where 'T: Render {
+    return item.render()
+}
+record Holder {
+    item: 'T where 'T: Render
+}
+func held(h: Holder[Dot]) -> int {
+    return 1
+}
+let dot: Dot = (x = 7)
+require render_only(dot) == 7

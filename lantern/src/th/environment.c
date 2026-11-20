@@ -2065,9 +2065,11 @@ static bool trait_requirements_hold(th_ctx *ctx, th_type *methods) {
   return true;
 }
 
+// Whether functions implement the trait's methods from `ordinal` on for the
+// receiver, together; with `only`, whether one implements that method alone.
 static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                                 const th_env_trait_t *trait,
-                                th_type *methods, size_t ordinal) {
+                                th_type *methods, size_t ordinal, bool only) {
   if (ordinal == contract_len(methods))
     return trait_requirements_hold(ctx, methods);
   const th_member *method = contract_method(methods, ordinal);
@@ -2124,8 +2126,8 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
                             th_tuple(ctx, have, 3))
           || !requirements_hold(ctx, function, branch_requirements))
         continue;
-      matched = trait_methods_match(ctx, receiver, trait, branch,
-                                    ordinal + 1);
+      matched = only || trait_methods_match(ctx, receiver, trait, branch,
+                                            ordinal + 1, false);
     }
   }
   core_list_free(candidates);
@@ -2154,9 +2156,37 @@ static bool implements_uncached(th_ctx *ctx, th_type *receiver,
     return false;
   th_type *methods = fresh_pattern(ctx, trait->contracts);
   bool implemented = contract_len(methods)
-      ? trait_methods_match(ctx, receiver, trait, methods, 0)
+      ? trait_methods_match(ctx, receiver, trait, methods, 0, false)
       : intrinsic_type_matches(ctx, trait, receiver);
   return implemented;
+}
+
+size_t th_env_unimplemented_methods(th_ctx *ctx, th_type *receiver,
+                                    core_string_t trait_name,
+                                    core_string_t *names, size_t max_names,
+                                    size_t *method_count) {
+  if (method_count)
+    *method_count = 0;
+  if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
+      !trait_name.data || th_kind_of(th_resolve(receiver)) == TH_VAR)
+    return 0;
+  const th_env_trait_t *trait = visible_trait(ctx, trait_name);
+  if (!trait)
+    return 0;
+  th_type *methods = fresh_pattern(ctx, trait->contracts);
+  if (method_count)
+    *method_count = contract_len(methods);
+  size_t count = 0;
+  for (size_t i = 0; i < contract_len(methods); i++) {
+    const th_member *method = contract_method(methods, i);
+    if (!method || trait_methods_match(ctx, receiver, trait,
+                                       fresh_pattern(ctx, methods), i, true))
+      continue;
+    if (names && count < max_names)
+      names[count] = method->name;
+    count++;
+  }
+  return count;
 }
 
 bool th_env_implements(th_ctx *ctx, th_type *receiver,

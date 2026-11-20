@@ -11,6 +11,7 @@
 #include "compiler_system.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
+#include "compiler_types.h"
 #include "driver.h"
 #include "signature_typevars.h"
 #include "storage_selection.h"
@@ -10404,11 +10405,14 @@ n00bb_type_arguments_fit(th_ctx *types, core_translation_unit_t *const *units,
                             n00bb_node_span(check->site),
                             N00B_TEXT_REQUIRED_TRAIT_MISSING,
                             N00BB_ARGS(ARG_TEXT(shown), ARG_TEXT(trait),
-                                       ARG_TEXT(check->declaration->name))))
+                                       ARG_TEXT(check->declaration->name)))) {
+                        n00bb_note_unimplemented(diagnostics, types,
+                                                 argument, requirement.iface);
                         n00bb_report_help(diagnostics,
                             N00B_TEXT_GIVE_A_TYPE_THAT_IMPLEMENTS,
                             N00BB_ARGS(ARG_TEXT(trait),
                                        ARG_TEXT(check->declaration->name)));
+                    }
                     ok = false;
                 }
                 else if (requirement.kind == TH_CON_EXCLUDES

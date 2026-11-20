@@ -47,6 +47,9 @@ typedef struct {
     core_string_t after;
     core_string_t other;
     core_string_t trait;
+    // A missing implementation's receiver, and its trait's qualified name.
+    th_type *receiver;
+    core_string_t trait_name;
     ir_span_t span;
     core_string_t site_module;
     ir_span_t site;

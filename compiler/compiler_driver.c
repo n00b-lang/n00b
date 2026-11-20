@@ -6220,7 +6220,8 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00B_DIAG_GENERIC_MISSING_IMPLEMENTATION, failure_location,
             N00B_TEXT_GENERIC_MISSING_IMPLEMENTATION,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
-                       ARG_TEXT(failure.after), ARG_TEXT(failure.before)));
+                       ARG_TEXT(failure.after), ARG_TEXT(failure.before),
+                       ARG_TEXT(failure.trait)));
         core_translation_unit_t *user = nullptr;
         for (size_t i = 0; failure.site_located && !user
              && i < analysis->units.len; i++)
@@ -6233,6 +6234,9 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                 N00B_TEXT_USED_WITH_TYPE_HERE,
                 N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                            ARG_TEXT(failure.before)));
+        n00bb_note_unimplemented(failure_diagnostics,
+            ir_ctx_types(analysis->ir_context), failure.receiver,
+            failure.trait_name);
         n00bb_report_help(failure_diagnostics,
             N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
             N00BB_ARGS(ARG_TEXT(failure.trait), ARG_TEXT(failure.before)));

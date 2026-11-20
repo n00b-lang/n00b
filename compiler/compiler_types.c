@@ -421,6 +421,33 @@ static bool report_bound_method(th_ctx *types,
     return true;
 }
 
+void n00bb_note_unimplemented(core_diagnostics_t *diagnostics, th_ctx *types,
+                              th_type *receiver, core_string_t trait)
+{
+    enum { shown_most = 8 };
+    core_string_t names[shown_most];
+    size_t        methods = 0;
+    th_type      *subject = receiver ? th_resolve(receiver) : nullptr;
+    size_t        count   = subject
+        ? th_env_unimplemented_methods(types, subject, trait, names,
+                                       shown_most, &methods)
+        : 0;
+
+    // Only a type that implements some of the trait's functions needs
+    // telling which it lacks: "does not implement" says the rest.
+    if (!count || count >= methods) {
+        return;
+    }
+
+    core_string_t shown = n00bb_print_type(types, subject);
+
+    for (size_t i = 0; i < count && i < shown_most; i++) {
+        n00bb_report_note(diagnostics, N00B_TEXT_TRAIT_FUNCTION_UNIMPLEMENTED,
+                          N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(trait)),
+                                     ARG_TEXT(names[i]), ARG_TEXT(shown)));
+    }
+}
+
 static bool report_required_trait(th_ctx *types,
                                   core_translation_unit_t *const *units,
                                   size_t count, core_translation_unit_t *unit,
@@ -462,6 +489,8 @@ static bool report_required_trait(th_ctx *types,
     if (callee) {
         note_declared(units, count, unit, callee);
     }
+    n00bb_note_unimplemented(diagnostics, types, failure->pred.subject,
+                             failure->pred.name);
     n00bb_report_help(diagnostics, N00B_TEXT_IMPLEMENT_THE_TRAIT_FOR,
                       N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
 
@@ -529,6 +558,8 @@ static bool report_body_bound(th_ctx *types, core_translation_unit_t *unit,
                  N00B_TEXT_REQUIRED_TRAIT_MISSING,
                  N00BB_ARGS(ARG_TEXT(subject), ARG_TEXT(trait),
                             ARG_TEXT(function_name(owner))));
+    n00bb_note_unimplemented(diagnostics, types, failure->pred.subject,
+                             failure->pred.name);
     n00bb_report_help(diagnostics, N00B_TEXT_GIVE_A_VALUE_THAT_IMPLEMENTS,
                       N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(subject)));
 
