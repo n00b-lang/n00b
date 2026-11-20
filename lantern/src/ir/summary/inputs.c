@@ -158,6 +158,21 @@ targets_answer(const call_targets_t *targets, bool hooked)
                             (uint64_t)hooked << 1 | targets->unknown);
 }
 
+// Whether `a` and `b` are one function: the same node, or a declaration
+// and the body it stands for, which a hook may hand back in its place
+// (a function a module reused from a cache declares).
+static bool
+same_function(const ir_func_t *a, const ir_func_t *b)
+{
+    if (a == b) return true;
+    a = a ? ir_func_definition((ir_func_t *)a) : nullptr;
+    b = b ? ir_func_definition((ir_func_t *)b) : nullptr;
+    return a == b
+        || (a && b && a->owner && b->owner && core_string_eq(a->name, b->name)
+            && core_string_eq(ir_module_name((ir_module_t *)a->owner),
+                              ir_module_name((ir_module_t *)b->owner)));
+}
+
 static bool
 plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
 {
@@ -165,7 +180,7 @@ plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
         ? ir_operand_value(&call->operands[0]) : nullptr;
     return hooked && !targets->unknown && targets->targets.len == 1
         && callee && callee->kind == IR_VAL_FUNC
-        && callee->owner == targets->targets.data[0];
+        && same_function(callee->owner, targets->targets.data[0]);
 }
 
 static void
