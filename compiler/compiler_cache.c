@@ -410,9 +410,15 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE,
         N00BB_KEY_BUILD_UNCHECKED_WIDE_NARROWING, N00BB_KEY_BUILD_PANIC_TRAP,
         N00BB_KEY_BUILD_LTO, N00BB_KEY_BUILD_ATOMIC128,
+        // A module's kept syntax warnings (P0011, P0012, P0034) follow these.
+        N00BB_KEY_SYNTAX_WARNINGS,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    put_u32(out, (uint32_t)n00bb_setting_count(preferences));
+    for (size_t i = 0; i < n00bb_setting_count(preferences); i++)
+        put_text(out, n00bb_setting_at(preferences, i));
     put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
@@ -1944,21 +1950,6 @@ n00bb_cache_mark_stale(n00bb_cache_t *cache, core_string_t module)
             cache->entries.data[e].stale = true;
 }
 
-uint64_t
-n00bb_syntax_warning_settings(void)
-{
-    core_buffer_t text = {0};
-    core_buffer_puts(&text, "n00b.syntax-warnings.v1");
-    put_u32(&text, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
-    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
-    put_u32(&text, (uint32_t)n00bb_setting_count(preferences));
-    for (size_t i = 0; i < n00bb_setting_count(preferences); i++)
-        put_text(&text, n00bb_setting_at(preferences, i));
-    uint64_t hash = buffer_hash(&text);
-    core_buffer_release(&text);
-    return hash;
-}
-
 bool
 n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
                              core_string_t kind, const uint8_t **data,
@@ -3025,8 +3016,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             put_warnings(&warnings, scc->members.data[m]);
             // What the kept warnings depend on beyond the key, checked when
             // the module is reused (n00bb_cache_warning_inputs).
-            core_buffer_putc(&inputs, N00BB_WARNING_INPUT_SYNTAX);
-            put_u64(&inputs, n00bb_syntax_warning_settings());
             const core_buffer_t *recorded =
                 &tu_state(scc->members.data[m])->warning_inputs;
             if (recorded->byte_len)

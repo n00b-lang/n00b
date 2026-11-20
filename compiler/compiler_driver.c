@@ -2000,7 +2000,6 @@ static void
 record_subpackages_input(core_buffer_t *inputs, core_string_t package_id,
                          core_string_t name, size_t subpackages)
 {
-    core_buffer_putc(inputs, N00BB_WARNING_INPUT_SUBPACKAGES);
     put_input_text(inputs, package_id);
     put_input_text(inputs, name);
     core_buffer_putc(inputs, (char)(subpackages > 2 ? 2 : subpackages));
@@ -2032,25 +2031,13 @@ cached_warning_inputs_hold(import_driver_t *driver,
         return true;
     size_t at = 0;
     while (at < size) {
-        uint8_t kind = data[at++];
-        if (kind == N00BB_WARNING_INPUT_SYNTAX) {
-            if (size - at < 8) return false;
-            uint64_t settings = 0;
-            for (int i = 0; i < 8; i++)
-                settings |= (uint64_t)data[at + (size_t)i] << (8 * i);
-            at += 8;
-            if (settings != n00bb_syntax_warning_settings()) return false;
-        }
-        else if (kind == N00BB_WARNING_INPUT_SUBPACKAGES) {
-            core_string_t package_id = {0}, name = {0};
-            if (!read_input_text(data, size, &at, &package_id)
-                || !read_input_text(data, size, &at, &name) || at >= size)
-                return false;
-            size_t subpackages = data[at++];
-            size_t now = package_subpackages(driver, package_id, name);
-            if ((now > 2 ? 2 : now) != subpackages) return false;
-        }
-        else return false;
+        core_string_t package_id = {0}, name = {0};
+        if (!read_input_text(data, size, &at, &package_id)
+            || !read_input_text(data, size, &at, &name) || at >= size)
+            return false;
+        size_t subpackages = data[at++];
+        size_t now = package_subpackages(driver, package_id, name);
+        if ((now > 2 ? 2 : now) != subpackages) return false;
     }
     return true;
 }
