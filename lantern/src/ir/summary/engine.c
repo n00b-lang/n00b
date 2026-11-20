@@ -398,7 +398,20 @@ function_engine(ir_summaries_t *summaries, ir_func_t *f)
     engine->pt          = core_alloc(pt_t);
     pt_init(engine->pt, summaries, f, false);
     pt_solve(engine->pt);
+    pt_release_solve(engine->pt);
     return engine->pt;
+}
+
+void
+ir_summaries_release_engines(ir_summaries_t *summaries)
+{
+    if (!summaries) return;
+    core_dict_foreach(&summaries->engines, entry) {
+        engine_release(entry->value);
+        core_free(entry->value);
+    }
+    core_dict_free(&summaries->engines);
+    core_dict_init(&summaries->engines, nullptr, nullptr);
 }
 
 static const core_string_t cross_mark    = CORE_STRING_STATIC("*");
@@ -840,6 +853,7 @@ keep_engine(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt)
     pt->flow.sourced = false;
     pt->flow.memory  = nullptr;
     pt->flow.rd      = nullptr;
+    pt_release_solve(pt);
     engine_t *engine = core_alloc(engine_t);
     *engine = (engine_t){.pt = pt, .fingerprint = ir_func_shape(f),
                          .kept = true};

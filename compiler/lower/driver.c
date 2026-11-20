@@ -559,6 +559,12 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     exclude_failed_functions(analysis, &units, marks);
     core_free(marks);
+    // The questions about where addresses escape are asked above, by the
+    // storage placement and the checks before it. The solves kept to answer
+    // them are most of what the escape facts hold, and they would stay
+    // through specializing and code generation, when the compile needs the
+    // most memory.
+    ir_summaries_release_engines(analysis->escapes);
     if (ok && dump_ir) ok = n00bb_dump_ir(analysis);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];

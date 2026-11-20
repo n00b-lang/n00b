@@ -352,6 +352,9 @@ growth_only_stale(pt_t *pt, const pt_memo_t *memo)
 {
     if (!memo->computed || (memo->positional && memo->at != pt->at))
         return false;
+    // Growth since before the content logs were let go (see
+    // pt_release_solve) can't be read from them.
+    if (memo->generation < pt->released_at) return false;
     for (size_t d = 0; d < memo->depends.len; d++) {
         uintptr_t key     = (uintptr_t)memo->depends.data[d];
         uintptr_t changed = (uintptr_t)core_dict_get(
@@ -466,6 +469,42 @@ resolved_release(resolved_t *entry)
     core_list_free(entry->nodes);
 }
 
+static void
+release_walk(resolved_t *entry)
+{
+    loc_table_free(&entry->visited);
+    loc_table_free(&entry->through[0]);
+    loc_table_free(&entry->through[1]);
+    core_list_free(entry->seen);
+    core_list_free(entry->nodes);
+    entry->released = true;
+}
+
+// Lets go of what a solved `pt` keeps only to carry its solve on
+// incrementally: each resolve walk's state and each site's record of the
+// items added to it (see resolve_again), and each content memo's log of
+// the items it gained (see content_at). An engine outlives its solve, and
+// with these it held about twice what its solution does; a program keeps
+// an engine for most of its functions (see keep_engine). What was found
+// stays. A walk asked for again after the sites it went into grew starts
+// from the beginning, which finds the same places (see resolve_again), and
+// a memo that last saw the contents before now reads them whole instead of
+// reading only what was logged since (see growth_only_stale).
+static void
+pt_release_solve(pt_t *pt)
+{
+    core_dict_foreach(&pt->resolved, entry) release_walk(entry->value);
+    core_dict_foreach(&pt->resolved_writes, entry)
+        release_walk(entry->value);
+    for (size_t s = 0; s < pt->sites.len; s++)
+        core_list_free(pt->sites.data[s].added);
+    core_dict_foreach(&pt->contents_memo, entry) {
+        content_memo_t *content = entry->value;
+        core_list_free(content->log);
+    }
+    pt->released_at = pt->generation;
+}
+
 // The places `loc` stands for; with `writes`, only those a write can reach
 // (see resolve_into).
 static void
@@ -486,7 +525,9 @@ pt_resolve_places(pt_t *pt, pt_loc_t loc, bool writes, pt_set_t *into)
     }
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
-        bool            again = entry->memo.computed;
+        bool            again = entry->memo.computed && !entry->released;
+        if (entry->released) entry->items.len = 0;
+        entry->released = false;
         memo_begin(pt, &entry->memo, &frame);
         resolved_t *outer = pt->walk;
         pt->walk    = entry;

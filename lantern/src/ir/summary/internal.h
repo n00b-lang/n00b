@@ -456,6 +456,9 @@ struct pt_t {
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
     uint64_t               generation;
+    // The generation the solve's incremental state was let go at (see
+    // pt_release_solve), or 0.
+    uint64_t               released_at;
     ir_places_t           *places;
     core_list_t(pt_access_t) context;
     bool                   contextual;
@@ -514,6 +517,9 @@ typedef struct resolved_t {
     loc_table_t                  through[2];
     pt_set_t                     seen;
     core_list_t(resolve_node_t)  nodes;
+    // The walk was let go (see pt_release_solve): `items` still holds what
+    // it found, but finding more means walking from the start again.
+    bool                         released;
 } resolved_t;
 
 typedef struct {
