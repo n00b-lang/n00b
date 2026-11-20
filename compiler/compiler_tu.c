@@ -1725,28 +1725,27 @@ n00bb_without_passing_modes(th_ctx *types, th_type *type)
     return erased;
 }
 
-th_type *
-n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
-                        parse_sym_entry_t *symbol, th_type *flat,
-                        n00bb_reference_adapter_t *adapter)
+bool
+n00bb_reference_adapter_signature(th_ctx *types, th_type *called,
+                                  th_type *value,
+                                  n00bb_parameter_name_fn named,
+                                  void *context,
+                                  n00bb_reference_adapter_t *adapter,
+                                  th_type **signature)
 {
-    *adapter = (n00bb_reference_adapter_t){.target = symbol};
-    th_type *called = flat ? th_resolve(flat) : nullptr;
-    th_type *value = called && th_kind_of(called) == TH_FUNCTION
-        ? n00bb_function_value_type(types, grammar, symbol, called)
-        : nullptr;
+    *signature = nullptr;
+    called = called ? th_resolve(called) : nullptr;
     value = value ? th_resolve(value) : nullptr;
-    if (!value || th_kind_of(value) != TH_FUNCTION) return nullptr;
+    if (!called || th_kind_of(called) != TH_FUNCTION || !value
+        || th_kind_of(value) != TH_FUNCTION) return false;
+    bool listed = th_func_nkw(value) || th_func_rest(value);
     adapter->count = th_func_nparams(called);
-    adapter->positional = value == called ? adapter->count
-                                          : th_func_nparams(value);
-    adapter->keywords = value == called ? 0 : th_func_nkw(value);
+    adapter->positional = listed ? th_func_nparams(value) : adapter->count;
+    adapter->keywords = listed ? th_func_nkw(value) : 0;
     if (adapter->count < adapter->positional + adapter->keywords)
-        return nullptr;
+        return false;
     adapter->order = core_alloc_array(uint32_t, adapter->count + 1);
     th_param *params = core_alloc_array(th_param, adapter->count + 1);
-    parse_tree_t *formals = adapter->keywords > 1
-        ? callable_formal_parameters(grammar, symbol) : nullptr;
     bool moded = false;
     bool ok = adapter->order && params;
     for (size_t i = 0; ok && i < adapter->count; i++) {
@@ -1755,8 +1754,7 @@ n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
         if (adapter->keywords < 2 || i < adapter->positional
             || i >= adapter->positional + adapter->keywords) continue;
         core_string_t name = {0};
-        ok = function_parameter_info(grammar, symbol, formals, i, nullptr,
-                                     &name, nullptr, nullptr);
+        ok = named(context, i, &name);
         size_t k = 0;
         while (ok && k < adapter->keywords
                && !core_string_eq(th_func_kw(value, k)->name, name))
@@ -1777,17 +1775,44 @@ n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
         params[at] = (th_param){.mode = keyword ? TH_IN : TH_INOUT,
                                 .type = type};
     }
-    th_type *signature = ok && (moded || adapter->reordered)
+    bool adapts = moded || adapter->reordered;
+    *signature = ok && adapts
         ? th_func_with_error(types, th_func_ret(called),
                              th_func_error(called), params, adapter->count,
                              nullptr, nullptr, 0)
         : nullptr;
     core_free(params);
-    if (!signature) {
+    if (!*signature) {
         core_free(adapter->order);
         adapter->order = nullptr;
     }
-    return signature;
+    return ok && (!adapts || *signature);
+}
+
+static bool
+declared_parameter_name(void *context, size_t index, core_string_t *name)
+{
+    void **declared = context;
+    return function_parameter_info(declared[0], declared[1], declared[2],
+                                   index, nullptr, name, nullptr, nullptr);
+}
+
+th_type *
+n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
+                        parse_sym_entry_t *symbol, th_type *flat,
+                        n00bb_reference_adapter_t *adapter)
+{
+    *adapter = (n00bb_reference_adapter_t){.target = symbol};
+    th_type *called = flat ? th_resolve(flat) : nullptr;
+    th_type *value = called && th_kind_of(called) == TH_FUNCTION
+        ? n00bb_function_value_type(types, grammar, symbol, called)
+        : nullptr;
+    void *declared[] = {grammar, symbol,
+                        callable_formal_parameters(grammar, symbol)};
+    th_type *signature = nullptr;
+    return n00bb_reference_adapter_signature(types, called, value,
+               declared_parameter_name, declared, adapter, &signature)
+        ? signature : nullptr;
 }
 
 bool

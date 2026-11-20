@@ -198,6 +198,20 @@ typedef struct {
 th_type *n00bb_reference_adapter(th_ctx *types, parse_grammar_t *grammar,
                                  parse_sym_entry_t *symbol, th_type *flat,
                                  n00bb_reference_adapter_t *adapter);
+// The name of parameter `index` of the function `context` says.
+typedef bool (*n00bb_parameter_name_fn)(void *context, size_t index,
+                                        core_string_t *name);
+// The reference adapter of a function whose signature as called is
+// `called`, and whose reference's type is `value`: `*adapter` filled in
+// but its target, and `*signature` as n00bb_reference_adapter gives it.
+// `named` gives the parameters' names, to reorder the keyword ones. False
+// when it can't be made.
+bool n00bb_reference_adapter_signature(th_ctx *types, th_type *called,
+                                       th_type *value,
+                                       n00bb_parameter_name_fn named,
+                                       void *context,
+                                       n00bb_reference_adapter_t *adapter,
+                                       th_type **signature);
 // Each of a trait's methods for a bound on `variable`, as a method
 // constraint whose target is the whole method: its receiver is `variable`,
 // and the trait's parameters (the other variables its methods name) are

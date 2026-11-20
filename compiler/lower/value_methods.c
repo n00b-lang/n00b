@@ -918,85 +918,57 @@ generate_reference_adapter(n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+static bool
+instance_parameter_name(void *context, size_t index, core_string_t *name)
+{
+    ir_func_t *instance = context;
+    if (index >= instance->n_params) return false;
+    *name = instance->params[index]->name;
+    return true;
+}
+
 ir_func_t *
 n00bb_instance_reference_adapter(ir_ctx_t *ir_context, ir_func_t *instance,
                                  th_type *value_type, bool *made)
 {
     *made = false;
-    th_type *flat = instance ? th_resolve(instance->type) : nullptr;
-    th_type *value = value_type ? th_resolve(value_type) : nullptr;
-    if (!flat || th_kind_of(flat) != TH_FUNCTION || !value
-        || th_kind_of(value) != TH_FUNCTION)
-        return nullptr;
-    th_ctx *types = ir_module_types(instance->owner);
-    size_t count = th_func_nparams(flat);
-    bool listed = th_func_nkw(value) || th_func_rest(value);
-    size_t positional = listed ? th_func_nparams(value) : count;
-    size_t keywords = listed ? th_func_nkw(value) : 0;
-    if (count < positional + keywords
-        || (keywords > 1 && instance->n_params < positional + keywords))
-        return nullptr;
-    uint32_t *order = core_alloc_array(uint32_t, count + 1);
-    th_param *params = core_alloc_array(th_param, count + 1);
-    bool moded = false, reordered = false;
-    bool ok = order && params;
-    for (size_t i = 0; ok && i < count; i++) {
-        order[i] = (uint32_t)i;
-        moded = moded || th_func_param(flat, i)->mode != TH_IN;
-        if (keywords < 2 || i < positional || i >= positional + keywords)
-            continue;
-        size_t k = 0;
-        while (k < keywords && !core_string_eq(th_func_kw(value, k)->name,
-                                               instance->params[i]->name))
-            k++;
-        ok = k < keywords;
-        order[i] = (uint32_t)(positional + k);
-        reordered = reordered || order[i] != i;
-    }
     // Taken as a declared function's adapter takes them
     // (n00bb_reference_adapter).
-    for (size_t i = 0; ok && i < count; i++) {
-        uint32_t at = order[i];
-        params[at] = (th_param){
-            .mode = at >= positional && at < positional + keywords
-                ? TH_IN : TH_INOUT,
-            .type = th_func_param(flat, i)->type};
-    }
-    ir_func_t *adapter = instance;
+    n00bb_reference_adapter_t shape = {0};
+    th_type *signature = nullptr;
+    if (!instance || !n00bb_reference_adapter_signature(
+            ir_module_types(instance->owner), instance->type, value_type,
+            instance_parameter_name, instance, &shape, &signature))
+        return nullptr;
+    if (!signature) return instance;
     core_buffer_t name = {0};
-    if (ok && (moded || reordered))
-        core_buffer_printf(&name, "__n00bb_reference_adapter_%.*s",
-                           (int)instance->name.u8_bytes, instance->name.data);
-    if (ok && name.data) {
-        adapter = ir_func_find(instance->owner, core_buffer_string(&name));
-        th_type *signature = adapter ? nullptr
-            : th_func_with_error(types, th_func_ret(flat),
-                                 th_func_error(flat), params, count, nullptr,
-                                 nullptr, 0);
-        if (signature) {
-            adapter = ir_func_add(instance->owner, core_buffer_string(&name),
-                                  signature, instance->linkage);
-            for (size_t k = 0; adapter && k < keywords; k++)
-                if (!ir_func_set_parameter_optional(adapter,
-                        (uint32_t)(positional + k), true))
-                    adapter = nullptr;
-            ok = adapter
-                && n00bb_adapter_body(nullptr, ir_context, adapter, instance,
-                                      instance->owner, nullptr, nullptr,
-                                      order)
-                && note_adapted(ir_context, adapter, instance, order, count)
-                && ir_annot_set(ir_context, &adapter->annots,
-                       (ir_annot_t){
-                           .key = CORE_STRING_STATIC(
-                               "n00bb.generated-value-method"),
-                           .kind = IR_ANNOT_BOOL, .b = true});
-            *made = ok;
-        }
-        ok = ok && adapter;
+    core_buffer_printf(&name, "__n00bb_reference_adapter_%.*s",
+                       (int)instance->name.u8_bytes, instance->name.data);
+    ir_func_t *adapter = ir_func_find(instance->owner,
+                                      core_buffer_string(&name));
+    bool ok = adapter != nullptr;
+    if (!adapter) {
+        adapter = ir_func_add(instance->owner, core_buffer_string(&name),
+                              signature, instance->linkage);
+        for (size_t k = 0; adapter && k < shape.keywords; k++)
+            if (!ir_func_set_parameter_optional(adapter,
+                    (uint32_t)(shape.positional + k), true))
+                adapter = nullptr;
+        ok = adapter
+            && n00bb_adapter_body(nullptr, ir_context, adapter, instance,
+                                  instance->owner, nullptr, nullptr,
+                                  shape.order)
+            && note_adapted(ir_context, adapter, instance, shape.order,
+                            shape.count)
+            && ir_annot_set(ir_context, &adapter->annots,
+                   (ir_annot_t){
+                       .key = CORE_STRING_STATIC(
+                           "n00bb.generated-value-method"),
+                       .kind = IR_ANNOT_BOOL, .b = true});
+        *made = ok;
     }
     core_buffer_release(&name);
-    core_free(order);
-    core_free(params);
+    core_free(shape.order);
     return ok ? adapter : nullptr;
 }
 
