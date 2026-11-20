@@ -2,7 +2,6 @@
 #include "ir/analyses.h"
 #include "ir/abcd.h"
 #include "ir/liveness.h"
-#include "ir/summary.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -206,103 +205,6 @@ slot_of(ir_func_t *f)
     return slot;
 }
 
-// What each function's analyses that depend on the bound summaries (abcd,
-// numbers, pdg) and its summary asked of them while they stay bound, with
-// the answers. Kept apart from the analyses, which a scope can release
-// and rebuild while the same summaries are bound: what they asked before
-// still went into whatever was computed with them. Binding other
-// summaries starts afresh; a body that changes drops its own.
-typedef ir_analysis_query_t *query_ptr_t;
-core_list_decl(query_ptr_t);
-
-typedef struct {
-    uint64_t                 fingerprint;
-    core_list_t(query_ptr_t) queries;
-    core_dict_t              noted;
-} query_log_t;
-
-static _Thread_local core_dict_t query_logs;
-static _Thread_local bool        query_logs_ready;
-static _Thread_local uint64_t    query_logs_epoch;
-// A query made where no function can be told is noted nowhere; from then on
-// no function's queries are taken as complete.
-static _Thread_local bool        queries_lost;
-
-static core_hash_value_t
-query_hash(void *key)
-{
-    const ir_analysis_query_t *q = key;
-    uint64_t words[5] = {
-        q->kind, q->index, (uint64_t)(uintptr_t)q->function,
-        (uint64_t)(uintptr_t)q->call, q->answer,
-    };
-    return (core_hash_value_t)core_xxh3_64bits_raw(words, sizeof(words));
-}
-
-static bool
-query_eq(const void *left, const void *right)
-{
-    const ir_analysis_query_t *a = left, *b = right;
-    return a->kind == b->kind && a->index == b->index
-        && a->function == b->function && a->call == b->call
-        && a->answer == b->answer;
-}
-
-static void
-log_free(query_log_t *log)
-{
-    for (size_t q = 0; q < log->queries.len; q++)
-        core_free(log->queries.data[q]);
-    core_list_free(log->queries);
-    core_dict_free(&log->noted);
-    core_free(log);
-}
-
-static void
-logs_reset(void)
-{
-    if (!query_logs_ready) {
-        core_dict_init(&query_logs, nullptr, nullptr);
-        query_logs_ready = true;
-    }
-    core_dict_foreach(&query_logs, item) log_free(item->value);
-    core_dict_free(&query_logs);
-    core_dict_init(&query_logs, nullptr, nullptr);
-    query_logs_epoch = summary_epoch;
-}
-
-static query_log_t *
-log_find(const ir_func_t *f)
-{
-    if (!query_logs_ready || query_logs_epoch != summary_epoch) return nullptr;
-    bool found = false;
-    query_log_t *log = core_dict_get(&query_logs, (void *)f, &found);
-    return found ? log : nullptr;
-}
-
-static void
-log_forget(const ir_func_t *f)
-{
-    query_log_t *log = log_find(f);
-    if (!log) return;
-    core_dict_remove(&query_logs, (void *)f);
-    log_free(log);
-}
-
-static query_log_t *
-log_of(ir_func_t *f)
-{
-    if (!query_logs_ready || query_logs_epoch != summary_epoch) logs_reset();
-    query_log_t *log = log_find(f);
-    if (log) return log;
-    log = core_alloc(query_log_t);
-    log->fingerprint = f->analyses ? f->analyses->fingerprint : 0;
-    log->queries = core_list_new(query_ptr_t);
-    core_dict_init(&log->noted, query_hash, query_eq);
-    core_dict_put(&query_logs, f, log);
-    return log;
-}
-
 static void
 release_summary_dependents(struct ir_func_analyses_t *slot)
 {
@@ -324,8 +226,6 @@ current_slot(ir_func_t *f)
         if (slot->epoch != summary_epoch) release_summary_dependents(slot);
         return slot;
     }
-    query_log_t *log = log_find(f);
-    if (log && log->fingerprint != now) log_forget(f);
     release_summary_dependents(slot);
     ir_sites_free(slot->sites);
     slot->sites = nullptr;
@@ -477,98 +377,6 @@ ir_func_release_analyses(ir_func_t *f)
     ir_doms_free(slot->doms);
     core_free(slot);
     f->analyses = nullptr;
-}
-
-void
-ir_analysis_note(ir_func_t *into, ir_analysis_query_t query)
-{
-    if (!into) {
-        queries_lost = true;
-        return;
-    }
-    query_log_t *log = log_of(into);
-    if (core_dict_contains(&log->noted, &query)) return;
-    ir_analysis_query_t *kept = core_alloc(ir_analysis_query_t);
-    *kept = query;
-    core_dict_put(&log->noted, kept, kept);
-    core_list_push(log->queries, kept);
-}
-
-void
-ir_analysis_note_pure(ir_func_t *into, const ir_instr_t *call, bool answer)
-{
-    ir_analysis_note(into, (ir_analysis_query_t){
-        .kind = IR_ANALYSIS_QUERY_PURE, .function = into, .call = call,
-        .answer = answer,
-    });
-}
-
-// `into`'s ranges took in `callee`'s: what those asked goes with it.
-void
-ir_analysis_note_callee(ir_func_t *into, ir_func_t *callee)
-{
-    if (!into || !callee || into == callee) return;
-    if (!callee->analyses) {
-        queries_lost = true;
-        return;
-    }
-    ir_analysis_note(into, (ir_analysis_query_t){
-        .kind = IR_ANALYSIS_QUERY_BODY, .function = callee,
-        .answer = callee->analyses->fingerprint,
-    });
-}
-
-static bool
-gather_queries(const ir_func_t *f, uint64_t identity, core_dict_t *seen,
-               core_list_t(ir_analysis_query_t) *out)
-{
-    if (!core_dict_add(seen, (void *)f, (void *)f)) return true;
-    query_log_t *log = log_find(f);
-    if (!log) return true;
-    if (log->fingerprint != identity) return false;
-    for (size_t q = 0; q < log->queries.len; q++) {
-        const ir_analysis_query_t *query = log->queries.data[q];
-        core_list_push(*out, *query);
-        if (query->kind == IR_ANALYSIS_QUERY_BODY
-            && !gather_queries(query->function, query->answer, seen, out))
-            return false;
-    }
-    return true;
-}
-
-bool
-ir_analysis_queries(ir_func_t *f, uint64_t identity,
-                    core_list_t(ir_analysis_query_t) *out)
-{
-    if (queries_lost) return false;
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
-    bool known = gather_queries(f, identity, &seen, out);
-    core_dict_free(&seen);
-    return known;
-}
-
-uint64_t
-ir_analysis_query_answer(ir_summaries_t *summaries,
-                         const ir_analysis_query_t *query)
-{
-    switch (query->kind) {
-    case IR_ANALYSIS_QUERY_BODY:
-        return fingerprint(query->function, true);
-    case IR_ANALYSIS_QUERY_PURE:
-        return ir_summary_call_pure(summaries, query->call);
-    case IR_ANALYSIS_QUERY_WRITES:
-        return ir_summary_call_writes(summaries, query->function,
-                                      ir_func_places(query->function),
-                                      query->call, query->index);
-    case IR_ANALYSIS_QUERY_ESCAPE: {
-        ir_summary_t *summary = ir_summary_of(summaries, query->function);
-        if (!summary) return 0;
-        return ir_summary_param_escape(summary, query->index)
-                & IR_SESCAPE_ADDRESS ? 2 : 1;
-    }
-    }
-    return ~(uint64_t)0;
 }
 
 ir_live_t *

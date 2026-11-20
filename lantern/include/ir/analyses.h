@@ -26,32 +26,4 @@ typedef struct ir_summaries_t ir_summaries_t;
 ir_summaries_t *ir_analysis_bind_summaries(ir_summaries_t *summaries);
 ir_summaries_t *ir_analysis_summaries(void);
 
-// What a function's analyses asked of the bound summaries, with the
-// answers, so a summary computed with them can tell whether computing it
-// again with other summaries bound would come out the same.
-typedef enum : uint8_t {
-    IR_ANALYSIS_QUERY_BODY,   // `function`'s identity
-    IR_ANALYSIS_QUERY_PURE,   // ir_summary_call_pure(call)
-    IR_ANALYSIS_QUERY_WRITES, // ir_summary_call_writes(function, call, index)
-    IR_ANALYSIS_QUERY_ESCAPE, // `function`'s summary and parameter `index`
-} ir_analysis_query_kind_t;
-
-typedef struct {
-    ir_analysis_query_kind_t kind;
-    uint32_t                 index;
-    ir_func_t               *function;
-    const ir_instr_t        *call;
-    uint64_t                 answer;
-} ir_analysis_query_t;
-core_list_decl(ir_analysis_query_t);
-
-void ir_analysis_note(ir_func_t *into, ir_analysis_query_t query);
-void ir_analysis_note_pure(ir_func_t *into, const ir_instr_t *call,
-                           bool answer);
-void ir_analysis_note_callee(ir_func_t *into, ir_func_t *callee);
-bool ir_analysis_queries(ir_func_t *f, uint64_t identity,
-                         core_list_t(ir_analysis_query_t) *out);
-uint64_t ir_analysis_query_answer(ir_summaries_t *summaries,
-                                  const ir_analysis_query_t *query);
-
 #endif

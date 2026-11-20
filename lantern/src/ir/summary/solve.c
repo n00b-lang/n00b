@@ -336,34 +336,12 @@ covers_callees(ir_summaries_t *summaries, ir_func_t *const *members,
     return covered;
 }
 
-// Whether what `old`'s function's analyses asked of the summaries bound
-// when it was computed gets the same answers from the ones bound now, so
-// that computing it again would prove the same traps. The bodies the
-// answers were about are checked first: the other queries point into them.
-static bool
-queries_hold(const ir_summaries_t *summaries, const ir_summary_t *old)
-{
-    if (summaries->defer_changed || !old->queries_known) return false;
-    ir_summaries_t *bound = (ir_summaries_t *)summaries->proof_context;
-    for (int pass = 0; pass < 2; pass++)
-        for (size_t q = 0; q < old->queries.len; q++) {
-            const ir_analysis_query_t *query = &old->queries.data[q];
-            if ((query->kind == IR_ANALYSIS_QUERY_BODY) != (pass == 0))
-                continue;
-            if (ir_analysis_query_answer(bound, query) != query->answer)
-                return false;
-        }
-    return true;
-}
-
 static bool
 reusable_member(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count, size_t at)
 {
     ir_summary_t *old = previous_summary(summaries, members[at]);
-    if (!old || (summaries->proofs_changed && !old->proof_free
-                 && !queries_hold(summaries, old)))
-        return false;
+    if (!old || (summaries->proofs_changed && !old->proof_free)) return false;
     for (size_t d = 0; d < old->deps.len; d++) {
         const summary_dep_t *dep = &old->deps.data[d];
         if (member_index(members, count, dep->function) < count) continue;
@@ -649,15 +627,6 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     attach_inputs(summaries, members, count, &inputs);
     core_list_free(inputs);
     stamp_component(summaries, members, count);
-    // What the members' analyses asked of the bound summaries on the way
-    // (see queries_hold). Only a summary computed here has it: one stored
-    // in the cache was computed with whatever was bound then.
-    for (size_t i = 0; i < count; i++) {
-        ir_summary_t *summary = ir_summary_of(summaries, members[i]);
-        summary->queries.len = 0;
-        summary->queries_known = ir_analysis_queries(members[i],
-            summary->identity, &summary->queries);
-    }
 }
 
 static void
@@ -840,10 +809,9 @@ compute_summaries(ir_func_t *const *functions, size_t count,
         && !previous->escapes_only
         && same_hooks(&previous->hook_values, hooks);
     // A summary whose trap proofs saw callees through other summaries than
-    // the ones bound now may prove other traps when computed again, so one
-    // that proved some is reused only if what its analyses asked of them
-    // gets the same answers now (see reusable_member). Reusing it
-    // regardless made what a function's summary says depend on whether the
+    // the ones bound now may prove other traps when computed again, so only
+    // one that proved none can be reused (see reusable_member). Reusing the
+    // others made what a function's summary says depend on whether the
     // inputs that would have recomputed it changed between the passes,
     // which they do on a cold build and not on a warm one.
     summaries->proof_context  = ir_analysis_summaries();

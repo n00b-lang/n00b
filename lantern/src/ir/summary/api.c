@@ -91,7 +91,6 @@ summary_free(ir_summary_t *summary)
     core_list_free(summary->fields);
     core_list_free(summary->deps);
     core_list_free(summary->inputs);
-    core_list_free(summary->queries);
     core_free(summary);
 }
 

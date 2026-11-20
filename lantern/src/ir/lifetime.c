@@ -52,10 +52,6 @@ typedef struct local_use_probe_t {
     const struct local_use_probe_t *previous;
 } local_use_probe_t;
 
-// The function whose allocation is asked about, which the callee summaries
-// consulted on the way are noted for (see ir_analysis_note).
-static _Thread_local ir_func_t *noting;
-
 static bool address_has_only_local_uses(const ir_func_t *function,
                                         const ir_value_t *address,
                                         const local_use_probe_t *previous);
@@ -78,20 +74,11 @@ call_argument_is_noescape(const ir_instr_t *call, uint32_t operand_index,
             return false;
     ir_value_t *parameter = callee->params[operand_index - 1];
     ir_summary_t *summary = ir_summary_of(ir_analysis_summaries(), callee);
-    bool noescape = summary
-        && !(ir_summary_param_escape(summary, operand_index - 1)
-             & IR_SESCAPE_ADDRESS);
-    ir_analysis_note(noting, (ir_analysis_query_t){
-        .kind = IR_ANALYSIS_QUERY_ESCAPE, .function = callee,
-        .index = operand_index - 1, .answer = !summary ? 0 : noescape ? 1 : 2,
-    });
-    if (noescape) return true;
-    if (!callee->n_blocks) return false;
-    ir_analysis_note(noting, (ir_analysis_query_t){
-        .kind = IR_ANALYSIS_QUERY_BODY, .function = callee,
-        .answer = ir_func_identity(callee),
-    });
-    return address_has_only_local_uses(callee, parameter, previous);
+    if (summary && !(ir_summary_param_escape(summary, operand_index - 1)
+                     & IR_SESCAPE_ADDRESS))
+        return true;
+    return callee->n_blocks
+        && address_has_only_local_uses(callee, parameter, previous);
 }
 
 static bool
@@ -164,11 +151,6 @@ ir_allocation_has_only_local_uses(const ir_func_t *function,
     ir_annot_t *placed = ir_annot_get(&((ir_instr_t *)allocation)->annots,
                                       CORE_STRING_STATIC("ir.allocation_local"));
     if (placed && placed->kind == IR_ANNOT_BOOL) return placed->b;
-    ir_func_t *outer = noting;
-    noting = (ir_func_t *)function;
-    bool local = address_has_only_local_uses(function, allocation->dest,
-                                             nullptr);
-    noting = outer;
-    return local;
+    return address_has_only_local_uses(function, allocation->dest, nullptr);
 }
 

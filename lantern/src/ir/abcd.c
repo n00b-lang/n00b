@@ -750,10 +750,7 @@ allocation(ir_op_t op)
 static bool
 pure_call(const ir_instr_t *call)
 {
-    bool pure = ir_summary_call_pure(ir_analysis_summaries(), call);
-    ir_analysis_note_pure(call->block ? call->block->owner : nullptr, call,
-                          pure);
-    return pure;
+    return ir_summary_call_pure(ir_analysis_summaries(), call);
 }
 
 static bool
@@ -1542,7 +1539,6 @@ callee_return_bound(ir_abcd_t *a, ir_func_t *callee, uint32_t parameter,
             }
             else if (returns_bounded(inner, param, 0)) result.bounded = true;
             inner->call_depth = depth;
-            ir_analysis_note_callee(a->f, callee);
         }
     }
     core_list_push(a->callees, result);
