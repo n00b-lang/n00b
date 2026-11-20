@@ -233,8 +233,10 @@ main(void)
         &field_symbol_index) && n00bb_abi_type_index_find(index,
         field->type, &child_type_index));
     const n00b_abi_field_v1 *emitted = &layouts.fields[1];
+    // The record and its one field occupy the same 64 bits: one run row.
     assert(layouts.field_count == 2 && layouts.packed_run_count == 2
-        && layouts.run_count == 3 && layouts.stream_index_count == 4
+        && layouts.run_count == 2 && layouts.stream_index_count == 4
+        && layouts.stream_indexes[0] == 1 && layouts.stream_indexes[2] == 1
         && identities.rows[record_index].fields_or_arms.first == 4
         && identities.rows[record_index].fields_or_arms.count == 1
         && layouts.stream_indexes[3] == 1
@@ -251,7 +253,7 @@ main(void)
         && emitted->physical_runs.count == 1
         && layouts.packed_runs[1].unit_width_bits == 64
         && layouts.packed_runs[1].width_bits == 64
-        && layouts.runs[2].width_bits == 64);
+        && layouts.runs[1].width_bits == 64);
     n00bb_abi_type_layout_rows_release(&layouts);
     n00bb_abi_decl_index_free(declarations);
     n00bb_abi_type_identity_rows_release(&identities);

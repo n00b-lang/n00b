@@ -10,6 +10,8 @@
 #include "ir/typelang.h"
 #include "parse/annot_walk.h"
 #include "lib/alloc.h"
+#include "lib/dict.h"
+#include "lib/hash.h"
 #include "lib/list.h"
 #include "field_extent.h"
 #include "record_layout_request.h"
@@ -23,6 +25,97 @@ core_list_decl(n00b_abi_tag_extractor_v1);
 core_list_decl(n00b_abi_trace_v1);
 core_list_decl(n00b_abi_trace_child_v1);
 core_list_decl(n00b_abi_trace_arm_v1);
+
+// A run is only its extent, so the module's object has one row for each
+// different run, whichever layouts and members it bounds.
+typedef struct {
+    core_list_t(n00b_abi_physical_run_v1) physical;
+    core_list_t(n00b_abi_packed_run_v1) packed;
+    core_dict_t physical_at;
+    core_dict_t packed_at;
+} layout_runs_t;
+
+static core_hash_value_t
+physical_run_hash(void *key)
+{
+    return core_hash_raw(key, sizeof(n00b_abi_physical_run_v1));
+}
+
+static bool
+physical_run_eq(const void *a, const void *b)
+{
+    return !memcmp(a, b, sizeof(n00b_abi_physical_run_v1));
+}
+
+static core_hash_value_t
+packed_run_hash(void *key)
+{
+    return core_hash_raw(key, sizeof(n00b_abi_packed_run_v1));
+}
+
+static bool
+packed_run_eq(const void *a, const void *b)
+{
+    return !memcmp(a, b, sizeof(n00b_abi_packed_run_v1));
+}
+
+static void
+layout_runs_init(layout_runs_t *runs)
+{
+    *runs = (layout_runs_t){0};
+    core_list_push(runs->physical, ((n00b_abi_physical_run_v1){0}));
+    core_list_push(runs->packed, ((n00b_abi_packed_run_v1){0}));
+    core_dict_init(&runs->physical_at, physical_run_hash, physical_run_eq);
+    core_dict_init(&runs->packed_at, packed_run_hash, packed_run_eq);
+}
+
+// Frees the lookups; the rows stay with whoever took them.
+static void
+layout_runs_forget(layout_runs_t *runs)
+{
+    core_dict_foreach(&runs->physical_at, item) core_free(item->key);
+    core_dict_foreach(&runs->packed_at, item) core_free(item->key);
+    core_dict_free(&runs->physical_at);
+    core_dict_free(&runs->packed_at);
+}
+
+static bool
+intern_physical_run(layout_runs_t *runs, n00b_abi_physical_run_v1 run,
+                    uint32_t *out)
+{
+    bool found = false;
+    void *at = core_dict_get(&runs->physical_at, &run, &found);
+    if (found) {
+        *out = (uint32_t)(uintptr_t)at;
+        return true;
+    }
+    if (runs->physical.len >= UINT32_MAX) return false;
+    n00b_abi_physical_run_v1 *key = core_alloc(n00b_abi_physical_run_v1);
+    *key = run;
+    *out = (uint32_t)runs->physical.len;
+    core_list_push(runs->physical, run);
+    core_dict_put(&runs->physical_at, key, (void *)(uintptr_t)*out);
+    return true;
+}
+
+static bool
+intern_packed_run(layout_runs_t *runs, n00b_abi_packed_run_v1 run,
+                  uint32_t *out)
+{
+    bool found = false;
+    void *at = core_dict_get(&runs->packed_at, &run, &found);
+    if (found) {
+        *out = (uint32_t)(uintptr_t)at;
+        return true;
+    }
+    if (runs->packed.len >= UINT32_MAX) return false;
+    n00b_abi_packed_run_v1 *key = core_alloc(n00b_abi_packed_run_v1);
+    *key = run;
+    *out = (uint32_t)runs->packed.len;
+    core_list_push(runs->packed, run);
+    core_dict_put(&runs->packed_at, key, (void *)(uintptr_t)*out);
+    return true;
+}
 
 typedef enum {
     TRACE_UNSEEN,
@@ -511,7 +604,7 @@ append_traces(trace_source_t *source,
 static bool
 append_runs(const ir_layout_bit_run_t *source, size_t count,
             uint64_t extent_bits, uint32_t stream_base,
-            core_list_t(n00b_abi_physical_run_v1) *runs,
+            layout_runs_t *runs,
             core_list_t(uint32_t) *indexes, n00b_abi_range_v1 *range)
 {
     *range = (n00b_abi_range_v1){0};
@@ -524,16 +617,15 @@ append_runs(const ir_layout_bit_run_t *source, size_t count,
         if (!remaining || bit > extent_bits
             || remaining > extent_bits - bit) return false;
         while (remaining) {
-            if (runs->len >= UINT32_MAX
-                || indexes->len >= UINT32_MAX - stream_base) return false;
+            if (indexes->len >= UINT32_MAX - stream_base) return false;
             uint32_t width = remaining > UINT32_MAX
                 ? UINT32_MAX : (uint32_t)remaining;
-            uint32_t run_index = (uint32_t)runs->len;
-            core_list_push(*runs, ((n00b_abi_physical_run_v1){
-                .byte_offset = bit / 8,
-                .bit_offset = (uint32_t)(bit % 8),
-                .width_bits = width,
-            }));
+            uint32_t run_index;
+            if (!intern_physical_run(runs, (n00b_abi_physical_run_v1){
+                    .byte_offset = bit / 8,
+                    .bit_offset = (uint32_t)(bit % 8),
+                    .width_bits = width,
+                }, &run_index)) return false;
             core_list_push(*indexes, run_index);
             bit += width;
             remaining -= width;
@@ -546,7 +638,7 @@ append_runs(const ir_layout_bit_run_t *source, size_t count,
 static bool
 append_accesses(const ir_layout_access_t *source, size_t count,
                 uint64_t extent_bits, uint32_t stream_base,
-                core_list_t(n00b_abi_packed_run_v1) *runs,
+                layout_runs_t *runs,
                 core_list_t(uint32_t) *indexes, n00b_abi_range_v1 *range)
 {
     *range = (n00b_abi_range_v1){0};
@@ -564,15 +656,14 @@ append_accesses(const ir_layout_access_t *source, size_t count,
             || access->lsb > extent_bits - access->unit_bit_offset
             || access->value_width_bits
                 > extent_bits - access->unit_bit_offset - access->lsb
-            || runs->len >= UINT32_MAX
             || indexes->len >= UINT32_MAX - stream_base) return false;
-        uint32_t run_index = (uint32_t)runs->len;
-        core_list_push(*runs, ((n00b_abi_packed_run_v1){
-            .unit_byte_offset = access->unit_bit_offset / 8,
-            .unit_width_bits = access->unit_width_bits,
-            .lsb_position = access->lsb,
-            .width_bits = access->value_width_bits,
-        }));
+        uint32_t run_index;
+        if (!intern_packed_run(runs, (n00b_abi_packed_run_v1){
+                .unit_byte_offset = access->unit_bit_offset / 8,
+                .unit_width_bits = access->unit_width_bits,
+                .lsb_position = access->lsb,
+                .width_bits = access->value_width_bits,
+            }, &run_index)) return false;
         core_list_push(*indexes, run_index);
     }
     range->count = (uint32_t)(stream_base + indexes->len - range->first);
@@ -607,8 +698,7 @@ build_member_row(n00bb_abi_type_index_t *index,
                  const ir_final_member_layout_t *member,
                  uint32_t parent_type_index, uint32_t stream_base,
                  uint32_t table_kind, uint32_t row_index,
-                 core_list_t(n00b_abi_packed_run_v1) *packed,
-                 core_list_t(n00b_abi_physical_run_v1) *physical,
+                 layout_runs_t *runs,
                  core_list_t(uint32_t) *indexes,
                  n00b_abi_field_v1 *row, parse_sym_entry_t **out_field)
 {
@@ -647,10 +737,10 @@ build_member_row(n00bb_abi_type_index_t *index,
                 member->name, table_kind, row_index,
                 offsetof(n00b_abi_field_v1, name), &row->name))
             || !append_accesses(member->accesses, member->n_accesses,
-                final->intrinsic_bits, stream_base, packed, indexes,
+                final->intrinsic_bits, stream_base, runs, indexes,
                 &row->packed_runs)
             || !append_runs(member->occupied, member->n_occupied,
-                final->intrinsic_bits, stream_base, physical, indexes,
+                final->intrinsic_bits, stream_base, runs, indexes,
                 &row->physical_runs)) return false;
     row->inline_element_count = member->inline_element_count;
     row->inline_element_stride_bits = member->inline_element_stride_bits;
@@ -683,8 +773,7 @@ append_members(n00bb_abi_type_index_t *index,
                core_list_t(n00b_abi_field_v1) *fields,
                core_list_t(parse_sym_entry_ptr_t) *field_symbols,
                core_list_t(n00b_abi_arm_v1) *arms,
-               core_list_t(n00b_abi_packed_run_v1) *packed,
-               core_list_t(n00b_abi_physical_run_v1) *physical,
+               layout_runs_t *runs,
                core_list_t(uint32_t) *indexes,
                n00b_abi_range_v1 *member_range)
 {
@@ -716,7 +805,7 @@ append_members(n00bb_abi_type_index_t *index,
                               member, parent_type_index, stream_base,
                               variant ? N00B_ABI_TABLE_ARM
                                       : N00B_ABI_TABLE_FIELD,
-                              row_index, packed, physical, indexes, &row,
+                              row_index, runs, indexes, &row,
                               &symbol)) {
             valid = false;
             break;
@@ -770,8 +859,8 @@ n00bb_abi_type_layout_rows_build(
         || types->count != n00bb_abi_type_index_count(index))
         return false;
     core_list_t(n00b_abi_layout_v1) layouts = {0};
-    core_list_t(n00b_abi_physical_run_v1) runs = {0};
-    core_list_t(n00b_abi_packed_run_v1) packed = {0};
+    layout_runs_t runs;
+    layout_runs_init(&runs);
     core_list_t(n00b_abi_field_v1) fields = {0};
     core_list_t(n00b_abi_arm_v1) arms = {0};
     core_list_t(n00b_abi_tag_extractor_v1) tag_extractors = {0};
@@ -783,8 +872,6 @@ n00bb_abi_type_layout_rows_build(
     n00b_abi_range_v1 *type_field_ranges = core_alloc_array(
         n00b_abi_range_v1, types->count);
     core_list_push(layouts, ((n00b_abi_layout_v1){0}));
-    core_list_push(runs, ((n00b_abi_physical_run_v1){0}));
-    core_list_push(packed, ((n00b_abi_packed_run_v1){0}));
     core_list_push(fields, ((n00b_abi_field_v1){0}));
     core_list_t(parse_sym_entry_ptr_t) field_symbols = {0};
     core_list_push(field_symbols, (parse_sym_entry_t *)nullptr);
@@ -904,8 +991,7 @@ n00bb_abi_type_layout_rows_build(
                                   && th_kind_of(th_resolve(type))
                                       == TH_RECORD,
                 final, (uint32_t)i, stream_base, &fields, &field_symbols,
-                &arms, &packed,
-                &runs, &indexes, &type_field_ranges[i]));
+                &arms, &runs, &indexes, &type_field_ranges[i]));
         // A declared record's or variant's member symbols are its
         // declaration's: only the module that declares the type has them.
         if (valid && type_declaration && !local_declaration
@@ -945,11 +1031,13 @@ n00bb_abi_type_layout_rows_build(
         core_free(need);
     }
     core_list_free(field_symbols);
+    layout_runs_forget(&runs);
     if (valid) {
         *out = (n00bb_abi_type_layout_rows_t){
             .layouts = layouts.data, .layout_count = layouts.len,
-            .runs = runs.data, .run_count = runs.len,
-            .packed_runs = packed.data, .packed_run_count = packed.len,
+            .runs = runs.physical.data, .run_count = runs.physical.len,
+            .packed_runs = runs.packed.data,
+            .packed_run_count = runs.packed.len,
             .fields = fields.data, .field_count = fields.len,
             .arms = arms.data, .arm_count = arms.len,
             .tag_extractors = tag_extractors.data,
@@ -964,8 +1052,8 @@ n00bb_abi_type_layout_rows_build(
     }
     else {
         core_list_free(layouts);
-        core_list_free(runs);
-        core_list_free(packed);
+        core_list_free(runs.physical);
+        core_list_free(runs.packed);
         core_list_free(fields);
         core_list_free(arms);
         core_list_free(tag_extractors);
