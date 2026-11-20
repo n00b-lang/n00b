@@ -19,6 +19,21 @@ permissions:
   contents: read
 
 jobs:
+  change-budget:
+    name: change budget
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check each change against its Budget trailer
+        run: >-
+          python3 tools/check_change_budget.py .
+          "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          --vcs=git
+
   test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
