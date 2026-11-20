@@ -5857,41 +5857,149 @@ static bool report_untyped(core_translation_unit_t *unit, core_string_t name,
     return false;
 }
 
-// Whether `variable` is one a `typecase` arm in `function` narrows to: a
-// local of that type has a type, the arm's.
-static bool narrowed_variable(th_ctx *types, ir_func_t *function,
+// Whether `variable` is one a `typecase` arm narrows to (see
+// n00bb_tu_state_t.arm_typevars): a local of that type has a type, the
+// arm's.
+static bool narrowed_variable(th_ctx *types, n00bb_tu_state_t *state,
                               th_type *variable)
 {
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *in = block->instrs[i];
-
-            if (in->op == IR_OP_TYPE_NARROW && in->n_operands == 2
-                && in->operands[1].kind == IR_OPD_TYPE
-                && in->operands[1].type
-                && th_occurs(types, variable, in->operands[1].type)) {
-                return true;
-            }
+    core_dict_foreach(&state->arm_typevars, item) {
+        if (th_occurs(types, variable, item->key)) {
+            return true;
         }
     }
 
     return false;
 }
 
-// `checked` says which units to look at: those with no errors before these
-// checks, which may have left types open on their account. A variable in
-// `reported` was reported already, as declared with a trait.
-static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
-                          size_t count, const bool *checked,
-                          const core_dict_t *reported)
+// A trait used as a type inside a function (`Array[Shape]`) stands for one
+// type that implements it, which the function's body settles. `bound` is
+// such a trait's when its variable is named after where the trait is used
+// and the signature of `function` doesn't hold it: that variable, resolved.
+// A `typecase` arm's stands for the subject's type at run time, so it stays
+// open, and so does anything it reached.
+static th_type *trait_type_var(th_ctx *types, n00bb_tu_state_t *state,
+                               ir_func_t *function, th_trait_requirement bound)
+{
+    th_type *var = bound.subject ? th_resolve(bound.subject) : nullptr;
+
+    if (bound.kind != TH_CON_IMPLEMENTS || !var || th_kind_of(var) != TH_VAR
+        || core_string_find_byte(th_var_name(bound.subject), '@') < 0
+        || th_occurs(types, var, function->type)) {
+        return nullptr;
+    }
+    core_dict_foreach(&state->arm_typevars, item) {
+        if (item->value == N00BB_ARM_TRAIT_VAR
+            && th_resolve(item->key) == var) {
+            return nullptr;
+        }
+    }
+
+    return var;
+}
+
+// A trait-as-type variable of one function, and the variables that hold
+// it: one of just that type, or else one whose type mentions it.
+typedef struct {
+    th_type       *var;
+    core_string_t  trait;
+    ir_local_t    *bare;
+    ir_local_t    *holder;
+} unsettled_trait_t;
+core_list_decl(unsettled_trait_t);
+
+static unsettled_trait_t *unsettled_entry(
+    core_list_t(unsettled_trait_t) *traits, th_type *var, core_string_t trait)
+{
+    for (size_t i = 0; i < traits->len; i++) {
+        if (traits->data[i].var == var) {
+            return &traits->data[i];
+        }
+    }
+    core_list_push(*traits, ((unsettled_trait_t){.var = var, .trait = trait}));
+
+    return &traits->data[traits->len - 1];
+}
+
+// Reports a trait-as-type variable nothing in `function` settled, at the
+// variable holding it, or else at the first value that has it. A variable
+// declared with just the trait (`var s: Shape`) is T0586, as any variable
+// nothing settles the type of.
+static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
+                                   ir_func_t *function,
+                                   const unsettled_trait_t *entry)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t       trait       = n00bb_name_leaf(entry->trait);
+    core_string_t       owner       = function_name(function);
+
+    if (entry->bare) {
+        core_string_t name = n00bb_name_leaf(entry->bare->source_name);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
+                     n00bb_name_location(unit, entry->bare->span, name),
+                     N00B_TEXT_VARIABLE_TRAIT_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        n00bb_report_help(diagnostics,
+                          N00B_TEXT_ASSIGN_OR_NAME_THE_IMPLEMENTING_TYPE,
+                          N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
+        return false;
+    }
+    if (entry->holder) {
+        core_string_t name = n00bb_name_leaf(entry->holder->source_name);
+
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_name_location(unit, entry->holder->span, name),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(owner),
+                                ARG_TEXT(name)));
+    }
+    else {
+        const ir_instr_t *at = nullptr;
+
+        for (uint32_t b = 0; !at && b < function->n_blocks; b++) {
+            for (uint32_t i = 0; !at && i < function->blocks[b]->n_instrs;
+                 i++) {
+                const ir_instr_t *in = function->blocks[b]->instrs[i];
+
+                at = in->dest && ir_span_known(in->span) && !in->span.implied
+                        && th_occurs(types, entry->var, in->dest->type)
+                       ? in
+                       : nullptr;
+            }
+        }
+        if (!at) {
+            return true;
+        }
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
+                     n00bb_span_location(at->span),
+                     N00B_TEXT_TRAIT_TYPE_UNSETTLED_HERE,
+                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(owner)));
+    }
+    n00bb_report_help(diagnostics,
+                      N00B_TEXT_STORE_OR_NAME_THE_IMPLEMENTING_TYPE,
+                      N00BB_ARGS(ARG_TEXT(trait)));
+
+    return false;
+}
+
+// Reports what nothing gave a type: a variable (T0586), or a trait used as
+// a type in a function's body (T0605, or T0586 for a variable of just the
+// trait). A unit with errors already may have left types open on their
+// account, so it is not checked.
+static bool check_untyped(th_ctx *types, const n00bb_dispatch_index_t *index,
+                          core_translation_unit_t *const *units, size_t count)
 {
     bool ok = true;
 
     for (size_t u = 0; u < count; u++) {
         n00bb_tu_state_t *state  = tu_state(units[u]);
-        ir_module_t      *module = checked[u] ? state->ir_module : nullptr;
+        ir_module_t      *module =
+            state->interface_module
+                || core_diagnostics_failed(
+                    core_translation_unit_diagnostics(units[u]))
+            ? nullptr
+            : state->ir_module;
 
         for (size_t g = 0; module && g < ir_global_count(module); g++) {
             ir_global_t *global = ir_global_at(module, g);
@@ -5908,208 +6016,64 @@ static bool check_untyped(th_ctx *types, core_translation_unit_t *const *units,
         }
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
+            bool       closed   = th_is_closed(types, function->type);
+            core_list_t(unsettled_trait_t) traits =
+                core_list_new(unsettled_trait_t);
 
-            if (!th_is_closed(types, function->type)) {
-                continue;
-            }
             for (uint32_t l = 0; l < function->n_locals; l++) {
                 ir_local_t *local = function->locals[l];
                 th_type    *type  = local->type ? th_resolve(local->type)
                                                 : nullptr;
+                bool        bare  = false;
 
-                if (type && th_kind_of(type) == TH_VAR && !th_var_ref(type)
-                    && !narrowed_variable(types, function, type)
-                    && !local->synthetic && local->source_name.u8_bytes
-                    && ir_span_known(local->span) && !local->span.implied
-                    && !core_dict_contains((core_dict_t *)reported, local)) {
+                if (!type || local->synthetic || !local->source_name.u8_bytes
+                    || !ir_span_known(local->span) || local->span.implied) {
+                    continue;
+                }
+                for (size_t b = 0; b < index->bounds.len; b++) {
+                    th_type *var = trait_type_var(types, state, function,
+                                                  index->bounds.data[b]);
+
+                    if (!var || !th_occurs(types, var, type)) {
+                        continue;
+                    }
+
+                    unsettled_trait_t *entry = unsettled_entry(
+                        &traits, var, index->bounds.data[b].iface);
+
+                    if (type == var && !entry->bare) {
+                        entry->bare = local;
+                        bare        = true;
+                    }
+                    if (type != var && !entry->holder) {
+                        entry->holder = local;
+                    }
+                }
+                if (closed && !bare && th_kind_of(type) == TH_VAR
+                    && !th_var_ref(type)
+                    && !narrowed_variable(types, state, type)) {
                     ok = report_untyped(units[u], local->source_name,
                                         local->mutability == IR_MUT_MUTABLE,
                                         local->span)
                       && ok;
                 }
             }
-        }
-    }
+            // A trait no variable holds is reported where a value has it.
+            for (size_t b = 0; b < index->bounds.len; b++) {
+                th_type *var = trait_type_var(types, state, function,
+                                              index->bounds.data[b]);
 
-    return ok;
-}
-
-static bool type_mentions(th_ctx *types, th_type *type, th_type *var)
-{
-    th_type **vars  = nullptr;
-    size_t    count = type ? th_free_vars(types, type, &vars) : 0;
-
-    for (size_t v = 0; v < count; v++) {
-        if (th_resolve(vars[v]) == var) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// A trait used as a type inside a function (`Array[Shape]`) stands for one
-// type that implements it, which the function's body settles. A value
-// whose type holds one that nothing settled can't be built. It is reported
-// at the variable holding it, or else at the first value that has it. A
-// variable declared with just the trait (`var s: Shape`) is T0586, as any
-// variable nothing settles the type of; it goes in `declared`.
-static bool report_unsettled_trait(th_ctx *types, core_translation_unit_t *unit,
-                                   parse_sym_entry_t *symbol,
-                                   ir_func_t *function, core_string_t trait,
-                                   th_type *var, core_dict_t *declared)
-{
-    ir_local_t *holder = nullptr;
-    ir_local_t *bare   = nullptr;
-
-    for (uint32_t l = 0; l < function->n_locals; l++) {
-        ir_local_t *local = function->locals[l];
-        th_type    *type  = local->type ? th_resolve(local->type) : nullptr;
-
-        if (!type || local->synthetic || !local->source_name.u8_bytes
-            || !ir_span_known(local->span) || local->span.implied) {
-            continue;
-        }
-        if (type == var && !bare) {
-            bare = local;
-        }
-        if (!holder && type != var && type_mentions(types, type, var)) {
-            holder = local;
-        }
-    }
-
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-
-    trait = n00bb_name_leaf(trait);
-    if (bare) {
-        core_string_t name = n00bb_name_leaf(bare->source_name);
-
-        core_dict_put(declared, bare, (void *)1);
-        n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
-                     n00bb_name_location(unit, bare->span, name),
-                     N00B_TEXT_VARIABLE_TRAIT_UNSETTLED,
-                     N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
-        n00bb_report_help(diagnostics,
-                          N00B_TEXT_ASSIGN_OR_NAME_THE_IMPLEMENTING_TYPE,
-                          N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(trait)));
-        return false;
-    }
-    if (holder) {
-        core_string_t name = n00bb_name_leaf(holder->source_name);
-
-        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
-                     n00bb_name_location(unit, holder->span, name),
-                     N00B_TEXT_TRAIT_TYPE_UNSETTLED,
-                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name),
-                                ARG_TEXT(name)));
-    }
-    else {
-        const ir_instr_t *at = nullptr;
-
-        for (uint32_t b = 0; !at && b < function->n_blocks; b++) {
-            for (uint32_t i = 0; !at && i < function->blocks[b]->n_instrs;
-                 i++) {
-                const ir_instr_t *in = function->blocks[b]->instrs[i];
-
-                at = in->dest && ir_span_known(in->span) && !in->span.implied
-                        && type_mentions(types, in->dest->type, var)
-                       ? in
-                       : nullptr;
-            }
-        }
-        if (!at) {
-            return true;
-        }
-        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_TYPE_UNSETTLED,
-                     n00bb_span_location(at->span),
-                     N00B_TEXT_TRAIT_TYPE_UNSETTLED_HERE,
-                     N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(symbol->name)));
-    }
-    n00bb_report_help(diagnostics,
-                      N00B_TEXT_STORE_OR_NAME_THE_IMPLEMENTING_TYPE,
-                      N00BB_ARGS(ARG_TEXT(trait)));
-
-    return false;
-}
-
-static bool check_unsettled_traits(th_ctx *types,
-                                   const n00bb_dispatch_index_t *index,
-                                   core_translation_unit_t *const *units,
-                                   size_t count, const bool *checked,
-                                   core_dict_t *declared)
-{
-    bool ok = true;
-
-    for (size_t l = 0; l < index->lists.len; l++) {
-        function_list_t *list = index->lists.data[l];
-
-        for (size_t i = 0; i < list->len; i++) {
-            parse_sym_entry_t          *symbol    = list->data[i];
-            n00bb_signature_typevars_t *variables = parse_sym_binding(
-                symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
-            core_translation_unit_t    *unit      = nullptr;
-
-            for (size_t u = 0; !unit && u < count; u++) {
-                unit = units[u] == symbol->owner_unit && checked[u]
-                         ? units[u]
-                         : nullptr;
-            }
-            if (!variables || !variables->len || !unit) {
-                continue;
-            }
-
-            ir_func_t *function = link_ir_function_for_symbol(
-                index->analysis, symbol);
-            core_list_t(th_trait_requirement) bounds =
-                n00bb_declared_bounds(symbol);
-            core_list_t(th_type_ptr_t) reported =
-                core_list_new(th_type_ptr_t);
-
-            // A `typecase` arm's variable stands for the subject's type at
-            // run time, so it stays open, and so does anything it reached.
-            for (size_t v = 0; function && v < variables->len; v++) {
-                if (variables->data[v].type
-                    && core_dict_get(&tu_state(unit)->arm_typevars,
-                                     variables->data[v].type, nullptr)
-                           == N00BB_ARM_TRAIT_VAR) {
-                    core_list_push(reported,
-                                   th_resolve(variables->data[v].type));
+                if (var) {
+                    unsettled_entry(&traits, var,
+                                    index->bounds.data[b].iface);
                 }
             }
-            for (size_t v = 0; function && v < variables->len; v++) {
-                th_type *var = variables->data[v].type
-                    ? th_resolve(variables->data[v].type) : nullptr;
-                bool     seen = false;
-
-                // Only a trait used as a type names its variable after
-                // where it is used.
-                if (!var || th_kind_of(var) != TH_VAR
-                    || core_string_find_byte(variables->data[v].name, '@') < 0
-                    || type_mentions(types, function->type, var)) {
-                    continue;
-                }
-                for (size_t r = 0; !seen && r < reported.len; r++) {
-                    seen = reported.data[r] == var;
-                }
-                for (size_t b = 0; !seen && b < bounds.len; b++) {
-                    th_type *subject = bounds.data[b].subject;
-
-                    if (bounds.data[b].kind == TH_CON_IMPLEMENTS && subject
-                        && th_kind_of(subject) == TH_VAR
-                        && core_string_eq(th_var_name(subject),
-                                          variables->data[v].name)) {
-                        ok = report_unsettled_trait(types, unit, symbol,
-                                                    function,
-                                                    bounds.data[b].iface, var,
-                                                    declared)
-                          && ok;
-                        core_list_push(reported, var);
-                        seen = true;
-                    }
-                }
+            for (size_t t = 0; t < traits.len; t++) {
+                ok = report_unsettled_trait(types, units[u], function,
+                                            &traits.data[t])
+                  && ok;
             }
-            core_list_free(reported);
-            core_list_free(bounds);
+            core_list_free(traits);
         }
     }
 
@@ -8954,22 +8918,7 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
     core_dict_free(&reported_calls);
     core_dict_free(&reported);
     ok = check_empty_lists(types, units, count, &functions) && ok;
-    // A unit with errors already may have left types open on their account.
-    bool       *checked = core_alloc_array(bool, count ? count : 1);
-    core_dict_t declared;
-
-    core_dict_init(&declared, nullptr, nullptr);
-    for (size_t u = 0; u < count; u++) {
-        checked[u] = !tu_state(units[u])->interface_module
-                  && !core_diagnostics_failed(
-                         core_translation_unit_diagnostics(units[u]));
-    }
-    ok = check_unsettled_traits(types, typing->dispatch, units, count,
-                                checked, &declared)
-      && ok;
-    ok = check_untyped(types, units, count, checked, &declared) && ok;
-    core_dict_free(&declared);
-    core_free(checked);
+    ok = check_untyped(types, typing->dispatch, units, count) && ok;
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->dispatch_calls, item)
             n00bb_written_call_free(item->value);
