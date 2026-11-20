@@ -1,8 +1,10 @@
-tests/diagnostics/link/enum_member_missing.n:6:20: error N00B-N0027: enum `Color` has no member `blue`
+tests/diagnostics/link/enum_member_missing.n:8:20: error N00B-N0027: enum `Color` has no member `blue`
   note: `Color` has members `green` and `red`
-tests/diagnostics/link/enum_member_missing.n:12:23: error N00B-N0027: enum `Color` has no member `gren`
+tests/diagnostics/link/enum_member_missing.n:14:23: error N00B-N0027: enum `Color` has no member `gren`
   help: did you mean `green`?
-tests/diagnostics/link/enum_member_missing.n:13:21: error N00B-N0027: flagset `Perm` has no member `exec`
+tests/diagnostics/link/enum_member_missing.n:15:21: error N00B-N0027: flagset `Perm` has no member `exec`
   note: `Perm` has members `read` and `write`
-tests/diagnostics/link/enum_member_missing.n:18:22: error N00B-N0027: enum `Color` has no member `rde`
+tests/diagnostics/link/enum_member_missing.n:20:22: error N00B-N0027: enum `Color` has no member `rde`
   help: did you mean `red`?
+tests/diagnostics/link/enum_member_missing.n:27:46: error N00B-N0027: enum `Index_Unit` has no member `grapheme`
+  note: `Index_Unit` has members `byte`, `char` and `cluster`

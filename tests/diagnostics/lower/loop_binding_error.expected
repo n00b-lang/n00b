@@ -1,1 +1,0 @@
-tests/diagnostics/lower/loop_binding_error.n:5:22: error N00B-T0500: `"three"` is `string`, which does not convert to `int`

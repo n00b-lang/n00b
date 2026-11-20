@@ -1,2 +1,0 @@
-tests/diagnostics/link/function_reference_cast.n:11:26: error N00B-S0105: `unsafe_cast` can't make an address of a function reference, which may be to an adapter rather than the function's native code
-  help: for a function's native code, use `native_entry` with the function's name

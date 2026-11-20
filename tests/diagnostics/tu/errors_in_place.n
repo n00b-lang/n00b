@@ -1,0 +1,48 @@
+// Errors reported where they are, with nothing following on from them.
+
+// A record or object field with no type.
+record Point {
+    x: int
+    y
+}
+
+object Shape {
+    private {
+        sides
+    }
+}
+
+func start() {
+    let p = Point(x = 1, y = 2)
+}
+
+// An error in a function's signature does not leave the function's scope
+// open: a later global with a parameter's name is not a redeclaration.
+func f(d: Dict[int]) -> int {
+    return 1
+}
+var d: int = 2
+func g(e: int) -> int {
+    return e + d
+}
+require g(1) == 3
+
+// A `where` bound on a variable that only the function's body names is
+// checked against the type the body gives it, and reported there.
+func strings() where 'T: Integer {
+    var x: 'T = "hi"
+}
+func numbers() where 'T: Integer {
+    var x: 'T = 5
+    require x == 5
+}
+strings()
+numbers()
+
+// A top-level loop with an error is left out of the module's code, binding
+// and all: what is reported is the error.
+var count: int = 0
+while count < 3 {
+    let label: int = "three"
+    count += 1
+}

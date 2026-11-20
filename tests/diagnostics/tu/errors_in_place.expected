@@ -1,0 +1,11 @@
+tests/diagnostics/tu/errors_in_place.n:6:5: error N00B-T0607: field `y` of `Point` has no type
+  help: give it a type, as in `y: int`
+tests/diagnostics/tu/errors_in_place.n:11:9: error N00B-T0607: field `sides` of `Shape` has no type
+  help: give it a type, as in `sides: int`
+tests/diagnostics/tu/errors_in_place.n:21:15: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
+  lib/builtin/containers/dict.n:23:8: note: `Dict` is declared here
+  help: add the missing type argument
+tests/diagnostics/tu/errors_in_place.n:33:9: error N00B-T0021: `string` does not implement `Integer`, which `strings` requires
+  help: give it a value whose type implements `Integer` here, or implement `Integer` for `string`
+tests/diagnostics/tu/errors_in_place.n:37:13: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/tu/errors_in_place.n:46:22: error N00B-T0500: `"three"` is `string`, which does not convert to `int`
