@@ -2167,7 +2167,7 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         if (!sccs.data[s].cached) scc_function_roots(&sccs.data[s], &roots);
     size_t missing = 0;
     for (size_t r = 0; r < roots.len; r++)
-        if (!ir_summary_of(analysis->summaries, roots.data[r]))
+        if (!ir_summary_of(analysis->library_summaries, roots.data[r]))
             roots.data[missing++] = roots.data[r];
     roots.len = missing;
     ir_summaries_t *summaries = ok && roots.len
@@ -2187,7 +2187,7 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         for (size_t f = 0; ok && f < functions.len; f++) {
             put_text(&input, ir_module_name(functions.data[f]->owner));
             put_text(&input, functions.data[f]->name);
-            ir_summary_t *summary = ir_summary_of(analysis->summaries,
+            ir_summary_t *summary = ir_summary_of(analysis->library_summaries,
                                                   functions.data[f]);
             ok = ir_summary_encode_identity(summary ? summary
                 : ir_summary_of(summaries, functions.data[f]), &input);
@@ -2481,7 +2481,7 @@ n00bb_cache_capture_summaries(n00bb_cache_t *cache,
 {
     ir_summaries_t *summaries = !analysis ? nullptr
         : phase == N00BB_PHASE_ESCAPES ? analysis->escapes
-                                       : analysis->summaries;
+                                       : analysis->library_summaries;
     for (size_t i = 0; cache && phase && phase <= N00BB_PHASE_FINAL
          && i < cache->snapshots.len; i++)
         capture_snapshot(&cache->snapshots.data[i], analysis, summaries,
@@ -2537,8 +2537,9 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
         if (analysis) {
             capture_snapshot(&snapshot, analysis, analysis->escapes,
                              N00BB_PHASE_ESCAPES);
-            if (analysis->summaries)
-                capture_snapshot(&snapshot, analysis, analysis->summaries,
+            if (analysis->library_summaries)
+                capture_snapshot(&snapshot, analysis,
+                                 analysis->library_summaries,
                                  N00BB_PHASE_MAIN);
         }
         for (size_t i = 0; i < scc->inlined.len; i++)

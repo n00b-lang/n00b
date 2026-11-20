@@ -1713,11 +1713,14 @@ core_list_decl(entry_param_t);
 
 const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
-                      uint32_t flag);
+                      uint32_t flag, const ir_func_t *subject);
 
 void
 n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
                          core_list_t(n00bb_ir_func_ptr_t) *roots);
+void
+n00bb_unit_bodies(n00bb_link_analysis_t *analysis,
+                  core_list_t(n00bb_ir_func_ptr_t) *out);
 
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global);
@@ -1730,6 +1733,9 @@ n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
 core_translation_unit_t *
 n00bb_visibility_unit(n00bb_link_analysis_t *analysis,
                       const ir_module_t *module);
+bool
+n00bb_module_sees(void *context, const ir_module_t *viewer,
+                  const ir_module_t *other);
 
 typedef core_list_t(core_string_t) text_list_t;
 

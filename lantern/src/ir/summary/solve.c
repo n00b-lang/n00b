@@ -659,6 +659,12 @@ strongconnect(tarjan_t *t, ir_func_t *root)
 }
 
 static void
+push_pending(void *sink, ir_func_t *function)
+{
+    core_list_push(*(core_list_t(summary_func_ptr_t) *)sink, function);
+}
+
+static void
 collect_reinterpretations(ir_summaries_t *summaries,
                           ir_func_t *const *functions, size_t count)
 {
@@ -669,6 +675,10 @@ collect_reinterpretations(ir_summaries_t *summaries,
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
     for (size_t i = 0; i < count; i++) core_list_push(pending, functions[i]);
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (hooks && hooks->reinterpretation_sources)
+        hooks->reinterpretation_sources(hooks->context, push_pending,
+                                        &pending);
     while (pending.len) {
         ir_func_t *f = ir_func_definition(pending.data[--pending.len]);
         if (!f || !core_dict_add(&seen, f, f)) continue;
@@ -713,9 +723,10 @@ same_hooks(const ir_summary_hooks_t *a, const ir_summary_hooks_t *b)
 static ir_summaries_t *
 compute_summaries(ir_func_t *const *functions, size_t count,
                   const ir_summary_hooks_t *hooks, bool escapes_only,
-                  ir_summaries_t *previous)
+                  ir_summaries_t *previous, ir_summaries_t *fallback)
 {
     ir_summaries_t *summaries = core_alloc(ir_summaries_t);
+    summaries->fallback = fallback;
     summaries->hooks = hooks;
     if (hooks) summaries->hook_values = *hooks;
     summaries->escapes_only = escapes_only;
@@ -725,7 +736,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     core_dict_init(&summaries->type_memos, nullptr, nullptr);
     core_dict_init(&summaries->engines, nullptr, nullptr);
     core_dict_init(&summaries->adopted, nullptr, nullptr);
-    collect_reinterpretations(summaries, functions, count);
+    if (!fallback) collect_reinterpretations(summaries, functions, count);
     summaries->previous = previous;
     summaries->reusable = previous && hooks && count && !escapes_only
         && !previous->escapes_only
@@ -759,7 +770,8 @@ ir_summaries_t *
 ir_summaries_compute(ir_func_t *const *functions, size_t count,
                      const ir_summary_hooks_t *hooks)
 {
-    return compute_summaries(functions, count, hooks, false, nullptr);
+    return compute_summaries(functions, count, hooks, false, nullptr,
+                             nullptr);
 }
 
 ir_summaries_t *
@@ -767,14 +779,24 @@ ir_summaries_recompute(ir_func_t *const *functions, size_t count,
                        const ir_summary_hooks_t *hooks,
                        ir_summaries_t *previous)
 {
-    return compute_summaries(functions, count, hooks, false, previous);
+    return compute_summaries(functions, count, hooks, false, previous,
+                             nullptr);
+}
+
+ir_summaries_t *
+ir_summaries_over(ir_func_t *const *functions, size_t count,
+                  const ir_summary_hooks_t *hooks, ir_summaries_t *fallback)
+{
+    return compute_summaries(functions, count, hooks, false, nullptr,
+                             fallback);
 }
 
 ir_summaries_t *
 ir_escapes_compute(ir_func_t *const *functions, size_t count,
                    const ir_summary_hooks_t *hooks)
 {
-    return compute_summaries(functions, count, hooks, true, nullptr);
+    return compute_summaries(functions, count, hooks, true, nullptr,
+                             nullptr);
 }
 
 void
