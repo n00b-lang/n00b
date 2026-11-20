@@ -310,13 +310,13 @@ func record_is_span(r: Style_Record) -> bool {
     return r.start_ix != nil and r.end_ix != nil and r.style_tag != nil
 }
 
-func record_is_reset(r: Style_Record) -> bool {
+private func record_is_reset(r: Style_Record) -> bool {
     return r.end_ix == nil and r.style_tag != nil and
         string.core.byte_len(r.style_tag) == 1 and
         string.core.byte_at(r.style_tag, 0) == 0x2f
 }
 
-func record_is_slot(r: Style_Record) -> bool {
+private func record_is_slot(r: Style_Record) -> bool {
     return sub_arm(r.substitution) != sub_arm_none
 }
 

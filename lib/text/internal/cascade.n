@@ -20,10 +20,6 @@ func __init(modify self: Cascade, s: string) {
     self.len = unsafe_cast[u32] byte_len(s)
 }
 
-private func record_is_span(r: Style_Record) -> bool {
-    return r.start_ix != nil and r.end_ix != nil
-}
-
 private func record_end(r: Style_Record, len: u32) -> u32 {
     let e: u32 = r.end_ix.get_or_else(index_extends)
     if e == index_extends or e > len {
