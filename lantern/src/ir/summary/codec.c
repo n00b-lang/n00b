@@ -137,8 +137,15 @@ put_bits(core_buffer_t *out, const flow_bits_t *bits)
     }
 }
 
+// An item as encoded, and the key it's sorted by: the same encoding with
+// its texts spelled out. Encoded through an interner, a text is a number
+// in the order the module's texts were first met, which depends on what
+// else the module's table holds (the functions a program summarized), so
+// sorting by those bytes put the same summary's flows in an order that
+// depended on the program.
 typedef struct {
     core_buffer_t bytes;
+    core_buffer_t key;
     size_t        index;
 } encoded_item_t;
 
@@ -146,12 +153,12 @@ static int
 compare_encoded(const void *left, const void *right)
 {
     const encoded_item_t *a = left, *b = right;
-    size_t shorter = a->bytes.byte_len < b->bytes.byte_len
-        ? a->bytes.byte_len : b->bytes.byte_len;
-    int order = shorter ? memcmp(a->bytes.data, b->bytes.data, shorter) : 0;
+    size_t shorter = a->key.byte_len < b->key.byte_len
+        ? a->key.byte_len : b->key.byte_len;
+    int order = shorter ? memcmp(a->key.data, b->key.data, shorter) : 0;
     if (order) return order;
-    return (a->bytes.byte_len > b->bytes.byte_len)
-        - (a->bytes.byte_len < b->bytes.byte_len);
+    return (a->key.byte_len > b->key.byte_len)
+        - (a->key.byte_len < b->key.byte_len);
 }
 
 static void
@@ -201,6 +208,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         if (!bit_has(&referenced, (uint32_t)s)) continue;
         sources[used].index = s;
         put_path(&sources[used].bytes, texts, types, flows->sources.data[s]);
+        put_path(&sources[used].key, nullptr, types, flows->sources.data[s]);
         used++;
     }
     if (used > 1)
@@ -218,19 +226,29 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         const flow_dest_t *dest = &flows->dests.data[d];
         if (!dest_flows(dest)) continue;
         core_buffer_t *bytes = &dests[kept].bytes;
+        core_buffer_t *key   = &dests[kept].key;
         put_path(bytes, texts, types, dest->to);
-        put_ranked_bits(bytes, &dest->data, rank, count);
-        put_ranked_bits(bytes, &dest->control, rank, count);
-        put_ranked_bits(bytes, &dest->alias, rank, count);
-        put_ranked_bits(bytes, &dest->copy, rank, count);
+        put_path(key, nullptr, types, dest->to);
+        const flow_bits_t *kinds[] = {&dest->data, &dest->control,
+                                      &dest->alias, &dest->copy};
+        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+            put_ranked_bits(bytes, kinds[k], rank, count);
+            put_ranked_bits(key, kinds[k], rank, count);
+        }
         dests[kept++].index = d;
     }
     if (kept > 1) qsort(dests, kept, sizeof(encoded_item_t), compare_encoded);
     put_u32(out, (uint32_t)kept);
     for (size_t k = 0; k < kept; k++)
         core_buffer_append(out, dests[k].bytes.data, dests[k].bytes.byte_len);
-    for (size_t k = 0; k < used; k++) core_buffer_release(&sources[k].bytes);
-    for (size_t k = 0; k < kept; k++) core_buffer_release(&dests[k].bytes);
+    for (size_t k = 0; k < used; k++) {
+        core_buffer_release(&sources[k].bytes);
+        core_buffer_release(&sources[k].key);
+    }
+    for (size_t k = 0; k < kept; k++) {
+        core_buffer_release(&dests[k].bytes);
+        core_buffer_release(&dests[k].key);
+    }
     core_list_free(referenced);
     core_free(sources);
     core_free(dests);
