@@ -365,8 +365,8 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
     if (!hooks->len) return true;
     *out = calloc(hooks->len, sizeof(**out));
     if (!*out) return false;
-    for (size_t b = 0; b < hooks->len; b++)
-        for (size_t t = 1; t < type_index_count; t++)
+    for (size_t t = 1; t < type_index_count && *out_count < hooks->len; t++)
+        for (size_t b = 0; b < hooks->len; b++)
             if (type_indices[t].typehash == hooks->data[b].typehash) {
                 (*out)[(*out_count)++] = (n00bb_llvm_finalizer_binding_t){
                     .type_index = (uint32_t)t,
