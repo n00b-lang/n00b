@@ -309,6 +309,7 @@
                      | %"-" %FLOAT
 
 <string-expr> ::= %STRING+
+                | %Q
 
 <symbol-expr> ::= %SYMBOL
 
