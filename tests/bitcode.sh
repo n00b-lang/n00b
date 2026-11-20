@@ -72,35 +72,37 @@ runtime)
     "$compiler" build --output "$tmp/generic_finalizer_probe" \
         "$program_dir/bitcode_generic_finalizer_probe.n"
     "$tmp/generic_finalizer_probe"
-    # Ranges the analyses share, checked as they are computed.
-    "$compiler" build --verify-analyses --output "$tmp/shared_ranges" \
-        "$program_dir/bitcode_shared_ranges.n"
-    "$tmp/shared_ranges"
+    # Three programs built, run and dumped as one (their functions don't
+    # touch, and the build dumps the program's own symbols and IR, after
+    # storage placement, without lowering the library again as `lower`
+    # does): bitcode_typeof_storage.n (whose `ok` the other's stands for),
+    # bitcode_shared_ranges.n and bitcode_escaping_new.n.
+    {
+        sed '/^__fd_write(2, "ok")$/d' \
+            "$program_dir/bitcode_typeof_storage.n"
+        cat "$program_dir/bitcode_shared_ranges.n" \
+            "$program_dir/bitcode_escaping_new.n"
+    } >"$tmp/storage_facts.n"
+    # Ranges the analyses share are checked as they are computed.
+    "$compiler" build --verify-analyses --dump-symbols --dump-ir \
+        --output "$tmp/storage_facts" "$tmp/storage_facts.n" \
+        >"$tmp/storage_facts.dump"
+    test "$("$tmp/storage_facts" 2>&1)" = ok
     # A local only `typeof` reads keeps automatic storage: nothing moves
     # it to the heap.
-    "$compiler" build --output "$tmp/typeof_storage" \
-        "$program_dir/bitcode_typeof_storage.n"
-    test "$("$tmp/typeof_storage" 2>&1)" = ok
-    "$compiler" lower --dump-symbols --dump-ir \
-        "$program_dir/bitcode_typeof_storage.n" >"$tmp/typeof_storage.dump"
     grep -q 'probe: variable.*storage-duration=automatic' \
-        "$tmp/typeof_storage.dump"
+        "$tmp/storage_facts.dump"
     if awk '/^  func @check_type_only_probe/ { inside = 1 }
             inside && /^  }/ { inside = 0 }
             inside && / = alloc / { found = 1 }
-            END { exit !found }' "$tmp/typeof_storage.dump"; then
+            END { exit !found }' "$tmp/storage_facts.dump"; then
         echo 'type-only probe was moved to heap storage' >&2
         exit 1
     fi
     # A local only bound to a `new` lives in the object `new` makes: one
     # node allocation in `prepend`, none for the local itself.
-    "$compiler" build --output "$tmp/escaping_new" \
-        "$program_dir/bitcode_escaping_new.n"
-    test "$("$tmp/escaping_new" 2>&1)" = ok
-    "$compiler" lower --dump-ir "$program_dir/bitcode_escaping_new.n" \
-        >"$tmp/escaping_new.ir"
-    test "$(awk '/^  func @prepend\(/, /^  }/' "$tmp/escaping_new.ir" \
-        | grep -c ' = alloc bitcode_escaping_new\.Chain_Node ')" = 1
+    test "$(awk '/^  func @prepend\(/, /^  }/' "$tmp/storage_facts.dump" \
+        | grep -c ' = alloc storage_facts\.Chain_Node ')" = 1
     ;;
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
