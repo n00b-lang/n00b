@@ -2,7 +2,8 @@
 # Calls through function references with keyword arguments, run, and typed
 # against an imported module's archived interface; and function references
 # a library makes, called by an importer built and run against only the
-# library's archived interface.
+# library's archived interface; and a library's module variables, read by
+# an importer checked against only its archived interface.
 set -eu
 
 compiler=$1
@@ -71,3 +72,23 @@ interface modlib modlib.facade
     >"$tmp/build.out" 2>"$tmp/build.err" \
     || fail "$tmp/build.out" "$tmp/build.err"
 run "$tmp/modlib_user"
+
+# Module variables letlib's initializer sets, read by an importer checked
+# with no N00B_PATH. A variable nothing may have set is still an error
+# there.
+interface letlib letlib.facade
+"$compiler" check --link-interface "$tmp/letlib.n00bi" \
+    "$programs/letlib_user.n" >"$tmp/check.out" 2>&1 || {
+    echo "an importer of letlib's archive didn't check" >&2
+    fail "$tmp/check.out"
+}
+if "$compiler" check --link-interface "$tmp/letlib.n00bi" \
+        "$programs/letlib_unset.n" >"$tmp/check.out" 2>&1; then
+    echo 'reading a variable nothing may have set checked against the archive' >&2
+    fail "$tmp/check.out"
+fi
+grep -q 'letlib_unset.n:6:12: error.*may read global `unset`' \
+    "$tmp/check.out" || {
+    echo "the archive check didn't report the unset read" >&2
+    fail "$tmp/check.out"
+}

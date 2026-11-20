@@ -1,5 +1,5 @@
 # Reads module variables a library's initializer sets, checked
-# against the library's archived interface (archive_let.sh).
+# against the library's archived interface.
 import letlib
 
 callback Step {

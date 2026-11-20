@@ -1,5 +1,5 @@
 # A library whose module variables are set by computed initializers, built
-# into an archived interface (archive_let.sh).
+# into an archived interface.
 func double(value: int) -> int {
     return value * 2
 }
