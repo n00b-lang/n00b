@@ -2,7 +2,7 @@ import importlib
 import sys
 import time
 
-CHECKS = ("comments", "docs")
+CHECKS = ("comments", "docs", "clones")
 
 
 def main(argv):
